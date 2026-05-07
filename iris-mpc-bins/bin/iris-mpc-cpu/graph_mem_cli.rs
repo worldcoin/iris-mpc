@@ -1,5 +1,7 @@
 #![recursion_limit = "256"]
 
+use aws_sdk_s3::config::Region as S3Region;
+use aws_sdk_s3::Client as S3Client;
 use clap::{Parser, Subcommand, ValueEnum};
 use eyre::Result;
 use iris_mpc_cpu::{
@@ -24,25 +26,28 @@ struct Cli {
     /// Display the graph in the terminal
     #[arg(long)]
     dbg: bool,
+    /// S3 bucket for graph checkpoints
+    #[arg(long)]
+    s3_bucket: String,
+    /// Party ID (0, 1, or 2) — used as part of S3 key namespacing
+    #[arg(long)]
+    party_id: usize,
+    /// AWS region (defaults to env/instance metadata)
+    #[arg(long)]
+    aws_region: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
 
 #[derive(Subcommand)]
 enum Command {
-    /// Load a graph from a database to memory, then write it to a file.
-    /// serializes both the left and right eye together
-    BackupDb,
-    /// (testing only) creates random data, stores it in the database, and then runs backup-db.
-    StoreRandom,
-    /// Load a graph from a file to memory, then write it to a database
-    RestoreDb,
-    /// restore the left or right eye
-    RestoreSide {
-        /// the left or right eye
-        side: Side,
-    },
-    /// (testing only) verify that Load/Store works as expected
+    /// Obtain the most recent checkoint, apply all relevant graph mutations, and save it to a file
+    BackupGraph,
+    /// (testing only) creates random data and stores it as a checkpoint
+    RandomCheckpoint,
+    /// Load a graph from a file to memory, then upload it to s3 and add it to the checkponts table.
+    LoadCheckpoint,
+    /// (testing only) run BackupGraph and compare it against a file.
     VerifyBackup,
     /// Load a graph from a file and compare it to the graph stored in the database.
     CompareToDb {
@@ -52,21 +57,6 @@ enum Command {
     },
 }
 
-#[derive(Clone, Copy, ValueEnum)]
-enum Side {
-    Left,
-    Right,
-}
-
-impl From<Side> for usize {
-    fn from(side: Side) -> usize {
-        match side {
-            Side::Left => LEFT,
-            Side::Right => RIGHT,
-        }
-    }
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let Cli {
@@ -74,28 +64,32 @@ async fn main() -> Result<()> {
         schema,
         file,
         dbg,
+        s3_bucket,
+        party_id,
+        aws_region,
         command,
     } = Cli::parse();
-    let db_context = DbContext::new(&db_url, &schema).await;
+
+    let region_provider = S3Region::new(aws_region.unwrap_or_else(|| "eu-north-1".to_string()));
+    let shared_config = aws_config::from_env().region(region_provider).load().await;
+    let s3_client = S3Client::new(&shared_config);
+
+    let db_context = DbContext::new(&db_url, &schema, s3_client, s3_bucket, party_id).await;
 
     match command {
-        Command::BackupDb => {
-            db_context.write_graph_to_file(&file, dbg).await?;
+        Command::BackupGraph => {
+            let graph = db_context.get_both_eyes().await?;
+            serialize_graph(&file, &graph).await?;
         }
-        Command::RestoreDb => {
-            db_context.load_graph_from_file(&file, dbg).await?;
-        }
-        Command::RestoreSide { side } => {
-            db_context
-                .load_side_from_file(&file, side.into(), dbg)
-                .await?;
+        Command::LoadCheckpoint => {
+            db_context.make_new_checkpoint(&file, dbg).await?;
         }
         Command::VerifyBackup => {
             db_context.verify_backup(&file, dbg).await?;
         }
-        Command::StoreRandom => {
-            db_context.store_random_graph().await?;
-            db_context.write_graph_to_file(&file, dbg).await?;
+        Command::RandomCheckpoint => {
+            let graph = db_context.store_random_graph().await?;
+            serialize_graph(&file, &graph).await?;
         }
         Command::CompareToDb { diff_method } => {
             db_context.compare_to_db(&file, diff_method, dbg).await?;
