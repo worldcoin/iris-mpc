@@ -1402,10 +1402,10 @@ impl TestCaseGenerator {
                 // First party processing this insertion
                 // Bounds check: new insertion idx must be >= initial_db_len
                 if idx < initial_db_len {
-                    tracing::warn!(
+                    panic!(
+                        "new insertion index is before initial database length (insertions should be after initial DB). idx {}, db_len: {}",
                         idx,
                         initial_db_len,
-                        "new insertion index is before initial database length (insertions should be after initial DB)"
                     );
                 }
                 let request = requests.get(req_id).unwrap().clone();

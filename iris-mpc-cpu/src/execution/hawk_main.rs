@@ -1921,7 +1921,7 @@ impl HawkHandle {
                 // The "b" (raw) operand always uses Normal queries to get the
                 // same-eye iris, even when comparing in Mirror orientation.
                 let raw_queries = request.queries(Orientation::Normal);
-                scheduler::spawn_with_span(async move {
+                scheduler::spawn_with_span(Span::current(), async move {
                     Ok(intra_batch_is_match(&sessions_intra, &search_queries, &raw_queries).await)
                 })
             };
