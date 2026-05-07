@@ -200,7 +200,7 @@ impl BitWriter {
         debug_assert!(n <= 32);
         // Insert the new bits into `buf` in one shot, then flush whole bytes.
         // Pre-condition: `nbits` is in 0..8, `n` <= 32, so `nbits + n` <= 39
-        // and the shift `64 - nbits - n` is always in 25..=64.
+        // and the shift `64 - nbits - n` is always in 25..=63.
         if n > 0 {
             let v = (value as u64) & ((1u64 << n) - 1);
             self.buf |= v << (64 - self.nbits - n);
