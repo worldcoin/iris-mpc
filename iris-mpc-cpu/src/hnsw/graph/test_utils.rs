@@ -87,6 +87,14 @@ impl DbContext {
         }
     }
 
+    /// Convenience constructor for contexts that don't use S3 or checkpointing.
+    /// A dummy (unconfigured) S3 client is created; calls to S3 will fail, but
+    /// as long as no checkpoint operations are performed this is safe.
+    pub async fn new_without_s3(url: &str, schema: &str, party_id: usize) -> Self {
+        let s3_client = S3Client::from_conf(aws_sdk_s3::config::Builder::new().build());
+        Self::new(url, schema, s3_client, String::new(), party_id).await
+    }
+
     // todo: consider the persistent_state table (last indexed modification id) and the modifications table and the
     // iris table. inserting everything as 0 and NULL can cause problems.
     /// Upload a BothEyes graph to S3 and record it in genesis_graph_checkpoint.
