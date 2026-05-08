@@ -181,6 +181,12 @@ env:
   - name: SMPC__ENABLE_DEBUG_TIMING
     value: "true"
 
+  - name: SMPC__CUDA_MEM_POOL_TRIM_INTERVAL_BATCHES
+    value: "5"
+
+  - name: SMPC__CUDA_MEM_POOL_TRIM_MIN_BYTES_TO_KEEP
+    value: "0"
+
 initContainer:
   enabled: true
   image: "amazon/aws-cli:2.17.62"

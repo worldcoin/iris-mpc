@@ -606,12 +606,17 @@ impl ServerActor {
         self.cuda_mem_pool_trim_interval_batches = interval_batches;
         self.cuda_mem_pool_trim_min_bytes_to_keep = min_bytes_to_keep;
         if interval_batches == 0 {
-            tracing::info!("CUDA memory pool periodic trimming disabled");
+            tracing::info!(
+                "CUDA memory pool periodic trimming: DISABLED (cuda_mem_pool_trim_interval_batches=0, \
+                 cuda_mem_pool_trim_min_bytes_to_keep={})",
+                min_bytes_to_keep,
+            );
         } else {
             tracing::info!(
+                "CUDA memory pool periodic trimming: ENABLED (cuda_mem_pool_trim_interval_batches={}, \
+                 cuda_mem_pool_trim_min_bytes_to_keep={})",
                 interval_batches,
                 min_bytes_to_keep,
-                "CUDA memory pool periodic trimming enabled",
             );
         }
     }
@@ -695,10 +700,15 @@ impl ServerActor {
         if !self.completed_batches_since_start.is_multiple_of(interval) {
             return;
         }
-        if let Err(err) = self
-            .device_manager
-            .trim_mem_pools(self.cuda_mem_pool_trim_min_bytes_to_keep)
-        {
+        let min_bytes_to_keep = self.cuda_mem_pool_trim_min_bytes_to_keep;
+        tracing::info!(
+            "Triggering periodic CUDA memory pool trim: completed_batches={}, \
+             cuda_mem_pool_trim_interval_batches={}, cuda_mem_pool_trim_min_bytes_to_keep={}",
+            self.completed_batches_since_start,
+            interval,
+            min_bytes_to_keep,
+        );
+        if let Err(err) = self.device_manager.trim_mem_pools(min_bytes_to_keep) {
             tracing::warn!(
                 ?err,
                 "CUDA memory pool trim sweep failed; continuing without trimming",
