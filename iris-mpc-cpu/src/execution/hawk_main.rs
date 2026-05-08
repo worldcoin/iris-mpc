@@ -147,6 +147,7 @@ use tokio::{
     sync::{mpsc, oneshot, RwLock, RwLockWriteGuard},
 };
 use tokio_util::sync::CancellationToken;
+use tracing::{Instrument, Span};
 
 /// Distance type used by the HawkActor. Change to `NhdOps` for Normalized Hamming Distance.
 pub type HawkOps = FhdOps;
@@ -1807,12 +1808,14 @@ impl JobSubmissionHandle for HawkHandle {
         // Wait for the job to be sent for backpressure.
         let sent = self.job_queue.send(job).await;
 
+        let span = Span::current();
         async move {
             // In a second Future, wait for the result.
             sent?;
             let result = rx.await??;
             Ok(result.job_result())
         }
+        .instrument(span)
     }
 }
 
@@ -1825,6 +1828,9 @@ impl HawkHandle {
         // fresh inserts allocate VectorIds that collide with the load.
         // Verify before any session work begins, and again at the start of
         // every batch (see `handle_job`).
+        let request_handler_span = Span::current();
+        let job_handler_span = request_handler_span.clone();
+
         hawk_actor.assert_registry_consistency().await;
 
         let mut sessions = hawk_actor.new_session_groups().await?;
@@ -1844,8 +1850,9 @@ impl HawkHandle {
                 batch_count += 1;
                 // check if there was a networking error
                 let error_ct = hawk_actor.error_ct.clone();
+                let span = job_handler_span.clone();
                 let job_result = tokio::select! {
-                    r = Self::handle_job(&mut hawk_actor, &mut sessions, job.request, batch_count) => r,
+                    r = Self::handle_job(&mut hawk_actor, &mut sessions, job.request, batch_count).instrument(span)=> r,
                     _ = error_ct.cancelled() => Err(eyre!("networking error")),
                 };
 
@@ -1865,7 +1872,7 @@ impl HawkHandle {
             while let Some(job) = rx.recv().await {
                 let _ = job.return_channel.send(Err(eyre::eyre!("stopping")));
             }
-        });
+        }.instrument(request_handler_span));
 
         Ok(Self { job_queue: tx })
     }
@@ -1914,8 +1921,8 @@ impl HawkHandle {
                 // The "b" (raw) operand always uses Normal queries to get the
                 // same-eye iris, even when comparing in Mirror orientation.
                 let raw_queries = request.queries(Orientation::Normal);
-                tokio::spawn(async move {
-                    intra_batch_is_match(&sessions_intra, &search_queries, &raw_queries).await
+                scheduler::spawn_with_span(async move {
+                    Ok(intra_batch_is_match(&sessions_intra, &search_queries, &raw_queries).await)
                 })
             };
 
@@ -1952,18 +1959,19 @@ impl HawkHandle {
                     is_match_batch(search_queries, step1.missing_vector_ids(), sessions_search)
                         .await?;
 
-                step1.step2(&missing_is_match, intra_results.await??)
+                step1.step2(&missing_is_match, intra_results.await???)
             };
 
             Ok((search_results, match_result))
         };
 
         // Search for both orientations
+        let span = Span::current();
         let (search_normal, search_mirror, match_result) = {
             let start = Instant::now();
             let ((search_normal, matches_normal), (search_mirror, matches_mirror)) = try_join!(
-                do_search(Orientation::Normal),
-                do_search(Orientation::Mirror),
+                do_search(Orientation::Normal).instrument(span.clone()),
+                do_search(Orientation::Mirror).instrument(span.clone()),
             )?;
             metrics::histogram!("all_search_duration").record(start.elapsed().as_secs_f64());
 
@@ -2009,6 +2017,7 @@ impl HawkHandle {
             identity_updates,
             &request,
         )
+        .instrument(span)
         .await?;
 
         // Evict cached queries now that the batch is fully processed.
@@ -2229,6 +2238,7 @@ mod tests {
     use rand::SeedableRng;
     use std::{ops::Not, time::Duration};
     use tokio::time::sleep;
+    use tracing::{info_span, Instrument};
     use tracing_test::traced_test;
 
     /// Regression guard for the load → registry wiring in `iris-mpc/src/server/mod.rs::load_database`.
@@ -2373,8 +2383,11 @@ mod tests {
         let addresses = get_free_local_addresses(N_PARTIES).await?;
 
         let handles = (0..N_PARTIES)
-            .map(|i| go(addresses.clone(), i))
-            .map(tokio::spawn)
+            .map(|i| {
+                let span = info_span!("mpc_node", idx = i);
+                let future = go(addresses.clone(), i);
+                tokio::spawn(future.instrument(span))
+            })
             .collect::<JoinAll<_>>()
             .await
             .into_iter()
@@ -2427,12 +2440,20 @@ mod tests {
             );
         }
 
-        let all_results =
-            parallelize(izip!(&irises, handles.clone()).map(|(shares, mut handle)| {
+        let all_results = parallelize(izip!(0..handles.len(), &irises, handles.clone()).map(
+            |(idx, shares, mut handle)| {
+                let span = info_span!("mpc_node", idx = idx);
                 let batch = batch_of_party(&batch_0, shares);
-                async move { handle.submit_batch_query(batch).await.await }
-            }))
-            .await?;
+                async move {
+                    handle
+                        .submit_batch_query(batch)
+                        .instrument(span)
+                        .await
+                        .await
+                }
+            },
+        ))
+        .await?;
 
         let result = assert_all_equal(all_results);
 
