@@ -8,6 +8,7 @@ use iris_mpc_cpu::{
     execution::hawk_main::{LEFT, RIGHT},
     hnsw::graph::test_utils::{DbContext, DiffMethod},
 };
+use iris_mpc_utils::misc::write_bin;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -79,7 +80,7 @@ async fn main() -> Result<()> {
     match command {
         Command::BackupGraph => {
             let graph = db_context.get_both_eyes().await?;
-            serialize_graph(&file, &graph).await?;
+            write_bin(&graph, &file)?;
         }
         Command::LoadCheckpoint => {
             db_context.make_new_checkpoint(&file, dbg).await?;
@@ -89,7 +90,7 @@ async fn main() -> Result<()> {
         }
         Command::RandomCheckpoint => {
             let graph = db_context.store_random_graph().await?;
-            serialize_graph(&file, &graph).await?;
+            write_bin(&graph, &file)?;
         }
         Command::CompareToDb { diff_method } => {
             db_context.compare_to_db(&file, diff_method, dbg).await?;
