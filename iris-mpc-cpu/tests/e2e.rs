@@ -21,6 +21,7 @@ use iris_mpc_cpu::{
 use rand::{rngs::StdRng, SeedableRng};
 use std::{collections::HashMap, future::Future, sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
+use tracing::{info_span, Instrument};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
@@ -50,7 +51,7 @@ fn install_tracing() {
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
-        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer().with_ansi(false))
         .try_init();
 }
 
@@ -86,6 +87,21 @@ async fn create_graph_from_plain_dbs(
     let right_graph = right_store
         .generate_graph(&mut rng, DB_SIZE, searcher)
         .await?;
+
+    let left_graph_max_id = left_graph
+        .layers
+        .iter()
+        .filter_map(|x| x.links.keys().max())
+        .max()
+        .map(|x| x.serial_id() as usize);
+    let right_graph_max_id = right_graph
+        .layers
+        .iter()
+        .filter_map(|x| x.links.keys().max())
+        .max()
+        .map(|x| x.serial_id() as usize);
+    assert_eq!(Some(DB_SIZE), left_graph_max_id);
+    assert_eq!(Some(DB_SIZE), right_graph_max_id);
 
     let left_mpc_graph: GraphMem<Aby3VectorRef> = left_graph;
     let right_mpc_graph: GraphMem<Aby3VectorRef> = right_graph;
@@ -125,6 +141,14 @@ async fn create_graph_from_plain_dbs(
         right_shared_irises.insert(vector_id, Arc::new(shares[player_index].clone()));
     }
 
+    tracing::info!(
+        "Creating iris stores: left_shared_irises.len()={}, right_shared_irises.len()={}, \
+         left max_serial_id={:?}, right max_serial_id={:?}",
+        left_shared_irises.len(),
+        right_shared_irises.len(),
+        left_shared_irises.keys().map(|v| v.serial_id()).max(),
+        right_shared_irises.keys().map(|v| v.serial_id()).max(),
+    );
     let left_iris_store = Aby3Store::<FhdOps>::new_storage(Some(left_shared_irises));
     let right_iris_store = Aby3Store::<FhdOps>::new_storage(Some(right_shared_irises));
 
@@ -139,6 +163,7 @@ async fn start_hawk_node(
     left_db: &IrisDB,
     right_db: &IrisDB,
 ) -> Result<HawkHandle> {
+    let span = info_span!("mpc_node", idx = args.party_index);
     tracing::info!("🦅 Starting Hawk node {}", args.party_index);
 
     // Bootstrap graph must match the actor's runtime searcher
@@ -152,12 +177,33 @@ async fn start_hawk_node(
     searcher.layer_distribution = LayerDistribution::new_geometric_from_M(HNSW_LAYER_DENSITY);
 
     let (graph, iris_store) =
-        create_graph_from_plain_dbs(args.party_index, left_db, right_db, &searcher).await?;
-    let hawk_actor =
-        HawkActor::from_cli_with_graph_and_store(args, CancellationToken::new(), graph, iris_store)
+        create_graph_from_plain_dbs(args.party_index, left_db, right_db, &searcher)
+            .instrument(span.clone())
             .await?;
 
-    let handle = HawkHandle::new(hawk_actor).await?;
+    // Verify iris_store has correct size before creating HawkActor
+    assert_eq!(
+        iris_store[0].db_size(),
+        DB_SIZE,
+        "Left iris_store size mismatch: expected {}, got {}",
+        DB_SIZE,
+        iris_store[0].db_size()
+    );
+    assert_eq!(
+        iris_store[1].db_size(),
+        DB_SIZE,
+        "Right iris_store size mismatch: expected {}, got {}",
+        DB_SIZE,
+        iris_store[1].db_size()
+    );
+
+    let mut hawk_actor =
+        HawkActor::from_cli_with_graph_and_store(args, CancellationToken::new(), graph, iris_store)
+            .instrument(span.clone())
+            .await?;
+
+    hawk_actor.refresh_registries().await;
+    let handle = HawkHandle::new(hawk_actor).instrument(span).await?;
 
     Ok(handle)
 }
@@ -235,6 +281,9 @@ async fn e2e_test_async() -> Result<()> {
     let test_db = generate_full_test_db(DB_SIZE, DB_RNG_SEED, false);
     let db_left = test_db.plain_dbs(0);
     let db_right = test_db.plain_dbs(1);
+
+    assert_eq!(DB_SIZE, db_left.len());
+    assert_eq!(DB_SIZE, db_right.len());
 
     let addresses = ["127.0.0.1:16000", "127.0.0.1:16100", "127.0.0.1:16200"]
         .into_iter()
@@ -519,9 +568,21 @@ async fn submit_variants_batch(
 
     let [b0, b1, b2] = batches;
     let (f0, f1, f2) = tokio::join!(
-        h0.submit_batch_query(b0),
-        h1.submit_batch_query(b1),
-        h2.submit_batch_query(b2),
+        {
+            let idx = 0;
+            let span = info_span!("mpc_node", idx = idx);
+            h0.submit_batch_query(b0).instrument(span)
+        },
+        {
+            let idx = 1;
+            let span = info_span!("mpc_node", idx = idx);
+            h1.submit_batch_query(b1).instrument(span)
+        },
+        {
+            let idx = 2;
+            let span = info_span!("mpc_node", idx = idx);
+            h2.submit_batch_query(b2).instrument(span)
+        }
     );
     let res0 = f0.await?;
     let res1 = f1.await?;

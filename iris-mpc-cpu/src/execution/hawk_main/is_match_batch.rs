@@ -1,7 +1,7 @@
 use super::HawkOps;
 use super::{BothEyes, HawkSession, MapEdges, VecEdges, VecRequests, VectorId, LEFT, RIGHT};
 use crate::{
-    execution::hawk_main::VecRotations,
+    execution::hawk_main::{scheduler, VecRotations},
     hawkers::aby3::aby3_store::{Aby3Query, Aby3Store},
     hnsw::VectorStore,
 };
@@ -69,8 +69,9 @@ async fn per_side(
 
     // Process the chunks in parallel (CPU and IO).
     let results = izip!(chunks, sessions)
-        .map(|(chunk, session)| per_session(chunk, session.clone()))
-        .map(tokio::spawn)
+        .map(|(chunk, session)| {
+            scheduler::spawn_task_with_span(per_session(chunk, session.clone()))
+        })
         .collect::<JoinAll<_>>()
         .await;
 
