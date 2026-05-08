@@ -115,6 +115,20 @@ pub struct Config {
     #[serde(default)]
     pub enable_debug_timing: bool,
 
+    /// How often (in completed batches) to trim each device's default CUDA
+    /// memory pool back to `cuda_mem_pool_trim_min_bytes_to_keep` bytes.
+    /// Set to `0` to disable periodic trimming. Periodic trimming lets the
+    /// pool reuse memory within a batch (preserving matmul throughput) while
+    /// preventing long-term fragmentation across many batches.
+    #[serde(default)]
+    pub cuda_mem_pool_trim_interval_batches: u64,
+
+    /// Bytes to retain in each device's CUDA memory pool after a periodic
+    /// trim. Forwarded verbatim to `cuMemPoolTrimTo`; `0` (the default)
+    /// returns all currently-unused memory back to the OS.
+    #[serde(default)]
+    pub cuda_mem_pool_trim_min_bytes_to_keep: usize,
+
     #[serde(
         default = "default_service_ports",
         deserialize_with = "deserialize_yaml_json_string"
@@ -732,8 +746,10 @@ impl From<Config> for CommonConfig {
             disable_persistence,
             hnsw_disable_memory_persistence,
             enable_debug_timing: _,
-            service_ports: _,          // Could be different for each server
-            service_outbound_ports: _, // Could be different for each server
+            cuda_mem_pool_trim_interval_batches: _, // GPU per-party tuning knob
+            cuda_mem_pool_trim_min_bytes_to_keep: _, // GPU per-party tuning knob
+            service_ports: _,                       // Could be different for each server
+            service_outbound_ports: _,              // Could be different for each server
             shutdown_last_results_sync_timeout_secs,
             enable_s3_importer: _, // it does not matter if this is synced or not between servers
             db_chunks_bucket_name: _, // different for each server

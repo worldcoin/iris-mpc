@@ -10,7 +10,7 @@ use cudarc::{
             self, event, malloc_async, memcpy_htod_async,
             stream::{synchronize, wait_event},
         },
-        sys::{CUevent, CUevent_flags, CU_MEMHOSTALLOC_PORTABLE},
+        sys::{CUevent, CUevent_flags, CUmemoryPool, CU_MEMHOSTALLOC_PORTABLE},
         CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceRepr,
     },
     nccl::Id,
@@ -242,6 +242,57 @@ impl DeviceManager {
         if let Ok(mut locked) = self.locked_dbs.lock() {
             locked.push(db);
         }
+    }
+
+    /// Trim each device's default CUDA memory pool, releasing unused memory
+    /// back to the OS until the pool retains at most `min_bytes_to_keep`
+    /// bytes. Pass `0` to release everything that is currently unused.
+    ///
+    /// This is intended to be invoked periodically between batches to combat
+    /// long-term fragmentation of the per-device memory pool. Any in-flight
+    /// allocations remain reserved by the pool, so the caller does not need
+    /// to synchronize the streams beforehand. Errors are logged and skipped
+    /// per-device so that a transient failure on one device does not abort
+    /// the trim sweep on the others.
+    pub fn trim_mem_pools(&self, min_bytes_to_keep: usize) -> Result<()> {
+        let total_start = Instant::now();
+        for (idx, device) in self.devices.iter().enumerate() {
+            device.bind_to_thread()?;
+            let mut pool: CUmemoryPool = std::ptr::null_mut();
+            let pool_ptr = &mut pool as *mut CUmemoryPool;
+            let cu_device = *device.cu_device();
+            let device_start = Instant::now();
+            unsafe {
+                let lib = cudarc::driver::sys::lib();
+                if let Err(err) = lib.cuDeviceGetDefaultMemPool(pool_ptr, cu_device).result() {
+                    tracing::warn!(
+                        device_index = idx,
+                        ?err,
+                        "Failed to query default CUDA memory pool; skipping trim"
+                    );
+                    continue;
+                }
+                if let Err(err) = lib.cuMemPoolTrimTo(pool, min_bytes_to_keep).result() {
+                    tracing::warn!(device_index = idx, ?err, "Failed to trim CUDA memory pool");
+                    continue;
+                }
+            }
+            tracing::debug!(
+                device_index = idx,
+                min_bytes_to_keep,
+                duration_ms = device_start.elapsed().as_secs_f64() * 1000.0,
+                "Trimmed CUDA memory pool",
+            );
+        }
+        let elapsed = total_start.elapsed();
+        tracing::info!(
+            duration_ms = elapsed.as_secs_f64() * 1000.0,
+            min_bytes_to_keep,
+            num_devices = self.devices.len(),
+            "Completed CUDA memory pool trim sweep",
+        );
+        metrics::histogram!("cuda_mem_pool_trim_duration_seconds").record(elapsed.as_secs_f64());
+        Ok(())
     }
 
     pub fn device(&self, index: usize) -> Arc<CudaDevice> {
