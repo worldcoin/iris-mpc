@@ -11,13 +11,17 @@ use iris_mpc_common::{
     vector_id::VectorId,
 };
 use iris_mpc_cpu::{
-    execution::hawk_main::{BothEyes, StoreId, LEFT, RIGHT},
+    execution::hawk_main::{BothEyes, LEFT, RIGHT},
     graph_checkpoint::{
-        download_graph_checkpoint, get_latest_checkpoint_state, GraphCheckpointState,
+        download_graph_checkpoint, get_most_recent_checkpoints, GraphCheckpointState,
     },
     hawkers::aby3::aby3_store::Aby3Store,
     hnsw::{
-        graph::{graph_store::GraphPg, layered_graph::GraphMem},
+        graph::{
+            graph_store::{GraphMutationRow, GraphPg},
+            layered_graph::GraphMem,
+            mutation::GraphMutation,
+        },
         searcher::HnswParams,
     },
 };
@@ -176,11 +180,6 @@ impl SanityCheckConfig {
     fn force_path_style(&self) -> bool {
         self.environment != ENV_PROD && self.environment != ENV_STAGE
     }
-
-    /// Empty bucket name disables S3-checkpoint mode.
-    fn s3_checkpoint_enabled(&self) -> bool {
-        !self.graph_checkpoint_bucket_name.is_empty()
-    }
 }
 
 #[derive(Deserialize)]
@@ -283,85 +282,101 @@ async fn main() -> Result<()> {
         None => None,
     };
 
-    // --- Optional: load graph from S3 checkpoint ---
-    let s3_graphs: Option<BothEyes<GraphMem<VectorId>>> = if config.s3_checkpoint_enabled() {
-        let bucket = config.graph_checkpoint_bucket_name.as_str();
-        rpt!(rpt, "--- Loading graph from S3 checkpoint ---");
-        let checkpoint_state = load_checkpoint_state(
-            &graph_pg,
-            args.checkpoint_s3_key.as_deref(),
-            bucket,
-            &mut rpt,
-        )
+    // --- Load graph from S3 checkpoint, then replay any mutations recorded after it ---
+    let bucket = config.graph_checkpoint_bucket_name.as_str();
+    rpt!(rpt, "--- Loading graph from S3 checkpoint ---");
+    let checkpoint_state = load_checkpoint_state(
+        &graph_pg,
+        args.checkpoint_s3_key.as_deref(),
+        bucket,
+        &mut rpt,
+    )
+    .await?;
+
+    // Build the checkpoint S3 client (mirrors AwsClients::checkpoint_s3_client,
+    // which may target a different region from the general S3 client).
+    let checkpoint_s3_client = build_checkpoint_s3_client(
+        &config.graph_checkpoint_bucket_region,
+        config.force_path_style(),
+    )
+    .await;
+
+    rpt!(
+        rpt,
+        "  Downloading checkpoint: s3://{}/{}",
+        bucket,
+        checkpoint_state.s3_key
+    );
+    let mut graphs: BothEyes<GraphMem<VectorId>> =
+        download_graph_checkpoint(&checkpoint_s3_client, bucket, &checkpoint_state).await?;
+    rpt!(rpt, "  Checkpoint loaded and BLAKE3 verified.");
+
+    // Replay any GraphMutations recorded in hawk_graph_mutations after the checkpoint.
+    let mutation_rows: Vec<GraphMutationRow> = graph_pg
+        .get_hawk_graph_mutations_after(checkpoint_state.graph_mutation_id)
+        .await?;
+    rpt!(
+        rpt,
+        "  Applying {} mutation row(s) after checkpoint (graph_mutation_id={:?})...",
+        mutation_rows.len(),
+        checkpoint_state.graph_mutation_id,
+    );
+    for row in &mutation_rows {
+        let both_eyes: BothEyes<Vec<GraphMutation<VectorId>>> =
+            bincode::deserialize(&row.serialized_mutations)?;
+        graphs[LEFT].insert_apply(both_eyes[LEFT].clone());
+        graphs[RIGHT].insert_apply(both_eyes[RIGHT].clone());
+    }
+    rpt!(rpt, "  All mutations applied.");
+
+    // Check 0a: checkpoint metadata vs persistent_state genesis watermarks
+    rpt!(rpt, "--- Check 0a: Checkpoint metadata validation ---");
+    let ps_iris_id: Option<u32> = graph_pg
+        .get_persistent_state(STATE_DOMAIN, STATE_KEY_LAST_INDEXED_IRIS_ID)
+        .await?;
+    let ps_mod_id: Option<i64> = graph_pg
+        .get_persistent_state(STATE_DOMAIN, STATE_KEY_LAST_INDEXED_MODIFICATION_ID)
         .await?;
 
-        let s3_client = build_checkpoint_s3_client(
-            &config.graph_checkpoint_bucket_region,
-            config.force_path_style(),
-        )
-        .await;
+    let iris_ok = ps_iris_id
+        .map(|ps| ps == checkpoint_state.last_indexed_iris_id)
+        .unwrap_or(false);
+    let mod_ok = ps_mod_id
+        .map(|ps| ps == checkpoint_state.last_indexed_modification_id)
+        .unwrap_or(false);
+    let cp_ok = iris_ok && mod_ok;
 
-        rpt!(
-            rpt,
-            "  Downloading checkpoint: s3://{}/{}",
-            bucket,
-            checkpoint_state.s3_key
-        );
-        let graphs: BothEyes<GraphMem<VectorId>> =
-            download_graph_checkpoint(&s3_client, bucket, &checkpoint_state).await?;
-        rpt!(rpt, "  Checkpoint loaded and BLAKE3 verified.");
+    let detail = format!(
+        "checkpoint(iris_id={}, mod_id={}) vs persistent_state(iris_id={}, mod_id={})",
+        checkpoint_state.last_indexed_iris_id,
+        checkpoint_state.last_indexed_modification_id,
+        ps_iris_id
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "not set".into()),
+        ps_mod_id
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "not set".into()),
+    );
+    rpt!(
+        rpt,
+        "  [{}] {}",
+        if cp_ok { "OK" } else { "MISMATCH" },
+        detail
+    );
+    checks.push(CheckResult::new("0a", "Checkpoint metadata", cp_ok, detail));
 
-        // Check 0a: checkpoint metadata vs persistent_state genesis watermarks
-        rpt!(rpt, "--- Check 0a: Checkpoint metadata validation ---");
-        let ps_iris_id: Option<u32> = graph_pg
-            .get_persistent_state(STATE_DOMAIN, STATE_KEY_LAST_INDEXED_IRIS_ID)
-            .await?;
-        let ps_mod_id: Option<i64> = graph_pg
-            .get_persistent_state(STATE_DOMAIN, STATE_KEY_LAST_INDEXED_MODIFICATION_ID)
-            .await?;
+    stats.add("checkpoint_s3_key", &checkpoint_state.s3_key);
+    stats.add(
+        "checkpoint_last_indexed_iris_id",
+        checkpoint_state.last_indexed_iris_id.to_string(),
+    );
+    stats.add(
+        "checkpoint_last_indexed_modification_id",
+        checkpoint_state.last_indexed_modification_id.to_string(),
+    );
+    stats.add("checkpoint_blake3_hash", &checkpoint_state.blake3_hash);
 
-        let iris_ok = ps_iris_id
-            .map(|ps| ps == checkpoint_state.last_indexed_iris_id)
-            .unwrap_or(false);
-        let mod_ok = ps_mod_id
-            .map(|ps| ps == checkpoint_state.last_indexed_modification_id)
-            .unwrap_or(false);
-        let cp_ok = iris_ok && mod_ok;
-
-        let detail = format!(
-            "checkpoint(iris_id={}, mod_id={}) vs persistent_state(iris_id={}, mod_id={})",
-            checkpoint_state.last_indexed_iris_id,
-            checkpoint_state.last_indexed_modification_id,
-            ps_iris_id
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "not set".into()),
-            ps_mod_id
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "not set".into()),
-        );
-        rpt!(
-            rpt,
-            "  [{}] {}",
-            if cp_ok { "OK" } else { "MISMATCH" },
-            detail
-        );
-        checks.push(CheckResult::new("0a", "Checkpoint metadata", cp_ok, detail));
-
-        stats.add("checkpoint_s3_key", &checkpoint_state.s3_key);
-        stats.add(
-            "checkpoint_last_indexed_iris_id",
-            checkpoint_state.last_indexed_iris_id.to_string(),
-        );
-        stats.add(
-            "checkpoint_last_indexed_modification_id",
-            checkpoint_state.last_indexed_modification_id.to_string(),
-        );
-        stats.add("checkpoint_blake3_hash", &checkpoint_state.blake3_hash);
-
-        Some(graphs)
-    } else {
-        None
-    };
+    let s3_graphs: Option<BothEyes<GraphMem<VectorId>>> = Some(graphs);
 
     rpt!(rpt, "--- Collecting iris IDs ---");
     let iris_ids = collect_iris_ids(&hnsw_store, &mut stats).await?;
@@ -385,7 +400,6 @@ async fn main() -> Result<()> {
     rpt!(rpt, "--- Check 1: HNSW graph structural checks ---");
     let layer_probability = args.layer_probability.unwrap_or((args.m as f64).recip());
     run_graph_checks(
-        &graph_pg,
         s3_graphs.as_ref(),
         &iris_ids,
         &exclusions,
@@ -479,7 +493,6 @@ async fn collect_iris_ids(store: &Store, stats: &mut Stats) -> Result<HashSet<i6
 
 #[allow(clippy::too_many_arguments)]
 async fn run_graph_checks(
-    graph_pg: &GraphPg<Aby3Store>,
     s3_graphs: Option<&BothEyes<GraphMem<VectorId>>>,
     iris_ids: &HashSet<i64>,
     exclusions: &Option<HashSet<u32>>,
@@ -493,9 +506,11 @@ async fn run_graph_checks(
     let mut l0_id_sets: Vec<(&str, HashSet<u32>)> = Vec::new();
 
     if let Some(graphs) = s3_graphs {
-        // Graphs already loaded from S3 checkpoint.
         for (eye, idx) in [("left", LEFT), ("right", RIGHT)] {
-            rpt!(rpt, "  Checking {eye} graph (from S3 checkpoint)...");
+            rpt!(
+                rpt,
+                "  Checking {eye} graph (from S3 checkpoint + mutations)..."
+            );
             let l0_ids = check_single_graph(
                 eye,
                 &graphs[idx],
@@ -511,25 +526,9 @@ async fn run_graph_checks(
             l0_id_sets.push((eye, l0_ids));
         }
     } else {
-        // Load one graph at a time from Postgres to halve peak memory.
-        for (eye, store_id) in [("left", StoreId::Left), ("right", StoreId::Right)] {
-            rpt!(rpt, "  Loading {eye} graph...");
-            let graph = load_graph(graph_pg, store_id).await?;
-            let l0_ids = check_single_graph(
-                eye,
-                &graph,
-                iris_ids,
-                exclusions,
-                m,
-                layer_probability,
-                checks,
-                degree_hist,
-                stats,
-                rpt,
-            );
-            drop(graph);
-            l0_id_sets.push((eye, l0_ids));
-        }
+        eyre::bail!(
+            "No graph loaded — S3 checkpoint is required (DB graph loading is no longer supported)"
+        );
     }
 
     // -- 1i: Left/Right graph sync --
@@ -892,15 +891,6 @@ fn check_single_graph(
     layer0_ids
 }
 
-async fn load_graph(
-    graph_pg: &GraphPg<Aby3Store>,
-    store_id: StoreId,
-) -> Result<GraphMem<VectorId>> {
-    let mut tx = graph_pg.tx().await?;
-    let mut ops = tx.with_graph(store_id);
-    ops.load_to_mem(graph_pg.pool(), 4).await
-}
-
 /// Resolve checkpoint state: use explicit S3 key (looked up from DB) or
 /// auto-discover the latest checkpoint from the genesis_graph_checkpoint table.
 async fn load_checkpoint_state(
@@ -933,24 +923,27 @@ async fn load_checkpoint_state(
             is_archival: row.is_archival,
         })
     } else {
-        rpt!(rpt, "  Auto-discovering latest checkpoint from DB...");
-        let state = get_latest_checkpoint_state(graph_pg).await?;
-        match state {
-            Some(s) => {
-                rpt!(
-                    rpt,
-                    "  Found checkpoint: s3://{}/{} (iris_id={}, mod_id={})",
-                    bucket,
-                    s.s3_key,
-                    s.last_indexed_iris_id,
-                    s.last_indexed_modification_id
-                );
-                Ok(s)
-            }
-            None => Err(eyre::eyre!(
-                "No checkpoint found in genesis_graph_checkpoint table"
-            )),
+        rpt!(rpt, "  Auto-discovering most recent checkpoint from DB...");
+        let (checkpoints, _hashes) = get_most_recent_checkpoints(graph_pg).await?;
+        if checkpoints.is_empty() {
+            return Err(eyre::eyre!(
+                "No checkpoints found in genesis_graph_checkpoints table"
+            ));
         }
+        // Pick the checkpoint with the highest last_indexed_iris_id as the most recent.
+        let state = checkpoints
+            .into_iter()
+            .max_by_key(|c| c.last_indexed_iris_id)
+            .expect("non-empty vec");
+        rpt!(
+            rpt,
+            "  Found checkpoint: s3://{}/{} (iris_id={}, mod_id={})",
+            bucket,
+            state.s3_key,
+            state.last_indexed_iris_id,
+            state.last_indexed_modification_id
+        );
+        Ok(state)
     }
 }
 
@@ -968,18 +961,16 @@ async fn run_persistent_state_checks(
     let last_indexed: Option<u32> = graph_pg
         .get_persistent_state(STATE_DOMAIN, STATE_KEY_LAST_INDEXED_IRIS_ID)
         .await?;
-    // When the graph is loaded from an S3 checkpoint, the Postgres links table
-    // is not the source of truth for the graph, so read the max serial id from
-    // the in-memory graphs instead.
+    // The graph is always loaded from an S3 checkpoint (+ mutations); the
+    // Postgres links table is no longer the source of truth.
     let (left_max, right_max) = match s3_graphs {
         Some(graphs) => (
             graph_mem_max_serial_id(&graphs[LEFT]),
             graph_mem_max_serial_id(&graphs[RIGHT]),
         ),
-        None => (
-            get_graph_max_serial_id(graph_pg, StoreId::Left).await?,
-            get_graph_max_serial_id(graph_pg, StoreId::Right).await?,
-        ),
+        None => {
+            eyre::bail!("No graph loaded — S3 checkpoint is required (DB graph loading is no longer supported)");
+        }
     };
 
     // 2a: last_indexed_iris_id matches irises table max serial ID
@@ -1030,12 +1021,6 @@ async fn run_persistent_state_checks(
     );
 
     Ok(last_mod_id)
-}
-
-async fn get_graph_max_serial_id(graph_pg: &GraphPg<Aby3Store>, store_id: StoreId) -> Result<i64> {
-    let mut tx = graph_pg.tx().await?;
-    let mut ops = tx.with_graph(store_id);
-    ops.get_max_serial_id().await
 }
 
 /// Returns the maximum serial_id across all nodes in layer 0 of an in-memory
