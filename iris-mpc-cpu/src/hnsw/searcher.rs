@@ -9,7 +9,11 @@ use super::{
     vector_store::VectorStoreMut,
 };
 use crate::hnsw::{
-    graph::neighborhood::Neighborhood, metrics::ops_counter::Operation, VectorStore,
+    graph::{
+        mutation::GroupedMutations, neighborhood::Neighborhood, GraphMutation, UpdateEntryPoint,
+    },
+    metrics::ops_counter::Operation,
+    VectorStore,
 };
 
 use crate::hnsw::GraphMem;
@@ -286,22 +290,10 @@ pub struct HnswSearcher {
     pub fixed_layer_search_batch_size: Option<usize>,
 }
 
+/// A list of graph mutations representing state updates for insertion of new nodes
+/// into the HNSW graph.
+pub type ConnectPlan<Vector> = GroupedMutations<Vector>;
 pub type ConnectPlanV<V> = ConnectPlan<<V as VectorStore>::VectorRef>;
-
-/// Represents the state updates required for insertion of a new node into an HNSW
-/// hierarchical graph.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConnectPlan<Vector: Ord> {
-    /// The new vector to insert
-    pub inserted_vector: Vector,
-
-    /// List of neighborhood updates to apply
-    pub updates: BTreeMap<(Vector, usize), Vec<Vector>>,
-
-    // TODO change to "entrypoints_update", and type `Option<EntryPointsUpdate>`
-    /// Whether this update sets the entry point of the HNSW graph to the inserted vector
-    pub update_ep: UpdateEntryPoint,
-}
 
 /// Represents a graph update of a single node's neighborhood in a graph, given
 /// by a tuple `(update_layer, update_vector, new_neighborhood)`.
@@ -319,18 +311,6 @@ pub fn build_layer_updates<V: Clone + Ord>(
     once(((inserted_vector, layer), neighbors.clone()))
         .chain(izip!(neighbors, nb_links).map(|(nb, nb_nbs)| ((nb, layer), nb_nbs)))
         .collect()
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum UpdateEntryPoint {
-    /// Do not update entry points based on inserted vector
-    False,
-
-    /// Set a new unique entry point
-    SetUnique { layer: usize },
-
-    /// Add a new item to the set of entry points
-    Append { layer: usize },
 }
 
 #[allow(non_snake_case)]
@@ -1500,6 +1480,7 @@ impl HnswSearcher {
         let (mut W, n_layers, insertion_layer, update_ep) = self
             .search_init::<_, N>(store, graph, query, insertion_layer)
             .await?;
+        tracing::info!("update_ep for query: {:?}", update_ep);
         metrics::histogram!("search_init_duration").record(init_start.elapsed().as_secs_f64());
 
         // Saved links for insertion layers
@@ -1565,24 +1546,31 @@ impl HnswSearcher {
         links: Vec<Vec<V::VectorRef>>,
         update_ep: UpdateEntryPoint,
     ) -> Result<ConnectPlanV<V>> {
-        let updates = vec![(inserted_vector, links, update_ep)];
-        let mut r = self.insert_prepare_batch(store, graph, updates).await?;
-        let first = r.pop();
-        first.ok_or(eyre!("insert_prepare produced no connect plans"))
+        // Convert links to layers format
+        let layers: Vec<(usize, Vec<V::VectorRef>)> = links.into_iter().enumerate().collect();
+
+        let mutations = vec![Some(GroupedMutations(vec![GraphMutation::InsertNode {
+            id: inserted_vector,
+            layers,
+            update_ep,
+        }]))];
+        let mut grouped = self.insert_prepare_batch(store, graph, mutations).await?;
+        Ok(grouped.pop().flatten().unwrap_or(GroupedMutations(vec![])))
     }
 
     /// Prepare connect plans for a batch of graph updates.
     ///
-    /// Given a collection of updates, generates a sequence of `ConnectPlan`
-    /// structs representing the individual sequential updates from applying the
-    /// input updates one after another.  This involves computing the
-    /// intermediate state of neighborhoods modified by insertions, and
-    /// collecting this intermediate state in corresponding updates.
+    /// Takes a `Vec<Option<GroupedMutations>>` with one slot per batch request.
+    /// `None` slots are passed through unchanged.  Each `Some` group may contain
+    /// an optional `RemoveNode` followed by an `InsertNode`.
     ///
-    /// After the `ConnectPlan` structs are created, the final state of all
-    /// updated neighborhoods is inspected to see if any are too large and need
-    /// to be compacted.  All such neighborhoods are compacted in one step at
-    /// the end of the function call.
+    /// For every `InsertNode` found, the function computes bilateral neighborhood
+    /// updates (intra-batch inserts are tracked so they see each other's links),
+    /// then checks whether any neighborhood has grown past the M limit.  If so,
+    /// a `Compact` mutation is appended to the `GroupedMutations` of whichever
+    /// InsertNode triggered the overflow: the inserted node's own group if it is
+    /// the node being compacted, otherwise the last group whose InsertNode added
+    /// to that neighborhood.
     ///
     /// TODO: finalize batched operation of compaction to minimize latency.
     ///
@@ -1592,130 +1580,107 @@ impl HnswSearcher {
         &self,
         store: &mut V,
         graph: &mut GraphMem<V::VectorRef>,
-        mut updates: Vec<(V::VectorRef, Vec<Vec<V::VectorRef>>, UpdateEntryPoint)>,
-    ) -> Result<Vec<ConnectPlanV<V>>> {
-        if updates.is_empty() {
-            return Ok(Vec::new());
-        }
+        mut mutations: Vec<Option<GroupedMutations<V::VectorRef>>>,
+    ) -> Result<Vec<Option<GroupedMutations<V::VectorRef>>>> {
+        // Extract InsertNode data, building sorted link vectors.
+        // update_to_group[i] gives the group_idx (slot in mutations) that produced updates[i].
+        let mut updates: Vec<(V::VectorRef, Vec<Vec<V::VectorRef>>, UpdateEntryPoint)> =
+            Vec::with_capacity(mutations.len());
+        let mut update_to_group: Vec<usize> = Vec::with_capacity(mutations.len());
 
-        // Sort all neighborhoods by index
-        for (_, links, _) in updates.iter_mut() {
-            for l in links.iter_mut() {
-                l.sort();
+        for (group_idx, opt_group) in mutations.iter_mut().enumerate() {
+            let Some(group) = opt_group else { continue };
+            for mutation in group.0.iter_mut() {
+                let GraphMutation::InsertNode {
+                    id,
+                    layers,
+                    update_ep,
+                } = mutation
+                else {
+                    continue;
+                };
+
+                let max_layer = layers.iter().map(|(l, _)| *l).max().unwrap_or(0);
+                let mut links = vec![Vec::new(); max_layer + 1];
+                for (layer, neighbors) in layers.iter_mut() {
+                    neighbors.sort();
+                    links[*layer] = neighbors.clone();
+                }
+                update_to_group.push(group_idx);
+                updates.push((id.clone(), links, update_ep.clone()));
             }
         }
 
-        // Output connect plans
-        let mut output_plans: Vec<ConnectPlanV<V>> = Vec::new();
-        // Map from vector ids to output connect plan indices
-        let mut query_idxs: HashMap<<V as VectorStore>::VectorRef, usize> = HashMap::new();
+        if updates.is_empty() {
+            return Ok(mutations);
+        }
 
-        // Map `(vector_id, layer) -> Vec<query_id>` recording the query ids
-        // which are to be inserted into neighborhoods of nodes, and in what
-        // order.  Note input `vector_id` can be a `query_id` if the
-        // neighborhood of a subsequent query has been extended to include a
-        // previous query in the batch.  `BTreeMap` is used for deterministic
-        // iteration order.
-        let mut nbhd_updates: BTreeMap<
-            (<V as VectorStore>::VectorRef, usize),
-            Vec<<V as VectorStore>::VectorRef>,
-        > = BTreeMap::new();
+        // Map from vector ids to update indices (for intra-batch neighborhood lookups)
+        let query_idxs: HashMap<V::VectorRef, usize> = updates
+            .iter()
+            .enumerate()
+            .map(|(idx, (vec, _, _))| (vec.clone(), idx))
+            .collect();
 
-        // Final updated neighborhood associated with each modified `(vector_id, layer)`
-        let mut final_nbhds: BTreeMap<
-            (<V as VectorStore>::VectorRef, usize),
-            Vec<<V as VectorStore>::VectorRef>,
-        > = BTreeMap::new();
+        // Map from inserted vector id to its group_idx (for compact attribution)
+        let insert_to_group: HashMap<V::VectorRef, usize> = updates
+            .iter()
+            .zip(update_to_group.iter())
+            .map(|((vec, _, _), &group_idx)| (vec.clone(), group_idx))
+            .collect();
 
-        for (idx, (vec, links, update_ep)) in updates.iter().enumerate() {
-            // Initialize connect plan for output
-            output_plans.push(ConnectPlan {
-                inserted_vector: vec.clone(),
-                updates: BTreeMap::new(),
-                update_ep: update_ep.clone(),
-            });
-            // Record index of associated vector id
-            query_idxs.insert(vec.clone(), idx);
+        // Track (neighbor, layer) -> query_ids to insert, final neighborhoods, and the
+        // last group_idx that added to each neighbor's neighborhood (for compact attribution).
+        let mut nbhd_updates: BTreeMap<(V::VectorRef, usize), Vec<V::VectorRef>> = BTreeMap::new();
+        let mut nbhd_last_group: BTreeMap<(V::VectorRef, usize), usize> = BTreeMap::new();
+        let mut final_nbhds: BTreeMap<(V::VectorRef, usize), Vec<V::VectorRef>> = BTreeMap::new();
 
+        for ((vec, links, _), &group_idx) in izip!(&updates, &update_to_group) {
             for (layer, neighbors) in links.iter().enumerate() {
-                // Add update for inserting node with outgoing edges in this layer
-                output_plans[idx]
-                    .updates
-                    .insert((vec.clone(), layer), neighbors.clone());
-
-                // Record neighborhood of new node as potential final neighborhood.
-                // (May be overwritten later if updated during batch.)
                 final_nbhds.insert((vec.clone(), layer), neighbors.clone());
-
-                // Record connections to existing nodes, organized by existing node
-                for nb in neighbors.iter() {
+                for nb in neighbors {
                     nbhd_updates
                         .entry((nb.clone(), layer))
                         .or_default()
                         .push(vec.clone());
+                    nbhd_last_group
+                        .entry((nb.clone(), layer))
+                        .and_modify(|g| *g = (*g).max(group_idx))
+                        .or_insert(group_idx);
                 }
             }
         }
 
+        // Apply neighborhood updates
         for ((nb, layer), query_ids) in nbhd_updates {
-            // Identify the graph neighborhood of `nb` in layer `layer` prior to
-            // any updates in the batch
-            let mut nb_nbhd = if let Some(idx) = query_idxs.get(&nb) {
-                // `nb`` is a query id from the current batch
-                let update_entry = updates
-                    .get(*idx)
-                    .ok_or_eyre("Could not find associated update entry")?;
-                let nbhd = update_entry
+            let mut nb_nbhd = match query_idxs.get(&nb) {
+                Some(idx) => updates[*idx]
                     .1
                     .get(layer)
-                    .ok_or_eyre("Update entry layer not present")?;
-                nbhd.clone()
-            } else {
-                let links = graph.get_links(&nb, layer).await.to_vec();
-                store.only_valid_vectors(links).await
+                    .ok_or_eyre("Update entry layer not present")?
+                    .clone(),
+                None => {
+                    store
+                        .only_valid_vectors(graph.get_links(&nb, layer).await.to_vec())
+                        .await
+                }
             };
 
-            // For each individual update, in order, extend the neighborhood and
-            // add as update in the corresopnding connect plan
             for query_id in query_ids {
-                // Get the output connect plan associated with `query_id`
-                let connect_plan_idx = *query_idxs
-                    .get(&query_id)
-                    .ok_or_eyre("Could not find associated connect plan index")?;
-                let connect_plan = output_plans
-                    .get_mut(connect_plan_idx)
-                    .ok_or_eyre("Could not find associated connect plan")?;
-
-                // Insert `query_id` into the existing index-sorted neighborhood.
-                // A duplicate here means the freshly allocated `query_id` already
-                // appears in `nb`'s neighborhood — i.e. the registry handed out a
-                // VectorId that the graph already knows about. That's a hard
-                // invariant violation (see refresh_registries() in load paths)
-                // and silently continuing leaves the graph in an inconsistent
-                // state, so fail the batch.
                 match nb_nbhd.binary_search(&query_id) {
                     Err(i) => nb_nbhd.insert(i, query_id),
                     Ok(_) => bail!(
-                        "Attempted to add graph edge which was already present: \
-                         {nb:?} -> {query_id:?} (layer {layer}) — registry/graph drift"
+                        "Duplicate edge: {nb:?} -> {query_id:?} (layer {layer}) — registry/graph drift"
                     ),
                 }
-
-                // Add update reflecting change to the existing neighborhood
-                connect_plan
-                    .updates
-                    .insert((nb.clone(), layer), nb_nbhd.clone());
             }
-
             final_nbhds.insert((nb, layer), nb_nbhd);
         }
 
-        // Initial updates without compaction are complete.  Now see if any
-        // modified neighborhoods are too large.
-
+        // Compact oversized neighborhoods
         let needs_compaction: BTreeMap<_, _> = final_nbhds
             .into_iter()
-            .filter(|((_nb, layer), nb_nbhd)| nb_nbhd.len() > self.params.get_M_limit(*layer))
+            .filter(|((_, layer), nbhd)| nbhd.len() > self.params.get_M_limit(*layer))
             .collect();
 
         metrics::histogram!("neighborhooods_compacted").record(needs_compaction.len() as f64);
@@ -1725,29 +1690,46 @@ impl HnswSearcher {
         );
 
         if !needs_compaction.is_empty() {
-            // Apply batch compaction
             let (base_nodes, neighborhoods, max_sizes, layers): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) =
                 needs_compaction
                     .into_iter()
-                    .map(|((nb, layer), nb_nbhd)| {
-                        (nb, nb_nbhd, self.params.get_M_max(layer), layer)
-                    })
+                    .map(|((nb, layer), nbhd)| (nb, nbhd, self.params.get_M_max(layer), layer))
                     .multiunzip();
+
             let compacted_nbhds = store
                 .compact_neighborhood_batch(&base_nodes, &neighborhoods, &max_sizes)
                 .await?;
 
-            // Add updates for neighborhood compaction to last connect plan
-            let last_plan = output_plans
-                .last_mut()
-                .ok_or_eyre("Output plans unexpectedly empty")?;
-            for (id, layer, mut compacted_nbhd) in izip!(base_nodes, layers, compacted_nbhds) {
-                compacted_nbhd.sort();
-                last_plan.updates.insert((id, layer), compacted_nbhd);
+            // Append each Compact mutation to the GroupedMutations of whichever InsertNode
+            // triggered the overflow: the inserted node itself if it is the one being
+            // compacted, otherwise the last group whose InsertNode added to that neighborhood.
+            let last_some_idx = mutations.iter().rposition(|opt| opt.is_some()).unwrap_or(0);
+            for (id, layer, original, compacted) in
+                izip!(&base_nodes, &layers, &neighborhoods, compacted_nbhds)
+            {
+                let compacted_set: HashSet<_> = compacted.iter().collect();
+                let to_remove: Vec<_> = original
+                    .iter()
+                    .filter(|v| !compacted_set.contains(v))
+                    .cloned()
+                    .collect();
+                if !to_remove.is_empty() {
+                    let group_idx = insert_to_group
+                        .get(id)
+                        .copied()
+                        .or_else(|| nbhd_last_group.get(&(id.clone(), *layer)).copied())
+                        .unwrap_or(last_some_idx);
+                    if let Some(Some(group)) = mutations.get_mut(group_idx) {
+                        group.0.push(GraphMutation::Compact {
+                            id: id.clone(),
+                            layer: *layer,
+                            to_remove,
+                        });
+                    }
+                }
             }
         }
-
-        Ok(output_plans)
+        Ok(mutations)
     }
 
     /// Insert a vector using the search results from `search_to_insert`,
@@ -1777,7 +1759,7 @@ impl HnswSearcher {
         let plan = self
             .insert_prepare(store, graph, inserted_vector, links_unstructured, update_ep)
             .await?;
-        graph.insert_apply(plan).await;
+        graph.insert_apply(plan.0);
         Ok(())
     }
 
@@ -2029,40 +2011,51 @@ mod tests {
                 UpdateEntryPoint::False
             };
 
-            // Create connect plan for this vector at layer 0
-            let connect_plan = ConnectPlan {
-                inserted_vector: vector_id,
-                updates: BTreeMap::from_iter([((vector_id, 0), nbs)]),
+            // Create mutations for this vector at layer 0
+            let mutations = vec![GraphMutation::InsertNode {
+                id: vector_id,
+                layers: vec![(0, nbs)],
                 update_ep,
-            };
+            }];
 
-            // Apply the connect plan to the graph
-            graph_store.insert_apply(connect_plan).await;
+            // Apply the mutations to the graph
+            graph_store.insert_apply(mutations);
         }
 
         // Create an update for inserting vector id 6
         let next_id = ids[5];
-        let neighbors = vec![ids[0..5].to_vec()];
-        let updates = vec![(next_id, neighbors, UpdateEntryPoint::False)];
+        let mutations = vec![Some(GroupedMutations(vec![GraphMutation::InsertNode {
+            id: next_id,
+            layers: vec![(0, ids[0..5].to_vec())],
+            update_ep: UpdateEntryPoint::False,
+        }]))];
 
         // Prepare the batch insertion
-        let connect_plans = searcher
-            .insert_prepare_batch(vector_store, graph_store, updates)
+        let grouped_plans = searcher
+            .insert_prepare_batch(vector_store, graph_store, mutations)
             .await?;
 
-        // Verify the connect plan was created correctly
-        assert_eq!(connect_plans.len(), 1);
-        let plan = &connect_plans[0];
-        assert_eq!(plan.update_ep, UpdateEntryPoint::False);
-        assert_eq!(plan.updates.len(), 6); // 1 for vector id 6, and 5 others for its neighbors
+        // Verify the grouped plan was created correctly
+        assert_eq!(grouped_plans.len(), 1);
+        let group = grouped_plans[0].as_ref().unwrap();
 
-        // Verify that each neighbor's updated neighborhood has exactly 4
-        // elements (the original 4 neighbors plus the newly inserted vector,
-        // trimmed to M_max=4 in layer 0)
-        for ((id, _lc), nbhd) in &plan.updates {
-            if *id != next_id {
-                assert_eq!(nbhd.len(), 4);
-            }
+        // Each group should have at least the InsertNode
+        assert!(!group.0.is_empty());
+        let plan = &group.0[0];
+
+        // Verify the first mutation is an InsertNode with the correct properties
+        if let GraphMutation::InsertNode {
+            id,
+            layers,
+            update_ep,
+        } = plan
+        {
+            assert_eq!(*id, next_id);
+            assert_eq!(*update_ep, UpdateEntryPoint::False);
+            // Check layers contains the expected neighbors
+            assert!(!layers.is_empty());
+        } else {
+            panic!("Expected InsertNode mutation");
         }
 
         Ok(())
