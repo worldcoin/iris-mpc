@@ -927,7 +927,7 @@ async fn load_checkpoint_state(
         let (checkpoints, _hashes) = get_most_recent_checkpoints(graph_pg).await?;
         if checkpoints.is_empty() {
             return Err(eyre::eyre!(
-                "No checkpoints found in genesis_graph_checkpoints table"
+                "No checkpoints found in genesis_graph_checkpoint table"
             ));
         }
         // Pick the checkpoint with the highest last_indexed_iris_id as the most recent.

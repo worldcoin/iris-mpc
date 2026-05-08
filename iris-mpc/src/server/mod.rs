@@ -588,7 +588,7 @@ async fn load_database(
 
     // Try to load graph from S3 checkpoint first, then fall back to
     // Postgres graph representation for temporary legacy compatibility.
-    // TODO simplify this logic once graph DB tables are removed.
+    // TODO: apply GraphMutations to the checkpoint
     let graph_load_future = async move {
         let both_eyes = if let Some(state) = checkpoint {
             tracing::info!(

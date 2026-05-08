@@ -177,7 +177,6 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
     pub fn insert_apply(&mut self, plan: Vec<GraphMutation<V>>) {
         tracing::info!(mutation_count = plan.len(), "Applying graph mutations");
         for mutation in plan {
-            tracing::info!("{:?}", mutation);
             match mutation {
                 GraphMutation::RemoveNode { ref id } => {
                     // Remove node from all layers where it exists
@@ -504,12 +503,15 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         // Add the node to each neighbor's neighborhood (bidirectional backlinks)
         for neighbor in &neighbors {
             if let Some(neighbor_links) = self.links.get_mut(neighbor) {
-                if !neighbor_links.contains(&id) {
-                    self.set_hash
-                        .remove_unordered_set(neighbor, neighbor_links.iter());
-                    neighbor_links.push(id.clone());
-                    self.set_hash
-                        .add_unordered_set(neighbor, neighbor_links.iter());
+                match neighbor_links.binary_search(&id) {
+                    Err(i) => {
+                        self.set_hash
+                            .remove_unordered_set(neighbor, neighbor_links.iter());
+                        neighbor_links.insert(i, id.clone());
+                        self.set_hash
+                            .add_unordered_set(neighbor, neighbor_links.iter());
+                    }
+                    Ok(_) => continue, // link already exists
                 }
             }
         }

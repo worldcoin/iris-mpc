@@ -1480,7 +1480,6 @@ impl HnswSearcher {
         let (mut W, n_layers, insertion_layer, update_ep) = self
             .search_init::<_, N>(store, graph, query, insertion_layer)
             .await?;
-        tracing::info!("update_ep for query: {:?}", update_ep);
         metrics::histogram!("search_init_duration").record(init_start.elapsed().as_secs_f64());
 
         // Saved links for insertion layers
@@ -1555,7 +1554,10 @@ impl HnswSearcher {
             update_ep,
         }]))];
         let mut grouped = self.insert_prepare_batch(store, graph, mutations).await?;
-        Ok(grouped.pop().flatten().unwrap_or(GroupedMutations(vec![])))
+        grouped
+            .pop()
+            .flatten()
+            .ok_or(eyre!("insert_prepare produced no mutations"))
     }
 
     /// Prepare connect plans for a batch of graph updates.

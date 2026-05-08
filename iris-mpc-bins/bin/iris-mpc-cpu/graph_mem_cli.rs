@@ -39,11 +39,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Obtain the most recent checkoint, apply all relevant graph mutations, and save it to a file
+    /// Obtain the most recent checkpoint, apply all relevant graph mutations, and save it to a file
     BackupGraph,
     /// (testing only) creates random data and stores it as a checkpoint
     RandomCheckpoint,
-    /// Load a graph from a file to memory, then upload it to s3 and add it to the checkponts table.
+    /// Load a graph from a file to memory, then upload it to s3 and add it to the checkpoint table.
     LoadCheckpoint,
     /// (testing only) run BackupGraph and compare it against a file.
     VerifyBackup,
