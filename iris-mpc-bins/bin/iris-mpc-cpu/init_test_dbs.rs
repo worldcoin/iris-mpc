@@ -1,5 +1,7 @@
 #![recursion_limit = "256"]
 
+use aws_sdk_s3::config::Region as S3Region;
+use aws_sdk_s3::Client as S3Client;
 use clap::Parser;
 use eyre::Result;
 use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId, IrisVectorId};
@@ -150,6 +152,14 @@ struct Args {
     /// Skip insertion of specific serial IDs ... used primarily in genesis testing.
     #[clap(long, num_args = 1..)]
     skip_insert_serial_ids: Vec<u32>,
+
+    /// S3 bucket for graph checkpoints.
+    #[clap(long)]
+    s3_bucket: String,
+
+    /// AWS region for the S3 checkpoint client.
+    #[clap(long, default_value = "eu-north-1")]
+    aws_region: String,
 }
 
 impl Args {
@@ -276,16 +286,10 @@ async fn main() -> Result<()> {
 
     tracing::info!("⚓ ANCHOR: Constructing HNSW graph databases");
 
-    tracing::info!("Initializing in-memory graphs from databases");
+    tracing::info!("Initializing in-memory graphs from S3 checkpoint");
     let graphs = if n_existing_irises > 0 {
-        // read graph store from party 0
-        let graph_l = dbs[DEFAULT_PARTY_IDX]
-            .load_graph_to_mem(StoreId::Left)
-            .await?;
-        let graph_r = dbs[DEFAULT_PARTY_IDX]
-            .load_graph_to_mem(StoreId::Right)
-            .await?;
-        [graph_l, graph_r]
+        // Load from S3 checkpoint, then replay mutations recorded after it
+        dbs[DEFAULT_PARTY_IDX].get_both_eyes().await?
     } else {
         // new graphs
         [GraphMem::new(), GraphMem::new()]
@@ -438,11 +442,10 @@ async fn main() -> Result<()> {
 
     let [(.., graph_l), (.., graph_r)] = results.try_into().unwrap();
 
+    let graphs = [graph_l, graph_r];
     for (party, db) in dbs.iter().enumerate() {
-        for (graph, side) in [(&graph_l, StoreId::Left), (&graph_r, StoreId::Right)] {
-            tracing::info!("Persisting {} graph for party {}", side, party);
-            db.persist_graph_db(graph.clone(), side).await?;
-        }
+        tracing::info!("Persisting graph checkpoint for party {}", party);
+        db.make_checkpoint_from_graph(&graphs).await?;
     }
 
     tracing::info!("Exited successfully! 🎉");
@@ -451,9 +454,25 @@ async fn main() -> Result<()> {
 }
 
 async fn init_dbs(args: &Args) -> Vec<DbContext> {
+    let region = S3Region::new(args.aws_region.clone());
+    let shared_config = aws_config::from_env().region(region).load().await;
+    let s3_client = S3Client::new(&shared_config);
+
     let mut dbs = Vec::new();
-    for (url, schema) in izip!(args.db_urls().iter(), args.db_schemas().iter()).take(N_PARTIES) {
-        dbs.push(DbContext::new(url, schema).await);
+    for (party_id, (url, schema)) in izip!(args.db_urls().iter(), args.db_schemas().iter())
+        .take(N_PARTIES)
+        .enumerate()
+    {
+        dbs.push(
+            DbContext::new(
+                url,
+                schema,
+                s3_client.clone(),
+                args.s3_bucket.clone(),
+                party_id,
+            )
+            .await,
+        );
     }
     dbs
 }
