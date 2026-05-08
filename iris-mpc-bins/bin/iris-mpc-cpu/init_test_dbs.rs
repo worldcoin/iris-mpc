@@ -6,7 +6,7 @@ use clap::Parser;
 use eyre::Result;
 use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId, IrisVectorId};
 use iris_mpc_cpu::{
-    execution::hawk_main::{StoreId, STORE_IDS},
+    execution::hawk_main::STORE_IDS,
     hawkers::aby3::aby3_store::FhdOps,
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
     hnsw::{

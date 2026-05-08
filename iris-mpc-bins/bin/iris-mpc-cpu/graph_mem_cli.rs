@@ -2,12 +2,9 @@
 
 use aws_sdk_s3::config::Region as S3Region;
 use aws_sdk_s3::Client as S3Client;
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use eyre::Result;
-use iris_mpc_cpu::{
-    execution::hawk_main::{LEFT, RIGHT},
-    hnsw::graph::test_utils::{DbContext, DiffMethod},
-};
+use iris_mpc_cpu::hnsw::graph::test_utils::{DbContext, DiffMethod};
 use iris_mpc_utils::misc::write_bin;
 use std::path::PathBuf;
 
