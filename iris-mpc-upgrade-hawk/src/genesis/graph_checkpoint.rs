@@ -53,7 +53,7 @@ pub async fn upload_and_sync_genesis_checkpoint(
     let (tx, done_rx) = oneshot::channel();
     let result = JobResult::new_s3_checkpoint(checkpoint_state, tx);
     tx_results.send(result).await?;
-    hawk_handle.sync_peers(false, Some(done_rx)).await?;
+    hawk_handle.sync_state(false, Some(done_rx)).await?;
     Ok(())
 }
 

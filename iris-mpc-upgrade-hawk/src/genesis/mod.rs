@@ -642,7 +642,7 @@ async fn exec_delta(
             let is_sync_batch = idx % (PERSIST_DELAY - 1) == 0 || idx == end;
             if is_sync_batch {
                 let wait_start = Instant::now();
-                hawk_handle.sync_peers(false, Some(done_rx)).await?;
+                hawk_handle.sync_state(false, Some(done_rx)).await?;
                 metrics::histogram!("genesis_persist_wait_duration")
                     .record(wait_start.elapsed().as_secs_f64());
             }
@@ -795,7 +795,7 @@ async fn exec_indexation(
         {
             // Coordinator: escape on shutdown.
             let shutdown = shutdown_handler.is_shutting_down();
-            let mismatch = hawk_handle.sync_peers(shutdown, None).await?;
+            let mismatch = hawk_handle.sync_state(shutdown, None).await?;
             if shutdown || mismatch {
                 tracing::warn!("Shutting down has been triggered");
                 break;
@@ -826,7 +826,7 @@ async fn exec_indexation(
                 if let Some(prev_done_rx) = persist_ch.take() {
                     let wait_start = Instant::now();
                     // Wait for other nodes to finish equivalent persistence.
-                    hawk_handle.sync_peers(false, Some(prev_done_rx)).await?;
+                    hawk_handle.sync_state(false, Some(prev_done_rx)).await?;
                     metrics::histogram!("genesis_persist_wait_duration")
                         .record(wait_start.elapsed().as_secs_f64());
                 }
@@ -901,11 +901,12 @@ async fn exec_indexation(
                     last_indexed_id
                 );
             } else if let Some(rx) = persist_ch.take() {
-                hawk_handle.sync_peers(false, Some(rx)).await?;
+                hawk_handle.sync_state(false, Some(rx)).await?;
             }
             metrics::histogram!("genesis_persist_wait_duration")
                 .record(wait_start.elapsed().as_secs_f64());
 
+            hawk_handle.sync_peers().await?;
             tracing::info!("All batches have been processed, shutting down...");
 
             Ok(())
@@ -1453,7 +1454,7 @@ async fn get_results_thread(
                     save_checkpoint_state(graph_tx, &checkpoint_state).await?;
                     let _ = done_tx.send(());
                 },
-                JobResult::Sync { .. } => unreachable!(),
+                JobResult::SyncState { .. } | JobResult::SyncPeers => unreachable!(),
             }
         }
 
