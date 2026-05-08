@@ -1559,6 +1559,7 @@ mod tests {
                     &query,
                     layer,
                 )
+                .instrument(plaintext_span.clone())
                 .await?;
         }
 
@@ -1595,109 +1596,7 @@ mod tests {
 
         for (role, mpc_graph) in mpc_graphs.into_iter().enumerate() {
             let mpc_graph = mpc_graph.unwrap_or_else(|| panic!("party {role} did not finish"));
-
-            // Manual graph comparison
-            let num_layers_mpc = mpc_graph.layers.len();
-            let num_layers_pt = plaintext_graph.layers.len();
-            println!(
-                "[Role {}] Layers count - MPC: {}, Plaintext: {}",
-                role, num_layers_mpc, num_layers_pt
-            );
-            if num_layers_mpc != num_layers_pt {
-                panic!(
-                    "[Role {}] Layer count mismatch: {} vs {}",
-                    role, num_layers_mpc, num_layers_pt
-                );
-            }
-
-            // Compare each layer
-            for (layer_idx, (mpc_layer, pt_layer)) in mpc_graph
-                .layers
-                .iter()
-                .zip(plaintext_graph.layers.iter())
-                .enumerate()
-            {
-                // Check if layers contain the same elements
-                let mpc_keys: std::collections::BTreeSet<_> = mpc_layer.links.keys().collect();
-                let pt_keys: std::collections::BTreeSet<_> = pt_layer.links.keys().collect();
-
-                if mpc_keys != pt_keys {
-                    println!(
-                        "[Role {} Layer {}] Element mismatch detected",
-                        role, layer_idx
-                    );
-                    panic!("[Role {} Layer {}] Layer elements differ: MPC has {} elements, plaintext has {} elements",
-                           role, layer_idx, mpc_keys.len(), pt_keys.len());
-                }
-                println!(
-                    "[Role {} Layer {}] Elements match - {} nodes",
-                    role,
-                    layer_idx,
-                    mpc_keys.len()
-                );
-
-                // Compare ordering by checking neighbors for each node
-                for node_id in mpc_keys.iter() {
-                    let mpc_neighbors = mpc_layer
-                        .links
-                        .get(node_id)
-                        .map(|v| v.as_slice())
-                        .unwrap_or(&[]);
-                    let pt_neighbors = pt_layer
-                        .links
-                        .get(node_id)
-                        .map(|v| v.as_slice())
-                        .unwrap_or(&[]);
-
-                    if mpc_neighbors != pt_neighbors {
-                        println!(
-                            "[Role {} Layer {}] Ordering mismatch for node {}",
-                            role, layer_idx, node_id
-                        );
-                        println!(
-                            "[Role {} Layer {}] Node {} MPC neighbors: {:?}",
-                            role, layer_idx, node_id, mpc_neighbors
-                        );
-                        println!(
-                            "[Role {} Layer {}] Node {} Plaintext neighbors: {:?}",
-                            role, layer_idx, node_id, pt_neighbors
-                        );
-                        panic!("[Role {} Layer {}] Neighbor list differs for node {}: MPC has {} neighbors, plaintext has {} neighbors",
-                               role, layer_idx, node_id, mpc_neighbors.len(), pt_neighbors.len());
-                    }
-                }
-                println!(
-                    "[Role {} Layer {}] Ordering matches for all nodes",
-                    role, layer_idx
-                );
-
-                // Compare order-agnostic SetHash checksums. Note: we cannot
-                // use `format!("{:?}", layer)` here, because that prints the
-                // underlying `HashMap` in non-deterministic iteration order
-                // and would produce false-positive mismatches even when the
-                // two layers are bit-for-bit equivalent.
-                let mpc_hash = mpc_layer.checksum();
-                let pt_hash = pt_layer.checksum();
-                if mpc_hash != pt_hash {
-                    println!(
-                        "[Role {} Layer {}] Hash mismatch detected (MPC: {:#x}, Plaintext: {:#x})",
-                        role, layer_idx, mpc_hash, pt_hash
-                    );
-                    panic!("[Role {} Layer {}] Layer hashes differ", role, layer_idx);
-                }
-                println!(
-                    "[Role {} Layer {}] Hashes match ({:#x})",
-                    role, layer_idx, mpc_hash
-                );
-            }
-
-            // Compare entry points
-            if mpc_graph.entry_points != plaintext_graph.entry_points {
-                println!("[Role {}] Entry points mismatch", role);
-                panic!("[Role {}] Entry points differ", role);
-            }
-            println!("[Role {}] Entry points match", role);
-            println!("[Role {}] All graph comparisons passed", role);
+            verify_graph_consistency(role, &mpc_graph, &plaintext_graph)?;
         }
 
         // If either assert fails the parameters no longer exercise the
@@ -1705,6 +1604,114 @@ mod tests {
         assert_eq!(plaintext_graph.get_num_layers(), 2);
         assert!(plaintext_graph.entry_points.len() >= 2);
 
+        Ok(())
+    }
+
+    /// Verifies that an MPC graph matches the plaintext reference graph.
+    /// Logs detailed comparison information and panics on mismatches.
+    fn verify_graph_consistency(
+        role: usize,
+        mpc_graph: &GraphMem<VectorId>,
+        plaintext_graph: &GraphMem<VectorId>,
+    ) -> eyre::Result<()> {
+        use std::collections::BTreeSet;
+
+        // Check layer count
+        let num_layers_mpc = mpc_graph.layers.len();
+        let num_layers_pt = plaintext_graph.layers.len();
+        tracing::debug!(
+            role,
+            num_layers_mpc,
+            num_layers_pt,
+            "Comparing layer counts"
+        );
+
+        if num_layers_mpc != num_layers_pt {
+            panic!(
+                "[Role {}] Layer count mismatch: MPC={} vs plaintext={}",
+                role, num_layers_mpc, num_layers_pt
+            );
+        }
+
+        // Compare each layer
+        for (layer_idx, (mpc_layer, pt_layer)) in mpc_graph
+            .layers
+            .iter()
+            .zip(plaintext_graph.layers.iter())
+            .enumerate()
+        {
+            // Check if layers contain the same elements
+            let mpc_keys: BTreeSet<_> = mpc_layer.links.keys().collect();
+            let pt_keys: BTreeSet<_> = pt_layer.links.keys().collect();
+
+            if mpc_keys != pt_keys {
+                tracing::error!(
+                    role,
+                    layer_idx,
+                    mpc_count = mpc_keys.len(),
+                    pt_count = pt_keys.len(),
+                    "Layer elements differ"
+                );
+                panic!(
+                    "[Role {}] Layer {} elements mismatch: MPC={} nodes, plaintext={} nodes",
+                    role,
+                    layer_idx,
+                    mpc_keys.len(),
+                    pt_keys.len()
+                );
+            }
+            tracing::debug!(
+                role,
+                layer_idx,
+                node_count = mpc_keys.len(),
+                "Layer elements verified"
+            );
+
+            // Compare ordering by checking neighbors for each node
+            for node_id in mpc_keys.iter() {
+                let mpc_neighbors = mpc_layer
+                    .links
+                    .get(node_id)
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&[]);
+                let pt_neighbors = pt_layer
+                    .links
+                    .get(node_id)
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&[]);
+
+                if mpc_neighbors != pt_neighbors {
+                    tracing::error!(
+                        role,
+                        layer_idx,
+                        node_id = %node_id,
+                        mpc_neighbor_count = mpc_neighbors.len(),
+                        pt_neighbor_count = pt_neighbors.len(),
+                        "Node neighbor list differs"
+                    );
+                    panic!(
+                    "[Role {}] Layer {} node {} neighbor mismatch: MPC={} neighbors, plaintext={} neighbors",
+                    role,
+                    layer_idx,
+                    node_id,
+                    mpc_neighbors.len(),
+                    pt_neighbors.len()
+                );
+                }
+            }
+            tracing::debug!(
+                role,
+                layer_idx,
+                "Layer node orderings verified for all nodes"
+            );
+        }
+
+        // Compare entry points
+        if mpc_graph.entry_points != plaintext_graph.entry_points {
+            tracing::error!(role, "Entry points mismatch");
+            panic!("[Role {}] Entry points differ", role);
+        }
+        tracing::info!(role, "Graph consistency verified");
         Ok(())
     }
 }
