@@ -185,7 +185,7 @@ env:
     value: "true"
 
   - name: SMPC__GPU_SCHEMA_NAME_SUFFIX
-    value: "rollback_0_21_0"
+    value: "rollback_0_22_0"
 
 initContainer:
   enabled: true
