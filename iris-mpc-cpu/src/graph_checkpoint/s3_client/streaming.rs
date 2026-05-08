@@ -1,7 +1,7 @@
 //! Streaming serialize + S3 multipart upload.
 //!
-//! `stream_serialize_and_upload` serializes a value directly into an S3
-//! multipart upload without materializing the full byte buffer in memory.
+//! [`stream_serialize_and_upload_with`] serializes a value directly into an
+//! S3 multipart upload without materializing the full byte buffer in memory.
 //! The serializer runs on a blocking thread and writes into a bounded async
 //! duplex pipe; the read side spawns up to `parallelism` concurrent
 //! `UploadPart` tasks as full chunks become available. Outside of the
@@ -26,11 +26,11 @@ use tokio::{
 };
 use tokio_util::io::SyncIoBridge;
 
-/// Default part size used by [`stream_serialize_and_upload`]. Also the size
-/// of the duplex pipe, which bounds back-pressure on the serializer.
+/// Suggested part size; also the size of the duplex pipe, which bounds
+/// back-pressure on the serializer.
 pub const DEFAULT_STREAMING_PART_SIZE: usize = 100 * 1024 * 1024;
 
-/// Default cap on concurrent in-flight `UploadPart` tasks.
+/// Suggested cap on concurrent in-flight `UploadPart` tasks.
 pub const DEFAULT_STREAMING_PARALLELISM: usize = 8;
 
 /// Serialize directly into an S3 multipart upload without buffering the full
@@ -38,35 +38,17 @@ pub const DEFAULT_STREAMING_PARALLELISM: usize = 8;
 ///
 /// `serialize` runs on a `spawn_blocking` thread, so it must be `Send +
 /// 'static`; callers typically move owned data or an `Arc`/owned guard into
-/// the closure. The closure receives a `&mut dyn Write` and should return
-/// `Ok(())` on success.
+/// the closure. The closure receives a `&mut dyn Write` and **must** stream
+/// its output incrementally (e.g. `bincode::serialize_into(w, &v)`); writing
+/// a fully buffered `Vec<u8>` to `w` defeats the streaming intent and
+/// reintroduces a full-size second copy.
 ///
 /// On any failure (serializer error, S3 error, task panic), the multipart
 /// upload is aborted before the function returns. On success,
 /// `complete_multipart_upload` is called and the object is durable.
-pub async fn stream_serialize_and_upload<F>(
-    s3_client: &S3Client,
-    bucket: &str,
-    key: &str,
-    serialize: F,
-) -> Result<()>
-where
-    F: FnOnce(&mut dyn Write) -> Result<()> + Send + 'static,
-{
-    stream_serialize_and_upload_with(
-        s3_client,
-        bucket,
-        key,
-        serialize,
-        DEFAULT_STREAMING_PART_SIZE,
-        DEFAULT_STREAMING_PARALLELISM,
-    )
-    .await
-}
-
-/// Like [`stream_serialize_and_upload`] but with explicit `part_size` and
-/// `parallelism`. Useful for tests; production callers should prefer the
-/// defaults.
+///
+/// Callers without a reason to override should pass
+/// [`DEFAULT_STREAMING_PART_SIZE`] and [`DEFAULT_STREAMING_PARALLELISM`].
 pub async fn stream_serialize_and_upload_with<F>(
     s3_client: &S3Client,
     bucket: &str,
