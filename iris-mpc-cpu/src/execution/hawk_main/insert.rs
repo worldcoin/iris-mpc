@@ -122,15 +122,6 @@ pub async fn insert<V: VectorStoreMut>(
         .filter_map(|opt| opt.as_ref())
         .flat_map(|group| group.0.iter().cloned())
         .collect();
-
-    tracing::info!(
-        mutation_count = all_mutations.len(),
-        insert_mutations = all_mutations
-            .iter()
-            .filter(|m| matches!(m, GraphMutation::InsertNode { .. }))
-            .count(),
-        "Applying mutations to graph"
-    );
     graph.insert_apply(all_mutations);
 
     // grouped_mutations is shaped as Vec<Option<ConnectPlanV<V>>>, one entry per
