@@ -1,4 +1,5 @@
 mod multipart;
+mod streaming;
 use std::{fmt::Display, io::Cursor, str::FromStr, time::Instant};
 
 use aws_sdk_s3::primitives::ByteStream;
@@ -23,6 +24,7 @@ use crate::{
 use crate::graph_checkpoint::data::*;
 use iris_mpc_common::IrisSerialId;
 pub use multipart::*;
+pub use streaming::*;
 
 /// Creates an S3 graph checkpoint.
 #[allow(clippy::too_many_arguments)]
