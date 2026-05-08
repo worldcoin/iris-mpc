@@ -58,11 +58,12 @@ pub enum JobRequest {
         modification: Modification,
     },
     /// Acts as a code barrier for inter-node synchronization.
-    Sync {
+    SyncState {
         /// Whether this node has been signaled to shut down.
         shutdown: bool,
         sync_status: Arc<AtomicU8>,
     },
+    SyncPeers,
 }
 
 /// Constructor.
@@ -114,11 +115,12 @@ pub enum JobResult {
         checkpoint_state: GraphCheckpointState,
         done_tx: sync::oneshot::Sender<()>,
     },
-    Sync {
+    SyncState {
         /// Whether the shutdown states of different nodes' Sync jobs
         /// were mismatched.
         mismatched: bool,
     },
+    SyncPeers,
 }
 
 /// Constructor.
@@ -178,7 +180,7 @@ impl fmt::Display for JobResult {
             } => {
                 write!(
                     f,
-                    "batch-id={}, batch-size={}, range=({:?}..{:?})",
+                    "JobResult::BatchIndexation: batch-id={}, batch-size={}, range=({:?}..{:?})",
                     batch_id,
                     vector_ids.len(),
                     first_serial_id,
@@ -188,17 +190,24 @@ impl fmt::Display for JobResult {
             JobResult::Modification {
                 modification_id, ..
             } => {
-                write!(f, "modification-id={}", modification_id)
+                write!(
+                    f,
+                    "JobResult::Modification: modification-id={}",
+                    modification_id
+                )
             }
-            JobResult::Sync { mismatched } => {
-                write!(f, "mismatched={}", mismatched)
+            JobResult::SyncState { mismatched } => {
+                write!(f, "JobResult::SyncState: mismatched={}", mismatched)
+            }
+            JobResult::SyncPeers => {
+                write!(f, "JobResult::SyncPeers")
             }
             JobResult::S3Checkpoint {
                 checkpoint_state, ..
             } => {
                 write!(
                     f,
-                    "iris-id={}, modification-id={}",
+                    "JobResult::S3Checkpoint: iris-id={}, modification-id={}",
                     checkpoint_state.last_indexed_iris_id,
                     checkpoint_state.last_indexed_modification_id
                 )
