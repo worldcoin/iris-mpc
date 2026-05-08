@@ -186,14 +186,6 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                     // Remove from entry points if present
                     self.entry_points.retain(|ep| &ep.point != id);
                 }
-                GraphMutation::ReplaceNode { new_id, old_id } => {
-                    for layer in &mut self.layers {
-                        layer.remove_node(&old_id);
-                    }
-                    if let Some(ep) = self.entry_points.iter_mut().find(|x| x.point == old_id) {
-                        ep.point = new_id;
-                    }
-                }
                 GraphMutation::InsertNode {
                     id,
                     layers,

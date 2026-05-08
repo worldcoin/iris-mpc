@@ -786,17 +786,14 @@ impl HawkActor {
                             next_serial_id += 1;
                             vid
                         };
+                        if let Some(replace_id) = &plan.plan.replace_id {
+                            mutations.push(GraphMutation::RemoveNode { id: *replace_id });
+                        }
                         mutations.push(GraphMutation::InsertNode {
                             id: inserted_vector,
                             layers: vec![],
                             update_ep: UpdateEntryPoint::False,
                         });
-                        if let Some(replace_id) = &plan.plan.replace_id {
-                            mutations.push(GraphMutation::ReplaceNode {
-                                new_id: inserted_vector,
-                                old_id: *replace_id,
-                            });
-                        }
                         GroupedMutations(mutations)
                     })
                 })
@@ -2118,12 +2115,6 @@ impl HawkHandle {
             // Set replace_id on plans for reauth updates and identity updates
             for (idx, req_index) in requests_order.iter().enumerate() {
                 if let Some(plan) = &mut insert_plans[idx] {
-                    tracing::info!(
-                        idx = idx,
-                        is_mutation = true,
-                        has_plan = true,
-                        "Creating insert plan"
-                    );
                     match req_index {
                         RequestIndex::UniqueReauthResetCheck(i) => {
                             if matches!(decisions[*i], ReauthUpdate(_)) {
@@ -2142,13 +2133,6 @@ impl HawkHandle {
                 }
             }
 
-            // Insert in memory, and return the plans to update the persistent database.
-            tracing::info!(
-                side = ?side,
-                insert_plans_count = insert_plans.len(),
-                non_none_plans = insert_plans.iter().filter(|p| p.is_some()).count(),
-                "About to call insert for eye"
-            );
             let mut plans = hawk_actor
                 .insert(sessions, insert_plans, &update_ids)
                 .await?;
@@ -2166,12 +2150,6 @@ impl HawkHandle {
                     // Apply deletion mutation to the in-memory graph immediately
                     let mut graph = hawk_actor.graph_store[*side as usize].write().await;
                     graph.insert_apply(removal_mutations);
-
-                    tracing::debug!(
-                        "Generated RemoveNode mutation for deletion {} (vector_id: {:?})",
-                        i,
-                        vector_id
-                    );
                 }
             }
 

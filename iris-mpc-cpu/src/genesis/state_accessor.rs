@@ -11,6 +11,8 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use std::{fmt::Debug, sync::Arc};
 
+// The below constants are public for the test_utils module
+
 /// Domain for persistent state store entry for last indexed id
 pub const STATE_DOMAIN: &str = "genesis";
 

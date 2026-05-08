@@ -97,20 +97,15 @@ pub async fn insert<V: VectorStoreMut>(
             };
 
             let mut request_mutations: Vec<GraphMutation<V::VectorRef>> = vec![];
-
-            // If updating an existing node, remove it first to clean up all old backlinks.
+            request_mutations.push(GraphMutation::InsertNode {
+                id: inserted.clone(),
+                // Convert links (Vec<Vec<VectorRef>>) to layers (Vec<(usize, Vec<VectorRef>)>)
+                layers: links.into_iter().enumerate().collect(),
+                update_ep,
+            });
             if let Some(rid) = replace_id {
                 request_mutations.push(GraphMutation::RemoveNode { id: rid.clone() });
             }
-
-            // Convert links (Vec<Vec<VectorRef>>) to layers (Vec<(usize, Vec<VectorRef>)>)
-            let layers: Vec<(usize, Vec<V::VectorRef>)> = links.into_iter().enumerate().collect();
-
-            request_mutations.push(GraphMutation::InsertNode {
-                id: inserted.clone(),
-                layers,
-                update_ep,
-            });
 
             mutations[idx] = Some(GroupedMutations(request_mutations));
             inserted_ids.push(inserted);
