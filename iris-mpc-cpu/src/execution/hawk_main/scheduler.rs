@@ -11,23 +11,21 @@ const N_EYES: usize = 2;
 /// Helper to spawn a task with the current tracing span preserved.
 /// This ensures that child tasks inherit and maintain the parent span context.
 /// The future should return a Result type.
-pub fn spawn_with_span<F, T>(task: F) -> JoinHandle<Result<T>>
+pub fn spawn_with_span<F, T>(span: Span, task: F) -> JoinHandle<Result<T>>
 where
     F: Future<Output = Result<T>> + Send + 'static,
     T: Send + 'static,
 {
-    let span = Span::current();
     tokio::spawn(async move { task.instrument(span).await })
 }
 
 /// Helper to spawn a task with the current tracing span preserved, without Result wrapping.
 /// Useful for tasks that already return Result or other types directly.
-pub fn spawn_task_with_span<F>(task: F) -> JoinHandle<F::Output>
+pub fn spawn_task_with_span<F>(span: Span, task: F) -> JoinHandle<F::Output>
 where
     F: Future + Send + 'static,
     F::Output: Send + 'static,
 {
-    let span = Span::current();
     tokio::spawn(task.instrument(span))
 }
 
@@ -182,7 +180,7 @@ where
     T: Send + 'static,
 {
     tasks
-        .map(spawn_with_span)
+        .map(|t| spawn_with_span(Span::current(), t))
         .collect::<JoinAll<_>>()
         .await
         .into_iter()
