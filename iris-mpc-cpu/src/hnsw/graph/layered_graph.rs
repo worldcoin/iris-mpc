@@ -175,7 +175,6 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
     /// This updates the graph's entry points set and connects the new vector to its
     /// neighbors as specified in the mutations.
     pub fn insert_apply(&mut self, plan: Vec<GraphMutation<V>>) {
-        tracing::info!(mutation_count = plan.len(), "Applying graph mutations");
         for mutation in plan {
             match mutation {
                 GraphMutation::RemoveNode { ref id } => {
@@ -194,11 +193,6 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                     // Handle entry point update
                     match update_ep {
                         UpdateEntryPoint::SetUnique { layer } => {
-                            tracing::info!(
-                                vector_id = ?id,
-                                layer = layer,
-                                "Setting unique entry point"
-                            );
                             // Ensure we have enough layers
                             if self.layers.len() < layer + 1 {
                                 self.layers.resize(layer + 1, Layer::new());
