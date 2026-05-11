@@ -44,8 +44,8 @@ use iris_mpc_cpu::execution::hawk_main::worker_pool_initializer::{
     DbLoadParams, LocalWorkerPoolInitializer, WorkerPoolInitializer,
 };
 use iris_mpc_cpu::execution::hawk_main::{
-    load_graphs_from_pg, GraphStore, HawkActor, HawkActorPrelude, HawkArgs, HawkHandle, HawkOps,
-    ServerJobResult, HAWK_DISTANCE_MODE,
+    build_hawk_network_handle, load_graphs_from_pg, GraphStore, HawkActor, HawkArgs, HawkHandle,
+    HawkOps, ServerJobResult, HAWK_DISTANCE_MODE,
 };
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
@@ -523,8 +523,7 @@ fn build_hawk_args(config: &Config) -> Result<(HawkArgs, Vec<String>, Vec<String
 
 /// Build the iris-loading initializer per config, run the iris and
 /// graph loads in parallel (graph from S3 checkpoint when present,
-/// else from PG), then finalize a `HawkActorPrelude` into a fully-loaded
-/// `HawkActor`.
+/// else from PG), then assemble a fully-loaded `HawkActor`.
 #[allow(clippy::too_many_arguments)]
 async fn init_hawk_actor(
     config: &Config,
@@ -581,7 +580,7 @@ async fn init_hawk_actor(
     let ct = shutdown_handler.get_network_cancellation_token();
 
     // Network handle built up-front; iris and graph load in parallel.
-    let prelude = HawkActorPrelude::new(&hawk_args, ct).await?;
+    let networking = build_hawk_network_handle(&hawk_args, ct).await?;
 
     let graph_parallelism = config
         .cpu_database
@@ -611,7 +610,7 @@ async fn init_hawk_actor(
         now.elapsed()
     );
 
-    prelude.finalize(initialized, graph).await
+    Ok(HawkActor::new(hawk_args, networking, initialized, graph))
 }
 
 /// Spawns thread responsible for communicating back results from batch query processing.

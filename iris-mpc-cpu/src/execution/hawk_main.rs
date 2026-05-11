@@ -470,49 +470,37 @@ pub struct HawkInsertPlan {
 /// new one. It is the definitive set of changes that will be applied to the graph storage.
 pub type ConnectPlan = ConnectPlanV<Aby3Store<HawkOps>>;
 
-/// Partial actor with only the network handle. Lets MPC peer
-/// communication run before iris data is loaded — genesis needs
-/// `sync_peers` to complete before iris-DB rollback fixes
-/// `max_serial_id`. `finalize` consumes the prelude with an
-/// initializer's output and a graph to produce a `HawkActor`.
-pub struct HawkActorPrelude {
-    args: HawkArgs,
-    networking: Box<dyn NetworkHandle>,
+/// Build the MPC network handle. Cheap — just TCP listener setup.
+/// Callers that need peer sync before iris load (genesis) call
+/// `networking.sync_peers()` on the returned handle before passing
+/// it to `HawkActor::new`.
+pub async fn build_hawk_network_handle(
+    args: &HawkArgs,
+    shutdown_ct: CancellationToken,
+) -> Result<Box<dyn NetworkHandle>> {
+    let network_args = NetworkHandleArgs {
+        party_index: args.party_index,
+        addresses: args.addresses.clone(),
+        outbound_addresses: args.outbound_addrs.clone(),
+        connection_parallelism: args.connection_parallelism,
+        request_parallelism: args.request_parallelism,
+        sessions_per_request: SessionGroups::N_SESSIONS_PER_REQUEST,
+        tls: args.tls.clone(),
+    };
+    build_network_handle(network_args, shutdown_ct).await
 }
 
-impl HawkActorPrelude {
-    /// Build the network handle. Cheap — just TCP listener setup.
-    pub async fn new(args: &HawkArgs, shutdown_ct: CancellationToken) -> Result<Self> {
-        let network_args = NetworkHandleArgs {
-            party_index: args.party_index,
-            addresses: args.addresses.clone(),
-            outbound_addresses: args.outbound_addrs.clone(),
-            connection_parallelism: args.connection_parallelism,
-            request_parallelism: args.request_parallelism,
-            sessions_per_request: SessionGroups::N_SESSIONS_PER_REQUEST,
-            tls: args.tls.clone(),
-        };
-        let networking = build_network_handle(network_args, shutdown_ct).await?;
-        Ok(Self {
-            args: args.clone(),
-            networking,
-        })
-    }
-
-    /// Sync with peer parties. Genesis calls this before iris-DB rollback
-    /// fixes `max_serial_id`.
-    pub async fn sync_peers(&mut self) -> Result<()> {
-        self.networking.sync_peers().await
-    }
-
-    /// Consume the prelude into a `HawkActor`. No loading happens here —
-    /// `initialized` and `graph` must already be ready.
-    pub async fn finalize(
-        self,
+impl HawkActor {
+    /// Assemble a fully-loaded actor. No I/O happens here — `networking`,
+    /// `initialized`, and `graph` must already be ready. Production paths
+    /// build the network handle, run any pre-load peer sync, load iris
+    /// data and graph in parallel, then call this.
+    pub fn new(
+        args: HawkArgs,
+        networking: Box<dyn NetworkHandle>,
         initialized: worker_pool_initializer::InitializedWorkers,
         graph: BothEyes<GraphMem<Aby3VectorRef>>,
-    ) -> Result<HawkActor> {
-        let HawkActorPrelude { args, networking } = self;
+    ) -> Self {
         let party_id = args.party_index;
 
         let searcher = {
@@ -539,7 +527,7 @@ impl HawkActorPrelude {
 
         let graph_store = graph.map(GraphMem::to_arc);
 
-        Ok(HawkActor {
+        HawkActor {
             args,
             searcher,
             prf_key: None,
@@ -550,11 +538,9 @@ impl HawkActorPrelude {
             party_id,
             error_ct: CancellationToken::new(),
             worker_pools: pools,
-        })
+        }
     }
-}
 
-impl HawkActor {
     /// Empty-store, empty-graph constructor. Test convenience.
     pub async fn from_cli(args: &HawkArgs, shutdown_ct: CancellationToken) -> Result<Self> {
         let initializer = Box::new(
@@ -584,23 +570,23 @@ impl HawkActor {
                 iris_store,
             ),
         );
-        let prelude = HawkActorPrelude::new(args, shutdown_ct).await?;
+        let networking = build_hawk_network_handle(args, shutdown_ct).await?;
         let initialized = initializer.initialize().await?;
-        prelude.finalize(initialized, graph).await
+        Ok(HawkActor::new(args.clone(), networking, initialized, graph))
     }
 
     /// Run an initializer, then build the actor with an empty graph.
-    /// Test/dev path; production builds prelude, initializer, and graph
-    /// in parallel via `HawkActorPrelude::finalize` directly.
+    /// Test/dev path; production builds the network handle, initializer,
+    /// and graph in parallel via `HawkActor::new` directly.
     pub async fn from_cli_with_initializer(
         args: &HawkArgs,
         shutdown_ct: CancellationToken,
         initializer: Box<dyn worker_pool_initializer::WorkerPoolInitializer>,
     ) -> Result<Self> {
-        let prelude = HawkActorPrelude::new(args, shutdown_ct).await?;
+        let networking = build_hawk_network_handle(args, shutdown_ct).await?;
         let initialized = initializer.initialize().await?;
         let graph = [(); 2].map(|_| GraphMem::new());
-        prelude.finalize(initialized, graph).await
+        Ok(HawkActor::new(args.clone(), networking, initialized, graph))
     }
 
     pub fn set_anon_stats_store(&mut self, store: Option<AnonStatsStore>) {

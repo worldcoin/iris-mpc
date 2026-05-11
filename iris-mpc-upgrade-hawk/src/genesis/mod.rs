@@ -24,12 +24,12 @@ use iris_mpc_common::{
 pub use iris_mpc_cpu::genesis::BatchSizeConfig;
 use iris_mpc_cpu::{
     execution::hawk_main::{
+        build_hawk_network_handle,
         iris_worker::IrisWorkerPool,
         worker_pool_initializer::{
             DbLoadParams, LocalWorkerPoolInitializer, WorkerPoolInitializer,
         },
-        BothEyes, GraphRef, GraphStore, HawkActor, HawkActorPrelude, HawkArgs, HawkOps, StoreId,
-        LEFT, RIGHT,
+        BothEyes, GraphRef, GraphStore, HawkActor, HawkArgs, HawkOps, StoreId, LEFT, RIGHT,
     },
     genesis::{
         state_accessor::{
@@ -415,8 +415,8 @@ async fn exec_setup(
 
     // Networking only: sync_peers + rollback must run before the iris
     // load decides `max_serial_id`.
-    let mut hawk_prelude = build_hawk_prelude(config, &shutdown_handler).await?;
-    hawk_prelude.sync_peers().await?;
+    let (hawk_args, mut hawk_networking) = build_hawk_networking(config, &shutdown_handler).await?;
+    hawk_networking.sync_peers().await?;
 
     if let Some(cp) = graph_checkpoint.as_ref() {
         maybe_rollback_iris_db(
@@ -447,13 +447,14 @@ async fn exec_setup(
     .await?;
     tracing::info!("Store consistency checks OK");
 
-    // Iris and graph load in parallel, then finalize the prelude.
+    // Iris and graph load in parallel, then assemble the actor.
     let hawk_actor = init_graph_from_stores(
         config,
         &config.graph_checkpoint_bucket_name,
         &iris_store,
         graph_store_arc.clone(),
-        hawk_prelude,
+        hawk_args,
+        hawk_networking,
         &checkpoint_s3_client,
         Arc::clone(&shutdown_handler),
         args.max_indexation_id as usize,
@@ -1104,12 +1105,12 @@ pub async fn exec_use_backup_as_source(
     Ok(())
 }
 
-/// Build a `HawkActorPrelude` (networking only). `init_graph_from_stores`
-/// finalizes it into a `HawkActor`.
-async fn build_hawk_prelude(
+/// Build `HawkArgs` and the MPC network handle. `init_graph_from_stores`
+/// uses them to assemble a fully-loaded `HawkActor`.
+async fn build_hawk_networking(
     config: &Config,
     shutdown_handler: &Arc<ShutdownHandler>,
-) -> Result<HawkActorPrelude> {
+) -> Result<(HawkArgs, Box<dyn iris_mpc_cpu::network::mpc::NetworkHandle>)> {
     let server_coord_config = config
         .server_coordination
         .as_ref()
@@ -1142,16 +1143,17 @@ async fn build_hawk_prelude(
     };
 
     tracing::info!(
-        "Initializing Hawk prelude (party_index: {}, addresses: {:?})",
+        "Initializing Hawk networking (party_index: {}, addresses: {:?})",
         hawk_args.party_index,
         node_addresses
     );
 
-    HawkActorPrelude::new(
+    let networking = build_hawk_network_handle(
         &hawk_args,
         shutdown_handler.get_network_cancellation_token(),
     )
-    .await
+    .await?;
+    Ok((hawk_args, networking))
 }
 
 /// Returns service clients used downstream.
@@ -1489,16 +1491,16 @@ async fn get_sync_result(
 }
 
 /// Load iris data and the graph (from S3 checkpoint if present, else
-/// PG) in parallel, then finalize the prelude into a fully-loaded
-/// `HawkActor`. `max_indexation_id` is the inclusive upper bound for
-/// the iris load.
+/// PG) in parallel, then assemble a fully-loaded `HawkActor`.
+/// `max_indexation_id` is the inclusive upper bound for the iris load.
 #[allow(clippy::too_many_arguments)]
 async fn init_graph_from_stores(
     config: &Config,
     checkpoint_bucket: &str,
     iris_store: &IrisStore,
     graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
-    hawk_prelude: HawkActorPrelude,
+    hawk_args: HawkArgs,
+    hawk_networking: Box<dyn iris_mpc_cpu::network::mpc::NetworkHandle>,
     s3_client: &S3Client,
     shutdown_handler: Arc<ShutdownHandler>,
     max_indexation_id: usize,
@@ -1563,7 +1565,12 @@ async fn init_graph_from_stores(
 
     let (initialized, graph) = tokio::try_join!(initializer.initialize(), graph_load_future)?;
 
-    hawk_prelude.finalize(initialized, graph).await
+    Ok(HawkActor::new(
+        hawk_args,
+        hawk_networking,
+        initialized,
+        graph,
+    ))
 }
 
 /// Initializes shutdown handler, which waits for shutdown signals or function
