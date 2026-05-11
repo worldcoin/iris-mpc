@@ -1548,11 +1548,17 @@ impl HnswSearcher {
         // Convert links to layers format
         let layers: Vec<(usize, Vec<V::VectorRef>)> = links.into_iter().enumerate().collect();
 
-        let mutations = vec![Some(GroupedMutations(vec![GraphMutation::InsertNode {
-            id: inserted_vector,
-            layers,
-            update_ep,
-        }]))];
+        let mutations = vec![Some(GroupedMutations(vec![
+            GraphMutation::InsertNode {
+                id: inserted_vector.clone(),
+                layers: layers.clone(),
+                update_ep,
+            },
+            GraphMutation::AddNeighbor {
+                id: inserted_vector,
+                layers,
+            },
+        ]))];
         let mut grouped = self.insert_prepare_batch(store, graph, mutations).await?;
         grouped
             .pop()
@@ -1654,6 +1660,7 @@ impl HnswSearcher {
         }
 
         // Apply neighborhood updates
+        let mut invalid_links: Vec<(_, usize, Vec<_>)> = vec![];
         for ((nb, layer), query_ids) in nbhd_updates {
             let mut nb_nbhd = match query_idxs.get(&nb) {
                 Some(idx) => updates[*idx]
@@ -1662,9 +1669,17 @@ impl HnswSearcher {
                     .ok_or_eyre("Update entry layer not present")?
                     .clone(),
                 None => {
-                    store
-                        .only_valid_vectors(graph.get_links(&nb, layer).await.to_vec())
-                        .await
+                    let current_links = graph.get_links(&nb, layer).await.to_vec();
+                    let valid_links = store.only_valid_vectors(current_links.clone()).await;
+                    if valid_links.len() < current_links.len() {
+                        let valid_set: HashSet<_> = valid_links.iter().collect();
+                        let to_remove: Vec<_> = current_links
+                            .into_iter()
+                            .filter(|v| !valid_set.contains(v))
+                            .collect();
+                        invalid_links.push((nb.clone(), layer, to_remove));
+                    }
+                    valid_links
                 }
             };
 
@@ -1731,6 +1746,26 @@ impl HnswSearcher {
                 }
             }
         }
+
+        // Emit RemoveInvalidNeighbors for vectors filtered out by only_valid_vectors
+        if !invalid_links.is_empty() {
+            let last_some_idx = mutations.iter().rposition(|opt| opt.is_some()).unwrap_or(0);
+            for (id, layer, to_remove) in invalid_links {
+                let group_idx = insert_to_group
+                    .get(&id)
+                    .copied()
+                    .or_else(|| nbhd_last_group.get(&(id.clone(), layer)).copied())
+                    .unwrap_or(last_some_idx);
+                if let Some(Some(group)) = mutations.get_mut(group_idx) {
+                    group.0.push(GraphMutation::RemoveInvalidNeighbors {
+                        id,
+                        layer,
+                        to_remove,
+                    });
+                }
+            }
+        }
+
         Ok(mutations)
     }
 

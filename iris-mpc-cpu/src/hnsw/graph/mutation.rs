@@ -15,6 +15,16 @@ pub enum GraphMutation<Vector: Ord> {
         update_ep: UpdateEntryPoint,
         id: Vector,
     },
+    AddNeighbor {
+        // list of layer, neighbors
+        layers: Vec<(usize, Vec<Vector>)>,
+        id: Vector,
+    },
+    RemoveInvalidNeighbors {
+        to_remove: Vec<Vector>,
+        layer: usize,
+        id: Vector,
+    },
     Compact {
         to_remove: Vec<Vector>,
         layer: usize,
@@ -35,6 +45,12 @@ impl<V: std::fmt::Debug + Ord> std::fmt::Debug for GraphMutation<V> {
                 .field("update_ep", update_ep)
                 .field("id", id)
                 .finish(),
+            Self::AddNeighbor { id, layers: _ } => {
+                f.debug_struct("AddNeighbor").field("id", id).finish()
+            }
+            Self::RemoveInvalidNeighbors { .. } => {
+                f.debug_struct("RemoveInvalidNeighbors").finish()
+            }
             Self::Compact {
                 to_remove: _,
                 layer,
@@ -67,6 +83,6 @@ impl<Vector: Ord> GraphMutation<Vector> {
     /// are modified in an incompatible way. Keeping this separate allows old
     /// mutations to remain stored and handled appropriately during format upgrades.
     pub fn get_version() -> i32 {
-        1
+        2
     }
 }

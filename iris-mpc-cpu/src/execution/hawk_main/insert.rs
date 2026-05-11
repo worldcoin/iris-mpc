@@ -100,8 +100,12 @@ pub async fn insert<V: VectorStoreMut>(
             request_mutations.push(GraphMutation::InsertNode {
                 id: inserted.clone(),
                 // Convert links (Vec<Vec<VectorRef>>) to layers (Vec<(usize, Vec<VectorRef>)>)
-                layers: links.into_iter().enumerate().collect(),
+                layers: links.iter().cloned().enumerate().collect(),
                 update_ep,
+            });
+            request_mutations.push(GraphMutation::AddNeighbor {
+                id: inserted.clone(),
+                layers: links.into_iter().enumerate().collect(),
             });
             if let Some(rid) = replace_id {
                 request_mutations.push(GraphMutation::RemoveNode { id: rid.clone() });

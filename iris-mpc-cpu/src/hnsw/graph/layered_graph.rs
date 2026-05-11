@@ -220,6 +220,21 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                         self.layers[layer_idx].insert_node(id.clone(), neighbors);
                     }
                 }
+                GraphMutation::AddNeighbor { id, layers } => {
+                    for (layer_idx, neighborhoods) in layers {
+                        if self.layers.len() < layer_idx + 1 {
+                            self.layers.resize(layer_idx + 1, Layer::new());
+                        }
+                        self.layers[layer_idx].add_neighbor(id.clone(), neighborhoods);
+                    }
+                }
+                GraphMutation::RemoveInvalidNeighbors {
+                    ref id,
+                    layer,
+                    to_remove,
+                } => {
+                    self.layers[layer].compact_node(id, to_remove);
+                }
                 GraphMutation::Compact {
                     ref id,
                     layer,
@@ -480,22 +495,19 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         self.set_hash.checksum()
     }
 
-    /// Insert a node with bidirectional links to its neighbors.
-    /// Sets the node's links and adds backlinks from each neighbor to this node.
     pub fn insert_node(&mut self, id: V, neighbors: Vec<V>) {
-        // Set the node's links
         self.set_links(id.clone(), neighbors.clone());
+    }
 
-        // Add the node to each neighbor's neighborhood (bidirectional backlinks)
-        for neighbor in &neighbors {
-            if let Some(neighbor_links) = self.links.get_mut(neighbor) {
+    pub fn add_neighbor(&mut self, id: V, neighborhoods: Vec<V>) {
+        for nbhd in &neighborhoods {
+            if let Some(neighbor_links) = self.links.get_mut(nbhd) {
                 match neighbor_links.binary_search(&id) {
                     Err(i) => {
                         self.set_hash
-                            .remove_unordered_set(neighbor, neighbor_links.iter());
+                            .remove_unordered_set(nbhd, neighbor_links.iter());
                         neighbor_links.insert(i, id.clone());
-                        self.set_hash
-                            .add_unordered_set(neighbor, neighbor_links.iter());
+                        self.set_hash.add_unordered_set(nbhd, neighbor_links.iter());
                     }
                     Ok(_) => continue, // link already exists
                 }
