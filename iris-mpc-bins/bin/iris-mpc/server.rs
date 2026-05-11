@@ -1,6 +1,10 @@
 #![allow(clippy::needless_range_loop, unused)]
 #![recursion_limit = "256"]
 
+#[cfg(feature = "jemalloc")]
+#[global_allocator]
+static GLOBAL_ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 use ampc_anon_stats::store::postgres::AccessMode as AnonStatsAccessMode;
 use ampc_anon_stats::store::postgres::PostgresClient as AnonStatsPgClient;
 use ampc_anon_stats::AnonStatsStore;
@@ -12,6 +16,7 @@ use ampc_server_utils::{
     init_heartbeat_task, set_node_ready, shutdown_handler::ShutdownHandler,
     start_coordination_server, wait_for_others_ready, wait_for_others_unready, TaskMonitor,
 };
+#[cfg(feature = "jemalloc")]
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
@@ -31,6 +36,8 @@ use iris_mpc::services::processors::result_message::{
 };
 use iris_mpc_common::config::CommonConfig;
 use iris_mpc_common::galois_engine::degree4::GaloisShares;
+#[cfg(feature = "jemalloc")]
+use iris_mpc_common::helpers::sqs_s3_helper::upload_file_to_s3;
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
 use iris_mpc_common::job::{GaloisSharesBothSides, RequestIndex};
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
@@ -71,11 +78,13 @@ use iris_mpc_store::{
 use itertools::{cloned, izip, Itertools};
 use metrics_exporter_statsd::StatsdBuilder;
 use serde::{Deserialize, Serialize};
+#[cfg(feature = "jemalloc")]
+use std::ffi::CString;
 use std::process::exit;
 use std::{
     collections::HashMap,
     fmt::Debug,
-    mem, panic,
+    fs, mem, panic,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
@@ -106,6 +115,132 @@ fn decode_iris_message_shares(
 
 fn trim_mask(mask: GaloisRingIrisCodeShare) -> GaloisRingTrimmedMaskCodeShare {
     mask.into()
+}
+
+fn emit_process_memory_metrics() {
+    let Ok(status) = fs::read_to_string("/proc/self/status") else {
+        return;
+    };
+
+    for line in status.lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+
+        match key {
+            "VmRSS" => record_status_kib_gauge("process_memory_rss_bytes", value),
+            "VmHWM" => record_status_kib_gauge("process_memory_peak_rss_bytes", value),
+            "VmSize" => record_status_kib_gauge("process_memory_virtual_bytes", value),
+            "VmData" => record_status_kib_gauge("process_memory_data_bytes", value),
+            "VmSwap" => record_status_kib_gauge("process_memory_swap_bytes", value),
+            "Threads" => record_status_count_gauge("process_threads", value),
+            _ => {}
+        }
+    }
+}
+
+fn record_status_kib_gauge(metric: &'static str, value: &str) {
+    if let Some(kib) = value
+        .split_whitespace()
+        .next()
+        .and_then(|v| v.parse::<u64>().ok())
+    {
+        metrics::gauge!(metric).set((kib * 1024) as f64);
+    }
+}
+
+fn record_status_count_gauge(metric: &'static str, value: &str) {
+    if let Ok(count) = value.trim().parse::<u64>() {
+        metrics::gauge!(metric).set(count as f64);
+    }
+}
+
+#[cfg(feature = "jemalloc")]
+fn spawn_jemalloc_profile_dump_task(
+    s3_client: S3Client,
+    bucket: String,
+    prefix: String,
+    party_id: usize,
+    run_id: String,
+) {
+    let interval_secs = std::env::var("JEMALLOC_PROFILE_DUMP_INTERVAL_SECS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(60 * 60);
+
+    if interval_secs == 0 {
+        tracing::info!("jemalloc periodic heap profile dumping disabled");
+        return;
+    }
+
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(interval_secs)).await;
+            dump_and_upload_jemalloc_profile(
+                s3_client.clone(),
+                &bucket,
+                &prefix,
+                party_id,
+                &run_id,
+            )
+            .await;
+        }
+    });
+}
+
+#[cfg(feature = "jemalloc")]
+async fn dump_and_upload_jemalloc_profile(
+    s3_client: S3Client,
+    bucket: &str,
+    prefix: &str,
+    party_id: usize,
+    run_id: &str,
+) {
+    let ts = chrono::Utc::now().format("%Y-%m-%dT%H-%M-%SZ");
+    let file_path = format!("/tmp/iris-mpc-gpu-jeprof-party{}-{}.heap", party_id, ts);
+
+    match dump_jemalloc_profile(&file_path) {
+        Ok(()) => tracing::info!(%file_path, "dumped jemalloc heap profile"),
+        Err(err) => {
+            tracing::warn!(?err, %file_path, "failed to dump jemalloc heap profile");
+            return;
+        }
+    }
+
+    let contents = match fs::read(&file_path) {
+        Ok(contents) => contents,
+        Err(err) => {
+            tracing::warn!(?err, %file_path, "failed to read jemalloc heap profile");
+            return;
+        }
+    };
+
+    let key = format!(
+        "{}/{}/party{}/jemalloc/{}.heap",
+        prefix, run_id, party_id, ts
+    );
+
+    match upload_file_to_s3(bucket, &key, s3_client, &contents).await {
+        Ok(_) => tracing::info!(bucket, key, "uploaded jemalloc heap profile to s3"),
+        Err(err) => tracing::warn!(
+            ?err,
+            bucket,
+            key,
+            "failed to upload jemalloc heap profile to s3"
+        ),
+    }
+
+    if let Err(err) = fs::remove_file(&file_path) {
+        tracing::warn!(?err, %file_path, "failed to remove local jemalloc heap profile");
+    }
+}
+
+#[cfg(feature = "jemalloc")]
+fn dump_jemalloc_profile(file_path: &str) -> Result<(), tikv_jemalloc_ctl::Error> {
+    let file_path =
+        CString::new(file_path).expect("jemalloc profile path cannot contain NUL bytes");
+
+    unsafe { tikv_jemalloc_ctl::raw::write(b"prof.dump\0", file_path.as_ptr()) }
 }
 
 #[tokio::main]
@@ -164,6 +299,20 @@ async fn server_main(config: Config) -> Result<()> {
 
     tracing::info!("Initialising AWS services");
     let aws_clients = AwsClients::new(&config.clone()).await?;
+
+    #[cfg(feature = "jemalloc")]
+    spawn_jemalloc_profile_dump_task(
+        aws_clients.s3_client.clone(),
+        std::env::var("JEMALLOC_PROFILE_S3_BUCKET")
+            .unwrap_or_else(|_| format!("wf-smpcv2-{}-sns-buffer", config.environment)),
+        std::env::var("JEMALLOC_PROFILE_S3_PREFIX").unwrap_or_else(|_| "gpu/jemalloc".to_string()),
+        config.party_id,
+        config
+            .pprof_run_id
+            .clone()
+            .unwrap_or_else(|| chrono::Utc::now().format("run-%Y%m%dT%H%M%SZ").to_string()),
+    );
+
     let next_sns_seq_number_future = get_next_sns_seq_num(
         &aws_clients.sqs_client,
         &config.requests_queue_url,
@@ -1097,6 +1246,8 @@ async fn server_main(config: Config) -> Result<()> {
             let result = timeout(processing_timeout, result_future.await)
                 .await
                 .map_err(|e| eyre!("ServerActor processing timeout: {:?}", e))??;
+
+            emit_process_memory_metrics();
 
             tx.send(result).await?;
 

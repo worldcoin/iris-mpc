@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - "dev"
-      - "pop-3544-gpu-shutdown-guardrail"
+      - "carlomazzaferro/pop-3786-investigate-host-memory-leak-in-iris-mpc"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
@@ -62,5 +62,6 @@ jobs:
           platforms: linux/amd64
           build-args: |
             ARCHITECTURE=x86_64
+            CARGO_FEATURES=jemalloc
           cache-from: type=gha
           cache-to: type=gha,mode=max

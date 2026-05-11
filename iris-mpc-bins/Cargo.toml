@@ -16,6 +16,7 @@ helpers = [
 ]
 phase_trace = ["iris-mpc-cpu/phase_trace"]
 networking_metrics = ["iris-mpc-cpu/networking_metrics"]
+jemalloc = ["dep:tikv-jemallocator", "dep:tikv-jemalloc-ctl"]
 
 [dependencies]
 aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display" }
@@ -52,6 +53,8 @@ sodiumoxide = "0.2.7"
 sqlx.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+tikv-jemallocator = { version = "0.6", optional = true, features = ["profiling"] }
+tikv-jemalloc-ctl = { version = "0.6", optional = true }
 toml.workspace = true
 ampc-actor-utils.workspace = true
 ampc-anon-stats.workspace = true
