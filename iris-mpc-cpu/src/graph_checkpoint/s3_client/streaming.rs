@@ -12,19 +12,24 @@
 //! to pass a fully buffered `Bytes` payload (doubling memory for large
 //! graphs).
 
-use std::{io::Write, sync::Arc};
+use std::{io::Write, sync::Arc, time::Duration};
 
 use aws_sdk_s3::{
     types::{CompletedMultipartUpload, CompletedPart},
     Client as S3Client,
 };
+use bytes::Bytes;
 use eyre::{eyre, Result};
 use tokio::{
     io::{AsyncReadExt, DuplexStream},
     sync::Semaphore,
     task::JoinSet,
+    time::sleep,
 };
 use tokio_util::io::SyncIoBridge;
+
+const UPLOAD_PART_MAX_RETRIES: u32 = 3;
+const UPLOAD_PART_RETRY_DELAY: Duration = Duration::from_secs(2);
 
 /// Suggested part size; also the size of the duplex pipe, which bounds
 /// back-pressure on the serializer.
@@ -161,10 +166,13 @@ where
         .await
         .map_err(|e| eyre!("serialize task panicked or was cancelled: {e:?}"))?;
 
-    match (serialize_result, upload_result) {
-        (Ok(()), Ok(parts)) => Ok(parts),
-        (Err(serialize_err), _) => Err(serialize_err),
-        (Ok(()), Err(upload_err)) => Err(upload_err),
+    // Prefer upload errors when both fail: when `run_upload_loop` bails on a
+    // part failure it drops the reader, which surfaces as a broken-pipe error
+    // in the serializer. The upload error is the root cause.
+    match (upload_result, serialize_result) {
+        (Ok(parts), Ok(())) => Ok(parts),
+        (Err(upload_err), _) => Err(upload_err),
+        (Ok(_), Err(serialize_err)) => Err(serialize_err),
     }
 }
 
@@ -179,9 +187,26 @@ async fn run_upload_loop(
 ) -> Result<Vec<CompletedPart>> {
     let semaphore = Arc::new(Semaphore::new(parallelism));
     let mut join_set: JoinSet<Result<CompletedPart>> = JoinSet::new();
+    let mut parts: Vec<CompletedPart> = Vec::new();
     let mut part_number: i32 = 1;
 
     loop {
+        // Surface any part failure eagerly so we don't keep serializing and
+        // spawning uploads after the upload has already gone wrong.
+        while let Some(res) = join_set.try_join_next() {
+            match res {
+                Ok(Ok(part)) => parts.push(part),
+                Ok(Err(e)) => {
+                    join_set.abort_all();
+                    return Err(e);
+                }
+                Err(e) => {
+                    join_set.abort_all();
+                    return Err(eyre!("upload task join error: {e:?}"));
+                }
+            }
+        }
+
         let mut buf = vec![0u8; part_size];
         let mut filled = 0usize;
 
@@ -212,31 +237,51 @@ async fn run_upload_loop(
         let bucket = bucket.clone();
         let key = key.clone();
         let upload_id = upload_id.clone();
+        // `Bytes` so retries clone cheaply (Arc bump) instead of copying.
+        let body = Bytes::from(buf);
 
         join_set.spawn(async move {
             let _permit = permit;
-            let res = client
-                .upload_part()
-                .bucket(&bucket)
-                .key(&key)
-                .upload_id(&upload_id)
-                .part_number(pn)
-                .body(buf.into())
-                .send()
-                .await
-                .map_err(|e| eyre!("upload_part {pn} failed: {e:?}"))?;
-            let etag = res
-                .e_tag()
-                .ok_or_else(|| eyre!("upload_part {pn} returned no e_tag"))?
-                .to_string();
-            tracing::debug!("uploaded part {pn} (etag={etag})");
-            Ok(CompletedPart::builder().e_tag(etag).part_number(pn).build())
+            let mut attempts: u32 = 0;
+            loop {
+                match client
+                    .upload_part()
+                    .bucket(&bucket)
+                    .key(&key)
+                    .upload_id(&upload_id)
+                    .part_number(pn)
+                    .body(body.clone().into())
+                    .send()
+                    .await
+                {
+                    Ok(res) => {
+                        let etag = res
+                            .e_tag()
+                            .ok_or_else(|| eyre!("upload_part {pn} returned no e_tag"))?
+                            .to_string();
+                        tracing::debug!("uploaded part {pn} (etag={etag})");
+                        return Ok(CompletedPart::builder()
+                            .e_tag(etag)
+                            .part_number(pn)
+                            .build());
+                    }
+                    Err(_) if attempts < UPLOAD_PART_MAX_RETRIES => {
+                        attempts += 1;
+                        tracing::warn!("Retry {attempts} for part {pn}");
+                        sleep(UPLOAD_PART_RETRY_DELAY).await;
+                    }
+                    Err(e) => {
+                        return Err(eyre!(
+                            "upload_part {pn} failed after {attempts} retries: {e:?}"
+                        ));
+                    }
+                }
+            }
         });
 
         part_number += 1;
     }
 
-    let mut parts = Vec::new();
     let mut first_error: Option<eyre::Report> = None;
     while let Some(res) = join_set.join_next().await {
         match res {
