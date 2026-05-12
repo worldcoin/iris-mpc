@@ -619,4 +619,124 @@ mod tests {
 
         Ok(())
     }
+
+    /// Round-trip test for `GraphPg::insert_hawk_graph_mutations`:
+    /// verifies the RETURNING clause echoes back all three columns correctly.
+    #[tokio::test]
+    async fn test_insert_hawk_graph_mutations_round_trip() -> Result<()> {
+        let store = TestGraphPg::<PlaintextStore>::new().await?;
+
+        let modification_id: i64 = 42;
+        let payload: &[u8] = b"round_trip_payload";
+
+        let mut graph_tx = store.tx().await?;
+        let returned = store
+            .insert_hawk_graph_mutations(&mut graph_tx.tx, modification_id, payload)
+            .await?;
+        graph_tx.tx.commit().await?;
+
+        assert_eq!(returned.len(), 1, "RETURNING should yield exactly one row");
+        let row = &returned[0];
+        assert_eq!(row.modification_id, modification_id);
+        assert_eq!(row.serialized_mutations, payload);
+        assert_eq!(
+            row.mutation_version,
+            crate::hnsw::graph::mutation::GraphMutation::<i64>::get_version(),
+            "mutation_version must match the current schema version"
+        );
+
+        Ok(())
+    }
+
+    /// Tests `get_hawk_graph_mutations_after` for:
+    ///   - empty table with None
+    ///   - None after inserts (returns all rows in ASC order)
+    ///   - Some(id) with rows above the threshold
+    ///   - Some(id) equal to the highest id (returns nothing)
+    ///   - Some(id) above all rows (returns nothing)
+    #[tokio::test]
+    async fn test_get_hawk_graph_mutations_after() -> Result<()> {
+        let store = TestGraphPg::<PlaintextStore>::new().await?;
+
+        // Empty table: None should return an empty vec
+        let rows = store.get_hawk_graph_mutations_after(None).await?;
+        assert!(rows.is_empty(), "expected empty vec on empty table");
+
+        // Populate three rows with distinct modification_ids
+        for &id in &[10i64, 20, 30] {
+            let mut graph_tx = store.tx().await?;
+            store
+                .insert_hawk_graph_mutations(&mut graph_tx.tx, id, &id.to_le_bytes())
+                .await?;
+            graph_tx.tx.commit().await?;
+        }
+
+        // None => all rows, ordered ASC by modification_id
+        let rows = store.get_hawk_graph_mutations_after(None).await?;
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].modification_id, 10);
+        assert_eq!(rows[1].modification_id, 20);
+        assert_eq!(rows[2].modification_id, 30);
+
+        // Some(10) => strictly greater, so [20, 30]
+        let rows = store.get_hawk_graph_mutations_after(Some(10)).await?;
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].modification_id, 20);
+        assert_eq!(rows[1].modification_id, 30);
+
+        // Some(29) => only [30]
+        let rows = store.get_hawk_graph_mutations_after(Some(29)).await?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].modification_id, 30);
+
+        // Some(30) => threshold equal to max, nothing above it
+        let rows = store.get_hawk_graph_mutations_after(Some(30)).await?;
+        assert!(rows.is_empty(), "threshold == max should return empty");
+
+        // Some(100) => threshold above all rows
+        let rows = store.get_hawk_graph_mutations_after(Some(100)).await?;
+        assert!(
+            rows.is_empty(),
+            "threshold above all rows should return empty"
+        );
+
+        Ok(())
+    }
+
+    /// Tests `get_max_hawk_graph_mutation_id`:
+    ///   - returns None on an empty table
+    ///   - tracks the running maximum correctly as rows are inserted
+    #[tokio::test]
+    async fn test_get_max_hawk_graph_mutation_id() -> Result<()> {
+        let store = TestGraphPg::<PlaintextStore>::new().await?;
+
+        // Empty table => None
+        assert_eq!(store.get_max_hawk_graph_mutation_id().await?, None);
+
+        // Insert id=5 => max is Some(5)
+        let mut graph_tx = store.tx().await?;
+        store
+            .insert_hawk_graph_mutations(&mut graph_tx.tx, 5, b"a")
+            .await?;
+        graph_tx.tx.commit().await?;
+        assert_eq!(store.get_max_hawk_graph_mutation_id().await?, Some(5));
+
+        // Insert id=3 (below current max) => max stays Some(5)
+        let mut graph_tx = store.tx().await?;
+        store
+            .insert_hawk_graph_mutations(&mut graph_tx.tx, 3, b"b")
+            .await?;
+        graph_tx.tx.commit().await?;
+        assert_eq!(store.get_max_hawk_graph_mutation_id().await?, Some(5));
+
+        // Insert id=10 => max becomes Some(10)
+        let mut graph_tx = store.tx().await?;
+        store
+            .insert_hawk_graph_mutations(&mut graph_tx.tx, 10, b"c")
+            .await?;
+        graph_tx.tx.commit().await?;
+        assert_eq!(store.get_max_hawk_graph_mutation_id().await?, Some(10));
+
+        Ok(())
+    }
 }
