@@ -3,9 +3,33 @@ use eyre::{eyre, Result};
 use futures::future::JoinAll;
 use itertools::Itertools;
 use std::{collections::HashMap, future::Future};
-use tokio::{sync::mpsc::UnboundedReceiver, task::JoinError};
+use tokio::{sync::mpsc::UnboundedReceiver, task::JoinError, task::JoinHandle};
+use tracing::{Instrument, Span};
 
 const N_EYES: usize = 2;
+
+/// Helper to spawn a task with the current tracing span preserved.
+/// This ensures that child tasks inherit and maintain the parent span context.
+/// The future should return a Result type.
+pub fn spawn_with_span<F, T>(task: F) -> JoinHandle<Result<T>>
+where
+    F: Future<Output = Result<T>> + Send + 'static,
+    T: Send + 'static,
+{
+    let span = Span::current();
+    tokio::spawn(async move { task.instrument(span).await })
+}
+
+/// Helper to spawn a task with the current tracing span preserved, without Result wrapping.
+/// Useful for tasks that already return Result or other types directly.
+pub fn spawn_task_with_span<F>(task: F) -> JoinHandle<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    let span = Span::current();
+    tokio::spawn(task.instrument(span))
+}
 
 /// A schedule is a collections of batches to process in parallel.
 pub struct Schedule {
@@ -155,10 +179,10 @@ impl Schedule {
 pub async fn parallelize<F, T>(tasks: impl Iterator<Item = F>) -> Result<Vec<T>>
 where
     F: Future<Output = Result<T>> + Send + 'static,
-    F::Output: Send + 'static,
+    T: Send + 'static,
 {
     tasks
-        .map(tokio::spawn)
+        .map(spawn_with_span)
         .collect::<JoinAll<_>>()
         .await
         .into_iter()
