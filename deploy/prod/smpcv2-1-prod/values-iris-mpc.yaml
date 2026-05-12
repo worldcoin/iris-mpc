@@ -135,7 +135,7 @@ env:
     value: "0"
 
   - name: SMPC__MAX_BATCH_SIZE
-    value: "8"
+    value: "64"
 
   - name: SMPC__ENABLE_RESET
     value: "true"
