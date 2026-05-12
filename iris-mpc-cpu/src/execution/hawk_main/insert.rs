@@ -103,7 +103,7 @@ pub async fn insert<V: VectorStoreMut>(
                 layers: links.iter().cloned().enumerate().collect(),
                 update_ep,
             });
-            request_mutations.push(GraphMutation::AddNeighbor {
+            request_mutations.push(GraphMutation::AddNeighbors {
                 id: inserted.clone(),
                 layers: links.into_iter().enumerate().collect(),
             });

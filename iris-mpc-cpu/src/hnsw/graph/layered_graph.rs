@@ -220,7 +220,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                         self.layers[layer_idx].insert_node(id.clone(), neighbors);
                     }
                 }
-                GraphMutation::AddNeighbor { id, layers } => {
+                GraphMutation::AddNeighbors { id, layers } => {
                     for (layer_idx, neighborhoods) in layers {
                         if self.layers.len() < layer_idx + 1 {
                             self.layers.resize(layer_idx + 1, Layer::new());
@@ -228,19 +228,12 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                         self.layers[layer_idx].add_neighbor(id.clone(), neighborhoods);
                     }
                 }
-                GraphMutation::RemoveInvalidNeighbors {
+                GraphMutation::RemoveNeighbors {
                     ref id,
                     layer,
                     to_remove,
                 } => {
-                    self.layers[layer].compact_node(id, to_remove);
-                }
-                GraphMutation::Compact {
-                    ref id,
-                    layer,
-                    to_remove,
-                } => {
-                    self.layers[layer].compact_node(id, to_remove);
+                    self.layers[layer].remove_neighbors(id, to_remove);
                 }
             }
         }
@@ -538,7 +531,7 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         }
     }
 
-    pub fn compact_node(&mut self, id: &V, neighbors_to_remove: Vec<V>) {
+    pub fn remove_neighbors(&mut self, id: &V, neighbors_to_remove: Vec<V>) {
         if let Some(node_links) = self.links.get_mut(id) {
             self.set_hash.remove_unordered_set(id, node_links.iter());
             for neighbor in &neighbors_to_remove {

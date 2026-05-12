@@ -1554,7 +1554,7 @@ impl HnswSearcher {
                 layers: layers.clone(),
                 update_ep,
             },
-            GraphMutation::AddNeighbor {
+            GraphMutation::AddNeighbors {
                 id: inserted_vector,
                 layers,
             },
@@ -1717,9 +1717,8 @@ impl HnswSearcher {
                 .compact_neighborhood_batch(&base_nodes, &neighborhoods, &max_sizes)
                 .await?;
 
-            // Append each Compact mutation to the GroupedMutations of whichever InsertNode
-            // triggered the overflow: the inserted node itself if it is the one being
-            // compacted, otherwise the last group whose InsertNode added to that neighborhood.
+            // for each neighborhood that had a neighbor added, check if the neighborhood is too large and if so,
+            // trim the neighborhood. The neighborhood size calculation does not consider "invalid" vectors (old versions of a node)
             let last_some_idx = mutations.iter().rposition(|opt| opt.is_some()).unwrap_or(0);
             for (id, layer, original, compacted) in
                 izip!(&base_nodes, &layers, &neighborhoods, compacted_nbhds)
@@ -1737,7 +1736,7 @@ impl HnswSearcher {
                         .or_else(|| nbhd_last_group.get(&(id.clone(), *layer)).copied())
                         .unwrap_or(last_some_idx);
                     if let Some(Some(group)) = mutations.get_mut(group_idx) {
-                        group.0.push(GraphMutation::Compact {
+                        group.0.push(GraphMutation::RemoveNeighbors {
                             id: id.clone(),
                             layer: *layer,
                             to_remove,
@@ -1747,7 +1746,7 @@ impl HnswSearcher {
             }
         }
 
-        // Emit RemoveInvalidNeighbors for vectors filtered out by only_valid_vectors
+        // Ensure neighborhoods contain only valid vectors
         if !invalid_links.is_empty() {
             let last_some_idx = mutations.iter().rposition(|opt| opt.is_some()).unwrap_or(0);
             for (id, layer, to_remove) in invalid_links {
@@ -1757,7 +1756,7 @@ impl HnswSearcher {
                     .or_else(|| nbhd_last_group.get(&(id.clone(), layer)).copied())
                     .unwrap_or(last_some_idx);
                 if let Some(Some(group)) = mutations.get_mut(group_idx) {
-                    group.0.push(GraphMutation::RemoveInvalidNeighbors {
+                    group.0.push(GraphMutation::RemoveNeighbors {
                         id,
                         layer,
                         to_remove,

@@ -15,17 +15,12 @@ pub enum GraphMutation<Vector: Ord> {
         update_ep: UpdateEntryPoint,
         id: Vector,
     },
-    AddNeighbor {
+    AddNeighbors {
         // list of layer, neighbors
         layers: Vec<(usize, Vec<Vector>)>,
         id: Vector,
     },
-    RemoveInvalidNeighbors {
-        to_remove: Vec<Vector>,
-        layer: usize,
-        id: Vector,
-    },
-    Compact {
+    RemoveNeighbors {
         to_remove: Vec<Vector>,
         layer: usize,
         id: Vector,
@@ -45,21 +40,10 @@ impl<V: std::fmt::Debug + Ord> std::fmt::Debug for GraphMutation<V> {
                 .field("update_ep", update_ep)
                 .field("id", id)
                 .finish(),
-            Self::AddNeighbor { id, layers: _ } => {
+            Self::AddNeighbors { id, layers: _ } => {
                 f.debug_struct("AddNeighbor").field("id", id).finish()
             }
-            Self::RemoveInvalidNeighbors { .. } => {
-                f.debug_struct("RemoveInvalidNeighbors").finish()
-            }
-            Self::Compact {
-                to_remove: _,
-                layer,
-                id,
-            } => f
-                .debug_struct("Compact")
-                .field("layer", layer)
-                .field("id", id)
-                .finish(),
+            Self::RemoveNeighbors { .. } => f.debug_struct("RemoveInvalidNeighbors").finish(),
         }
     }
 }
