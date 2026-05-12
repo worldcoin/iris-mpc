@@ -1730,6 +1730,8 @@ impl HnswSearcher {
                     .cloned()
                     .collect();
                 if !to_remove.is_empty() {
+                    // invariant: add the Mutation to either the last group which touched the node, or to the last
+                    // eleemnt of mutations
                     let group_idx = insert_to_group
                         .get(id)
                         .copied()
