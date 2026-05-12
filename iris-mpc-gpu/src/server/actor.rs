@@ -186,6 +186,15 @@ pub struct ServerActor {
     full_scan_side_switching_enabled: bool,
     // Per-batch flag propagated from SQS to disable anonymized statistics collection and computation
     anon_stats_writer: Option<AnonStatsWriter>,
+    // How often (in completed batches) to trim each device's default CUDA
+    // memory pool. `0` disables periodic trimming entirely.
+    cuda_mem_pool_trim_interval_batches: u64,
+    // Bytes to retain in the pool after a trim; passed verbatim to
+    // `cuMemPoolTrimTo` (`0` returns all unused memory to the OS).
+    cuda_mem_pool_trim_min_bytes_to_keep: usize,
+    // Counter of completed batches used to decide when to trim. Reset is not
+    // required; only divisibility against the configured interval matters.
+    completed_batches_since_start: u64,
 }
 
 const NON_MATCH_ID: u32 = u32::MAX;
@@ -577,7 +586,39 @@ impl ServerActor {
             full_scan_side_switching_enabled,
             both_side_match_distances_buffer,
             anon_stats_writer,
+            cuda_mem_pool_trim_interval_batches: 0,
+            cuda_mem_pool_trim_min_bytes_to_keep: 0,
+            completed_batches_since_start: 0,
         })
+    }
+
+    /// Configure periodic trimming of each device's default CUDA memory pool.
+    ///
+    /// `interval_batches` is the number of completed batches between trim
+    /// sweeps; `0` disables the feature. `min_bytes_to_keep` is forwarded to
+    /// `cuMemPoolTrimTo`; `0` releases all unused pool memory to the OS.
+    ///
+    /// Frequent small trims would hurt matmul throughput by forcing repeated
+    /// reservations from the driver, so a moderate interval (every several
+    /// batches) is preferred while still preventing long-term fragmentation
+    /// of the pool.
+    pub fn set_cuda_mem_pool_trim(&mut self, interval_batches: u64, min_bytes_to_keep: usize) {
+        self.cuda_mem_pool_trim_interval_batches = interval_batches;
+        self.cuda_mem_pool_trim_min_bytes_to_keep = min_bytes_to_keep;
+        if interval_batches == 0 {
+            tracing::info!(
+                "CUDA memory pool periodic trimming: DISABLED (cuda_mem_pool_trim_interval_batches=0, \
+                 cuda_mem_pool_trim_min_bytes_to_keep={})",
+                min_bytes_to_keep,
+            );
+        } else {
+            tracing::info!(
+                "CUDA memory pool periodic trimming: ENABLED (cuda_mem_pool_trim_interval_batches={}, \
+                 cuda_mem_pool_trim_min_bytes_to_keep={})",
+                interval_batches,
+                min_bytes_to_keep,
+            );
+        }
     }
 
     pub fn run(mut self) {
@@ -638,8 +679,41 @@ impl ServerActor {
                 self.full_scan_side = self.full_scan_side.other();
                 tracing::info!("Switching full scan side to {}", self.full_scan_side);
             }
+
+            self.maybe_trim_cuda_mem_pools();
         }
         tracing::info!("Server Actor finished due to all job queues being closed");
+    }
+
+    /// Trim each device's default CUDA memory pool every
+    /// `cuda_mem_pool_trim_interval_batches` completed batches. Performed
+    /// between batches (after `process_batch_query` has returned) so any
+    /// transient allocations made for the just-finished batch have already
+    /// been released into the pool, allowing a meaningful trim back to the
+    /// OS without harming matmul throughput within a batch.
+    fn maybe_trim_cuda_mem_pools(&mut self) {
+        self.completed_batches_since_start = self.completed_batches_since_start.wrapping_add(1);
+        let interval = self.cuda_mem_pool_trim_interval_batches;
+        if interval == 0 {
+            return;
+        }
+        if !self.completed_batches_since_start.is_multiple_of(interval) {
+            return;
+        }
+        let min_bytes_to_keep = self.cuda_mem_pool_trim_min_bytes_to_keep;
+        tracing::info!(
+            "Triggering periodic CUDA memory pool trim: completed_batches={}, \
+             cuda_mem_pool_trim_interval_batches={}, cuda_mem_pool_trim_min_bytes_to_keep={}",
+            self.completed_batches_since_start,
+            interval,
+            min_bytes_to_keep,
+        );
+        if let Err(err) = self.device_manager.trim_mem_pools(min_bytes_to_keep) {
+            tracing::warn!(
+                ?err,
+                "CUDA memory pool trim sweep failed; continuing without trimming",
+            );
+        }
     }
 
     fn register_host_memory(&self) {

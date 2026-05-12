@@ -400,6 +400,10 @@ async fn server_main(config: Config) -> Result<()> {
             anon_stats_writer_for_actor,
         ) {
             Ok((mut actor, handle)) => {
+                actor.set_cuda_mem_pool_trim(
+                    config.cuda_mem_pool_trim_interval_batches,
+                    config.cuda_mem_pool_trim_min_bytes_to_keep,
+                );
                 tracing::info!("⚓️ ANCHOR: Load the database");
                 let res = if config.fake_db_size > 0 {
                     // TODO: does this even still work, since we do not page-lock the memory here?

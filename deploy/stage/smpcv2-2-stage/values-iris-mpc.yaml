@@ -99,7 +99,7 @@ env:
     value: "wf-smpcv2-stage-sns-requests"
 
   - name: SMPC__ENABLE_S3_IMPORTER
-    value: "true"
+    value: "false"
 
   - name: SMPC__DB_CHUNKS_BUCKET_NAME
     value: "iris-mpc-db-exporter-store-node-2-stage--eun1-az3--x-s3"
@@ -117,10 +117,10 @@ env:
     value: "true"
 
   - name: SMPC__INIT_DB_SIZE
-    value: "0" # "1200000"
+    value: "500000"
 
   - name: SMPC__MAX_DB_SIZE
-    value: "100000" # "1300000"
+    value: "1300000"
 
   - name: SMPC__MAX_BATCH_SIZE
     value: "64"
@@ -180,6 +180,12 @@ env:
 
   - name: SMPC__ENABLE_DEBUG_TIMING
     value: "true"
+
+  - name: SMPC__CUDA_MEM_POOL_TRIM_INTERVAL_BATCHES
+    value: "5"
+
+  - name: SMPC__CUDA_MEM_POOL_TRIM_MIN_BYTES_TO_KEEP
+    value: "0"
 
 initContainer:
   enabled: true
