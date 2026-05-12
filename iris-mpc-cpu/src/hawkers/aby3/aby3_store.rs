@@ -776,8 +776,12 @@ mod tests {
             plaintext_store::PlaintextStore,
         },
         hnsw::{
-            graph::graph_diff::node_equiv::ensure_node_equivalence, GraphMem, HnswSearcher,
-            SortedNeighborhood,
+            graph::graph_diff::{
+                self,
+                explicit::{ExplicitNeighborhoodDiffer, SortBy},
+                node_equiv::ensure_node_equivalence,
+            },
+            GraphMem, HnswSearcher, SortedNeighborhood,
         },
         network::mpc::NetworkType,
         protocol::shared_iris::GaloisRingSharedIris,
@@ -1601,6 +1605,17 @@ mod tests {
             let mpc_graph = mpc_graph.unwrap_or_else(|| panic!("party {role} did not finish"));
             if let Err(e) = ensure_node_equivalence(&mpc_graph, &plaintext_graph) {
                 panic!("graph mismatch: {:?}", e);
+            }
+            if mpc_graph != plaintext_graph {
+                let diff_output = graph_diff::run_diff(
+                    &mpc_graph,
+                    &plaintext_graph,
+                    ExplicitNeighborhoodDiffer::new(SortBy::Index),
+                );
+                panic!(
+                    "[Role {}] graphs are not equal. Diff: {}",
+                    role, diff_output
+                );
             }
         }
 
