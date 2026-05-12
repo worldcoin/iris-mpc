@@ -2075,24 +2075,73 @@ mod tests {
         assert_eq!(grouped_plans.len(), 1);
         let group = grouped_plans[0].as_ref().unwrap();
 
-        // Each group should have at least the InsertNode
-        assert!(!group.0.is_empty());
-        let plan = &group.0[0];
+        // Expected: 1 InsertNode for next_id + 6 RemoveNeighbors (one for next_id
+        // itself whose 5-neighbor list exceeds M_limit=4, and one per each of the
+        // 5 pre-existing nodes whose backlink-extended neighborhood of 5 also
+        // exceeds M_limit=4).
+        assert_eq!(group.0.len(), 7);
 
-        // Verify the first mutation is an InsertNode with the correct properties
-        if let GraphMutation::InsertNode {
-            id,
-            layers,
-            update_ep,
-        } = plan
-        {
+        // Verify the first mutation is an InsertNode with the correct shape.
+        let plan = &group.0[0];
+        if let GraphMutation::InsertNode { id, update_ep, .. } = plan {
             assert_eq!(*id, next_id);
             assert_eq!(*update_ep, UpdateEntryPoint::False);
-            // Check layers contains the expected neighbors
-            assert!(!layers.is_empty());
         } else {
             panic!("Expected InsertNode mutation");
         }
+
+        // Collect all RemoveNeighbors mutations and assert compaction correctness.
+        let remove_mutations: Vec<_> = group
+            .0
+            .iter()
+            .filter_map(|m| {
+                if let GraphMutation::RemoveNeighbors {
+                    id,
+                    layer,
+                    to_remove,
+                } = m
+                {
+                    Some((id, layer, to_remove))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // There should be exactly 6 compact mutations: one for next_id (whose
+        // 5-element InsertNode neighborhood exceeds M_limit=4) and one for each of
+        // the 5 pre-existing nodes (each gaining next_id as a backlink, going from
+        // 4 → 5 neighbors, which also exceeds M_limit=4).
+        assert_eq!(remove_mutations.len(), 6);
+
+        // Build the set of all ids that should appear as compaction targets.
+        let mut expected_compact_targets: std::collections::HashSet<_> =
+            ids[0..6].iter().cloned().collect();
+
+        for (id, layer, to_remove) in &remove_mutations {
+            // Every compaction is on layer 0.
+            assert_eq!(**layer, 0, "RemoveNeighbors should target layer 0");
+
+            // Each neighborhood was trimmed from 5 to M_max=4, so exactly one
+            // neighbor is removed.
+            assert_eq!(
+                to_remove.len(),
+                1,
+                "Each compaction should remove exactly 1 neighbor (5 → M_max=4)"
+            );
+
+            // The target id must be one of the expected nodes.
+            assert!(
+                expected_compact_targets.remove(*id),
+                "Unexpected or duplicate RemoveNeighbors target: {id:?}"
+            );
+        }
+
+        // Every expected target must have received a compaction.
+        assert!(
+            expected_compact_targets.is_empty(),
+            "Missing RemoveNeighbors for: {expected_compact_targets:?}"
+        );
 
         Ok(())
     }
