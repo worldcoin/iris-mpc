@@ -68,8 +68,11 @@ async fn main() -> Result<()> {
         command,
     } = Cli::parse();
 
-    let region_provider = S3Region::new(aws_region.unwrap_or_else(|| "eu-north-1".to_string()));
-    let shared_config = aws_config::from_env().region(region_provider).load().await;
+    let mut builder = aws_config::from_env();
+    if let Some(aws_region) = aws_region {
+        builder = builder.region(S3Region::new(aws_region));
+    }
+    let shared_config = builder.load().await;
     let s3_client = S3Client::new(&shared_config);
 
     let db_context = DbContext::new(&db_url, &schema, s3_client, s3_bucket, party_id).await;

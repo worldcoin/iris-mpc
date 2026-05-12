@@ -157,9 +157,9 @@ struct Args {
     #[clap(long)]
     s3_bucket: String,
 
-    /// AWS region for the S3 checkpoint client.
-    #[clap(long, default_value = "eu-north-1")]
-    aws_region: String,
+    /// AWS region for the S3 checkpoint client (defaults to env/instance metadata)
+    #[clap(long)]
+    aws_region: Option<String>,
 }
 
 impl Args {
@@ -454,8 +454,11 @@ async fn main() -> Result<()> {
 }
 
 async fn init_dbs(args: &Args) -> Vec<DbContext> {
-    let region = S3Region::new(args.aws_region.clone());
-    let shared_config = aws_config::from_env().region(region).load().await;
+    let mut builder = aws_config::from_env();
+    if let Some(aws_region) = args.aws_region.clone() {
+        builder = builder.region(S3Region::new(aws_region));
+    }
+    let shared_config = builder.load().await;
     let s3_client = S3Client::new(&shared_config);
 
     let mut dbs = Vec::new();
