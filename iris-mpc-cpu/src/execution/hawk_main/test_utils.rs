@@ -101,11 +101,17 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
             } else {
                 UpdateEntryPoint::False
             };
-            let mutations = vec![GraphMutation::InsertNode {
-                id: id(i),
-                layers: vec![(0, edges(i))],
-                update_ep,
-            }];
+            let mutations = vec![
+                GraphMutation::InsertNode {
+                    id: id(i),
+                    layers: vec![(0, edges(i))],
+                    update_ep,
+                },
+                GraphMutation::AddNeighbors {
+                    id: id(i),
+                    layers: vec![(0, edges(i))],
+                },
+            ];
             graph.insert_apply(mutations);
         }
     }
