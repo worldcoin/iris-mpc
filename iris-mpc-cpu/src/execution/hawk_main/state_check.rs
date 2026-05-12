@@ -832,4 +832,61 @@ mod test {
         let found = run_diff(&stores, 64);
         assert_eq!(found, vec![10]);
     }
+
+    #[test]
+    fn test_unordered_set_order_independence() {
+        // Items folded in different orders must produce the same checksum.
+        let mut a = SetHash::default();
+        a.add_unordered_set("key", [1u64, 2, 3]);
+
+        let mut b = SetHash::default();
+        b.add_unordered_set("key", [3u64, 1, 2]);
+
+        assert_eq!(a.checksum(), b.checksum());
+    }
+
+    #[test]
+    fn test_unordered_set_empty_vs_absent() {
+        // Adding an empty set must still mutate the accumulator: the
+        // key-existence marker is the whole point of the design.
+        let absent = SetHash::default();
+
+        let mut empty_set = SetHash::default();
+        empty_set.add_unordered_set("key", [] as [u64; 0]);
+
+        assert_ne!(
+            absent.checksum(),
+            empty_set.checksum(),
+            "empty set present must be distinguishable from key being absent"
+        );
+    }
+
+    #[test]
+    fn test_unordered_set_add_remove_identity() {
+        // remove_unordered_set is the exact inverse of add_unordered_set:
+        // a round-trip with identical (key, items) must be a no-op.
+        let baseline = SetHash::default();
+
+        let mut h = SetHash::default();
+        h.add_unordered_set("key", [10u64, 20, 30]);
+        h.remove_unordered_set("key", [10u64, 20, 30]);
+
+        assert_eq!(baseline.checksum(), h.checksum());
+    }
+
+    #[test]
+    fn test_unordered_set_multiset_semantics() {
+        // Duplicates are counted separately; [a, a] must differ from [a].
+        let mut once = SetHash::default();
+        once.add_unordered_set("key", [42u64]);
+
+        let mut twice = SetHash::default();
+        twice.add_unordered_set("key", [42u64, 42]);
+
+        assert_ne!(
+            once.checksum(),
+            twice.checksum(),
+            "duplicate items must produce a different hash (multiset, not set)"
+        );
+    }
 }
