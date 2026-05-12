@@ -1726,6 +1726,8 @@ impl HawkMutation {
 
         for mutation in self.0 {
             // Insert graph mutation into hawk_graph_mutations and link to modification
+            // note that not all mutations modify the graph. mutation.modification_key = None is a valid option.
+            // for reference, see the end of handle_mutations()
             if let Some(ref modification_key) = mutation.modification_key {
                 if let Some(modification) = modifications.get_mut(modification_key) {
                     // Serialize the plans (BothEyes<Option<ConnectPlan>>)
@@ -1736,6 +1738,11 @@ impl HawkMutation {
                     graph_tx
                         .insert_hawk_graph_mutations(modification.id, &serialized)
                         .await?;
+                } else {
+                    tracing::warn!(
+                        "modification_key {:?} not found in modifications",
+                        modification_key
+                    );
                 }
             }
         }
