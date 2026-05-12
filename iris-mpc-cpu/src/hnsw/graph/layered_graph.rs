@@ -492,6 +492,7 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         self.set_links(id.clone(), neighbors.clone());
     }
 
+    // invariant: neighbor_links is kept sorted; relies on the planner sorting before set_links
     pub fn add_neighbor(&mut self, id: V, neighborhoods: Vec<V>) {
         for nbhd in &neighborhoods {
             if let Some(neighbor_links) = self.links.get_mut(nbhd) {
