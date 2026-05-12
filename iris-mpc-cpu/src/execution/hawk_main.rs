@@ -1712,8 +1712,8 @@ impl HawkMutation {
     ///
     /// For each SingleHawkMutation:
     /// 1. Serializes the mutation plans and inserts into hawk_graph_mutations table
-    /// 2. Links the modification to the graph_mutation via graph_mutation_id
-    /// 3. Updates last_indexed_modification_id in persistent_state
+    ///    (modification_id is the natural key — no separate id returned)
+    /// 2. Updates last_indexed_modification_id in persistent_state
     pub async fn persist(
         self,
         graph_tx: &mut GraphTx<'_>,
@@ -1732,13 +1732,10 @@ impl HawkMutation {
                     let serialized = bincode::serialize(&mutation.plans)
                         .map_err(|e| eyre::eyre!("Failed to serialize graph mutation: {}", e))?;
 
-                    // Insert into hawk_graph_mutations and get the generated ID
-                    let graph_mutation_id = graph_tx
+                    // Insert into hawk_graph_mutations; modification_id is the natural key.
+                    graph_tx
                         .insert_hawk_graph_mutations(modification.id, &serialized)
                         .await?;
-
-                    // Link modification to graph_mutation
-                    modification.graph_mutation_id = Some(graph_mutation_id);
                 }
             }
         }
@@ -2179,8 +2176,8 @@ impl HawkHandle {
                 RequestIndex::IdentityUpdate(i) => {
                     // This is a reset update mutation.
                     // Note: A missing vector_id here means the target was not found, which is a
-                    // legitimate "no graph change" case (e.g., recovery update on non-existent identity).
-                    // The null graph_mutation_id is intentional in this case.
+                    // legitimate "no graph change" case (e.g., recovery update on non-existent
+                    // identity) — no hawk_graph_mutations row is written.
                     if let Some(&vector_id) = identity_updates.vector_ids.get(i) {
                         Some(ModificationKey::RequestSerialId(vector_id.serial_id()))
                     } else {

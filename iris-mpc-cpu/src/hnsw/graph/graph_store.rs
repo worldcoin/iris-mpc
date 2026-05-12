@@ -20,7 +20,6 @@ pub struct GraphCheckpointRow {
 /// A row from the hawk_graph_mutations table.
 #[derive(sqlx::FromRow, Debug, Clone, PartialEq, Eq)]
 pub struct GraphMutationRow {
-    pub id: i64,
     pub modification_id: i64,
     /// Bincode-serialized BothEyes<Vec<GraphMutation<VectorId>>> (mutations for both eyes)
     pub serialized_mutations: Vec<u8>,
@@ -357,7 +356,7 @@ impl<V: VectorStore> GraphPg<V> {
             r#"
             INSERT INTO hawk_graph_mutations (modification_id, serialized_mutations, mutation_version)
             VALUES ($1, $2, $3)
-            RETURNING id, modification_id, serialized_mutations, mutation_version
+            RETURNING modification_id, serialized_mutations, mutation_version
             "#,
         )
         .bind(modification_id)
@@ -375,10 +374,10 @@ impl<V: VectorStore> GraphPg<V> {
     ) -> Result<Vec<GraphMutationRow>> {
         let rows = sqlx::query_as::<_, GraphMutationRow>(
             r#"
-            SELECT id, modification_id, serialized_mutations, mutation_version
+            SELECT modification_id, serialized_mutations, mutation_version
             FROM hawk_graph_mutations
-            WHERE $1::bigint IS NULL OR id <= $1
-            ORDER BY id ASC
+            WHERE $1::bigint IS NULL OR modification_id <= $1
+            ORDER BY modification_id ASC
             "#,
         )
         .bind(max_graph_mutation_id)
@@ -394,10 +393,10 @@ impl<V: VectorStore> GraphPg<V> {
     ) -> Result<Vec<GraphMutationRow>> {
         let rows = sqlx::query_as::<_, GraphMutationRow>(
             r#"
-            SELECT id, modification_id, serialized_mutations, mutation_version
+            SELECT modification_id, serialized_mutations, mutation_version
             FROM hawk_graph_mutations
-            WHERE $1::bigint IS NULL OR id > $1
-            ORDER BY id ASC
+            WHERE $1::bigint IS NULL OR modification_id > $1
+            ORDER BY modification_id ASC
             "#,
         )
         .bind(min_id)
@@ -418,7 +417,7 @@ impl<V: VectorStore> GraphPg<V> {
                 sqlx::query(
                     r#"
                     DELETE FROM hawk_graph_mutations
-                    WHERE id <= $1
+                    WHERE modification_id <= $1
                     "#,
                 )
                 .bind(max_mutation_id)
@@ -435,11 +434,11 @@ impl<V: VectorStore> GraphPg<V> {
         Ok(())
     }
 
-    /// Returns the maximum mutation id from hawk_graph_mutations table, or None if empty.
+    /// Returns the maximum modification_id from hawk_graph_mutations table, or None if empty.
     pub async fn get_max_hawk_graph_mutation_id(&self) -> Result<Option<i64>> {
         let row = sqlx::query(
             r#"
-            SELECT MAX(id) as max_id
+            SELECT MAX(modification_id) as max_id
             FROM hawk_graph_mutations
             "#,
         )
@@ -459,25 +458,23 @@ pub struct GraphTx<'a, V> {
 
 impl<'b, V: VectorStore> GraphTx<'b, V> {
     /// Insert a single graph mutation row into hawk_graph_mutations.
-    /// Returns the generated mutation id.
     pub async fn insert_hawk_graph_mutations(
         &mut self,
         modification_id: i64,
         serialized_mutations: &[u8],
-    ) -> Result<i64> {
-        let row = sqlx::query(
+    ) -> Result<()> {
+        sqlx::query(
             r#"
             INSERT INTO hawk_graph_mutations (modification_id, serialized_mutations)
             VALUES ($1, $2)
-            RETURNING id
             "#,
         )
         .bind(modification_id)
         .bind(serialized_mutations)
-        .fetch_one(self.tx.deref_mut())
+        .execute(self.tx.deref_mut())
         .await?;
 
-        Ok(row.get("id"))
+        Ok(())
     }
 
     /// Update the last_indexed_modification_id in persistent_state.

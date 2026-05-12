@@ -135,8 +135,6 @@ pub struct StoredModification {
     pub status: String,
     pub persisted: bool,
     pub result_message_body: Option<String>,
-    /// References a row in hawk_graph_mutations which stores BothEyes<GraphMutation>
-    pub graph_mutation_id: Option<i64>,
 }
 
 impl From<StoredModification> for Modification {
@@ -149,7 +147,6 @@ impl From<StoredModification> for Modification {
             status: stored.status,
             persisted: stored.persisted,
             result_message_body: stored.result_message_body,
-            graph_mutation_id: stored.graph_mutation_id,
         }
     }
 }
@@ -494,8 +491,7 @@ WHERE id = $1;
                 s3_url,
                 status,
                 persisted,
-                result_message_body,
-                graph_mutation_id
+                result_message_body
             "#,
         )
         .bind(serial_id)
@@ -527,8 +523,7 @@ WHERE id = $1;
                 s3_url,
                 status,
                 persisted,
-                result_message_body,
-                graph_mutation_id
+                result_message_body
             FROM modifications
             ORDER BY id DESC
             LIMIT $1
@@ -578,8 +573,7 @@ WHERE id = $1;
                     s3_url,
                     status,
                     persisted,
-                    result_message_body,
-                    graph_mutation_id
+                    result_message_body
                 FROM modifications
                 WHERE id > $1
                   AND request_type = ANY($2)
@@ -634,8 +628,6 @@ WHERE id = $1;
             .map(|m| m.result_message_body.clone())
             .collect();
         let serial_ids: Vec<Option<i64>> = modifications.iter().map(|m| m.serial_id).collect();
-        let graph_mutation_ids: Vec<Option<i64>> =
-            modifications.iter().map(|m| m.graph_mutation_id).collect();
 
         for (id, status, persisted, serial_id) in izip!(&ids, &statuses, &persisted, &serial_ids) {
             tracing::info!(
@@ -653,16 +645,14 @@ WHERE id = $1;
             SET status = data.status,
                 persisted = data.persisted,
                 result_message_body = data.result_message_body,
-                serial_id = data.serial_id,
-                graph_mutation_id = data.graph_mutation_id
+                serial_id = data.serial_id
             FROM (
                 SELECT
                     unnest($1::bigint[])  as id,
                     unnest($2::text[])    as status,
                     unnest($3::bool[])    as persisted,
                     unnest($4::text[])    as result_message_body,
-                    unnest($5::bigint[])  as serial_id,
-                    unnest($6::bigint[])  as graph_mutation_id
+                    unnest($5::bigint[])  as serial_id
             ) as data
             WHERE modifications.id = data.id
             "#,
@@ -672,7 +662,6 @@ WHERE id = $1;
         .bind(&persisted)
         .bind(&result_message_bodies)
         .bind(&serial_ids)
-        .bind(&graph_mutation_ids)
         .execute(tx.deref_mut())
         .await?;
 
@@ -1216,7 +1205,6 @@ pub mod tests {
             ModificationStatus::InProgress,
             false,
             None,
-            None,
         );
 
         // 3. Insert another modification
@@ -1233,7 +1221,6 @@ pub mod tests {
             Some("https://example.com".to_string()),
             ModificationStatus::InProgress,
             false,
-            None,
             None,
         );
 
@@ -1273,7 +1260,6 @@ pub mod tests {
             ModificationStatus::InProgress,
             false,
             None,
-            None,
         );
         assert_modification(
             second_last,
@@ -1283,7 +1269,6 @@ pub mod tests {
             None,
             ModificationStatus::InProgress,
             false,
-            None,
             None,
         );
 
@@ -1301,7 +1286,6 @@ pub mod tests {
         expected_status: ModificationStatus,
         expected_persisted: bool,
         expected_result_body: Option<String>,
-        expected_graph_mutation_id: Option<i64>,
     ) {
         assert_eq!(actual.id, expected_id);
         assert_eq!(actual.serial_id, expected_serial_id);
@@ -1310,7 +1294,6 @@ pub mod tests {
         assert_eq!(actual.status, expected_status.to_string());
         assert_eq!(actual.persisted, expected_persisted);
         assert_eq!(actual.result_message_body, expected_result_body);
-        assert_eq!(actual.graph_mutation_id, expected_graph_mutation_id);
     }
 
     #[tokio::test]
@@ -1367,7 +1350,6 @@ pub mod tests {
             ModificationStatus::InProgress,
             false,
             None,
-            None,
         );
         assert_modification(
             &last_five[1],
@@ -1378,7 +1360,6 @@ pub mod tests {
             ModificationStatus::Completed,
             false,
             Some("m4".to_string()),
-            None,
         );
         assert_modification(
             &last_five[2],
@@ -1389,7 +1370,6 @@ pub mod tests {
             ModificationStatus::Completed,
             true,
             Some("m3".to_string()),
-            None, // graph_mutation_id not set in this test
         );
         assert_modification(
             &last_five[3],
@@ -1400,7 +1380,6 @@ pub mod tests {
             ModificationStatus::Completed,
             false,
             Some("m2".to_string()),
-            None,
         );
         assert_modification(
             &last_five[4],
@@ -1411,7 +1390,6 @@ pub mod tests {
             ModificationStatus::Completed,
             true,
             Some("m1".to_string()),
-            None, // graph_mutation_id not set in this test
         );
 
         cleanup(&postgres_client, &schema_name).await?;

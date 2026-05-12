@@ -19,9 +19,8 @@ use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 // Graph mutations are already in the WAL (hawk_graph_mutations table) from when
-// they were originally committed. The modifications table just references them
-// via graph_mutation_id. Actual mutation application to GraphMem happens during
-// startup delta replay (checkpoint load → WAL replay), not here.
+// they were originally committed, keyed by modification_id. Actual mutation application
+// to GraphMem happens during startup delta replay (checkpoint load → WAL replay), not here.
 pub async fn sync_modifications(
     config: &Config,
     store: &Store,

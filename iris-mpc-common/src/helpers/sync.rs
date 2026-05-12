@@ -64,8 +64,6 @@ pub struct Modification {
     pub status: String,
     pub persisted: bool,
     pub result_message_body: Option<String>,
-    /// References a row in hawk_graph_mutations which stores BothEyes<GraphMutation>
-    pub graph_mutation_id: Option<i64>,
 }
 
 impl PartialEq for Modification {
@@ -76,7 +74,7 @@ impl PartialEq for Modification {
             && self.s3_url == other.s3_url
             && self.status == other.status
             && self.persisted == other.persisted
-        // result_message_body and graph_mutation_id are ignored since they differ across nodes
+        // result_message_body is ignored since it differs across nodes
     }
 }
 
@@ -97,7 +95,6 @@ impl fmt::Debug for Modification {
             .field("status", &self.status)
             .field("persisted", &self.persisted)
             .field("result_message_body", &result_message_summary)
-            .field("graph_mutation_id", &self.graph_mutation_id)
             .finish()
     }
 }
@@ -334,12 +331,6 @@ fn assert_modifications_consistency(modifications: &[Modification]) {
         if first.serial_id.is_some() && m.serial_id.is_some() {
             assert_eq!(first.serial_id, m.serial_id, "Inconsistent serial IDs");
         }
-        if first.graph_mutation_id.is_some() && m.graph_mutation_id.is_some() {
-            assert_eq!(
-                first.graph_mutation_id, m.graph_mutation_id,
-                "Inconsistent graph mutation IDs"
-            );
-        }
     }
 }
 
@@ -363,7 +354,6 @@ mod tests {
         s3_url: Option<&str>,
         status: ModificationStatus,
         persisted: bool,
-        graph_mutation_id: Option<i64>,
     ) -> Modification {
         Modification {
             id,
@@ -373,7 +363,6 @@ mod tests {
             status: status.to_string(),
             persisted,
             result_message_body: None,
-            graph_mutation_id,
         }
     }
 
@@ -407,7 +396,6 @@ mod tests {
             None,
             ModificationStatus::Completed,
             true,
-            Some(1),
         );
         let mod2_local = create_modification(
             2,
@@ -416,7 +404,6 @@ mod tests {
             Some("http://example.com/200"),
             ModificationStatus::Completed,
             false,
-            None,
         );
         let mod3_local = create_modification(
             3,
@@ -425,7 +412,6 @@ mod tests {
             None,
             ModificationStatus::InProgress,
             false,
-            None,
         );
         let mod4_local = create_modification(
             4,
@@ -434,7 +420,6 @@ mod tests {
             Some("http://example.com/400"),
             ModificationStatus::InProgress,
             false,
-            None,
         );
         let mod5_local = create_modification(
             5,
@@ -443,7 +428,6 @@ mod tests {
             Some("http://example.com/mod5"),
             ModificationStatus::InProgress,
             false,
-            None,
         );
         let mod6_local = create_modification(
             6,
@@ -452,7 +436,6 @@ mod tests {
             Some("http://example.com/mod6"),
             ModificationStatus::InProgress,
             false,
-            None,
         );
         let my_state = create_sync_state(vec![
             mod1_local.clone(),
@@ -470,7 +453,6 @@ mod tests {
             None,
             ModificationStatus::Completed,
             true,
-            Some(1),
         );
         let mod2_other = create_modification(
             2,
@@ -479,7 +461,6 @@ mod tests {
             Some("http://example.com/200"),
             ModificationStatus::Completed,
             false,
-            None,
         );
         let mod3_other = create_modification(
             3,
@@ -488,7 +469,6 @@ mod tests {
             None,
             ModificationStatus::Completed,
             true,
-            Some(3),
         );
         let mod4_other = create_modification(
             4,
@@ -497,7 +477,6 @@ mod tests {
             Some("http://example.com/400"),
             ModificationStatus::Completed,
             false,
-            None,
         );
         let mod5_other = create_modification(
             5,
@@ -506,7 +485,6 @@ mod tests {
             Some("http://example.com/mod5"),
             ModificationStatus::Completed,
             true,
-            Some(5),
         );
         let mod6_other = create_modification(
             6,
@@ -515,7 +493,6 @@ mod tests {
             Some("http://example.com/mod6"),
             ModificationStatus::Completed,
             false,
-            None,
         );
         let other_state = create_sync_state(vec![
             mod1_other,
@@ -563,7 +540,6 @@ mod tests {
             None,
             ModificationStatus::Completed,
             true,
-            Some(1),
         );
         let mod2_local = create_modification(
             2,
@@ -572,7 +548,6 @@ mod tests {
             Some("http://example.com/200"),
             ModificationStatus::Completed,
             false,
-            None,
         );
         let mod3_local = create_modification(
             3,
@@ -581,7 +556,6 @@ mod tests {
             None,
             ModificationStatus::Completed,
             true,
-            Some(3),
         );
         let mod4_local = create_modification(
             4,
@@ -590,7 +564,6 @@ mod tests {
             Some("http://example.com/400"),
             ModificationStatus::Completed,
             false,
-            None,
         );
         let mod5_local = create_modification(
             5,
@@ -599,7 +572,6 @@ mod tests {
             Some("http://example.com/mod5"),
             ModificationStatus::Completed,
             true,
-            Some(5),
         );
         let mod6_local = create_modification(
             6,
@@ -608,7 +580,6 @@ mod tests {
             Some("http://example.com/mod6"),
             ModificationStatus::Completed,
             false,
-            None,
         );
         let my_state = create_sync_state(vec![
             mod1_local.clone(),
@@ -627,7 +598,6 @@ mod tests {
             None,
             ModificationStatus::Completed,
             true,
-            Some(1),
         );
         let mod2_other = create_modification(
             2,
@@ -636,7 +606,6 @@ mod tests {
             Some("http://example.com/200"),
             ModificationStatus::Completed,
             false,
-            None,
         );
         let mod3_other = create_modification(
             3,
@@ -645,7 +614,6 @@ mod tests {
             None,
             ModificationStatus::InProgress,
             false,
-            None,
         );
         let mod4_other = create_modification(
             4,
@@ -654,7 +622,6 @@ mod tests {
             Some("http://example.com/400"),
             ModificationStatus::InProgress,
             false,
-            None,
         );
         let mod5_other = create_modification(
             5,
@@ -663,7 +630,6 @@ mod tests {
             Some("http://example.com/mod5"),
             ModificationStatus::InProgress,
             false,
-            None,
         );
         let mod6_other = create_modification(
             6,
@@ -672,7 +638,6 @@ mod tests {
             Some("http://example.com/mod6"),
             ModificationStatus::InProgress,
             false,
-            None,
         );
         let other_state = create_sync_state(vec![
             mod1_other, mod2_other, mod3_other, mod4_other, mod5_other, mod6_other,
@@ -706,7 +671,6 @@ mod tests {
             Some("http://example.com/200"),
             ModificationStatus::Completed,
             false,
-            None,
         );
         let mod3_local = create_modification(
             3,
@@ -715,7 +679,6 @@ mod tests {
             None,
             ModificationStatus::InProgress,
             false,
-            None,
         );
         let my_state = create_sync_state(vec![mod2_local.clone(), mod3_local.clone()]);
 
@@ -726,7 +689,6 @@ mod tests {
             None,
             ModificationStatus::Completed,
             true,
-            None,
         );
         mod1_other.result_message_body = Some(
             serde_json::to_string(&IdentityDeletionResult {
@@ -766,7 +728,6 @@ mod tests {
             None,
             ModificationStatus::Completed,
             true,
-            None,
         );
         let mod2_local = create_modification(
             2,
@@ -775,7 +736,6 @@ mod tests {
             Some("http://example.com/200"),
             ModificationStatus::Completed,
             false,
-            None,
         );
         let mod3_local = create_modification(
             3,
@@ -784,7 +744,6 @@ mod tests {
             None,
             ModificationStatus::InProgress,
             false,
-            None,
         );
         let mod4_local = create_modification(
             4,
@@ -793,7 +752,6 @@ mod tests {
             Some("http://example.com/400"),
             ModificationStatus::InProgress,
             false,
-            None,
         );
         let my_state = create_sync_state(vec![
             mod1_local.clone(),
@@ -924,7 +882,6 @@ mod tests {
             status: ModificationStatus::Completed.to_string(),
             persisted: true,
             result_message_body: Some(serialized_reauth),
-            graph_mutation_id: None,
         };
 
         // Update the node_id in the serialized message
@@ -971,7 +928,6 @@ mod tests {
             status: ModificationStatus::Completed.to_string(),
             persisted: true,
             result_message_body: Some(serialized_deletion),
-            graph_mutation_id: None,
         };
 
         // Update the node_id in the serialized message
@@ -1045,7 +1001,6 @@ mod tests {
             Some("http://example.com/100"),
             ModificationStatus::Completed,
             true,
-            None,
         );
         let my_state = create_sync_state_with_lookback(vec![mod1_node1], 10);
 
@@ -1057,7 +1012,6 @@ mod tests {
             Some("http://example.com/1500"),
             ModificationStatus::Completed,
             true,
-            None,
         );
         let other_state1 = create_sync_state_with_lookback(vec![mod15_node2], 10);
 
@@ -1069,7 +1023,6 @@ mod tests {
             None,
             ModificationStatus::Completed,
             true,
-            None,
         );
         let other_state2 = create_sync_state_with_lookback(vec![mod20_node3], 10);
 

@@ -318,7 +318,6 @@ pub async fn process_job_result(
         let mut graph_tx = graph_store.tx_wrap(iris_tx);
 
         // Persist graph mutations to hawk_graph_mutations table
-        // This sets graph_mutation_id on modifications
         let step_start = Instant::now();
         hawk_mutation
             .persist(&mut graph_tx, &mut modifications)
@@ -326,7 +325,6 @@ pub async fn process_job_result(
         metrics::histogram!("persist_graph_mutations_duration")
             .record(step_start.elapsed().as_secs_f64());
 
-        // Update modification results in db (now includes graph_mutation_id)
         let step_start = Instant::now();
         store
             .update_modifications(
