@@ -275,7 +275,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                     }
                 }
                 GraphMutation::RemoveEdges {
-                    ref id,
+                    id,
                     layer,
                     to_remove,
                     direction,
@@ -290,13 +290,13 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                     let layer_mut = &mut self.layers[layer];
                     match direction {
                         EdgeDirection::Outgoing => {
-                            if layer_mut.get_links(id).is_none() {
+                            if layer_mut.get_links(&id).is_none() {
                                 warn!(
                                     "RemoveEdges(Outgoing): id={:?} missing at layer {layer}; skipping",
                                     id
                                 );
                             } else {
-                                layer_mut.remove_neighbors(id, to_remove);
+                                layer_mut.remove_neighbors(&id, to_remove);
                             }
                         }
                         EdgeDirection::Incoming => {
@@ -308,16 +308,16 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     );
                                 }
                             }
-                            layer_mut.remove_incoming_edges(id, to_remove);
+                            layer_mut.remove_incoming_edges(&id, to_remove);
                         }
                         EdgeDirection::Bidirectional => {
-                            if layer_mut.get_links(id).is_none() {
+                            if layer_mut.get_links(&id).is_none() {
                                 warn!(
                                     "RemoveEdges(Bidirectional): id={:?} missing at layer {layer}; skipping outgoing half",
                                     id
                                 );
                             } else {
-                                layer_mut.remove_neighbors(id, to_remove.clone());
+                                layer_mut.remove_neighbors(&id, to_remove.clone());
                             }
                             for target in &to_remove {
                                 if layer_mut.get_links(target).is_none() {
@@ -327,7 +327,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     );
                                 }
                             }
-                            layer_mut.remove_incoming_edges(id, to_remove);
+                            layer_mut.remove_incoming_edges(&id, to_remove);
                         }
                     }
                 }
