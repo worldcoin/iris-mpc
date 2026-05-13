@@ -374,8 +374,8 @@ impl DbContext {
         // Set entry point via InsertNode with SetUnique
         let ep_mutation = GraphMutation::AddNode {
             id: vectors[0],
-            layers: vec![(0, vec![])],
-            update_ep: crate::hnsw::graph::mutation::UpdateEntryPoint::SetUnique { layer: 0 },
+            max_graph_layer: 0,
+            update_ep: crate::hnsw::graph::mutation::UpdateEntryPoint::SetUnique { layer: 1 },
         };
         left_graph.insert_apply(vec![ep_mutation]);
 
@@ -388,12 +388,20 @@ impl DbContext {
                     .await?;
             }
             let neighbors = links.edge_ids();
-            let mutation = GraphMutation::AddNode {
-                id: vectors[i],
-                layers: vec![(0, neighbors)],
-                update_ep: crate::hnsw::graph::mutation::UpdateEntryPoint::False,
-            };
-            left_graph.insert_apply(vec![mutation]);
+            let mutations = vec![
+                GraphMutation::AddNode {
+                    id: vectors[i],
+                    max_graph_layer: 0,
+                    update_ep: crate::hnsw::graph::mutation::UpdateEntryPoint::False,
+                },
+                GraphMutation::AddEdges {
+                    id: vectors[i],
+                    layer: 0,
+                    to_add: neighbors,
+                    direction: crate::hnsw::graph::mutation::EdgeDirection::Outgoing,
+                },
+            ];
+            left_graph.insert_apply(mutations);
         }
 
         // Use same graph for both eyes (this is test data)

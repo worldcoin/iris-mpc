@@ -791,7 +791,7 @@ impl HawkActor {
                         }
                         mutations.push(GraphMutation::AddNode {
                             id: inserted_vector,
-                            layers: vec![],
+                            max_graph_layer: plan.plan.links.len().saturating_sub(1),
                             update_ep: UpdateEntryPoint::False,
                         });
                         GroupedMutations(mutations)
@@ -2614,15 +2614,23 @@ mod tests {
 #[cfg(test)]
 mod hawk_mutation_tests {
     use super::*;
-    use crate::hnsw::graph::UpdateEntryPoint;
+    use crate::hnsw::graph::{mutation::EdgeDirection, UpdateEntryPoint};
     use iris_mpc_common::helpers::sync::ModificationKey;
 
     fn create_test_connect_plan(vector_id: VectorId) -> ConnectPlan {
-        GroupedMutations(vec![GraphMutation::AddNode {
-            id: vector_id,
-            layers: vec![(0, vec![vector_id])],
-            update_ep: UpdateEntryPoint::False,
-        }])
+        GroupedMutations(vec![
+            GraphMutation::AddNode {
+                id: vector_id,
+                max_graph_layer: 0,
+                update_ep: UpdateEntryPoint::False,
+            },
+            GraphMutation::AddEdges {
+                id: vector_id,
+                layer: 0,
+                to_add: vec![vector_id],
+                direction: EdgeDirection::Outgoing,
+            },
+        ])
     }
 
     #[test]

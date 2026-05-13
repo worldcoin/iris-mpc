@@ -99,8 +99,7 @@ pub async fn insert<V: VectorStoreMut>(
             let mut request_mutations: Vec<GraphMutation<V::VectorRef>> = vec![];
             request_mutations.push(GraphMutation::AddNode {
                 id: inserted.clone(),
-                // Convert links (Vec<Vec<VectorRef>>) to layers (Vec<(usize, Vec<VectorRef>)>)
-                layers: links.iter().cloned().enumerate().collect(),
+                max_graph_layer: links.len().saturating_sub(1),
                 update_ep,
             });
             for (layer_idx, layer_links) in links.into_iter().enumerate() {

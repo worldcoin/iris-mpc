@@ -95,7 +95,7 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
         for i in 0..db_size {
             let update_ep = if i == 0 {
                 match layer_mode {
-                    LayerMode::Standard { .. } => UpdateEntryPoint::SetUnique { layer: 0 },
+                    LayerMode::Standard { .. } => UpdateEntryPoint::SetUnique { layer: 1 },
                     LayerMode::LinearScan { .. } => UpdateEntryPoint::False,
                 }
             } else {
@@ -104,7 +104,7 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
             let mutations = vec![
                 GraphMutation::AddNode {
                     id: id(i),
-                    layers: vec![(0, edges(i))],
+                    max_graph_layer: 0,
                     update_ep,
                 },
                 GraphMutation::AddEdges {

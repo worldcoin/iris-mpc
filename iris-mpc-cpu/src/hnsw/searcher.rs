@@ -1549,9 +1549,10 @@ impl HnswSearcher {
     ) -> Result<ConnectPlanV<V>> {
         let layers: Vec<(usize, Vec<V::VectorRef>)> = links.into_iter().enumerate().collect();
 
+        let max_graph_layer = layers.iter().map(|(l, _)| *l).max().unwrap_or(0);
         let mut group_mutations: Vec<GraphMutation<V::VectorRef>> = vec![GraphMutation::AddNode {
             id: inserted_vector.clone(),
-            layers: layers.clone(),
+            max_graph_layer,
             update_ep,
         }];
         for (layer_idx, layer_links) in layers.into_iter() {
@@ -1602,25 +1603,45 @@ impl HnswSearcher {
 
         for (group_idx, opt_group) in mutations.iter_mut().enumerate() {
             let Some(group) = opt_group else { continue };
-            for mutation in group.0.iter_mut() {
-                let GraphMutation::AddNode {
-                    id,
-                    layers,
-                    update_ep,
-                } = mutation
-                else {
-                    continue;
-                };
 
-                let max_layer = layers.iter().map(|(l, _)| *l).max().unwrap_or(0);
-                let mut links = vec![Vec::new(); max_layer + 1];
-                for (layer, neighbors) in layers.iter_mut() {
-                    neighbors.sort();
-                    links[*layer] = neighbors.clone();
+            // Find the AddNode in this group (assume at most one — matches current usage).
+            let add_node = group.0.iter().find_map(|m| match m {
+                GraphMutation::AddNode {
+                    id,
+                    max_graph_layer,
+                    update_ep,
+                } => Some((id.clone(), *max_graph_layer, update_ep.clone())),
+                _ => None,
+            });
+            let Some((id, max_graph_layer, update_ep)) = add_node else {
+                continue;
+            };
+
+            // Build the link vectors from this group's AddEdges entries that target
+            // this id with Outgoing or Bidirectional direction. Sort each layer's list.
+            let mut links: Vec<Vec<V::VectorRef>> = vec![Vec::new(); max_graph_layer + 1];
+            for mutation in group.0.iter_mut() {
+                if let GraphMutation::AddEdges {
+                    id: edge_id,
+                    layer,
+                    to_add,
+                    direction,
+                } = mutation
+                {
+                    let touches_id_outgoing = *edge_id == id
+                        && matches!(
+                            direction,
+                            EdgeDirection::Outgoing | EdgeDirection::Bidirectional
+                        );
+                    if touches_id_outgoing && *layer <= max_graph_layer {
+                        to_add.sort();
+                        links[*layer] = to_add.clone();
+                    }
                 }
-                update_to_group.push(group_idx);
-                updates.push((id.clone(), links, update_ep.clone()));
             }
+
+            update_to_group.push(group_idx);
+            updates.push((id, links, update_ep));
         }
 
         if updates.is_empty() {
@@ -2050,17 +2071,25 @@ mod tests {
 
             // Set entry point for first item
             let update_ep = if i == 0 {
-                UpdateEntryPoint::SetUnique { layer: 0 }
+                UpdateEntryPoint::SetUnique { layer: 1 }
             } else {
                 UpdateEntryPoint::False
             };
 
             // Create mutations for this vector at layer 0
-            let mutations = vec![GraphMutation::AddNode {
-                id: vector_id,
-                layers: vec![(0, nbs)],
-                update_ep,
-            }];
+            let mutations = vec![
+                GraphMutation::AddNode {
+                    id: vector_id,
+                    max_graph_layer: 0,
+                    update_ep,
+                },
+                GraphMutation::AddEdges {
+                    id: vector_id,
+                    layer: 0,
+                    to_add: nbs,
+                    direction: EdgeDirection::Outgoing,
+                },
+            ];
 
             // Apply the mutations to the graph
             graph_store.insert_apply(mutations);
@@ -2068,11 +2097,19 @@ mod tests {
 
         // Create an update for inserting vector id 6
         let next_id = ids[5];
-        let mutations = vec![Some(GroupedMutations(vec![GraphMutation::AddNode {
-            id: next_id,
-            layers: vec![(0, ids[0..5].to_vec())],
-            update_ep: UpdateEntryPoint::False,
-        }]))];
+        let mutations = vec![Some(GroupedMutations(vec![
+            GraphMutation::AddNode {
+                id: next_id,
+                max_graph_layer: 0,
+                update_ep: UpdateEntryPoint::False,
+            },
+            GraphMutation::AddEdges {
+                id: next_id,
+                layer: 0,
+                to_add: ids[0..5].to_vec(),
+                direction: EdgeDirection::Outgoing,
+            },
+        ]))];
 
         // Prepare the batch insertion
         let grouped_plans = searcher
@@ -2083,11 +2120,9 @@ mod tests {
         assert_eq!(grouped_plans.len(), 1);
         let group = grouped_plans[0].as_ref().unwrap();
 
-        // Expected: 1 InsertNode for next_id + 6 RemoveNeighbors (one for next_id
-        // itself whose 5-neighbor list exceeds M_limit=4, and one per each of the
-        // 5 pre-existing nodes whose backlink-extended neighborhood of 5 also
-        // exceeds M_limit=4).
-        assert_eq!(group.0.len(), 7);
+        // 1 AddNode + 1 AddEdges(Outgoing) + 6 RemoveEdges (compaction for next_id
+        // itself and each of the 5 pre-existing nodes whose neighborhood overflowed).
+        assert_eq!(group.0.len(), 8);
 
         // Verify the first mutation is an InsertNode with the correct shape.
         let plan = &group.0[0];
