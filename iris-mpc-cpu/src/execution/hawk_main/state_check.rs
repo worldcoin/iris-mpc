@@ -38,7 +38,7 @@ impl SetHash {
         self.accumulator = self.accumulator.wrapping_add(Self::hash(value));
     }
 
-    /// Inverse of [`add_unordered`]. Subtracts the value's hash from the
+    /// Inverse of [`Self::add_unordered`]. Subtracts the value's hash from the
     /// accumulator using wrapping subtraction, so a balanced add+remove
     /// pair returns the accumulator to its prior state exactly.
     pub fn remove(&mut self, value: impl Hash) {
@@ -59,7 +59,7 @@ impl SetHash {
         self.fold_unordered_set(key, items, u64::wrapping_add);
     }
 
-    /// Inverse of [`add_unordered_set`]: removes a `(key, set-of-items)`
+    /// Inverse of [`Self::add_unordered_set`]: removes a `(key, set-of-items)`
     /// pair previously added, using wrapping subtraction. Must be called
     /// with the same `(key, items)` content that was added, otherwise the
     /// accumulator drifts.
