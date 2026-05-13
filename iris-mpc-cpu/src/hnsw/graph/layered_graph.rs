@@ -246,7 +246,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                             for target in &to_add {
                                 if layer_mut.get_links(target).is_none() {
                                     warn!(
-                                        "AddEdges(Incoming): target={:?} missing at layer {layer} (id={:?}); skipping",
+                                        "AddEdges(Incoming): target={:?} missing at layer {layer} (id={:?}); add_neighbor will no-op for this target",
                                         target, id
                                     );
                                 }
@@ -265,7 +265,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                             for target in &to_add {
                                 if layer_mut.get_links(target).is_none() {
                                     warn!(
-                                        "AddEdges(Bidirectional): target={:?} missing at layer {layer} (id={:?}); skipping incoming half for this target",
+                                        "AddEdges(Bidirectional): target={:?} missing at layer {layer} (id={:?}); add_neighbor will no-op for this target",
                                         target, id
                                     );
                                 }
@@ -556,8 +556,9 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
     }
 
     /// Add `to_add` into `id`'s own neighbor list, sorted and deduplicated.
-    /// No-op if `id` is not present in this layer. Idempotent: existing
-    /// entries are not duplicated.
+    /// No-op if `id` is not present in this layer (callers that need to log
+    /// the missing case should check `get_links(id)` first). Idempotent:
+    /// existing entries are not duplicated.
     pub fn add_outgoing_edges(&mut self, id: &V, to_add: Vec<V>) {
         let Some(node_links) = self.links.get_mut(id) else {
             return;
