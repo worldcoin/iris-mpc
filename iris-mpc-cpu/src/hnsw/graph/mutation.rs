@@ -23,9 +23,10 @@ pub enum GraphMutation<Vector: Ord> {
         id: Vector,
     },
     AddEdges {
-        // list of layer, neighbors
-        layers: Vec<(usize, Vec<Vector>)>,
         id: Vector,
+        layer: usize,
+        to_add: Vec<Vector>,
+        direction: EdgeDirection,
     },
     RemoveEdges {
         to_remove: Vec<Vector>,
@@ -47,9 +48,17 @@ impl<V: std::fmt::Debug + Ord> std::fmt::Debug for GraphMutation<V> {
                 .field("update_ep", update_ep)
                 .field("id", id)
                 .finish(),
-            Self::AddEdges { id, layers: _ } => {
-                f.debug_struct("AddNeighbor").field("id", id).finish()
-            }
+            Self::AddEdges {
+                id,
+                layer,
+                direction,
+                ..
+            } => f
+                .debug_struct("AddEdges")
+                .field("id", id)
+                .field("layer", layer)
+                .field("direction", direction)
+                .finish(),
             Self::RemoveEdges { .. } => f.debug_struct("RemoveInvalidNeighbors").finish(),
         }
     }

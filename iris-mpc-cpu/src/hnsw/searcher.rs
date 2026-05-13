@@ -10,7 +10,9 @@ use super::{
 };
 use crate::hnsw::{
     graph::{
-        mutation::GroupedMutations, neighborhood::Neighborhood, GraphMutation, UpdateEntryPoint,
+        mutation::{EdgeDirection, GroupedMutations},
+        neighborhood::Neighborhood,
+        GraphMutation, UpdateEntryPoint,
     },
     metrics::ops_counter::Operation,
     VectorStore,
@@ -1545,20 +1547,22 @@ impl HnswSearcher {
         links: Vec<Vec<V::VectorRef>>,
         update_ep: UpdateEntryPoint,
     ) -> Result<ConnectPlanV<V>> {
-        // Convert links to layers format
         let layers: Vec<(usize, Vec<V::VectorRef>)> = links.into_iter().enumerate().collect();
 
-        let mutations = vec![Some(GroupedMutations(vec![
-            GraphMutation::AddNode {
+        let mut group_mutations: Vec<GraphMutation<V::VectorRef>> = vec![GraphMutation::AddNode {
+            id: inserted_vector.clone(),
+            layers: layers.clone(),
+            update_ep,
+        }];
+        for (layer_idx, layer_links) in layers.into_iter() {
+            group_mutations.push(GraphMutation::AddEdges {
                 id: inserted_vector.clone(),
-                layers: layers.clone(),
-                update_ep,
-            },
-            GraphMutation::AddEdges {
-                id: inserted_vector,
-                layers,
-            },
-        ]))];
+                layer: layer_idx,
+                to_add: layer_links,
+                direction: EdgeDirection::Bidirectional,
+            });
+        }
+        let mutations = vec![Some(GroupedMutations(group_mutations))];
         let mut grouped = self.insert_prepare_batch(store, graph, mutations).await?;
         grouped
             .pop()

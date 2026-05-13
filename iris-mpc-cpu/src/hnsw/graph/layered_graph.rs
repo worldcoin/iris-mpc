@@ -7,7 +7,7 @@ use crate::{
     execution::hawk_main::state_check::SetHash,
     hawkers::ideal_knn_engines::{read_knn_results_from_file, Engine, EngineChoice, KNNResult},
     hnsw::{
-        graph::{GraphMutation, UpdateEntryPoint},
+        graph::{mutation::EdgeDirection, GraphMutation, UpdateEntryPoint},
         searcher::LayerMode,
         vector_store::Ref,
         HnswSearcher,
@@ -31,6 +31,7 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::RwLock;
+use tracing::warn;
 
 /// Representation of the entry point of HNSW search in a layered graph.
 /// This is a vector reference along with the layer of the graph at which
@@ -220,12 +221,57 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                         self.layers[layer_idx].insert_node(id.clone(), neighbors);
                     }
                 }
-                GraphMutation::AddEdges { id, layers } => {
-                    for (layer_idx, neighborhoods) in layers {
-                        if self.layers.len() < layer_idx + 1 {
-                            self.layers.resize(layer_idx + 1, Layer::new());
+                GraphMutation::AddEdges {
+                    id,
+                    layer,
+                    to_add,
+                    direction,
+                } => {
+                    if self.layers.len() < layer + 1 {
+                        self.layers.resize(layer + 1, Layer::new());
+                    }
+                    let layer_mut = &mut self.layers[layer];
+                    match direction {
+                        EdgeDirection::Outgoing => {
+                            if layer_mut.get_links(&id).is_none() {
+                                warn!(
+                                    "AddEdges(Outgoing): id={:?} missing at layer {layer}; skipping",
+                                    id
+                                );
+                            } else {
+                                layer_mut.add_outgoing_edges(&id, to_add);
+                            }
                         }
-                        self.layers[layer_idx].add_neighbor(id.clone(), neighborhoods);
+                        EdgeDirection::Incoming => {
+                            for target in &to_add {
+                                if layer_mut.get_links(target).is_none() {
+                                    warn!(
+                                        "AddEdges(Incoming): target={:?} missing at layer {layer} (id={:?}); skipping",
+                                        target, id
+                                    );
+                                }
+                            }
+                            layer_mut.add_neighbor(id.clone(), to_add);
+                        }
+                        EdgeDirection::Bidirectional => {
+                            if layer_mut.get_links(&id).is_none() {
+                                warn!(
+                                    "AddEdges(Bidirectional): id={:?} missing at layer {layer}; skipping outgoing half",
+                                    id
+                                );
+                            } else {
+                                layer_mut.add_outgoing_edges(&id, to_add.clone());
+                            }
+                            for target in &to_add {
+                                if layer_mut.get_links(target).is_none() {
+                                    warn!(
+                                        "AddEdges(Bidirectional): target={:?} missing at layer {layer} (id={:?}); skipping incoming half for this target",
+                                        target, id
+                                    );
+                                }
+                            }
+                            layer_mut.add_neighbor(id, to_add);
+                        }
                     }
                 }
                 GraphMutation::RemoveEdges {
@@ -507,6 +553,22 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
                 }
             }
         }
+    }
+
+    /// Add `to_add` into `id`'s own neighbor list, sorted and deduplicated.
+    /// No-op if `id` is not present in this layer. Idempotent: existing
+    /// entries are not duplicated.
+    pub fn add_outgoing_edges(&mut self, id: &V, to_add: Vec<V>) {
+        let Some(node_links) = self.links.get_mut(id) else {
+            return;
+        };
+        self.set_hash.remove_unordered_set(id, node_links.iter());
+        for nb in to_add {
+            if let Err(pos) = node_links.binary_search(&nb) {
+                node_links.insert(pos, nb);
+            }
+        }
+        self.set_hash.add_unordered_set(id, node_links.iter());
     }
 
     /// Remove a node from the graph and clean up all backlinks from its neighbors.
