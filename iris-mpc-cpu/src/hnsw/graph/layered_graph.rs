@@ -254,7 +254,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     );
                                 }
                             }
-                            layer_mut.add_neighbor(id.clone(), to_add);
+                            layer_mut.add_incoming_edges(&id, to_add);
                         }
                         EdgeDirection::Bidirectional => {
                             if layer_mut.get_links(&id).is_none() {
@@ -273,7 +273,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     );
                                 }
                             }
-                            layer_mut.add_neighbor(id, to_add);
+                            layer_mut.add_incoming_edges(&id, to_add);
                         }
                     }
                 }
@@ -299,7 +299,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     id
                                 );
                             } else {
-                                layer_mut.remove_neighbors(&id, to_remove);
+                                layer_mut.remove_outgoing_edges(&id, to_remove);
                             }
                         }
                         EdgeDirection::Incoming => {
@@ -320,7 +320,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     id
                                 );
                             } else {
-                                layer_mut.remove_neighbors(&id, to_remove.clone());
+                                layer_mut.remove_outgoing_edges(&id, to_remove.clone());
                             }
                             for target in &to_remove {
                                 if layer_mut.get_links(target).is_none() {
@@ -591,18 +591,19 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         self.set_links(id.clone(), neighbors.clone());
     }
 
-    // invariant: neighbor_links is kept sorted; relies on the planner sorting before set_links
-    pub fn add_neighbor(&mut self, id: V, neighborhoods: Vec<V>) {
-        for nbhd in &neighborhoods {
-            if let Some(neighbor_links) = self.links.get_mut(nbhd) {
-                match neighbor_links.binary_search(&id) {
-                    Err(i) => {
-                        self.set_hash
-                            .remove_unordered_set(nbhd, neighbor_links.iter());
-                        neighbor_links.insert(i, id.clone());
-                        self.set_hash.add_unordered_set(nbhd, neighbor_links.iter());
-                    }
-                    Ok(_) => continue, // link already exists
+    /// Insert `id` as an incoming edge into each target's neighbor list,
+    /// keeping each list sorted and deduplicated. Targets that don't exist in
+    /// this layer are silently skipped (callers that need to log the missing
+    /// case should check `get_links(target)` first). Idempotent: if `id` is
+    /// already present in a target's list, that target is left unchanged.
+    pub fn add_incoming_edges(&mut self, id: &V, to_add: Vec<V>) {
+        for target in &to_add {
+            if let Some(target_links) = self.links.get_mut(target) {
+                if let Err(pos) = target_links.binary_search(id) {
+                    self.set_hash
+                        .remove_unordered_set(target, target_links.iter());
+                    target_links.insert(pos, id.clone());
+                    self.set_hash.add_unordered_set(target, target_links.iter());
                 }
             }
         }
@@ -662,16 +663,19 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         }
     }
 
-    pub fn remove_neighbors(&mut self, id: &V, neighbors_to_remove: Vec<V>) {
-        if let Some(node_links) = self.links.get_mut(id) {
-            self.set_hash.remove_unordered_set(id, node_links.iter());
-            for neighbor in &neighbors_to_remove {
-                // this is a uni-directional pruning. it is incorrect to prune the neighbors links
-                // when doing compaction.
-                node_links.retain(|x| x != neighbor);
-            }
-            self.set_hash.add_unordered_set(id, node_links.iter());
-        }
+    /// Remove each entry in `to_remove` from `id`'s own neighbor list. No-op
+    /// if `id` is not present in this layer (callers that need to log the
+    /// missing case should check `get_links(id)` first). The removal is
+    /// unidirectional: the targets' own link lists are not modified. This is
+    /// the compaction contract — callers (and any WAL replay) must not infer
+    /// bidirectional pruning from this operation.
+    pub fn remove_outgoing_edges(&mut self, id: &V, to_remove: Vec<V>) {
+        let Some(node_links) = self.links.get_mut(id) else {
+            return;
+        };
+        self.set_hash.remove_unordered_set(id, node_links.iter());
+        node_links.retain(|x| !to_remove.contains(x));
+        self.set_hash.add_unordered_set(id, node_links.iter());
     }
 
     pub fn set_links(&mut self, from: V, links: Vec<V>) {
