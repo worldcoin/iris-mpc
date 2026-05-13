@@ -55,6 +55,19 @@ impl<V: std::fmt::Debug + Ord> std::fmt::Debug for GraphMutation<V> {
     }
 }
 
+/// Direction in which edge mutations are applied between `id` and the
+/// vectors listed in `to_add` / `to_remove`.
+///
+/// - `Outgoing`: writes to `id`'s own neighbor list (forward edges from `id`).
+/// - `Incoming`: writes `id` into each target's neighbor list (back-edges into `id`).
+/// - `Bidirectional`: both of the above, applied together.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EdgeDirection {
+    Outgoing,
+    Incoming,
+    Bidirectional,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum UpdateEntryPoint {
     /// Do not update entry points based on inserted vector.
