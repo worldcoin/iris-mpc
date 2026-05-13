@@ -35,14 +35,14 @@ startupProbe:
 
 resources:
   limits:
-    cpu: 28
-    memory: 100Gi
-    nvidia.com/gpu: 1
+    cpu: 88
+    memory: 1000Gi
+    nvidia.com/gpu: 8
     vpc.amazonaws.com/efa: 1
   requests:
-    cpu: 27
-    memory: 99Gi
-    nvidia.com/gpu: 1
+    cpu: 88
+    memory: 1000Gi
+    nvidia.com/gpu: 8
     vpc.amazonaws.com/efa: 1
 
 imagePullSecrets:
