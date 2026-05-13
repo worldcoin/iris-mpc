@@ -2913,7 +2913,6 @@ dependencies = [
  "aws-smithy-types",
  "axum 0.7.7",
  "base64",
- "bincode",
  "blake3",
  "chrono",
  "clap",

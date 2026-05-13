@@ -1,6 +1,9 @@
-use crate::hnsw::VectorStore;
+use crate::{
+    execution::hawk_main::BothEyes,
+    hnsw::{graph::GraphMutation, VectorStore},
+};
 use eyre::{eyre, Result};
-use iris_mpc_common::postgres::PostgresClient;
+use iris_mpc_common::{postgres::PostgresClient, IrisVectorId};
 use serde::{de::DeserializeOwned, Serialize};
 use sqlx::{types::Json, Postgres, Row, Transaction};
 use std::{marker::PhantomData, ops::DerefMut};
@@ -30,6 +33,14 @@ pub struct GraphPg<V: VectorStore> {
     pool: sqlx::PgPool,
     schema_name: String,
     phantom: PhantomData<V>,
+}
+
+impl GraphMutationRow {
+    pub fn deserialize_mutations(&self) -> Result<BothEyes<Vec<GraphMutation<IrisVectorId>>>> {
+        let both_eyes: BothEyes<Vec<GraphMutation<IrisVectorId>>> =
+            bincode::deserialize(&self.serialized_mutations)?;
+        Ok(both_eyes)
+    }
 }
 
 impl<V: VectorStore> GraphPg<V> {

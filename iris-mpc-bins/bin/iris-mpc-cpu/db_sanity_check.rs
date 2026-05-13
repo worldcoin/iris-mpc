@@ -20,7 +20,6 @@ use iris_mpc_cpu::{
         graph::{
             graph_store::{GraphMutationRow, GraphPg},
             layered_graph::GraphMem,
-            mutation::GraphMutation,
         },
         searcher::HnswParams,
     },
@@ -322,8 +321,7 @@ async fn main() -> Result<()> {
         checkpoint_state.graph_mutation_id,
     );
     for row in &mutation_rows {
-        let both_eyes: BothEyes<Vec<GraphMutation<VectorId>>> =
-            bincode::deserialize(&row.serialized_mutations)?;
+        let both_eyes = row.deserialize_mutations()?;
         graphs[LEFT].insert_apply(both_eyes[LEFT].clone());
         graphs[RIGHT].insert_apply(both_eyes[RIGHT].clone());
     }

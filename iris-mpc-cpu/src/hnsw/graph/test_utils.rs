@@ -37,7 +37,6 @@ use clap::ValueEnum;
 use eyre::Result;
 use iris_mpc_common::iris_db::db::IrisDB;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
-use iris_mpc_common::vector_id::VectorId;
 use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::Itertools;
 use rand::SeedableRng;
@@ -224,8 +223,7 @@ impl DbContext {
             .await?;
 
         for row in mutation_rows {
-            let both_eyes: BothEyes<Vec<GraphMutation<VectorId>>> =
-                bincode::deserialize(&row.serialized_mutations)?;
+            let both_eyes = row.deserialize_mutations()?;
             graph[LEFT].insert_apply(both_eyes[LEFT].clone());
             graph[RIGHT].insert_apply(both_eyes[RIGHT].clone());
         }
