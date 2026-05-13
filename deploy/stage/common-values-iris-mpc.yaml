@@ -35,15 +35,15 @@ startupProbe:
 
 resources:
   limits:
-    cpu: 88
-    memory: 1000Gi
+    cpu: 80
+    memory: 900Gi
     nvidia.com/gpu: 8
-    vpc.amazonaws.com/efa: 1
+    vpc.amazonaws.com/efa: 4
   requests:
-    cpu: 88
-    memory: 1000Gi
+    cpu: 80
+    memory: 900Gi
     nvidia.com/gpu: 8
-    vpc.amazonaws.com/efa: 1
+    vpc.amazonaws.com/efa: 4
 
 imagePullSecrets:
   - name: github-secret
