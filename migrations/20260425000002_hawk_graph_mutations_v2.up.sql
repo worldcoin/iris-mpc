@@ -13,14 +13,5 @@
 ALTER TABLE modifications
     DROP COLUMN IF EXISTS graph_mutation_id;
 
--- Recreate hawk_graph_mutations with modification_id as the sole primary key.
--- Any existing rows are discarded; this migration is safe to apply on a fresh deployment or
--- after a coordinated shutdown because the WAL is replayed from the last checkpoint anyway.
-DROP TABLE IF EXISTS hawk_graph_mutations;
-
-CREATE TABLE IF NOT EXISTS hawk_graph_mutations (
-    modification_id BIGINT PRIMARY KEY,
-    -- BothEyes<Vec<GraphMutation>>
-    serialized_mutations BYTEA NOT NULL,
-    mutation_version INT NOT NULL DEFAULT 1
-);
+ALTER TABLE hawk_graph_mutations
+    DROP COLUMN IF EXISTS mutation_version;

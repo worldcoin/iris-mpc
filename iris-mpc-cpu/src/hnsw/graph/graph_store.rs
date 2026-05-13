@@ -26,7 +26,6 @@ pub struct GraphMutationRow {
     pub modification_id: i64,
     /// Bincode-serialized BothEyes<Vec<GraphMutation<VectorId>>> (mutations for both eyes)
     pub serialized_mutations: Vec<u8>,
-    pub mutation_version: i32,
 }
 
 pub struct GraphPg<V: VectorStore> {
@@ -362,17 +361,15 @@ impl<V: VectorStore> GraphPg<V> {
         modification_id: i64,
         serialized_mutations: &[u8],
     ) -> Result<Vec<GraphMutationRow>> {
-        let mutation_version = crate::hnsw::graph::mutation::GraphMutation::<i64>::get_version();
         let rows = sqlx::query_as::<_, GraphMutationRow>(
             r#"
-            INSERT INTO hawk_graph_mutations (modification_id, serialized_mutations, mutation_version)
-            VALUES ($1, $2, $3)
-            RETURNING modification_id, serialized_mutations, mutation_version
+            INSERT INTO hawk_graph_mutations (modification_id, serialized_mutations)
+            VALUES ($1, $2)
+            RETURNING modification_id, serialized_mutations
             "#,
         )
         .bind(modification_id)
         .bind(serialized_mutations)
-        .bind(mutation_version)
         .fetch_all(tx.deref_mut())
         .await?;
 
@@ -385,7 +382,7 @@ impl<V: VectorStore> GraphPg<V> {
     ) -> Result<Vec<GraphMutationRow>> {
         let rows = sqlx::query_as::<_, GraphMutationRow>(
             r#"
-            SELECT modification_id, serialized_mutations, mutation_version
+            SELECT modification_id, serialized_mutations
             FROM hawk_graph_mutations
             WHERE $1::bigint IS NULL OR modification_id <= $1
             ORDER BY modification_id ASC
@@ -404,7 +401,7 @@ impl<V: VectorStore> GraphPg<V> {
     ) -> Result<Vec<GraphMutationRow>> {
         let rows = sqlx::query_as::<_, GraphMutationRow>(
             r#"
-            SELECT modification_id, serialized_mutations, mutation_version
+            SELECT modification_id, serialized_mutations
             FROM hawk_graph_mutations
             WHERE $1::bigint IS NULL OR modification_id > $1
             ORDER BY modification_id ASC
@@ -650,11 +647,6 @@ mod tests {
         let row = &returned[0];
         assert_eq!(row.modification_id, modification_id);
         assert_eq!(row.serialized_mutations, payload);
-        assert_eq!(
-            row.mutation_version,
-            crate::hnsw::graph::mutation::GraphMutation::<i64>::get_version(),
-            "mutation_version must match the current schema version"
-        );
 
         Ok(())
     }
