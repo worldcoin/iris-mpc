@@ -176,14 +176,13 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
     /// This updates the graph's entry points set and connects the new vector to its
     /// neighbors as specified in the mutations.
     pub fn insert_apply(&mut self, plan: Vec<GraphMutation<V>>) {
-        for mutation in plan {
+        // Pass 1: apply node-level mutations.
+        for mutation in plan.iter() {
             match mutation {
-                GraphMutation::RemoveNode { ref id } => {
-                    // Remove node from all layers where it exists
+                GraphMutation::RemoveNode { id } => {
                     for layer in &mut self.layers {
                         layer.remove_node(id);
                     }
-                    // Remove from entry points if present
                     self.entry_points.retain(|ep| &ep.point != id);
                 }
                 GraphMutation::AddNode {
@@ -191,35 +190,40 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                     max_graph_layer,
                     update_ep,
                 } => {
-                    // Handle entry point update.
                     match update_ep {
                         UpdateEntryPoint::SetUnique { layer } => {
-                            if self.layers.len() < layer + 1 {
-                                self.layers.resize(layer + 1, Layer::new());
+                            if self.layers.len() < *layer + 1 {
+                                self.layers.resize(*layer + 1, Layer::new());
                             }
                             self.entry_points = vec![EntryPoint {
                                 point: id.clone(),
-                                layer,
+                                layer: *layer,
                             }];
                         }
                         UpdateEntryPoint::Append { layer } => {
                             self.entry_points.push(EntryPoint {
                                 point: id.clone(),
-                                layer,
+                                layer: *layer,
                             });
                         }
                         UpdateEntryPoint::False => {}
                     }
 
-                    // Ensure layers exist up to max_graph_layer and insert an empty entry
-                    // for this id in each.
-                    if self.layers.len() < max_graph_layer + 1 {
-                        self.layers.resize(max_graph_layer + 1, Layer::new());
+                    if self.layers.len() < *max_graph_layer + 1 {
+                        self.layers.resize(*max_graph_layer + 1, Layer::new());
                     }
-                    for layer_idx in 0..=max_graph_layer {
+                    for layer_idx in 0..=*max_graph_layer {
                         self.layers[layer_idx].insert_node(id.clone(), Vec::new());
                     }
                 }
+                GraphMutation::AddEdges { .. } | GraphMutation::RemoveEdges { .. } => {}
+            }
+        }
+
+        // Pass 2: apply edge-level mutations.
+        for mutation in plan.into_iter() {
+            match mutation {
+                GraphMutation::AddNode { .. } | GraphMutation::RemoveNode { .. } => {}
                 GraphMutation::AddEdges {
                     id,
                     layer,
@@ -1149,5 +1153,37 @@ mod tests {
         assert_eq!(graph.layers[0].get_links(&a).unwrap(), &[c]);
         // Bidirectional cleanup is not implied — b's list still contains a.
         assert_eq!(graph.layers[0].get_links(&b).unwrap(), &[a]);
+    }
+
+    #[test]
+    fn two_phase_apply_edges_before_node_in_vec_still_works() {
+        // Pass 1 should apply AddNode before pass 2 applies AddEdges, regardless
+        // of their order in the input Vec.
+        let mut graph = GraphMem::<IrisVectorId>::new();
+        let a = IrisVectorId::from_serial_id(1);
+        let b = IrisVectorId::from_serial_id(2);
+        graph.insert_apply(vec![
+            // Listed first: an edge op that references a node not yet created.
+            GraphMutation::AddEdges {
+                id: a,
+                layer: 0,
+                to_add: vec![b],
+                direction: EdgeDirection::Outgoing,
+            },
+            // Listed second: the node creation.
+            GraphMutation::AddNode {
+                id: a,
+                max_graph_layer: 0,
+                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+            },
+            GraphMutation::AddNode {
+                id: b,
+                max_graph_layer: 0,
+                update_ep: UpdateEntryPoint::False,
+            },
+        ]);
+        // Pass-1 created the nodes, then pass-2 applied the edge — so a should
+        // now have b in its outgoing list.
+        assert_eq!(graph.layers[0].get_links(&a).unwrap(), &[b]);
     }
 }
