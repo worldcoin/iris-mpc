@@ -1,4 +1,7 @@
 env:
+  - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
+    value: "_validation_test"
+
   - name: RUST_LOG
     value: "info"
 
