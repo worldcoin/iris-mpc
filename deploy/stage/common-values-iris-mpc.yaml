@@ -51,6 +51,11 @@ imagePullSecrets:
 nodeSelector:
   node.kubernetes.io/instance-type: "p4d.24xlarge"
 
+tmpDir:
+  enabled: true
+  size: 5Gi
+  mountPath: /dev/shm
+
 hostNetwork: true
 
 podSecurityContext:
