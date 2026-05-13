@@ -187,7 +187,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                 }
                 GraphMutation::AddNode {
                     id,
-                    max_graph_layer,
+                    height,
                     update_ep,
                 } => {
                     match update_ep {
@@ -209,10 +209,10 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                         UpdateEntryPoint::False => {}
                     }
 
-                    if self.layers.len() < *max_graph_layer + 1 {
-                        self.layers.resize(*max_graph_layer + 1, Layer::new());
+                    if self.layers.len() < *height {
+                        self.layers.resize(*height, Layer::new());
                     }
-                    for layer_idx in 0..=*max_graph_layer {
+                    for layer_idx in 0..*height {
                         self.layers[layer_idx].insert_node(id.clone(), Vec::new());
                     }
                 }
@@ -1005,17 +1005,17 @@ mod tests {
         graph.insert_apply(vec![
             GraphMutation::AddNode {
                 id: a,
-                max_graph_layer: 0,
+                height: 1,
                 update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
             },
             GraphMutation::AddNode {
                 id: b,
-                max_graph_layer: 0,
+                height: 1,
                 update_ep: UpdateEntryPoint::False,
             },
             GraphMutation::AddNode {
                 id: c,
-                max_graph_layer: 0,
+                height: 1,
                 update_ep: UpdateEntryPoint::False,
             },
         ]);
@@ -1045,17 +1045,17 @@ mod tests {
         graph.insert_apply(vec![
             GraphMutation::AddNode {
                 id: a,
-                max_graph_layer: 0,
+                height: 1,
                 update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
             },
             GraphMutation::AddNode {
                 id: b,
-                max_graph_layer: 0,
+                height: 1,
                 update_ep: UpdateEntryPoint::False,
             },
             GraphMutation::AddNode {
                 id: c,
-                max_graph_layer: 0,
+                height: 1,
                 update_ep: UpdateEntryPoint::False,
             },
         ]);
@@ -1082,17 +1082,17 @@ mod tests {
         graph.insert_apply(vec![
             GraphMutation::AddNode {
                 id: a,
-                max_graph_layer: 0,
+                height: 1,
                 update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
             },
             GraphMutation::AddNode {
                 id: b,
-                max_graph_layer: 0,
+                height: 1,
                 update_ep: UpdateEntryPoint::False,
             },
             GraphMutation::AddNode {
                 id: c,
-                max_graph_layer: 0,
+                height: 1,
                 update_ep: UpdateEntryPoint::False,
             },
         ]);
@@ -1116,7 +1116,7 @@ mod tests {
         graph.insert_apply(vec![
             GraphMutation::AddNode {
                 id: a,
-                max_graph_layer: 0,
+                height: 1,
                 update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
             },
             GraphMutation::AddEdges {
@@ -1127,7 +1127,7 @@ mod tests {
             },
             GraphMutation::AddNode {
                 id: b,
-                max_graph_layer: 0,
+                height: 1,
                 update_ep: UpdateEntryPoint::False,
             },
             GraphMutation::AddEdges {
@@ -1138,7 +1138,7 @@ mod tests {
             },
             GraphMutation::AddNode {
                 id: c,
-                max_graph_layer: 0,
+                height: 1,
                 update_ep: UpdateEntryPoint::False,
             },
             GraphMutation::AddEdges {
@@ -1177,12 +1177,12 @@ mod tests {
             // Listed second: the node creation.
             GraphMutation::AddNode {
                 id: a,
-                max_graph_layer: 0,
+                height: 1,
                 update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
             },
             GraphMutation::AddNode {
                 id: b,
-                max_graph_layer: 0,
+                height: 1,
                 update_ep: UpdateEntryPoint::False,
             },
         ]);

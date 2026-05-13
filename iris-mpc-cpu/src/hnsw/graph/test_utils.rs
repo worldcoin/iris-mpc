@@ -374,7 +374,7 @@ impl DbContext {
         // Set entry point via InsertNode with SetUnique
         let ep_mutation = GraphMutation::AddNode {
             id: vectors[0],
-            max_graph_layer: 0,
+            height: 1,
             update_ep: crate::hnsw::graph::mutation::UpdateEntryPoint::SetUnique { layer: 0 },
         };
         left_graph.insert_apply(vec![ep_mutation]);
@@ -391,7 +391,7 @@ impl DbContext {
             let mutations = vec![
                 GraphMutation::AddNode {
                     id: vectors[i],
-                    max_graph_layer: 0,
+                    height: 1,
                     update_ep: crate::hnsw::graph::mutation::UpdateEntryPoint::False,
                 },
                 GraphMutation::AddEdges {

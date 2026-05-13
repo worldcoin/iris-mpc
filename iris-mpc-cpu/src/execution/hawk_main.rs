@@ -791,7 +791,7 @@ impl HawkActor {
                         }
                         mutations.push(GraphMutation::AddNode {
                             id: inserted_vector,
-                            max_graph_layer: plan.plan.links.len().saturating_sub(1),
+                            height: plan.plan.links.len(),
                             update_ep: UpdateEntryPoint::False,
                         });
                         GroupedMutations(mutations)
@@ -2621,7 +2621,7 @@ mod hawk_mutation_tests {
         GroupedMutations(vec![
             GraphMutation::AddNode {
                 id: vector_id,
-                max_graph_layer: 0,
+                height: 1,
                 update_ep: UpdateEntryPoint::False,
             },
             GraphMutation::AddEdges {

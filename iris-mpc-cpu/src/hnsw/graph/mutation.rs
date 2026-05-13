@@ -15,12 +15,12 @@ pub struct GroupedMutations<V: Ord>(pub Vec<GraphMutation<V>>);
 pub enum GraphMutation<Vector: Ord> {
     AddNode {
         id: Vector,
-        /// The top real graph layer this node lives in. The node will be present
-        /// in layers `0..=max_graph_layer`. When `update_ep` is
-        /// `SetUnique { layer: L }` or `Append { layer: L }`, the apply path
-        /// requires `max_graph_layer == L - 1` (the entry-point layer is a virtual
-        /// layer one above the top real graph layer in this codebase's structure).
-        max_graph_layer: usize,
+        /// Number of real graph layers this node is included in. The node will
+        /// be present in layers `0..height`, i.e. layer indices `0..=height-1`.
+        /// `height == 0` represents a node that is not inserted into any graph
+        /// layer (used as a marker on code paths that record an insertion
+        /// without mutating the in-memory graph).
+        height: usize,
         update_ep: UpdateEntryPoint,
     },
     RemoveNode {
@@ -46,12 +46,12 @@ impl<V: std::fmt::Debug + Ord> std::fmt::Debug for GraphMutation<V> {
             Self::RemoveNode { id } => f.debug_struct("RemoveNode").field("id", id).finish(),
             Self::AddNode {
                 id,
-                max_graph_layer,
+                height,
                 update_ep,
             } => f
                 .debug_struct("AddNode")
                 .field("id", id)
-                .field("max_graph_layer", max_graph_layer)
+                .field("height", height)
                 .field("update_ep", update_ep)
                 .finish(),
             Self::AddEdges {

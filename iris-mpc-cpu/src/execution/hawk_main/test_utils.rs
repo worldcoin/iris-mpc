@@ -104,7 +104,7 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
             let mutations = vec![
                 GraphMutation::AddNode {
                     id: id(i),
-                    max_graph_layer: 0,
+                    height: 1,
                     update_ep,
                 },
                 GraphMutation::AddEdges {
