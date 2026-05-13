@@ -95,7 +95,7 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
         for i in 0..db_size {
             let update_ep = if i == 0 {
                 match layer_mode {
-                    LayerMode::Standard { .. } => UpdateEntryPoint::SetUnique { layer: 1 },
+                    LayerMode::Standard { .. } => UpdateEntryPoint::SetUnique { layer: 0 },
                     LayerMode::LinearScan { .. } => UpdateEntryPoint::False,
                 }
             } else {
