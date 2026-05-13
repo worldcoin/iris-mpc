@@ -185,7 +185,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                     // Remove from entry points if present
                     self.entry_points.retain(|ep| &ep.point != id);
                 }
-                GraphMutation::InsertNode {
+                GraphMutation::AddNode {
                     id,
                     layers,
                     update_ep,
@@ -220,7 +220,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                         self.layers[layer_idx].insert_node(id.clone(), neighbors);
                     }
                 }
-                GraphMutation::AddNeighbors { id, layers } => {
+                GraphMutation::AddEdges { id, layers } => {
                     for (layer_idx, neighborhoods) in layers {
                         if self.layers.len() < layer_idx + 1 {
                             self.layers.resize(layer_idx + 1, Layer::new());
@@ -228,7 +228,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                         self.layers[layer_idx].add_neighbor(id.clone(), neighborhoods);
                     }
                 }
-                GraphMutation::RemoveNeighbors {
+                GraphMutation::RemoveEdges {
                     ref id,
                     layer,
                     to_remove,

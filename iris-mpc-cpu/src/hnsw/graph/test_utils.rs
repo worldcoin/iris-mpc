@@ -372,7 +372,7 @@ impl DbContext {
         let mut left_graph = GraphMem::<PlaintextVectorRef>::new();
 
         // Set entry point via InsertNode with SetUnique
-        let ep_mutation = GraphMutation::InsertNode {
+        let ep_mutation = GraphMutation::AddNode {
             id: vectors[0],
             layers: vec![(0, vec![])],
             update_ep: crate::hnsw::graph::mutation::UpdateEntryPoint::SetUnique { layer: 0 },
@@ -388,7 +388,7 @@ impl DbContext {
                     .await?;
             }
             let neighbors = links.edge_ids();
-            let mutation = GraphMutation::InsertNode {
+            let mutation = GraphMutation::AddNode {
                 id: vectors[i],
                 layers: vec![(0, neighbors)],
                 update_ep: crate::hnsw::graph::mutation::UpdateEntryPoint::False,

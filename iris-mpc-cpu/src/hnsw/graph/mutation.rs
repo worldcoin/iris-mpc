@@ -13,21 +13,21 @@ pub struct GroupedMutations<V: Ord>(pub Vec<GraphMutation<V>>);
 /// Represents a diff to apply to an existing graph.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GraphMutation<Vector: Ord> {
-    RemoveNode {
-        id: Vector,
-    },
-    InsertNode {
+    AddNode {
         // List of layer, neighbors.
         layers: Vec<(usize, Vec<Vector>)>,
         update_ep: UpdateEntryPoint,
         id: Vector,
     },
-    AddNeighbors {
+    RemoveNode {
+        id: Vector,
+    },
+    AddEdges {
         // list of layer, neighbors
         layers: Vec<(usize, Vec<Vector>)>,
         id: Vector,
     },
-    RemoveNeighbors {
+    RemoveEdges {
         to_remove: Vec<Vector>,
         layer: usize,
         id: Vector,
@@ -38,7 +38,7 @@ impl<V: std::fmt::Debug + Ord> std::fmt::Debug for GraphMutation<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::RemoveNode { id } => f.debug_struct("RemoveNode").field("id", id).finish(),
-            Self::InsertNode {
+            Self::AddNode {
                 layers: _,
                 update_ep,
                 id,
@@ -47,10 +47,10 @@ impl<V: std::fmt::Debug + Ord> std::fmt::Debug for GraphMutation<V> {
                 .field("update_ep", update_ep)
                 .field("id", id)
                 .finish(),
-            Self::AddNeighbors { id, layers: _ } => {
+            Self::AddEdges { id, layers: _ } => {
                 f.debug_struct("AddNeighbor").field("id", id).finish()
             }
-            Self::RemoveNeighbors { .. } => f.debug_struct("RemoveInvalidNeighbors").finish(),
+            Self::RemoveEdges { .. } => f.debug_struct("RemoveInvalidNeighbors").finish(),
         }
     }
 }

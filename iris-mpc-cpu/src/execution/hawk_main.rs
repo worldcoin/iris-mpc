@@ -789,7 +789,7 @@ impl HawkActor {
                         if let Some(replace_id) = &plan.plan.replace_id {
                             mutations.push(GraphMutation::RemoveNode { id: *replace_id });
                         }
-                        mutations.push(GraphMutation::InsertNode {
+                        mutations.push(GraphMutation::AddNode {
                             id: inserted_vector,
                             layers: vec![],
                             update_ep: UpdateEntryPoint::False,
@@ -1485,7 +1485,7 @@ impl HawkResult {
                     .or(mutation.plans[RIGHT].as_ref())
                     .and_then(|plan| {
                         plan.0.iter().find_map(|m| match m {
-                            GraphMutation::InsertNode { id, .. } => Some(*id),
+                            GraphMutation::AddNode { id, .. } => Some(*id),
                             _ => None,
                         })
                     })
@@ -2618,7 +2618,7 @@ mod hawk_mutation_tests {
     use iris_mpc_common::helpers::sync::ModificationKey;
 
     fn create_test_connect_plan(vector_id: VectorId) -> ConnectPlan {
-        GroupedMutations(vec![GraphMutation::InsertNode {
+        GroupedMutations(vec![GraphMutation::AddNode {
             id: vector_id,
             layers: vec![(0, vec![vector_id])],
             update_ep: UpdateEntryPoint::False,
