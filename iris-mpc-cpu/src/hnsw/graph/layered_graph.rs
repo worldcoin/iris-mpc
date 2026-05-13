@@ -985,4 +985,152 @@ mod tests {
 
         Ok(())
     }
+
+    use crate::hnsw::graph::mutation::{EdgeDirection, GraphMutation, UpdateEntryPoint};
+
+    #[test]
+    fn add_edges_outgoing_writes_only_to_id_list() {
+        let mut graph = GraphMem::<IrisVectorId>::new();
+        let a = IrisVectorId::from_serial_id(1);
+        let b = IrisVectorId::from_serial_id(2);
+        let c = IrisVectorId::from_serial_id(3);
+        // Seed: a, b, c all exist at layer 0 with no edges.
+        graph.insert_apply(vec![
+            GraphMutation::AddNode {
+                id: a,
+                layers: vec![(0, vec![])],
+                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+            },
+            GraphMutation::AddNode {
+                id: b,
+                layers: vec![(0, vec![])],
+                update_ep: UpdateEntryPoint::False,
+            },
+            GraphMutation::AddNode {
+                id: c,
+                layers: vec![(0, vec![])],
+                update_ep: UpdateEntryPoint::False,
+            },
+        ]);
+        graph.insert_apply(vec![GraphMutation::AddEdges {
+            id: a,
+            layer: 0,
+            to_add: vec![b, c],
+            direction: EdgeDirection::Outgoing,
+        }]);
+        assert_eq!(graph.layers[0].get_links(&a).unwrap(), &[b, c]);
+        assert_eq!(
+            graph.layers[0].get_links(&b).unwrap(),
+            &[] as &[IrisVectorId]
+        );
+        assert_eq!(
+            graph.layers[0].get_links(&c).unwrap(),
+            &[] as &[IrisVectorId]
+        );
+    }
+
+    #[test]
+    fn add_edges_incoming_writes_only_to_target_lists() {
+        let mut graph = GraphMem::<IrisVectorId>::new();
+        let a = IrisVectorId::from_serial_id(1);
+        let b = IrisVectorId::from_serial_id(2);
+        let c = IrisVectorId::from_serial_id(3);
+        graph.insert_apply(vec![
+            GraphMutation::AddNode {
+                id: a,
+                layers: vec![(0, vec![])],
+                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+            },
+            GraphMutation::AddNode {
+                id: b,
+                layers: vec![(0, vec![])],
+                update_ep: UpdateEntryPoint::False,
+            },
+            GraphMutation::AddNode {
+                id: c,
+                layers: vec![(0, vec![])],
+                update_ep: UpdateEntryPoint::False,
+            },
+        ]);
+        graph.insert_apply(vec![GraphMutation::AddEdges {
+            id: a,
+            layer: 0,
+            to_add: vec![b, c],
+            direction: EdgeDirection::Incoming,
+        }]);
+        assert_eq!(
+            graph.layers[0].get_links(&a).unwrap(),
+            &[] as &[IrisVectorId]
+        );
+        assert_eq!(graph.layers[0].get_links(&b).unwrap(), &[a]);
+        assert_eq!(graph.layers[0].get_links(&c).unwrap(), &[a]);
+    }
+
+    #[test]
+    fn add_edges_bidirectional_writes_both_sides() {
+        let mut graph = GraphMem::<IrisVectorId>::new();
+        let a = IrisVectorId::from_serial_id(1);
+        let b = IrisVectorId::from_serial_id(2);
+        let c = IrisVectorId::from_serial_id(3);
+        graph.insert_apply(vec![
+            GraphMutation::AddNode {
+                id: a,
+                layers: vec![(0, vec![])],
+                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+            },
+            GraphMutation::AddNode {
+                id: b,
+                layers: vec![(0, vec![])],
+                update_ep: UpdateEntryPoint::False,
+            },
+            GraphMutation::AddNode {
+                id: c,
+                layers: vec![(0, vec![])],
+                update_ep: UpdateEntryPoint::False,
+            },
+        ]);
+        graph.insert_apply(vec![GraphMutation::AddEdges {
+            id: a,
+            layer: 0,
+            to_add: vec![b, c],
+            direction: EdgeDirection::Bidirectional,
+        }]);
+        assert_eq!(graph.layers[0].get_links(&a).unwrap(), &[b, c]);
+        assert_eq!(graph.layers[0].get_links(&b).unwrap(), &[a]);
+        assert_eq!(graph.layers[0].get_links(&c).unwrap(), &[a]);
+    }
+
+    #[test]
+    fn remove_edges_outgoing_only_modifies_id_list() {
+        let mut graph = GraphMem::<IrisVectorId>::new();
+        let a = IrisVectorId::from_serial_id(1);
+        let b = IrisVectorId::from_serial_id(2);
+        let c = IrisVectorId::from_serial_id(3);
+        graph.insert_apply(vec![
+            GraphMutation::AddNode {
+                id: a,
+                layers: vec![(0, vec![b, c])],
+                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+            },
+            GraphMutation::AddNode {
+                id: b,
+                layers: vec![(0, vec![a])],
+                update_ep: UpdateEntryPoint::False,
+            },
+            GraphMutation::AddNode {
+                id: c,
+                layers: vec![(0, vec![a])],
+                update_ep: UpdateEntryPoint::False,
+            },
+        ]);
+        graph.insert_apply(vec![GraphMutation::RemoveEdges {
+            id: a,
+            layer: 0,
+            to_remove: vec![b],
+            direction: EdgeDirection::Outgoing,
+        }]);
+        assert_eq!(graph.layers[0].get_links(&a).unwrap(), &[c]);
+        // Bidirectional cleanup is not implied — b's list still contains a.
+        assert_eq!(graph.layers[0].get_links(&b).unwrap(), &[a]);
+    }
 }
