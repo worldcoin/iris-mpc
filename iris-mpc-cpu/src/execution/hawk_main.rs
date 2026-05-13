@@ -1413,7 +1413,7 @@ impl HawkRequest {
                     let query = Aby3Query::new(query_id);
                     VecRotationSupport::new_center_only(query)
                 })
-                .collect_vec()
+                .collect()
         });
         (
             IdentityUpdateRequests {
