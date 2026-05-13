@@ -213,7 +213,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                         self.layers.resize(*height, Layer::new());
                     }
                     for layer_idx in 0..*height {
-                        self.layers[layer_idx].insert_node(id.clone(), Vec::new());
+                        self.layers[layer_idx].insert_node(id, Vec::new());
                     }
                 }
                 GraphMutation::AddEdges { .. } | GraphMutation::RemoveEdges { .. } => {}
@@ -587,7 +587,7 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         self.set_hash.checksum()
     }
 
-    pub fn insert_node(&mut self, id: V, neighbors: Vec<V>) {
+    pub fn insert_node(&mut self, id: &V, neighbors: Vec<V>) {
         self.set_links(id.clone(), neighbors.clone());
     }
 

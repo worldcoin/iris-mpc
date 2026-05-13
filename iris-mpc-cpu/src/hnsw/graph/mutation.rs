@@ -16,10 +16,7 @@ pub enum GraphMutation<Vector: Ord> {
     AddNode {
         id: Vector,
         /// Number of real graph layers this node is included in. The node will
-        /// be present in layers `0..height`, i.e. layer indices `0..=height-1`.
-        /// `height == 0` represents a node that is not inserted into any graph
-        /// layer (used as a marker on code paths that record an insertion
-        /// without mutating the in-memory graph).
+        /// be present in layers `0..height`.
         height: usize,
         update_ep: UpdateEntryPoint,
     },
@@ -115,7 +112,7 @@ mod tests {
     #[test]
     fn insert_node_sets_exact_links() {
         let mut layer = Layer::new();
-        layer.insert_node(1i32, vec![2, 3, 4]);
+        layer.insert_node(&1i32, vec![2, 3, 4]);
         assert_eq!(layer.get_links(&1), Some([2, 3, 4].as_slice()));
     }
 
@@ -123,8 +120,8 @@ mod tests {
     #[test]
     fn insert_node_replaces_existing_links() {
         let mut layer = Layer::new();
-        layer.insert_node(1i32, vec![2, 3]);
-        layer.insert_node(1i32, vec![4, 5]);
+        layer.insert_node(&1i32, vec![2, 3]);
+        layer.insert_node(&1i32, vec![4, 5]);
         assert_eq!(layer.get_links(&1), Some([4, 5].as_slice()));
     }
 
@@ -134,8 +131,8 @@ mod tests {
     #[test]
     fn add_neighbors_inserts_id_into_existing_nodes() {
         let mut layer = Layer::new();
-        layer.insert_node(10i32, vec![]);
-        layer.insert_node(20i32, vec![]);
+        layer.insert_node(&10i32, vec![]);
+        layer.insert_node(&20i32, vec![]);
         layer.add_incoming_edges(&5, vec![10, 20]);
         assert_eq!(layer.get_links(&10), Some([5].as_slice()));
         assert_eq!(layer.get_links(&20), Some([5].as_slice()));
@@ -146,7 +143,7 @@ mod tests {
     #[test]
     fn add_neighbors_is_idempotent() {
         let mut layer = Layer::new();
-        layer.insert_node(10i32, vec![]);
+        layer.insert_node(&10i32, vec![]);
         layer.add_incoming_edges(&5, vec![10]);
         layer.add_incoming_edges(&5, vec![10]);
         assert_eq!(layer.get_links(&10), Some([5].as_slice()));
@@ -158,7 +155,7 @@ mod tests {
     #[test]
     fn add_neighbors_maintains_sorted_order() {
         let mut layer = Layer::new();
-        layer.insert_node(10i32, vec![]);
+        layer.insert_node(&10i32, vec![]);
         layer.add_incoming_edges(&7, vec![10]);
         layer.add_incoming_edges(&3, vec![10]);
         layer.add_incoming_edges(&5, vec![10]);
@@ -180,7 +177,7 @@ mod tests {
     #[test]
     fn remove_neighbors_removes_specified_only() {
         let mut layer = Layer::new();
-        layer.insert_node(1i32, vec![2, 3, 4, 5]);
+        layer.insert_node(&1i32, vec![2, 3, 4, 5]);
         layer.remove_outgoing_edges(&1, vec![2, 4]);
         assert_eq!(layer.get_links(&1), Some([3, 5].as_slice()));
     }
@@ -191,8 +188,8 @@ mod tests {
     #[test]
     fn remove_neighbors_is_unidirectional() {
         let mut layer = Layer::new();
-        layer.insert_node(1i32, vec![2, 3]);
-        layer.insert_node(2i32, vec![1, 3]);
+        layer.insert_node(&1i32, vec![2, 3]);
+        layer.insert_node(&2i32, vec![1, 3]);
         layer.remove_outgoing_edges(&1, vec![2]);
         assert_eq!(layer.get_links(&1), Some([3].as_slice()));
         assert_eq!(layer.get_links(&2), Some([1, 3].as_slice()));
@@ -214,12 +211,12 @@ mod tests {
     #[test]
     fn wal_replay_insert_then_backlinks() {
         let mut layer = Layer::new();
-        layer.insert_node(10i32, vec![20, 30]);
-        layer.insert_node(20i32, vec![10, 30]);
-        layer.insert_node(30i32, vec![10, 20]);
+        layer.insert_node(&10i32, vec![20, 30]);
+        layer.insert_node(&20i32, vec![10, 30]);
+        layer.insert_node(&30i32, vec![10, 20]);
 
         // New node 40 inserted with forward links to 10 and 20
-        layer.insert_node(40, vec![10, 20]);
+        layer.insert_node(&40, vec![10, 20]);
         // Backlinks: 10 and 20 each gain 40 as a neighbor
         layer.add_incoming_edges(&40, vec![10, 20]);
 
@@ -235,12 +232,12 @@ mod tests {
     #[test]
     fn wal_replay_insert_backlinks_then_compact() {
         let mut layer = Layer::new();
-        layer.insert_node(1i32, vec![2, 3]);
-        layer.insert_node(2i32, vec![1, 3]);
-        layer.insert_node(3i32, vec![1, 2]);
+        layer.insert_node(&1i32, vec![2, 3]);
+        layer.insert_node(&2i32, vec![1, 3]);
+        layer.insert_node(&3i32, vec![1, 2]);
 
         // Insert node 4 with forward links [1, 2]
-        layer.insert_node(4, vec![1, 2]);
+        layer.insert_node(&4, vec![1, 2]);
         // Backlinks into 1 and 2
         layer.add_incoming_edges(&4, vec![1, 2]);
         // Compaction: node 2 now exceeds link limit, prune neighbor 3
