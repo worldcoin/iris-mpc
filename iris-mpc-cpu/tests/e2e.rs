@@ -197,12 +197,11 @@ async fn start_hawk_node(
         iris_store[1].db_size()
     );
 
-    let mut hawk_actor =
+    let hawk_actor =
         HawkActor::from_cli_with_graph_and_store(args, CancellationToken::new(), graph, iris_store)
             .instrument(span.clone())
             .await?;
 
-    hawk_actor.refresh_registries().await;
     let handle = HawkHandle::new(hawk_actor).instrument(span).await?;
 
     Ok(handle)
