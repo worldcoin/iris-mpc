@@ -2062,10 +2062,18 @@ impl HawkHandle {
                             let request_id = &request.batch.request_ids[i];
                             Some(ModificationKey::RequestId(request_id.clone()))
                         }
-                        ReauthUpdate(vector_id) => {
+                        ReauthUpdate(vector_id)
+                            if !request
+                                .batch
+                                .skip_persistence
+                                .get(i)
+                                .copied()
+                                .unwrap_or(false) =>
+                        {
                             Some(ModificationKey::RequestSerialId(vector_id.serial_id()))
                         }
                         UniqueInsertSkipped | NoMutation => None,
+                        ReauthUpdate(_) => None,
                     }
                 }
                 RequestIndex::IdentityUpdate(i) => {
