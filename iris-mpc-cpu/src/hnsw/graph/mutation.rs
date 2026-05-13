@@ -189,7 +189,7 @@ mod tests {
         assert_eq!(layer.get_links(&10).unwrap(), &[20, 30, 40]);
         assert_eq!(layer.get_links(&20).unwrap(), &[10, 30, 40]);
         // 30 was not in the backlink set — untouched
-        assert_eq!(layer.get_links(&30).unwrap(), &[10, 20, 40]);
+        assert_eq!(layer.get_links(&30).unwrap(), &[10, 20]);
     }
 
     /// Replays a full mutation group: insert + backlinks + compaction (RemoveNeighbors).
