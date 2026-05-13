@@ -50,6 +50,8 @@ imagePullSecrets:
 
 nodeSelector:
   kubernetes.io/arch: amd64
+  karpenter.sh/capacity-type: on-demand
+  node.kubernetes.io/instance-type: "p4d.24xlarge"
 
 hostNetwork: true
 
