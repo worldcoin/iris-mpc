@@ -29,9 +29,10 @@ pub enum GraphMutation<Vector: Ord> {
         direction: EdgeDirection,
     },
     RemoveEdges {
-        to_remove: Vec<Vector>,
-        layer: usize,
         id: Vector,
+        layer: usize,
+        to_remove: Vec<Vector>,
+        direction: EdgeDirection,
     },
 }
 
@@ -59,7 +60,17 @@ impl<V: std::fmt::Debug + Ord> std::fmt::Debug for GraphMutation<V> {
                 .field("layer", layer)
                 .field("direction", direction)
                 .finish(),
-            Self::RemoveEdges { .. } => f.debug_struct("RemoveInvalidNeighbors").finish(),
+            Self::RemoveEdges {
+                id,
+                layer,
+                direction,
+                ..
+            } => f
+                .debug_struct("RemoveEdges")
+                .field("id", id)
+                .field("layer", layer)
+                .field("direction", direction)
+                .finish(),
         }
     }
 }

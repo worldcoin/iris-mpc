@@ -278,8 +278,58 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                     ref id,
                     layer,
                     to_remove,
+                    direction,
                 } => {
-                    self.layers[layer].remove_neighbors(id, to_remove);
+                    if self.layers.len() < layer + 1 {
+                        warn!(
+                            "RemoveEdges: layer {layer} does not exist (id={:?}); skipping",
+                            id
+                        );
+                        continue;
+                    }
+                    let layer_mut = &mut self.layers[layer];
+                    match direction {
+                        EdgeDirection::Outgoing => {
+                            if layer_mut.get_links(id).is_none() {
+                                warn!(
+                                    "RemoveEdges(Outgoing): id={:?} missing at layer {layer}; skipping",
+                                    id
+                                );
+                            } else {
+                                layer_mut.remove_neighbors(id, to_remove);
+                            }
+                        }
+                        EdgeDirection::Incoming => {
+                            for target in &to_remove {
+                                if layer_mut.get_links(target).is_none() {
+                                    warn!(
+                                        "RemoveEdges(Incoming): target={:?} missing at layer {layer} (id={:?}); remove_incoming_edges will no-op for this target",
+                                        target, id
+                                    );
+                                }
+                            }
+                            layer_mut.remove_incoming_edges(id, to_remove);
+                        }
+                        EdgeDirection::Bidirectional => {
+                            if layer_mut.get_links(id).is_none() {
+                                warn!(
+                                    "RemoveEdges(Bidirectional): id={:?} missing at layer {layer}; skipping outgoing half",
+                                    id
+                                );
+                            } else {
+                                layer_mut.remove_neighbors(id, to_remove.clone());
+                            }
+                            for target in &to_remove {
+                                if layer_mut.get_links(target).is_none() {
+                                    warn!(
+                                        "RemoveEdges(Bidirectional): target={:?} missing at layer {layer} (id={:?}); remove_incoming_edges will no-op for this target",
+                                        target, id
+                                    );
+                                }
+                            }
+                            layer_mut.remove_incoming_edges(id, to_remove);
+                        }
+                    }
                 }
             }
         }
@@ -591,6 +641,20 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
                     self.set_hash
                         .add_unordered_set(&neighbor, neighbor_links.iter());
                 }
+            }
+        }
+    }
+
+    /// Remove `id` from each target's neighbor list, where `target` ranges over
+    /// `to_remove`. Targets that don't exist in this layer are silently skipped
+    /// (the caller's apply path is responsible for any logging).
+    pub fn remove_incoming_edges(&mut self, id: &V, to_remove: Vec<V>) {
+        for target in &to_remove {
+            if let Some(target_links) = self.links.get_mut(target) {
+                self.set_hash
+                    .remove_unordered_set(target, target_links.iter());
+                target_links.retain(|x| x != id);
+                self.set_hash.add_unordered_set(target, target_links.iter());
             }
         }
     }

@@ -1746,6 +1746,7 @@ impl HnswSearcher {
                             id: id.clone(),
                             layer: *layer,
                             to_remove,
+                            direction: EdgeDirection::Outgoing,
                         });
                     }
                 }
@@ -1766,6 +1767,7 @@ impl HnswSearcher {
                         id,
                         layer,
                         to_remove,
+                        direction: EdgeDirection::Outgoing,
                     });
                 }
             }
@@ -2105,6 +2107,7 @@ mod tests {
                     id,
                     layer,
                     to_remove,
+                    direction: _,
                 } = m
                 {
                     Some((id, layer, to_remove))
