@@ -5,11 +5,7 @@ use super::{
     search::{self, SearchParams, SearchQueries, SearchResults},
     BothEyes, HawkActor, HawkRequest, HawkSession, LEFT, RIGHT,
 };
-use crate::execution::hawk_main::{
-    iris_worker::{IrisWorkerPool, QueryId},
-    search::SearchIds,
-    NEIGHBORHOOD_MODE,
-};
+use crate::execution::hawk_main::{iris_worker::QueryId, search::SearchIds, NEIGHBORHOOD_MODE};
 use eyre::Result;
 use iris_mpc_common::vector_id::VectorId;
 

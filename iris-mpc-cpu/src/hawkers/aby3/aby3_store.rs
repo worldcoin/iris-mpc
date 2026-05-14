@@ -1,8 +1,6 @@
 use crate::{
     execution::{
-        hawk_main::iris_worker::{
-            cache_iris, IrisWorkerPool, LocalIrisWorkerPool, QueryId, QuerySpec,
-        },
+        hawk_main::iris_worker::{cache_iris, IrisWorkerPool, QueryId, QuerySpec},
         session::{Session, SessionHandles},
     },
     hawkers::shared_irises::{SharedIrises, SharedIrisesRef},
@@ -74,14 +72,13 @@ pub type VectorIdRegistryRef = SharedIrisesRef<()>;
 
 /// Implementation of VectorStore based on the ABY3 framework (<https://eprint.iacr.org/2018/403.pdf>).
 ///
-/// Generic over `D` (distance operations, e.g. `FhdOps`/`NhdOps`) and `W`
-/// (worker pool implementation). The default `W = LocalIrisWorkerPool` is the
-/// single-node implementation; future remote implementations will enable
-/// horizontal scaling.
+/// Generic over `D` (distance operations, e.g. `FhdOps`/`NhdOps`). The worker
+/// pool is `Arc<dyn IrisWorkerPool>` so the local and remote sharded pools
+/// share one type.
 ///
 /// Note that all SMPC operations are performed in a single session.
 #[derive(Debug)]
-pub struct Aby3Store<D = FhdOps, W: IrisWorkerPool = LocalIrisWorkerPool> {
+pub struct Aby3Store<D = FhdOps> {
     /// VectorId registry — tracks presence, versions, and checksums.
     /// Does **not** hold iris data; all iris reads go through `workers`.
     pub registry: VectorIdRegistryRef,
@@ -90,14 +87,14 @@ pub struct Aby3Store<D = FhdOps, W: IrisWorkerPool = LocalIrisWorkerPool> {
     pub session: Session,
 
     /// Worker pool for CPU-bound distance computations.
-    pub workers: W,
+    pub workers: Arc<dyn IrisWorkerPool>,
 
     distance_fn: distance_fn::DistanceFn,
 
     _phantom: std::marker::PhantomData<D>,
 }
 
-impl<D: DistanceOps, W: IrisWorkerPool> Aby3Store<D, W>
+impl<D: DistanceOps> Aby3Store<D>
 where
     Standard: Distribution<D::Ring>,
     VecShare<D::Ring>: Transpose64,
@@ -105,7 +102,7 @@ where
     pub fn new(
         registry: VectorIdRegistryRef,
         session: Session,
-        workers: W,
+        workers: Arc<dyn IrisWorkerPool>,
         distance_mode: DistanceMode,
     ) -> Self {
         Self {
@@ -175,7 +172,7 @@ where
             .into_iter()
             .next()
             .ok_or_eyre("fetch_irises did not return expected iris or empty default")?;
-        cache_iris(&self.workers, iris).await
+        cache_iris(self.workers.as_ref(), iris).await
     }
 
     /// Obliviously swaps the elements in `list` at the given `indices` according to the `swap_bits`.
@@ -564,7 +561,7 @@ where
     }
 }
 
-impl<D: DistanceOps, W: IrisWorkerPool> VectorStore for Aby3Store<D, W>
+impl<D: DistanceOps> VectorStore for Aby3Store<D>
 where
     Standard: Distribution<D::Ring>,
     VecShare<D::Ring>: Transpose64,
@@ -719,7 +716,7 @@ where
     }
 }
 
-impl<D: DistanceOps, W: IrisWorkerPool> VectorStoreMut for Aby3Store<D, W>
+impl<D: DistanceOps> VectorStoreMut for Aby3Store<D>
 where
     Standard: Distribution<D::Ring>,
     VecShare<D::Ring>: Transpose64,
@@ -784,6 +781,7 @@ mod tests {
     use itertools::{izip, Itertools};
     use rand::SeedableRng;
     use tokio::task::JoinSet;
+    use tracing::{info_span, Instrument};
     use tracing_test::traced_test;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -804,7 +802,7 @@ mod tests {
             let irises: Vec<ArcIris> = (0..database_size)
                 .map(|id| Arc::new(shared_irises[id][player_index].clone()))
                 .collect();
-            let queries = cache_irises(&store.lock().await.workers, irises).await?;
+            let queries = cache_irises(store.lock().await.workers.as_ref(), irises).await?;
             let mut rng = rng.clone();
             let store = store.clone();
             jobs.spawn(async move {
@@ -1003,7 +1001,7 @@ mod tests {
             let mut player_inserts = vec![];
             let mut store_lock = store.lock().await;
             for iris in player_irises.iter() {
-                let query = cache_iris(&store_lock.workers, iris.clone()).await?;
+                let query = cache_iris(store_lock.workers.as_ref(), iris.clone()).await?;
                 let vid = store_lock.insert(&query).await;
                 player_inserts.push(vid);
             }
@@ -1376,7 +1374,7 @@ mod tests {
                 .map(|id| Arc::new(shared_irises[id][player_index].clone()))
                 .collect();
             let mut store_lock = store.lock().await;
-            let player_preps = cache_irises(&store_lock.workers, irises).await?;
+            let player_preps = cache_irises(store_lock.workers.as_ref(), irises).await?;
             queries.push(player_preps.clone());
             let mut player_inserts = vec![];
             for p in player_preps.iter() {
@@ -1548,6 +1546,7 @@ mod tests {
 
         let mut plaintext_store = PlaintextStore::<FhdOps>::new();
         let mut plaintext_graph: GraphMem<VectorId> = GraphMem::new();
+        let plaintext_span = info_span!("plaintext_insert");
         for (iris, &layer) in cleartext_db.iter().zip(insertion_layers.iter()) {
             let query = Arc::new(iris.clone());
             searcher
@@ -1557,12 +1556,13 @@ mod tests {
                     &query,
                     layer,
                 )
+                .instrument(plaintext_span.clone())
                 .await?;
         }
 
         let stores = setup_local_store_aby3_players(NetworkType::Local).await?;
         let mut jobs = JoinSet::new();
-        for store in stores.into_iter() {
+        for (idx, store) in stores.into_iter().enumerate() {
             let role = get_owner_index(&store).await?;
             let irises: Vec<ArcIris> = shared_irises
                 .iter()
@@ -1571,12 +1571,14 @@ mod tests {
             let layers = insertion_layers.clone();
             let searcher = searcher.clone();
             jobs.spawn(async move {
+                let mpc_span = info_span!("mpc_insert", id = idx);
                 let mut store = store.lock().await;
-                let queries = cache_irises(&store.workers, irises).await?;
+                let queries = cache_irises(store.workers.as_ref(), irises).await?;
                 let mut graph: GraphMem<VectorId> = GraphMem::new();
                 for (query, &layer) in queries.iter().zip(layers.iter()) {
                     searcher
                         .insert::<_, SortedNeighborhood<_>>(&mut *store, &mut graph, query, layer)
+                        .instrument(mpc_span.clone())
                         .await?;
                 }
                 Ok::<(usize, GraphMem<VectorId>), eyre::Report>((role, graph))
@@ -1591,10 +1593,7 @@ mod tests {
 
         for (role, mpc_graph) in mpc_graphs.into_iter().enumerate() {
             let mpc_graph = mpc_graph.unwrap_or_else(|| panic!("party {role} did not finish"));
-            assert_eq!(
-                mpc_graph, plaintext_graph,
-                "MPC graph for party {role} differs from plaintext graph",
-            );
+            verify_graph_consistency(role, &mpc_graph, &plaintext_graph)?;
         }
 
         // If either assert fails the parameters no longer exercise the
@@ -1602,6 +1601,114 @@ mod tests {
         assert_eq!(plaintext_graph.get_num_layers(), 2);
         assert!(plaintext_graph.entry_points.len() >= 2);
 
+        Ok(())
+    }
+
+    /// Verifies that an MPC graph matches the plaintext reference graph.
+    /// Logs detailed comparison information and panics on mismatches.
+    fn verify_graph_consistency(
+        role: usize,
+        mpc_graph: &GraphMem<VectorId>,
+        plaintext_graph: &GraphMem<VectorId>,
+    ) -> eyre::Result<()> {
+        use std::collections::BTreeSet;
+
+        // Check layer count
+        let num_layers_mpc = mpc_graph.layers.len();
+        let num_layers_pt = plaintext_graph.layers.len();
+        tracing::debug!(
+            role,
+            num_layers_mpc,
+            num_layers_pt,
+            "Comparing layer counts"
+        );
+
+        if num_layers_mpc != num_layers_pt {
+            panic!(
+                "[Role {}] Layer count mismatch: MPC={} vs plaintext={}",
+                role, num_layers_mpc, num_layers_pt
+            );
+        }
+
+        // Compare each layer
+        for (layer_idx, (mpc_layer, pt_layer)) in mpc_graph
+            .layers
+            .iter()
+            .zip(plaintext_graph.layers.iter())
+            .enumerate()
+        {
+            // Check if layers contain the same elements
+            let mpc_keys: BTreeSet<_> = mpc_layer.links.keys().collect();
+            let pt_keys: BTreeSet<_> = pt_layer.links.keys().collect();
+
+            if mpc_keys != pt_keys {
+                tracing::error!(
+                    role,
+                    layer_idx,
+                    mpc_count = mpc_keys.len(),
+                    pt_count = pt_keys.len(),
+                    "Layer elements differ"
+                );
+                panic!(
+                    "[Role {}] Layer {} elements mismatch: MPC={} nodes, plaintext={} nodes",
+                    role,
+                    layer_idx,
+                    mpc_keys.len(),
+                    pt_keys.len()
+                );
+            }
+            tracing::debug!(
+                role,
+                layer_idx,
+                node_count = mpc_keys.len(),
+                "Layer elements verified"
+            );
+
+            // Compare ordering by checking neighbors for each node
+            for node_id in mpc_keys.iter() {
+                let mpc_neighbors = mpc_layer
+                    .links
+                    .get(node_id)
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&[]);
+                let pt_neighbors = pt_layer
+                    .links
+                    .get(node_id)
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&[]);
+
+                if mpc_neighbors != pt_neighbors {
+                    tracing::error!(
+                        role,
+                        layer_idx,
+                        node_id = %node_id,
+                        mpc_neighbor_count = mpc_neighbors.len(),
+                        pt_neighbor_count = pt_neighbors.len(),
+                        "Node neighbor list differs"
+                    );
+                    panic!(
+                    "[Role {}] Layer {} node {} neighbor mismatch: MPC={} neighbors, plaintext={} neighbors",
+                    role,
+                    layer_idx,
+                    node_id,
+                    mpc_neighbors.len(),
+                    pt_neighbors.len()
+                );
+                }
+            }
+            tracing::debug!(
+                role,
+                layer_idx,
+                "Layer node orderings verified for all nodes"
+            );
+        }
+
+        // Compare entry points
+        if mpc_graph.entry_points != plaintext_graph.entry_points {
+            tracing::error!(role, "Entry points mismatch");
+            panic!("[Role {}] Entry points differ", role);
+        }
+        tracing::info!(role, "Graph consistency verified");
         Ok(())
     }
 }

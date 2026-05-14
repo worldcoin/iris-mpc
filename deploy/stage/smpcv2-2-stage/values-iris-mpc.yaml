@@ -35,6 +35,9 @@ env:
   - name: SMPC__DATABASE__LOAD_PARALLELISM
     value: "8"
 
+  - name: SMPC__DISABLE_PERSISTENCE
+    value: "false"
+
   - name: SMPC__ANON_STATS_DATABASE__URL
     valueFrom:
       secretKeyRef:

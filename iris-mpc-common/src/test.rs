@@ -1338,6 +1338,10 @@ impl TestCaseGenerator {
             return;
         }
 
+        // Compute bounds for idx validation
+        let initial_db_len = self.initial_db_state.initial_db_len() as u32;
+        let max_valid_idx = initial_db_len + self.inserted_responses.len() as u32;
+
         if let Some(expected_idx) = expected_idx {
             assert!(!full_face_mirror_attack_detected);
             assert!(
@@ -1349,6 +1353,15 @@ impl TestCaseGenerator {
                 assert_eq!(
                     expected_idx, idx,
                     "expected matched index to be as expected"
+                );
+                // Bounds check: matched idx must be within valid DB range
+                assert!(
+                    idx < max_valid_idx,
+                    "matched idx {} exceeds max valid idx {} (initial_db_len={}, insertions={})",
+                    idx,
+                    max_valid_idx,
+                    initial_db_len,
+                    self.inserted_responses.len()
                 );
             } else {
                 assert!(
@@ -1366,8 +1379,63 @@ impl TestCaseGenerator {
                 assert!(was_match);
             } else {
                 assert!(!was_match);
+                self.validate_and_store_insertion(idx, req_id, requests, initial_db_len);
+            }
+        }
+    }
+
+    /// Validates and stores a new insertion, or verifies consistency of an existing one.
+    /// Handles the case where multiple parties process the same insertion.
+    fn validate_and_store_insertion(
+        &mut self,
+        idx: u32,
+        req_id: &str,
+        requests: &HashMap<String, E2ETemplate>,
+        initial_db_len: u32,
+    ) {
+        // idx == u32::MAX means no insertion happened (NON_MATCH_ID sentinel)
+        // This can happen for invalidated requests
+        if idx != u32::MAX {
+            // Check if another party already processed this insertion
+            if let std::collections::hash_map::Entry::Vacant(e) = self.inserted_responses.entry(idx)
+            {
+                // First party processing this insertion
+                // Bounds check: new insertion idx must be >= initial_db_len
+                if idx < initial_db_len {
+                    tracing::warn!(
+                        idx,
+                        initial_db_len,
+                        "new insertion index is before initial database length (insertions should be after initial DB)"
+                    );
+                }
                 let request = requests.get(req_id).unwrap().clone();
-                self.inserted_responses.insert(idx, request);
+                e.insert(request);
+            } else {
+                // Already validated by another party; verify consistency
+                let stored = self.inserted_responses.get(&idx).unwrap();
+                let current = requests.get(req_id).unwrap();
+
+                // Compare full E2ETemplate: both eyes' code and mask
+                assert_eq!(
+                    stored.left.code, current.left.code,
+                    "inconsistent left code insertion data across parties for idx {}",
+                    idx
+                );
+                assert_eq!(
+                    stored.left.mask, current.left.mask,
+                    "inconsistent left mask insertion data across parties for idx {}",
+                    idx
+                );
+                assert_eq!(
+                    stored.right.code, current.right.code,
+                    "inconsistent right code insertion data across parties for idx {}",
+                    idx
+                );
+                assert_eq!(
+                    stored.right.mask, current.right.mask,
+                    "inconsistent right mask insertion data across parties for idx {}",
+                    idx
+                );
             }
         }
     }
