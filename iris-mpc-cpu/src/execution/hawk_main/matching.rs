@@ -146,8 +146,7 @@ impl Step1 {
     fn missing_vector_ids(&self, side: usize) -> VecEdges<VectorId> {
         let other_side = 1 - side;
         let anti_join = &self.anti_join[other_side];
-        // Reauth target is always added (not deduped against inner_join) so the explicit
-        // is_match at the requested target id is computed regardless of whether the search hit it.
+        // Always add reauth target so is_match is computed even if the search didn't hit it.
         let reauth_id = self.reauth_id().map(|(id, _)| id);
 
         chain!(anti_join, &self.luc_ids, &reauth_id)
@@ -246,11 +245,7 @@ impl Decision {
     }
 }
 
-/// Maximally permissive filter: any match in any orientation, including intra-batch peers.
-///
-/// Used by `BatchStep3::decisions()` to compute the canonical "did anything match?" boolean,
-/// and by `HawkResult::merged_results` / `HawkResult::matched_batch_request_ids` for the
-/// reporting fields whose semantic is "everything across orientations".
+/// Wide filter: any match in any orientation, including intra-batch peers.
 pub const DECISION_FILTER: Filter = Filter {
     eyes: OnlyOrBoth::Both,
     orient: OnlyOrBoth::Both,

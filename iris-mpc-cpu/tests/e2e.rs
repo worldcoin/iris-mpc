@@ -340,17 +340,12 @@ enum Expectation {
     DbMatchAt { expected_match_index: u32 },
     /// Blocked by an earlier mutating slot in the same batch.
     IntraBatchBlockedBy { earlier_request_id: String },
-    /// Same as `IntraBatchBlockedBy` plus a mirror-attack flag — the matching peer is the
-    /// mirror of the request. The peer hasn't been persisted yet, so the DB-only match lists
-    /// stay empty; `full_face_mirror_attack_detected` is raised because the wide
-    /// (intra_batch=true) filter sees the mirror peer.
+    /// `IntraBatchBlockedBy` + mirror-attack flag (peer not yet in DB, so match_ids stay empty).
     IntraBatchMirrorAttackedBy { earlier_request_id: String },
     /// `full_face_mirror_attack_detected` raised, mirror match at the given index.
     MirrorAttackDetected { expected_mirror_match_index: u32 },
-    /// Mirror DB match exists, but the Normal pass also has intra-batch matches with an earlier
-    /// mirror peer (rotation overlap), so `full_face_mirror_attack_detected` stays false. We
-    /// don't pin which peer's request_id ends up in `matched_batch_request_ids` because rotation
-    /// distance from the rolling set of earlier mirror peers varies; we just assert non-empty.
+    /// Mirror DB match present but the Normal pass also matches an earlier mirror peer in-batch,
+    /// so the attack flag stays false. Don't pin which peer's request_id surfaces.
     MirrorDbMatchWithNormalIntraBatchBlock { expected_mirror_match_index: u32 },
     /// Reauth target updated.
     ReauthSucceeds { target_index: u32 },
@@ -503,16 +498,10 @@ fn reauth_variant(
     }
 }
 
-/// All 62 rotation/mirror variants of X, to be submitted after X is already
-/// persisted at `seed_db_index`. Identity slot (rot=0, non-mirror) is pushed
-/// first so the centered raw iris for intra-batch comparisons is X itself.
-///
-/// Mirror variants: the FIRST mirror variant (`rot=-15 mirror=true`) gets a
-/// clean mirror-attack flag — its Normal pass has no other intra-batch
-/// matches yet (the only earlier slots are non-mirror variants of X, which
-/// are not its mirror). Subsequent mirror variants overlap each other in the
-/// Normal pass via rotation, so the wide-filter normal is non-empty and
-/// `mirror_attack=false`; they still report the DB mirror match.
+/// 62 rotation/mirror variants of X, submitted after X is persisted at `seed_db_index`.
+/// Identity slot first so intra-batch comparisons are centered on X. The first mirror variant
+/// gets a clean mirror-attack (no earlier mirror peer in Normal); later mirror variants overlap
+/// earlier ones via rotation so the attack flag is false but the DB mirror match still surfaces.
 fn build_batch2_variants(
     x_left: &IrisCode,
     x_right: &IrisCode,
@@ -987,17 +976,10 @@ async fn e2e_uniqueness_test_async() -> Result<()> {
     let y_rot: isize = 30; // Y  = X rotated +30
     let z_rot: isize = -15; // Z  = X rotated −15
 
-    // Batch 1: seed X + 61 rotation/mirror variants. Slot 0 inserts; every
-    // other slot is intra-batch-blocked by slot 0. Mirror variants (eyes
-    // swapped + mirrored) are blocked too — the seed at slot 0 is their
-    // mirror. The first mirror variant in the batch (rot=-15 mirror=true,
-    // slot 2) is also flagged as a mirror attack because its Normal pass has
-    // no other intra-batch matches yet — rotations of this iris only overlap
-    // with later mirror variants. Subsequent mirror variants do match earlier
-    // mirror peers in Normal via rotation overlap, so mirror_attack=false for
-    // them. Batch 2 resubmits these same variants once X is in the DB and
-    // exercises the DB mirror-attack path with serial ids reported via
-    // `full_face_mirror_match_ids`.
+    // Batch 1: seed X + 61 rotation/mirror variants, all blocked intra-batch by slot 0. The first
+    // mirror variant additionally raises the mirror-attack flag (no earlier mirror peer in Normal);
+    // later mirror variants overlap each other in Normal via rotation, so the flag stays false.
+    // Batch 2 reruns these variants against the now-persisted seed.
     let seed = uniqueness_variant(
         &x_left,
         &x_right,

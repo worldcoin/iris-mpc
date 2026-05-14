@@ -346,29 +346,15 @@ pub enum RequestIndex {
     IdentityUpdate(usize),
 }
 
-/// Per-batch result returned by Hawk Main / GPU Server.
-///
-/// **Vector length contract** — fields fall into three groups, each with a different length:
-///
-/// 1. **Per `UniqueReauthResetCheck` row** (= `n` uniqueness + reauth + reset/recovery_check
-///    requests, in `BatchQuery::requests_order` order, with deletion and identity-update slots
-///    skipped): `request_ids`, `request_types`, `metadata`, `matches`,
-///    `matches_with_skip_persistence`, `skip_persistence`, `match_ids`,
-///    `partial_match_ids_*`, `partial_match_counters_*`, `partial_match_rotation_indices_*`,
-///    `full_face_mirror_match_ids`, `full_face_mirror_partial_match_*`,
-///    `full_face_mirror_attack_detected`, `merged_results`, `matched_batch_request_ids`,
-///    `successful_reauths`, `left_iris_requests`, `right_iris_requests`.
-/// 2. **Per `Deletion` row**: `deleted_ids` (raw indices from `BatchQuery::deletion_requests_indices`).
-/// 3. **Per `IdentityUpdate` row**: `identity_update_indices`, `identity_update_request_ids`,
-///    `identity_update_request_types`, `identity_update_shares`.
-///
-/// Other fields:
-/// - `reauth_target_indices`, `reauth_or_rule_used`: maps keyed by reauth `request_id`, sized by
-///   the number of reauth requests.
-/// - `modifications`: map keyed by `ModificationKey`, covers all rows that produce a persistable
-///   mutation (uniqueness inserts, reauths, identity updates, deletions).
-/// - `actor_data`: implementation-specific data (e.g. `HawkMutation` on the CPU path); size and
-///   shape per its own contract.
+/// Per-batch result. Vector-length groups (see `RequestIndex`):
+/// - `UniqueReauthResetCheck` rows: `request_ids`, `request_types`, `metadata`, `matches`,
+///   `matches_with_skip_persistence`, `skip_persistence`, `match_ids`, `partial_match_*`,
+///   `full_face_mirror_*`, `merged_results`, `matched_batch_request_ids`, `successful_reauths`,
+///   `{left,right}_iris_requests`.
+/// - `Deletion` rows: `deleted_ids`.
+/// - `IdentityUpdate` rows: `identity_update_*`.
+/// `reauth_*` maps are keyed by reauth `request_id`. `modifications` is keyed by
+/// `ModificationKey` across all persistable mutations. `actor_data` shape is implementation-defined.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ServerJobResult<A = ()> {
     pub merged_results: Vec<u32>,
@@ -378,33 +364,13 @@ pub struct ServerJobResult<A = ()> {
     pub request_types: Vec<String>,
     // As defined in the BatchQuery
     pub metadata: Vec<BatchMetadata>,
-    /// Per `UniqueReauthResetCheck` row: `true` iff the row's decision was **not** a successful new
-    /// uniqueness insertion (allocate a fresh serial id and persist a new iris).
-    ///
-    /// The name is misleading. The bool is `!UniqueInsert` over the CPU `Decision` enum:
-    /// - `false` only for `Decision::UniqueInsert` rows.
-    /// - `true` for `UniqueInsertSkipped`, matched-uniqueness, reauth (success or failure),
-    ///   reset/recovery check, and unsupported rows. (Reauth still overwrites an iris at the target
-    ///   serial id, but that is **not** a new uniqueness insertion.)
-    ///
-    /// On the GPU path the field is constructed analogously: `true` by default, flipped to `false`
-    /// only for the rows in `uniqueness_insertion_list`. Non-uniqueness rows therefore retain
-    /// `true`. See the long comment near `iris-mpc-gpu/src/server/actor.rs:1322` for the GPU-side
-    /// rationale, and `.claude/match-decision-reporting.md` (Q2) for the CPU-side mapping.
-    ///
-    /// Only meaningful as a "did the query match" boolean when filtered to
-    /// `request_types[i] == UNIQUENESS_MESSAGE_TYPE`.
+    /// Misleadingly named: stores `!UniqueInsert` (i.e. `false` only for a fresh uniqueness
+    /// insertion). Reauth rows are `true` even though they overwrite the target iris.
+    /// Only meaningful as "did the query match" when filtered to uniqueness rows.
     pub matches: Vec<bool>,
-    /// Per `UniqueReauthResetCheck` row: `true` iff the row's decision was **not** a uniqueness
-    /// no-match (regardless of whether the iris was actually persisted).
-    ///
-    /// The name is misleading. The bool is `!(UniqueInsert | UniqueInsertSkipped)`:
-    /// - `false` for both `UniqueInsert` and `UniqueInsertSkipped` (the uniqueness query was
-    ///   determined to be unique — either persisted or skipped via `skip_persistence`).
-    /// - `true` for matched-uniqueness, reauth, reset/recovery check, and unsupported rows.
-    ///
-    /// Used to populate the wire field `UniquenessResult::is_match`. Like `matches`, only
-    /// meaningful filtered to uniqueness rows.
+    /// Misleadingly named: stores `!(UniqueInsert | UniqueInsertSkipped)`, i.e. `false` for both
+    /// persisted and skipped uniqueness inserts. Populates `UniquenessResult::is_match`.
+    /// Only meaningful filtered to uniqueness rows.
     pub matches_with_skip_persistence: Vec<bool>,
     // Per-request skip persistence flag from the batch.
     pub skip_persistence: Vec<bool>,
