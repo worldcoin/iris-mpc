@@ -15,7 +15,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: "${{ github.repository }}-genesis"
+  IMAGE_NAME: "iris-mpc-genesis"
 
 jobs:
   docker:
