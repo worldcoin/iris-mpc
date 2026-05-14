@@ -5,12 +5,11 @@ use aws_sdk_s3::Client;
 use aws_sdk_sns::types::MessageAttributeValue;
 use axum::routing::get;
 use axum::Router;
-use iris_mpc_cpu::graph_checkpoint::download_graph_checkpoint;
-use iris_mpc_cpu::graph_checkpoint::get_common_checkpoint;
-use iris_mpc_cpu::graph_checkpoint::get_most_recent_checkpoints;
-use iris_mpc_cpu::graph_checkpoint::s3_key_exists;
-use iris_mpc_cpu::graph_checkpoint::GraphCheckpointState;
-use iris_mpc_cpu::graph_checkpoint::GRAPH_CHECKPOINT_ROUTE;
+use iris_mpc_cpu::graph_checkpoint::{
+    download_graph_checkpoint, get_common_checkpoint, get_most_recent_checkpoints, s3_key_exists,
+    GraphCheckpointState, GRAPH_CHECKPOINT_ROUTE,
+};
+use iris_mpc_cpu::hnsw::GraphMem;
 
 use crate::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,
@@ -44,8 +43,8 @@ use iris_mpc_cpu::execution::hawk_main::worker_pool_initializer::{
     DbLoadParams, LocalWorkerPoolInitializer, WorkerPoolInitializer,
 };
 use iris_mpc_cpu::execution::hawk_main::{
-    build_hawk_network_handle, load_graphs_from_pg, GraphStore, HawkActor, HawkArgs, HawkHandle,
-    HawkOps, ServerJobResult, HAWK_DISTANCE_MODE,
+    build_hawk_network_handle, GraphStore, HawkActor, HawkArgs, HawkHandle, HawkOps,
+    ServerJobResult, HAWK_DISTANCE_MODE,
 };
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
@@ -167,7 +166,6 @@ pub async fn server_main(config: Config) -> Result<()> {
         sync_modifications(
             &config,
             &iris_store,
-            Some(&graph_store),
             &aws_clients,
             &shares_encryption_key_pair,
             sync_result.clone(),
@@ -201,7 +199,6 @@ pub async fn server_main(config: Config) -> Result<()> {
         &aws_clients.checkpoint_s3_client,
         &config.graph_checkpoint_bucket_name,
         &iris_store,
-        &graph_store,
         graph_checkpoint,
         &shutdown_handler,
     )
@@ -530,7 +527,6 @@ async fn init_hawk_actor(
     s3_client: &Client,
     checkpoint_bucket: &str,
     iris_store: &Store,
-    graph_store: &GraphPg<Aby3Store<HawkOps>>,
     checkpoint: Option<GraphCheckpointState>,
     shutdown_handler: &Arc<ShutdownHandler>,
 ) -> Result<HawkActor> {
@@ -582,26 +578,21 @@ async fn init_hawk_actor(
     // Network handle built up-front; iris and graph load in parallel.
     let networking = build_hawk_network_handle(&hawk_args, ct).await?;
 
-    let graph_parallelism = config
-        .cpu_database
-        .as_ref()
-        .ok_or_else(|| eyre!("Missing database config"))?
-        .load_parallelism;
-
     // Try to load graph from S3 checkpoint first, then fall back to
     // Postgres graph representation for temporary legacy compatibility.
-    // TODO simplify this logic once graph DB tables are removed.
+    // TODO: apply GraphMutations to the checkpoint
     let graph_load_future = async move {
-        if let Some(state) = checkpoint {
+        let both_eyes = if let Some(state) = checkpoint {
             tracing::info!(
                 "Loading graph from common S3 checkpoint, hash: {}",
                 state.blake3_hash
             );
-            download_graph_checkpoint(s3_client, checkpoint_bucket, &state).await
+            download_graph_checkpoint(s3_client, checkpoint_bucket, &state).await?
         } else {
-            tracing::info!("No S3 checkpoint found, loading from PostgreSQL");
-            load_graphs_from_pg(graph_store, graph_parallelism).await
-        }
+            tracing::info!("No S3 checkpoint found, defaulting to empty graph");
+            [GraphMem::new(), GraphMem::new()]
+        };
+        Ok::<_, eyre::Report>(both_eyes)
     };
 
     let (initialized, graph) = tokio::try_join!(initializer.initialize(), graph_load_future)?;

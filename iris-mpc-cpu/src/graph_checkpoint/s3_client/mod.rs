@@ -47,6 +47,73 @@ pub async fn upload_graph_checkpoint(
     let left_graph = graph_mem[LEFT].read().await;
     let right_graph = graph_mem[RIGHT].read().await;
     let data = Bytes::from(bincode::serialize(&[&*left_graph, &*right_graph])?);
+    _upload_graph_checkpoint(
+        bucket,
+        party_id,
+        s3_client,
+        last_indexed_iris_id,
+        last_indexed_modification_id,
+        graph_mutation_id,
+        is_archival,
+        data,
+        "genesis",
+        "graph",
+        start,
+    )
+    .await
+}
+
+/// Creates an S3 graph checkpoint from plaintext graphs (for testing).
+#[allow(clippy::too_many_arguments)]
+pub async fn upload_graph_checkpoint_plaintext(
+    bucket: &str,
+    party_id: usize,
+    graph_mem: &BothEyes<GraphMem<PlaintextVectorRef>>,
+    s3_client: &S3Client,
+    last_indexed_iris_id: IrisSerialId,
+    last_indexed_modification_id: i64,
+    graph_mutation_id: Option<i64>,
+    is_archival: bool,
+) -> Result<GraphCheckpointState> {
+    let start = Instant::now();
+    tracing::info!(
+        "Creating S3 plaintext graph checkpoint: last_indexed_iris_id={}, last_indexed_modification_id={}, is_archival={}",
+        last_indexed_iris_id,
+        last_indexed_modification_id,
+        is_archival,
+    );
+
+    let data = Bytes::from(bincode::serialize(graph_mem)?);
+    _upload_graph_checkpoint(
+        bucket,
+        party_id,
+        s3_client,
+        last_indexed_iris_id,
+        last_indexed_modification_id,
+        graph_mutation_id,
+        is_archival,
+        data,
+        "plaintext",
+        "plaintext graph",
+        start,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn _upload_graph_checkpoint(
+    bucket: &str,
+    party_id: usize,
+    s3_client: &S3Client,
+    last_indexed_iris_id: IrisSerialId,
+    last_indexed_modification_id: i64,
+    graph_mutation_id: Option<i64>,
+    is_archival: bool,
+    data: Bytes,
+    s3_prefix: &str,
+    log_label: &str,
+    start: Instant,
+) -> Result<GraphCheckpointState> {
     let data_len = data.len();
     tracing::info!(
         "Serialized graphs to {} bytes in {:?}",
@@ -64,7 +131,8 @@ pub async fn upload_graph_checkpoint(
     );
 
     let s3_key = format!(
-        "genesis/{}/checkpoint_{}.bin",
+        "{}/{}/checkpoint_{}.bin",
+        s3_prefix,
         party_id,
         uuid::Uuid::new_v4()
     );
@@ -82,7 +150,8 @@ pub async fn upload_graph_checkpoint(
     };
 
     tracing::info!(
-        "S3 graph checkpoint created successfully: s3_key={}, is_archival={}, duration={:?}",
+        "S3 {} checkpoint created successfully: s3_key={}, is_archival={}, duration={:?}",
+        log_label,
         s3_key,
         is_archival,
         start.elapsed()

@@ -309,6 +309,7 @@ impl Handle {
 
                                     let mut store = session.aby3_store.write().await;
                                     let mut graph = session.graph_store.write().await;
+
                                     let connect_plan =
                                         insert(&mut *store, &mut *graph, &searcher, plans, &ids).await?;
 

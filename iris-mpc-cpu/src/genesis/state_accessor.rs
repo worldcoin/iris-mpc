@@ -11,14 +11,16 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use std::{fmt::Debug, sync::Arc};
 
+// The below constants are public for the test_utils module
+
 /// Domain for persistent state store entry for last indexed id
-const STATE_DOMAIN: &str = "genesis";
+pub const STATE_DOMAIN: &str = "genesis";
 
 /// Key for persistent state store entry for last indexed iris id
-const STATE_KEY_LAST_INDEXED_IRIS_ID: &str = "last_indexed_iris_id";
+pub const STATE_KEY_LAST_INDEXED_IRIS_ID: &str = "last_indexed_iris_id";
 
 /// Key for persistent state store entry for last indexed modification id
-const STATE_KEY_LAST_INDEXED_MODIFICATION_ID: &str = "last_indexed_modification_id";
+pub const STATE_KEY_LAST_INDEXED_MODIFICATION_ID: &str = "last_indexed_modification_id";
 
 /// Fetches serial identifiers marked as deleted.
 ///

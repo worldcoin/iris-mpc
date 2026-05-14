@@ -45,7 +45,7 @@ use iris_mpc_cpu::{
     },
     graph_checkpoint::*,
     hawkers::aby3::aby3_store::{Aby3Store, VectorIdRegistryRef},
-    hnsw::graph::graph_store::GraphPg,
+    hnsw::{graph::graph_store::GraphPg, GraphMem},
 };
 use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
 use std::{
@@ -436,15 +436,8 @@ async fn exec_setup(
         .unwrap_or(last_indexed_id);
 
     // Bail if stores are inconsistent.
-    validate_consistency_of_stores(
-        config,
-        &iris_store,
-        graph_store_arc.clone(),
-        args.max_indexation_id,
-        last_indexed_id,
-        graph_checkpoint.is_some(),
-    )
-    .await?;
+    validate_consistency_of_stores(config, &iris_store, args.max_indexation_id, last_indexed_id)
+        .await?;
     tracing::info!("Store consistency checks OK");
 
     // Iris and graph load in parallel, then assemble the actor.
@@ -452,7 +445,6 @@ async fn exec_setup(
         config,
         &config.graph_checkpoint_bucket_name,
         &iris_store,
-        graph_store_arc.clone(),
         hawk_args,
         hawk_networking,
         &checkpoint_s3_client,
@@ -993,119 +985,6 @@ async fn exec_snapshot(
     Ok(())
 }
 
-/// Executes database backup by graph table data to independent tables
-/// within the existing schema.
-///
-/// # Arguments
-///
-/// * `graph_store` - Arc-wrapped HNSW graph store instance.
-#[allow(dead_code)]
-async fn exec_database_backup(
-    graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
-) -> Result<(), IndexationError> {
-    tracing::info!("Graph table data snapshot begins");
-    let now = Instant::now();
-    graph_store
-        .backup_hawk_graph_tables()
-        .await
-        .map_err(|err| {
-            tracing::error!("Failed to copy table data: {}", err);
-            IndexationError::DatabaseCopyFailure(err.to_string())
-        })?;
-    tracing::info!(
-        "Graph table data snapshot ended - time taken is {:?}s",
-        now.elapsed().as_secs_f64()
-    );
-
-    Ok(())
-}
-
-/// Restores the HNSW graph and iris data from backup if `use_backup_as_source` is set.
-///
-/// This method is used when HNSW persistence is enabled and the graph/iris data may have been modified.
-/// It restores the HNSW schema and data to the last known consistent state by:
-///   1. Restoring graph tables from backup.
-///   2. Removing all iris data with serial IDs greater than the last indexed ID.
-///   3. Overriding iris data in the HNSW iris store for all modifications recorded in the modifications table,
-///      by copying the corresponding iris data from the main iris store.
-///
-/// # Arguments
-///
-/// * `last_indexed_id` - The last indexed iris serial ID to keep in the HNSW iris store.
-/// * `graph_store_arc` - Arc-wrapped HNSW graph store instance.
-/// * `hnsw_iris_store` - The HNSW iris store to restore.
-/// * `iris_store` - The main iris store to copy data from.
-#[allow(dead_code)]
-pub async fn exec_use_backup_as_source(
-    last_indexed_id: u32,
-    graph_store_arc: &Arc<GraphPg<Aby3Store<HawkOps>>>,
-    hnsw_iris_store: &IrisStore,
-    iris_store: &IrisStore,
-) -> Result<()> {
-    tracing::info!("Restoring graph tables from backup as user_backup_as_source is set");
-
-    // Step 1: Restore graph tables from backup.
-    let mut now = Instant::now();
-    graph_store_arc
-        .restore_hawk_graph_tables_from_backup()
-        .await?;
-    tracing::info!(
-        "Graph tables restored from backup :: time {:?}s",
-        now.elapsed().as_secs_f64()
-    );
-
-    // Step 2: Remove all iris data except that is larger than the last indexed id.
-    now = Instant::now();
-    hnsw_iris_store
-        .delete_irises_after_id(last_indexed_id as usize)
-        .await?;
-    tracing::info!(
-        "Removing all iris data except that larger than last indexed id: {}:: time {:?}s",
-        last_indexed_id,
-        now.elapsed().as_secs_f64()
-    );
-
-    // Step 3: Use modifications table created during the last Genesis run to override the iris data in the HNSW iris store.
-    // In the case that HNSW performed some modification that GPU did not, we would need to override the iris data
-    now = Instant::now();
-    let max_hnsw_serial_id = hnsw_iris_store.get_max_serial_id().await?;
-    let (hnsw_mods, _max_id) = hnsw_iris_store
-        .get_persisted_modifications_after_id(0, max_hnsw_serial_id as u32)
-        .await?;
-    if !hnsw_mods.is_empty() {
-        tracing::info!("Restoring {} iris modifications", hnsw_mods.len());
-        let mut tx = hnsw_iris_store.tx().await?;
-        for modification in &hnsw_mods {
-            if let Some(serial_id) = modification.serial_id {
-                tracing::info!(
-                    "Restoring iris modification: id={}, serial_id={:?}",
-                    modification.id,
-                    modification.serial_id
-                );
-
-                let iris = iris_store.get_iris_data_by_id(serial_id).await?;
-                let iris_ref = iris_mpc_store::StoredIrisRef {
-                    id: iris.serial_id() as i64,
-                    left_code: iris.left_code(),
-                    left_mask: iris.left_mask(),
-                    right_code: iris.right_code(),
-                    right_mask: iris.right_mask(),
-                };
-                hnsw_iris_store
-                    .update_iris_with_version_id(Some(&mut tx), iris.version_id(), &iris_ref)
-                    .await?;
-            }
-        }
-        tx.commit().await?;
-    }
-    tracing::info!(
-        "Restoring iris data from modifications table in HNSW iris store :: time {:?}s",
-        now.elapsed().as_secs_f64()
-    );
-
-    Ok(())
-}
-
 /// Build `HawkArgs` and the MPC network handle. `init_graph_from_stores`
 /// uses them to assemble a fully-loaded `HawkActor`.
 async fn build_hawk_networking(
@@ -1499,7 +1378,6 @@ async fn init_graph_from_stores(
     config: &Config,
     checkpoint_bucket: &str,
     iris_store: &IrisStore,
-    graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
     hawk_args: HawkArgs,
     hawk_networking: Box<dyn iris_mpc_cpu::network::mpc::NetworkHandle>,
     s3_client: &S3Client,
@@ -1555,12 +1433,8 @@ async fn init_graph_from_stores(
             );
             download_graph_checkpoint(s3_client, checkpoint_bucket, &state).await
         } else {
-            tracing::info!("No S3 checkpoint found, loading graph from PostgreSQL");
-            iris_mpc_cpu::execution::hawk_main::load_graphs_from_pg(
-                &graph_store,
-                graph_db_parallelism,
-            )
-            .await
+            tracing::info!("No S3 checkpoint found, defaulting to empty graph");
+            Ok([GraphMem::new(), GraphMem::new()])
         }
     };
 
@@ -1622,10 +1496,8 @@ fn validate_config(config: &Config) -> Result<()> {
 async fn validate_consistency_of_stores(
     config: &Config,
     iris_store: &IrisStore,
-    graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
     max_indexation_id: IrisSerialId,
     last_indexed_id: IrisSerialId,
-    checkpoint_available: bool,
 ) -> Result<()> {
     // Bail if last indexed id exceeds max indexation id
     if last_indexed_id > max_indexation_id {
@@ -1659,32 +1531,5 @@ async fn validate_consistency_of_stores(
         tracing::error!("{}", msg);
         bail!(msg);
     }
-
-    // if there is a checkpoint, skip graph store validation (already validated in exec_setup).
-    if checkpoint_available {
-        return Ok(());
-    }
-
-    // ensure the graph store is consistent with the last persisted_indexed_id
-    let mut tx = graph_store.tx().await.unwrap();
-    let last_indexed_id_in_graph_left = {
-        let mut graph_left = tx.with_graph(StoreId::Left);
-        graph_left.get_max_serial_id().await? as u32
-    };
-    let last_indexed_id_in_graph_right = {
-        let mut graph_right = tx.with_graph(StoreId::Right);
-        graph_right.get_max_serial_id().await? as u32
-    };
-    if last_indexed_id_in_graph_left != last_indexed_id
-        || last_indexed_id_in_graph_right != last_indexed_id
-    {
-        let msg = format!(
-            "Last indexed id in graph store does not match last indexed id: left={} :: right={} :: expected={}",
-            last_indexed_id_in_graph_left, last_indexed_id_in_graph_right, last_indexed_id
-        );
-        tracing::error!("{}", msg);
-        bail!(msg);
-    }
-
     Ok(())
 }
