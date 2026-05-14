@@ -13,6 +13,7 @@ use iris_mpc_common::helpers::smpc_response::{
     UniquenessResult,
 };
 
+use iris_mpc_common::helpers::sync::ModificationKey;
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
 use iris_mpc_common::iris_db::get_dummy_shares_for_deletion;
 use iris_mpc_common::job::ServerJobResult;
@@ -190,10 +191,16 @@ pub async fn process_job_result(
                 .wrap_err("failed to serialize reauth result")?;
 
             let modification_key = RequestSerialId(serial_id);
+            let (persisted, _graph_mutation) = reauth_modification_persistence(
+                success,
+                skip_persistence.get(i).copied().unwrap_or(false),
+                &modification_key,
+                &hawk_mutation,
+            );
             modifications
                 .get_mut(&modification_key)
                 .unwrap()
-                .mark_completed(success, &result_string, None);
+                .mark_completed(persisted, &result_string, None);
 
             Ok(result_string)
         })
@@ -543,4 +550,74 @@ pub async fn process_job_result(
     shutdown_handler.decrement_batches_pending_completion();
 
     Ok(())
+}
+
+fn reauth_modification_persistence(
+    success: bool,
+    skip_persistence: bool,
+    modification_key: &ModificationKey,
+    hawk_mutation: &HawkMutation,
+) -> (bool, Option<Vec<u8>>) {
+    let persisted = success && !skip_persistence;
+    let graph_mutation = if persisted {
+        hawk_mutation.get_serialized_mutation_by_key(modification_key)
+    } else {
+        None
+    };
+
+    (persisted, graph_mutation)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iris_mpc_cpu::execution::hawk_main::SingleHawkMutation;
+
+    #[test]
+    fn successful_reauth_with_skip_persistence_is_not_persisted() {
+        let modification_key = RequestSerialId(7);
+        let hawk_mutation = HawkMutation(vec![SingleHawkMutation {
+            plans: [None, None],
+            modification_key: Some(modification_key.clone()),
+            request_index: None,
+        }]);
+
+        let (persisted, graph_mutation) =
+            reauth_modification_persistence(true, true, &modification_key, &hawk_mutation);
+
+        assert!(!persisted);
+        assert!(graph_mutation.is_none());
+    }
+
+    #[test]
+    fn successful_reauth_without_skip_persistence_keeps_graph_mutation() {
+        let modification_key = RequestSerialId(7);
+        let hawk_mutation = HawkMutation(vec![SingleHawkMutation {
+            plans: [None, None],
+            modification_key: Some(modification_key.clone()),
+            request_index: None,
+        }]);
+
+        let (persisted, graph_mutation) =
+            reauth_modification_persistence(true, false, &modification_key, &hawk_mutation);
+
+        assert!(persisted);
+        assert!(graph_mutation.is_some());
+    }
+
+    #[test]
+    fn failed_reauth_is_not_persisted() {
+        let modification_key = RequestSerialId(7);
+        let hawk_mutation = HawkMutation(vec![SingleHawkMutation {
+            plans: [None, None],
+            modification_key: Some(modification_key.clone()),
+            request_index: None,
+        }]);
+
+        let (persisted, graph_mutation) =
+            reauth_modification_persistence(false, false, &modification_key, &hawk_mutation);
+
+        assert!(!persisted);
+        assert!(graph_mutation.is_none());
+    }
 }

@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "dev"
+      - "pop-3712-reauth-skip-persistence-alias"
     paths-ignore:
       - "deploy/**"
 
