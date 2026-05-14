@@ -1,5 +1,5 @@
 use crate::hnsw::{
-    graph::{mutation::EdgeDirection, GraphMutation, GroupedMutations, UpdateEntryPoint},
+    graph::{mutation::EdgeType, GraphMutation, GroupedMutations, UpdateEntryPoint},
     searcher::{ConnectPlanV, LayerMode},
     vector_store::VectorStoreMut,
     GraphMem, HnswSearcher, VectorStore,
@@ -104,10 +104,10 @@ pub async fn insert<V: VectorStoreMut>(
             });
             for (layer_idx, layer_links) in links.into_iter().enumerate() {
                 request_mutations.push(GraphMutation::AddEdges {
-                    id: inserted.clone(),
+                    base: inserted.clone(),
                     layer: layer_idx,
-                    to_add: layer_links,
-                    direction: EdgeDirection::Bidirectional,
+                    neighbors: layer_links,
+                    edge_type: EdgeType::All,
                 });
             }
             if let Some(rid) = replace_id {

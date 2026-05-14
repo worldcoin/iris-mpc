@@ -18,8 +18,9 @@ use crate::{
                 node_equiv::ensure_node_equivalence,
                 run_diff,
             },
+            mutation::EdgeType,
             neighborhood::Neighborhood,
-            GraphMutation,
+            GraphMutation, UpdateEntryPoint,
         },
         vector_store::{VectorStore, VectorStoreMut},
         SortedNeighborhood,
@@ -375,7 +376,7 @@ impl DbContext {
         let ep_mutation = GraphMutation::AddNode {
             id: vectors[0],
             height: 1,
-            update_ep: crate::hnsw::graph::mutation::UpdateEntryPoint::SetUnique { layer: 0 },
+            update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
         };
         left_graph.insert_apply(vec![ep_mutation]);
 
@@ -392,13 +393,13 @@ impl DbContext {
                 GraphMutation::AddNode {
                     id: vectors[i],
                     height: 1,
-                    update_ep: crate::hnsw::graph::mutation::UpdateEntryPoint::False,
+                    update_ep: UpdateEntryPoint::False,
                 },
                 GraphMutation::AddEdges {
-                    id: vectors[i],
+                    base: vectors[i],
                     layer: 0,
-                    to_add: neighbors,
-                    direction: crate::hnsw::graph::mutation::EdgeDirection::Outgoing,
+                    neighbors,
+                    edge_type: EdgeType::Base,
                 },
             ];
             left_graph.insert_apply(mutations);

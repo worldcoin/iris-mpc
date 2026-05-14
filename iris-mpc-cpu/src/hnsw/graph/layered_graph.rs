@@ -7,7 +7,7 @@ use crate::{
     execution::hawk_main::state_check::SetHash,
     hawkers::ideal_knn_engines::{read_knn_results_from_file, Engine, EngineChoice, KNNResult},
     hnsw::{
-        graph::{mutation::EdgeDirection, GraphMutation, UpdateEntryPoint},
+        graph::{mutation::EdgeType, GraphMutation, UpdateEntryPoint},
         searcher::LayerMode,
         vector_store::Ref,
         HnswSearcher,
@@ -225,112 +225,112 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
             match mutation {
                 GraphMutation::AddNode { .. } | GraphMutation::RemoveNode { .. } => {}
                 GraphMutation::AddEdges {
-                    id,
+                    base,
                     layer,
-                    to_add,
-                    direction,
+                    neighbors: to_add,
+                    edge_type,
                 } => {
                     if self.layers.len() < layer + 1 {
                         self.layers.resize(layer + 1, Layer::new());
                     }
                     let layer_mut = &mut self.layers[layer];
-                    match direction {
-                        EdgeDirection::Outgoing => {
-                            if layer_mut.get_links(&id).is_none() {
+                    match edge_type {
+                        EdgeType::Base => {
+                            if layer_mut.get_links(&base).is_none() {
                                 warn!(
-                                    "AddEdges(Outgoing): id={:?} missing at layer {layer}; skipping",
-                                    id
+                                    "AddEdges(Base): base={:?} missing at layer {layer}; skipping",
+                                    base
                                 );
                             } else {
-                                layer_mut.add_outgoing_edges(&id, to_add);
+                                layer_mut.add_outgoing_edges(&base, to_add);
                             }
                         }
-                        EdgeDirection::Incoming => {
+                        EdgeType::Neighbors => {
                             for target in &to_add {
                                 if layer_mut.get_links(target).is_none() {
                                     warn!(
-                                        "AddEdges(Incoming): target={:?} missing at layer {layer} (id={:?}); add_neighbor will no-op for this target",
-                                        target, id
+                                        "AddEdges(Neighbors): target={:?} missing at layer {layer} (base={:?}); add_neighbor will no-op for this target",
+                                        target, base
                                     );
                                 }
                             }
-                            layer_mut.add_incoming_edges(&id, to_add);
+                            layer_mut.add_incoming_edges(&base, to_add);
                         }
-                        EdgeDirection::Bidirectional => {
-                            if layer_mut.get_links(&id).is_none() {
+                        EdgeType::All => {
+                            if layer_mut.get_links(&base).is_none() {
                                 warn!(
-                                    "AddEdges(Bidirectional): id={:?} missing at layer {layer}; skipping outgoing half",
-                                    id
+                                    "AddEdges(All): base={:?} missing at layer {layer}; skipping outgoing half",
+                                    base
                                 );
                             } else {
-                                layer_mut.add_outgoing_edges(&id, to_add.clone());
+                                layer_mut.add_outgoing_edges(&base, to_add.clone());
                             }
                             for target in &to_add {
                                 if layer_mut.get_links(target).is_none() {
                                     warn!(
-                                        "AddEdges(Bidirectional): target={:?} missing at layer {layer} (id={:?}); add_neighbor will no-op for this target",
-                                        target, id
+                                        "AddEdges(All): target={:?} missing at layer {layer} (base={:?}); add_neighbor will no-op for this target",
+                                        target, base
                                     );
                                 }
                             }
-                            layer_mut.add_incoming_edges(&id, to_add);
+                            layer_mut.add_incoming_edges(&base, to_add);
                         }
                     }
                 }
                 GraphMutation::RemoveEdges {
-                    id,
+                    base,
                     layer,
-                    to_remove,
-                    direction,
+                    neighbors: to_remove,
+                    edge_type,
                 } => {
                     if self.layers.len() < layer + 1 {
                         warn!(
-                            "RemoveEdges: layer {layer} does not exist (id={:?}); skipping",
-                            id
+                            "RemoveEdges: layer {layer} does not exist (base={:?}); skipping",
+                            base
                         );
                         continue;
                     }
                     let layer_mut = &mut self.layers[layer];
-                    match direction {
-                        EdgeDirection::Outgoing => {
-                            if layer_mut.get_links(&id).is_none() {
+                    match edge_type {
+                        EdgeType::Base => {
+                            if layer_mut.get_links(&base).is_none() {
                                 warn!(
-                                    "RemoveEdges(Outgoing): id={:?} missing at layer {layer}; skipping",
-                                    id
+                                    "RemoveEdges(Base): base={:?} missing at layer {layer}; skipping",
+                                    base
                                 );
                             } else {
-                                layer_mut.remove_outgoing_edges(&id, to_remove);
+                                layer_mut.remove_outgoing_edges(&base, to_remove);
                             }
                         }
-                        EdgeDirection::Incoming => {
+                        EdgeType::Neighbors => {
                             for target in &to_remove {
                                 if layer_mut.get_links(target).is_none() {
                                     warn!(
-                                        "RemoveEdges(Incoming): target={:?} missing at layer {layer} (id={:?}); remove_incoming_edges will no-op for this target",
-                                        target, id
+                                        "RemoveEdges(Neighbors): target={:?} missing at layer {layer} (base={:?}); remove_incoming_edges will no-op for this target",
+                                        target, base
                                     );
                                 }
                             }
-                            layer_mut.remove_incoming_edges(&id, to_remove);
+                            layer_mut.remove_incoming_edges(&base, to_remove);
                         }
-                        EdgeDirection::Bidirectional => {
-                            if layer_mut.get_links(&id).is_none() {
+                        EdgeType::All => {
+                            if layer_mut.get_links(&base).is_none() {
                                 warn!(
-                                    "RemoveEdges(Bidirectional): id={:?} missing at layer {layer}; skipping outgoing half",
-                                    id
+                                    "RemoveEdges(All): base={:?} missing at layer {layer}; skipping outgoing half",
+                                    base
                                 );
                             } else {
-                                layer_mut.remove_outgoing_edges(&id, to_remove.clone());
+                                layer_mut.remove_outgoing_edges(&base, to_remove.clone());
                             }
                             for target in &to_remove {
                                 if layer_mut.get_links(target).is_none() {
                                     warn!(
-                                        "RemoveEdges(Bidirectional): target={:?} missing at layer {layer} (id={:?}); remove_incoming_edges will no-op for this target",
-                                        target, id
+                                        "RemoveEdges(All): target={:?} missing at layer {layer} (base={:?}); remove_incoming_edges will no-op for this target",
+                                        target, base
                                     );
                                 }
                             }
-                            layer_mut.remove_incoming_edges(&id, to_remove);
+                            layer_mut.remove_incoming_edges(&base, to_remove);
                         }
                     }
                 }
@@ -666,9 +666,7 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
     /// Remove each entry in `to_remove` from `id`'s own neighbor list. No-op
     /// if `id` is not present in this layer (callers that need to log the
     /// missing case should check `get_links(id)` first). The removal is
-    /// unidirectional: the targets' own link lists are not modified. This is
-    /// the compaction contract — callers (and any WAL replay) must not infer
-    /// bidirectional pruning from this operation.
+    /// unidirectional: the targets' own link lists are not modified.
     pub fn remove_outgoing_edges(&mut self, id: &V, to_remove: Vec<V>) {
         let Some(node_links) = self.links.get_mut(id) else {
             return;
@@ -993,7 +991,7 @@ mod tests {
         Ok(())
     }
 
-    use crate::hnsw::graph::mutation::{EdgeDirection, GraphMutation, UpdateEntryPoint};
+    use crate::hnsw::graph::mutation::{EdgeType, GraphMutation, UpdateEntryPoint};
 
     #[test]
     fn add_edges_outgoing_writes_only_to_id_list() {
@@ -1020,10 +1018,10 @@ mod tests {
             },
         ]);
         graph.insert_apply(vec![GraphMutation::AddEdges {
-            id: a,
+            base: a,
             layer: 0,
-            to_add: vec![b, c],
-            direction: EdgeDirection::Outgoing,
+            neighbors: vec![b, c],
+            edge_type: EdgeType::Base,
         }]);
         assert_eq!(graph.layers[0].get_links(&a).unwrap(), &[b, c]);
         assert_eq!(
@@ -1060,10 +1058,10 @@ mod tests {
             },
         ]);
         graph.insert_apply(vec![GraphMutation::AddEdges {
-            id: a,
+            base: a,
             layer: 0,
-            to_add: vec![b, c],
-            direction: EdgeDirection::Incoming,
+            neighbors: vec![b, c],
+            edge_type: EdgeType::Neighbors,
         }]);
         assert_eq!(
             graph.layers[0].get_links(&a).unwrap(),
@@ -1097,10 +1095,10 @@ mod tests {
             },
         ]);
         graph.insert_apply(vec![GraphMutation::AddEdges {
-            id: a,
+            base: a,
             layer: 0,
-            to_add: vec![b, c],
-            direction: EdgeDirection::Bidirectional,
+            neighbors: vec![b, c],
+            edge_type: EdgeType::All,
         }]);
         assert_eq!(graph.layers[0].get_links(&a).unwrap(), &[b, c]);
         assert_eq!(graph.layers[0].get_links(&b).unwrap(), &[a]);
@@ -1120,10 +1118,10 @@ mod tests {
                 update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
             },
             GraphMutation::AddEdges {
-                id: a,
+                base: a,
                 layer: 0,
-                to_add: vec![b, c],
-                direction: EdgeDirection::Outgoing,
+                neighbors: vec![b, c],
+                edge_type: EdgeType::Base,
             },
             GraphMutation::AddNode {
                 id: b,
@@ -1131,10 +1129,10 @@ mod tests {
                 update_ep: UpdateEntryPoint::False,
             },
             GraphMutation::AddEdges {
-                id: b,
+                base: b,
                 layer: 0,
-                to_add: vec![a],
-                direction: EdgeDirection::Outgoing,
+                neighbors: vec![a],
+                edge_type: EdgeType::Base,
             },
             GraphMutation::AddNode {
                 id: c,
@@ -1142,17 +1140,17 @@ mod tests {
                 update_ep: UpdateEntryPoint::False,
             },
             GraphMutation::AddEdges {
-                id: c,
+                base: c,
                 layer: 0,
-                to_add: vec![a],
-                direction: EdgeDirection::Outgoing,
+                neighbors: vec![a],
+                edge_type: EdgeType::Base,
             },
         ]);
         graph.insert_apply(vec![GraphMutation::RemoveEdges {
-            id: a,
+            base: a,
             layer: 0,
-            to_remove: vec![b],
-            direction: EdgeDirection::Outgoing,
+            neighbors: vec![b],
+            edge_type: EdgeType::Base,
         }]);
         assert_eq!(graph.layers[0].get_links(&a).unwrap(), &[c]);
         // Bidirectional cleanup is not implied — b's list still contains a.
@@ -1169,10 +1167,10 @@ mod tests {
         graph.insert_apply(vec![
             // Listed first: an edge op that references a node not yet created.
             GraphMutation::AddEdges {
-                id: a,
+                base: a,
                 layer: 0,
-                to_add: vec![b],
-                direction: EdgeDirection::Outgoing,
+                neighbors: vec![b],
+                edge_type: EdgeType::Base,
             },
             // Listed second: the node creation.
             GraphMutation::AddNode {

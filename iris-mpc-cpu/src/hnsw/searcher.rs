@@ -10,7 +10,7 @@ use super::{
 };
 use crate::hnsw::{
     graph::{
-        mutation::{EdgeDirection, GroupedMutations},
+        mutation::{EdgeType, GroupedMutations},
         neighborhood::Neighborhood,
         GraphMutation, UpdateEntryPoint,
     },
@@ -1557,10 +1557,10 @@ impl HnswSearcher {
         }];
         for (layer_idx, layer_links) in layers.into_iter() {
             group_mutations.push(GraphMutation::AddEdges {
-                id: inserted_vector.clone(),
+                base: inserted_vector.clone(),
                 layer: layer_idx,
-                to_add: layer_links,
-                direction: EdgeDirection::Bidirectional,
+                neighbors: layer_links,
+                edge_type: EdgeType::All,
             });
         }
         let mutations = vec![Some(GroupedMutations(group_mutations))];
@@ -1618,21 +1618,18 @@ impl HnswSearcher {
             };
 
             // Build the link vectors from this group's AddEdges entries that target
-            // this id with Outgoing or Bidirectional direction. Sort each layer's list.
+            // this id with Base or All edge type. Sort each layer's list.
             let mut links: Vec<Vec<V::VectorRef>> = vec![Vec::new(); height];
             for mutation in group.0.iter_mut() {
                 if let GraphMutation::AddEdges {
-                    id: edge_id,
+                    base: edge_id,
                     layer,
-                    to_add,
-                    direction,
+                    neighbors: to_add,
+                    edge_type,
                 } = mutation
                 {
-                    let touches_id_outgoing = *edge_id == id
-                        && matches!(
-                            direction,
-                            EdgeDirection::Outgoing | EdgeDirection::Bidirectional
-                        );
+                    let touches_id_outgoing =
+                        *edge_id == id && matches!(edge_type, EdgeType::Base | EdgeType::All);
                     if touches_id_outgoing && *layer < height {
                         to_add.sort();
                         links[*layer] = to_add.clone();
@@ -1764,10 +1761,10 @@ impl HnswSearcher {
                         .unwrap_or(last_some_idx);
                     if let Some(Some(group)) = mutations.get_mut(group_idx) {
                         group.0.push(GraphMutation::RemoveEdges {
-                            id: id.clone(),
+                            base: id.clone(),
                             layer: *layer,
-                            to_remove,
-                            direction: EdgeDirection::Outgoing,
+                            neighbors: to_remove,
+                            edge_type: EdgeType::Base,
                         });
                     }
                 }
@@ -1785,10 +1782,10 @@ impl HnswSearcher {
                     .unwrap_or(last_some_idx);
                 if let Some(Some(group)) = mutations.get_mut(group_idx) {
                     group.0.push(GraphMutation::RemoveEdges {
-                        id,
+                        base: id,
                         layer,
-                        to_remove,
-                        direction: EdgeDirection::Outgoing,
+                        neighbors: to_remove,
+                        edge_type: EdgeType::Base,
                     });
                 }
             }
@@ -2084,10 +2081,10 @@ mod tests {
                     update_ep,
                 },
                 GraphMutation::AddEdges {
-                    id: vector_id,
+                    base: vector_id,
                     layer: 0,
-                    to_add: nbs,
-                    direction: EdgeDirection::Outgoing,
+                    neighbors: nbs,
+                    edge_type: EdgeType::Base,
                 },
             ];
 
@@ -2104,10 +2101,10 @@ mod tests {
                 update_ep: UpdateEntryPoint::False,
             },
             GraphMutation::AddEdges {
-                id: next_id,
+                base: next_id,
                 layer: 0,
-                to_add: ids[0..5].to_vec(),
-                direction: EdgeDirection::Outgoing,
+                neighbors: ids[0..5].to_vec(),
+                edge_type: EdgeType::Base,
             },
         ]))];
 
@@ -2120,7 +2117,7 @@ mod tests {
         assert_eq!(grouped_plans.len(), 1);
         let group = grouped_plans[0].as_ref().unwrap();
 
-        // 1 AddNode + 1 AddEdges(Outgoing) + 6 RemoveEdges (compaction for next_id
+        // 1 AddNode + 1 AddEdges(Base) + 6 RemoveEdges (compaction for next_id
         // itself and each of the 5 pre-existing nodes whose neighborhood overflowed).
         assert_eq!(group.0.len(), 8);
 
@@ -2139,13 +2136,13 @@ mod tests {
             .iter()
             .filter_map(|m| {
                 if let GraphMutation::RemoveEdges {
-                    id,
+                    base,
                     layer,
-                    to_remove,
-                    direction: _,
+                    neighbors,
+                    edge_type: _,
                 } = m
                 {
-                    Some((id, layer, to_remove))
+                    Some((base, layer, neighbors))
                 } else {
                     None
                 }

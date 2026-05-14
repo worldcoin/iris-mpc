@@ -24,16 +24,16 @@ pub enum GraphMutation<Vector: Ord> {
         id: Vector,
     },
     AddEdges {
-        id: Vector,
+        base: Vector,
+        neighbors: Vec<Vector>,
         layer: usize,
-        to_add: Vec<Vector>,
-        direction: EdgeDirection,
+        edge_type: EdgeType,
     },
     RemoveEdges {
-        id: Vector,
+        base: Vector,
+        neighbors: Vec<Vector>,
         layer: usize,
-        to_remove: Vec<Vector>,
-        direction: EdgeDirection,
+        edge_type: EdgeType,
     },
 }
 
@@ -52,42 +52,49 @@ impl<V: std::fmt::Debug + Ord> std::fmt::Debug for GraphMutation<V> {
                 .field("update_ep", update_ep)
                 .finish(),
             Self::AddEdges {
-                id,
+                base,
                 layer,
-                direction,
+                edge_type,
                 ..
             } => f
                 .debug_struct("AddEdges")
-                .field("id", id)
+                .field("base", base)
                 .field("layer", layer)
-                .field("direction", direction)
+                .field("edge_type", edge_type)
                 .finish(),
             Self::RemoveEdges {
-                id,
+                base,
                 layer,
-                direction,
+                edge_type,
                 ..
             } => f
                 .debug_struct("RemoveEdges")
-                .field("id", id)
+                .field("base", base)
                 .field("layer", layer)
-                .field("direction", direction)
+                .field("edge_type", edge_type)
                 .finish(),
         }
     }
 }
 
-/// Direction in which edge mutations are applied between `id` and the
-/// vectors listed in `to_add` / `to_remove`.
+/// Type of edges between `base` and the nodes listed in `neighbors` affected by
+/// edge mutations.
 ///
-/// - `Outgoing`: writes to `id`'s own neighbor list (forward edges from `id`).
-/// - `Incoming`: writes `id` into each target's neighbor list (back-edges into `id`).
-/// - `Bidirectional`: both of the above, applied together.
+/// - `Base`: affects nodes listed in `neighbors` found in `base`'s neighbor
+///   list (forward edges from `base`).
+/// - `Neighbors`: affects instances of `base` in each neighbor node's neighbor
+///   list (back-edges into `base`).
+/// - `All`: affects both of the above types of edges (symmetric edges).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum EdgeDirection {
-    Outgoing,
-    Incoming,
-    Bidirectional,
+pub enum EdgeType {
+    /// Affects forward edges from the base node
+    Base,
+
+    /// Affects back edges into the base node
+    Neighbors,
+
+    /// Affects both forward edges from and back edges into the base node
+    All,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

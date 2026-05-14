@@ -2614,7 +2614,7 @@ mod tests {
 #[cfg(test)]
 mod hawk_mutation_tests {
     use super::*;
-    use crate::hnsw::graph::{mutation::EdgeDirection, UpdateEntryPoint};
+    use crate::hnsw::graph::{mutation::EdgeType, UpdateEntryPoint};
     use iris_mpc_common::helpers::sync::ModificationKey;
 
     fn create_test_connect_plan(vector_id: VectorId) -> ConnectPlan {
@@ -2625,10 +2625,10 @@ mod hawk_mutation_tests {
                 update_ep: UpdateEntryPoint::False,
             },
             GraphMutation::AddEdges {
-                id: vector_id,
+                base: vector_id,
                 layer: 0,
-                to_add: vec![vector_id],
-                direction: EdgeDirection::Outgoing,
+                neighbors: vec![vector_id],
+                edge_type: EdgeType::Base,
             },
         ])
     }
