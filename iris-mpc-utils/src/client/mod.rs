@@ -284,6 +284,7 @@ impl ServiceClient {
         Ok(())
     }
 
+    #[cfg(not(feature = "explicit-sns-batching"))]
     async fn publish_requests(&mut self, batch_requests: &[typeset::Request]) -> Vec<usize> {
         use crate::aws::types::SnsMessageInfo;
 
@@ -302,6 +303,56 @@ impl ServiceClient {
         }
 
         idxs
+    }
+
+    #[cfg(feature = "explicit-sns-batching")]
+    async fn publish_requests(&mut self, batch_requests: &[typeset::Request]) -> Vec<usize> {
+        use crate::aws::types::SnsMessageInfo;
+        use iris_mpc_common::helpers::smpc_request::{CompactBatchRequest, CompressedBatchPayload};
+
+        // Convert requests to RequestPayload items
+        let items: Vec<smpc_request::RequestPayload> = batch_requests
+            .iter()
+            .map(|request| {
+                let payload = typeset::RequestPayload::from(request);
+                payload.to_smpc_request()
+            })
+            .collect();
+
+        let compact_batch = CompactBatchRequest { items };
+
+        // Compress the batch
+        let compressed_data = match compact_batch.compress() {
+            Ok(data) => data,
+            Err(e) => {
+                tracing::error!("Failed to compress batch: {}", e);
+                self.state.error_bits.set_sns_publish_error();
+                return Vec::new();
+            }
+        };
+
+        let payload = CompressedBatchPayload {
+            data: compressed_data,
+        };
+
+        // Publish the compressed batch as a single SNS message
+        let batch_sns_info =
+            SnsMessageInfo::new("enrollment", smpc_request::BATCH_MESSAGE_TYPE, &payload);
+
+        let res = self.aws_client.sns_publish_json(batch_sns_info).await;
+        let published_idxs: Vec<usize> = if res.is_ok() {
+            (0..batch_requests.len()).collect()
+        } else {
+            self.state.error_bits.set_sns_publish_error();
+            Vec::new()
+        };
+
+        for &idx in &published_idxs {
+            let request = &batch_requests[idx];
+            tracing::info!("publishing {}", request.log_tag());
+        }
+
+        published_idxs
     }
 }
 
