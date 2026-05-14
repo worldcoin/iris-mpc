@@ -68,6 +68,7 @@ pub async fn plaintext_parallel_batch_insert<D: DistanceOps>(
                     query,
                     links: links_unstructured,
                     update_ep,
+                    replace_id: None,
                 };
                 Ok((vector_id, insert_plan))
             });

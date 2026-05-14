@@ -263,6 +263,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                         query,
                         links: links_unstructured,
                         update_ep,
+                        replace_id: None,
                     };
 
                     insert::insert(
@@ -367,6 +368,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                     query,
                     links: links_unstructured,
                     update_ep,
+                    replace_id: None,
                 };
 
                 results.push(Some(insert_plan));

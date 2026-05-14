@@ -1,5 +1,6 @@
 use crate::hnsw::{
-    searcher::{ConnectPlanV, LayerMode, UpdateEntryPoint},
+    graph::{mutation::EdgeType, GraphMutation, GroupedMutations, UpdateEntryPoint},
+    searcher::{ConnectPlanV, LayerMode},
     vector_store::VectorStoreMut,
     GraphMem, HnswSearcher, VectorStore,
 };
@@ -29,6 +30,7 @@ pub struct InsertPlanV<V: VectorStore> {
     pub query: V::QueryRef,
     pub links: Vec<Vec<V::VectorRef>>,
     pub update_ep: UpdateEntryPoint,
+    pub replace_id: Option<V::VectorRef>,
 }
 
 // Manual implementation of Clone for InsertPlanV, since derive(Clone) does not
@@ -39,6 +41,7 @@ impl<V: VectorStore> Clone for InsertPlanV<V> {
             query: self.query.clone(),
             links: self.links.clone(),
             update_ep: self.update_ep.clone(),
+            replace_id: self.replace_id.clone(),
         }
     }
 }
@@ -62,21 +65,22 @@ pub async fn insert<V: VectorStoreMut>(
     let insert_plans = join_plans(plans, &searcher.layer_mode);
     validate_ep_updates(&insert_plans, &searcher.layer_mode)?;
 
-    let mut connect_plans = vec![None; insert_plans.len()];
     let mut inserted_ids = vec![];
     let m = searcher.params.get_M(0);
 
-    let mut update_idxs = vec![];
-    let mut updates: Vec<(_, _, _)> = vec![];
+    // Build one Option<GroupedMutations> per batch slot.  None slots pass through
+    // insert_prepare_batch unchanged; Some slots carry per-request mutations
+    // (optional RemoveNode + InsertNode).
+    let mut mutations: Vec<Option<GroupedMutations<V::VectorRef>>> = vec![None; insert_plans.len()];
+
     for (idx, (plan, update_id)) in izip!(insert_plans, ids).enumerate() {
         if let Some(InsertPlanV {
             query,
             mut links,
             update_ep,
+            replace_id,
         }) = plan
         {
-            update_idxs.push(idx);
-
             // Extend links in bottom layer with items from batch, only when the
             // bottom layer is not large enough to build full neighborhoods,
             // i.e. when the graph does not yet have M elements.
@@ -87,25 +91,49 @@ pub async fn insert<V: VectorStoreMut>(
             }
 
             // Insert vector in store, getting new persistent vector id if none specified.
-            let inserted = {
-                match update_id {
-                    None => store.insert(&query).await,
-                    Some(id) => store.insert_at(id, &query).await?,
-                }
+            let inserted = match update_id {
+                None => store.insert(&query).await,
+                Some(id) => store.insert_at(id, &query).await?,
             };
 
-            updates.push((inserted.clone(), links, update_ep));
+            let mut request_mutations: Vec<GraphMutation<V::VectorRef>> = vec![];
+            request_mutations.push(GraphMutation::AddNode {
+                id: inserted.clone(),
+                height: links.len(),
+                update_ep,
+            });
+            for (layer_idx, layer_links) in links.into_iter().enumerate() {
+                request_mutations.push(GraphMutation::AddEdges {
+                    base: inserted.clone(),
+                    layer: layer_idx,
+                    neighbors: layer_links,
+                    edge_type: EdgeType::All,
+                });
+            }
+            if let Some(rid) = replace_id {
+                request_mutations.push(GraphMutation::RemoveNode { id: rid.clone() });
+            }
+
+            mutations[idx] = Some(GroupedMutations(request_mutations));
             inserted_ids.push(inserted);
         }
     }
 
-    let plans = searcher.insert_prepare_batch(store, graph, updates).await?;
-    for (cp_idx, plan) in izip!(update_idxs, plans) {
-        graph.insert_apply(plan.clone()).await;
-        connect_plans[cp_idx].replace(plan);
-    }
+    let grouped_mutations = searcher
+        .insert_prepare_batch(store, graph, mutations)
+        .await?;
 
-    Ok(connect_plans)
+    // Flatten all mutations for in-memory graph application.
+    let all_mutations: Vec<GraphMutation<V::VectorRef>> = grouped_mutations
+        .iter()
+        .filter_map(|opt| opt.as_ref())
+        .flat_map(|group| group.0.iter().cloned())
+        .collect();
+    graph.insert_apply(all_mutations);
+
+    // grouped_mutations is shaped as Vec<Option<ConnectPlanV<V>>>, one entry per
+    // batch slot — return it directly as the connect plans.
+    Ok(grouped_mutations)
 }
 
 /// Combine insert plans from parallel searches, repairing any conflict.
@@ -234,6 +262,7 @@ mod tests {
             query: Arc::new(IrisCode::default()),
             links: vec![Vec::new(); ins_layer],
             update_ep: ep_update,
+            replace_id: None,
         }
     }
 

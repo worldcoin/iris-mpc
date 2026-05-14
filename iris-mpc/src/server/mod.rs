@@ -5,12 +5,11 @@ use aws_sdk_s3::Client;
 use aws_sdk_sns::types::MessageAttributeValue;
 use axum::routing::get;
 use axum::Router;
-use iris_mpc_cpu::graph_checkpoint::download_graph_checkpoint;
-use iris_mpc_cpu::graph_checkpoint::get_common_checkpoint;
-use iris_mpc_cpu::graph_checkpoint::get_most_recent_checkpoints;
-use iris_mpc_cpu::graph_checkpoint::s3_key_exists;
-use iris_mpc_cpu::graph_checkpoint::GraphCheckpointState;
-use iris_mpc_cpu::graph_checkpoint::GRAPH_CHECKPOINT_ROUTE;
+use iris_mpc_cpu::graph_checkpoint::{
+    download_graph_checkpoint, get_common_checkpoint, get_most_recent_checkpoints, s3_key_exists,
+    GraphCheckpointState, GRAPH_CHECKPOINT_ROUTE,
+};
+use iris_mpc_cpu::hnsw::GraphMem;
 
 use crate::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,
@@ -165,7 +164,6 @@ pub async fn server_main(config: Config) -> Result<()> {
         sync_modifications(
             &config,
             &iris_store,
-            Some(&graph_store),
             &aws_clients,
             &shares_encryption_key_pair,
             sync_result.clone(),
@@ -213,7 +211,6 @@ pub async fn server_main(config: Config) -> Result<()> {
         &aws_clients.checkpoint_s3_client,
         &config.graph_checkpoint_bucket_name,
         &iris_store,
-        &graph_store,
         graph_checkpoint,
         &shutdown_handler,
         &mut hawk_actor,
@@ -544,7 +541,6 @@ async fn load_database(
     s3_client: &Client,
     checkpoint_bucket: &str,
     iris_store: &Store,
-    graph_store: &GraphPg<Aby3Store<HawkOps>>,
     checkpoint: Option<GraphCheckpointState>,
     shutdown_handler: &Arc<ShutdownHandler>,
     hawk_actor: &mut HawkActor,
@@ -592,22 +588,20 @@ async fn load_database(
 
     // Try to load graph from S3 checkpoint first, then fall back to
     // Postgres graph representation for temporary legacy compatibility.
-    // TODO simplify this logic once graph DB tables are removed.
+    // TODO: apply GraphMutations to the checkpoint
     let graph_load_future = async move {
-        if let Some(state) = checkpoint {
+        let both_eyes = if let Some(state) = checkpoint {
             tracing::info!(
                 "Loading graph from common S3 checkpoint, hash: {}",
                 state.blake3_hash
             );
-            let both_eyes = download_graph_checkpoint(s3_client, checkpoint_bucket, &state).await?;
-            graph_loader.load_graphs_from_checkpoint(both_eyes);
-            Ok(())
+            download_graph_checkpoint(s3_client, checkpoint_bucket, &state).await?
         } else {
-            tracing::info!("No S3 checkpoint found, loading from PostgreSQL");
-            graph_loader
-                .load_graph_store(graph_store, parallelism)
-                .await
-        }
+            tracing::info!("No S3 checkpoint found, defaulting to empty graph");
+            [GraphMem::new(), GraphMem::new()]
+        };
+        graph_loader.load_graphs_from_checkpoint(both_eyes);
+        Ok::<(), eyre::Report>(())
     };
 
     let (iris_result, graph_result) = tokio::join!(iris_load_future, graph_load_future);
