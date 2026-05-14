@@ -27,7 +27,6 @@ use ampc_server_utils::{
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::config::{CommonConfig, Config};
-use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::sha256::sha256_bytes;
 use iris_mpc_common::helpers::smpc_request::{
@@ -40,12 +39,15 @@ use iris_mpc_common::helpers::sqs_s3_helper::upload_file_to_s3;
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::job::JobSubmissionHandle;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_cpu::execution::hawk_main::worker_pool_initializer::{
+    DbLoadParams, LocalWorkerPoolInitializer, WorkerPoolInitializer,
+};
 use iris_mpc_cpu::execution::hawk_main::{
-    GraphStore, HawkActor, HawkArgs, HawkHandle, HawkOps, ServerJobResult,
+    build_hawk_network_handle, GraphStore, HawkActor, HawkArgs, HawkHandle, HawkOps,
+    ServerJobResult, HAWK_DISTANCE_MODE,
 };
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
-use iris_mpc_store::loader::load_iris_db;
 use iris_mpc_store::Store;
 use pprof::protos::Message;
 use pprof::ProfilerGuardBuilder;
@@ -192,7 +194,15 @@ pub async fn server_main(config: Config) -> Result<()> {
         return Ok(());
     }
 
-    let mut hawk_actor = init_hawk_actor(&config, &shutdown_handler).await?;
+    let mut hawk_actor = init_hawk_actor(
+        &config,
+        &aws_clients.checkpoint_s3_client,
+        &config.graph_checkpoint_bucket_name,
+        &iris_store,
+        graph_checkpoint,
+        &shutdown_handler,
+    )
+    .await?;
 
     if let Some(url) = config.get_anon_stats_db_url() {
         let schema = config.get_anon_stats_db_schema();
@@ -205,17 +215,6 @@ pub async fn server_main(config: Config) -> Result<()> {
                 "Anon stats persistence enabled but no anon stats database configured; skipping DB writes"
             );
     }
-
-    load_database(
-        &config,
-        &aws_clients.checkpoint_s3_client,
-        &config.graph_checkpoint_bucket_name,
-        &iris_store,
-        graph_checkpoint,
-        &shutdown_handler,
-        &mut hawk_actor,
-    )
-    .await?;
 
     background_tasks.check_tasks();
 
@@ -478,12 +477,8 @@ async fn sync_sqs_queues(
     Ok(())
 }
 
-/// Initialize main Hawk actor process for handling query batches using HNSW
-/// approximate k-nearest neighbors graph search.
-async fn init_hawk_actor(
-    config: &Config,
-    shutdown_handler: &Arc<ShutdownHandler>,
-) -> Result<HawkActor> {
+/// Build `HawkArgs` from server config.
+fn build_hawk_args(config: &Config) -> Result<(HawkArgs, Vec<String>, Vec<String>)> {
     let server_coord_config = config.server_coordination.clone().unwrap();
 
     let node_inbound_addresses: Vec<String> = server_coord_config
@@ -520,71 +515,74 @@ async fn init_hawk_actor(
         numa: config.hawk_numa,
     };
 
-    tracing::info!(
-       "Initializing HawkActor with args: party_index: {}, inbound addresses: {:?}, outbound addresses: {:?}",
-        hawk_args.party_index,
-        node_inbound_addresses,
-        node_outbound_addresses
-    );
-
-    HawkActor::from_cli(
-        &hawk_args,
-        shutdown_handler.get_network_cancellation_token(),
-    )
-    .await
+    Ok((hawk_args, node_inbound_addresses, node_outbound_addresses))
 }
 
-/// Loads iris code shares & HNSW graph from Postgres and/or S3.
+/// Build the iris-loading initializer per config, run the iris and
+/// graph loads in parallel (graph from S3 checkpoint when present,
+/// else from PG), then assemble a fully-loaded `HawkActor`.
 #[allow(clippy::too_many_arguments)]
-async fn load_database(
+async fn init_hawk_actor(
     config: &Config,
     s3_client: &Client,
     checkpoint_bucket: &str,
     iris_store: &Store,
     checkpoint: Option<GraphCheckpointState>,
     shutdown_handler: &Arc<ShutdownHandler>,
-    hawk_actor: &mut HawkActor,
-) -> Result<()> {
-    tracing::info!("⚓️ ANCHOR: Load the database");
-    let (mut iris_loader, graph_loader) = hawk_actor.as_iris_loader().await;
+) -> Result<HawkActor> {
+    let (hawk_args, inbound, outbound) = build_hawk_args(config)?;
 
-    // TODO: not needed?
+    tracing::info!(
+        "Initializing HawkActor with args: party_index: {}, inbound addresses: {:?}, outbound addresses: {:?}",
+        hawk_args.party_index,
+        inbound,
+        outbound,
+    );
+    tracing::info!("⚓️ ANCHOR: Load the database");
+
     if config.fake_db_size > 0 {
-        iris_loader.fake_db(config.fake_db_size);
-        iris_loader.wait_completion().await?;
-        return Ok(());
+        bail!(
+            "fake_db_size is no longer supported in Hawk main; \
+             set SMPC__FAKE_DB_SIZE=0"
+        );
     }
 
     let parallelism = config
         .cpu_database
         .as_ref()
-        .ok_or(eyre!("Missing database config"))?
+        .ok_or_else(|| eyre!("Missing database config"))?
         .load_parallelism;
-
+    let store_len = iris_store.count_irises().await?;
     tracing::info!(
         "Initialize iris db: Loading from DB (parallelism: {})",
-        parallelism
+        parallelism,
     );
-    let download_shutdown_handler = Arc::clone(shutdown_handler);
-
-    let store_len = iris_store.count_irises().await?;
+    let initializer: Box<dyn WorkerPoolInitializer> =
+        Box::new(LocalWorkerPoolInitializer::new_load_from_db(
+            hawk_args.party_index,
+            HAWK_DISTANCE_MODE,
+            hawk_args.numa,
+            DbLoadParams {
+                store: iris_store.clone(),
+                config: Arc::new(config.clone()),
+                max_serial_id: store_len,
+                parallelism,
+                s3_max_serial_id: None,
+                shutdown_handler: Arc::clone(shutdown_handler),
+            },
+        ));
 
     let now = Instant::now();
+    let ct = shutdown_handler.get_network_cancellation_token();
 
-    let iris_load_future = async move {
-        load_iris_db(
-            &mut iris_loader,
-            iris_store,
-            store_len,
-            parallelism,
-            None,
-            config,
-            download_shutdown_handler,
-        )
-        .await?;
-        iris_loader.wait_completion().await?;
-        eyre::Result::<()>::Ok(())
-    };
+    // Network handle built up-front; iris and graph load in parallel.
+    let networking = build_hawk_network_handle(&hawk_args, ct).await?;
+
+    let graph_parallelism = config
+        .cpu_database
+        .as_ref()
+        .ok_or_else(|| eyre!("Missing database config"))?
+        .load_parallelism;
 
     // Try to load graph from S3 checkpoint first, then fall back to
     // Postgres graph representation for temporary legacy compatibility.
@@ -604,20 +602,13 @@ async fn load_database(
         Ok::<(), eyre::Report>(())
     };
 
-    let (iris_result, graph_result) = tokio::join!(iris_load_future, graph_load_future);
-    iris_result.expect("Failed to load iris DB");
-    graph_result.expect("Failed to load graph DB");
+    let (initialized, graph) = tokio::try_join!(initializer.initialize(), graph_load_future)?;
     tracing::info!(
         "Loaded both iris and graph DBs into memory in {:?}",
         now.elapsed()
     );
 
-    // The registries are snapshotted from `iris_store` at HawkActor construction
-    // (i.e. empty), but `IrisLoader` populates `iris_store` after the fact.
-    // Rebuild the registries so sessions see the loaded VectorIds.
-    hawk_actor.refresh_registries().await;
-
-    Ok(())
+    Ok(HawkActor::new(hawk_args, networking, initialized, graph))
 }
 
 /// Spawns thread responsible for communicating back results from batch query processing.
