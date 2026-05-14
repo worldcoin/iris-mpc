@@ -7,7 +7,7 @@ use crate::{
     execution::hawk_main::state_check::SetHash,
     hawkers::ideal_knn_engines::{read_knn_results_from_file, Engine, EngineChoice, KNNResult},
     hnsw::{
-        graph::{GraphMutation, UpdateEntryPoint},
+        graph::{mutation::EdgeType, GraphMutation, UpdateEntryPoint},
         searcher::LayerMode,
         vector_store::Ref,
         HnswSearcher,
@@ -31,6 +31,7 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::RwLock;
+use tracing::warn;
 
 /// Representation of the entry point of HNSW search in a layered graph.
 /// This is a vector reference along with the layer of the graph at which
@@ -175,65 +176,163 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
     /// This updates the graph's entry points set and connects the new vector to its
     /// neighbors as specified in the mutations.
     pub fn insert_apply(&mut self, plan: Vec<GraphMutation<V>>) {
-        for mutation in plan {
+        // Pass 1: apply node-level mutations.
+        for mutation in plan.iter() {
             match mutation {
-                GraphMutation::RemoveNode { ref id } => {
-                    // Remove node from all layers where it exists
+                GraphMutation::RemoveNode { id } => {
                     for layer in &mut self.layers {
                         layer.remove_node(id);
                     }
-                    // Remove from entry points if present
                     self.entry_points.retain(|ep| &ep.point != id);
                 }
-                GraphMutation::InsertNode {
+                GraphMutation::AddNode {
                     id,
-                    layers,
+                    height,
                     update_ep,
                 } => {
-                    // Handle entry point update
                     match update_ep {
                         UpdateEntryPoint::SetUnique { layer } => {
-                            // Ensure we have enough layers
-                            if self.layers.len() < layer + 1 {
-                                self.layers.resize(layer + 1, Layer::new());
+                            if self.layers.len() < *layer + 1 {
+                                self.layers.resize(*layer + 1, Layer::new());
                             }
                             self.entry_points = vec![EntryPoint {
                                 point: id.clone(),
-                                layer,
+                                layer: *layer,
                             }];
                         }
                         UpdateEntryPoint::Append { layer } => {
                             self.entry_points.push(EntryPoint {
                                 point: id.clone(),
-                                layer,
+                                layer: *layer,
                             });
                         }
                         UpdateEntryPoint::False => {}
                     }
 
-                    // Insert node into each specified layer
-                    for (layer_idx, neighbors) in layers {
-                        // Ensure we have enough layers
-                        if self.layers.len() < layer_idx + 1 {
-                            self.layers.resize(layer_idx + 1, Layer::new());
-                        }
-                        self.layers[layer_idx].insert_node(id.clone(), neighbors);
+                    if self.layers.len() < *height {
+                        self.layers.resize(*height, Layer::new());
+                    }
+                    for layer_idx in 0..*height {
+                        self.layers[layer_idx].insert_node(id, Vec::new());
                     }
                 }
-                GraphMutation::AddNeighbors { id, layers } => {
-                    for (layer_idx, neighborhoods) in layers {
-                        if self.layers.len() < layer_idx + 1 {
-                            self.layers.resize(layer_idx + 1, Layer::new());
-                        }
-                        self.layers[layer_idx].add_neighbor(id.clone(), neighborhoods);
-                    }
-                }
-                GraphMutation::RemoveNeighbors {
-                    ref id,
+                GraphMutation::AddEdges { .. } | GraphMutation::RemoveEdges { .. } => {}
+            }
+        }
+
+        // Pass 2: apply edge-level mutations.
+        for mutation in plan.into_iter() {
+            match mutation {
+                GraphMutation::AddNode { .. } | GraphMutation::RemoveNode { .. } => {}
+                GraphMutation::AddEdges {
+                    base,
                     layer,
-                    to_remove,
+                    neighbors: to_add,
+                    edge_type,
                 } => {
-                    self.layers[layer].remove_neighbors(id, to_remove);
+                    if self.layers.len() < layer + 1 {
+                        self.layers.resize(layer + 1, Layer::new());
+                    }
+                    let layer_mut = &mut self.layers[layer];
+                    match edge_type {
+                        EdgeType::Base => {
+                            if layer_mut.get_links(&base).is_none() {
+                                warn!(
+                                    "AddEdges(Base): base={:?} missing at layer {layer}; skipping",
+                                    base
+                                );
+                            } else {
+                                layer_mut.link_neighbors_to_node(&base, to_add);
+                            }
+                        }
+                        EdgeType::Neighbors => {
+                            for target in &to_add {
+                                if layer_mut.get_links(target).is_none() {
+                                    warn!(
+                                        "AddEdges(Neighbors): target={:?} missing at layer {layer} (base={:?}); add_neighbor will no-op for this target",
+                                        target, base
+                                    );
+                                }
+                            }
+                            layer_mut.link_node_to_neighbors(&base, to_add);
+                        }
+                        EdgeType::All => {
+                            if layer_mut.get_links(&base).is_none() {
+                                warn!(
+                                    "AddEdges(All): base={:?} missing at layer {layer}; skipping outgoing half",
+                                    base
+                                );
+                            } else {
+                                layer_mut.link_neighbors_to_node(&base, to_add.clone());
+                            }
+                            for target in &to_add {
+                                if layer_mut.get_links(target).is_none() {
+                                    warn!(
+                                        "AddEdges(All): target={:?} missing at layer {layer} (base={:?}); add_neighbor will no-op for this target",
+                                        target, base
+                                    );
+                                }
+                            }
+                            layer_mut.link_node_to_neighbors(&base, to_add);
+                        }
+                    }
+                }
+                GraphMutation::RemoveEdges {
+                    base,
+                    layer,
+                    neighbors: to_remove,
+                    edge_type,
+                } => {
+                    if self.layers.len() < layer + 1 {
+                        warn!(
+                            "RemoveEdges: layer {layer} does not exist (base={:?}); skipping",
+                            base
+                        );
+                        continue;
+                    }
+                    let layer_mut = &mut self.layers[layer];
+                    match edge_type {
+                        EdgeType::Base => {
+                            if layer_mut.get_links(&base).is_none() {
+                                warn!(
+                                    "RemoveEdges(Base): base={:?} missing at layer {layer}; skipping",
+                                    base
+                                );
+                            } else {
+                                layer_mut.unlink_neighbors_from_node(&base, to_remove);
+                            }
+                        }
+                        EdgeType::Neighbors => {
+                            for target in &to_remove {
+                                if layer_mut.get_links(target).is_none() {
+                                    warn!(
+                                        "RemoveEdges(Neighbors): target={:?} missing at layer {layer} (base={:?}); remove_incoming_edges will no-op for this target",
+                                        target, base
+                                    );
+                                }
+                            }
+                            layer_mut.unlink_node_from_neighbors(&base, to_remove);
+                        }
+                        EdgeType::All => {
+                            if layer_mut.get_links(&base).is_none() {
+                                warn!(
+                                    "RemoveEdges(All): base={:?} missing at layer {layer}; skipping outgoing half",
+                                    base
+                                );
+                            } else {
+                                layer_mut.unlink_neighbors_from_node(&base, to_remove.clone());
+                            }
+                            for target in &to_remove {
+                                if layer_mut.get_links(target).is_none() {
+                                    warn!(
+                                        "RemoveEdges(All): target={:?} missing at layer {layer} (base={:?}); remove_incoming_edges will no-op for this target",
+                                        target, base
+                                    );
+                                }
+                            }
+                            layer_mut.unlink_node_from_neighbors(&base, to_remove);
+                        }
+                    }
                 }
             }
         }
@@ -488,25 +587,43 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         self.set_hash.checksum()
     }
 
-    pub fn insert_node(&mut self, id: V, neighbors: Vec<V>) {
+    pub fn insert_node(&mut self, id: &V, neighbors: Vec<V>) {
         self.set_links(id.clone(), neighbors.clone());
     }
 
-    // invariant: neighbor_links is kept sorted; relies on the planner sorting before set_links
-    pub fn add_neighbor(&mut self, id: V, neighborhoods: Vec<V>) {
-        for nbhd in &neighborhoods {
-            if let Some(neighbor_links) = self.links.get_mut(nbhd) {
-                match neighbor_links.binary_search(&id) {
-                    Err(i) => {
-                        self.set_hash
-                            .remove_unordered_set(nbhd, neighbor_links.iter());
-                        neighbor_links.insert(i, id.clone());
-                        self.set_hash.add_unordered_set(nbhd, neighbor_links.iter());
-                    }
-                    Ok(_) => continue, // link already exists
+    /// Insert `id` as an incoming edge into each target's neighbor list,
+    /// keeping each list sorted and deduplicated. Targets that don't exist in
+    /// this layer are silently skipped (callers that need to log the missing
+    /// case should check `get_links(target)` first). Idempotent: if `id` is
+    /// already present in a target's list, that target is left unchanged.
+    pub fn link_node_to_neighbors(&mut self, node: &V, neighbors: Vec<V>) {
+        for target in &neighbors {
+            if let Some(target_links) = self.links.get_mut(target) {
+                if let Err(pos) = target_links.binary_search(node) {
+                    self.set_hash
+                        .remove_unordered_set(target, target_links.iter());
+                    target_links.insert(pos, node.clone());
+                    self.set_hash.add_unordered_set(target, target_links.iter());
                 }
             }
         }
+    }
+
+    /// Add `to_add` into `id`'s own neighbor list, sorted and deduplicated.
+    /// No-op if `id` is not present in this layer (callers that need to log
+    /// the missing case should check `get_links(id)` first). Idempotent:
+    /// existing entries are not duplicated.
+    pub fn link_neighbors_to_node(&mut self, node: &V, neighbors: Vec<V>) {
+        let Some(node_links) = self.links.get_mut(node) else {
+            return;
+        };
+        self.set_hash.remove_unordered_set(node, node_links.iter());
+        for nb in neighbors {
+            if let Err(pos) = node_links.binary_search(&nb) {
+                node_links.insert(pos, nb);
+            }
+        }
+        self.set_hash.add_unordered_set(node, node_links.iter());
     }
 
     /// Remove a node from the graph and clean up all backlinks from its neighbors.
@@ -532,16 +649,31 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         }
     }
 
-    pub fn remove_neighbors(&mut self, id: &V, neighbors_to_remove: Vec<V>) {
-        if let Some(node_links) = self.links.get_mut(id) {
-            self.set_hash.remove_unordered_set(id, node_links.iter());
-            for neighbor in &neighbors_to_remove {
-                // this is a uni-directional pruning. it is incorrect to prune the neighbors links
-                // when doing compaction.
-                node_links.retain(|x| x != neighbor);
+    /// Remove `id` from each target's neighbor list, where `target` ranges over
+    /// `to_remove`. Targets that don't exist in this layer are silently skipped
+    /// (the caller's apply path is responsible for any logging).
+    pub fn unlink_node_from_neighbors(&mut self, node: &V, neighbors: Vec<V>) {
+        for target in &neighbors {
+            if let Some(target_links) = self.links.get_mut(target) {
+                self.set_hash
+                    .remove_unordered_set(target, target_links.iter());
+                target_links.retain(|x| x != node);
+                self.set_hash.add_unordered_set(target, target_links.iter());
             }
-            self.set_hash.add_unordered_set(id, node_links.iter());
         }
+    }
+
+    /// Remove each entry in `to_remove` from `id`'s own neighbor list. No-op
+    /// if `id` is not present in this layer (callers that need to log the
+    /// missing case should check `get_links(id)` first). The removal is
+    /// unidirectional: the targets' own link lists are not modified.
+    pub fn unlink_neighbors_from_node(&mut self, node: &V, neighbors: Vec<V>) {
+        let Some(node_links) = self.links.get_mut(node) else {
+            return;
+        };
+        self.set_hash.remove_unordered_set(node, node_links.iter());
+        node_links.retain(|x| !neighbors.contains(x));
+        self.set_hash.add_unordered_set(node, node_links.iter());
     }
 
     pub fn set_links(&mut self, from: V, links: Vec<V>) {
@@ -857,5 +989,203 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    use crate::hnsw::graph::mutation::{EdgeType, GraphMutation, UpdateEntryPoint};
+
+    #[test]
+    fn add_edges_outgoing_writes_only_to_id_list() {
+        let mut graph = GraphMem::<IrisVectorId>::new();
+        let a = IrisVectorId::from_serial_id(1);
+        let b = IrisVectorId::from_serial_id(2);
+        let c = IrisVectorId::from_serial_id(3);
+        // Seed: a, b, c all exist at layer 0 with no edges.
+        graph.insert_apply(vec![
+            GraphMutation::AddNode {
+                id: a,
+                height: 1,
+                update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
+            },
+            GraphMutation::AddNode {
+                id: b,
+                height: 1,
+                update_ep: UpdateEntryPoint::False,
+            },
+            GraphMutation::AddNode {
+                id: c,
+                height: 1,
+                update_ep: UpdateEntryPoint::False,
+            },
+        ]);
+        graph.insert_apply(vec![GraphMutation::AddEdges {
+            base: a,
+            layer: 0,
+            neighbors: vec![b, c],
+            edge_type: EdgeType::Base,
+        }]);
+        assert_eq!(graph.layers[0].get_links(&a).unwrap(), &[b, c]);
+        assert_eq!(
+            graph.layers[0].get_links(&b).unwrap(),
+            &[] as &[IrisVectorId]
+        );
+        assert_eq!(
+            graph.layers[0].get_links(&c).unwrap(),
+            &[] as &[IrisVectorId]
+        );
+    }
+
+    #[test]
+    fn add_edges_incoming_writes_only_to_target_lists() {
+        let mut graph = GraphMem::<IrisVectorId>::new();
+        let a = IrisVectorId::from_serial_id(1);
+        let b = IrisVectorId::from_serial_id(2);
+        let c = IrisVectorId::from_serial_id(3);
+        graph.insert_apply(vec![
+            GraphMutation::AddNode {
+                id: a,
+                height: 1,
+                update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
+            },
+            GraphMutation::AddNode {
+                id: b,
+                height: 1,
+                update_ep: UpdateEntryPoint::False,
+            },
+            GraphMutation::AddNode {
+                id: c,
+                height: 1,
+                update_ep: UpdateEntryPoint::False,
+            },
+        ]);
+        graph.insert_apply(vec![GraphMutation::AddEdges {
+            base: a,
+            layer: 0,
+            neighbors: vec![b, c],
+            edge_type: EdgeType::Neighbors,
+        }]);
+        assert_eq!(
+            graph.layers[0].get_links(&a).unwrap(),
+            &[] as &[IrisVectorId]
+        );
+        assert_eq!(graph.layers[0].get_links(&b).unwrap(), &[a]);
+        assert_eq!(graph.layers[0].get_links(&c).unwrap(), &[a]);
+    }
+
+    #[test]
+    fn add_edges_bidirectional_writes_both_sides() {
+        let mut graph = GraphMem::<IrisVectorId>::new();
+        let a = IrisVectorId::from_serial_id(1);
+        let b = IrisVectorId::from_serial_id(2);
+        let c = IrisVectorId::from_serial_id(3);
+        graph.insert_apply(vec![
+            GraphMutation::AddNode {
+                id: a,
+                height: 1,
+                update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
+            },
+            GraphMutation::AddNode {
+                id: b,
+                height: 1,
+                update_ep: UpdateEntryPoint::False,
+            },
+            GraphMutation::AddNode {
+                id: c,
+                height: 1,
+                update_ep: UpdateEntryPoint::False,
+            },
+        ]);
+        graph.insert_apply(vec![GraphMutation::AddEdges {
+            base: a,
+            layer: 0,
+            neighbors: vec![b, c],
+            edge_type: EdgeType::All,
+        }]);
+        assert_eq!(graph.layers[0].get_links(&a).unwrap(), &[b, c]);
+        assert_eq!(graph.layers[0].get_links(&b).unwrap(), &[a]);
+        assert_eq!(graph.layers[0].get_links(&c).unwrap(), &[a]);
+    }
+
+    #[test]
+    fn remove_edges_outgoing_only_modifies_id_list() {
+        let mut graph = GraphMem::<IrisVectorId>::new();
+        let a = IrisVectorId::from_serial_id(1);
+        let b = IrisVectorId::from_serial_id(2);
+        let c = IrisVectorId::from_serial_id(3);
+        graph.insert_apply(vec![
+            GraphMutation::AddNode {
+                id: a,
+                height: 1,
+                update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
+            },
+            GraphMutation::AddEdges {
+                base: a,
+                layer: 0,
+                neighbors: vec![b, c],
+                edge_type: EdgeType::Base,
+            },
+            GraphMutation::AddNode {
+                id: b,
+                height: 1,
+                update_ep: UpdateEntryPoint::False,
+            },
+            GraphMutation::AddEdges {
+                base: b,
+                layer: 0,
+                neighbors: vec![a],
+                edge_type: EdgeType::Base,
+            },
+            GraphMutation::AddNode {
+                id: c,
+                height: 1,
+                update_ep: UpdateEntryPoint::False,
+            },
+            GraphMutation::AddEdges {
+                base: c,
+                layer: 0,
+                neighbors: vec![a],
+                edge_type: EdgeType::Base,
+            },
+        ]);
+        graph.insert_apply(vec![GraphMutation::RemoveEdges {
+            base: a,
+            layer: 0,
+            neighbors: vec![b],
+            edge_type: EdgeType::Base,
+        }]);
+        assert_eq!(graph.layers[0].get_links(&a).unwrap(), &[c]);
+        // Bidirectional cleanup is not implied — b's list still contains a.
+        assert_eq!(graph.layers[0].get_links(&b).unwrap(), &[a]);
+    }
+
+    #[test]
+    fn two_phase_apply_edges_before_node_in_vec_still_works() {
+        // Pass 1 should apply AddNode before pass 2 applies AddEdges, regardless
+        // of their order in the input Vec.
+        let mut graph = GraphMem::<IrisVectorId>::new();
+        let a = IrisVectorId::from_serial_id(1);
+        let b = IrisVectorId::from_serial_id(2);
+        graph.insert_apply(vec![
+            // Listed first: an edge op that references a node not yet created.
+            GraphMutation::AddEdges {
+                base: a,
+                layer: 0,
+                neighbors: vec![b],
+                edge_type: EdgeType::Base,
+            },
+            // Listed second: the node creation.
+            GraphMutation::AddNode {
+                id: a,
+                height: 1,
+                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+            },
+            GraphMutation::AddNode {
+                id: b,
+                height: 1,
+                update_ep: UpdateEntryPoint::False,
+            },
+        ]);
+        // Pass-1 created the nodes, then pass-2 applied the edge — so a should
+        // now have b in its outgoing list.
+        assert_eq!(graph.layers[0].get_links(&a).unwrap(), &[b]);
     }
 }

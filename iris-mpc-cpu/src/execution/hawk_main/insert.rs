@@ -1,5 +1,5 @@
 use crate::hnsw::{
-    graph::{GraphMutation, GroupedMutations, UpdateEntryPoint},
+    graph::{mutation::EdgeType, GraphMutation, GroupedMutations, UpdateEntryPoint},
     searcher::{ConnectPlanV, LayerMode},
     vector_store::VectorStoreMut,
     GraphMem, HnswSearcher, VectorStore,
@@ -97,16 +97,19 @@ pub async fn insert<V: VectorStoreMut>(
             };
 
             let mut request_mutations: Vec<GraphMutation<V::VectorRef>> = vec![];
-            request_mutations.push(GraphMutation::InsertNode {
+            request_mutations.push(GraphMutation::AddNode {
                 id: inserted.clone(),
-                // Convert links (Vec<Vec<VectorRef>>) to layers (Vec<(usize, Vec<VectorRef>)>)
-                layers: links.iter().cloned().enumerate().collect(),
+                height: links.len(),
                 update_ep,
             });
-            request_mutations.push(GraphMutation::AddNeighbors {
-                id: inserted.clone(),
-                layers: links.into_iter().enumerate().collect(),
-            });
+            for (layer_idx, layer_links) in links.into_iter().enumerate() {
+                request_mutations.push(GraphMutation::AddEdges {
+                    base: inserted.clone(),
+                    layer: layer_idx,
+                    neighbors: layer_links,
+                    edge_type: EdgeType::All,
+                });
+            }
             if let Some(rid) = replace_id {
                 request_mutations.push(GraphMutation::RemoveNode { id: rid.clone() });
             }

@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     execution::local::get_free_local_addresses,
     hnsw::{
-        graph::{GraphMutation, UpdateEntryPoint},
+        graph::{mutation::EdgeType, GraphMutation, UpdateEntryPoint},
         searcher::LayerMode,
     },
     protocol::shared_iris::GaloisRingSharedIris,
@@ -102,14 +102,16 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
                 UpdateEntryPoint::False
             };
             let mutations = vec![
-                GraphMutation::InsertNode {
+                GraphMutation::AddNode {
                     id: id(i),
-                    layers: vec![(0, edges(i))],
+                    height: 1,
                     update_ep,
                 },
-                GraphMutation::AddNeighbors {
-                    id: id(i),
-                    layers: vec![(0, edges(i))],
+                GraphMutation::AddEdges {
+                    base: id(i),
+                    layer: 0,
+                    neighbors: edges(i),
+                    edge_type: EdgeType::All,
                 },
             ];
             graph.insert_apply(mutations);

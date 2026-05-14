@@ -18,8 +18,9 @@ use crate::{
                 node_equiv::ensure_node_equivalence,
                 run_diff,
             },
+            mutation::EdgeType,
             neighborhood::Neighborhood,
-            GraphMutation,
+            GraphMutation, UpdateEntryPoint,
         },
         vector_store::{VectorStore, VectorStoreMut},
         SortedNeighborhood,
@@ -372,10 +373,10 @@ impl DbContext {
         let mut left_graph = GraphMem::<PlaintextVectorRef>::new();
 
         // Set entry point via InsertNode with SetUnique
-        let ep_mutation = GraphMutation::InsertNode {
+        let ep_mutation = GraphMutation::AddNode {
             id: vectors[0],
-            layers: vec![(0, vec![])],
-            update_ep: crate::hnsw::graph::mutation::UpdateEntryPoint::SetUnique { layer: 0 },
+            height: 1,
+            update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
         };
         left_graph.insert_apply(vec![ep_mutation]);
 
@@ -388,12 +389,20 @@ impl DbContext {
                     .await?;
             }
             let neighbors = links.edge_ids();
-            let mutation = GraphMutation::InsertNode {
-                id: vectors[i],
-                layers: vec![(0, neighbors)],
-                update_ep: crate::hnsw::graph::mutation::UpdateEntryPoint::False,
-            };
-            left_graph.insert_apply(vec![mutation]);
+            let mutations = vec![
+                GraphMutation::AddNode {
+                    id: vectors[i],
+                    height: 1,
+                    update_ep: UpdateEntryPoint::False,
+                },
+                GraphMutation::AddEdges {
+                    base: vectors[i],
+                    layer: 0,
+                    neighbors,
+                    edge_type: EdgeType::Base,
+                },
+            ];
+            left_graph.insert_apply(mutations);
         }
 
         // Use same graph for both eyes (this is test data)
