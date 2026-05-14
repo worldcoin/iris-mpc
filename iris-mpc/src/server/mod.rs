@@ -578,12 +578,6 @@ async fn init_hawk_actor(
     // Network handle built up-front; iris and graph load in parallel.
     let networking = build_hawk_network_handle(&hawk_args, ct).await?;
 
-    let graph_parallelism = config
-        .cpu_database
-        .as_ref()
-        .ok_or_else(|| eyre!("Missing database config"))?
-        .load_parallelism;
-
     // Try to load graph from S3 checkpoint first, then fall back to
     // Postgres graph representation for temporary legacy compatibility.
     // TODO: apply GraphMutations to the checkpoint
@@ -598,8 +592,7 @@ async fn init_hawk_actor(
             tracing::info!("No S3 checkpoint found, defaulting to empty graph");
             [GraphMem::new(), GraphMem::new()]
         };
-        graph_loader.load_graphs_from_checkpoint(both_eyes);
-        Ok::<(), eyre::Report>(())
+        Ok::<_, eyre::Report>(both_eyes)
     };
 
     let (initialized, graph) = tokio::try_join!(initializer.initialize(), graph_load_future)?;

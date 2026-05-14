@@ -13,7 +13,6 @@ use iris_mpc_common::helpers::smpc_response::{
     UniquenessResult,
 };
 
-use iris_mpc_common::helpers::sync::ModificationKey;
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
 use iris_mpc_common::iris_db::get_dummy_shares_for_deletion;
 use iris_mpc_common::job::ServerJobResult;

@@ -45,7 +45,7 @@ use iris_mpc_cpu::{
     },
     graph_checkpoint::*,
     hawkers::aby3::aby3_store::{Aby3Store, VectorIdRegistryRef},
-    hnsw::graph::graph_store::GraphPg,
+    hnsw::{graph::graph_store::GraphPg, GraphMem},
 };
 use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
 use std::{
@@ -445,13 +445,8 @@ async fn exec_setup(
         config,
         &config.graph_checkpoint_bucket_name,
         &iris_store,
-<<<<<<< HEAD
-        &mut hawk_actor,
-=======
-        graph_store_arc.clone(),
         hawk_args,
         hawk_networking,
->>>>>>> sw/main3
         &checkpoint_s3_client,
         Arc::clone(&shutdown_handler),
         args.max_indexation_id as usize,
@@ -1383,7 +1378,6 @@ async fn init_graph_from_stores(
     config: &Config,
     checkpoint_bucket: &str,
     iris_store: &IrisStore,
-    graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
     hawk_args: HawkArgs,
     hawk_networking: Box<dyn iris_mpc_cpu::network::mpc::NetworkHandle>,
     s3_client: &S3Client,
@@ -1437,10 +1431,10 @@ async fn init_graph_from_stores(
                 "Loading graph from S3 checkpoint, hash: {}",
                 state.blake3_hash
             );
-            let both_eyes = download_graph_checkpoint(s3_client, checkpoint_bucket, &state).await?;
-            graph_loader.load_graphs_from_checkpoint(both_eyes);
+            download_graph_checkpoint(s3_client, checkpoint_bucket, &state).await
         } else {
-            tracing::info!("No S3 checkpoint found. Failed to load graph");
+            tracing::info!("No S3 checkpoint found, defaulting to empty graph");
+            Ok([GraphMem::new(), GraphMem::new()])
         }
     };
 
