@@ -353,6 +353,7 @@ pub enum RequestIndex {
 ///   `{left,right}_iris_requests`.
 /// - `Deletion` rows: `deleted_ids`.
 /// - `IdentityUpdate` rows: `identity_update_*`.
+///
 /// `reauth_*` maps are keyed by reauth `request_id`. `modifications` is keyed by
 /// `ModificationKey` across all persistable mutations. `actor_data` shape is implementation-defined.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
