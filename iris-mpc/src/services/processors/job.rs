@@ -190,10 +190,11 @@ pub async fn process_job_result(
                 .wrap_err("failed to serialize reauth result")?;
 
             let modification_key = RequestSerialId(serial_id);
+            let persisted = success && skip_persistence.get(i).copied().unwrap_or(false);
             modifications
                 .get_mut(&modification_key)
                 .unwrap()
-                .mark_completed(success, &result_string, None);
+                .mark_completed(persisted, &result_string, None);
 
             Ok(result_string)
         })
