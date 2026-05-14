@@ -260,10 +260,7 @@ async fn run_upload_loop(
                             .ok_or_else(|| eyre!("upload_part {pn} returned no e_tag"))?
                             .to_string();
                         tracing::debug!("uploaded part {pn} (etag={etag})");
-                        return Ok(CompletedPart::builder()
-                            .e_tag(etag)
-                            .part_number(pn)
-                            .build());
+                        return Ok(CompletedPart::builder().e_tag(etag).part_number(pn).build());
                     }
                     Err(_) if attempts < UPLOAD_PART_MAX_RETRIES => {
                         attempts += 1;
