@@ -1686,10 +1686,19 @@ impl HnswSearcher {
                     .get_mut(connect_plan_idx)
                     .ok_or_eyre("Could not find associated connect plan")?;
 
-                // Insert `query_id` into the existing index-sorted neighborhood
+                // Insert `query_id` into the existing index-sorted neighborhood.
+                // A duplicate here means the freshly allocated `query_id` already
+                // appears in `nb`'s neighborhood — i.e. the registry handed out a
+                // VectorId that the graph already knows about. That's a hard
+                // invariant violation (see refresh_registries() in load paths)
+                // and silently continuing leaves the graph in an inconsistent
+                // state, so fail the batch.
                 match nb_nbhd.binary_search(&query_id) {
                     Err(i) => nb_nbhd.insert(i, query_id),
-                    Ok(_) => tracing::warn!("Attempted to add graph edge which was already present: {nb:?} -> {query_id:?} (layer {layer})"),
+                    Ok(_) => bail!(
+                        "Attempted to add graph edge which was already present: \
+                         {nb:?} -> {query_id:?} (layer {layer}) — registry/graph drift"
+                    ),
                 }
 
                 // Add update reflecting change to the existing neighborhood

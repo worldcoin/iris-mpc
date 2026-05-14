@@ -1,4 +1,5 @@
 #![allow(clippy::needless_range_loop, unused)]
+#![recursion_limit = "256"]
 
 use ampc_anon_stats::store::postgres::AccessMode as AnonStatsAccessMode;
 use ampc_anon_stats::store::postgres::PostgresClient as AnonStatsPgClient;
@@ -654,10 +655,11 @@ async fn server_main(config: Config) -> Result<()> {
                     );
                     let result_string = serde_json::to_string(&result_event)
                         .expect("failed to serialize reauth result");
+                    let persisted = success && !skip_persistence.get(i).copied().unwrap_or(false);
                     modifications
                         .get_mut(&RequestSerialId(serial_id))
                         .unwrap()
-                        .mark_completed(success, &result_string, None, None);
+                        .mark_completed(persisted, &result_string, None, None);
                     result_string
                 })
                 .collect::<Vec<String>>();

@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 //! Measures communication cost (bytes and messages) of the hawk_main workflow
 //! on a pre-built HNSW graph.
 //!

@@ -1,15 +1,11 @@
-use crate::{
-    join_runners,
-    utils::{
-        genesis_runner::{self, DEFAULT_GENESIS_ARGS, NUM_GPU_IRISES_INIT},
-        mpc_node::{DbAssertions, MpcNodes},
-        plaintext_genesis, HawkConfigs, TestRun, TestRunContextInfo,
-    },
+use crate::run_genesis;
+use crate::utils::{
+    genesis_runner::{self, DEFAULT_GENESIS_ARGS, NUM_GPU_IRISES_INIT},
+    mpc_node::{DbAssertions, MpcNodes},
+    plaintext_genesis, HawkConfigs, TestRun, TestRunContextInfo,
 };
 use eyre::Result;
 use iris_mpc_cpu::genesis::plaintext::{run_plaintext_genesis, GenesisState};
-use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
-use tokio::task::JoinSet;
 
 /// Final iris count after all three genesis runs (25 irises per run).
 const FINAL_INDEXATION_ID: usize = 75;
@@ -39,29 +35,15 @@ impl TestRun for Test {
     //   - Party 0 has the previous entry and contributes an old hash.
     //   - All parties have the old hash so they all roll back to that one.
     async fn exec(&mut self) -> Result<()> {
-        let genesis_args = DEFAULT_GENESIS_ARGS;
-
         // Run 1: index irises 1-25.
-        let mut join_set = JoinSet::new();
-        for config in self.configs.iter().cloned() {
-            let mut args = genesis_args.clone();
-            args.max_indexation_id = 25;
-            join_set.spawn(async move {
-                exec_genesis(ExecutionArgs::from_plaintext_args(args, false), config).await
-            });
-        }
-        join_runners!(join_set);
+        let mut args = DEFAULT_GENESIS_ARGS;
+        args.max_indexation_id = 25;
+        run_genesis!(self, args);
 
         // Run 2: index irises 26-50.
-        let mut join_set = JoinSet::new();
-        for config in self.configs.iter().cloned() {
-            let mut args = genesis_args.clone();
-            args.max_indexation_id = 50;
-            join_set.spawn(async move {
-                exec_genesis(ExecutionArgs::from_plaintext_args(args, false), config).await
-            });
-        }
-        join_runners!(join_set);
+        let mut args = DEFAULT_GENESIS_ARGS;
+        args.max_indexation_id = 50;
+        run_genesis!(self, args);
 
         // Corrupt party 0's state: delete its genesis graph checkpoint from the CPU store.
         // Parties 1 and 2 are untouched - they retain their checkpoint entries pointing to
@@ -74,15 +56,9 @@ impl TestRun for Test {
         // Run 3: index irises 51-75.
         // Party 0 must recover its graph from the S3 checkpoint held by parties 1 and 2
         // before it can continue indexing. The graph-rollback logic is what enables this.
-        let mut join_set = JoinSet::new();
-        for config in self.configs.iter().cloned() {
-            let mut args = genesis_args.clone();
-            args.max_indexation_id = FINAL_INDEXATION_ID as u32;
-            join_set.spawn(async move {
-                exec_genesis(ExecutionArgs::from_plaintext_args(args, false), config).await
-            });
-        }
-        join_runners!(join_set);
+        let mut args = DEFAULT_GENESIS_ARGS;
+        args.max_indexation_id = FINAL_INDEXATION_ID as u32;
+        run_genesis!(self, args);
 
         Ok(())
     }

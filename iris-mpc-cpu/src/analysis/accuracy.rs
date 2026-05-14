@@ -1,6 +1,6 @@
 use crate::{
     hawkers::{
-        aby3::aby3_store::{DistanceFn, DistanceOps},
+        aby3::aby3_store::{DistanceMode, DistanceOps},
         plaintext_store::{PlaintextStore, SharedPlaintextStore},
     },
     hnsw::{
@@ -60,10 +60,10 @@ pub struct AnalysisConfig {
 }
 
 impl AnalysisConfig {
-    pub fn get_distance_fn(&self) -> Result<DistanceFn> {
+    pub fn get_distance_mode(&self) -> Result<DistanceMode> {
         match self.distance_fn.as_str() {
-            "simple" => Ok(DistanceFn::Simple),
-            "min_rotation" => Ok(DistanceFn::MinRotation),
+            "simple" => Ok(DistanceMode::Simple),
+            "min_rotation" => Ok(DistanceMode::MinRotation),
             _ => bail!("Unknown distance_fn: {}", self.distance_fn),
         }
     }
@@ -388,7 +388,7 @@ impl From<&HnswConfig> for HnswSearcher {
 pub async fn load_iris_store<D: DistanceOps>(
     config: IrisesInit,
     rng: &mut StdRng,
-    distance_fn: DistanceFn,
+    distance_mode: DistanceMode,
 ) -> Result<PlaintextStore<D>> {
     let irises = match config {
         IrisesInit::Random { number } => {
@@ -409,9 +409,9 @@ pub async fn load_iris_store<D: DistanceOps>(
     };
 
     let mut store = PlaintextStore::from_irises_iter(irises.into_iter());
-    // Override distance_fn;
+    // Override distance_mode;
     // This is safe, because store initialization doesn't depend on distance
-    store.distance_fn = distance_fn;
+    store.distance_mode = distance_mode;
 
     Ok(store)
 }

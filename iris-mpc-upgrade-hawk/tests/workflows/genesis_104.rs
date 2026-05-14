@@ -1,20 +1,18 @@
 use std::sync::Arc;
 
-use crate::{
-    join_runners,
-    utils::{
-        genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
-        modifications::{
-            ModificationInput,
-            ModificationType::{Reauth, ResetUpdate},
-        },
-        mpc_node::{DbAssertions, MpcNode, MpcNodes},
-        plaintext_genesis, HawkConfigs, TestRun, TestRunContextInfo,
+use crate::join_runners;
+use crate::run_genesis;
+use crate::utils::{
+    genesis_runner::{self, DEFAULT_GENESIS_ARGS, MAX_INDEXATION_ID},
+    modifications::{
+        ModificationInput,
+        ModificationType::{Reauth, ResetUpdate},
     },
+    mpc_node::{DbAssertions, MpcNode, MpcNodes},
+    plaintext_genesis, HawkConfigs, TestRun, TestRunContextInfo,
 };
 use eyre::Result;
 use iris_mpc_cpu::genesis::plaintext::{run_plaintext_genesis, GenesisState};
-use iris_mpc_upgrade_hawk::genesis::{exec as exec_genesis, ExecutionArgs};
 use tokio::task::JoinSet;
 
 const MODIFICATIONS: [ModificationInput; 2] = [
@@ -44,16 +42,9 @@ impl TestRun for Test {
     // then run genesis again
     async fn exec(&mut self) -> Result<()> {
         // Execute genesis - first run indexing up to 50
-        let genesis_args = DEFAULT_GENESIS_ARGS;
-        let mut join_set = JoinSet::new();
-        for config in self.configs.iter().cloned() {
-            let mut args = genesis_args.clone();
-            args.max_indexation_id = 50;
-            join_set.spawn(async move {
-                exec_genesis(ExecutionArgs::from_plaintext_args(args, false), config).await
-            });
-        }
-        join_runners!(join_set);
+        let mut args = DEFAULT_GENESIS_ARGS;
+        args.max_indexation_id = 50;
+        run_genesis!(self, args);
 
         let mut join_set = JoinSet::new();
         for node in self.get_nodes().await {
@@ -62,15 +53,9 @@ impl TestRun for Test {
         join_runners!(join_set);
 
         // Execute genesis - second run indexing up to 100
-        let mut join_set = JoinSet::new();
-        for config in self.configs.iter().cloned() {
-            let mut args = genesis_args.clone();
-            args.max_indexation_id = 100;
-            join_set.spawn(async move {
-                exec_genesis(ExecutionArgs::from_plaintext_args(args, false), config).await
-            });
-        }
-        join_runners!(join_set);
+        let mut args = DEFAULT_GENESIS_ARGS;
+        args.max_indexation_id = 100;
+        run_genesis!(self, args);
 
         Ok(())
     }

@@ -5,6 +5,7 @@ on:
     branches:
       - "dev"
       - "feat/recovery-update"
+      - "pop-3712-reauth-skip-persistence-alias"
 
     paths-ignore:
       - "deploy/**"

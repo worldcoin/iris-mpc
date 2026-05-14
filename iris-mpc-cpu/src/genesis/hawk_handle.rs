@@ -1,11 +1,9 @@
-use super::{
-    hawk_job::{Job, JobRequest, JobResult, SYNC_DONE, SYNC_ERROR, SYNC_RUNNING},
-    utils,
-};
+use super::hawk_job::{Job, JobRequest, JobResult, SYNC_DONE, SYNC_ERROR, SYNC_RUNNING};
 use crate::{
     execution::hawk_main::{
-        insert::insert, scheduler::parallelize, search::search_single_query_no_match_count,
-        BothEyes, HawkActor, HawkSession, StoreId, LEFT, RIGHT, STORE_IDS,
+        insert::insert, iris_worker::QueryId, scheduler::parallelize,
+        search::search_single_query_no_match_count, BothEyes, HawkActor, HawkSession, LEFT, RIGHT,
+        STORE_IDS,
     },
     hawkers::aby3::aby3_store::Aby3Query,
 };
@@ -21,9 +19,6 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::{self, mpsc, oneshot};
-
-// Component name for logging purposes.
-const COMPONENT: &str = "Hawk-Handle";
 
 /// Maximum time to wait for all parties to complete the sync_peers exchange.
 /// This bounds the retry loop inside `HawkSession::sync_peers` so that
@@ -62,7 +57,7 @@ impl Handle {
 
         // Initiate sessions with other MPC nodes & perform state consistency check.
         let mut sessions = actor.new_sessions().await?;
-        Self::log_info(String::from("Starting State check"));
+        tracing::info!("Starting State check");
         HawkSession::state_check([&sessions[LEFT][0], &sessions[RIGHT][0]]).await?;
 
         // Process jobs until health check fails or channel closes.
@@ -75,13 +70,20 @@ impl Handle {
             }) = rx.recv().await
             {
                 let job_result = Self::handle_job(&mut actor, &sessions, request).await;
-                let health = do_health_check(&mut actor, &mut sessions, job_result.is_err()).await;
+                // SyncPeers and SyncState do not modify the inner state. As long as they didn't fail
+                // it is safe to skip the health check
+                let health = if matches!(
+                    job_result,
+                    Ok((_, JobResult::SyncPeers)) | Ok((_, JobResult::SyncState { .. }))
+                ) {
+                    Ok(())
+                } else {
+                    do_health_check(&mut actor, &mut sessions, job_result.is_err()).await
+                };
                 let stop = health.is_err();
                 let _ = return_channel.send(health.and(job_result));
                 if stop {
-                    Self::log_error(String::from(
-                        "HawkActor is in an inconsistent state, therefore stopping.",
-                    ));
+                    tracing::error!("HawkActor is in an inconsistent state, therefore stopping.");
                     break;
                 }
             }
@@ -125,21 +127,25 @@ impl Handle {
                 vector_ids,
                 queries,
                 vector_ids_to_persist,
+                irises_to_cache,
             } => {
-                Self::log_info(format!(
+                tracing::info!(
                     "Hawk Job :: processing batch-id={}; batch-size={}",
                     batch_id,
                     vector_ids.len(),
-                ));
+                );
 
-                let queries = JobRequest::numa_realloc(
-                    queries,
-                    [
-                        actor.workers_handle(StoreId::Left),
-                        actor.workers_handle(StoreId::Right),
-                    ],
-                )
-                .await;
+                // Cache all batch irises in both worker pools before search.
+                // Both pools need all irises (mirror queries cross eyes).
+                let all_to_cache: Vec<_> = irises_to_cache[LEFT]
+                    .iter()
+                    .chain(irises_to_cache[RIGHT].iter())
+                    .cloned()
+                    .collect();
+                futures::try_join!(
+                    actor.worker_pools[LEFT].cache_queries(all_to_cache.clone()),
+                    actor.worker_pools[RIGHT].cache_queries(all_to_cache),
+                )?;
 
                 // Use all sessions per iris side to search for insertion indices per
                 // batch, number configured by `args.request_parallelism`.
@@ -163,7 +169,7 @@ impl Handle {
                             for queries_batch in queries_with_ids.chunks(n_sessions) {
                                 let search_jobs = izip!(queries_batch.iter(), sessions.iter()).map(
                                     |((query, id), session)| {
-                                        let query = query.clone();
+                                        let query = *query;
                                         let searcher = searcher.clone();
                                         let session = session.clone();
                                         let identifier = (*id, side);
@@ -224,6 +230,17 @@ impl Handle {
                 let [left_plans, right_plans] = results;
                 assert_eq!(left_plans.len(), right_plans.len());
 
+                // Evict cached queries now that the batch is fully processed.
+                let all_query_ids: Vec<QueryId> = irises_to_cache[LEFT]
+                    .iter()
+                    .chain(irises_to_cache[RIGHT].iter())
+                    .map(|(qid, _)| *qid)
+                    .collect();
+                futures::try_join!(
+                    actor.worker_pools[LEFT].evict_queries(all_query_ids.clone()),
+                    actor.worker_pools[RIGHT].evict_queries(all_query_ids),
+                )?;
+
                 metrics::histogram!("genesis_batch_duration").record(now.elapsed().as_secs_f64());
                 metrics::gauge!("genesis_batch_size").set(vector_ids.len() as f64);
 
@@ -245,12 +262,12 @@ impl Handle {
                 let jobs_per_side =
                     izip!(STORE_IDS, sessions.iter()).map(|(side, sessions_side)| {
                         let sessions = sessions_side.clone();
-                        let vector = actor.iris_store(side);
+                        let registry = actor.registry(side);
                         let modification = modification.clone();
                         let searcher = actor.searcher();
 
                         async move {
-                            let vector_id_ = vector.get_vector_id(serial_id).await;
+                            let vector_id_ = registry.get_vector_id(serial_id).await;
 
                             let session =
                                 sessions.first().ok_or_eyre("Sessions for side are empty")?;
@@ -266,7 +283,20 @@ impl Handle {
 
                                     // TODO remove any prior versions of this vector id from graph
 
-                                    let query = Aby3Query::new(&vector.get_vector_or_empty(&vector_id).await);
+                                    // Fetch the iris from the worker pool and cache it before search.
+                                    let query_id = QueryId::new();
+                                    let irises = {
+                                        let store = session.aby3_store.read().await;
+                                        store.workers.fetch_irises(vec![vector_id]).await?
+                                    };
+                                    {
+                                        let store = session.aby3_store.read().await;
+                                        store
+                                            .workers
+                                            .cache_queries(vec![(query_id, irises.into_iter().next().unwrap())])
+                                            .await?;
+                                    }
+                                    let query = Aby3Query::new(query_id);
                                     let insert_plan = search_single_query_no_match_count(
                                         session.clone(),
                                         query,
@@ -282,20 +312,29 @@ impl Handle {
                                     let connect_plan =
                                         insert(&mut *store, &mut *graph, &searcher, plans, &ids).await?;
 
+                                    // Evict the cached query now that search + insert are done.
+                                    // Use the workers reference from the already-held write guard:
+                                    // the query cache uses its own internal lock, independent of
+                                    // the aby3_store RwLock. Acquiring a second `read()` here would
+                                    // deadlock against the outer `write()` guard.
+                                    store.workers.evict_queries(vec![query_id]).await?;
+
                                     Ok((connect_plan, vector_id))
                                 }
                                 smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
-                                    let msg = Self::log_error(format!(
+                                    let msg = format!(
                                         "HawkActor does not support deletion of identities: modification: {:?}",
                                         modification
-                                    ));
+                                    );
+                                    tracing::error!("{}", msg);
                                     Err(eyre!(msg))
                                 }
                                 _ => {
-                                    let msg = Self::log_error(format!(
+                                    let msg = format!(
                                         "Invalid modification type received: {:?}",
                                         modification,
-                                    ));
+                                    );
+                                    tracing::error!("{}", msg);
                                     Err(eyre!(msg))
                                 }
                             }
@@ -321,29 +360,27 @@ impl Handle {
                     JobResult::new_modification_result(modification.id, left_vector, done_tx),
                 ))
             }
-            JobRequest::Sync {
+            JobRequest::SyncState {
                 shutdown,
                 sync_status,
             } => {
                 let _ = done_tx;
                 let mismatched = tokio::time::timeout(
                     SYNC_PEERS_TIMEOUT,
-                    HawkSession::sync_peers(shutdown, sync_status, sessions),
+                    HawkSession::sync_state(shutdown, sync_status, sessions),
                 )
                 .await
-                .map_err(|_| eyre!("sync_peers timed out after {SYNC_PEERS_TIMEOUT:?}"))??;
-                Ok((done_rx, JobResult::Sync { mismatched }))
+                .map_err(|_| eyre!("sync_state timed out after {SYNC_PEERS_TIMEOUT:?}"))??;
+                Ok((done_rx, JobResult::SyncState { mismatched }))
+            }
+            JobRequest::SyncPeers => {
+                let _ = done_tx;
+                tokio::time::timeout(SYNC_PEERS_TIMEOUT, actor.sync_peers())
+                    .await
+                    .map_err(|_| eyre!("sync_peers timeout after {SYNC_PEERS_TIMEOUT:?}"))??;
+                Ok((done_rx, JobResult::SyncPeers))
             }
         }
-    }
-
-    // Helper: component error logging.
-    fn log_error(msg: String) -> String {
-        utils::log_error(COMPONENT, msg)
-    }
-    // Helper: component logging.
-    fn log_info(msg: String) -> String {
-        utils::log_info(COMPONENT, msg)
     }
 
     /// Enqueues a job request for the genesis indexer HNSW processing thread. It returns
@@ -391,7 +428,7 @@ impl Handle {
     ///
     /// Used to periodically synchronize db persistence threads of MPC nodes in
     /// genesis protocol.
-    pub async fn sync_peers(
+    pub async fn sync_state(
         &mut self,
         shutdown: bool,
         sync_done: Option<oneshot::Receiver<()>>,
@@ -410,14 +447,23 @@ impl Handle {
         }
 
         let r = self
-            .submit_request(JobRequest::Sync {
+            .submit_request(JobRequest::SyncState {
                 shutdown,
                 sync_status: status,
             })
             .await;
         let (_, r) = r.await?;
         match r {
-            JobResult::Sync { mismatched } => Ok(mismatched),
+            JobResult::SyncState { mismatched } => Ok(mismatched),
+            _ => bail!("invalid job result"),
+        }
+    }
+
+    pub async fn sync_peers(&mut self) -> Result<()> {
+        let r = self.submit_request(JobRequest::SyncPeers).await;
+        let (_, r) = r.await?;
+        match r {
+            JobResult::SyncPeers => Ok(()),
             _ => bail!("invalid job result"),
         }
     }

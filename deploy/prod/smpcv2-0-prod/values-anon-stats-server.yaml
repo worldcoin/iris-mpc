@@ -82,8 +82,14 @@ env:
   - name: SMPC__MIN_1D_JOB_SIZE
     value: "65536"
 
+  - name: SMPC__MIN_1D_JOB_SIZE_MIRROR
+    value: "16384"
+
   - name: SMPC__MIN_2D_JOB_SIZE
     value: "1024"
+
+  - name: SMPC__MIN_2D_JOB_SIZE_MIRROR
+    value: "256"
 
   - name: SMPC__MIN_1D_JOB_SIZE_REAUTH
     value: "1000"

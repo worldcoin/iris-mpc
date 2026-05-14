@@ -28,7 +28,7 @@ use iris_mpc_common::iris_db::iris::Threshold;
 use tracing::instrument;
 
 use crate::{
-    hawkers::aby3::aby3_store::DistanceFn,
+    hawkers::aby3::aby3_store::DistanceMode,
     protocol::{
         min_round_robin::{build_round_robin_pairs, select_round_robin_min},
         ops::{DistancePair, IdDistance},
@@ -226,7 +226,7 @@ pub trait DistanceOps: Send + Sync + Debug + 'static {
 
     /// Plaintext distance computation between two iris codes via distance computation strategy f,
     /// returning a fractional Hamming distance pair (dot product of iris codes, dot product of mask codes).
-    fn plaintext_distance(a: &IrisCode, b: &IrisCode, f: DistanceFn) -> (u16, u16);
+    fn plaintext_distance(a: &IrisCode, b: &IrisCode, mode: DistanceMode) -> (u16, u16);
 
     /// Shuffles batched (id, distance) pairs using the 3-party shuffle protocol.
     async fn shuffle_batch(
@@ -294,10 +294,10 @@ impl DistanceOps for FhdOps {
         ((a as u32) * (d as u32)).cmp(&((b as u32) * (c as u32)))
     }
 
-    fn plaintext_distance(a: &IrisCode, b: &IrisCode, f: DistanceFn) -> (u16, u16) {
-        match f {
-            DistanceFn::Simple => a.get_distance_fraction(b),
-            DistanceFn::MinRotation => {
+    fn plaintext_distance(a: &IrisCode, b: &IrisCode, mode: DistanceMode) -> (u16, u16) {
+        match mode {
+            DistanceMode::Simple => a.get_distance_fraction(b),
+            DistanceMode::MinRotation => {
                 a.get_min_fhd_distance_fraction_rotation_aware::<HAWK_MIN_DIST_ROTATIONS>(b)
             }
         }
@@ -352,10 +352,10 @@ impl DistanceOps for NhdOps {
         (nmr1 * (d2.1 as i64)).cmp(&(nmr2 * (d1.1 as i64)))
     }
 
-    fn plaintext_distance(a: &IrisCode, b: &IrisCode, f: DistanceFn) -> (u16, u16) {
-        match f {
-            DistanceFn::Simple => a.get_distance_fraction(b),
-            DistanceFn::MinRotation => {
+    fn plaintext_distance(a: &IrisCode, b: &IrisCode, mode: DistanceMode) -> (u16, u16) {
+        match mode {
+            DistanceMode::Simple => a.get_distance_fraction(b),
+            DistanceMode::MinRotation => {
                 a.get_min_nhd_distance_fraction_rotation_aware::<HAWK_MIN_DIST_ROTATIONS>(b)
             }
         }

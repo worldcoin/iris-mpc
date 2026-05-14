@@ -1,4 +1,5 @@
 #![allow(clippy::needless_range_loop)]
+#![recursion_limit = "256"]
 
 use clap::Parser;
 use eyre::Result;
