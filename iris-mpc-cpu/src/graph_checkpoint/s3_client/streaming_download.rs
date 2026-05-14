@@ -13,12 +13,36 @@
 //! Compare to [`super::multipart::download_graph`], which uses parallel range
 //! GETs into a `BytesMut` and returns a fully buffered `Bytes`. The streaming
 //! path trades that throughput for ~3× lower peak memory on large graphs.
+//!
+//! # Contract on the source byte stream
+//!
+//! `deserialize_and_hash_from` requires that the source emits **exactly** the
+//! canonical bincode encoding of `T` and then EOFs. Any trailing bytes cause
+//! the tee task to fail with `BrokenPipe` (the deserializer drops its end of
+//! the duplex once bincode is done), which surfaces as an error from the
+//! function. For S3 objects produced by [`super::stream_serialize_and_upload`]
+//! this is automatic; callers wiring up other sources must respect the
+//! contract.
+//!
+//! # Retry
+//!
+//! `stream_download_and_deserialize` retries the whole GET → body-read →
+//! deserialize pipeline up to [`DOWNLOAD_MAX_RETRIES`] times on any failure,
+//! with [`DOWNLOAD_RETRY_DELAY`] between attempts. This matches the buffered
+//! [`super::multipart::download_graph`] path, which retries each ranged GET.
+//! Each attempt restarts BLAKE3 from scratch and re-issues `get_object`.
+//! Deserialize errors are also retried — bounded cost, simpler surface.
+
+use std::time::Duration;
 
 use aws_sdk_s3::Client as S3Client;
 use eyre::{eyre, Result};
 use serde::de::DeserializeOwned;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio_util::io::SyncIoBridge;
+
+const DOWNLOAD_MAX_RETRIES: u32 = 3;
+const DOWNLOAD_RETRY_DELAY: Duration = Duration::from_secs(2);
 
 /// Default duplex pipe capacity. Bounds back-pressure on the S3 reader: when
 /// the deserializer falls behind, the pipe fills, the tee task blocks, and
@@ -58,6 +82,34 @@ where
         "Streaming download + deserialize: bucket={bucket}, key={key}, pipe_capacity={pipe_capacity}"
     );
 
+    let mut attempts: u32 = 0;
+    loop {
+        let attempt_result = try_download_once::<T>(s3_client, bucket, key, pipe_capacity).await;
+        match attempt_result {
+            Ok(pair) => return Ok(pair),
+            Err(e) if attempts < DOWNLOAD_MAX_RETRIES => {
+                attempts += 1;
+                tracing::warn!("Retry {attempts} for download s3://{bucket}/{key}: {e}");
+                tokio::time::sleep(DOWNLOAD_RETRY_DELAY).await;
+            }
+            Err(e) => {
+                return Err(eyre!(
+                    "download s3://{bucket}/{key} failed after {attempts} retries: {e:?}"
+                ));
+            }
+        }
+    }
+}
+
+async fn try_download_once<T>(
+    s3_client: &S3Client,
+    bucket: &str,
+    key: &str,
+    pipe_capacity: usize,
+) -> Result<(T, [u8; 32])>
+where
+    T: DeserializeOwned + Send + 'static,
+{
     let resp = s3_client
         .get_object()
         .bucket(bucket)
@@ -193,6 +245,24 @@ mod tests {
 
         let result: Result<(Sample, _)> = deserialize_and_hash_from(Cursor::new(bytes), 1024).await;
         assert!(result.is_err());
+    }
+
+    /// Trailing bytes beyond the bincode payload are a contract violation
+    /// (see module doc). Bincode finishes reading and the deserializer task
+    /// drops its end of the duplex; the still-running tee gets `BrokenPipe`
+    /// on its next write, which surfaces as an error from the function. This
+    /// test pins down that behavior so a future refactor can't accidentally
+    /// hide trailing-byte streams as successful.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn trailing_bytes_fail() {
+        let v = fixture();
+        let mut bytes = bincode::serialize(&v).expect("bincode");
+        bytes.extend_from_slice(&[0xAB; 64 * 1024]); // > one tee buffer past bincode EOF
+        let result: Result<(Sample, _)> = deserialize_and_hash_from(Cursor::new(bytes), 1024).await;
+        assert!(
+            result.is_err(),
+            "trailing bytes after the bincode payload must fail per module contract"
+        );
     }
 
     /// Reader errors propagate. Custom AsyncRead that returns an error

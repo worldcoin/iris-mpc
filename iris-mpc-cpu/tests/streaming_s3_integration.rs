@@ -16,7 +16,9 @@ use aws_sdk_s3::{
     Client as S3Client, Config,
 };
 use eyre::{eyre, Result};
-use iris_mpc_cpu::graph_checkpoint::stream_serialize_and_upload_with;
+use iris_mpc_cpu::graph_checkpoint::{
+    stream_download_and_deserialize_with, stream_serialize_and_upload_with,
+};
 
 fn s3_test_endpoint() -> Option<String> {
     std::env::var("S3_TEST_ENDPOINT").ok()
@@ -197,5 +199,74 @@ async fn streaming_upload_aborts_on_serializer_error() -> Result<()> {
     );
 
     cleanup_bucket(&client, &bucket).await;
+    Ok(())
+}
+
+/// End-to-end: upload via `stream_serialize_and_upload_with`, download via
+/// `stream_download_and_deserialize_with`, assert byte-identical value and
+/// blake3 hash. Exercises the S3 → `ByteStream::into_async_read` → tee →
+/// SyncIoBridge → bincode path that the unit tests bypass.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn streaming_download_round_trip() -> Result<()> {
+    let Some(endpoint) = s3_test_endpoint() else {
+        eprintln!("S3_TEST_ENDPOINT not set; skipping");
+        return Ok(());
+    };
+    let client = make_test_client(&endpoint);
+    let bucket = format!("streaming-test-dl-{}", uuid::Uuid::new_v4());
+    let key = "round-trip.bin";
+    create_bucket(&client, &bucket).await?;
+
+    // ~12 MiB payload so the upload spans 3 parts and the download exercises
+    // mid-stream back-pressure (pipe capacity 4 MiB << payload).
+    let payload: Vec<u64> = (0..1_500_000u64).collect();
+    let buffered = bincode::serialize(&payload).map_err(|e| eyre!("bincode: {e}"))?;
+    let expected_hash = *blake3::hash(&buffered).as_bytes();
+    assert!(buffered.len() > 10 * 1024 * 1024);
+
+    let payload_for_closure = payload.clone();
+    let upload = stream_serialize_and_upload_with(
+        &client,
+        &bucket,
+        key,
+        move |w| {
+            bincode::serialize_into(w, &payload_for_closure).map_err(|e| eyre!("bincode: {e}"))
+        },
+        5 * 1024 * 1024,
+        4,
+    )
+    .await;
+    if let Err(e) = upload {
+        cleanup_bucket(&client, &bucket).await;
+        return Err(e);
+    }
+
+    let download: Result<(Vec<u64>, [u8; 32])> =
+        stream_download_and_deserialize_with(&client, &bucket, key, 4 * 1024 * 1024).await;
+    cleanup_bucket(&client, &bucket).await;
+    let (got, got_hash) = download?;
+
+    assert_eq!(got, payload, "deserialized value mismatch");
+    assert_eq!(got_hash, expected_hash, "hash mismatch");
+    Ok(())
+}
+
+/// A GET against a key that doesn't exist must propagate as an error rather
+/// than hang. Exercises the retry-then-fail path.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn streaming_download_missing_key_fails() -> Result<()> {
+    let Some(endpoint) = s3_test_endpoint() else {
+        eprintln!("S3_TEST_ENDPOINT not set; skipping");
+        return Ok(());
+    };
+    let client = make_test_client(&endpoint);
+    let bucket = format!("streaming-test-dl-missing-{}", uuid::Uuid::new_v4());
+    create_bucket(&client, &bucket).await?;
+
+    let result: Result<(Vec<u64>, [u8; 32])> =
+        stream_download_and_deserialize_with(&client, &bucket, "does-not-exist", 64 * 1024).await;
+
+    cleanup_bucket(&client, &bucket).await;
+    assert!(result.is_err(), "download of missing key should fail");
     Ok(())
 }
