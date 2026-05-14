@@ -242,7 +242,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     base
                                 );
                             } else {
-                                layer_mut.add_outgoing_edges(&base, to_add);
+                                layer_mut.link_neighbors_to_node(&base, to_add);
                             }
                         }
                         EdgeType::Neighbors => {
@@ -254,7 +254,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     );
                                 }
                             }
-                            layer_mut.add_incoming_edges(&base, to_add);
+                            layer_mut.link_node_to_neighbors(&base, to_add);
                         }
                         EdgeType::All => {
                             if layer_mut.get_links(&base).is_none() {
@@ -263,7 +263,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     base
                                 );
                             } else {
-                                layer_mut.add_outgoing_edges(&base, to_add.clone());
+                                layer_mut.link_neighbors_to_node(&base, to_add.clone());
                             }
                             for target in &to_add {
                                 if layer_mut.get_links(target).is_none() {
@@ -273,7 +273,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     );
                                 }
                             }
-                            layer_mut.add_incoming_edges(&base, to_add);
+                            layer_mut.link_node_to_neighbors(&base, to_add);
                         }
                     }
                 }
@@ -299,7 +299,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     base
                                 );
                             } else {
-                                layer_mut.remove_outgoing_edges(&base, to_remove);
+                                layer_mut.unlink_neighbors_from_node(&base, to_remove);
                             }
                         }
                         EdgeType::Neighbors => {
@@ -311,7 +311,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     );
                                 }
                             }
-                            layer_mut.remove_incoming_edges(&base, to_remove);
+                            layer_mut.unlink_node_from_neighbors(&base, to_remove);
                         }
                         EdgeType::All => {
                             if layer_mut.get_links(&base).is_none() {
@@ -320,7 +320,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     base
                                 );
                             } else {
-                                layer_mut.remove_outgoing_edges(&base, to_remove.clone());
+                                layer_mut.unlink_neighbors_from_node(&base, to_remove.clone());
                             }
                             for target in &to_remove {
                                 if layer_mut.get_links(target).is_none() {
@@ -330,7 +330,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     );
                                 }
                             }
-                            layer_mut.remove_incoming_edges(&base, to_remove);
+                            layer_mut.unlink_node_from_neighbors(&base, to_remove);
                         }
                     }
                 }
@@ -596,13 +596,13 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
     /// this layer are silently skipped (callers that need to log the missing
     /// case should check `get_links(target)` first). Idempotent: if `id` is
     /// already present in a target's list, that target is left unchanged.
-    pub fn add_incoming_edges(&mut self, id: &V, to_add: Vec<V>) {
-        for target in &to_add {
+    pub fn link_node_to_neighbors(&mut self, node: &V, neighbors: Vec<V>) {
+        for target in &neighbors {
             if let Some(target_links) = self.links.get_mut(target) {
-                if let Err(pos) = target_links.binary_search(id) {
+                if let Err(pos) = target_links.binary_search(node) {
                     self.set_hash
                         .remove_unordered_set(target, target_links.iter());
-                    target_links.insert(pos, id.clone());
+                    target_links.insert(pos, node.clone());
                     self.set_hash.add_unordered_set(target, target_links.iter());
                 }
             }
@@ -613,17 +613,17 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
     /// No-op if `id` is not present in this layer (callers that need to log
     /// the missing case should check `get_links(id)` first). Idempotent:
     /// existing entries are not duplicated.
-    pub fn add_outgoing_edges(&mut self, id: &V, to_add: Vec<V>) {
-        let Some(node_links) = self.links.get_mut(id) else {
+    pub fn link_neighbors_to_node(&mut self, node: &V, neighbors: Vec<V>) {
+        let Some(node_links) = self.links.get_mut(node) else {
             return;
         };
-        self.set_hash.remove_unordered_set(id, node_links.iter());
-        for nb in to_add {
+        self.set_hash.remove_unordered_set(node, node_links.iter());
+        for nb in neighbors {
             if let Err(pos) = node_links.binary_search(&nb) {
                 node_links.insert(pos, nb);
             }
         }
-        self.set_hash.add_unordered_set(id, node_links.iter());
+        self.set_hash.add_unordered_set(node, node_links.iter());
     }
 
     /// Remove a node from the graph and clean up all backlinks from its neighbors.
@@ -652,12 +652,12 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
     /// Remove `id` from each target's neighbor list, where `target` ranges over
     /// `to_remove`. Targets that don't exist in this layer are silently skipped
     /// (the caller's apply path is responsible for any logging).
-    pub fn remove_incoming_edges(&mut self, id: &V, to_remove: Vec<V>) {
-        for target in &to_remove {
+    pub fn unlink_node_from_neighbors(&mut self, node: &V, neighbors: Vec<V>) {
+        for target in &neighbors {
             if let Some(target_links) = self.links.get_mut(target) {
                 self.set_hash
                     .remove_unordered_set(target, target_links.iter());
-                target_links.retain(|x| x != id);
+                target_links.retain(|x| x != node);
                 self.set_hash.add_unordered_set(target, target_links.iter());
             }
         }
@@ -667,13 +667,13 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
     /// if `id` is not present in this layer (callers that need to log the
     /// missing case should check `get_links(id)` first). The removal is
     /// unidirectional: the targets' own link lists are not modified.
-    pub fn remove_outgoing_edges(&mut self, id: &V, to_remove: Vec<V>) {
-        let Some(node_links) = self.links.get_mut(id) else {
+    pub fn unlink_neighbors_from_node(&mut self, node: &V, neighbors: Vec<V>) {
+        let Some(node_links) = self.links.get_mut(node) else {
             return;
         };
-        self.set_hash.remove_unordered_set(id, node_links.iter());
-        node_links.retain(|x| !to_remove.contains(x));
-        self.set_hash.add_unordered_set(id, node_links.iter());
+        self.set_hash.remove_unordered_set(node, node_links.iter());
+        node_links.retain(|x| !neighbors.contains(x));
+        self.set_hash.add_unordered_set(node, node_links.iter());
     }
 
     pub fn set_links(&mut self, from: V, links: Vec<V>) {

@@ -140,7 +140,7 @@ mod tests {
         let mut layer = Layer::new();
         layer.insert_node(&10i32, vec![]);
         layer.insert_node(&20i32, vec![]);
-        layer.add_incoming_edges(&5, vec![10, 20]);
+        layer.link_node_to_neighbors(&5, vec![10, 20]);
         assert_eq!(layer.get_links(&10), Some([5].as_slice()));
         assert_eq!(layer.get_links(&20), Some([5].as_slice()));
     }
@@ -151,8 +151,8 @@ mod tests {
     fn add_neighbors_is_idempotent() {
         let mut layer = Layer::new();
         layer.insert_node(&10i32, vec![]);
-        layer.add_incoming_edges(&5, vec![10]);
-        layer.add_incoming_edges(&5, vec![10]);
+        layer.link_node_to_neighbors(&5, vec![10]);
+        layer.link_node_to_neighbors(&5, vec![10]);
         assert_eq!(layer.get_links(&10), Some([5].as_slice()));
     }
 
@@ -163,9 +163,9 @@ mod tests {
     fn add_neighbors_maintains_sorted_order() {
         let mut layer = Layer::new();
         layer.insert_node(&10i32, vec![]);
-        layer.add_incoming_edges(&7, vec![10]);
-        layer.add_incoming_edges(&3, vec![10]);
-        layer.add_incoming_edges(&5, vec![10]);
+        layer.link_node_to_neighbors(&7, vec![10]);
+        layer.link_node_to_neighbors(&3, vec![10]);
+        layer.link_node_to_neighbors(&5, vec![10]);
         assert_eq!(layer.get_links(&10), Some([3, 5, 7].as_slice()));
     }
 
@@ -174,7 +174,7 @@ mod tests {
     #[test]
     fn add_neighbors_skips_nonexistent_nodes() {
         let mut layer = Layer::new();
-        layer.add_incoming_edges(&1i32, vec![99]); // node 99 was never inserted
+        layer.link_node_to_neighbors(&1i32, vec![99]); // node 99 was never inserted
         assert!(layer.get_links(&99).is_none());
     }
 
@@ -185,7 +185,7 @@ mod tests {
     fn remove_neighbors_removes_specified_only() {
         let mut layer = Layer::new();
         layer.insert_node(&1i32, vec![2, 3, 4, 5]);
-        layer.remove_outgoing_edges(&1, vec![2, 4]);
+        layer.unlink_neighbors_from_node(&1, vec![2, 4]);
         assert_eq!(layer.get_links(&1), Some([3, 5].as_slice()));
     }
 
@@ -197,7 +197,7 @@ mod tests {
         let mut layer = Layer::new();
         layer.insert_node(&1i32, vec![2, 3]);
         layer.insert_node(&2i32, vec![1, 3]);
-        layer.remove_outgoing_edges(&1, vec![2]);
+        layer.unlink_neighbors_from_node(&1, vec![2]);
         assert_eq!(layer.get_links(&1), Some([3].as_slice()));
         assert_eq!(layer.get_links(&2), Some([1, 3].as_slice()));
     }
@@ -206,7 +206,7 @@ mod tests {
     #[test]
     fn remove_neighbors_on_nonexistent_node_is_noop() {
         let mut layer = Layer::new();
-        layer.remove_outgoing_edges(&99i32, vec![1, 2]); // should not panic
+        layer.unlink_neighbors_from_node(&99i32, vec![1, 2]); // should not panic
     }
 
     // ── WAL replay sequences ──────────────────────────────────────────────────
@@ -225,7 +225,7 @@ mod tests {
         // New node 40 inserted with forward links to 10 and 20
         layer.insert_node(&40, vec![10, 20]);
         // Backlinks: 10 and 20 each gain 40 as a neighbor
-        layer.add_incoming_edges(&40, vec![10, 20]);
+        layer.link_node_to_neighbors(&40, vec![10, 20]);
 
         assert_eq!(layer.get_links(&40), Some([10, 20].as_slice()));
         assert_eq!(layer.get_links(&10).unwrap(), &[20, 30, 40]);
@@ -246,9 +246,9 @@ mod tests {
         // Insert node 4 with forward links [1, 2]
         layer.insert_node(&4, vec![1, 2]);
         // Backlinks into 1 and 2
-        layer.add_incoming_edges(&4, vec![1, 2]);
+        layer.link_node_to_neighbors(&4, vec![1, 2]);
         // Compaction: node 2 now exceeds link limit, prune neighbor 3
-        layer.remove_outgoing_edges(&2, vec![3]);
+        layer.unlink_neighbors_from_node(&2, vec![3]);
 
         assert_eq!(layer.get_links(&4), Some([1, 2].as_slice()));
         assert_eq!(layer.get_links(&1).unwrap(), &[2, 3, 4]);
