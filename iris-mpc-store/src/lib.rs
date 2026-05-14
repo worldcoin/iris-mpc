@@ -209,6 +209,19 @@ impl Store {
         .fetch(&self.pool)
     }
 
+    /// Stream `(serial_id, version_id)` pairs for `1..=max_serial_id`.
+    /// Index-only — no iris code/mask blobs.
+    pub fn stream_iris_ids(
+        &self,
+        max_serial_id: usize,
+    ) -> impl Stream<Item = sqlx::Result<(i64, i16)>> + '_ {
+        sqlx::query_as::<_, (i64, i16)>(
+            "SELECT id, version_id FROM irises WHERE id >= 1 AND id <= $1 ORDER BY id ASC",
+        )
+        .bind(i64::try_from(max_serial_id).expect("max_serial_id fits into i64"))
+        .fetch(&self.pool)
+    }
+
     pub async fn get_iris_data_by_id(&self, id: i64) -> Result<DbStoredIris> {
         let iris = sqlx::query_as::<_, DbStoredIris>(
             r#"
