@@ -146,8 +146,11 @@ impl NetworkHandle for CountingNetworkHandle {
         self.inner.make_sessions().await
     }
 
-    async fn sync_peers(&mut self) -> Result<()> {
-        self.inner.sync_peers().await
+    async fn control_channel(
+        &mut self,
+    ) -> Result<Box<dyn ampc_actor_utils::network::mpc::handle::control_channel::ControlChannel>>
+    {
+        self.inner.control_channel().await
     }
 }
 
@@ -186,7 +189,10 @@ impl NetworkHandle for DummyNetHandle {
     )> {
         unreachable!("DummyNetHandle should never be called")
     }
-    async fn sync_peers(&mut self) -> Result<()> {
+    async fn control_channel(
+        &mut self,
+    ) -> Result<Box<dyn ampc_actor_utils::network::mpc::handle::control_channel::ControlChannel>>
+    {
         unreachable!("DummyNetHandle should never be called")
     }
 }
