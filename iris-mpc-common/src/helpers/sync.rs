@@ -13,6 +13,9 @@ pub struct SyncState {
     /// Bincode-serialized `BothEyes<Vec<GraphMutation<IrisVectorId>>>` for each
     /// modification in `modifications` (parallel by index).  `None` means this
     /// party has no WAL entry for that modification.
+    ///
+    /// using serde(default) for backwards compatibility.
+    #[serde(default)]
     pub graph_mutation_bytes: Vec<Option<Vec<u8>>>,
 }
 
