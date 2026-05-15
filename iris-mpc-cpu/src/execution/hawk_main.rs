@@ -767,15 +767,12 @@ impl HawkActor {
             // so that downstream result derivation (merged_results / inserted_id)
             // still sees the correct serial IDs.
             let mut next_serial_id = self.registry[LEFT].read().await.next_id;
-            return Ok(plans
-                .into_iter()
-                .zip(insertion_ids.iter())
-                .zip(replace_ids.iter())
-                .map(|((plan, id), replace_id)| {
+            return Ok(izip!(plans, insertion_ids.iter(), replace_ids.iter())
+                .map(|(plan, insertion_id, replace_id)| {
                     let mut mutations = Vec::new();
 
                     if let Some(plan) = plan {
-                        let inserted_vector = if let Some(id) = id {
+                        let inserted_vector = if let Some(id) = insertion_id {
                             *id
                         } else {
                             let vid = VectorId::from_serial_id(next_serial_id);
@@ -1966,10 +1963,7 @@ impl HawkHandle {
 
         // Build replace_ids covering both reauth/identity-update targets (which
         // pair with an InsertPlan in the same slot) and pure deletions (which
-        // have None as their InsertPlan). Slot order matches requests_order so
-        // graph mutations are applied in arrival order. update_ids[i] already
-        // corresponds to requests_order[i] (both are built by parallel iteration
-        // over requests_order above).
+        // have None as their InsertPlan).
         let replace_ids = requests_order
             .iter()
             .enumerate()
@@ -2017,8 +2011,6 @@ impl HawkHandle {
             );
 
             // Collect the HNSW insertion plans for all mutating decisions.
-            // Deletion slots are always None here; their RemoveNode is produced by
-            // the insert pipeline via the replace_ids argument.
             let insert_plans = requests_order
                 .iter()
                 .map(|req_index| match req_index {
