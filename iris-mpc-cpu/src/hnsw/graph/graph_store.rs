@@ -1,6 +1,6 @@
 use crate::{
     execution::hawk_main::BothEyes,
-    hnsw::{graph::GraphMutation, VectorStore},
+    hnsw::{graph::MutationOp, VectorStore},
 };
 use eyre::{eyre, Result};
 use iris_mpc_common::{postgres::PostgresClient, IrisVectorId};
@@ -35,8 +35,8 @@ pub struct GraphPg<V: VectorStore> {
 }
 
 impl GraphMutationRow {
-    pub fn deserialize_mutations(&self) -> Result<BothEyes<Vec<GraphMutation<IrisVectorId>>>> {
-        let both_eyes: BothEyes<Vec<GraphMutation<IrisVectorId>>> =
+    pub fn deserialize_mutations(&self) -> Result<BothEyes<Vec<MutationOp<IrisVectorId>>>> {
+        let both_eyes: BothEyes<Vec<MutationOp<IrisVectorId>>> =
             bincode::deserialize(&self.serialized_mutations)?;
         Ok(both_eyes)
     }

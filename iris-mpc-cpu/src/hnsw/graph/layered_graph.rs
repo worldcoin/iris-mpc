@@ -7,7 +7,7 @@ use crate::{
     execution::hawk_main::state_check::SetHash,
     hawkers::ideal_knn_engines::{read_knn_results_from_file, Engine, EngineChoice, KNNResult},
     hnsw::{
-        graph::{mutation::EdgeType, GraphMutation, UpdateEntryPoint},
+        graph::{mutation::EdgeType, MutationOp, UpdateEntryPoint},
         searcher::LayerMode,
         vector_store::Ref,
         HnswSearcher,
@@ -175,17 +175,17 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
     ///
     /// This updates the graph's entry points set and connects the new vector to its
     /// neighbors as specified in the mutations.
-    pub fn insert_apply(&mut self, plan: Vec<GraphMutation<V>>) {
+    pub fn insert_apply(&mut self, plan: Vec<MutationOp<V>>) {
         // Pass 1: apply node-level mutations.
         for mutation in plan.iter() {
             match mutation {
-                GraphMutation::RemoveNode { id } => {
+                MutationOp::RemoveNode { id } => {
                     for layer in &mut self.layers {
                         layer.remove_node(id);
                     }
                     self.entry_points.retain(|ep| &ep.point != id);
                 }
-                GraphMutation::AddNode {
+                MutationOp::AddNode {
                     id,
                     height,
                     update_ep,
@@ -216,15 +216,15 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                         self.layers[layer_idx].insert_node(id, Vec::new());
                     }
                 }
-                GraphMutation::AddEdges { .. } | GraphMutation::RemoveEdges { .. } => {}
+                MutationOp::AddEdges { .. } | MutationOp::RemoveEdges { .. } => {}
             }
         }
 
         // Pass 2: apply edge-level mutations.
         for mutation in plan.into_iter() {
             match mutation {
-                GraphMutation::AddNode { .. } | GraphMutation::RemoveNode { .. } => {}
-                GraphMutation::AddEdges {
+                MutationOp::AddNode { .. } | MutationOp::RemoveNode { .. } => {}
+                MutationOp::AddEdges {
                     base,
                     layer,
                     neighbors: to_add,
@@ -277,7 +277,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                         }
                     }
                 }
-                GraphMutation::RemoveEdges {
+                MutationOp::RemoveEdges {
                     base,
                     layer,
                     neighbors: to_remove,
@@ -991,7 +991,7 @@ mod tests {
         Ok(())
     }
 
-    use crate::hnsw::graph::mutation::{EdgeType, GraphMutation, UpdateEntryPoint};
+    use crate::hnsw::graph::mutation::{EdgeType, MutationOp, UpdateEntryPoint};
 
     #[test]
     fn add_edges_outgoing_writes_only_to_id_list() {
@@ -1001,23 +1001,23 @@ mod tests {
         let c = IrisVectorId::from_serial_id(3);
         // Seed: a, b, c all exist at layer 0 with no edges.
         graph.insert_apply(vec![
-            GraphMutation::AddNode {
+            MutationOp::AddNode {
                 id: a,
                 height: 1,
                 update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
             },
-            GraphMutation::AddNode {
+            MutationOp::AddNode {
                 id: b,
                 height: 1,
                 update_ep: UpdateEntryPoint::False,
             },
-            GraphMutation::AddNode {
+            MutationOp::AddNode {
                 id: c,
                 height: 1,
                 update_ep: UpdateEntryPoint::False,
             },
         ]);
-        graph.insert_apply(vec![GraphMutation::AddEdges {
+        graph.insert_apply(vec![MutationOp::AddEdges {
             base: a,
             layer: 0,
             neighbors: vec![b, c],
@@ -1041,23 +1041,23 @@ mod tests {
         let b = IrisVectorId::from_serial_id(2);
         let c = IrisVectorId::from_serial_id(3);
         graph.insert_apply(vec![
-            GraphMutation::AddNode {
+            MutationOp::AddNode {
                 id: a,
                 height: 1,
                 update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
             },
-            GraphMutation::AddNode {
+            MutationOp::AddNode {
                 id: b,
                 height: 1,
                 update_ep: UpdateEntryPoint::False,
             },
-            GraphMutation::AddNode {
+            MutationOp::AddNode {
                 id: c,
                 height: 1,
                 update_ep: UpdateEntryPoint::False,
             },
         ]);
-        graph.insert_apply(vec![GraphMutation::AddEdges {
+        graph.insert_apply(vec![MutationOp::AddEdges {
             base: a,
             layer: 0,
             neighbors: vec![b, c],
@@ -1078,23 +1078,23 @@ mod tests {
         let b = IrisVectorId::from_serial_id(2);
         let c = IrisVectorId::from_serial_id(3);
         graph.insert_apply(vec![
-            GraphMutation::AddNode {
+            MutationOp::AddNode {
                 id: a,
                 height: 1,
                 update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
             },
-            GraphMutation::AddNode {
+            MutationOp::AddNode {
                 id: b,
                 height: 1,
                 update_ep: UpdateEntryPoint::False,
             },
-            GraphMutation::AddNode {
+            MutationOp::AddNode {
                 id: c,
                 height: 1,
                 update_ep: UpdateEntryPoint::False,
             },
         ]);
-        graph.insert_apply(vec![GraphMutation::AddEdges {
+        graph.insert_apply(vec![MutationOp::AddEdges {
             base: a,
             layer: 0,
             neighbors: vec![b, c],
@@ -1112,41 +1112,41 @@ mod tests {
         let b = IrisVectorId::from_serial_id(2);
         let c = IrisVectorId::from_serial_id(3);
         graph.insert_apply(vec![
-            GraphMutation::AddNode {
+            MutationOp::AddNode {
                 id: a,
                 height: 1,
                 update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
             },
-            GraphMutation::AddEdges {
+            MutationOp::AddEdges {
                 base: a,
                 layer: 0,
                 neighbors: vec![b, c],
                 edge_type: EdgeType::Base,
             },
-            GraphMutation::AddNode {
+            MutationOp::AddNode {
                 id: b,
                 height: 1,
                 update_ep: UpdateEntryPoint::False,
             },
-            GraphMutation::AddEdges {
+            MutationOp::AddEdges {
                 base: b,
                 layer: 0,
                 neighbors: vec![a],
                 edge_type: EdgeType::Base,
             },
-            GraphMutation::AddNode {
+            MutationOp::AddNode {
                 id: c,
                 height: 1,
                 update_ep: UpdateEntryPoint::False,
             },
-            GraphMutation::AddEdges {
+            MutationOp::AddEdges {
                 base: c,
                 layer: 0,
                 neighbors: vec![a],
                 edge_type: EdgeType::Base,
             },
         ]);
-        graph.insert_apply(vec![GraphMutation::RemoveEdges {
+        graph.insert_apply(vec![MutationOp::RemoveEdges {
             base: a,
             layer: 0,
             neighbors: vec![b],
@@ -1166,19 +1166,19 @@ mod tests {
         let b = IrisVectorId::from_serial_id(2);
         graph.insert_apply(vec![
             // Listed first: an edge op that references a node not yet created.
-            GraphMutation::AddEdges {
+            MutationOp::AddEdges {
                 base: a,
                 layer: 0,
                 neighbors: vec![b],
                 edge_type: EdgeType::Base,
             },
             // Listed second: the node creation.
-            GraphMutation::AddNode {
+            MutationOp::AddNode {
                 id: a,
                 height: 1,
                 update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
             },
-            GraphMutation::AddNode {
+            MutationOp::AddNode {
                 id: b,
                 height: 1,
                 update_ep: UpdateEntryPoint::False,
