@@ -75,7 +75,7 @@ pub async fn insert<V: VectorStoreMut>(
     assert_eq!(
         plans.len(),
         insert_ids.len(),
-        "plans and ids must be the same length"
+        "plans and insert_ids must be the same length"
     );
 
     let insert_plans = join_plans(plans, &searcher.layer_mode);
