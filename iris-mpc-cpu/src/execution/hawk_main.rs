@@ -85,7 +85,7 @@ use crate::{
         shared_irises::SharedIrises,
     },
     hnsw::{
-        graph::{graph_store, GraphMutation, GroupedMutations, UpdateEntryPoint},
+        graph::{graph_store, GraphMutation, MutationOp, UpdateEntryPoint},
         searcher::{LayerDistribution, NeighborhoodMode},
         GraphMem, HnswSearcher, VectorStore,
     },
@@ -469,7 +469,7 @@ pub struct HawkInsertPlan {
 /// represents the full set of atomic graph updates required. This includes not only the new
 /// node's neighbors but also the reciprocal (bilateral) connections from existing nodes back to the
 /// new one. It is the definitive set of changes that will be applied to the graph storage.
-pub type ConnectPlan = GroupedMutations<VectorId>;
+pub type ConnectPlan = GraphMutation<VectorId>;
 
 /// Build the MPC network handle. Cheap — just TCP listener setup.
 /// Callers that need peer sync before iris load (genesis) call
@@ -779,7 +779,7 @@ impl HawkActor {
                             next_serial_id += 1;
                             vid
                         };
-                        mutations.push(GraphMutation::AddNode {
+                        mutations.push(MutationOp::AddNode {
                             id: inserted_vector,
                             height: plan.plan.links.len(),
                             update_ep: UpdateEntryPoint::False,
@@ -787,13 +787,13 @@ impl HawkActor {
                     }
 
                     if let Some(rid) = replace_id {
-                        mutations.push(GraphMutation::RemoveNode { id: *rid });
+                        mutations.push(MutationOp::RemoveNode { id: *rid });
                     }
 
                     if mutations.is_empty() {
                         None
                     } else {
-                        Some(GroupedMutations(mutations))
+                        Some(GraphMutation(mutations))
                     }
                 })
                 .collect_vec());
@@ -1405,7 +1405,7 @@ impl HawkResult {
                     .or(mutation.plans[RIGHT].as_ref())
                     .and_then(|plan| {
                         plan.0.iter().find_map(|m| match m {
-                            GraphMutation::AddNode { id, .. } => Some(*id),
+                            MutationOp::AddNode { id, .. } => Some(*id),
                             _ => None,
                         })
                     })
@@ -2472,13 +2472,13 @@ mod hawk_mutation_tests {
     use iris_mpc_common::helpers::sync::ModificationKey;
 
     fn create_test_connect_plan(vector_id: VectorId) -> ConnectPlan {
-        GroupedMutations(vec![
-            GraphMutation::AddNode {
+        GraphMutation(vec![
+            MutationOp::AddNode {
                 id: vector_id,
                 height: 1,
                 update_ep: UpdateEntryPoint::False,
             },
-            GraphMutation::AddEdges {
+            MutationOp::AddEdges {
                 base: vector_id,
                 layer: 0,
                 neighbors: vec![vector_id],

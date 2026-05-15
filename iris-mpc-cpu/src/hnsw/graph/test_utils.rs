@@ -20,7 +20,7 @@ use crate::{
             },
             mutation::EdgeType,
             neighborhood::Neighborhood,
-            GraphMutation, UpdateEntryPoint,
+            MutationOp, UpdateEntryPoint,
         },
         vector_store::{VectorStore, VectorStoreMut},
         SortedNeighborhood,
@@ -373,7 +373,7 @@ impl DbContext {
         let mut left_graph = GraphMem::<PlaintextVectorRef>::new();
 
         // Set entry point via InsertNode with SetUnique
-        let ep_mutation = GraphMutation::AddNode {
+        let ep_mutation = MutationOp::AddNode {
             id: vectors[0],
             height: 1,
             update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
@@ -390,12 +390,12 @@ impl DbContext {
             }
             let neighbors = links.edge_ids();
             let mutations = vec![
-                GraphMutation::AddNode {
+                MutationOp::AddNode {
                     id: vectors[i],
                     height: 1,
                     update_ep: UpdateEntryPoint::False,
                 },
-                GraphMutation::AddEdges {
+                MutationOp::AddEdges {
                     base: vectors[i],
                     layer: 0,
                     neighbors,
