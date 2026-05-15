@@ -5,6 +5,7 @@
     reason = "In MPC protocols, this can be dangerous as the iteration order is not guaranteed to be in sync between the parties due to HashMap randomization."
 )]
 pub mod analysis;
+pub mod checkpoint_protocol;
 pub mod execution;
 pub mod genesis;
 pub mod graph_checkpoint;
