@@ -290,6 +290,8 @@ impl<V: VectorStore> GraphPg<V> {
             r#"
             INSERT INTO hawk_graph_mutations (modification_id, serialized_mutations)
             VALUES ($1, $2)
+            ON CONFLICT (modification_id) DO UPDATE
+            SET serialized_mutations = EXCLUDED.serialized_mutations
             RETURNING modification_id, serialized_mutations
             "#,
         )
@@ -338,6 +340,37 @@ impl<V: VectorStore> GraphPg<V> {
         .map_err(|e| eyre!("Failed to fetch mutations after {min_id:?}: {e}"))?;
 
         Ok(rows.into_iter().collect())
+    }
+
+    /// Returns every row whose `modification_id >= from_id`, ordered ascending.
+    /// Use this when you know the exact first modification you need (inclusive),
+    /// in contrast to `get_hawk_graph_mutations_after()` which is exclusive.
+    pub async fn get_hawk_graph_mutations_from(
+        &self,
+        from_id: i64,
+    ) -> Result<Vec<GraphMutationRow>> {
+        let rows = sqlx::query_as::<_, GraphMutationRow>(
+            r#"
+            SELECT modification_id, serialized_mutations
+            FROM hawk_graph_mutations
+            WHERE modification_id >= $1
+            ORDER BY modification_id ASC
+            "#,
+        )
+        .bind(from_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| eyre!("Failed to fetch mutations from {from_id}: {e}"))?;
+
+        Ok(rows.into_iter().collect())
+    }
+
+    /// Opens a new database transaction on the underlying pool.
+    pub async fn begin_tx(&self) -> Result<Transaction<'_, Postgres>> {
+        self.pool
+            .begin()
+            .await
+            .map_err(|e| eyre!("Failed to begin graph transaction: {e}"))
     }
 
     pub async fn delete_hawk_graph_mutations(
@@ -400,6 +433,8 @@ impl<'b, V: VectorStore> GraphTx<'b, V> {
             r#"
             INSERT INTO hawk_graph_mutations (modification_id, serialized_mutations)
             VALUES ($1, $2)
+            ON CONFLICT (modification_id) DO UPDATE
+            SET serialized_mutations = EXCLUDED.serialized_mutations
             "#,
         )
         .bind(modification_id)

@@ -1,9 +1,11 @@
 mod data;
 mod s3_client;
+mod synchronize;
 
 use ampc_server_utils::{try_get_endpoint_other_nodes, ServerCoordinationConfig};
 pub use data::*;
 pub use s3_client::*;
+pub use synchronize::*;
 
 use eyre::{bail, Result};
 
