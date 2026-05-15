@@ -6,8 +6,9 @@ use aws_sdk_sns::types::MessageAttributeValue;
 use axum::routing::get;
 use axum::Router;
 use iris_mpc_cpu::graph_checkpoint::{
-    download_graph_checkpoint, get_common_checkpoint, get_most_recent_checkpoints, s3_key_exists,
-    GraphCheckpointState, GRAPH_CHECKPOINT_ROUTE,
+    apply_graph_mutations, download_graph_checkpoint, get_common_checkpoint,
+    get_most_recent_checkpoints, s3_key_exists, sync_graph_mutations, GraphCheckpointState,
+    GRAPH_CHECKPOINT_ROUTE,
 };
 use iris_mpc_cpu::hnsw::GraphMem;
 
@@ -81,7 +82,7 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     maybe_seed_random_shares(&config, &iris_store).await?;
     check_store_consistency(&config, &iris_store).await?;
-    let my_state = build_sync_state(&config, &aws_clients, &iris_store).await?;
+    let my_state = build_sync_state(&config, &aws_clients, &iris_store, &graph_store).await?;
 
     let mut background_tasks = TaskMonitor::new();
 
@@ -171,6 +172,9 @@ pub async fn server_main(config: Config) -> Result<()> {
             sync_result.clone(),
         )
         .await?;
+        // insert the WAL entries so that init_hawk_actor rolls the graph forward to
+        // the correct height.
+        sync_graph_mutations(&sync_result, &graph_store).await?;
     }
 
     if config.enable_modifications_replay {
@@ -199,6 +203,7 @@ pub async fn server_main(config: Config) -> Result<()> {
         &aws_clients.checkpoint_s3_client,
         &config.graph_checkpoint_bucket_name,
         &iris_store,
+        &graph_store,
         graph_checkpoint,
         &shutdown_handler,
     )
@@ -426,6 +431,7 @@ async fn build_sync_state(
     config: &Config,
     aws_clients: &AwsClients,
     store: &Store,
+    graph_store: &GraphPg<Aby3Store<HawkOps>>,
 ) -> Result<SyncState> {
     let db_len = store.count_irises().await? as u64;
     let modifications = store
@@ -439,6 +445,24 @@ async fn build_sync_state(
     .await?;
     let common_config = CommonConfig::from(config.clone());
 
+    // Fetch graph mutations for all modifications in the lookback window so
+    // they can be exchanged with the other parties via the SyncState payload.
+    // We only need mutations starting from the oldest modification we track.
+    let graph_mutation_bytes = if let Some(min_id) = modifications.iter().map(|m| m.id).min() {
+        let mutation_map: HashMap<i64, Vec<u8>> = graph_store
+            .get_hawk_graph_mutations_from(min_id)
+            .await?
+            .into_iter()
+            .map(|row| (row.modification_id, row.serialized_mutations))
+            .collect();
+        modifications
+            .iter()
+            .map(|m| mutation_map.get(&m.id).cloned())
+            .collect()
+    } else {
+        vec![]
+    };
+
     tracing::info!("Database store length is: {}", db_len);
 
     Ok(SyncState {
@@ -446,6 +470,7 @@ async fn build_sync_state(
         modifications,
         next_sns_sequence_num,
         common_config,
+        graph_mutation_bytes,
     })
 }
 
@@ -527,6 +552,7 @@ async fn init_hawk_actor(
     s3_client: &Client,
     checkpoint_bucket: &str,
     iris_store: &Store,
+    graph_store: &GraphPg<Aby3Store<HawkOps>>,
     checkpoint: Option<GraphCheckpointState>,
     shutdown_handler: &Arc<ShutdownHandler>,
 ) -> Result<HawkActor> {
@@ -578,11 +604,25 @@ async fn init_hawk_actor(
     // Network handle built up-front; iris and graph load in parallel.
     let networking = build_hawk_network_handle(&hawk_args, ct).await?;
 
-    // Try to load graph from S3 checkpoint first, then fall back to
-    // Postgres graph representation for temporary legacy compatibility.
-    // TODO: apply GraphMutations to the checkpoint
+    // Fetch WAL mutations that were committed after the checkpoint was taken.
+    let wal_mutation_rows = match checkpoint.as_ref().and_then(|cp| cp.graph_mutation_id) {
+        Some(last_mutation_id) => {
+            tracing::info!(
+                last_mutation_id,
+                "fetching WAL graph mutations to replay on top of checkpoint"
+            );
+            graph_store
+                .get_hawk_graph_mutations_after(Some(last_mutation_id))
+                .await?
+        }
+        None => vec![],
+    };
+
+    // Try to load graph from S3 checkpoint first, then fall back to an empty
+    // graph.  After loading from the checkpoint, replay any WAL mutations that
+    // were committed after it so all parties converge on the same graph state.
     let graph_load_future = async move {
-        let both_eyes = if let Some(state) = checkpoint {
+        let mut both_eyes = if let Some(state) = checkpoint {
             tracing::info!(
                 "Loading graph from common S3 checkpoint, hash: {}",
                 state.blake3_hash
@@ -592,6 +632,14 @@ async fn init_hawk_actor(
             tracing::info!("No S3 checkpoint found, defaulting to empty graph");
             [GraphMem::new(), GraphMem::new()]
         };
+
+        // Apply WAL mutations on top of the checkpoint in modification_id order.
+        let n = wal_mutation_rows.len();
+        apply_graph_mutations(&mut both_eyes, wal_mutation_rows)?;
+        if n > 0 {
+            tracing::info!(n, "applied WAL graph mutations to checkpoint");
+        }
+
         Ok::<_, eyre::Report>(both_eyes)
     };
 

@@ -10,6 +10,10 @@ pub struct SyncState {
     pub modifications: Vec<Modification>,
     pub next_sns_sequence_num: Option<u128>,
     pub common_config: CommonConfig,
+    /// Bincode-serialized `BothEyes<Vec<GraphMutation<IrisVectorId>>>` for each
+    /// modification in `modifications` (parallel by index).  `None` means this
+    /// party has no WAL entry for that modification.
+    pub graph_mutation_bytes: Vec<Option<Vec<u8>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -384,6 +388,7 @@ mod tests {
             modifications,
             next_sns_sequence_num: None,
             common_config: CommonConfig::from(config),
+            graph_mutation_bytes: vec![],
         }
     }
 
@@ -790,18 +795,21 @@ mod tests {
                 modifications: vec![],
                 next_sns_sequence_num: Some(100),
                 common_config: CommonConfig::default(),
+                graph_mutation_bytes: vec![],
             },
             SyncState {
                 db_len: 20,
                 modifications: vec![],
                 next_sns_sequence_num: Some(200),
                 common_config: CommonConfig::default(),
+                graph_mutation_bytes: vec![],
             },
             SyncState {
                 db_len: 30,
                 modifications: vec![],
                 next_sns_sequence_num: Some(150),
                 common_config: CommonConfig::default(),
+                graph_mutation_bytes: vec![],
             },
         ];
 
@@ -814,6 +822,7 @@ mod tests {
             modifications: vec![],
             next_sns_sequence_num: None,
             common_config: CommonConfig::default(),
+            graph_mutation_bytes: vec![],
         };
         let all_states = vec![
             state_with_none_sequence_num.clone(),
@@ -836,18 +845,21 @@ mod tests {
                 modifications: vec![],
                 next_sns_sequence_num: None, // NodeX - advanced but empty queue
                 common_config: CommonConfig::default(),
+                graph_mutation_bytes: vec![],
             },
             SyncState {
                 db_len: 20,
                 modifications: vec![],
                 next_sns_sequence_num: Some(123), // Other nodes still have messages
                 common_config: CommonConfig::default(),
+                graph_mutation_bytes: vec![],
             },
             SyncState {
                 db_len: 30,
                 modifications: vec![],
                 next_sns_sequence_num: Some(123),
                 common_config: CommonConfig::default(),
+                graph_mutation_bytes: vec![],
             },
         ];
 
@@ -967,18 +979,21 @@ mod tests {
                 modifications: vec![],
                 next_sns_sequence_num: Some(100),
                 common_config: CommonConfig::from(config1),
+                graph_mutation_bytes: vec![],
             },
             SyncState {
                 db_len: 20,
                 modifications: vec![],
                 next_sns_sequence_num: Some(100),
                 common_config: CommonConfig::from(config2),
+                graph_mutation_bytes: vec![],
             },
             SyncState {
                 db_len: 20,
                 modifications: vec![],
                 next_sns_sequence_num: Some(100),
                 common_config: CommonConfig::from(config3),
+                graph_mutation_bytes: vec![],
             },
         ];
 
