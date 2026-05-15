@@ -9,6 +9,7 @@
 //! See `Checkpoint Protocol - Unified Design.md` for the design rationale.
 
 pub mod hasher;
+pub mod materializer;
 pub mod store;
 pub mod transport;
 
@@ -16,6 +17,7 @@ pub mod transport;
 mod tests;
 
 pub use hasher::Blake3GraphHasher;
+pub use materializer::{LiveClone, RebuildFromCheckpoint};
 pub use transport::{RingChannel, RingConsensusTransport};
 
 use std::time::Duration;
@@ -42,6 +44,11 @@ pub type GraphMutationId = i64;
 pub type Graph = BothEyes<GraphMem<VectorId>>;
 
 /// Metadata for the base checkpoint a cycle starts from.
+///
+/// All fields participate in base agreement (strict equality across parties).
+/// `graph_version` lives here so the materializer doesn't need a separate
+/// lookup to drive S3 download, and so version-skewed parties fail the base
+/// round rather than the hash round.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckpointMeta {
     pub checkpoint_id: i64,
@@ -50,6 +57,7 @@ pub struct CheckpointMeta {
     pub last_indexed_modification_id: i64,
     pub graph_mutation_id: Option<GraphMutationId>,
     pub blake3_hash: String,
+    pub graph_version: i32,
 }
 
 /// Inclusive upper bound on `graph_mutation_id` to apply during materialization.

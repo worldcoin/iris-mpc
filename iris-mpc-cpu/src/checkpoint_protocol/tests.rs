@@ -42,6 +42,7 @@ fn meta(id: i64, mut_id: Option<i64>) -> CheckpointMeta {
         last_indexed_modification_id: 0,
         graph_mutation_id: mut_id,
         blake3_hash: "deadbeef".into(),
+        graph_version: 1,
     }
 }
 

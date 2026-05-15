@@ -47,6 +47,7 @@ impl<V: VectorStore + Send + Sync> MutationStore for GraphPg<V> {
             last_indexed_modification_id: row.last_indexed_modification_id,
             graph_mutation_id: row.graph_mutation_id,
             blake3_hash: row.blake3_hash,
+            graph_version: row.graph_version,
         })
     }
 
@@ -161,6 +162,7 @@ mod tests {
         assert_eq!(meta.last_indexed_modification_id, 456);
         assert_eq!(meta.graph_mutation_id, Some(789));
         assert_eq!(meta.blake3_hash, "deadbeefcafebabe");
+        assert_eq!(meta.graph_version, 1);
 
         Ok(())
     }
