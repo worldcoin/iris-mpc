@@ -17,6 +17,7 @@ use crate::checkpoint_protocol::{
     CycleError, FreezeHeight, Graph, GraphHasher, GraphMutationId, GraphSnapshot, Materializer,
     MutationStore, Outcome, PeerResponses, SkipReason, TerminalAction,
 };
+use crate::execution::hawk_main::BothEyes;
 use crate::hnsw::{graph::mutation::GraphMutation, GraphMem};
 
 // ── shared fixtures ──────────────────────────────────────────────────────
@@ -61,7 +62,8 @@ impl MutationStore for MockStore {
         &self,
         _lo_exclusive: GraphMutationId,
         _hi_inclusive: GraphMutationId,
-    ) -> Result<BoxStream<'_, Result<GraphMutation<VectorId>, CycleError>>, CycleError> {
+    ) -> Result<BoxStream<'_, Result<BothEyes<Vec<GraphMutation<VectorId>>>, CycleError>>, CycleError>
+    {
         Ok(Box::pin(stream::empty()))
     }
     async fn last_indexed_modification_id(&self) -> Result<i64, CycleError> {

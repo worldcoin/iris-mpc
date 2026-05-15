@@ -9,6 +9,7 @@
 //! See `Checkpoint Protocol - Unified Design.md` for the design rationale.
 
 pub mod hasher;
+pub mod store;
 pub mod transport;
 
 #[cfg(test)]
@@ -155,11 +156,15 @@ pub trait ConsensusTransport {
 pub trait MutationStore {
     async fn latest_checkpoint(&self) -> Result<CheckpointMeta, CycleError>;
 
+    /// Stream WAL rows in `(lo_exclusive, hi_inclusive]` in ascending
+    /// `modification_id` order. Each item is one DB row's deserialized
+    /// payload — both eyes together — so a row's left and right mutations
+    /// stay atomic across replay.
     async fn mutations_in_range(
         &self,
         lo_exclusive: GraphMutationId,
         hi_inclusive: GraphMutationId,
-    ) -> Result<BoxStream<'_, Result<GraphMutation<VectorId>, CycleError>>, CycleError>;
+    ) -> Result<BoxStream<'_, Result<BothEyes<Vec<GraphMutation<VectorId>>>, CycleError>>, CycleError>;
 
     async fn last_indexed_modification_id(&self) -> Result<i64, CycleError>;
 
