@@ -56,7 +56,10 @@ pub async fn sync_graph_mutations(
                 })
                 .or_insert(graph_mutation);
             if entry.is_some() && graph_mutation.is_some() && *entry != graph_mutation {
-                bail!("graph mutation mismatch between parties. modification id: {}; party A: {:?}; party B: {:?}", modification.id, entry, graph_mutation);
+                bail!(
+                    "graph mutation mismatch between parties. modification id: {}",
+                    modification.id
+                );
             }
         }
     }
