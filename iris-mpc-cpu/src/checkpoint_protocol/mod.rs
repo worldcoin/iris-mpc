@@ -10,6 +10,8 @@
 
 pub mod hasher;
 pub mod materializer;
+pub mod restart;
+pub mod sidecar;
 pub mod store;
 pub mod terminal;
 pub mod transport;
@@ -19,6 +21,8 @@ mod tests;
 
 pub use hasher::Blake3GraphHasher;
 pub use materializer::{LiveClone, RebuildFromCheckpoint};
+pub use restart::restart_from_checkpoint;
+pub use sidecar::{sidecar_main, SidecarConfig};
 pub use terminal::{InstallAsServing, UploadAndRecord};
 pub use transport::{RingChannel, RingConsensusTransport};
 
