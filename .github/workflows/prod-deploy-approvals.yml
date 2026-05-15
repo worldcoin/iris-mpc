@@ -27,7 +27,6 @@ jobs:
             ];
 
             approversGroupB = [
-              'leonanos8',
               'camelop',      // UC Berkeley
               'stneng',       // UC Berkeley
               'jweberphipps', // UC Berkeley
