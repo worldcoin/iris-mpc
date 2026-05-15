@@ -344,7 +344,7 @@ impl<V: VectorStore> GraphPg<V> {
 
     /// Returns every row whose `modification_id >= from_id`, ordered ascending.
     /// Use this when you know the exact first modification you need (inclusive),
-    /// in contrast to [`get_hawk_graph_mutations_after`] which is exclusive.
+    /// in contrast to `get_hawk_graph_mutations_after()` which is exclusive.
     pub async fn get_hawk_graph_mutations_from(
         &self,
         from_id: i64,

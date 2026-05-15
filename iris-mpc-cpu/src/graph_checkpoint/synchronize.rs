@@ -19,7 +19,7 @@ use crate::{
 };
 
 /// Ensures that every modification that was rolled forward during
-/// [`sync_modifications`] has its graph mutations present in the local
+/// `sync_modifications()` has its graph mutations present in the local
 /// `hawk_graph_mutations` table.
 ///
 /// It is assumed that one party could have None for a graph mutation and
