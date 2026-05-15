@@ -290,6 +290,8 @@ impl<V: VectorStore> GraphPg<V> {
             r#"
             INSERT INTO hawk_graph_mutations (modification_id, serialized_mutations)
             VALUES ($1, $2)
+            ON CONFLICT (modification_id) DO UPDATE
+            SET serialized_mutations = EXCLUDED.serialized_mutations
             RETURNING modification_id, serialized_mutations
             "#,
         )
@@ -431,6 +433,8 @@ impl<'b, V: VectorStore> GraphTx<'b, V> {
             r#"
             INSERT INTO hawk_graph_mutations (modification_id, serialized_mutations)
             VALUES ($1, $2)
+            ON CONFLICT (modification_id) DO UPDATE
+            SET serialized_mutations = EXCLUDED.serialized_mutations
             "#,
         )
         .bind(modification_id)
