@@ -64,7 +64,7 @@ impl<V: VectorStore + Send + Sync> TerminalAction for UploadAndRecord<'_, V> {
         &mut self,
         base: CheckpointMeta,
         snapshot: GraphSnapshot,
-        _hash: Blake3Hash,
+        hash: Blake3Hash,
     ) -> Result<(), CycleError> {
         // upload_graph_checkpoint takes `&BothEyes<GraphRef>` (Arc<RwLock>).
         // We own the snapshot graph; wrap each eye to match the signature.
@@ -92,6 +92,20 @@ impl<V: VectorStore + Send + Sync> TerminalAction for UploadAndRecord<'_, V> {
         )
         .await
         .map_err(|e| CycleError::Fatal(format!("upload_graph_checkpoint: {e}")))?;
+
+        // Defensive check: the protocol's consensus hash and the upload's
+        // recomputed hash must agree. Equality is structural today (both
+        // bincode-serialize the same BothEyes<GraphMem<VectorId>>), but if
+        // either serializer ever drifts, every subsequent cycle starting
+        // from this checkpoint would silently fail base or hash agreement.
+        // Catch the drift at the writing party.
+        let local_hex = crate::checkpoint_protocol::hex(&hash);
+        if local_hex != state.blake3_hash {
+            return Err(CycleError::Fatal(format!(
+                "consensus/storage hash mismatch: local={local_hex} stored={}",
+                state.blake3_hash,
+            )));
+        }
 
         let mut tx = self
             .graph_store
@@ -222,5 +236,58 @@ mod tests {
             assert!(has_1, "snapshot's vid(1) should be installed");
             assert!(!has_99, "target's prior vid(99) should be gone");
         }
+    }
+
+    /// The protocol's consensus hash (computed by [`Blake3GraphHasher`])
+    /// MUST equal the hash that `upload_graph_checkpoint` recomputes and
+    /// stores in `genesis_graph_checkpoint.blake3_hash`. Both paths
+    /// bincode-serialize the same `BothEyes<GraphMem<VectorId>>`, but
+    /// through different argument shapes:
+    ///
+    /// - Hasher: `bincode::serialize_into(blake3, &graph)` where
+    ///   `graph: &[GraphMem; 2]`.
+    /// - Upload: `bincode::serialize(&[&*left, &*right])` where the
+    ///   argument is `&[&GraphMem; 2]`.
+    ///
+    /// If they ever diverge, every cycle from the resulting checkpoint
+    /// fails base or hash agreement silently. `UploadAndRecord::finalize`
+    /// has a runtime mismatch check; this test pins the property down at
+    /// the serializer level so any drift surfaces in unit tests.
+    #[test]
+    fn consensus_hash_matches_upload_path_serialization() {
+        use crate::checkpoint_protocol::Blake3GraphHasher;
+        use crate::checkpoint_protocol::GraphHasher;
+        use crate::execution::hawk_main::{LEFT, RIGHT};
+
+        // Build a non-trivial graph: distinct content per eye so eye-order
+        // swaps would fail the assertion loudly.
+        let mut left = GraphMem::<VectorId>::new();
+        let mut right = GraphMem::<VectorId>::new();
+        left.insert_apply(vec![GraphMutation::AddNode {
+            id: vid(7),
+            height: 2,
+            update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+        }]);
+        right.insert_apply(vec![GraphMutation::AddNode {
+            id: vid(11),
+            height: 1,
+            update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+        }]);
+        let graph = [left, right];
+
+        // Consensus path.
+        let consensus_hash = Blake3GraphHasher::new().hash_canonical(&graph);
+
+        // Upload path (the inner bincode + blake3 sequence from
+        // upload_graph_checkpoint, replicated without S3 I/O).
+        let upload_bytes =
+            bincode::serialize(&[&graph[LEFT], &graph[RIGHT]]).expect("bincode serialize");
+        let upload_hash: [u8; 32] = *blake3::hash(&upload_bytes).as_bytes();
+
+        assert_eq!(
+            consensus_hash, upload_hash,
+            "Blake3GraphHasher and the upload path must produce byte-identical hashes; \
+             if you changed one serializer, change both (or refactor to share)."
+        );
     }
 }

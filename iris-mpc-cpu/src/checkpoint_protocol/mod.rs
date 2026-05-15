@@ -21,7 +21,7 @@ mod tests;
 
 pub use hasher::Blake3GraphHasher;
 pub use materializer::{LiveClone, RebuildFromCheckpoint};
-pub use restart::restart_from_checkpoint;
+pub use restart::{restart_from_checkpoint, RestartOutcome};
 pub use sidecar::{sidecar_main, SidecarConfig};
 pub use terminal::{InstallAsServing, UploadAndRecord};
 pub use transport::{RingChannel, RingConsensusTransport};
@@ -88,7 +88,19 @@ pub enum Outcome {
 
 #[derive(Debug)]
 pub enum SkipReason {
-    NotEnoughMutations { available: u64, required: u64 },
+    NotEnoughMutations {
+        available: u64,
+        required: u64,
+    },
+    /// `min(peer heights)` came in below the agreed base — a peer is behind
+    /// the base checkpoint. Materializing under this condition would write
+    /// a regressing WAL anchor (UploadAndRecord) or install the base graph
+    /// while claiming a lower height (InstallAsServing). Caller decides
+    /// whether to wait + retry.
+    PeerBehindBase {
+        freeze: GraphMutationId,
+        base: GraphMutationId,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -122,6 +134,11 @@ pub struct CycleConfig {
 
 #[async_trait]
 pub trait Materializer {
+    /// Produce a graph snapshot at (or describing) `freeze`. `actual_height`
+    /// in the returned [`GraphSnapshot`] is *observational* — it does not
+    /// have to equal `freeze.0`, and run_cycle does not gate on it. Cross-
+    /// party determinism is enforced by the subsequent hash-consensus
+    /// round on `snapshot.graph`, not by the reported height.
     async fn snapshot(
         &mut self,
         base: CheckpointMeta,
@@ -252,8 +269,20 @@ where
         .await?;
     let freeze = agree_height(local_height, peer_heights);
 
-    // Gate on minimum mutations to apply; restart callers pass `0`.
+    // A peer reporting a height below our agreed base means they haven't
+    // ingested up to the base WAL position yet. Replaying would either
+    // (a) regress the WAL anchor stored at the next checkpoint, or
+    // (b) install the base graph while reporting a freeze height that's
+    // lower than the base's. Bail with Skipped so callers can wait.
     let lo = agreed_base.graph_mutation_id.unwrap_or(0);
+    if freeze.0 < lo {
+        return Ok(Outcome::Skipped(SkipReason::PeerBehindBase {
+            freeze: freeze.0,
+            base: lo,
+        }));
+    }
+
+    // Gate on minimum mutations to apply; restart callers pass `0`.
     let available = freeze.0.saturating_sub(lo).max(0) as u64;
     if available < cfg.min_mutations_to_apply {
         return Ok(Outcome::Skipped(SkipReason::NotEnoughMutations {
@@ -326,7 +355,7 @@ fn agree_height(local: GraphMutationId, peers: PeerResponses<GraphMutationId>) -
     FreezeHeight(agreed)
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
         s.push_str(&format!("{:02x}", b));

@@ -517,10 +517,15 @@ async fn peer_returning_wrong_variant_is_fatal() {
     assert!(matches!(err, CycleError::Fatal(_)));
 }
 
-// ── height < base.graph_mutation_id is a no-op skip (saturating sub) ─────
+// ── freeze < base.graph_mutation_id surfaces as PeerBehindBase ───────────
+//
+// Critical for restart (min_mutations_to_apply=0): without this gate, a
+// peer behind the base would slip through `available < min` and run_cycle
+// would materialize the *base* graph while reporting a freeze height below
+// the base — corrupting the next checkpoint's WAL anchor.
 
 #[tokio::test]
-async fn freeze_below_base_does_not_underflow() {
+async fn freeze_below_base_skips_as_peer_behind_even_when_min_is_zero() {
     let mut mat = MockMaterializer::new();
     let mut fin = MockFinalizer::new();
     let store = MockStore {
@@ -536,16 +541,23 @@ async fn freeze_below_base_does_not_underflow() {
     let transport = MockTransport::new(canned);
     let hasher = ConstHasher(hash_a());
 
-    let outcome = run_cycle(&mut mat, &mut fin, &transport, &store, &hasher, &cfg(1))
+    // min=0 mimics the restart path; the PeerBehindBase check must still fire.
+    let outcome = run_cycle(&mut mat, &mut fin, &transport, &store, &hasher, &cfg(0))
         .await
-        .expect("saturating sub must keep this safe");
+        .expect("freeze < base must not error, just skip");
 
     match outcome {
-        Outcome::Skipped(SkipReason::NotEnoughMutations { available, .. }) => {
-            assert_eq!(available, 0, "saturating sub clamps to 0, not panic");
+        Outcome::Skipped(SkipReason::PeerBehindBase { freeze, base }) => {
+            assert_eq!(freeze, 100);
+            assert_eq!(base, 500);
         }
-        other => panic!("expected Skipped, got {other:?}"),
+        other => panic!("expected Skipped::PeerBehindBase, got {other:?}"),
     }
+
+    // The materializer and finalizer must not have been called — the cycle
+    // bails before phase 3.
+    assert_eq!(mat.calls.lock().unwrap().len(), 0);
+    assert_eq!(fin.calls.lock().unwrap().len(), 0);
 }
 
 // ── base.graph_mutation_id == None treated as lo=0 ───────────────────────

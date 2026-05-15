@@ -15,8 +15,8 @@ use eyre::{eyre, Result};
 use tokio::sync::RwLock;
 
 use crate::checkpoint_protocol::{
-    run_cycle, Blake3GraphHasher, CycleConfig, InstallAsServing, Outcome, RebuildFromCheckpoint,
-    RingConsensusTransport,
+    run_cycle, Blake3GraphHasher, CycleConfig, GraphMutationId, InstallAsServing, Outcome,
+    RebuildFromCheckpoint, RingConsensusTransport, SkipReason,
 };
 use crate::execution::hawk_main::BothEyes;
 use crate::hnsw::{
@@ -25,14 +25,25 @@ use crate::hnsw::{
 };
 use iris_mpc_common::vector_id::VectorId;
 
+/// Result of a restart attempt. The caller decides how to act on each.
+#[derive(Debug)]
+pub enum RestartOutcome {
+    /// A graph was installed at the reported height.
+    Installed { height: GraphMutationId },
+    /// No `genesis_graph_checkpoint` row exists; caller falls back to its
+    /// own bootstrap path (empty graph, plaintext checkpoint migration).
+    NoCheckpoint,
+    /// A peer's `current_max_mutation_id` came in below the agreed base.
+    /// Restart can be retried once peers catch up; not a fatal error.
+    PeerBehindBase {
+        freeze: GraphMutationId,
+        base: GraphMutationId,
+    },
+}
+
 /// Rebuild the live graph from the latest checkpoint + WAL replay, then
 /// install it into `target`. `min_mutations_to_apply=0` so the cycle
 /// proceeds even when there are no new mutations beyond the base.
-///
-/// Returns `Ok(true)` if a graph was installed; `Ok(false)` if no
-/// `genesis_graph_checkpoint` row exists yet — the caller should fall
-/// back to its own bootstrap path (empty graph, plaintext checkpoint
-/// migration, etc).
 pub async fn restart_from_checkpoint<V: VectorStore + Send + Sync>(
     graph_store: &GraphPg<V>,
     s3_client: &S3Client,
@@ -40,14 +51,13 @@ pub async fn restart_from_checkpoint<V: VectorStore + Send + Sync>(
     networking: &mut Box<dyn NetworkHandle>,
     target: BothEyes<Arc<RwLock<GraphMem<VectorId>>>>,
     peer_round_timeout: Duration,
-) -> Result<bool> {
-    // Probe: if there's no base checkpoint, the caller decides what to do.
+) -> Result<RestartOutcome> {
     let checkpoint_row = graph_store
         .get_latest_genesis_graph_checkpoint()
         .await
         .map_err(|e| eyre!("get_latest_genesis_graph_checkpoint: {e}"))?;
     let Some(row) = checkpoint_row else {
-        return Ok(false);
+        return Ok(RestartOutcome::NoCheckpoint);
     };
     let cycle_nonce = row.id as u128;
 
@@ -81,12 +91,18 @@ pub async fn restart_from_checkpoint<V: VectorStore + Send + Sync>(
     match outcome {
         Outcome::Finalized { height, .. } => {
             tracing::info!(height, "restart installed graph from checkpoint");
-            Ok(true)
+            Ok(RestartOutcome::Installed { height })
         }
-        Outcome::Skipped(reason) => {
-            // min=0 means a Skipped outcome is structurally impossible; treat
-            // as a bug rather than a recoverable state.
-            Err(eyre!("restart unexpectedly skipped: {reason:?}"))
+        Outcome::Skipped(SkipReason::PeerBehindBase { freeze, base }) => {
+            tracing::warn!(freeze, base, "restart skipped: peer behind base");
+            Ok(RestartOutcome::PeerBehindBase { freeze, base })
+        }
+        Outcome::Skipped(SkipReason::NotEnoughMutations { .. }) => {
+            // Structurally impossible: min_mutations_to_apply=0 cannot
+            // trigger this branch.
+            Err(eyre!(
+                "restart unexpectedly skipped on NotEnoughMutations despite min=0"
+            ))
         }
     }
 }

@@ -343,6 +343,14 @@ impl<V: VectorStore> GraphPg<V> {
     /// Streams hawk_graph_mutations rows with `lo_exclusive < modification_id <= hi_inclusive`
     /// in ascending order. Yields one row at a time so callers can apply mutations
     /// without buffering the full range — important for WAL replay over long gaps.
+    ///
+    /// **Snapshot caveat**: rows are streamed from the pool's connection,
+    /// not from a `REPEATABLE READ` transaction. Replay determinism relies
+    /// on inserts into `hawk_graph_mutations` being strictly monotone in
+    /// `modification_id` and committed before any future row at a higher
+    /// id becomes visible (true today via the write path). If that ever
+    /// changes — back-fills, gap-filling inserts, late commits — wrap this
+    /// call in a transaction with `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ`.
     pub fn stream_hawk_graph_mutations_in_range(
         &self,
         lo_exclusive: i64,
