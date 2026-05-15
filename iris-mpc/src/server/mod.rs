@@ -6,11 +6,9 @@ use aws_sdk_sns::types::MessageAttributeValue;
 use axum::routing::get;
 use axum::Router;
 use iris_mpc_cpu::graph_checkpoint::{
-    apply_graph_mutations, download_graph_checkpoint, get_common_checkpoint,
-    get_most_recent_checkpoints, s3_key_exists, sync_graph_mutations, GraphCheckpointState,
-    GRAPH_CHECKPOINT_ROUTE,
+    get_common_checkpoint, get_most_recent_checkpoints, load_graph_and_roll_forward, s3_key_exists,
+    sync_graph_mutations, GraphCheckpointState, GRAPH_CHECKPOINT_ROUTE,
 };
-use iris_mpc_cpu::hnsw::GraphMem;
 
 use crate::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,
@@ -633,25 +631,8 @@ async fn init_hawk_actor(
             }
         };
 
-        let mut both_eyes = if let Some(state) = checkpoint {
-            tracing::info!(
-                "Loading graph from common S3 checkpoint, hash: {}",
-                state.blake3_hash
-            );
-            download_graph_checkpoint(s3_client, checkpoint_bucket, &state).await?
-        } else {
-            tracing::info!("No S3 checkpoint found, defaulting to empty graph");
-            [GraphMem::new(), GraphMem::new()]
-        };
-
-        // Apply WAL mutations on top of the checkpoint in modification_id order.
-        let n = wal_mutation_rows.len();
-        apply_graph_mutations(&mut both_eyes, wal_mutation_rows)?;
-        if n > 0 {
-            tracing::info!(n, "applied WAL graph mutations to checkpoint");
-        }
-
-        Ok::<_, eyre::Report>(both_eyes)
+        load_graph_and_roll_forward(s3_client, checkpoint_bucket, checkpoint, wal_mutation_rows)
+            .await
     };
 
     let (initialized, graph) = tokio::try_join!(initializer.initialize(), graph_load_future)?;
