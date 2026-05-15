@@ -6,7 +6,6 @@ on:
       - "dev"
       - "pop-3544-gpu-shutdown-guardrail"
       - "pop-3712-reauth-skip-persistence-alias"
-      - "POP-3835/debug-the-networking-error-in-iris-mpc-on-the-latest-eks-runner-ami"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
