@@ -51,6 +51,12 @@ impl<V: VectorStore> Clone for InsertPlanV<V> {
 /// plan is to be inserted with a specific identifier (e.g. for updates or for insertions
 /// which need to parallel an existing iris code database), and `None` if the associated plan
 /// is to be inserted at the next available serial ID, with version 0.
+///
+/// The `replace_ids` argument consists of `Option<VectorId>`s which are `Some(id)` if the
+/// associated slot should additionally emit a `RemoveNode(id)` mutation (e.g. for reauth or
+/// identity-update replacements, or for pure deletions). A pure-deletion slot has
+/// `plans[i] = None` and `replace_ids[i] = Some(id)`. A slot with both `plans[i] = None` and
+/// `replace_ids[i] = None` produces `None` in the output (no mutations for that slot).
 pub async fn insert<V: VectorStoreMut>(
     store: &mut V,
     graph: &mut GraphMem<<V as VectorStore>::VectorRef>,
@@ -740,9 +746,21 @@ mod tests {
         let slot0 = grouped[0].as_ref().expect("slot 0 should be Some");
         let mutations: &Vec<_> = &slot0.0;
 
-        // First non-edge mutation should be the AddNode, somewhere later we must
-        // see RemoveNode(old). AddEdges and any bilateral updates may appear in
-        // between.
+        let add_count = mutations
+            .iter()
+            .filter(|m| matches!(m, GraphMutation::AddNode { .. }))
+            .count();
+        assert_eq!(add_count, 1, "slot should contain exactly one AddNode");
+
+        let remove_old_count = mutations
+            .iter()
+            .filter(|m| matches!(m, GraphMutation::RemoveNode { id } if *id == old))
+            .count();
+        assert_eq!(
+            remove_old_count, 1,
+            "slot should contain exactly one RemoveNode(old)"
+        );
+
         let add_pos = mutations
             .iter()
             .position(|m| matches!(m, GraphMutation::AddNode { .. }))
