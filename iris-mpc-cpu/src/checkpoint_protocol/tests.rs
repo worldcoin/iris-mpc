@@ -207,6 +207,7 @@ impl MockFinalizer {
 impl TerminalAction for MockFinalizer {
     async fn finalize(
         &mut self,
+        _base: CheckpointMeta,
         snapshot: GraphSnapshot,
         hash: Blake3Hash,
     ) -> Result<(), CycleError> {

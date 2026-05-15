@@ -11,6 +11,7 @@
 pub mod hasher;
 pub mod materializer;
 pub mod store;
+pub mod terminal;
 pub mod transport;
 
 #[cfg(test)]
@@ -18,6 +19,7 @@ mod tests;
 
 pub use hasher::Blake3GraphHasher;
 pub use materializer::{LiveClone, RebuildFromCheckpoint};
+pub use terminal::{InstallAsServing, UploadAndRecord};
 pub use transport::{RingChannel, RingConsensusTransport};
 
 use std::time::Duration;
@@ -125,8 +127,13 @@ pub trait Materializer {
 
 #[async_trait]
 pub trait TerminalAction {
+    /// `base` is the agreed-upon checkpoint the cycle started from; finalize
+    /// implementations carry forward fields that aren't tracked elsewhere
+    /// (e.g. `last_indexed_iris_id` for Hawk Main, where there's no
+    /// per-mutation iris-id source).
     async fn finalize(
         &mut self,
+        base: CheckpointMeta,
         snapshot: GraphSnapshot,
         hash: Blake3Hash,
     ) -> Result<(), CycleError>;
@@ -253,7 +260,7 @@ where
 
     // Phase 3 — materialize. Pluggable: rebuild-from-checkpoint, live-clone,
     // or future live-fork.
-    let snapshot = materializer.snapshot(agreed_base, freeze).await?;
+    let snapshot = materializer.snapshot(agreed_base.clone(), freeze).await?;
 
     // Phase 4 — hash the materialized graph.
     let local_hash = hasher.hash_canonical(&snapshot.graph);
@@ -282,7 +289,9 @@ where
     }
 
     let height = snapshot.actual_height;
-    finalizer.finalize(snapshot, local_hash).await?;
+    finalizer
+        .finalize(agreed_base, snapshot, local_hash)
+        .await?;
     Ok(Outcome::Finalized {
         hash: local_hash,
         height,
