@@ -7,7 +7,13 @@ use itertools::izip;
 use crate::{
     execution::hawk_main::{BothEyes, HawkOps},
     hawkers::aby3::aby3_store::Aby3Store,
-    hnsw::{graph::graph_store::GraphPg, graph::GraphMutation, GraphMem},
+    hnsw::{
+        graph::{
+            graph_store::{GraphMutationRow, GraphPg},
+            GraphMutation,
+        },
+        GraphMem,
+    },
 };
 
 /// Ensures that every modification that was rolled forward during
@@ -91,7 +97,7 @@ pub async fn sync_graph_mutations(
 /// guaranteed by all `get_hawk_graph_mutations_*` queries).
 pub fn apply_graph_mutations(
     both_eyes: &mut BothEyes<GraphMem<IrisVectorId>>,
-    mutation_rows: Vec<crate::hnsw::graph::graph_store::GraphMutationRow>,
+    mutation_rows: Vec<GraphMutationRow>,
 ) -> Result<()> {
     for row in mutation_rows {
         let [left_mutations, right_mutations]: [Vec<GraphMutation<IrisVectorId>>; 2] =
