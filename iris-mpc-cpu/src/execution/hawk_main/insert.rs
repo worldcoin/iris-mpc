@@ -47,10 +47,10 @@ impl<V: VectorStore> Clone for InsertPlanV<V> {
 /// Insert a collection `plans` of `InsertPlanV` structs into the graph and vector store,
 /// adjusting the insertion plans as needed to repair any conflict from parallel searches.
 ///
-/// The `ids` argument consists of `Option<VectorId>`s which are `Some(id)` if the associated
-/// plan is to be inserted with a specific identifier (e.g. for updates or for insertions
-/// which need to parallel an existing iris code database), and `None` if the associated plan
-/// is to be inserted at the next available serial ID, with version 0.
+/// The `insert_ids` argument consists of `Option<VectorId>`s which are `Some(id)` if the
+/// associated plan is to be inserted with a specific identifier (e.g. for updates or for
+/// insertions which need to parallel an existing iris code database), and `None` if the
+/// associated plan is to be inserted at the next available serial ID, with version 0.
 ///
 /// The `replace_ids` argument consists of `Option<VectorId>`s which are `Some(id)` if the
 /// associated slot should additionally emit a `RemoveNode(id)` mutation (e.g. for reauth or
@@ -62,7 +62,7 @@ pub async fn insert<V: VectorStoreMut>(
     graph: &mut GraphMem<<V as VectorStore>::VectorRef>,
     searcher: &HnswSearcher,
     plans: VecRequests<Option<InsertPlanV<V>>>,
-    ids: &VecRequests<Option<V::VectorRef>>,
+    insert_ids: &VecRequests<Option<V::VectorRef>>,
     replace_ids: &VecRequests<Option<V::VectorRef>>,
 ) -> Result<VecRequests<Option<ConnectPlanV<V>>>> {
     tracing::debug!("Inserting {} InsertPlans into store", plans.len());
@@ -74,7 +74,7 @@ pub async fn insert<V: VectorStoreMut>(
     );
     assert_eq!(
         plans.len(),
-        ids.len(),
+        insert_ids.len(),
         "plans and ids must be the same length"
     );
 
@@ -90,8 +90,8 @@ pub async fn insert<V: VectorStoreMut>(
     // for deletion-only slots).
     let mut mutations: Vec<Option<GroupedMutations<V::VectorRef>>> = vec![None; insert_plans.len()];
 
-    for (idx, ((plan, update_id), replace_id)) in
-        izip!(insert_plans, ids).zip(replace_ids.iter()).enumerate()
+    for (idx, (plan, update_id, replace_id)) in
+        izip!(insert_plans, insert_ids, replace_ids).enumerate()
     {
         let mut request_mutations: Vec<GraphMutation<V::VectorRef>> = vec![];
 
