@@ -683,14 +683,21 @@ mod tests {
             None,
             None,
         ];
-        let ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
+        let insert_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
             vec![None, None, None];
         let replace_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
             vec![None, Some(a), Some(b)];
 
-        let grouped = insert(&mut store, &mut graph, &searcher, plans, &ids, &replace_ids)
-            .await
-            .expect("insert should succeed");
+        let grouped = insert(
+            &mut store,
+            &mut graph,
+            &searcher,
+            plans,
+            &insert_ids,
+            &replace_ids,
+        )
+        .await
+        .expect("insert should succeed");
 
         assert_eq!(grouped.len(), 3, "one output per slot");
 
@@ -735,13 +742,21 @@ mod tests {
         let plans = vec![Some(dummy_insert_plan(UpdateEntryPoint::SetUnique {
             layer: 0,
         }))];
-        let ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> = vec![None];
+        let insert_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
+            vec![None];
         let replace_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
             vec![Some(old)];
 
-        let grouped = insert(&mut store, &mut graph, &searcher, plans, &ids, &replace_ids)
-            .await
-            .expect("insert should succeed");
+        let grouped = insert(
+            &mut store,
+            &mut graph,
+            &searcher,
+            plans,
+            &insert_ids,
+            &replace_ids,
+        )
+        .await
+        .expect("insert should succeed");
 
         let slot0 = grouped[0].as_ref().expect("slot 0 should be Some");
         let mutations: &Vec<_> = &slot0.0;
@@ -783,13 +798,21 @@ mod tests {
         let searcher = HnswSearcher::new_with_test_parameters();
 
         let plans: VecRequests<Option<InsertPlanV<PlaintextStore>>> = vec![None];
-        let ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> = vec![None];
+        let insert_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
+            vec![None];
         let replace_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
             vec![None];
 
-        let grouped = insert(&mut store, &mut graph, &searcher, plans, &ids, &replace_ids)
-            .await
-            .expect("insert should succeed");
+        let grouped = insert(
+            &mut store,
+            &mut graph,
+            &searcher,
+            plans,
+            &insert_ids,
+            &replace_ids,
+        )
+        .await
+        .expect("insert should succeed");
 
         assert!(grouped[0].is_none(), "fully-empty slot should yield None");
     }
