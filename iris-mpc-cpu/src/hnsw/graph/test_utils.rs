@@ -20,7 +20,7 @@ use crate::{
             },
             mutation::EdgeType,
             neighborhood::Neighborhood,
-            GraphMutation, UpdateEntryPoint,
+            GraphMutation, MutationOp, UpdateEntryPoint,
         },
         vector_store::{VectorStore, VectorStoreMut},
         SortedNeighborhood,
@@ -225,8 +225,12 @@ impl DbContext {
 
         for row in mutation_rows {
             let both_eyes = row.deserialize_mutations()?;
-            graph[LEFT].insert_apply(both_eyes[LEFT].clone());
-            graph[RIGHT].insert_apply(both_eyes[RIGHT].clone());
+            for m in &both_eyes[LEFT] {
+                graph[LEFT].insert_apply(m)?;
+            }
+            for m in &both_eyes[RIGHT] {
+                graph[RIGHT].insert_apply(m)?;
+            }
         }
 
         Ok(graph)
@@ -373,12 +377,17 @@ impl DbContext {
         let mut left_graph = GraphMem::<PlaintextVectorRef>::new();
 
         // Set entry point via InsertNode with SetUnique
-        let ep_mutation = GraphMutation::AddNode {
+        let ep_mutation = MutationOp::AddNode {
             id: vectors[0],
             height: 1,
             update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
         };
-        left_graph.insert_apply(vec![ep_mutation]);
+        left_graph
+            .insert_apply(&GraphMutation {
+                id: 1,
+                ops: vec![ep_mutation],
+            })
+            .unwrap();
 
         // Build links between vectors 1-3 and 4-6
         for i in 1..4usize {
@@ -390,19 +399,24 @@ impl DbContext {
             }
             let neighbors = links.edge_ids();
             let mutations = vec![
-                GraphMutation::AddNode {
+                MutationOp::AddNode {
                     id: vectors[i],
                     height: 1,
                     update_ep: UpdateEntryPoint::False,
                 },
-                GraphMutation::AddEdges {
+                MutationOp::AddEdges {
                     base: vectors[i],
                     layer: 0,
                     neighbors,
                     edge_type: EdgeType::Base,
                 },
             ];
-            left_graph.insert_apply(mutations);
+            left_graph
+                .insert_apply(&GraphMutation {
+                    id: (i as u64) + 1,
+                    ops: mutations,
+                })
+                .unwrap();
         }
 
         // Use same graph for both eyes (this is test data)

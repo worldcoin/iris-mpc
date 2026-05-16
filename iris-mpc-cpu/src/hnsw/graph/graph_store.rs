@@ -667,4 +667,48 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_hawk_graph_mutations_full_round_trip() -> Result<()> {
+        use crate::hnsw::graph::mutation::{GraphMutation, MutationOp, UpdateEntryPoint};
+
+        let store = TestGraphPg::<PlaintextStore>::new().await?;
+
+        let plan_left = GraphMutation::<IrisVectorId> {
+            id: 1,
+            ops: vec![MutationOp::AddNode {
+                id: IrisVectorId::from_serial_id(1),
+                height: 1,
+                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+            }],
+        };
+        let plan_right = GraphMutation::<IrisVectorId> {
+            id: 1,
+            ops: vec![MutationOp::AddNode {
+                id: IrisVectorId::from_serial_id(2),
+                height: 1,
+                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+            }],
+        };
+        let both: BothEyes<Vec<GraphMutation<IrisVectorId>>> =
+            [vec![plan_left.clone()], vec![plan_right.clone()]];
+        let payload = bincode::serialize(&both)?;
+
+        let mut graph_tx = store.tx().await?;
+        store
+            .insert_hawk_graph_mutations(&mut graph_tx.tx, 42, &payload)
+            .await?;
+        graph_tx.tx.commit().await?;
+
+        let rows = store.get_hawk_graph_mutations_after(None).await?;
+        assert_eq!(rows.len(), 1);
+        let back = rows[0].deserialize_mutations()?;
+        assert_eq!(back[0].len(), 1);
+        assert_eq!(back[0][0].id, plan_left.id);
+        assert_eq!(back[1].len(), 1);
+        assert_eq!(back[1][0].id, plan_right.id);
+
+        store.cleanup().await?;
+        Ok(())
+    }
 }
