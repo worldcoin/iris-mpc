@@ -64,6 +64,10 @@ pub struct GraphMem<V: Ref + Display + FromStr + Ord> {
     /// subset of the nodes of the previous layer, and graph neighborhoods in
     /// each layer represent approximate nearest neighbors within that layer.
     pub layers: Vec<Layer<V>>,
+
+    /// The id of the most recently applied `GraphMutation`. `0` means no
+    /// mutation has been applied. Advanced by `insert_apply` on success.
+    pub last_modification_id: u64,
 }
 
 impl Display for GraphMem<IrisVectorId> {
@@ -104,6 +108,7 @@ impl<V: Ref + Display + FromStr + Ord> Clone for GraphMem<V> {
         GraphMem {
             entry_points: self.entry_points.clone(),
             layers: self.layers.clone(),
+            last_modification_id: self.last_modification_id,
         }
     }
 }
@@ -113,7 +118,16 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
         GraphMem {
             entry_points: vec![],
             layers: vec![],
+            last_modification_id: 0,
         }
+    }
+
+    /// Returns the id that the next applied `GraphMutation` must equal or
+    /// exceed. This is a pure peek — it does not modify the graph. Callers
+    /// minting several ids in one batch seed a local running counter from
+    /// this value and increment locally.
+    pub fn next_modification_id(&self) -> u64 {
+        self.last_modification_id + 1
     }
 
     pub fn to_arc(self) -> Arc<RwLock<Self>> {
@@ -130,6 +144,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                 })
                 .collect::<Vec<_>>(),
             layers,
+            last_modification_id: 0,
         }
     }
 
@@ -744,6 +759,7 @@ where
     V: Ref + Display + FromStr + Ord,
     VecMap: Fn(U) -> V + Copy,
 {
+    let last_modification_id = graph.last_modification_id;
     let new_entry_point = graph
         .entry_points
         .iter()
@@ -768,6 +784,7 @@ where
     GraphMem::<V> {
         entry_points: new_entry_point,
         layers: new_layers,
+        last_modification_id,
     }
 }
 
@@ -1187,5 +1204,18 @@ mod tests {
         // Pass-1 created the nodes, then pass-2 applied the edge — so a should
         // now have b in its outgoing list.
         assert_eq!(graph.layers[0].get_links(&a).unwrap(), &[b]);
+    }
+
+    #[test]
+    fn next_modification_id_is_one_past_last_and_does_not_mutate() {
+        use crate::hnsw::GraphMem;
+        use iris_mpc_common::IrisVectorId;
+        let mut graph = GraphMem::<IrisVectorId>::new();
+        assert_eq!(graph.last_modification_id, 0);
+        assert_eq!(graph.next_modification_id(), 1);
+        assert_eq!(graph.next_modification_id(), 1, "peek must not mutate");
+        graph.last_modification_id = 42;
+        assert_eq!(graph.next_modification_id(), 43);
+        assert_eq!(graph.last_modification_id, 42, "peek must not mutate");
     }
 }
