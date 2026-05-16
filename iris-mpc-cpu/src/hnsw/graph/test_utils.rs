@@ -226,7 +226,10 @@ impl DbContext {
         for _row in mutation_rows {
             // TODO(graph-mod-ids Task 5): once deserialize_mutations returns
             // BothEyes<Vec<GraphMutation<…>>>, replay per-group with insert_apply.
-            todo!("replay loop updated in Task 5 when persistence shape changes");
+            todo!(
+                "graph-mod-ids Task 3 stub: WAL replay disabled until Task 5 lands. \
+                 Do not exercise this code path against a DB with non-empty hawk_graph_mutations rows."
+            );
         }
 
         Ok(graph)
