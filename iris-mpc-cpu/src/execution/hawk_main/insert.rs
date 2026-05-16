@@ -44,6 +44,26 @@ impl<V: VectorStore> Clone for InsertPlanV<V> {
     }
 }
 
+/// Mints sequential `u64` ids for `GraphMutation` groups built during a single
+/// `insert` call. Seeded from `GraphMem::next_modification_id()`; never touches
+/// the graph itself. The graph's `last_modification_id` only advances when each
+/// stamped group is later applied via `GraphMem::insert_apply`.
+struct MutationIdAllocator {
+    next: u64,
+}
+
+impl MutationIdAllocator {
+    fn new(start: u64) -> Self {
+        Self { next: start }
+    }
+
+    fn next(&mut self) -> u64 {
+        let id = self.next;
+        self.next += 1;
+        id
+    }
+}
+
 /// Insert a collection `plans` of `InsertPlanV` structs into the graph and vector store,
 /// adjusting the insertion plans as needed to repair any conflict from parallel searches.
 ///
@@ -81,6 +101,7 @@ pub async fn insert<V: VectorStoreMut>(
     let insert_plans = join_plans(plans, &searcher.layer_mode);
     validate_ep_updates(&insert_plans, &searcher.layer_mode)?;
 
+    let mut id_allocator = MutationIdAllocator::new(graph.next_modification_id());
     let mut inserted_ids = vec![];
     let m = searcher.params.get_M(0);
 
@@ -139,23 +160,16 @@ pub async fn insert<V: VectorStoreMut>(
 
         if !request_mutations.is_empty() {
             mutations[idx] = Some(GraphMutation {
-                id: 0,
+                id: id_allocator.next(),
                 ops: request_mutations,
             });
         }
     }
 
-    let mut grouped_mutations = searcher
+    let grouped_mutations = searcher
         .insert_prepare_batch(store, graph, mutations)
         .await?;
 
-    // Temporary in-place id stamping; Task 4 will move this to mutation
-    // construction time via MutationIdAllocator.
-    for (next_id, slot) in
-        (graph.next_modification_id()..).zip(grouped_mutations.iter_mut().flatten())
-    {
-        slot.id = next_id;
-    }
     // Apply each finalized group; strict-increase ordering is enforced.
     for group in grouped_mutations.iter().flatten() {
         graph.insert_apply(group)?;
@@ -822,5 +836,48 @@ mod tests {
         .expect("insert should succeed");
 
         assert!(grouped[0].is_none(), "fully-empty slot should yield None");
+    }
+
+    #[tokio::test]
+    async fn test_insert_stamps_strictly_increasing_ids_per_slot() {
+        let mut store = PlaintextStore::default();
+        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let searcher = HnswSearcher::new_with_test_parameters();
+
+        let expected_start = graph.next_modification_id();
+
+        let plans = vec![
+            Some(dummy_insert_plan(UpdateEntryPoint::SetUnique { layer: 0 })),
+            None,
+            Some(dummy_insert_plan(UpdateEntryPoint::False)),
+        ];
+        let insert_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
+            vec![None, None, None];
+        let replace_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
+            vec![None, None, None];
+
+        let grouped = insert(
+            &mut store,
+            &mut graph,
+            &searcher,
+            plans,
+            &insert_ids,
+            &replace_ids,
+        )
+        .await
+        .expect("insert should succeed");
+
+        let ids: Vec<u64> = grouped
+            .iter()
+            .filter_map(|opt| opt.as_ref().map(|g| g.id))
+            .collect();
+        assert_eq!(ids.len(), 2, "two non-None slots produce two groups");
+        assert_eq!(ids[0], expected_start, "first id is next_modification_id");
+        assert_eq!(ids[1], expected_start + 1, "ids are sequential");
+        assert_eq!(
+            graph.last_modification_id,
+            expected_start + 1,
+            "counter advanced"
+        );
     }
 }

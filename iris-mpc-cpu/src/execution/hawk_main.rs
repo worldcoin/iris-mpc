@@ -793,6 +793,11 @@ impl HawkActor {
                     if mutations.is_empty() {
                         None
                     } else {
+                        // No in-memory graph to mint from in this branch
+                        // (hnsw_disable_memory_persistence). The mutation is
+                        // returned for downstream serialization but never
+                        // applied to a GraphMem here, so a placeholder id of
+                        // 0 is fine.
                         Some(GraphMutation {
                             id: 0,
                             ops: mutations,
