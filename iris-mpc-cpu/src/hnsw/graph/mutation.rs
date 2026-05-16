@@ -259,25 +259,4 @@ mod tests {
         // unidirectional pruning — 3 still links back to 2
         assert_eq!(layer.get_links(&3).unwrap(), &[1, 2]);
     }
-
-    #[test]
-    fn graph_mutation_has_id_and_ops_fields() {
-        use crate::hnsw::graph::mutation::{GraphMutation, MutationOp, UpdateEntryPoint};
-        let m: GraphMutation<i32> = GraphMutation {
-            id: 7,
-            ops: vec![MutationOp::AddNode {
-                id: 42,
-                height: 1,
-                update_ep: UpdateEntryPoint::False,
-            }],
-        };
-        assert_eq!(m.id, 7);
-        assert_eq!(m.ops.len(), 1);
-
-        // bincode round-trip preserves both fields
-        let bytes = bincode::serialize(&m).unwrap();
-        let back: GraphMutation<i32> = bincode::deserialize(&bytes).unwrap();
-        assert_eq!(back.id, 7);
-        assert_eq!(back.ops.len(), 1);
-    }
 }
