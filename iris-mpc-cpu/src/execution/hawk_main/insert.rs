@@ -138,7 +138,10 @@ pub async fn insert<V: VectorStoreMut>(
         }
 
         if !request_mutations.is_empty() {
-            mutations[idx] = Some(GraphMutation(request_mutations));
+            mutations[idx] = Some(GraphMutation {
+                id: 0,
+                ops: request_mutations,
+            });
         }
     }
 
@@ -150,7 +153,7 @@ pub async fn insert<V: VectorStoreMut>(
     let all_mutations: Vec<MutationOp<V::VectorRef>> = grouped_mutations
         .iter()
         .filter_map(|opt| opt.as_ref())
-        .flat_map(|group| group.0.iter().cloned())
+        .flat_map(|group| group.ops.iter().cloned())
         .collect();
     graph.insert_apply(all_mutations);
 
@@ -705,7 +708,7 @@ mod tests {
         let slot0 = grouped[0].as_ref().expect("slot 0 should be Some");
         assert!(
             slot0
-                .0
+                .ops
                 .iter()
                 .any(|m| matches!(m, MutationOp::AddNode { .. })),
             "slot 0 should contain AddNode"
@@ -713,16 +716,16 @@ mod tests {
 
         // Slot 1 contains exactly one mutation, RemoveNode(a).
         let slot1 = grouped[1].as_ref().expect("slot 1 should be Some");
-        assert_eq!(slot1.0.len(), 1, "deletion slot has one mutation");
-        match &slot1.0[0] {
+        assert_eq!(slot1.ops.len(), 1, "deletion slot has one mutation");
+        match &slot1.ops[0] {
             MutationOp::RemoveNode { id } => assert_eq!(*id, a),
             other => panic!("expected RemoveNode(a) in slot 1, got {:?}", other),
         }
 
         // Slot 2 contains exactly one mutation, RemoveNode(b).
         let slot2 = grouped[2].as_ref().expect("slot 2 should be Some");
-        assert_eq!(slot2.0.len(), 1, "deletion slot has one mutation");
-        match &slot2.0[0] {
+        assert_eq!(slot2.ops.len(), 1, "deletion slot has one mutation");
+        match &slot2.ops[0] {
             MutationOp::RemoveNode { id } => assert_eq!(*id, b),
             other => panic!("expected RemoveNode(b) in slot 2, got {:?}", other),
         }
@@ -759,7 +762,7 @@ mod tests {
         .expect("insert should succeed");
 
         let slot0 = grouped[0].as_ref().expect("slot 0 should be Some");
-        let mutations: &Vec<_> = &slot0.0;
+        let mutations: &Vec<_> = &slot0.ops;
 
         let add_count = mutations
             .iter()
