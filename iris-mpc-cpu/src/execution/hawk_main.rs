@@ -1409,8 +1409,8 @@ impl HawkResult {
             .get_by_request_index(RequestIndex::UniqueReauthResetCheck(request_i))
             .and_then(|mutation| {
                 mutation.plans[LEFT]
-                    .as_ref()
-                    .or(mutation.plans[RIGHT].as_ref())
+                    .first()
+                    .or_else(|| mutation.plans[RIGHT].first())
                     .and_then(|plan| {
                         plan.ops.iter().find_map(|m| match m {
                             MutationOp::AddNode { id, .. } => Some(*id),
@@ -1600,7 +1600,7 @@ pub struct HawkMutation(pub Vec<SingleHawkMutation>);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SingleHawkMutation {
-    pub plans: BothEyes<Option<ConnectPlan>>,
+    pub plans: BothEyes<Vec<ConnectPlan>>,
 
     #[serde(skip)]
     pub modification_key: Option<ModificationKey>,
@@ -1658,7 +1658,7 @@ impl HawkMutation {
             // for reference, see the end of handle_mutations()
             if let Some(ref modification_key) = mutation.modification_key {
                 if let Some(modification) = modifications.get_mut(modification_key) {
-                    // Serialize the plans (BothEyes<Option<ConnectPlan>>)
+                    // Serialize the plans (BothEyes<Vec<ConnectPlan>>)
                     let serialized = bincode::serialize(&mutation.plans)
                         .map_err(|e| eyre::eyre!("Failed to serialize graph mutation: {}", e))?;
 
@@ -1984,8 +1984,9 @@ impl HawkHandle {
             .collect_vec();
 
         // Store plans for both sides using BothEyes structure
-        let mut plans_both_sides: Vec<BothEyes<Option<ConnectPlan>>> =
-            vec![[None, None]; requests_order.len()];
+        let mut plans_both_sides: Vec<BothEyes<Vec<ConnectPlan>>> = (0..requests_order.len())
+            .map(|_| [Vec::new(), Vec::new()])
+            .collect();
 
         // For both eyes.
         for (side, sessions, search_results, reset_results) in izip!(
@@ -2048,7 +2049,9 @@ impl HawkHandle {
 
             // Store plans for this side
             for (plan, both_sides) in izip!(plans, &mut plans_both_sides) {
-                both_sides[*side as usize] = plan;
+                if let Some(p) = plan {
+                    both_sides[*side as usize].push(p);
+                }
             }
         }
 
@@ -2505,8 +2508,8 @@ mod hawk_mutation_tests {
 
         let mutation = SingleHawkMutation {
             plans: [
-                Some(create_test_connect_plan(VectorId::from_serial_id(1))),
-                None,
+                vec![create_test_connect_plan(VectorId::from_serial_id(1))],
+                Vec::new(),
             ],
             modification_key: Some(modification_key.clone()),
             request_index: Some(RequestIndex::UniqueReauthResetCheck(0)),
@@ -2549,8 +2552,8 @@ mod hawk_mutation_tests {
 
         let mutation1 = SingleHawkMutation {
             plans: [
-                Some(create_test_connect_plan(VectorId::from_serial_id(1))),
-                None,
+                vec![create_test_connect_plan(VectorId::from_serial_id(1))],
+                Vec::new(),
             ],
             modification_key: Some(key1.clone()),
             request_index: Some(index1),
@@ -2558,8 +2561,8 @@ mod hawk_mutation_tests {
 
         let mutation2 = SingleHawkMutation {
             plans: [
-                None,
-                Some(create_test_connect_plan(VectorId::from_serial_id(2))),
+                Vec::new(),
+                vec![create_test_connect_plan(VectorId::from_serial_id(2))],
             ],
             modification_key: Some(key2.clone()),
             request_index: Some(index2),
@@ -2567,8 +2570,8 @@ mod hawk_mutation_tests {
 
         let mutation3 = SingleHawkMutation {
             plans: [
-                Some(create_test_connect_plan(VectorId::from_serial_id(3))),
-                Some(create_test_connect_plan(VectorId::from_serial_id(3))),
+                vec![create_test_connect_plan(VectorId::from_serial_id(3))],
+                vec![create_test_connect_plan(VectorId::from_serial_id(3))],
             ],
             modification_key: Some(key3.clone()),
             request_index: Some(index3),
@@ -2608,8 +2611,8 @@ mod hawk_mutation_tests {
     fn test_mutation_without_modification_key() {
         let mutation_with_key = SingleHawkMutation {
             plans: [
-                Some(create_test_connect_plan(VectorId::from_serial_id(1))),
-                None,
+                vec![create_test_connect_plan(VectorId::from_serial_id(1))],
+                Vec::new(),
             ],
             modification_key: Some(ModificationKey::RequestId("test".to_string())),
             request_index: Some(RequestIndex::UniqueReauthResetCheck(0)),
@@ -2617,8 +2620,8 @@ mod hawk_mutation_tests {
 
         let mutation_without_key = SingleHawkMutation {
             plans: [
-                None,
-                Some(create_test_connect_plan(VectorId::from_serial_id(2))),
+                Vec::new(),
+                vec![create_test_connect_plan(VectorId::from_serial_id(2))],
             ],
             modification_key: None,
             request_index: None,
@@ -2641,8 +2644,8 @@ mod hawk_mutation_tests {
     fn test_single_hawk_mutation_serialization() {
         let mutation = SingleHawkMutation {
             plans: [
-                Some(create_test_connect_plan(VectorId::from_serial_id(1))),
-                None,
+                vec![create_test_connect_plan(VectorId::from_serial_id(1))],
+                Vec::new(),
             ],
             modification_key: Some(ModificationKey::RequestId("test".to_string())),
             request_index: Some(RequestIndex::UniqueReauthResetCheck(0)),
@@ -2658,5 +2661,34 @@ mod hawk_mutation_tests {
         // modification_key is skipped during serialization, so it should be None
         assert_eq!(deserialized.plans, mutation.plans);
         assert_eq!(deserialized.modification_key, None);
+    }
+
+    #[test]
+    fn single_hawk_mutation_per_side_vec_round_trips() {
+        let plan_a = GraphMutation {
+            id: 5,
+            ops: vec![MutationOp::AddNode {
+                id: VectorId::from_serial_id(1),
+                height: 1,
+                update_ep: UpdateEntryPoint::False,
+            }],
+        };
+        let plan_b = GraphMutation {
+            id: 6,
+            ops: vec![MutationOp::RemoveNode {
+                id: VectorId::from_serial_id(2),
+            }],
+        };
+        let mutation = SingleHawkMutation {
+            plans: [vec![plan_a.clone()], vec![plan_b.clone()]],
+            modification_key: None,
+            request_index: None,
+        };
+        let bytes = mutation.serialize().expect("serialize");
+        let back: SingleHawkMutation = bincode::deserialize(&bytes).expect("deserialize");
+        assert_eq!(back.plans[0].len(), 1);
+        assert_eq!(back.plans[0][0].id, 5);
+        assert_eq!(back.plans[1].len(), 1);
+        assert_eq!(back.plans[1][0].id, 6);
     }
 }
