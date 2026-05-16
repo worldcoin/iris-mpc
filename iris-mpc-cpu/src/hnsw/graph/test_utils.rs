@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use super::graph_store::GraphPg;
 use crate::{
-    execution::hawk_main::{BothEyes, LEFT, RIGHT},
+    execution::hawk_main::BothEyes,
     genesis::state_accessor::{
         STATE_DOMAIN, STATE_KEY_LAST_INDEXED_IRIS_ID, STATE_KEY_LAST_INDEXED_MODIFICATION_ID,
     },
@@ -20,7 +20,7 @@ use crate::{
             },
             mutation::EdgeType,
             neighborhood::Neighborhood,
-            MutationOp, UpdateEntryPoint,
+            GraphMutation, MutationOp, UpdateEntryPoint,
         },
         vector_store::{VectorStore, VectorStoreMut},
         SortedNeighborhood,
@@ -200,7 +200,7 @@ impl DbContext {
     pub async fn get_both_eyes(&self) -> Result<BothEyes<GraphMem<PlaintextVectorRef>>> {
         let checkpoint_row = self.graph_pg.get_latest_genesis_graph_checkpoint().await?;
 
-        let mut graph: BothEyes<GraphMem<PlaintextVectorRef>> = match checkpoint_row {
+        let graph: BothEyes<GraphMem<PlaintextVectorRef>> = match checkpoint_row {
             None => [GraphMem::new(), GraphMem::new()],
             Some(ref row) => {
                 let state = GraphCheckpointState {
@@ -223,10 +223,10 @@ impl DbContext {
             .get_hawk_graph_mutations_after(min_mutation_id)
             .await?;
 
-        for row in mutation_rows {
-            let both_eyes = row.deserialize_mutations()?;
-            graph[LEFT].insert_apply(both_eyes[LEFT].clone());
-            graph[RIGHT].insert_apply(both_eyes[RIGHT].clone());
+        for _row in mutation_rows {
+            // TODO(graph-mod-ids Task 5): once deserialize_mutations returns
+            // BothEyes<Vec<GraphMutation<…>>>, replay per-group with insert_apply.
+            todo!("replay loop updated in Task 5 when persistence shape changes");
         }
 
         Ok(graph)
@@ -378,7 +378,12 @@ impl DbContext {
             height: 1,
             update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
         };
-        left_graph.insert_apply(vec![ep_mutation]);
+        left_graph
+            .insert_apply(&GraphMutation {
+                id: 1,
+                ops: vec![ep_mutation],
+            })
+            .unwrap();
 
         // Build links between vectors 1-3 and 4-6
         for i in 1..4usize {
@@ -402,7 +407,12 @@ impl DbContext {
                     edge_type: EdgeType::Base,
                 },
             ];
-            left_graph.insert_apply(mutations);
+            left_graph
+                .insert_apply(&GraphMutation {
+                    id: (i as u64) + 1,
+                    ops: mutations,
+                })
+                .unwrap();
         }
 
         // Use same graph for both eyes (this is test data)

@@ -145,17 +145,21 @@ pub async fn insert<V: VectorStoreMut>(
         }
     }
 
-    let grouped_mutations = searcher
+    let mut grouped_mutations = searcher
         .insert_prepare_batch(store, graph, mutations)
         .await?;
 
-    // Flatten all mutations for in-memory graph application.
-    let all_mutations: Vec<MutationOp<V::VectorRef>> = grouped_mutations
-        .iter()
-        .filter_map(|opt| opt.as_ref())
-        .flat_map(|group| group.ops.iter().cloned())
-        .collect();
-    graph.insert_apply(all_mutations);
+    // Temporary in-place id stamping; Task 4 will move this to mutation
+    // construction time via MutationIdAllocator.
+    for (next_id, slot) in
+        (graph.next_modification_id()..).zip(grouped_mutations.iter_mut().flatten())
+    {
+        slot.id = next_id;
+    }
+    // Apply each finalized group; strict-increase ordering is enforced.
+    for group in grouped_mutations.iter().flatten() {
+        graph.insert_apply(group)?;
+    }
 
     // grouped_mutations is shaped as Vec<Option<ConnectPlanV<V>>>, one entry per
     // batch slot — return it directly as the connect plans.

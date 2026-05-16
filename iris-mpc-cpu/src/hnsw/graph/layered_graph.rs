@@ -7,7 +7,7 @@ use crate::{
     execution::hawk_main::state_check::SetHash,
     hawkers::ideal_knn_engines::{read_knn_results_from_file, Engine, EngineChoice, KNNResult},
     hnsw::{
-        graph::{mutation::EdgeType, MutationOp, UpdateEntryPoint},
+        graph::{mutation::EdgeType, GraphMutation, MutationOp, UpdateEntryPoint},
         searcher::LayerMode,
         vector_store::Ref,
         HnswSearcher,
@@ -190,10 +190,22 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
     ///
     /// This updates the graph's entry points set and connects the new vector to its
     /// neighbors as specified in the mutations.
-    pub fn insert_apply(&mut self, plan: Vec<MutationOp<V>>) {
+    ///
+    /// The supplied `mutation.id` must be strictly greater than
+    /// `self.last_modification_id`; otherwise the call returns `Err` without
+    /// touching the graph. On success the counter advances to `mutation.id`.
+    pub fn insert_apply(&mut self, mutation: &GraphMutation<V>) -> Result<()> {
+        if mutation.id <= self.last_modification_id {
+            return Err(eyre::eyre!(
+                "GraphMem::insert_apply: mutation id {} is not strictly greater than \
+                 last_modification_id {}",
+                mutation.id,
+                self.last_modification_id,
+            ));
+        }
         // Pass 1: apply node-level mutations.
-        for mutation in plan.iter() {
-            match mutation {
+        for op in mutation.ops.iter() {
+            match op {
                 MutationOp::RemoveNode { id } => {
                     for layer in &mut self.layers {
                         layer.remove_node(id);
@@ -236,8 +248,8 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
         }
 
         // Pass 2: apply edge-level mutations.
-        for mutation in plan.into_iter() {
-            match mutation {
+        for op in mutation.ops.iter().cloned() {
+            match op {
                 MutationOp::AddNode { .. } | MutationOp::RemoveNode { .. } => {}
                 MutationOp::AddEdges {
                     base,
@@ -351,6 +363,19 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                 }
             }
         }
+
+        self.last_modification_id = mutation.id;
+        Ok(())
+    }
+
+    /// Apply a slice of `GraphMutation` groups in order. Short-circuits on
+    /// the first strict-increase violation. The graph state at the failure
+    /// point reflects the successfully applied prefix.
+    pub fn insert_apply_all(&mut self, mutations: &[GraphMutation<V>]) -> Result<()> {
+        for m in mutations {
+            self.insert_apply(m)?;
+        }
+        Ok(())
     }
 
     pub async fn get_first_entry_point(&self) -> Option<(V, usize)> {
@@ -1008,7 +1033,7 @@ mod tests {
         Ok(())
     }
 
-    use crate::hnsw::graph::mutation::{EdgeType, MutationOp, UpdateEntryPoint};
+    use crate::hnsw::graph::mutation::{EdgeType, GraphMutation, MutationOp, UpdateEntryPoint};
 
     #[test]
     fn add_edges_outgoing_writes_only_to_id_list() {
@@ -1017,29 +1042,39 @@ mod tests {
         let b = IrisVectorId::from_serial_id(2);
         let c = IrisVectorId::from_serial_id(3);
         // Seed: a, b, c all exist at layer 0 with no edges.
-        graph.insert_apply(vec![
-            MutationOp::AddNode {
-                id: a,
-                height: 1,
-                update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
-            },
-            MutationOp::AddNode {
-                id: b,
-                height: 1,
-                update_ep: UpdateEntryPoint::False,
-            },
-            MutationOp::AddNode {
-                id: c,
-                height: 1,
-                update_ep: UpdateEntryPoint::False,
-            },
-        ]);
-        graph.insert_apply(vec![MutationOp::AddEdges {
-            base: a,
-            layer: 0,
-            neighbors: vec![b, c],
-            edge_type: EdgeType::Base,
-        }]);
+        graph
+            .insert_apply(&GraphMutation {
+                id: 1,
+                ops: vec![
+                    MutationOp::AddNode {
+                        id: a,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
+                    },
+                    MutationOp::AddNode {
+                        id: b,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::False,
+                    },
+                    MutationOp::AddNode {
+                        id: c,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::False,
+                    },
+                ],
+            })
+            .unwrap();
+        graph
+            .insert_apply(&GraphMutation {
+                id: 2,
+                ops: vec![MutationOp::AddEdges {
+                    base: a,
+                    layer: 0,
+                    neighbors: vec![b, c],
+                    edge_type: EdgeType::Base,
+                }],
+            })
+            .unwrap();
         assert_eq!(graph.layers[0].get_links(&a).unwrap(), &[b, c]);
         assert_eq!(
             graph.layers[0].get_links(&b).unwrap(),
@@ -1057,29 +1092,39 @@ mod tests {
         let a = IrisVectorId::from_serial_id(1);
         let b = IrisVectorId::from_serial_id(2);
         let c = IrisVectorId::from_serial_id(3);
-        graph.insert_apply(vec![
-            MutationOp::AddNode {
-                id: a,
-                height: 1,
-                update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
-            },
-            MutationOp::AddNode {
-                id: b,
-                height: 1,
-                update_ep: UpdateEntryPoint::False,
-            },
-            MutationOp::AddNode {
-                id: c,
-                height: 1,
-                update_ep: UpdateEntryPoint::False,
-            },
-        ]);
-        graph.insert_apply(vec![MutationOp::AddEdges {
-            base: a,
-            layer: 0,
-            neighbors: vec![b, c],
-            edge_type: EdgeType::Neighbors,
-        }]);
+        graph
+            .insert_apply(&GraphMutation {
+                id: 1,
+                ops: vec![
+                    MutationOp::AddNode {
+                        id: a,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
+                    },
+                    MutationOp::AddNode {
+                        id: b,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::False,
+                    },
+                    MutationOp::AddNode {
+                        id: c,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::False,
+                    },
+                ],
+            })
+            .unwrap();
+        graph
+            .insert_apply(&GraphMutation {
+                id: 2,
+                ops: vec![MutationOp::AddEdges {
+                    base: a,
+                    layer: 0,
+                    neighbors: vec![b, c],
+                    edge_type: EdgeType::Neighbors,
+                }],
+            })
+            .unwrap();
         assert_eq!(
             graph.layers[0].get_links(&a).unwrap(),
             &[] as &[IrisVectorId]
@@ -1094,29 +1139,39 @@ mod tests {
         let a = IrisVectorId::from_serial_id(1);
         let b = IrisVectorId::from_serial_id(2);
         let c = IrisVectorId::from_serial_id(3);
-        graph.insert_apply(vec![
-            MutationOp::AddNode {
-                id: a,
-                height: 1,
-                update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
-            },
-            MutationOp::AddNode {
-                id: b,
-                height: 1,
-                update_ep: UpdateEntryPoint::False,
-            },
-            MutationOp::AddNode {
-                id: c,
-                height: 1,
-                update_ep: UpdateEntryPoint::False,
-            },
-        ]);
-        graph.insert_apply(vec![MutationOp::AddEdges {
-            base: a,
-            layer: 0,
-            neighbors: vec![b, c],
-            edge_type: EdgeType::All,
-        }]);
+        graph
+            .insert_apply(&GraphMutation {
+                id: 1,
+                ops: vec![
+                    MutationOp::AddNode {
+                        id: a,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
+                    },
+                    MutationOp::AddNode {
+                        id: b,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::False,
+                    },
+                    MutationOp::AddNode {
+                        id: c,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::False,
+                    },
+                ],
+            })
+            .unwrap();
+        graph
+            .insert_apply(&GraphMutation {
+                id: 2,
+                ops: vec![MutationOp::AddEdges {
+                    base: a,
+                    layer: 0,
+                    neighbors: vec![b, c],
+                    edge_type: EdgeType::All,
+                }],
+            })
+            .unwrap();
         assert_eq!(graph.layers[0].get_links(&a).unwrap(), &[b, c]);
         assert_eq!(graph.layers[0].get_links(&b).unwrap(), &[a]);
         assert_eq!(graph.layers[0].get_links(&c).unwrap(), &[a]);
@@ -1128,47 +1183,57 @@ mod tests {
         let a = IrisVectorId::from_serial_id(1);
         let b = IrisVectorId::from_serial_id(2);
         let c = IrisVectorId::from_serial_id(3);
-        graph.insert_apply(vec![
-            MutationOp::AddNode {
-                id: a,
-                height: 1,
-                update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
-            },
-            MutationOp::AddEdges {
-                base: a,
-                layer: 0,
-                neighbors: vec![b, c],
-                edge_type: EdgeType::Base,
-            },
-            MutationOp::AddNode {
-                id: b,
-                height: 1,
-                update_ep: UpdateEntryPoint::False,
-            },
-            MutationOp::AddEdges {
-                base: b,
-                layer: 0,
-                neighbors: vec![a],
-                edge_type: EdgeType::Base,
-            },
-            MutationOp::AddNode {
-                id: c,
-                height: 1,
-                update_ep: UpdateEntryPoint::False,
-            },
-            MutationOp::AddEdges {
-                base: c,
-                layer: 0,
-                neighbors: vec![a],
-                edge_type: EdgeType::Base,
-            },
-        ]);
-        graph.insert_apply(vec![MutationOp::RemoveEdges {
-            base: a,
-            layer: 0,
-            neighbors: vec![b],
-            edge_type: EdgeType::Base,
-        }]);
+        graph
+            .insert_apply(&GraphMutation {
+                id: 1,
+                ops: vec![
+                    MutationOp::AddNode {
+                        id: a,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
+                    },
+                    MutationOp::AddEdges {
+                        base: a,
+                        layer: 0,
+                        neighbors: vec![b, c],
+                        edge_type: EdgeType::Base,
+                    },
+                    MutationOp::AddNode {
+                        id: b,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::False,
+                    },
+                    MutationOp::AddEdges {
+                        base: b,
+                        layer: 0,
+                        neighbors: vec![a],
+                        edge_type: EdgeType::Base,
+                    },
+                    MutationOp::AddNode {
+                        id: c,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::False,
+                    },
+                    MutationOp::AddEdges {
+                        base: c,
+                        layer: 0,
+                        neighbors: vec![a],
+                        edge_type: EdgeType::Base,
+                    },
+                ],
+            })
+            .unwrap();
+        graph
+            .insert_apply(&GraphMutation {
+                id: 2,
+                ops: vec![MutationOp::RemoveEdges {
+                    base: a,
+                    layer: 0,
+                    neighbors: vec![b],
+                    edge_type: EdgeType::Base,
+                }],
+            })
+            .unwrap();
         assert_eq!(graph.layers[0].get_links(&a).unwrap(), &[c]);
         // Bidirectional cleanup is not implied — b's list still contains a.
         assert_eq!(graph.layers[0].get_links(&b).unwrap(), &[a]);
@@ -1181,26 +1246,31 @@ mod tests {
         let mut graph = GraphMem::<IrisVectorId>::new();
         let a = IrisVectorId::from_serial_id(1);
         let b = IrisVectorId::from_serial_id(2);
-        graph.insert_apply(vec![
-            // Listed first: an edge op that references a node not yet created.
-            MutationOp::AddEdges {
-                base: a,
-                layer: 0,
-                neighbors: vec![b],
-                edge_type: EdgeType::Base,
-            },
-            // Listed second: the node creation.
-            MutationOp::AddNode {
-                id: a,
-                height: 1,
-                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
-            },
-            MutationOp::AddNode {
-                id: b,
-                height: 1,
-                update_ep: UpdateEntryPoint::False,
-            },
-        ]);
+        graph
+            .insert_apply(&GraphMutation {
+                id: 1,
+                ops: vec![
+                    // Listed first: an edge op that references a node not yet created.
+                    MutationOp::AddEdges {
+                        base: a,
+                        layer: 0,
+                        neighbors: vec![b],
+                        edge_type: EdgeType::Base,
+                    },
+                    // Listed second: the node creation.
+                    MutationOp::AddNode {
+                        id: a,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+                    },
+                    MutationOp::AddNode {
+                        id: b,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::False,
+                    },
+                ],
+            })
+            .unwrap();
         // Pass-1 created the nodes, then pass-2 applied the edge — so a should
         // now have b in its outgoing list.
         assert_eq!(graph.layers[0].get_links(&a).unwrap(), &[b]);
@@ -1217,5 +1287,97 @@ mod tests {
         graph.last_modification_id = 42;
         assert_eq!(graph.next_modification_id(), 43);
         assert_eq!(graph.last_modification_id, 42, "peek must not mutate");
+    }
+
+    #[test]
+    fn insert_apply_advances_last_modification_id_on_success() {
+        use crate::hnsw::graph::mutation::{GraphMutation, MutationOp, UpdateEntryPoint};
+        let mut graph = GraphMem::<IrisVectorId>::new();
+        let a = IrisVectorId::from_serial_id(1);
+        let mutation = GraphMutation::<IrisVectorId> {
+            id: 1,
+            ops: vec![MutationOp::AddNode {
+                id: a,
+                height: 1,
+                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+            }],
+        };
+        graph
+            .insert_apply(&mutation)
+            .expect("strict-increase should hold");
+        assert_eq!(graph.last_modification_id, 1);
+    }
+
+    #[test]
+    fn insert_apply_rejects_id_equal_to_last_modification_id() {
+        use crate::hnsw::graph::mutation::{GraphMutation, MutationOp, UpdateEntryPoint};
+        let mut graph = GraphMem::<IrisVectorId>::new();
+        graph.last_modification_id = 5;
+        let mutation = GraphMutation::<IrisVectorId> {
+            id: 5,
+            ops: vec![MutationOp::AddNode {
+                id: IrisVectorId::from_serial_id(1),
+                height: 1,
+                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+            }],
+        };
+        let res = graph.insert_apply(&mutation);
+        assert!(res.is_err(), "equal id must be rejected");
+        assert_eq!(
+            graph.last_modification_id, 5,
+            "state must be unchanged on Err"
+        );
+        assert_eq!(graph.layers.len(), 0, "no ops should have been applied");
+    }
+
+    #[test]
+    fn insert_apply_rejects_id_below_last_modification_id() {
+        use crate::hnsw::graph::mutation::{GraphMutation, MutationOp, UpdateEntryPoint};
+        let mut graph = GraphMem::<IrisVectorId>::new();
+        graph.last_modification_id = 10;
+        let mutation = GraphMutation::<IrisVectorId> {
+            id: 9,
+            ops: vec![MutationOp::AddNode {
+                id: IrisVectorId::from_serial_id(1),
+                height: 1,
+                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+            }],
+        };
+        let res = graph.insert_apply(&mutation);
+        assert!(res.is_err());
+        assert_eq!(graph.last_modification_id, 10);
+    }
+
+    #[test]
+    fn insert_apply_all_short_circuits_on_first_violation() {
+        use crate::hnsw::graph::mutation::{GraphMutation, MutationOp, UpdateEntryPoint};
+        let mut graph = GraphMem::<IrisVectorId>::new();
+        let a = IrisVectorId::from_serial_id(1);
+        let b = IrisVectorId::from_serial_id(2);
+        let mutations = vec![
+            GraphMutation::<IrisVectorId> {
+                id: 1,
+                ops: vec![MutationOp::AddNode {
+                    id: a,
+                    height: 1,
+                    update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+                }],
+            },
+            // Equal id — should fail.
+            GraphMutation::<IrisVectorId> {
+                id: 1,
+                ops: vec![MutationOp::AddNode {
+                    id: b,
+                    height: 1,
+                    update_ep: UpdateEntryPoint::False,
+                }],
+            },
+        ];
+        let res = graph.insert_apply_all(&mutations);
+        assert!(res.is_err(), "second mutation must be rejected");
+        assert_eq!(graph.last_modification_id, 1, "first applied; counter at 1");
+        // First mutation's AddNode took effect, second did not.
+        assert!(graph.layers[0].get_links(&a).is_some());
+        assert!(graph.layers[0].get_links(&b).is_none());
     }
 }

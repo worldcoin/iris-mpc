@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     execution::local::get_free_local_addresses,
     hnsw::{
-        graph::{mutation::EdgeType, MutationOp, UpdateEntryPoint},
+        graph::{mutation::EdgeType, GraphMutation, MutationOp, UpdateEntryPoint},
         searcher::LayerMode,
     },
     protocol::shared_iris::GaloisRingSharedIris,
@@ -113,7 +113,12 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
                     edge_type: EdgeType::All,
                 },
             ];
-            graph.insert_apply(mutations);
+            graph
+                .insert_apply(&GraphMutation {
+                    id: (i as u64) + 1,
+                    ops: mutations,
+                })
+                .unwrap();
         }
     }
 
