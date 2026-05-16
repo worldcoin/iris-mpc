@@ -323,7 +323,10 @@ async fn main() -> Result<()> {
     for _row in &mutation_rows {
         // TODO(graph-mod-ids Task 5): once deserialize_mutations returns
         // BothEyes<Vec<GraphMutation<…>>>, replay per-group with insert_apply.
-        todo!("replay loop updated in Task 5 when persistence shape changes");
+        todo!(
+            "graph-mod-ids Task 3 stub: db_sanity_check WAL replay disabled until Task 5 lands. \
+             Do not run this binary against a live DB until Task 5."
+        );
     }
     rpt!(rpt, "  All mutations applied.");
 

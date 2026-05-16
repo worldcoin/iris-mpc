@@ -248,7 +248,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
         }
 
         // Pass 2: apply edge-level mutations.
-        for op in mutation.ops.iter().cloned() {
+        for op in mutation.ops.iter() {
             match op {
                 MutationOp::AddNode { .. } | MutationOp::RemoveNode { .. } => {}
                 MutationOp::AddEdges {
@@ -257,23 +257,24 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                     neighbors: to_add,
                     edge_type,
                 } => {
+                    let layer = *layer;
                     if self.layers.len() < layer + 1 {
                         self.layers.resize(layer + 1, Layer::new());
                     }
                     let layer_mut = &mut self.layers[layer];
                     match edge_type {
                         EdgeType::Base => {
-                            if layer_mut.get_links(&base).is_none() {
+                            if layer_mut.get_links(base).is_none() {
                                 warn!(
                                     "AddEdges(Base): base={:?} missing at layer {layer}; skipping",
                                     base
                                 );
                             } else {
-                                layer_mut.link_neighbors_to_node(&base, to_add);
+                                layer_mut.link_neighbors_to_node(base, to_add.clone());
                             }
                         }
                         EdgeType::Neighbors => {
-                            for target in &to_add {
+                            for target in to_add {
                                 if layer_mut.get_links(target).is_none() {
                                     warn!(
                                         "AddEdges(Neighbors): target={:?} missing at layer {layer} (base={:?}); add_neighbor will no-op for this target",
@@ -281,18 +282,18 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     );
                                 }
                             }
-                            layer_mut.link_node_to_neighbors(&base, to_add);
+                            layer_mut.link_node_to_neighbors(base, to_add.clone());
                         }
                         EdgeType::All => {
-                            if layer_mut.get_links(&base).is_none() {
+                            if layer_mut.get_links(base).is_none() {
                                 warn!(
                                     "AddEdges(All): base={:?} missing at layer {layer}; skipping outgoing half",
                                     base
                                 );
                             } else {
-                                layer_mut.link_neighbors_to_node(&base, to_add.clone());
+                                layer_mut.link_neighbors_to_node(base, to_add.clone());
                             }
-                            for target in &to_add {
+                            for target in to_add {
                                 if layer_mut.get_links(target).is_none() {
                                     warn!(
                                         "AddEdges(All): target={:?} missing at layer {layer} (base={:?}); add_neighbor will no-op for this target",
@@ -300,7 +301,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     );
                                 }
                             }
-                            layer_mut.link_node_to_neighbors(&base, to_add);
+                            layer_mut.link_node_to_neighbors(base, to_add.clone());
                         }
                     }
                 }
@@ -310,6 +311,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                     neighbors: to_remove,
                     edge_type,
                 } => {
+                    let layer = *layer;
                     if self.layers.len() < layer + 1 {
                         warn!(
                             "RemoveEdges: layer {layer} does not exist (base={:?}); skipping",
@@ -320,17 +322,17 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                     let layer_mut = &mut self.layers[layer];
                     match edge_type {
                         EdgeType::Base => {
-                            if layer_mut.get_links(&base).is_none() {
+                            if layer_mut.get_links(base).is_none() {
                                 warn!(
                                     "RemoveEdges(Base): base={:?} missing at layer {layer}; skipping",
                                     base
                                 );
                             } else {
-                                layer_mut.unlink_neighbors_from_node(&base, to_remove);
+                                layer_mut.unlink_neighbors_from_node(base, to_remove.clone());
                             }
                         }
                         EdgeType::Neighbors => {
-                            for target in &to_remove {
+                            for target in to_remove {
                                 if layer_mut.get_links(target).is_none() {
                                     warn!(
                                         "RemoveEdges(Neighbors): target={:?} missing at layer {layer} (base={:?}); remove_incoming_edges will no-op for this target",
@@ -338,18 +340,18 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     );
                                 }
                             }
-                            layer_mut.unlink_node_from_neighbors(&base, to_remove);
+                            layer_mut.unlink_node_from_neighbors(base, to_remove.clone());
                         }
                         EdgeType::All => {
-                            if layer_mut.get_links(&base).is_none() {
+                            if layer_mut.get_links(base).is_none() {
                                 warn!(
                                     "RemoveEdges(All): base={:?} missing at layer {layer}; skipping outgoing half",
                                     base
                                 );
                             } else {
-                                layer_mut.unlink_neighbors_from_node(&base, to_remove.clone());
+                                layer_mut.unlink_neighbors_from_node(base, to_remove.clone());
                             }
-                            for target in &to_remove {
+                            for target in to_remove {
                                 if layer_mut.get_links(target).is_none() {
                                     warn!(
                                         "RemoveEdges(All): target={:?} missing at layer {layer} (base={:?}); remove_incoming_edges will no-op for this target",
@@ -357,7 +359,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     );
                                 }
                             }
-                            layer_mut.unlink_node_from_neighbors(&base, to_remove);
+                            layer_mut.unlink_node_from_neighbors(base, to_remove.clone());
                         }
                     }
                 }
@@ -1291,7 +1293,6 @@ mod tests {
 
     #[test]
     fn insert_apply_advances_last_modification_id_on_success() {
-        use crate::hnsw::graph::mutation::{GraphMutation, MutationOp, UpdateEntryPoint};
         let mut graph = GraphMem::<IrisVectorId>::new();
         let a = IrisVectorId::from_serial_id(1);
         let mutation = GraphMutation::<IrisVectorId> {
@@ -1310,7 +1311,6 @@ mod tests {
 
     #[test]
     fn insert_apply_rejects_id_equal_to_last_modification_id() {
-        use crate::hnsw::graph::mutation::{GraphMutation, MutationOp, UpdateEntryPoint};
         let mut graph = GraphMem::<IrisVectorId>::new();
         graph.last_modification_id = 5;
         let mutation = GraphMutation::<IrisVectorId> {
@@ -1332,7 +1332,6 @@ mod tests {
 
     #[test]
     fn insert_apply_rejects_id_below_last_modification_id() {
-        use crate::hnsw::graph::mutation::{GraphMutation, MutationOp, UpdateEntryPoint};
         let mut graph = GraphMem::<IrisVectorId>::new();
         graph.last_modification_id = 10;
         let mutation = GraphMutation::<IrisVectorId> {
@@ -1350,7 +1349,6 @@ mod tests {
 
     #[test]
     fn insert_apply_all_short_circuits_on_first_violation() {
-        use crate::hnsw::graph::mutation::{GraphMutation, MutationOp, UpdateEntryPoint};
         let mut graph = GraphMem::<IrisVectorId>::new();
         let a = IrisVectorId::from_serial_id(1);
         let b = IrisVectorId::from_serial_id(2);
