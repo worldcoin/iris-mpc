@@ -306,7 +306,7 @@ async fn main() -> Result<()> {
         bucket,
         checkpoint_state.s3_key
     );
-    let graphs: BothEyes<GraphMem<VectorId>> =
+    let mut graphs: BothEyes<GraphMem<VectorId>> =
         download_graph_checkpoint(&checkpoint_s3_client, bucket, &checkpoint_state).await?;
     rpt!(rpt, "  Checkpoint loaded and BLAKE3 verified.");
 
@@ -320,13 +320,14 @@ async fn main() -> Result<()> {
         mutation_rows.len(),
         checkpoint_state.graph_mutation_id,
     );
-    for _row in &mutation_rows {
-        // TODO(graph-mod-ids Task 5): once deserialize_mutations returns
-        // BothEyes<Vec<GraphMutation<…>>>, replay per-group with insert_apply.
-        todo!(
-            "graph-mod-ids Task 3 stub: db_sanity_check WAL replay disabled until Task 5 lands. \
-             Do not run this binary against a live DB until Task 5."
-        );
+    for row in &mutation_rows {
+        let both_eyes = row.deserialize_mutations()?;
+        for m in &both_eyes[LEFT] {
+            graphs[LEFT].insert_apply(m)?;
+        }
+        for m in &both_eyes[RIGHT] {
+            graphs[RIGHT].insert_apply(m)?;
+        }
     }
     rpt!(rpt, "  All mutations applied.");
 

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use super::graph_store::GraphPg;
 use crate::{
-    execution::hawk_main::BothEyes,
+    execution::hawk_main::{BothEyes, LEFT, RIGHT},
     genesis::state_accessor::{
         STATE_DOMAIN, STATE_KEY_LAST_INDEXED_IRIS_ID, STATE_KEY_LAST_INDEXED_MODIFICATION_ID,
     },
@@ -200,7 +200,7 @@ impl DbContext {
     pub async fn get_both_eyes(&self) -> Result<BothEyes<GraphMem<PlaintextVectorRef>>> {
         let checkpoint_row = self.graph_pg.get_latest_genesis_graph_checkpoint().await?;
 
-        let graph: BothEyes<GraphMem<PlaintextVectorRef>> = match checkpoint_row {
+        let mut graph: BothEyes<GraphMem<PlaintextVectorRef>> = match checkpoint_row {
             None => [GraphMem::new(), GraphMem::new()],
             Some(ref row) => {
                 let state = GraphCheckpointState {
@@ -223,13 +223,14 @@ impl DbContext {
             .get_hawk_graph_mutations_after(min_mutation_id)
             .await?;
 
-        for _row in mutation_rows {
-            // TODO(graph-mod-ids Task 5): once deserialize_mutations returns
-            // BothEyes<Vec<GraphMutation<…>>>, replay per-group with insert_apply.
-            todo!(
-                "graph-mod-ids Task 3 stub: WAL replay disabled until Task 5 lands. \
-                 Do not exercise this code path against a DB with non-empty hawk_graph_mutations rows."
-            );
+        for row in mutation_rows {
+            let both_eyes = row.deserialize_mutations()?;
+            for m in &both_eyes[LEFT] {
+                graph[LEFT].insert_apply(m)?;
+            }
+            for m in &both_eyes[RIGHT] {
+                graph[RIGHT].insert_apply(m)?;
+            }
         }
 
         Ok(graph)
