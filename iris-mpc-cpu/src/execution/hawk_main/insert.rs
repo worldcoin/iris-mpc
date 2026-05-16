@@ -57,7 +57,7 @@ impl MutationIdAllocator {
         Self { next: start }
     }
 
-    fn next(&mut self) -> u64 {
+    fn mint(&mut self) -> u64 {
         let id = self.next;
         self.next += 1;
         id
@@ -160,7 +160,7 @@ pub async fn insert<V: VectorStoreMut>(
 
         if !request_mutations.is_empty() {
             mutations[idx] = Some(GraphMutation {
-                id: id_allocator.next(),
+                id: id_allocator.mint(),
                 ops: request_mutations,
             });
         }
