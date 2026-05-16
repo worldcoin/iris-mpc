@@ -1821,10 +1821,11 @@ impl HnswSearcher {
             links_unstructured.push(l.edge_ids())
         }
 
-        let plan = self
+        let mut plan = self
             .insert_prepare(store, graph, inserted_vector, links_unstructured, update_ep)
             .await?;
-        graph.insert_apply(plan.ops);
+        plan.id = graph.next_modification_id();
+        graph.insert_apply(&plan)?;
         Ok(())
     }
 
@@ -2092,7 +2093,12 @@ mod tests {
             ];
 
             // Apply the mutations to the graph
-            graph_store.insert_apply(mutations);
+            graph_store
+                .insert_apply(&GraphMutation {
+                    id: (i as u64) + 1,
+                    ops: mutations,
+                })
+                .unwrap();
         }
 
         // Create an update for inserting vector id 6
