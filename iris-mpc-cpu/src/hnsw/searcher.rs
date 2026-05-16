@@ -1563,7 +1563,10 @@ impl HnswSearcher {
                 edge_type: EdgeType::All,
             });
         }
-        let mutations = vec![Some(GraphMutation(group_mutations))];
+        let mutations = vec![Some(GraphMutation {
+            id: 0,
+            ops: group_mutations,
+        })];
         let mut grouped = self.insert_prepare_batch(store, graph, mutations).await?;
         grouped
             .pop()
@@ -1605,7 +1608,7 @@ impl HnswSearcher {
             let Some(group) = opt_group else { continue };
 
             // Find the AddNode in this group (assume at most one — matches current usage).
-            let add_node = group.0.iter().find_map(|m| match m {
+            let add_node = group.ops.iter().find_map(|m| match m {
                 MutationOp::AddNode {
                     id,
                     height,
@@ -1620,7 +1623,7 @@ impl HnswSearcher {
             // Build the link vectors from this group's AddEdges entries that target
             // this id with Base or All edge type. Sort each layer's list.
             let mut links: Vec<Vec<V::VectorRef>> = vec![Vec::new(); height];
-            for mutation in group.0.iter_mut() {
+            for mutation in group.ops.iter_mut() {
                 if let MutationOp::AddEdges {
                     base: edge_id,
                     layer,
@@ -1760,7 +1763,7 @@ impl HnswSearcher {
                         .or_else(|| nbhd_last_group.get(&(id.clone(), *layer)).copied())
                         .unwrap_or(last_some_idx);
                     if let Some(Some(group)) = mutations.get_mut(group_idx) {
-                        group.0.push(MutationOp::RemoveEdges {
+                        group.ops.push(MutationOp::RemoveEdges {
                             base: id.clone(),
                             layer: *layer,
                             neighbors: to_remove,
@@ -1781,7 +1784,7 @@ impl HnswSearcher {
                     .or_else(|| nbhd_last_group.get(&(id.clone(), layer)).copied())
                     .unwrap_or(last_some_idx);
                 if let Some(Some(group)) = mutations.get_mut(group_idx) {
-                    group.0.push(MutationOp::RemoveEdges {
+                    group.ops.push(MutationOp::RemoveEdges {
                         base: id,
                         layer,
                         neighbors: to_remove,
@@ -1821,7 +1824,7 @@ impl HnswSearcher {
         let plan = self
             .insert_prepare(store, graph, inserted_vector, links_unstructured, update_ep)
             .await?;
-        graph.insert_apply(plan.0);
+        graph.insert_apply(plan.ops);
         Ok(())
     }
 
@@ -2094,19 +2097,22 @@ mod tests {
 
         // Create an update for inserting vector id 6
         let next_id = ids[5];
-        let mutations = vec![Some(GraphMutation(vec![
-            MutationOp::AddNode {
-                id: next_id,
-                height: 1,
-                update_ep: UpdateEntryPoint::False,
-            },
-            MutationOp::AddEdges {
-                base: next_id,
-                layer: 0,
-                neighbors: ids[0..5].to_vec(),
-                edge_type: EdgeType::Base,
-            },
-        ]))];
+        let mutations = vec![Some(GraphMutation {
+            id: 0,
+            ops: vec![
+                MutationOp::AddNode {
+                    id: next_id,
+                    height: 1,
+                    update_ep: UpdateEntryPoint::False,
+                },
+                MutationOp::AddEdges {
+                    base: next_id,
+                    layer: 0,
+                    neighbors: ids[0..5].to_vec(),
+                    edge_type: EdgeType::Base,
+                },
+            ],
+        })];
 
         // Prepare the batch insertion
         let grouped_plans = searcher
@@ -2119,10 +2125,10 @@ mod tests {
 
         // 1 AddNode + 1 AddEdges(Base) + 6 RemoveEdges (compaction for next_id
         // itself and each of the 5 pre-existing nodes whose neighborhood overflowed).
-        assert_eq!(group.0.len(), 8);
+        assert_eq!(group.ops.len(), 8);
 
         // Verify the first mutation is an InsertNode with the correct shape.
-        let plan = &group.0[0];
+        let plan = &group.ops[0];
         if let MutationOp::AddNode { id, update_ep, .. } = plan {
             assert_eq!(*id, next_id);
             assert_eq!(*update_ep, UpdateEntryPoint::False);
@@ -2132,7 +2138,7 @@ mod tests {
 
         // Collect all RemoveNeighbors mutations and assert compaction correctness.
         let remove_mutations: Vec<_> = group
-            .0
+            .ops
             .iter()
             .filter_map(|m| {
                 if let MutationOp::RemoveEdges {

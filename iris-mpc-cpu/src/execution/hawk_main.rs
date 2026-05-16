@@ -793,7 +793,10 @@ impl HawkActor {
                     if mutations.is_empty() {
                         None
                     } else {
-                        Some(GraphMutation(mutations))
+                        Some(GraphMutation {
+                            id: 0,
+                            ops: mutations,
+                        })
                     }
                 })
                 .collect_vec());
@@ -1404,7 +1407,7 @@ impl HawkResult {
                     .as_ref()
                     .or(mutation.plans[RIGHT].as_ref())
                     .and_then(|plan| {
-                        plan.0.iter().find_map(|m| match m {
+                        plan.ops.iter().find_map(|m| match m {
                             MutationOp::AddNode { id, .. } => Some(*id),
                             _ => None,
                         })
@@ -2472,19 +2475,22 @@ mod hawk_mutation_tests {
     use iris_mpc_common::helpers::sync::ModificationKey;
 
     fn create_test_connect_plan(vector_id: VectorId) -> ConnectPlan {
-        GraphMutation(vec![
-            MutationOp::AddNode {
-                id: vector_id,
-                height: 1,
-                update_ep: UpdateEntryPoint::False,
-            },
-            MutationOp::AddEdges {
-                base: vector_id,
-                layer: 0,
-                neighbors: vec![vector_id],
-                edge_type: EdgeType::Base,
-            },
-        ])
+        GraphMutation {
+            id: 0,
+            ops: vec![
+                MutationOp::AddNode {
+                    id: vector_id,
+                    height: 1,
+                    update_ep: UpdateEntryPoint::False,
+                },
+                MutationOp::AddEdges {
+                    base: vector_id,
+                    layer: 0,
+                    neighbors: vec![vector_id],
+                    edge_type: EdgeType::Base,
+                },
+            ],
+        }
     }
 
     #[test]
