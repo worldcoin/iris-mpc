@@ -67,6 +67,15 @@ pub struct GraphMem<V: Ref + Display + FromStr + Ord> {
 
     /// The id of the most recently applied `GraphMutation`. `0` means no
     /// mutation has been applied. Advanced by `insert_apply` on success.
+    ///
+    /// NOTE: serialization through `GraphV3` (the current on-disk
+    /// checkpoint format) does NOT carry this field — see
+    /// `From<GraphV3> for GraphMem` in `utils/serialization/graph.rs`,
+    /// which resets it to 0 on import. As a result the strict-increase
+    /// safeguard is reliable only within a single process lifetime;
+    /// across restarts it is effectively reset. A `GraphV4` carrying
+    /// this field is a planned follow-up; see
+    /// `docs/superpowers/specs/2026-05-15-graph-modification-ids-design.md`.
     pub last_modification_id: u64,
 }
 
