@@ -101,7 +101,7 @@ use ampc_anon_stats::{
     AnonStatsContext, AnonStatsOperation, AnonStatsOrientation, AnonStatsOrigin, AnonStatsStore,
 };
 use clap::Parser;
-use eyre::{eyre, Report, Result};
+use eyre::{bail, eyre, Report, Result};
 use futures::try_join;
 use identity_update::{
     apply_deletions, search_to_identity_update, IdentityUpdatePlan, IdentityUpdateRequests,
@@ -801,11 +801,8 @@ impl HawkActor {
                 let plan = if mutations.is_empty() {
                     None
                 } else {
-                    // No in-memory graph to mint from in this branch
-                    // (hnsw_disable_memory_persistence). The mutation is
-                    // returned for downstream serialization but never
-                    // applied to a GraphMem here, so a placeholder id of
-                    // 0 is fine.
+                    // The mutation is returned for downstream serialization but
+                    // never applied to a GraphMem, so we use a placeholder id.
                     Some(GraphMutation {
                         id: 0,
                         ops: mutations,
@@ -1609,13 +1606,7 @@ pub struct SingleHawkMutation {
     #[serde(skip)]
     pub request_index: Option<RequestIndex>,
 
-    /// The `VectorId` newly inserted by this request, if any. Populated at the
-    /// point of insertion (in `insert::insert` or the no-memory-persistence
-    /// fast path) so downstream code does not have to re-derive it by walking
-    /// the mutation ops. `None` for pure deletions and no-op slots.
-    ///
-    /// `#[serde(skip)]`: the value is request-level metadata, not part of the
-    /// WAL payload — replay reconstructs graph state from the `plans` alone.
+    /// The `VectorId` newly inserted by this request, if any.
     #[serde(skip)]
     pub inserted_id: Option<VectorId>,
 }
@@ -1669,11 +1660,9 @@ impl HawkMutation {
             // for reference, see the end of handle_mutations()
             if let Some(ref modification_key) = mutation.modification_key {
                 if let Some(modification) = modifications.get_mut(modification_key) {
-                    // Serialize the plans (BothEyes<Vec<ConnectPlan>>)
                     let serialized = bincode::serialize(&mutation.plans)
                         .map_err(|e| eyre::eyre!("Failed to serialize graph mutation: {}", e))?;
 
-                    // Insert into hawk_graph_mutations; modification_id is the natural key.
                     graph_tx
                         .insert_hawk_graph_mutations(modification.id, &serialized)
                         .await?;
@@ -1999,11 +1988,10 @@ impl HawkHandle {
             .map(|_| [Vec::new(), Vec::new()])
             .collect();
 
-        // Track the per-request inserted VectorId surfaced from `HawkActor::insert`.
-        // Left and right sides insert at the same VectorIds, so we keep just one
-        // copy populated from whichever side we process first.
-        let mut inserted_ids_per_request: VecRequests<Option<VectorId>> =
-            vec![None; requests_order.len()];
+        // Track the per-request inserted VectorIds surfaced from `HawkActor::insert`.
+        // Left and right sides insert at the same VectorIds, so we capture the
+        // whole vec from the first side and assert equality on subsequent sides.
+        let mut inserted_ids_per_request: Option<VecRequests<Option<VectorId>>> = None;
 
         // For both eyes.
         for (side, sessions, search_results, reset_results) in izip!(
@@ -2071,23 +2059,24 @@ impl HawkHandle {
                 }
             }
 
-            // Inserted ids are symmetric across sides (the same VectorId is
-            // inserted left and right). Populate on the first side, then on
-            // subsequent sides assert agreement to catch regressions.
-            for (req_i, side_id) in side_inserted_ids.into_iter().enumerate() {
-                match (&inserted_ids_per_request[req_i], side_id) {
-                    (None, side_id) => inserted_ids_per_request[req_i] = side_id,
-                    (Some(_), None) => {}
-                    (Some(existing), Some(s)) => {
-                        debug_assert_eq!(
-                            *existing, s,
-                            "inserted_id mismatch across sides at request {}",
-                            req_i
+            // Inserted ids must be the same on both sides. Capture the whole
+            // vec on the first side and check agreement against it on the
+            // others; a mismatch indicates a real inconsistency between the
+            // left and right HNSW insertion pipelines.
+            match &inserted_ids_per_request {
+                None => inserted_ids_per_request = Some(side_inserted_ids),
+                Some(existing) => {
+                    if *existing != side_inserted_ids {
+                        bail!(
+                            "inserted_id mismatch across sides: {:?} vs {:?}",
+                            existing,
+                            side_inserted_ids
                         );
                     }
                 }
             }
         }
+        let inserted_ids_per_request = inserted_ids_per_request.unwrap_or_default();
 
         // Combine ModificationKey and ConnectPlan into into SingleHawkMutation objects.
         let mut mutations = Vec::new();

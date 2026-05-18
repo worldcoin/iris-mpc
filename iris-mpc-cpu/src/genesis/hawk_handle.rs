@@ -216,8 +216,6 @@ impl Handle {
                                     .await?;
                                     metrics::histogram!("genesis_insert_duration")
                                         .record(start.elapsed().as_secs_f64());
-                                    // The genesis path doesn't surface per-slot
-                                    // inserted ids; drop them here.
                                     let (plans, _inserted_ids) = plans;
                                     connect_plans.extend(plans);
                                 }

@@ -80,10 +80,8 @@ impl MutationIdAllocator {
 ///
 /// Returns a parallel pair of `VecRequests`:
 /// - the per-slot `Option<ConnectPlanV<V>>` carrying the graph mutations to persist;
-/// - the per-slot `Option<V::VectorRef>` identifying the newly inserted vector (the same id
-///   that appears in the slot's `AddNode` op for non-deletion slots). `None` for pure
-///   deletions and no-op slots. Captured here at the point of insertion so downstream
-///   consumers do not have to re-derive it by walking the mutation ops.
+/// - the per-slot `Option<V::VectorRef>` identifying the newly inserted vector, or `None`
+///   for pure deletions and no-op slots.
 pub async fn insert<V: VectorStoreMut>(
     store: &mut V,
     graph: &mut GraphMem<<V as VectorStore>::VectorRef>,
@@ -146,27 +144,28 @@ pub async fn insert<V: VectorStoreMut>(
             }
 
             // Insert vector in store, getting new persistent vector id if none specified.
-            let inserted = match update_id {
+            let inserted_id = match update_id {
                 None => store.insert(&query).await,
                 Some(id) => store.insert_at(id, &query).await?,
             };
+            intra_batch_inserted.push(inserted_id.clone());
 
             request_mutations.push(MutationOp::AddNode {
-                id: inserted.clone(),
+                id: inserted_id.clone(),
                 height: links.len(),
                 update_ep,
             });
             for (layer_idx, layer_links) in links.into_iter().enumerate() {
                 request_mutations.push(MutationOp::AddEdges {
-                    base: inserted.clone(),
+                    base: inserted_id.clone(),
                     layer: layer_idx,
                     neighbors: layer_links,
                     edge_type: EdgeType::All,
                 });
             }
 
-            slot_inserted_ids[idx] = Some(inserted.clone());
-            intra_batch_inserted.push(inserted);
+            // Record inserted id for output
+            slot_inserted_ids[idx] = Some(inserted_id.clone());
         }
 
         if let Some(rid) = replace_id {
@@ -185,13 +184,11 @@ pub async fn insert<V: VectorStoreMut>(
         .insert_prepare_batch(store, graph, mutations)
         .await?;
 
-    // Apply each finalized group; strict-increase ordering is enforced.
+    // Apply each finalized mutation to the graph
     for group in grouped_mutations.iter().flatten() {
         graph.insert_apply(group)?;
     }
 
-    // grouped_mutations is shaped as Vec<Option<ConnectPlanV<V>>>, one entry per
-    // batch slot — return it directly alongside the parallel per-slot inserted ids.
     Ok((grouped_mutations, slot_inserted_ids))
 }
 

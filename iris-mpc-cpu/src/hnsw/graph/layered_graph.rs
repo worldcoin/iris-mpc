@@ -67,15 +67,6 @@ pub struct GraphMem<V: Ref + Display + FromStr + Ord> {
 
     /// The id of the most recently applied `GraphMutation`. `0` means no
     /// mutation has been applied. Advanced by `insert_apply` on success.
-    ///
-    /// NOTE: serialization through `GraphV3` (the current on-disk
-    /// checkpoint format) does NOT carry this field — see
-    /// `From<GraphV3> for GraphMem` in `utils/serialization/graph.rs`,
-    /// which resets it to 0 on import. As a result the strict-increase
-    /// safeguard is reliable only within a single process lifetime;
-    /// across restarts it is effectively reset. A `GraphV4` carrying
-    /// this field is a planned follow-up; see
-    /// `docs/superpowers/specs/2026-05-15-graph-modification-ids-design.md`.
     pub last_modification_id: u64,
 }
 
@@ -132,9 +123,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
     }
 
     /// Returns the id that the next applied `GraphMutation` must equal or
-    /// exceed. This is a pure peek — it does not modify the graph. Callers
-    /// minting several ids in one batch seed a local running counter from
-    /// this value and increment locally.
+    /// exceed. This is a pure peek — it does not modify the graph.
     pub fn next_modification_id(&self) -> u64 {
         self.last_modification_id + 1
     }
@@ -197,12 +186,13 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
 
     /// Applies a list of graph mutations to the in-memory graph.
     ///
-    /// This updates the graph's entry points set and connects the new vector to its
-    /// neighbors as specified in the mutations.
+    /// This updates the graph's entry points set and connects the new vector to
+    /// its neighbors as specified in the mutations.
     ///
     /// The supplied `mutation.id` must be strictly greater than
     /// `self.last_modification_id`; otherwise the call returns `Err` without
-    /// touching the graph. On success the counter advances to `mutation.id`.
+    /// touching the graph. On success `self.last_modification_id` advances to
+    /// `mutation.id`.
     pub fn insert_apply(&mut self, mutation: &GraphMutation<V>) -> Result<()> {
         if mutation.id <= self.last_modification_id {
             return Err(eyre::eyre!(
@@ -212,6 +202,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                 self.last_modification_id,
             ));
         }
+
         // Pass 1: apply node-level mutations.
         for op in mutation.ops.iter() {
             match op {
@@ -379,9 +370,6 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
         Ok(())
     }
 
-    /// Apply a slice of `GraphMutation` groups in order. Short-circuits on
-    /// the first strict-increase violation. The graph state at the failure
-    /// point reflects the successfully applied prefix.
     pub fn insert_apply_all(&mut self, mutations: &[GraphMutation<V>]) -> Result<()> {
         for m in mutations {
             self.insert_apply(m)?;
