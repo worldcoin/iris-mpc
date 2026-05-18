@@ -2,8 +2,7 @@
 //!
 //! Adapts [`GraphPg`] to the trait surface that `run_cycle` consumes:
 //! the latest genesis checkpoint, a streaming WAL range over
-//! `hawk_graph_mutations`, the persisted `last_indexed_modification_id`,
-//! and the live max `modification_id`.
+//! `hawk_graph_mutations`, and the live max `modification_id`.
 
 use async_trait::async_trait;
 use futures::stream::{BoxStream, StreamExt, TryStreamExt};
@@ -16,24 +15,15 @@ use crate::hnsw::{
 };
 use iris_mpc_common::vector_id::VectorId;
 
-const HAWK_DOMAIN: &str = "hawk";
-const LAST_INDEXED_MODIFICATION_ID_KEY: &str = "last_indexed_modification_id";
-
-fn transient<E: std::fmt::Display>(ctx: &str) -> impl FnOnce(E) -> CycleError + '_ {
-    move |e| CycleError::Transient(format!("{ctx}: {e}"))
-}
-
-fn fatal<E: std::fmt::Display>(ctx: &str) -> impl FnOnce(E) -> CycleError + '_ {
-    move |e| CycleError::Fatal(format!("{ctx}: {e}"))
-}
-
 #[async_trait]
 impl<V: VectorStore + Send + Sync> MutationStore for GraphPg<V> {
     async fn latest_checkpoint(&self) -> Result<CheckpointMeta, CycleError> {
         let row = self
             .get_latest_genesis_graph_checkpoint()
             .await
-            .map_err(transient("get_latest_genesis_graph_checkpoint"))?
+            .map_err(|e| {
+                CycleError::Transient(format!("get_latest_genesis_graph_checkpoint: {e}"))
+            })?
             .ok_or_else(|| {
                 CycleError::Fatal(
                     "no genesis_graph_checkpoint row exists; cannot start a cycle".into(),
@@ -71,21 +61,11 @@ impl<V: VectorStore + Send + Sync> MutationStore for GraphPg<V> {
         Ok(stream.boxed())
     }
 
-    async fn last_indexed_modification_id(&self) -> Result<i64, CycleError> {
-        let value: Option<i64> = self
-            .get_persistent_state(HAWK_DOMAIN, LAST_INDEXED_MODIFICATION_ID_KEY)
-            .await
-            .map_err(transient(
-                "get_persistent_state(last_indexed_modification_id)",
-            ))?;
-        Ok(value.unwrap_or(0))
-    }
-
     async fn current_max_mutation_id(&self) -> Result<GraphMutationId, CycleError> {
         let max = self
             .get_max_hawk_graph_mutation_id()
             .await
-            .map_err(fatal("get_max_hawk_graph_mutation_id"))?;
+            .map_err(|e| CycleError::Fatal(format!("get_max_hawk_graph_mutation_id: {e}")))?;
         Ok(max.unwrap_or(0))
     }
 }
@@ -187,35 +167,6 @@ mod tests {
             assert!(matches!(right[0], GraphMutation::RemoveNode { id } if id == vid(expected.1)));
         }
 
-        Ok(())
-    }
-
-    /// `last_indexed_modification_id` defaults to 0 when the row is missing.
-    #[tokio::test]
-    async fn test_last_indexed_modification_id_defaults_to_zero() -> eyre::Result<()> {
-        let store = TestGraphPg::<PlaintextStore>::new().await?;
-        let v = MutationStore::last_indexed_modification_id(&store.graph).await?;
-        assert_eq!(v, 0);
-        Ok(())
-    }
-
-    /// `last_indexed_modification_id` reads back whatever was written via set_persistent_state.
-    #[tokio::test]
-    async fn test_last_indexed_modification_id_reads_persistent_state() -> eyre::Result<()> {
-        let store = TestGraphPg::<PlaintextStore>::new().await?;
-
-        let mut graph_tx = store.tx().await?;
-        GraphPg::<PlaintextStore>::set_persistent_state(
-            &mut graph_tx.tx,
-            HAWK_DOMAIN,
-            LAST_INDEXED_MODIFICATION_ID_KEY,
-            &123i64,
-        )
-        .await?;
-        graph_tx.tx.commit().await?;
-
-        let v = MutationStore::last_indexed_modification_id(&store.graph).await?;
-        assert_eq!(v, 123);
         Ok(())
     }
 

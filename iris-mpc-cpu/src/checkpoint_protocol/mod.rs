@@ -20,7 +20,7 @@ pub mod transport;
 mod tests;
 
 pub use hasher::Blake3GraphHasher;
-pub use materializer::{LiveClone, RebuildFromCheckpoint};
+pub use materializer::RebuildFromCheckpoint;
 pub use restart::{restart_from_checkpoint, RestartOutcome};
 pub use sidecar::{sidecar_main, SidecarConfig};
 pub use terminal::{InstallAsServing, UploadAndRecord};
@@ -69,12 +69,6 @@ pub struct CheckpointMeta {
 /// Inclusive upper bound on `graph_mutation_id` to apply during materialization.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FreezeHeight(pub GraphMutationId);
-
-/// Materialized graph at a freeze height.
-pub struct GraphSnapshot {
-    pub graph: Graph,
-    pub actual_height: GraphMutationId,
-}
 
 /// Cycle outcome reported back to the caller's daemon loop.
 #[derive(Debug)]
@@ -134,28 +128,30 @@ pub struct CycleConfig {
 
 #[async_trait]
 pub trait Materializer {
-    /// Produce a graph snapshot at (or describing) `freeze`. `actual_height`
-    /// in the returned [`GraphSnapshot`] is *observational* — it does not
-    /// have to equal `freeze.0`, and run_cycle does not gate on it. Cross-
-    /// party determinism is enforced by the subsequent hash-consensus
-    /// round on `snapshot.graph`, not by the reported height.
+    /// Produce the graph as of `freeze`. Cross-party determinism is
+    /// enforced by the subsequent hash-consensus round on the returned
+    /// graph, not by any height the materializer reports.
     async fn snapshot(
         &mut self,
         base: CheckpointMeta,
         freeze: FreezeHeight,
-    ) -> Result<GraphSnapshot, CycleError>;
+    ) -> Result<Graph, CycleError>;
 }
 
 #[async_trait]
 pub trait TerminalAction {
-    /// `base` is the agreed-upon checkpoint the cycle started from; finalize
-    /// implementations carry forward fields that aren't tracked elsewhere
-    /// (e.g. `last_indexed_iris_id` for Hawk Main, where there's no
-    /// per-mutation iris-id source).
+    /// `base` is the agreed-upon checkpoint the cycle started from;
+    /// `freeze` is the agreed freeze height; `graph` is the materialized
+    /// snapshot at that height; `hash` is the consensus-agreed BLAKE3 over
+    /// the canonical bytes of `graph`.
+    ///
+    /// Implementations may carry fields forward from `base` that aren't
+    /// tracked elsewhere (e.g. `last_indexed_iris_id` for Hawk Main).
     async fn finalize(
         &mut self,
         base: CheckpointMeta,
-        snapshot: GraphSnapshot,
+        freeze: FreezeHeight,
+        graph: Graph,
         hash: Blake3Hash,
     ) -> Result<(), CycleError>;
 }
@@ -202,8 +198,6 @@ pub trait MutationStore {
         hi_inclusive: GraphMutationId,
     ) -> Result<BoxStream<'_, Result<BothEyes<Vec<GraphMutation<VectorId>>>, CycleError>>, CycleError>;
 
-    async fn last_indexed_modification_id(&self) -> Result<i64, CycleError>;
-
     /// Largest `graph_mutation_id` currently visible to this party.
     /// Used for the height-agreement round.
     async fn current_max_mutation_id(&self) -> Result<GraphMutationId, CycleError>;
@@ -249,7 +243,14 @@ where
             cfg.peer_round_timeout,
         )
         .await?;
-    let agreed_base = agree_base(local_base, peer_bases)?;
+    for peer in &peer_bases.responses {
+        if peer != &local_base {
+            return Err(CycleError::Fatal(format!(
+                "base mismatch: local={local_base:?} peer={peer:?}"
+            )));
+        }
+    }
+    let agreed_base = local_base;
 
     // Phase 2 — height agreement. Pick the min across parties so every party
     // is guaranteed to have all WAL rows up to and including the freeze.
@@ -267,7 +268,13 @@ where
             cfg.peer_round_timeout,
         )
         .await?;
-    let freeze = agree_height(local_height, peer_heights);
+    let freeze = FreezeHeight(
+        peer_heights
+            .responses
+            .iter()
+            .copied()
+            .fold(local_height, GraphMutationId::min),
+    );
 
     // A peer reporting a height below our agreed base means they haven't
     // ingested up to the base WAL position yet. Replaying would either
@@ -283,7 +290,7 @@ where
     }
 
     // Gate on minimum mutations to apply; restart callers pass `0`.
-    let available = freeze.0.saturating_sub(lo).max(0) as u64;
+    let available = (freeze.0 - lo) as u64;
     if available < cfg.min_mutations_to_apply {
         return Ok(Outcome::Skipped(SkipReason::NotEnoughMutations {
             available,
@@ -293,10 +300,10 @@ where
 
     // Phase 3 — materialize. Pluggable: rebuild-from-checkpoint, live-clone,
     // or future live-fork.
-    let snapshot = materializer.snapshot(agreed_base.clone(), freeze).await?;
+    let graph = materializer.snapshot(agreed_base.clone(), freeze).await?;
 
     // Phase 4 — hash the materialized graph.
-    let local_hash = hasher.hash_canonical(&snapshot.graph);
+    let local_hash = hasher.hash_canonical(&graph);
 
     // Phase 5 — hash consensus. All parties must produce the same canonical
     // bytes; any mismatch is fatal (graph divergence; cycle cannot be trusted).
@@ -321,38 +328,13 @@ where
         }
     }
 
-    let height = snapshot.actual_height;
     finalizer
-        .finalize(agreed_base, snapshot, local_hash)
+        .finalize(agreed_base, freeze, graph, local_hash)
         .await?;
     Ok(Outcome::Finalized {
         hash: local_hash,
-        height,
+        height: freeze.0,
     })
-}
-
-fn agree_base(
-    local: CheckpointMeta,
-    peers: PeerResponses<CheckpointMeta>,
-) -> Result<CheckpointMeta, CycleError> {
-    for peer in &peers.responses {
-        if peer != &local {
-            return Err(CycleError::Fatal(format!(
-                "base mismatch: local={:?} peer={:?}",
-                local, peer
-            )));
-        }
-    }
-    Ok(local)
-}
-
-fn agree_height(local: GraphMutationId, peers: PeerResponses<GraphMutationId>) -> FreezeHeight {
-    let agreed = peers
-        .responses
-        .iter()
-        .copied()
-        .fold(local, GraphMutationId::min);
-    FreezeHeight(agreed)
 }
 
 pub(crate) fn hex(bytes: &[u8]) -> String {

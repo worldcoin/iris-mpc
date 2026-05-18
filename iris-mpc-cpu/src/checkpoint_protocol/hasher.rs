@@ -66,7 +66,6 @@ mod tests {
     use super::*;
     use crate::hnsw::graph::layered_graph::{EntryPoint, GraphMem, Layer};
     use iris_mpc_common::vector_id::VectorId;
-    use std::collections::HashMap;
 
     fn vid(i: u32) -> VectorId {
         VectorId::from_0_index(i)
@@ -204,12 +203,5 @@ mod tests {
         let g2: Graph = [right, left];
         let h = Blake3GraphHasher::new();
         assert_ne!(h.hash_canonical(&g1), h.hash_canonical(&g2));
-    }
-
-    /// Suppress the unused-import warning in this test module. The HashMap
-    /// import is for the inline `graph_from` helper above.
-    #[allow(dead_code)]
-    fn _force_use() {
-        let _: HashMap<u8, u8> = HashMap::new();
     }
 }

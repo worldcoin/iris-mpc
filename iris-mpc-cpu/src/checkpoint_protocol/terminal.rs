@@ -15,7 +15,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::checkpoint_protocol::{
-    Blake3Hash, CheckpointMeta, CycleError, GraphSnapshot, TerminalAction,
+    Blake3Hash, CheckpointMeta, CycleError, FreezeHeight, Graph, TerminalAction,
 };
 use crate::execution::hawk_main::{BothEyes, GraphRef, LEFT, RIGHT};
 use crate::graph_checkpoint::upload_graph_checkpoint;
@@ -63,13 +63,14 @@ impl<V: VectorStore + Send + Sync> TerminalAction for UploadAndRecord<'_, V> {
     async fn finalize(
         &mut self,
         base: CheckpointMeta,
-        snapshot: GraphSnapshot,
+        freeze: FreezeHeight,
+        graph: Graph,
         hash: Blake3Hash,
     ) -> Result<(), CycleError> {
         // upload_graph_checkpoint takes `&BothEyes<GraphRef>` (Arc<RwLock>).
-        // We own the snapshot graph; wrap each eye to match the signature.
-        // The wrappers are dropped after upload — no lasting allocation.
-        let [left, right] = snapshot.graph;
+        // We own the graph; wrap each eye to match the signature. The
+        // wrappers are dropped after upload — no lasting allocation.
+        let [left, right] = graph;
         let wrapped: BothEyes<GraphRef> =
             [Arc::new(RwLock::new(left)), Arc::new(RwLock::new(right))];
 
@@ -86,8 +87,8 @@ impl<V: VectorStore + Send + Sync> TerminalAction for UploadAndRecord<'_, V> {
             &wrapped,
             self.s3_client,
             last_indexed_iris_id_u32,
-            snapshot.actual_height,
-            Some(snapshot.actual_height),
+            freeze.0,
+            Some(freeze.0),
             self.is_archival,
         )
         .await
@@ -152,12 +153,13 @@ impl TerminalAction for InstallAsServing {
     async fn finalize(
         &mut self,
         _base: CheckpointMeta,
-        snapshot: GraphSnapshot,
+        _freeze: FreezeHeight,
+        graph: Graph,
         _hash: Blake3Hash,
     ) -> Result<(), CycleError> {
-        let [snap_left, snap_right] = snapshot.graph;
-        *self.target[LEFT].write().await = snap_left;
-        *self.target[RIGHT].write().await = snap_right;
+        let [left, right] = graph;
+        *self.target[LEFT].write().await = left;
+        *self.target[RIGHT].write().await = right;
         Ok(())
     }
 }
@@ -165,7 +167,6 @@ impl TerminalAction for InstallAsServing {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::checkpoint_protocol::FreezeHeight;
     use crate::hnsw::graph::mutation::{GraphMutation, UpdateEntryPoint};
 
     fn vid(n: u32) -> VectorId {
@@ -202,8 +203,8 @@ mod tests {
             }]);
         }
 
-        // Snapshot carries a different graph (node 1).
-        let snapshot = {
+        // Snapshot graph carries a different graph (node 1).
+        let snapshot_graph: Graph = {
             let mut left = GraphMem::new();
             let mut right = GraphMem::new();
             for g in [&mut left, &mut right] {
@@ -213,14 +214,13 @@ mod tests {
                     update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
                 }]);
             }
-            GraphSnapshot {
-                graph: [left, right],
-                actual_height: FreezeHeight(42).0,
-            }
+            [left, right]
         };
 
         let mut t = InstallAsServing::new([Arc::clone(&target[0]), Arc::clone(&target[1])]);
-        t.finalize(cp_meta(), snapshot, [0u8; 32]).await.unwrap();
+        t.finalize(cp_meta(), FreezeHeight(42), snapshot_graph, [0u8; 32])
+            .await
+            .unwrap();
 
         // After finalize, the target has node 1 and no longer has node 99.
         for eye in &target {

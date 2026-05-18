@@ -14,8 +14,8 @@ use iris_mpc_common::vector_id::VectorId;
 
 use crate::checkpoint_protocol::{
     run_cycle, Blake3Hash, CheckpointMeta, ConsensusMessage, ConsensusTransport, CycleConfig,
-    CycleError, FreezeHeight, Graph, GraphHasher, GraphMutationId, GraphSnapshot, Materializer,
-    MutationStore, Outcome, PeerResponses, SkipReason, TerminalAction,
+    CycleError, FreezeHeight, Graph, GraphHasher, GraphMutationId, Materializer, MutationStore,
+    Outcome, PeerResponses, SkipReason, TerminalAction,
 };
 use crate::execution::hawk_main::BothEyes;
 use crate::hnsw::{graph::mutation::GraphMutation, GraphMem};
@@ -66,9 +66,6 @@ impl MutationStore for MockStore {
     ) -> Result<BoxStream<'_, Result<BothEyes<Vec<GraphMutation<VectorId>>>, CycleError>>, CycleError>
     {
         Ok(Box::pin(stream::empty()))
-    }
-    async fn last_indexed_modification_id(&self) -> Result<i64, CycleError> {
-        Ok(0)
     }
     async fn current_max_mutation_id(&self) -> Result<GraphMutationId, CycleError> {
         Ok(self.max_id)
@@ -159,16 +156,12 @@ impl ConsensusTransport for MockTransport {
 struct MockMaterializer {
     /// Records (base, freeze) on each invocation.
     calls: Arc<Mutex<Vec<(CheckpointMeta, FreezeHeight)>>>,
-    /// Height returned in `GraphSnapshot.actual_height` — defaults to the
-    /// freeze.0 the caller passes; set to `Some(x)` to override.
-    actual_height_override: Option<GraphMutationId>,
 }
 
 impl MockMaterializer {
     fn new() -> Self {
         Self {
             calls: Arc::new(Mutex::new(vec![])),
-            actual_height_override: None,
         }
     }
 }
@@ -179,12 +172,9 @@ impl Materializer for MockMaterializer {
         &mut self,
         base: CheckpointMeta,
         freeze: FreezeHeight,
-    ) -> Result<GraphSnapshot, CycleError> {
+    ) -> Result<Graph, CycleError> {
         self.calls.lock().unwrap().push((base, freeze));
-        Ok(GraphSnapshot {
-            graph: empty_graph(),
-            actual_height: self.actual_height_override.unwrap_or(freeze.0),
-        })
+        Ok(empty_graph())
     }
 }
 
@@ -192,6 +182,7 @@ impl Materializer for MockMaterializer {
 
 #[derive(Clone)]
 struct MockFinalizer {
+    /// Records (hash, freeze) on each invocation.
     calls: Arc<Mutex<Vec<(Blake3Hash, GraphMutationId)>>>,
 }
 
@@ -208,13 +199,11 @@ impl TerminalAction for MockFinalizer {
     async fn finalize(
         &mut self,
         _base: CheckpointMeta,
-        snapshot: GraphSnapshot,
+        freeze: FreezeHeight,
+        _graph: Graph,
         hash: Blake3Hash,
     ) -> Result<(), CycleError> {
-        self.calls
-            .lock()
-            .unwrap()
-            .push((hash, snapshot.actual_height));
+        self.calls.lock().unwrap().push((hash, freeze.0));
         Ok(())
     }
 }
