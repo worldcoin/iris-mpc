@@ -12,8 +12,9 @@ use crate::checkpoint_protocol::{
     CheckpointMeta, CycleError, FreezeHeight, Graph, Materializer, MutationStore,
 };
 use crate::execution::hawk_main::BothEyes;
-use crate::graph_checkpoint::{download_graph_checkpoint, GraphCheckpointState};
+use crate::graph_checkpoint::stream_download_and_deserialize;
 use crate::hnsw::{graph::graph_store::GraphPg, VectorStore};
+use crate::utils::serialization::graph::GraphFormat;
 use futures::TryStreamExt;
 use iris_mpc_common::vector_id::VectorId;
 
@@ -43,36 +44,34 @@ impl<V: VectorStore + Send + Sync> Materializer for RebuildFromCheckpoint<'_, V>
         base: CheckpointMeta,
         freeze: FreezeHeight,
     ) -> Result<Graph, CycleError> {
-        // Phase A: download the base graph from S3.
-        let state = GraphCheckpointState {
-            s3_key: base.s3_key.clone(),
-            last_indexed_iris_id: base.last_indexed_iris_id.try_into().map_err(|_| {
-                CycleError::Fatal(format!(
-                    "checkpoint {} has invalid last_indexed_iris_id={}",
-                    base.checkpoint_id, base.last_indexed_iris_id,
-                ))
-            })?,
-            last_indexed_modification_id: base.last_indexed_modification_id,
-            graph_mutation_id: base.graph_mutation_id,
-            blake3_hash: base.blake3_hash.clone(),
-            graph_version: base.graph_version,
-            // Pruning policy is not protocol-relevant; the download path
-            // only inspects this field via metrics. Default to false.
-            is_archival: false,
-        };
+        // Phase A: stream the base graph down from S3. Peak transient memory
+        // is ~`DEFAULT_DOWNLOAD_PIPE_CAPACITY` + 1× deserialized graph; the
+        // BLAKE3 over the wire bytes is tee'd inline and returned for the
+        // hash-equality check below.
+        if base.graph_version != GraphFormat::Current.version() {
+            return Err(CycleError::Fatal(format!(
+                "unsupported checkpoint graph_version={} for {}/{}",
+                base.graph_version, self.bucket, base.s3_key,
+            )));
+        }
 
-        // TODO: switch to the streaming download primitive from PR #2119 once it
-        // lands in main — keeps peak RAM at ~part_size instead of the full graph
-        // size during deserialize. Buffered path is correct, just memory-hungry.
-        let mut graph: Graph =
-            download_graph_checkpoint::<VectorId>(self.s3_client, &self.bucket, &state)
+        let (mut graph, downloaded_hash) =
+            stream_download_and_deserialize::<Graph>(self.s3_client, &self.bucket, &base.s3_key)
                 .await
                 .map_err(|e| {
                     CycleError::Fatal(format!(
-                        "download_graph_checkpoint({}/{}): {e}",
-                        self.bucket, state.s3_key,
+                        "stream_download_and_deserialize({}/{}): {e}",
+                        self.bucket, base.s3_key,
                     ))
                 })?;
+
+        let downloaded_hex = hex::encode(downloaded_hash);
+        if downloaded_hex != base.blake3_hash {
+            return Err(CycleError::Fatal(format!(
+                "BLAKE3 mismatch for {}/{}: expected={} got={}",
+                self.bucket, base.s3_key, base.blake3_hash, downloaded_hex,
+            )));
+        }
 
         // Phase B: replay WAL rows in `(base.graph_mutation_id, freeze]`.
         let lo = base.graph_mutation_id.unwrap_or(0);

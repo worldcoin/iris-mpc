@@ -11,19 +11,44 @@
 
 use async_trait::async_trait;
 use aws_sdk_s3::Client as S3Client;
+use std::io::Write;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{oneshot, RwLock};
 
 use crate::checkpoint_protocol::{
     Blake3Hash, CheckpointMeta, CycleError, FreezeHeight, Graph, TerminalAction,
 };
-use crate::execution::hawk_main::{BothEyes, GraphRef, LEFT, RIGHT};
-use crate::graph_checkpoint::upload_graph_checkpoint;
+use crate::execution::hawk_main::{BothEyes, LEFT, RIGHT};
+use crate::graph_checkpoint::{
+    stream_serialize_and_upload_with, DEFAULT_STREAMING_PARALLELISM, DEFAULT_STREAMING_PART_SIZE,
+};
 use crate::hnsw::{
     graph::{graph_store::GraphPg, layered_graph::GraphMem},
     VectorStore,
 };
+use crate::utils::serialization::graph::GraphFormat;
 use iris_mpc_common::vector_id::VectorId;
+
+/// `std::io::Write` adapter that forwards every byte to an inner writer
+/// while also feeding `blake3::Hasher::update`. Lets us compute the
+/// canonical-bytes hash of the upload payload in one streaming pass —
+/// no `Vec<u8>` of the serialized graph held in memory.
+struct BlakeTee<'a, W: Write> {
+    inner: W,
+    hasher: &'a mut blake3::Hasher,
+}
+
+impl<W: Write> Write for BlakeTee<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.hasher.update(&buf[..n]);
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
 
 /// Terminal action that uploads the materialized graph to S3 and inserts a
 /// new `genesis_graph_checkpoint` row.
@@ -67,46 +92,66 @@ impl<V: VectorStore + Send + Sync> TerminalAction for UploadAndRecord<'_, V> {
         graph: Graph,
         hash: Blake3Hash,
     ) -> Result<(), CycleError> {
-        // upload_graph_checkpoint takes `&BothEyes<GraphRef>` (Arc<RwLock>).
-        // We own the graph; wrap each eye to match the signature. The
-        // wrappers are dropped after upload — no lasting allocation.
-        let [left, right] = graph;
-        let wrapped: BothEyes<GraphRef> =
-            [Arc::new(RwLock::new(left)), Arc::new(RwLock::new(right))];
-
-        let last_indexed_iris_id_u32: u32 = base.last_indexed_iris_id.try_into().map_err(|_| {
-            CycleError::Fatal(format!(
-                "carried last_indexed_iris_id={} overflows u32",
-                base.last_indexed_iris_id,
-            ))
-        })?;
-
-        let state = upload_graph_checkpoint(
-            &self.bucket,
+        // Mirror the buffered upload's S3 key format so existing readers
+        // (and the streaming download path) don't need a separate code path.
+        let s3_key = format!(
+            "genesis/{}/checkpoint_{}.bin",
             self.party_id,
-            &wrapped,
+            uuid::Uuid::new_v4()
+        );
+
+        // Stream the canonical bincode bytes through BLAKE3 (tee) into a
+        // multipart upload. Peak RAM stays ~= 1× graph + part buffers; no
+        // fully serialized `Vec<u8>` ever exists. The hash comes back via a
+        // oneshot — sent from inside the serializer closure right after
+        // `bincode::serialize_into` finishes — and is ready by the time
+        // `stream_serialize_and_upload_with` returns (the closure completes
+        // before the pipe drains, which happens before `complete_multipart_upload`).
+        let (hash_tx, hash_rx) = oneshot::channel::<Blake3Hash>();
+        stream_serialize_and_upload_with(
             self.s3_client,
-            last_indexed_iris_id_u32,
-            freeze.0,
-            Some(freeze.0),
-            self.is_archival,
+            &self.bucket,
+            &s3_key,
+            move |w| {
+                let mut hasher = blake3::Hasher::new();
+                let mut tee = BlakeTee {
+                    inner: w,
+                    hasher: &mut hasher,
+                };
+                bincode::serialize_into(&mut tee, &graph)
+                    .map_err(|e| eyre::eyre!("bincode::serialize_into: {e}"))?;
+                let _ = hash_tx.send(*hasher.finalize().as_bytes());
+                Ok(())
+            },
+            DEFAULT_STREAMING_PART_SIZE,
+            DEFAULT_STREAMING_PARALLELISM,
         )
         .await
-        .map_err(|e| CycleError::Fatal(format!("upload_graph_checkpoint: {e}")))?;
+        .map_err(|e| CycleError::Fatal(format!("stream_serialize_and_upload_with: {e}")))?;
 
-        // Defensive check: the protocol's consensus hash and the upload's
-        // recomputed hash must agree. Equality is structural today (both
-        // bincode-serialize the same BothEyes<GraphMem<VectorId>>), but if
-        // either serializer ever drifts, every subsequent cycle starting
-        // from this checkpoint would silently fail base or hash agreement.
-        // Catch the drift at the writing party.
-        let local_hex = hex::encode(hash);
-        if local_hex != state.blake3_hash {
+        let upload_hash: Blake3Hash = hash_rx.await.map_err(|_| {
+            CycleError::Fatal(
+                "upload hash channel dropped before send — serializer closure did not run \
+                 to completion despite Ok return"
+                    .into(),
+            )
+        })?;
+
+        // Defensive check: the consensus hash (from `Blake3GraphHasher`) and
+        // the upload-time hash (from `BlakeTee` over the same `serialize_into`)
+        // must agree. They're structurally equal today — same canonical
+        // bytes, same algorithm — but if either path's serializer ever
+        // drifts, every subsequent cycle starting from this checkpoint would
+        // silently fail base or hash agreement. Catch drift at the writing
+        // party.
+        if upload_hash != hash {
             return Err(CycleError::Fatal(format!(
-                "consensus/storage hash mismatch: local={local_hex} stored={}",
-                state.blake3_hash,
+                "consensus/upload hash mismatch: consensus={} upload={}",
+                hex::encode(hash),
+                hex::encode(upload_hash),
             )));
         }
+        let blake3_hash_hex = hex::encode(upload_hash);
 
         let mut tx = self
             .graph_store
@@ -115,13 +160,13 @@ impl<V: VectorStore + Send + Sync> TerminalAction for UploadAndRecord<'_, V> {
             .map_err(|e| CycleError::Transient(format!("begin tx: {e}")))?;
         GraphPg::<V>::insert_genesis_graph_checkpoint(
             &mut tx.tx,
-            &state.s3_key,
-            state.last_indexed_iris_id as i64,
-            state.last_indexed_modification_id,
-            state.graph_mutation_id,
-            &state.blake3_hash,
+            &s3_key,
+            base.last_indexed_iris_id,
+            freeze.0,
+            Some(freeze.0),
+            &blake3_hash_hex,
             self.is_archival,
-            state.graph_version,
+            GraphFormat::Current.version(),
         )
         .await
         .map_err(|e| CycleError::Transient(format!("insert_genesis_graph_checkpoint: {e}")))?;
