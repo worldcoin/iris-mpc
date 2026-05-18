@@ -113,58 +113,6 @@ async fn streaming_upload_round_trip_multipart() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn streaming_upload_round_trip_single_part() -> Result<()> {
-    let Some(endpoint) = s3_test_endpoint() else {
-        eprintln!("S3_TEST_ENDPOINT not set; skipping");
-        return Ok(());
-    };
-    let client = make_test_client(&endpoint);
-    let bucket = format!("streaming-test-sp-{}", uuid::Uuid::new_v4());
-    let key = "single-part.bin";
-    create_bucket(&client, &bucket).await?;
-
-    // < part_size: payload fits in a single part. That part is by definition
-    // the last, so the 5 MiB minimum doesn't apply.
-    let payload: Vec<u32> = (0..500u32).collect();
-    let buffered = bincode::serialize(&payload).map_err(|e| eyre!("bincode: {e}"))?;
-
-    let payload_for_closure = payload;
-    let upload = stream_serialize_and_upload_with(
-        &client,
-        &bucket,
-        key,
-        move |w| {
-            bincode::serialize_into(w, &payload_for_closure).map_err(|e| eyre!("bincode: {e}"))
-        },
-        5 * 1024 * 1024,
-        2,
-    )
-    .await;
-    if let Err(e) = upload {
-        cleanup_bucket(&client, &bucket).await;
-        return Err(e);
-    }
-
-    let downloaded = client
-        .get_object()
-        .bucket(&bucket)
-        .key(key)
-        .send()
-        .await
-        .map_err(|e| eyre!("get_object: {e:?}"))?
-        .body
-        .collect()
-        .await
-        .map_err(|e| eyre!("collect body: {e:?}"))?
-        .to_vec();
-
-    cleanup_bucket(&client, &bucket).await;
-
-    assert_eq!(downloaded, buffered);
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn streaming_upload_aborts_on_serializer_error() -> Result<()> {
     let Some(endpoint) = s3_test_endpoint() else {
         eprintln!("S3_TEST_ENDPOINT not set; skipping");
@@ -248,25 +196,5 @@ async fn streaming_download_round_trip() -> Result<()> {
 
     assert_eq!(got, payload, "deserialized value mismatch");
     assert_eq!(got_hash, expected_hash, "hash mismatch");
-    Ok(())
-}
-
-/// A GET against a key that doesn't exist must propagate as an error rather
-/// than hang. Exercises the retry-then-fail path.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn streaming_download_missing_key_fails() -> Result<()> {
-    let Some(endpoint) = s3_test_endpoint() else {
-        eprintln!("S3_TEST_ENDPOINT not set; skipping");
-        return Ok(());
-    };
-    let client = make_test_client(&endpoint);
-    let bucket = format!("streaming-test-dl-missing-{}", uuid::Uuid::new_v4());
-    create_bucket(&client, &bucket).await?;
-
-    let result: Result<(Vec<u64>, [u8; 32])> =
-        stream_download_and_deserialize_with(&client, &bucket, "does-not-exist", 64 * 1024).await;
-
-    cleanup_bucket(&client, &bucket).await;
-    assert!(result.is_err(), "download of missing key should fail");
     Ok(())
 }

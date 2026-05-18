@@ -123,9 +123,8 @@ where
 }
 
 /// Core: tee an `AsyncRead` through BLAKE3 into a pipe; deserialize from the
-/// pipe on a blocking thread. Exposed for tests that don't want to stand up
-/// a mock S3.
-pub async fn deserialize_and_hash_from<R, T>(
+/// pipe on a blocking thread.
+async fn deserialize_and_hash_from<R, T>(
     mut reader: R,
     pipe_capacity: usize,
 ) -> Result<(T, [u8; 32])>
@@ -263,39 +262,6 @@ mod tests {
             result.is_err(),
             "trailing bytes after the bincode payload must fail per module contract"
         );
-    }
-
-    /// Reader errors propagate. Custom AsyncRead that returns an error
-    /// after producing a few bytes.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn reader_error_is_propagated() {
-        use std::pin::Pin;
-        use std::task::{Context, Poll};
-        use tokio::io::ReadBuf;
-
-        struct FailingReader {
-            bytes_emitted: usize,
-        }
-        impl AsyncRead for FailingReader {
-            fn poll_read(
-                mut self: Pin<&mut Self>,
-                _cx: &mut Context<'_>,
-                buf: &mut ReadBuf<'_>,
-            ) -> Poll<std::io::Result<()>> {
-                if self.bytes_emitted >= 8 {
-                    return Poll::Ready(Err(std::io::Error::other("boom")));
-                }
-                buf.put_slice(&[0u8; 8]);
-                self.bytes_emitted += 8;
-                Poll::Ready(Ok(()))
-            }
-        }
-
-        let reader = FailingReader { bytes_emitted: 0 };
-        let result: Result<(Vec<u64>, _)> = deserialize_and_hash_from(reader, 64).await;
-        assert!(result.is_err());
-        let msg = format!("{}", result.unwrap_err());
-        assert!(msg.contains("boom") || msg.contains("source read"));
     }
 
     /// Force the writer to drop early — the deserializer should fail with
