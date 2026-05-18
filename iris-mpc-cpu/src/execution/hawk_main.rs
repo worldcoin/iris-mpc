@@ -751,7 +751,10 @@ impl HawkActor {
         plans: VecRequests<Option<HawkInsertPlan>>,
         update_ids: &VecRequests<Option<VectorId>>,
         replace_ids: &VecRequests<Option<VectorId>>,
-    ) -> Result<VecRequests<Option<ConnectPlan>>> {
+    ) -> Result<(
+        VecRequests<Option<ConnectPlan>>,
+        VecRequests<Option<VectorId>>,
+    )> {
         assert_eq!(plans.len(), replace_ids.len());
         assert_eq!(plans.len(), update_ids.len());
 
@@ -767,44 +770,52 @@ impl HawkActor {
             // so that downstream result derivation (merged_results / inserted_id)
             // still sees the correct serial IDs.
             let mut next_serial_id = self.registry[LEFT].read().await.next_id;
-            return Ok(izip!(plans, insertion_ids.iter(), replace_ids.iter())
-                .map(|(plan, insertion_id, replace_id)| {
-                    let mut mutations = Vec::new();
+            let mut connect_plans: Vec<Option<ConnectPlan>> = Vec::with_capacity(plans.len());
+            let mut slot_inserted_ids: Vec<Option<VectorId>> = Vec::with_capacity(plans.len());
+            for (plan, insertion_id, replace_id) in
+                izip!(plans, insertion_ids.iter(), replace_ids.iter())
+            {
+                let mut mutations = Vec::new();
+                let mut inserted_id: Option<VectorId> = None;
 
-                    if let Some(plan) = plan {
-                        let inserted_vector = if let Some(id) = insertion_id {
-                            *id
-                        } else {
-                            let vid = VectorId::from_serial_id(next_serial_id);
-                            next_serial_id += 1;
-                            vid
-                        };
-                        mutations.push(MutationOp::AddNode {
-                            id: inserted_vector,
-                            height: plan.plan.links.len(),
-                            update_ep: UpdateEntryPoint::False,
-                        });
-                    }
-
-                    if let Some(rid) = replace_id {
-                        mutations.push(MutationOp::RemoveNode { id: *rid });
-                    }
-
-                    if mutations.is_empty() {
-                        None
+                if let Some(plan) = plan {
+                    let inserted_vector = if let Some(id) = insertion_id {
+                        *id
                     } else {
-                        // No in-memory graph to mint from in this branch
-                        // (hnsw_disable_memory_persistence). The mutation is
-                        // returned for downstream serialization but never
-                        // applied to a GraphMem here, so a placeholder id of
-                        // 0 is fine.
-                        Some(GraphMutation {
-                            id: 0,
-                            ops: mutations,
-                        })
-                    }
-                })
-                .collect_vec());
+                        let vid = VectorId::from_serial_id(next_serial_id);
+                        next_serial_id += 1;
+                        vid
+                    };
+                    mutations.push(MutationOp::AddNode {
+                        id: inserted_vector,
+                        height: plan.plan.links.len(),
+                        update_ep: UpdateEntryPoint::False,
+                    });
+                    inserted_id = Some(inserted_vector);
+                }
+
+                if let Some(rid) = replace_id {
+                    mutations.push(MutationOp::RemoveNode { id: *rid });
+                }
+
+                let plan = if mutations.is_empty() {
+                    None
+                } else {
+                    // No in-memory graph to mint from in this branch
+                    // (hnsw_disable_memory_persistence). The mutation is
+                    // returned for downstream serialization but never
+                    // applied to a GraphMem here, so a placeholder id of
+                    // 0 is fine.
+                    Some(GraphMutation {
+                        id: 0,
+                        ops: mutations,
+                    })
+                };
+
+                connect_plans.push(plan);
+                slot_inserted_ids.push(inserted_id);
+            }
+            return Ok((connect_plans, slot_inserted_ids));
         }
 
         // Map insertion plans to inner InsertionPlanV
@@ -1407,17 +1418,7 @@ impl HawkResult {
     fn inserted_id(&self, request_i: usize) -> Option<VectorId> {
         self.connect_plans
             .get_by_request_index(RequestIndex::UniqueReauthResetCheck(request_i))
-            .and_then(|mutation| {
-                mutation.plans[LEFT]
-                    .first()
-                    .or_else(|| mutation.plans[RIGHT].first())
-                    .and_then(|plan| {
-                        plan.ops.iter().find_map(|m| match m {
-                            MutationOp::AddNode { id, .. } => Some(*id),
-                            _ => None,
-                        })
-                    })
-            })
+            .and_then(|mutation| mutation.inserted_id)
     }
 
     fn select(&self, filter: Filter) -> (VecRequests<Vec<u32>>, VecRequests<usize>) {
@@ -1607,6 +1608,16 @@ pub struct SingleHawkMutation {
 
     #[serde(skip)]
     pub request_index: Option<RequestIndex>,
+
+    /// The `VectorId` newly inserted by this request, if any. Populated at the
+    /// point of insertion (in `insert::insert` or the no-memory-persistence
+    /// fast path) so downstream code does not have to re-derive it by walking
+    /// the mutation ops. `None` for pure deletions and no-op slots.
+    ///
+    /// `#[serde(skip)]`: the value is request-level metadata, not part of the
+    /// WAL payload — replay reconstructs graph state from the `plans` alone.
+    #[serde(skip)]
+    pub inserted_id: Option<VectorId>,
 }
 
 impl SingleHawkMutation {
@@ -1988,6 +1999,12 @@ impl HawkHandle {
             .map(|_| [Vec::new(), Vec::new()])
             .collect();
 
+        // Track the per-request inserted VectorId surfaced from `HawkActor::insert`.
+        // Left and right sides insert at the same VectorIds, so we keep just one
+        // copy populated from whichever side we process first.
+        let mut inserted_ids_per_request: VecRequests<Option<VectorId>> =
+            vec![None; requests_order.len()];
+
         // For both eyes.
         for (side, sessions, search_results, reset_results) in izip!(
             &STORE_IDS,
@@ -2043,7 +2060,7 @@ impl HawkHandle {
                 })
                 .collect_vec();
 
-            let plans = hawk_actor
+            let (plans, side_inserted_ids) = hawk_actor
                 .insert(sessions, insert_plans, &update_ids, &replace_ids)
                 .await?;
 
@@ -2053,12 +2070,30 @@ impl HawkHandle {
                     both_sides[*side as usize].push(p);
                 }
             }
+
+            // Inserted ids are symmetric across sides (the same VectorId is
+            // inserted left and right). Populate on the first side, then on
+            // subsequent sides assert agreement to catch regressions.
+            for (req_i, side_id) in side_inserted_ids.into_iter().enumerate() {
+                match (&inserted_ids_per_request[req_i], side_id) {
+                    (None, side_id) => inserted_ids_per_request[req_i] = side_id,
+                    (Some(_), None) => {}
+                    (Some(existing), Some(s)) => {
+                        debug_assert_eq!(
+                            *existing, s,
+                            "inserted_id mismatch across sides at request {}",
+                            req_i
+                        );
+                    }
+                }
+            }
         }
 
         // Combine ModificationKey and ConnectPlan into into SingleHawkMutation objects.
         let mut mutations = Vec::new();
 
-        for (req_index, modif_plan) in izip!(requests_order, plans_both_sides) {
+        for (slot_i, (req_index, modif_plan)) in izip!(requests_order, plans_both_sides).enumerate()
+        {
             let modification_key = match *req_index {
                 RequestIndex::UniqueReauthResetCheck(i) => {
                     // This is a batch request mutation
@@ -2098,10 +2133,18 @@ impl HawkHandle {
                 }
             };
 
+            // `inserted_ids_per_request` is aligned with `requests_order` (the
+            // batch slot order), not with the inner request_index.
+            let inserted_id = inserted_ids_per_request
+                .get(slot_i)
+                .copied()
+                .unwrap_or(None);
+
             mutations.push(SingleHawkMutation {
                 plans: modif_plan,
                 modification_key,
                 request_index: Some(*req_index),
+                inserted_id,
             });
         }
 
@@ -2513,6 +2556,7 @@ mod hawk_mutation_tests {
             ],
             modification_key: Some(modification_key.clone()),
             request_index: Some(RequestIndex::UniqueReauthResetCheck(0)),
+            inserted_id: Some(VectorId::from_serial_id(1)),
         };
 
         let hawk_mutation = HawkMutation(vec![mutation.clone()]);
@@ -2557,6 +2601,7 @@ mod hawk_mutation_tests {
             ],
             modification_key: Some(key1.clone()),
             request_index: Some(index1),
+            inserted_id: Some(VectorId::from_serial_id(1)),
         };
 
         let mutation2 = SingleHawkMutation {
@@ -2566,6 +2611,7 @@ mod hawk_mutation_tests {
             ],
             modification_key: Some(key2.clone()),
             request_index: Some(index2),
+            inserted_id: Some(VectorId::from_serial_id(2)),
         };
 
         let mutation3 = SingleHawkMutation {
@@ -2575,6 +2621,7 @@ mod hawk_mutation_tests {
             ],
             modification_key: Some(key3.clone()),
             request_index: Some(index3),
+            inserted_id: Some(VectorId::from_serial_id(3)),
         };
 
         let hawk_mutation = HawkMutation(vec![
@@ -2616,6 +2663,7 @@ mod hawk_mutation_tests {
             ],
             modification_key: Some(ModificationKey::RequestId("test".to_string())),
             request_index: Some(RequestIndex::UniqueReauthResetCheck(0)),
+            inserted_id: Some(VectorId::from_serial_id(1)),
         };
 
         let mutation_without_key = SingleHawkMutation {
@@ -2625,6 +2673,7 @@ mod hawk_mutation_tests {
             ],
             modification_key: None,
             request_index: None,
+            inserted_id: None,
         };
 
         let hawk_mutation = HawkMutation(vec![mutation_with_key.clone(), mutation_without_key]);
@@ -2649,6 +2698,7 @@ mod hawk_mutation_tests {
             ],
             modification_key: Some(ModificationKey::RequestId("test".to_string())),
             request_index: Some(RequestIndex::UniqueReauthResetCheck(0)),
+            inserted_id: Some(VectorId::from_serial_id(1)),
         };
 
         // Test serialization
@@ -2683,6 +2733,7 @@ mod hawk_mutation_tests {
             plans: [vec![plan_a.clone()], vec![plan_b.clone()]],
             modification_key: None,
             request_index: None,
+            inserted_id: Some(VectorId::from_serial_id(1)),
         };
         let bytes = mutation.serialize().expect("serialize");
         let back: SingleHawkMutation = bincode::deserialize(&bytes).expect("deserialize");
@@ -2690,5 +2741,7 @@ mod hawk_mutation_tests {
         assert_eq!(back.plans[0][0].id, 5);
         assert_eq!(back.plans[1].len(), 1);
         assert_eq!(back.plans[1][0].id, 6);
+        // inserted_id is #[serde(skip)] — round-tripped value is None.
+        assert_eq!(back.inserted_id, None);
     }
 }

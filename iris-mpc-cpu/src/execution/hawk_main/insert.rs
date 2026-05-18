@@ -77,6 +77,13 @@ impl MutationIdAllocator {
 /// identity-update replacements, or for pure deletions). A pure-deletion slot has
 /// `plans[i] = None` and `replace_ids[i] = Some(id)`. A slot with both `plans[i] = None` and
 /// `replace_ids[i] = None` produces `None` in the output (no mutations for that slot).
+///
+/// Returns a parallel pair of `VecRequests`:
+/// - the per-slot `Option<ConnectPlanV<V>>` carrying the graph mutations to persist;
+/// - the per-slot `Option<V::VectorRef>` identifying the newly inserted vector (the same id
+///   that appears in the slot's `AddNode` op for non-deletion slots). `None` for pure
+///   deletions and no-op slots. Captured here at the point of insertion so downstream
+///   consumers do not have to re-derive it by walking the mutation ops.
 pub async fn insert<V: VectorStoreMut>(
     store: &mut V,
     graph: &mut GraphMem<<V as VectorStore>::VectorRef>,
@@ -84,7 +91,10 @@ pub async fn insert<V: VectorStoreMut>(
     plans: VecRequests<Option<InsertPlanV<V>>>,
     insert_ids: &VecRequests<Option<V::VectorRef>>,
     replace_ids: &VecRequests<Option<V::VectorRef>>,
-) -> Result<VecRequests<Option<ConnectPlanV<V>>>> {
+) -> Result<(
+    VecRequests<Option<ConnectPlanV<V>>>,
+    VecRequests<Option<V::VectorRef>>,
+)> {
     tracing::debug!("Inserting {} InsertPlans into store", plans.len());
 
     assert_eq!(
@@ -102,14 +112,18 @@ pub async fn insert<V: VectorStoreMut>(
     validate_ep_updates(&insert_plans, &searcher.layer_mode)?;
 
     let mut id_allocator = MutationIdAllocator::new(graph.next_modification_id());
-    let mut inserted_ids = vec![];
+    let mut intra_batch_inserted = vec![];
     let m = searcher.params.get_M(0);
 
-    // Build one Option<GroupedMutations> per batch slot. None slots pass through
+    // Build one Option<GraphMutation> per batch slot. None slots pass through
     // insert_prepare_batch unchanged; Some slots carry per-request mutations
     // (optional AddNode + AddEdges + optional RemoveNode, OR a pure RemoveNode
     // for deletion-only slots).
     let mut mutations: Vec<Option<GraphMutation<V::VectorRef>>> = vec![None; insert_plans.len()];
+
+    // Per-slot inserted VectorId; aligned with the returned plans. None for
+    // deletion-only and no-op slots.
+    let mut slot_inserted_ids: Vec<Option<V::VectorRef>> = vec![None; insert_plans.len()];
 
     for (idx, (plan, update_id, replace_id)) in
         izip!(insert_plans, insert_ids, replace_ids).enumerate()
@@ -127,7 +141,7 @@ pub async fn insert<V: VectorStoreMut>(
             // i.e. when the graph does not yet have M elements.
             if let Some(bottom_layer) = links.first_mut() {
                 if bottom_layer.len() < m {
-                    bottom_layer.extend_from_slice(&inserted_ids);
+                    bottom_layer.extend_from_slice(&intra_batch_inserted);
                 }
             }
 
@@ -151,7 +165,8 @@ pub async fn insert<V: VectorStoreMut>(
                 });
             }
 
-            inserted_ids.push(inserted);
+            slot_inserted_ids[idx] = Some(inserted.clone());
+            intra_batch_inserted.push(inserted);
         }
 
         if let Some(rid) = replace_id {
@@ -176,8 +191,8 @@ pub async fn insert<V: VectorStoreMut>(
     }
 
     // grouped_mutations is shaped as Vec<Option<ConnectPlanV<V>>>, one entry per
-    // batch slot — return it directly as the connect plans.
-    Ok(grouped_mutations)
+    // batch slot — return it directly alongside the parallel per-slot inserted ids.
+    Ok((grouped_mutations, slot_inserted_ids))
 }
 
 /// Combine insert plans from parallel searches, repairing any conflict.
@@ -709,7 +724,7 @@ mod tests {
         let replace_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
             vec![None, Some(a), Some(b)];
 
-        let grouped = insert(
+        let (grouped, inserted_ids) = insert(
             &mut store,
             &mut graph,
             &searcher,
@@ -721,6 +736,10 @@ mod tests {
         .expect("insert should succeed");
 
         assert_eq!(grouped.len(), 3, "one output per slot");
+        assert_eq!(inserted_ids.len(), 3, "inserted_ids aligned with slots");
+        assert!(inserted_ids[0].is_some(), "slot 0 inserted a new vector C");
+        assert!(inserted_ids[1].is_none(), "slot 1 is a pure deletion");
+        assert!(inserted_ids[2].is_none(), "slot 2 is a pure deletion");
 
         // Slot 0 contains an AddNode (the insert of C).
         let slot0 = grouped[0].as_ref().expect("slot 0 should be Some");
@@ -768,7 +787,7 @@ mod tests {
         let replace_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
             vec![Some(old)];
 
-        let grouped = insert(
+        let (grouped, inserted_ids) = insert(
             &mut store,
             &mut graph,
             &searcher,
@@ -778,6 +797,13 @@ mod tests {
         )
         .await
         .expect("insert should succeed");
+
+        assert_eq!(inserted_ids.len(), 1);
+        let inserted = inserted_ids[0].expect("combined-replace slot inserts a new vector");
+        assert_ne!(
+            inserted, old,
+            "inserted id is the new vector, not the replaced one"
+        );
 
         let slot0 = grouped[0].as_ref().expect("slot 0 should be Some");
         let mutations: &Vec<_> = &slot0.ops;
@@ -824,7 +850,7 @@ mod tests {
         let replace_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
             vec![None];
 
-        let grouped = insert(
+        let (grouped, inserted_ids) = insert(
             &mut store,
             &mut graph,
             &searcher,
@@ -836,6 +862,10 @@ mod tests {
         .expect("insert should succeed");
 
         assert!(grouped[0].is_none(), "fully-empty slot should yield None");
+        assert!(
+            inserted_ids[0].is_none(),
+            "fully-empty slot does not insert anything"
+        );
     }
 
     #[tokio::test]
@@ -856,7 +886,7 @@ mod tests {
         let replace_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
             vec![None, None, None];
 
-        let grouped = insert(
+        let (grouped, inserted_ids) = insert(
             &mut store,
             &mut graph,
             &searcher,
@@ -879,5 +909,24 @@ mod tests {
             expected_start + 1,
             "counter advanced"
         );
+
+        assert_eq!(inserted_ids.len(), 3, "inserted_ids aligned with slots");
+        assert!(inserted_ids[0].is_some());
+        assert!(inserted_ids[1].is_none());
+        assert!(inserted_ids[2].is_some());
+        // The inserted ids should match the AddNode ids in the corresponding groups.
+        for (slot_plan, slot_id) in grouped.iter().zip(inserted_ids.iter()) {
+            match (slot_plan, slot_id) {
+                (Some(g), Some(id)) => {
+                    let add_id = g.ops.iter().find_map(|op| match op {
+                        MutationOp::AddNode { id, .. } => Some(*id),
+                        _ => None,
+                    });
+                    assert_eq!(add_id, Some(*id));
+                }
+                (None, None) => {}
+                (sp, si) => panic!("plan/inserted_id shape mismatch: {:?} vs {:?}", sp, si),
+            }
+        }
     }
 }
