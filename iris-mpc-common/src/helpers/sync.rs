@@ -221,7 +221,7 @@ impl SyncResult {
             grouped.entry(m.id).or_default().push(m);
         }
 
-        tracing::info!("Grouped modifications: {:?}", grouped);
+        tracing::info!("Grouped modifications: {}", grouped.len());
 
         let completed_max_mod_ids: Vec<Option<i64>> = self
             .all_states
@@ -240,9 +240,9 @@ impl SyncResult {
             let mod_id_diff = max_id.saturating_sub(min_id) as usize;
             if mod_id_diff > self.my_state.common_config.get_max_modifications_lookback() {
                 panic!(
-                    "Modification ID difference across nodes is too large: {:?}. Min: {:?}, Max: {:?}. \
+                    "Modification ID difference across nodes is too large. Min: {:?}, Max: {:?}. \
              Can not safely handle this case, consider bumping lookback. Crashing!",
-                    completed_max_mod_ids, min_id, max_id
+                    min_id, max_id
                 );
             }
         }

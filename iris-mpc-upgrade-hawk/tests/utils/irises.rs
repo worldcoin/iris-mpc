@@ -3,8 +3,12 @@ use std::path::PathBuf;
 use eyre::Result;
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
+    execution::hawk_main::BothEyes,
     protocol::shared_iris::GaloisRingSharedIris,
     utils::serialization::iris_ndjson::{irises_from_ndjson_iter, IrisSelection},
+};
+use iris_mpc_utils::irises::{
+    generate_iris_shares_for_upload_both_eyes, GaloisRingSharedIrisForUpload,
 };
 use itertools::Itertools;
 use rand::{rngs::StdRng, SeedableRng};
@@ -62,4 +66,25 @@ pub fn share_irises_locally(
     }
 
     Ok(shared_irises)
+}
+
+/// Share irises locally for upload (full-size mask shares).
+/// Returns one `BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]>` per iris pair.
+pub fn share_irises_for_upload_locally(
+    irises: &[(IrisCode, IrisCode)],
+    rng_seed: u64,
+) -> Result<Vec<BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]>>> {
+    let mut result = Vec::with_capacity(irises.len());
+
+    for (left_iris, right_iris) in irises {
+        let mut rng = StdRng::seed_from_u64(rng_seed);
+        let both_eyes = generate_iris_shares_for_upload_both_eyes(
+            &mut rng,
+            Some(left_iris.clone()),
+            Some(right_iris.clone()),
+        );
+        result.push(both_eyes);
+    }
+
+    Ok(result)
 }

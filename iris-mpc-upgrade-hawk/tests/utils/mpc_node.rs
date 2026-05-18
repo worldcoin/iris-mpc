@@ -490,7 +490,7 @@ impl DbAssertions {
     }
 }
 
-mod db_ops {
+pub mod db_ops {
     use std::ops::DerefMut;
 
     use eyre::Result;
@@ -561,13 +561,14 @@ mod db_ops {
     ) -> Result<()> {
         let query = sqlx::query(
             r#"
-            INSERT INTO modifications (id, serial_id, request_type, s3_url, status, persisted)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO modifications (id, serial_id, request_type, s3_url, status, result_message_body, persisted)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (id) DO UPDATE
             SET serial_id = EXCLUDED.serial_id,
                 request_type = EXCLUDED.request_type,
                 s3_url = EXCLUDED.s3_url,
                 status = EXCLUDED.status,
+                result_message_body = EXCLUDED.result_message_body,
                 persisted = EXCLUDED.persisted;
             "#,
         )
@@ -576,6 +577,7 @@ mod db_ops {
         .bind(m.request_type.as_str())
         .bind(m.s3_url.as_ref())
         .bind(m.status.as_str())
+        .bind(m.result_message_body.clone())
         .bind(m.persisted);
         query.execute(tx.deref_mut()).await?;
 
