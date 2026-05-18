@@ -11,7 +11,6 @@
 
 use async_trait::async_trait;
 use aws_sdk_s3::Client as S3Client;
-use std::io::Write;
 use std::sync::Arc;
 use tokio::sync::{oneshot, RwLock};
 
@@ -20,7 +19,8 @@ use crate::checkpoint_protocol::{
 };
 use crate::execution::hawk_main::{BothEyes, LEFT, RIGHT};
 use crate::graph_checkpoint::{
-    stream_serialize_and_upload_with, DEFAULT_STREAMING_PARALLELISM, DEFAULT_STREAMING_PART_SIZE,
+    stream_serialize_and_upload_with, BlakeTeeWriter, DEFAULT_STREAMING_PARALLELISM,
+    DEFAULT_STREAMING_PART_SIZE,
 };
 use crate::hnsw::{
     graph::{graph_store::GraphPg, layered_graph::GraphMem},
@@ -28,27 +28,6 @@ use crate::hnsw::{
 };
 use crate::utils::serialization::graph::GraphFormat;
 use iris_mpc_common::vector_id::VectorId;
-
-/// `std::io::Write` adapter that forwards every byte to an inner writer
-/// while also feeding `blake3::Hasher::update`. Lets us compute the
-/// canonical-bytes hash of the upload payload in one streaming pass —
-/// no `Vec<u8>` of the serialized graph held in memory.
-struct BlakeTee<'a, W: Write> {
-    inner: W,
-    hasher: &'a mut blake3::Hasher,
-}
-
-impl<W: Write> Write for BlakeTee<'_, W> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let n = self.inner.write(buf)?;
-        self.hasher.update(&buf[..n]);
-        Ok(n)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.inner.flush()
-    }
-}
 
 /// Terminal action that uploads the materialized graph to S3 and inserts a
 /// new `genesis_graph_checkpoint` row.
@@ -113,14 +92,10 @@ impl<V: VectorStore + Send + Sync> TerminalAction for UploadAndRecord<'_, V> {
             &self.bucket,
             &s3_key,
             move |w| {
-                let mut hasher = blake3::Hasher::new();
-                let mut tee = BlakeTee {
-                    inner: w,
-                    hasher: &mut hasher,
-                };
+                let mut tee = BlakeTeeWriter::new(w);
                 bincode::serialize_into(&mut tee, &graph)
                     .map_err(|e| eyre::eyre!("bincode::serialize_into: {e}"))?;
-                let _ = hash_tx.send(*hasher.finalize().as_bytes());
+                let _ = hash_tx.send(tee.finalize());
                 Ok(())
             },
             DEFAULT_STREAMING_PART_SIZE,
