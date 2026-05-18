@@ -90,17 +90,14 @@ impl<V: VectorStore + Send + Sync> Materializer for RebuildFromCheckpoint<'_, V>
 /// `hawk_graph_mutations` row's deserialized payload — both eyes together —
 /// so the left-eye and right-eye mutations of a row are applied as a unit
 /// before advancing.
-async fn apply_wal_stream<S>(graph: &mut Graph, stream: S) -> Result<(), CycleError>
-where
-    S: futures::Stream<
-        Item = Result<
-            BothEyes<Vec<crate::hnsw::graph::mutation::GraphMutation<VectorId>>>,
-            CycleError,
-        >,
+async fn apply_wal_stream(
+    graph: &mut Graph,
+    mut stream: futures::stream::BoxStream<
+        '_,
+        Result<BothEyes<Vec<crate::hnsw::graph::mutation::GraphMutation<VectorId>>>, CycleError>,
     >,
-{
+) -> Result<(), CycleError> {
     use crate::execution::hawk_main::{LEFT, RIGHT};
-    tokio::pin!(stream);
     while let Some(row) = stream.try_next().await? {
         let [left_muts, right_muts] = row;
         graph[LEFT].insert_apply(left_muts);
@@ -115,7 +112,7 @@ mod tests {
     use crate::execution::hawk_main::{LEFT, RIGHT};
     use crate::hnsw::graph::layered_graph::GraphMem;
     use crate::hnsw::graph::mutation::{GraphMutation, UpdateEntryPoint};
-    use futures::stream;
+    use futures::{stream, StreamExt};
 
     fn vid(n: u32) -> VectorId {
         VectorId::from_serial_id(n)
@@ -152,7 +149,7 @@ mod tests {
             row(vec![11], vec![21]),
         ];
 
-        apply_wal_stream(&mut graph, stream::iter(items))
+        apply_wal_stream(&mut graph, stream::iter(items).boxed())
             .await
             .unwrap();
 
@@ -190,7 +187,7 @@ mod tests {
             row(vec![3], vec![4]),
         ];
 
-        let err = apply_wal_stream(&mut graph, stream::iter(items))
+        let err = apply_wal_stream(&mut graph, stream::iter(items).boxed())
             .await
             .unwrap_err();
         assert!(matches!(err, CycleError::Fatal(_)));

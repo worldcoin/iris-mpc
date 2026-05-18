@@ -3041,6 +3041,7 @@ dependencies = [
  "delegate",
  "eyre",
  "futures",
+ "hex",
  "iris-mpc-common",
  "iris-mpc-store",
  "itertools 0.13.0",

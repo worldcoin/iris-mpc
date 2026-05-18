@@ -100,7 +100,7 @@ impl<V: VectorStore + Send + Sync> TerminalAction for UploadAndRecord<'_, V> {
         // either serializer ever drifts, every subsequent cycle starting
         // from this checkpoint would silently fail base or hash agreement.
         // Catch the drift at the writing party.
-        let local_hex = crate::checkpoint_protocol::hex(&hash);
+        let local_hex = hex::encode(hash);
         if local_hex != state.blake3_hash {
             return Err(CycleError::Fatal(format!(
                 "consensus/storage hash mismatch: local={local_hex} stored={}",

@@ -24,7 +24,7 @@ pub use materializer::RebuildFromCheckpoint;
 pub use restart::{restart_from_checkpoint, RestartOutcome};
 pub use sidecar::{sidecar_main, SidecarConfig};
 pub use terminal::{InstallAsServing, UploadAndRecord};
-pub use transport::{RingChannel, RingConsensusTransport};
+pub use transport::RingConsensusTransport;
 
 use std::time::Duration;
 
@@ -322,8 +322,8 @@ where
         if peer_hash != &local_hash {
             return Err(CycleError::Fatal(format!(
                 "hash mismatch: local={} peer={}",
-                hex(&local_hash),
-                hex(peer_hash),
+                hex::encode(local_hash),
+                hex::encode(peer_hash),
             )));
         }
     }
@@ -335,12 +335,4 @@ where
         hash: local_hash,
         height: freeze.0,
     })
-}
-
-pub(crate) fn hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{:02x}", b));
-    }
-    s
 }

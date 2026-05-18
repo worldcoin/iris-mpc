@@ -1,22 +1,20 @@
-//! `ConsensusTransport` over a symmetric ring channel.
+//! `ConsensusTransport` over ampc-common's [`ControlChannel`].
 //!
-//! Mirrors the shape of ampc-common's `ControlChannel`: each party has a
-//! `next` and a `prev` neighbour, sends block until flushed, receives block
-//! until a complete message arrives. Production wiring is:
-//!
-//! ```text
-//! impl RingChannel for Box<dyn ControlChannel> { /* delegate */ }
-//! ```
-//!
-//! Tests drive an in-memory triangle ring (see `test_ring`) so end-to-end
-//! protocol behaviour can be exercised without TCP.
+//! Each party has a `next` and a `prev` neighbour; sends block until
+//! flushed, receives block until a complete message arrives. Production
+//! callers obtain a `Box<dyn ControlChannel>` from
+//! `NetworkHandle::control_channel()`; tests drive an in-memory triangle
+//! ring (see [`test_ring`]) that implements `ControlChannel` over mpsc.
 //!
 //! # Wire format
 //!
-//! Each proposal is bincode-serialized into a `WireFrame { cycle_nonce, msg }`
-//! and sent as a single message on the channel. The nonce lets a party
-//! detect cross-wires from a stale cycle (fatal). Variant mismatches (a peer
-//! responding with `HeightProposal` to our `BaseProposal`) are also fatal.
+//! Each proposal is bincode-serialized into a `WireFrame { cycle_nonce, msg }`,
+//! wrapped in [`NetworkValue::Bytes`], and sent as a single message on the
+//! channel. The nonce lets a party detect cross-wires from a stale cycle
+//! (fatal). Variant mismatches (a peer responding with `HeightProposal` to
+//! our `BaseProposal`) are also fatal. Any other `NetworkValue` variant on
+//! receive is fatal too — we never share a control channel with non-protocol
+//! traffic.
 //!
 //! # Send-before-recv
 //!
@@ -27,73 +25,12 @@
 
 use std::time::Duration;
 
+use ampc_actor_utils::network::mpc::handle::control_channel::ControlChannel;
+use ampc_actor_utils::network::mpc::NetworkValue;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::checkpoint_protocol::{ConsensusMessage, ConsensusTransport, CycleError, PeerResponses};
-
-/// Symmetric ring primitive. Each party has a `next` and `prev` neighbour;
-/// sends block until flushed, recvs block until a complete message arrives.
-/// Structural mirror of ampc-common's `ControlChannel`; the production wiring
-/// is a delegating impl over `Box<dyn ControlChannel>` (see below).
-#[async_trait]
-pub trait RingChannel: Send {
-    async fn send_next(&mut self, bytes: Vec<u8>) -> Result<(), CycleError>;
-    async fn send_prev(&mut self, bytes: Vec<u8>) -> Result<(), CycleError>;
-    async fn recv_next(&mut self) -> Result<Vec<u8>, CycleError>;
-    async fn recv_prev(&mut self) -> Result<Vec<u8>, CycleError>;
-}
-
-/// Production wiring: any [`ControlChannel`] becomes a [`RingChannel`] by
-/// boxing its bytes in [`NetworkValue::Bytes`]. A peer responding with any
-/// other `NetworkValue` variant is a fatal protocol error — we never share
-/// a control channel with non-protocol traffic.
-#[async_trait]
-impl RingChannel
-    for Box<dyn ampc_actor_utils::network::mpc::handle::control_channel::ControlChannel>
-{
-    async fn send_next(&mut self, bytes: Vec<u8>) -> Result<(), CycleError> {
-        self.as_mut()
-            .send_next(ampc_actor_utils::network::mpc::NetworkValue::Bytes(bytes))
-            .await
-            .map_err(|e| CycleError::Transient(format!("control_channel.send_next: {e}")))
-    }
-
-    async fn send_prev(&mut self, bytes: Vec<u8>) -> Result<(), CycleError> {
-        self.as_mut()
-            .send_prev(ampc_actor_utils::network::mpc::NetworkValue::Bytes(bytes))
-            .await
-            .map_err(|e| CycleError::Transient(format!("control_channel.send_prev: {e}")))
-    }
-
-    async fn recv_next(&mut self) -> Result<Vec<u8>, CycleError> {
-        let v = self
-            .as_mut()
-            .recv_next()
-            .await
-            .map_err(|e| CycleError::Transient(format!("control_channel.recv_next: {e}")))?;
-        match v {
-            ampc_actor_utils::network::mpc::NetworkValue::Bytes(b) => Ok(b),
-            other => Err(CycleError::Fatal(format!(
-                "control_channel.recv_next: expected NetworkValue::Bytes, got {other:?}"
-            ))),
-        }
-    }
-
-    async fn recv_prev(&mut self) -> Result<Vec<u8>, CycleError> {
-        let v = self
-            .as_mut()
-            .recv_prev()
-            .await
-            .map_err(|e| CycleError::Transient(format!("control_channel.recv_prev: {e}")))?;
-        match v {
-            ampc_actor_utils::network::mpc::NetworkValue::Bytes(b) => Ok(b),
-            other => Err(CycleError::Fatal(format!(
-                "control_channel.recv_prev: expected NetworkValue::Bytes, got {other:?}"
-            ))),
-        }
-    }
-}
 
 #[derive(Serialize, Deserialize)]
 struct WireFrame {
@@ -101,15 +38,15 @@ struct WireFrame {
     msg: ConsensusMessage,
 }
 
-/// `ConsensusTransport` adapter over any `RingChannel`. The channel is held
-/// behind a `tokio::sync::Mutex` so `exchange` can take `&self` while the
-/// underlying primitive needs `&mut self` (TCP streams).
-pub struct RingConsensusTransport<R: RingChannel> {
-    channel: tokio::sync::Mutex<R>,
+/// `ConsensusTransport` adapter over a [`ControlChannel`]. The channel is
+/// held behind a `tokio::sync::Mutex` so `exchange` can take `&self` while
+/// the underlying primitive needs `&mut self` (TCP streams).
+pub struct RingConsensusTransport {
+    channel: tokio::sync::Mutex<Box<dyn ControlChannel>>,
 }
 
-impl<R: RingChannel> RingConsensusTransport<R> {
-    pub fn new(channel: R) -> Self {
+impl RingConsensusTransport {
+    pub fn new(channel: Box<dyn ControlChannel>) -> Self {
         Self {
             channel: tokio::sync::Mutex::new(channel),
         }
@@ -117,7 +54,7 @@ impl<R: RingChannel> RingConsensusTransport<R> {
 }
 
 #[async_trait]
-impl<R: RingChannel + Send> ConsensusTransport for RingConsensusTransport<R> {
+impl ConsensusTransport for RingConsensusTransport {
     async fn exchange<T: Send + 'static>(
         &self,
         msg: ConsensusMessage,
@@ -135,10 +72,14 @@ impl<R: RingChannel + Send> ConsensusTransport for RingConsensusTransport<R> {
         let mut ch = self.channel.lock().await;
         let result = tokio::time::timeout(timeout, async {
             // Sends first to avoid deadlock — see module doc.
-            ch.send_next(bytes.clone()).await?;
-            ch.send_prev(bytes).await?;
-            let next = ch.recv_next().await?;
-            let prev = ch.recv_prev().await?;
+            ch.send_next(NetworkValue::Bytes(bytes.clone()))
+                .await
+                .map_err(|e| CycleError::Transient(format!("control_channel.send_next: {e}")))?;
+            ch.send_prev(NetworkValue::Bytes(bytes))
+                .await
+                .map_err(|e| CycleError::Transient(format!("control_channel.send_prev: {e}")))?;
+            let next = recv_bytes("recv_next", ch.recv_next().await).await?;
+            let prev = recv_bytes("recv_prev", ch.recv_prev().await).await?;
             Ok::<(Vec<u8>, Vec<u8>), CycleError>((next, prev))
         })
         .await;
@@ -173,6 +114,23 @@ impl<R: RingChannel + Send> ConsensusTransport for RingConsensusTransport<R> {
     }
 }
 
+/// Map a `ControlChannel` recv result to a payload byte vector. A non-Bytes
+/// `NetworkValue` is fatal — the channel isn't shared with anything else.
+async fn recv_bytes(
+    label: &str,
+    result: eyre::Result<NetworkValue>,
+) -> Result<Vec<u8>, CycleError> {
+    match result {
+        Ok(NetworkValue::Bytes(b)) => Ok(b),
+        Ok(other) => Err(CycleError::Fatal(format!(
+            "control_channel.{label}: expected NetworkValue::Bytes, got {other:?}"
+        ))),
+        Err(e) => Err(CycleError::Transient(format!(
+            "control_channel.{label}: {e}"
+        ))),
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod test_ring {
     //! In-process triangle ring. Three parties, six unidirectional mpsc
@@ -182,42 +140,48 @@ pub(crate) mod test_ring {
     //! Use [`triangle`] to build all three `InMemoryRing` instances at once.
 
     use super::*;
+    use eyre::Result;
     use tokio::sync::mpsc;
 
     /// One leg of the in-memory ring — owns its tx/rx halves on each
-    /// neighbour side.
+    /// neighbour side. Implements [`ControlChannel`] directly so it plugs
+    /// into [`RingConsensusTransport`] the same way a production TCP
+    /// channel does.
     pub struct InMemoryRing {
-        send_next: mpsc::Sender<Vec<u8>>,
-        send_prev: mpsc::Sender<Vec<u8>>,
-        recv_next: mpsc::Receiver<Vec<u8>>,
-        recv_prev: mpsc::Receiver<Vec<u8>>,
+        send_next: mpsc::Sender<NetworkValue>,
+        send_prev: mpsc::Sender<NetworkValue>,
+        recv_next: mpsc::Receiver<NetworkValue>,
+        recv_prev: mpsc::Receiver<NetworkValue>,
     }
 
     #[async_trait]
-    impl RingChannel for InMemoryRing {
-        async fn send_next(&mut self, bytes: Vec<u8>) -> Result<(), CycleError> {
+    impl ControlChannel for InMemoryRing {
+        async fn send_next(&mut self, value: NetworkValue) -> Result<()> {
             self.send_next
-                .send(bytes)
+                .send(value)
                 .await
-                .map_err(|e| CycleError::Transient(format!("send_next: {e}")))
+                .map_err(|e| eyre::eyre!("send_next: {e}"))
         }
-        async fn send_prev(&mut self, bytes: Vec<u8>) -> Result<(), CycleError> {
+        async fn send_prev(&mut self, value: NetworkValue) -> Result<()> {
             self.send_prev
-                .send(bytes)
+                .send(value)
                 .await
-                .map_err(|e| CycleError::Transient(format!("send_prev: {e}")))
+                .map_err(|e| eyre::eyre!("send_prev: {e}"))
         }
-        async fn recv_next(&mut self) -> Result<Vec<u8>, CycleError> {
+        async fn recv_next(&mut self) -> Result<NetworkValue> {
             self.recv_next
                 .recv()
                 .await
-                .ok_or_else(|| CycleError::Transient("recv_next: channel closed".into()))
+                .ok_or_else(|| eyre::eyre!("recv_next: channel closed"))
         }
-        async fn recv_prev(&mut self) -> Result<Vec<u8>, CycleError> {
+        async fn recv_prev(&mut self) -> Result<NetworkValue> {
             self.recv_prev
                 .recv()
                 .await
-                .ok_or_else(|| CycleError::Transient("recv_prev: channel closed".into()))
+                .ok_or_else(|| eyre::eyre!("recv_prev: channel closed"))
+        }
+        async fn sync(&mut self) -> Result<()> {
+            Ok(())
         }
     }
 
@@ -260,9 +224,13 @@ pub(crate) mod test_ring {
 
 #[cfg(test)]
 mod tests {
-    use super::test_ring::triangle;
+    use super::test_ring::{triangle, InMemoryRing};
     use super::*;
     use crate::checkpoint_protocol::{ConsensusMessage, ConsensusTransport};
+
+    fn xport(ring: InMemoryRing) -> RingConsensusTransport {
+        RingConsensusTransport::new(Box::new(ring))
+    }
 
     /// Two parties send proposals through the in-memory ring; each receives
     /// the other's. (Three parties needed for `triangle`, so we drive all
@@ -270,9 +238,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn ring_exchange_round_trips_a_proposal() {
         let [p0, p1, p2] = triangle(8);
-        let t0 = RingConsensusTransport::new(p0);
-        let t1 = RingConsensusTransport::new(p1);
-        let t2 = RingConsensusTransport::new(p2);
+        let t0 = xport(p0);
+        let t1 = xport(p1);
+        let t2 = xport(p2);
 
         let nonce = 0x1234_5678_u128;
         let proposal_0 = ConsensusMessage::HeightProposal { height: 100 };
@@ -339,9 +307,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn ring_exchange_nonce_mismatch_is_fatal() {
         let [p0, p1, p2] = triangle(8);
-        let t0 = RingConsensusTransport::new(p0);
-        let t1 = RingConsensusTransport::new(p1);
-        let t2 = RingConsensusTransport::new(p2);
+        let t0 = xport(p0);
+        let t1 = xport(p1);
+        let t2 = xport(p2);
 
         let timeout = std::time::Duration::from_secs(2);
 
@@ -397,9 +365,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn ring_exchange_variant_mismatch_is_fatal() {
         let [p0, p1, p2] = triangle(8);
-        let t0 = RingConsensusTransport::new(p0);
-        let t1 = RingConsensusTransport::new(p1);
-        let t2 = RingConsensusTransport::new(p2);
+        let t0 = xport(p0);
+        let t1 = xport(p1);
+        let t2 = xport(p2);
 
         let nonce = 7;
         let timeout = std::time::Duration::from_secs(2);
@@ -459,8 +427,8 @@ mod tests {
         // p2 is dropped: its sends never happen, its receives are dropped
         // immediately so p0/p1 get send errors after the channel buffer fills.
         // We use a small timeout to keep the test fast.
-        let t0 = RingConsensusTransport::new(p0);
-        let t1 = RingConsensusTransport::new(p1);
+        let t0 = xport(p0);
+        let t1 = xport(p1);
 
         let nonce = 1;
         let timeout = std::time::Duration::from_millis(150);
@@ -501,139 +469,6 @@ mod tests {
         assert!(
             any_transient,
             "expected at least one transient; got r0={r0:?}, r1={r1:?}"
-        );
-    }
-}
-
-#[cfg(test)]
-mod control_channel_adapter_tests {
-    //! Cover the `impl RingChannel for Box<dyn ControlChannel>` wiring:
-    //! - send wraps bytes in `NetworkValue::Bytes`
-    //! - recv unwraps `NetworkValue::Bytes`
-    //! - a non-Bytes variant on recv is fatal (someone else is on the channel)
-    //! - a network error on recv is transient (let the daemon retry)
-
-    use super::*;
-    use ampc_actor_utils::network::mpc::handle::control_channel::ControlChannel;
-    use ampc_actor_utils::network::mpc::NetworkValue;
-    use async_trait::async_trait;
-    use std::collections::VecDeque;
-    use std::sync::Mutex;
-
-    /// A `ControlChannel` test double. `send_*` pushes onto `sent`;
-    /// `recv_*` pops from the matching queue. Either queue can hold canned
-    /// errors to drive failure paths.
-    struct FakeChannel {
-        sent_next: Mutex<Vec<NetworkValue>>,
-        sent_prev: Mutex<Vec<NetworkValue>>,
-        recv_next: Mutex<VecDeque<eyre::Result<NetworkValue>>>,
-        recv_prev: Mutex<VecDeque<eyre::Result<NetworkValue>>>,
-    }
-
-    impl FakeChannel {
-        fn new() -> Self {
-            Self {
-                sent_next: Mutex::new(vec![]),
-                sent_prev: Mutex::new(vec![]),
-                recv_next: Mutex::new(VecDeque::new()),
-                recv_prev: Mutex::new(VecDeque::new()),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl ControlChannel for FakeChannel {
-        async fn send_next(&mut self, v: NetworkValue) -> eyre::Result<()> {
-            self.sent_next.lock().unwrap().push(v);
-            Ok(())
-        }
-        async fn send_prev(&mut self, v: NetworkValue) -> eyre::Result<()> {
-            self.sent_prev.lock().unwrap().push(v);
-            Ok(())
-        }
-        async fn recv_next(&mut self) -> eyre::Result<NetworkValue> {
-            self.recv_next
-                .lock()
-                .unwrap()
-                .pop_front()
-                .expect("recv_next queue underflow")
-        }
-        async fn recv_prev(&mut self) -> eyre::Result<NetworkValue> {
-            self.recv_prev
-                .lock()
-                .unwrap()
-                .pop_front()
-                .expect("recv_prev queue underflow")
-        }
-        async fn sync(&mut self) -> eyre::Result<()> {
-            Ok(())
-        }
-    }
-
-    #[tokio::test]
-    async fn adapter_wraps_bytes_in_network_value_on_send() {
-        let fake = Box::new(FakeChannel::new()) as Box<dyn ControlChannel>;
-        let mut ch: Box<dyn ControlChannel> = fake;
-        RingChannel::send_next(&mut ch, b"hello".to_vec())
-            .await
-            .unwrap();
-        RingChannel::send_prev(&mut ch, b"world".to_vec())
-            .await
-            .unwrap();
-
-        // Downcast back to FakeChannel via raw pointer trickery isn't worth it;
-        // instead exercise recv via the matching path below. This test just
-        // proves the call shape compiles + send doesn't error.
-    }
-
-    #[tokio::test]
-    async fn adapter_unwraps_bytes_on_recv() {
-        let fake = FakeChannel::new();
-        fake.recv_next
-            .lock()
-            .unwrap()
-            .push_back(Ok(NetworkValue::Bytes(b"next-payload".to_vec())));
-        fake.recv_prev
-            .lock()
-            .unwrap()
-            .push_back(Ok(NetworkValue::Bytes(b"prev-payload".to_vec())));
-        let mut ch: Box<dyn ControlChannel> = Box::new(fake);
-
-        let next = RingChannel::recv_next(&mut ch).await.unwrap();
-        let prev = RingChannel::recv_prev(&mut ch).await.unwrap();
-        assert_eq!(next, b"next-payload");
-        assert_eq!(prev, b"prev-payload");
-    }
-
-    #[tokio::test]
-    async fn adapter_recv_wrong_variant_is_fatal() {
-        let fake = FakeChannel::new();
-        fake.recv_next
-            .lock()
-            .unwrap()
-            .push_back(Ok(NetworkValue::PrfKey([0u8; 16])));
-        let mut ch: Box<dyn ControlChannel> = Box::new(fake);
-
-        let err = RingChannel::recv_next(&mut ch).await.unwrap_err();
-        assert!(
-            matches!(err, CycleError::Fatal(_)),
-            "expected Fatal, got {err:?}"
-        );
-    }
-
-    #[tokio::test]
-    async fn adapter_recv_io_error_is_transient() {
-        let fake = FakeChannel::new();
-        fake.recv_prev
-            .lock()
-            .unwrap()
-            .push_back(Err(eyre::eyre!("connection reset")));
-        let mut ch: Box<dyn ControlChannel> = Box::new(fake);
-
-        let err = RingChannel::recv_prev(&mut ch).await.unwrap_err();
-        assert!(
-            matches!(err, CycleError::Transient(_)),
-            "expected Transient, got {err:?}"
         );
     }
 }

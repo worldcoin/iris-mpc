@@ -154,14 +154,15 @@ impl ConsensusTransport for MockTransport {
 
 #[derive(Clone)]
 struct MockMaterializer {
-    /// Records (base, freeze) on each invocation.
-    calls: Arc<Mutex<Vec<(CheckpointMeta, FreezeHeight)>>>,
+    /// Records the `freeze` passed on each invocation. (Base is discarded —
+    /// no test inspects it; existing assertions only look at length / freeze.)
+    freezes: Arc<Mutex<Vec<FreezeHeight>>>,
 }
 
 impl MockMaterializer {
     fn new() -> Self {
         Self {
-            calls: Arc::new(Mutex::new(vec![])),
+            freezes: Arc::new(Mutex::new(vec![])),
         }
     }
 }
@@ -170,10 +171,10 @@ impl MockMaterializer {
 impl Materializer for MockMaterializer {
     async fn snapshot(
         &mut self,
-        base: CheckpointMeta,
+        _base: CheckpointMeta,
         freeze: FreezeHeight,
     ) -> Result<Graph, CycleError> {
-        self.calls.lock().unwrap().push((base, freeze));
+        self.freezes.lock().unwrap().push(freeze);
         Ok(empty_graph())
     }
 }
@@ -271,7 +272,7 @@ async fn happy_path_finalizes() {
         other => panic!("expected Finalized, got {other:?}"),
     }
     assert_eq!(fin.calls.lock().unwrap().len(), 1);
-    assert_eq!(mat.calls.lock().unwrap().len(), 1);
+    assert_eq!(mat.freezes.lock().unwrap().len(), 1);
 
     // Phase ordering: Base, Height, Hash.
     let calls = transport.calls.lock().unwrap();
@@ -330,7 +331,7 @@ async fn skips_when_not_enough_mutations() {
         other => panic!("expected Skipped, got {other:?}"),
     }
     assert_eq!(
-        mat.calls.lock().unwrap().len(),
+        mat.freezes.lock().unwrap().len(),
         0,
         "materializer must not run on skip"
     );
@@ -365,7 +366,7 @@ async fn restart_with_min_zero_runs_even_with_no_new_mutations() {
         .expect("min=0 should always run");
 
     assert!(matches!(outcome, Outcome::Finalized { .. }));
-    assert_eq!(mat.calls.lock().unwrap().len(), 1);
+    assert_eq!(mat.freezes.lock().unwrap().len(), 1);
     assert_eq!(fin.calls.lock().unwrap().len(), 1);
 }
 
@@ -395,7 +396,7 @@ async fn base_mismatch_is_fatal() {
         .expect_err("must be fatal");
     assert!(matches!(err, CycleError::Fatal(_)));
     assert_eq!(
-        mat.calls.lock().unwrap().len(),
+        mat.freezes.lock().unwrap().len(),
         0,
         "must not materialize after base mismatch"
     );
@@ -436,7 +437,7 @@ async fn height_is_min_across_parties() {
         .await
         .expect("should finalize");
 
-    let (_base, freeze) = mat.calls.lock().unwrap()[0].clone();
+    let freeze = mat.freezes.lock().unwrap()[0];
     assert_eq!(
         freeze.0, 80,
         "freeze height must be min(local=200, peers={{80,150}})"
@@ -474,7 +475,7 @@ async fn hash_mismatch_is_fatal_and_skips_finalize() {
         .expect_err("hash mismatch must be fatal");
     assert!(matches!(err, CycleError::Fatal(_)));
     assert_eq!(
-        mat.calls.lock().unwrap().len(),
+        mat.freezes.lock().unwrap().len(),
         1,
         "materializer ran before hash phase"
     );
@@ -545,7 +546,7 @@ async fn freeze_below_base_skips_as_peer_behind_even_when_min_is_zero() {
 
     // The materializer and finalizer must not have been called — the cycle
     // bails before phase 3.
-    assert_eq!(mat.calls.lock().unwrap().len(), 0);
+    assert_eq!(mat.freezes.lock().unwrap().len(), 0);
     assert_eq!(fin.calls.lock().unwrap().len(), 0);
 }
 
@@ -585,9 +586,9 @@ use crate::checkpoint_protocol::{transport::test_ring::triangle, RingConsensusTr
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn three_parties_finalize_in_lockstep() {
     let [r0, r1, r2] = triangle(8);
-    let t0 = RingConsensusTransport::new(r0);
-    let t1 = RingConsensusTransport::new(r1);
-    let t2 = RingConsensusTransport::new(r2);
+    let t0 = RingConsensusTransport::new(Box::new(r0));
+    let t1 = RingConsensusTransport::new(Box::new(r1));
+    let t2 = RingConsensusTransport::new(Box::new(r2));
 
     let base = meta(7, Some(0));
     let store_for_party = |b: CheckpointMeta| MockStore {
@@ -650,9 +651,9 @@ async fn three_parties_finalize_in_lockstep() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn three_parties_fail_on_base_disagreement() {
     let [r0, r1, r2] = triangle(8);
-    let t0 = RingConsensusTransport::new(r0);
-    let t1 = RingConsensusTransport::new(r1);
-    let t2 = RingConsensusTransport::new(r2);
+    let t0 = RingConsensusTransport::new(Box::new(r0));
+    let t1 = RingConsensusTransport::new(Box::new(r1));
+    let t2 = RingConsensusTransport::new(Box::new(r2));
 
     let config = CycleConfig {
         min_mutations_to_apply: 0,
@@ -718,9 +719,9 @@ async fn three_parties_fail_on_base_disagreement() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn three_parties_fail_on_hash_disagreement() {
     let [r0, r1, r2] = triangle(8);
-    let t0 = RingConsensusTransport::new(r0);
-    let t1 = RingConsensusTransport::new(r1);
-    let t2 = RingConsensusTransport::new(r2);
+    let t0 = RingConsensusTransport::new(Box::new(r0));
+    let t1 = RingConsensusTransport::new(Box::new(r1));
+    let t2 = RingConsensusTransport::new(Box::new(r2));
 
     let base = meta(1, Some(0));
     let config = CycleConfig {
