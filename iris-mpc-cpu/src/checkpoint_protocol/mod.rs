@@ -10,8 +10,7 @@
 
 pub mod hasher;
 pub mod materializer;
-pub mod restart;
-pub mod sidecar;
+pub mod runner;
 pub mod store;
 pub mod terminal;
 pub mod transport;
@@ -21,8 +20,7 @@ mod tests;
 
 pub use hasher::Blake3GraphHasher;
 pub use materializer::RebuildFromCheckpoint;
-pub use restart::{restart_from_checkpoint, RestartOutcome};
-pub use sidecar::{sidecar_main, SidecarConfig};
+pub use runner::{restart_from_checkpoint, sidecar_main, RestartOutcome, SidecarConfig};
 pub use terminal::{InstallAsServing, UploadAndRecord};
 pub use transport::RingConsensusTransport;
 
@@ -113,17 +111,6 @@ pub struct CycleConfig {
     /// `0` for the restart path; e.g. `10_000` for sidecar/in-Hawk loops.
     pub min_mutations_to_apply: u64,
     pub peer_round_timeout: Duration,
-    /// Per-cycle nonce all three parties must agree on. Stamps the wire
-    /// frame on every `ConsensusTransport::exchange` round, so a stale
-    /// message from a prior cycle (e.g. on a reused channel) fails the
-    /// nonce check and aborts the cycle. The caller's daemon loop is
-    /// responsible for picking a value that's deterministic across
-    /// parties — e.g. derived from the latest checkpoint id plus an
-    /// attempt counter. For TCP-backed transports that open a fresh
-    /// stream per cycle (see ampc-common PR #103), the nonce is largely a
-    /// debug breadcrumb; for reused channels (in-memory tests) it's the
-    /// only guard against cross-wires.
-    pub cycle_nonce: u128,
 }
 
 #[async_trait]
@@ -164,11 +151,6 @@ pub enum ConsensusMessage {
     HashProposal { hash: Blake3Hash },
 }
 
-#[derive(Clone, Debug)]
-pub struct PeerResponses<T> {
-    pub responses: Vec<T>,
-}
-
 #[async_trait]
 pub trait ConsensusTransport {
     /// Send `msg` to all peers, collect their responses, project each through
@@ -181,7 +163,7 @@ pub trait ConsensusTransport {
         expect: fn(ConsensusMessage) -> Option<T>,
         cycle_nonce: u128,
         timeout: Duration,
-    ) -> Result<PeerResponses<T>, CycleError>;
+    ) -> Result<Vec<T>, CycleError>;
 }
 
 #[async_trait]
@@ -224,12 +206,17 @@ where
     S: MutationStore + Send + Sync,
     H: GraphHasher,
 {
-    let cycle_nonce = cfg.cycle_nonce;
-
     // Phase 1 — base agreement. All parties must point at the same checkpoint
     // row; any disagreement is fatal (a party that diverged on which base to
     // start from cannot reach a matching hash later).
+    //
+    // Nonce derived from `agreed_base.checkpoint_id`: deterministic across
+    // parties once Phase 1 succeeds (they agree on the row, therefore on the
+    // id). For Phase 1's own exchange we use the local checkpoint_id — if
+    // parties disagree on base, they'll either see the nonce mismatch or the
+    // base-content mismatch, both Fatal.
     let local_base = store.latest_checkpoint().await?;
+    let cycle_nonce = local_base.checkpoint_id as u128;
     let peer_bases = transport
         .exchange(
             ConsensusMessage::BaseProposal {
@@ -243,7 +230,7 @@ where
             cfg.peer_round_timeout,
         )
         .await?;
-    for peer in &peer_bases.responses {
+    for peer in &peer_bases {
         if peer != &local_base {
             return Err(CycleError::Fatal(format!(
                 "base mismatch: local={local_base:?} peer={peer:?}"
@@ -270,7 +257,6 @@ where
         .await?;
     let freeze = FreezeHeight(
         peer_heights
-            .responses
             .iter()
             .copied()
             .fold(local_height, GraphMutationId::min),
@@ -318,7 +304,7 @@ where
             cfg.peer_round_timeout,
         )
         .await?;
-    for peer_hash in &peer_hashes.responses {
+    for peer_hash in &peer_hashes {
         if peer_hash != &local_hash {
             return Err(CycleError::Fatal(format!(
                 "hash mismatch: local={} peer={}",

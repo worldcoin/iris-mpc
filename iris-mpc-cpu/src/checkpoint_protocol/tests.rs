@@ -15,7 +15,7 @@ use iris_mpc_common::vector_id::VectorId;
 use crate::checkpoint_protocol::{
     run_cycle, Blake3Hash, CheckpointMeta, ConsensusMessage, ConsensusTransport, CycleConfig,
     CycleError, FreezeHeight, Graph, GraphHasher, GraphMutationId, Materializer, MutationStore,
-    Outcome, PeerResponses, SkipReason, TerminalAction,
+    Outcome, SkipReason, TerminalAction,
 };
 use crate::execution::hawk_main::BothEyes;
 use crate::hnsw::{graph::mutation::GraphMutation, GraphMem};
@@ -30,7 +30,6 @@ fn cfg(min: u64) -> CycleConfig {
     CycleConfig {
         min_mutations_to_apply: min,
         peer_round_timeout: Duration::from_millis(100),
-        cycle_nonce: 0xC0FFEE_u128,
     }
 }
 
@@ -118,7 +117,7 @@ impl ConsensusTransport for MockTransport {
         expect: fn(ConsensusMessage) -> Option<T>,
         cycle_nonce: u128,
         timeout: Duration,
-    ) -> Result<PeerResponses<T>, CycleError> {
+    ) -> Result<Vec<T>, CycleError> {
         self.calls.lock().unwrap().push(ExchangeCall {
             msg_variant: variant(&msg),
             nonce: cycle_nonce,
@@ -144,9 +143,7 @@ impl ConsensusTransport for MockTransport {
                 }
             }
         }
-        Ok(PeerResponses {
-            responses: projected,
-        })
+        Ok(projected)
     }
 }
 
@@ -598,7 +595,6 @@ async fn three_parties_finalize_in_lockstep() {
     let config = CycleConfig {
         min_mutations_to_apply: 1,
         peer_round_timeout: Duration::from_secs(2),
-        cycle_nonce: 0xABCDEF_u128,
     };
 
     let h0 = tokio::spawn({
@@ -658,7 +654,6 @@ async fn three_parties_fail_on_base_disagreement() {
     let config = CycleConfig {
         min_mutations_to_apply: 0,
         peer_round_timeout: Duration::from_secs(2),
-        cycle_nonce: 0x11_u128,
     };
 
     let h0 = tokio::spawn({
@@ -727,7 +722,6 @@ async fn three_parties_fail_on_hash_disagreement() {
     let config = CycleConfig {
         min_mutations_to_apply: 0,
         peer_round_timeout: Duration::from_secs(2),
-        cycle_nonce: 0x22_u128,
     };
 
     let fin0 = MockFinalizer::new();

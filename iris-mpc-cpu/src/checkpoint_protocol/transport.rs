@@ -30,7 +30,7 @@ use ampc_actor_utils::network::mpc::NetworkValue;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
-use crate::checkpoint_protocol::{ConsensusMessage, ConsensusTransport, CycleError, PeerResponses};
+use crate::checkpoint_protocol::{ConsensusMessage, ConsensusTransport, CycleError};
 
 #[derive(Serialize, Deserialize)]
 struct WireFrame {
@@ -61,7 +61,7 @@ impl ConsensusTransport for RingConsensusTransport {
         expect: fn(ConsensusMessage) -> Option<T>,
         cycle_nonce: u128,
         timeout: Duration,
-    ) -> Result<PeerResponses<T>, CycleError> {
+    ) -> Result<Vec<T>, CycleError> {
         let frame = WireFrame {
             cycle_nonce,
             msg: msg.clone(),
@@ -108,9 +108,7 @@ impl ConsensusTransport for RingConsensusTransport {
             })
         };
 
-        Ok(PeerResponses {
-            responses: vec![parse(next_bytes)?, parse(prev_bytes)?],
-        })
+        Ok(vec![parse(next_bytes)?, parse(prev_bytes)?])
     }
 }
 
@@ -292,9 +290,7 @@ mod tests {
 
         // Each party sees the other two parties' heights (set semantics — order
         // is next/prev which depends on party).
-        let collect = |r: PeerResponses<i64>| -> std::collections::BTreeSet<i64> {
-            r.responses.into_iter().collect()
-        };
+        let collect = |r: Vec<i64>| -> std::collections::BTreeSet<i64> { r.into_iter().collect() };
         let s0 = collect(r0);
         let s1 = collect(r1);
         let s2 = collect(r2);
