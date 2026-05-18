@@ -1,4 +1,13 @@
-#![allow(unused)]
+//! File: e2e_hawk.rs
+//! This integration test exercises the roll forward functionality of server_main(). That service is normally
+//! run in a kubernetes cluster and is managed by the ctrl+c signal. However, after setup (whic includes the
+//! roll forward), an HTTP endpoint sets a "ready" flag. This test sets up the databases to trigger the roll
+//! forward, and then monitors the "ready" endpoint to determine when the test is completed.
+//!
+//! Test code from genesis (iris-mpc-upgrade-hawk) is reused when possible. It is needed to generate and upload
+//! iris shares, create Config structs, and interact with the databases.
+//!
+#![allow(unused)] // this is needed to stop warnings that arise from including the utils and workflows modules
 #![recursion_limit = "256"]
 use std::sync::Arc;
 
@@ -9,6 +18,7 @@ use iris_mpc::server::server_main;
 use iris_mpc_common::{
     config::Config,
     helpers::sync::{Modification, MOD_STATUS_COMPLETED},
+    iris_db::iris::IrisCode,
     postgres::{AccessMode, PostgresClient},
     IrisVectorId,
 };
@@ -19,9 +29,11 @@ use iris_mpc_cpu::{
 };
 use iris_mpc_utils::{
     aws::{AwsClient, AwsClientConfig},
-    constants::AWS_PUBLIC_KEY_BASE_URL,
+    constants::{AWS_PUBLIC_KEY_BASE_URL, N_PARTIES},
+    irises::{generate_iris_shares_for_upload_both_eyes, GaloisRingSharedIrisForUpload},
 };
-use rand::{thread_rng, Rng};
+use itertools::izip;
+use rand::{rngs::StdRng, thread_rng, Rng, SeedableRng};
 use serial_test::serial;
 use tokio::time::{timeout, Duration};
 use tokio::{sync::Notify, task::JoinSet};
@@ -30,11 +42,13 @@ use uuid::Uuid;
 
 const RUST_LOG: &str = "info";
 
+// these module imports are hacks to reuse some test code from the genesis workflows
 mod utils;
 mod workflows;
 
 use crate::utils::{
-    genesis_runner, irises,
+    genesis_runner,
+    irises::{self},
     modifications::{ModificationInput, ModificationType},
     mpc_node::{db_ops, MpcNodes},
 };
@@ -46,7 +60,7 @@ fn test_hawk_init() -> Result<()> {
     std::thread::Builder::new()
         .name("test_hawk_init()".into())
         .stack_size(64 * 1024 * 1024)
-        .spawn(move || run_test_hawk_init())
+        .spawn(run_test_hawk_init)
         .expect("failed to spawn test thread")
         .join()
         .expect("test thread panicked")
@@ -71,6 +85,7 @@ fn run_test_hawk_init() -> Result<()> {
             config.gpu_schema_name_suffix = config.hnsw_schema_name_suffix.clone();
         }
 
+        // for testing, it is ok for the PRF keys to all be the same.
         let hawk_prf0 = configs[0].hawk_prf_key;
         assert!(
             configs.iter().all(|c| c.hawk_prf_key == hawk_prf0),
@@ -113,8 +128,7 @@ fn run_test_hawk_init() -> Result<()> {
             irises::share_irises_locally(&plaintext_irises, shares_rng_seed)?;
 
         // Generate shares for upload (full-size mask shares for S3)
-        let upload_shares =
-            irises::share_irises_for_upload_locally(&plaintext_irises, shares_rng_seed)?;
+        let upload_shares = share_irises_for_upload_locally(&plaintext_irises, shares_rng_seed)?;
 
         let uniqueness_modifications: Vec<ModificationInput> = (1..=10)
             .map(|id| ModificationInput::new(id, id, ModificationType::Uniqueness, true, true))
@@ -132,7 +146,6 @@ fn run_test_hawk_init() -> Result<()> {
                 vec![],        // sqs_response_queue_urls - not needed for upload
             )
             .await;
-            println!("aws config: {:#?}", aws_config);
             let mut client = AwsClient::new(aws_config);
             client.set_public_keyset().await?;
             aws_clients.push(client);
@@ -217,7 +230,12 @@ fn run_test_hawk_init() -> Result<()> {
         }
         join_runners!(join_set);
 
-        // assert_hawk_mutations_len(0, &configs, line!()).await?;
+        assert_hawk_mutations_len(
+            &[0, uniqueness_mutations.len(), uniqueness_mutations.len()],
+            &configs,
+            line!(),
+        )
+        .await?;
 
         // server_main holds !Send pprof state, so each server runs on its own
         // OS thread with its own Tokio runtime to avoid the Send requirement.
@@ -273,17 +291,17 @@ fn run_test_hawk_init() -> Result<()> {
 
         // stop zombie threads
         notify.notify_waiters();
-        assert_hawk_mutations_len(uniqueness_mutations.len(), &configs, line!()).await?;
+        assert_hawk_mutations_len(&[uniqueness_mutations.len(); 3], &configs, line!()).await?;
         Ok(())
     })
 }
 
 async fn assert_hawk_mutations_len(
-    expected_len: usize,
+    expected_lengths: &[usize],
     configs: &[Config],
     line: u32,
 ) -> Result<()> {
-    for config in configs {
+    for (config, &expected_len) in izip!(configs, expected_lengths) {
         let url = config
             .get_cpu_db_url()
             .ok_or_else(|| eyre!("cpu_database url is required for party {}", config.party_id))?;
@@ -303,4 +321,24 @@ async fn assert_hawk_mutations_len(
     }
 
     Ok(())
+}
+
+/// Share irises locally for upload (full-size mask shares).
+pub fn share_irises_for_upload_locally(
+    irises: &[(IrisCode, IrisCode)],
+    rng_seed: u64,
+) -> Result<Vec<BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]>>> {
+    let mut result = Vec::with_capacity(irises.len());
+
+    for (left_iris, right_iris) in irises {
+        let mut rng = StdRng::seed_from_u64(rng_seed);
+        let both_eyes = generate_iris_shares_for_upload_both_eyes(
+            &mut rng,
+            Some(left_iris.clone()),
+            Some(right_iris.clone()),
+        );
+        result.push(both_eyes);
+    }
+
+    Ok(result)
 }
