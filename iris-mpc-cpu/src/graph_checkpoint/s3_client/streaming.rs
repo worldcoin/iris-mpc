@@ -38,6 +38,61 @@ pub const DEFAULT_STREAMING_PART_SIZE: usize = 100 * 1024 * 1024;
 /// Suggested cap on concurrent in-flight `UploadPart` tasks.
 pub const DEFAULT_STREAMING_PARALLELISM: usize = 8;
 
+/// `Write` adapter that forwards every byte to an inner writer while
+/// folding the same bytes into a `blake3::Hasher`. Lets callers compute
+/// the BLAKE3 digest of their upload payload in one streaming pass, with
+/// no intermediate `Vec<u8>`.
+///
+/// Pairs with [`stream_serialize_and_upload_with`] when the caller needs
+/// the canonical-bytes hash (e.g. to record into a verification field):
+///
+/// ```ignore
+/// let (hash_tx, hash_rx) = tokio::sync::oneshot::channel();
+/// stream_serialize_and_upload_with(s3, bucket, key, move |w| {
+///     let mut tee = BlakeTeeWriter::new(w);
+///     bincode::serialize_into(&mut tee, &v)?;
+///     let _ = hash_tx.send(tee.finalize());
+///     Ok(())
+/// }, DEFAULT_STREAMING_PART_SIZE, DEFAULT_STREAMING_PARALLELISM).await?;
+/// let hash = hash_rx.await?;
+/// ```
+///
+/// Kept deliberately outside the upload primitive itself so the primitive
+/// stays content-agnostic: callers that don't need a hash (or want a
+/// different algorithm) can write straight to the underlying `&mut dyn
+/// Write` instead.
+pub struct BlakeTeeWriter<W> {
+    inner: W,
+    hasher: blake3::Hasher,
+}
+
+impl<W: Write> BlakeTeeWriter<W> {
+    pub fn new(inner: W) -> Self {
+        Self {
+            inner,
+            hasher: blake3::Hasher::new(),
+        }
+    }
+
+    /// Consume the tee and return the BLAKE3 digest of every byte that
+    /// passed through `Write::write`.
+    pub fn finalize(self) -> [u8; 32] {
+        *self.hasher.finalize().as_bytes()
+    }
+}
+
+impl<W: Write> Write for BlakeTeeWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = self.inner.write(buf)?;
+        self.hasher.update(&buf[..n]);
+        Ok(n)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
 /// Serialize directly into an S3 multipart upload without buffering the full
 /// payload in memory.
 ///
@@ -410,5 +465,20 @@ mod tests {
         let result = collect_streamed_bytes(|_w| -> Result<()> { panic!("boom") }, 1024).await;
 
         assert!(result.is_err());
+    }
+
+    /// Bytes that pass through `BlakeTeeWriter` reach the inner sink
+    /// unchanged, and `finalize` returns `blake3::hash(written_bytes)`.
+    #[test]
+    fn blake_tee_writer_hashes_what_it_forwards() {
+        let mut sink: Vec<u8> = Vec::new();
+        let mut tee = BlakeTeeWriter::new(&mut sink);
+
+        let payload = b"the quick brown fox jumps over the lazy dog";
+        tee.write_all(payload).unwrap();
+        let hash = tee.finalize();
+
+        assert_eq!(sink, payload);
+        assert_eq!(hash, *blake3::hash(payload).as_bytes());
     }
 }
