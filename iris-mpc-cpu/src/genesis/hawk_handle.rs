@@ -205,7 +205,7 @@ impl Handle {
                                     let mut graph = insert_session.graph_store.write().await;
 
                                     let replace_ids = vec![None; plans.len()];
-                                    let plans = insert(
+                                    let (plans, _inserted_ids) = insert(
                                         &mut *store,
                                         &mut *graph,
                                         &searcher,
@@ -313,7 +313,7 @@ impl Handle {
                                     let mut graph = session.graph_store.write().await;
 
                                     let replace_ids = vec![None; plans.len()];
-                                    let connect_plan = insert(
+                                    let (connect_plan, _inserted_id) = insert(
                                         &mut *store,
                                         &mut *graph,
                                         &searcher,
