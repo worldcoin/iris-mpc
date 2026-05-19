@@ -204,12 +204,14 @@ impl Handle {
                                     let mut store = insert_session.aby3_store.write().await;
                                     let mut graph = insert_session.graph_store.write().await;
 
+                                    let replace_ids = vec![None; plans.len()];
                                     let plans = insert(
                                         &mut *store,
                                         &mut *graph,
                                         &searcher,
                                         plans,
                                         &batch_ids,
+                                        &replace_ids,
                                     )
                                     .await?;
                                     metrics::histogram!("genesis_insert_duration")
@@ -310,8 +312,16 @@ impl Handle {
                                     let mut store = session.aby3_store.write().await;
                                     let mut graph = session.graph_store.write().await;
 
-                                    let connect_plan =
-                                        insert(&mut *store, &mut *graph, &searcher, plans, &ids).await?;
+                                    let replace_ids = vec![None; plans.len()];
+                                    let connect_plan = insert(
+                                        &mut *store,
+                                        &mut *graph,
+                                        &searcher,
+                                        plans,
+                                        &ids,
+                                        &replace_ids,
+                                    )
+                                    .await?;
 
                                     // Evict the cached query now that search + insert are done.
                                     // Use the workers reference from the already-held write guard:

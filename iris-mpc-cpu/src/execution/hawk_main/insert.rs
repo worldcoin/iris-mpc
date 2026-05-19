@@ -30,7 +30,6 @@ pub struct InsertPlanV<V: VectorStore> {
     pub query: V::QueryRef,
     pub links: Vec<Vec<V::VectorRef>>,
     pub update_ep: UpdateEntryPoint,
-    pub replace_id: Option<V::VectorRef>,
 }
 
 // Manual implementation of Clone for InsertPlanV, since derive(Clone) does not
@@ -41,7 +40,6 @@ impl<V: VectorStore> Clone for InsertPlanV<V> {
             query: self.query.clone(),
             links: self.links.clone(),
             update_ep: self.update_ep.clone(),
-            replace_id: self.replace_id.clone(),
         }
     }
 }
@@ -49,18 +47,36 @@ impl<V: VectorStore> Clone for InsertPlanV<V> {
 /// Insert a collection `plans` of `InsertPlanV` structs into the graph and vector store,
 /// adjusting the insertion plans as needed to repair any conflict from parallel searches.
 ///
-/// The `ids` argument consists of `Option<VectorId>`s which are `Some(id)` if the associated
-/// plan is to be inserted with a specific identifier (e.g. for updates or for insertions
-/// which need to parallel an existing iris code database), and `None` if the associated plan
-/// is to be inserted at the next available serial ID, with version 0.
+/// The `insert_ids` argument consists of `Option<VectorId>`s which are `Some(id)` if the
+/// associated plan is to be inserted with a specific identifier (e.g. for updates or for
+/// insertions which need to parallel an existing iris code database), and `None` if the
+/// associated plan is to be inserted at the next available serial ID, with version 0.
+///
+/// The `replace_ids` argument consists of `Option<VectorId>`s which are `Some(id)` if the
+/// associated slot should additionally emit a `RemoveNode(id)` mutation (e.g. for reauth or
+/// identity-update replacements, or for pure deletions). A pure-deletion slot has
+/// `plans[i] = None` and `replace_ids[i] = Some(id)`. A slot with both `plans[i] = None` and
+/// `replace_ids[i] = None` produces `None` in the output (no mutations for that slot).
 pub async fn insert<V: VectorStoreMut>(
     store: &mut V,
     graph: &mut GraphMem<<V as VectorStore>::VectorRef>,
     searcher: &HnswSearcher,
     plans: VecRequests<Option<InsertPlanV<V>>>,
-    ids: &VecRequests<Option<V::VectorRef>>,
+    insert_ids: &VecRequests<Option<V::VectorRef>>,
+    replace_ids: &VecRequests<Option<V::VectorRef>>,
 ) -> Result<VecRequests<Option<ConnectPlanV<V>>>> {
     tracing::debug!("Inserting {} InsertPlans into store", plans.len());
+
+    assert_eq!(
+        plans.len(),
+        replace_ids.len(),
+        "plans and replace_ids must be the same length"
+    );
+    assert_eq!(
+        plans.len(),
+        insert_ids.len(),
+        "plans and insert_ids must be the same length"
+    );
 
     let insert_plans = join_plans(plans, &searcher.layer_mode);
     validate_ep_updates(&insert_plans, &searcher.layer_mode)?;
@@ -68,17 +84,21 @@ pub async fn insert<V: VectorStoreMut>(
     let mut inserted_ids = vec![];
     let m = searcher.params.get_M(0);
 
-    // Build one Option<GroupedMutations> per batch slot.  None slots pass through
+    // Build one Option<GroupedMutations> per batch slot. None slots pass through
     // insert_prepare_batch unchanged; Some slots carry per-request mutations
-    // (optional RemoveNode + InsertNode).
+    // (optional AddNode + AddEdges + optional RemoveNode, OR a pure RemoveNode
+    // for deletion-only slots).
     let mut mutations: Vec<Option<GroupedMutations<V::VectorRef>>> = vec![None; insert_plans.len()];
 
-    for (idx, (plan, update_id)) in izip!(insert_plans, ids).enumerate() {
+    for (idx, (plan, update_id, replace_id)) in
+        izip!(insert_plans, insert_ids, replace_ids).enumerate()
+    {
+        let mut request_mutations: Vec<GraphMutation<V::VectorRef>> = vec![];
+
         if let Some(InsertPlanV {
             query,
             mut links,
             update_ep,
-            replace_id,
         }) = plan
         {
             // Extend links in bottom layer with items from batch, only when the
@@ -96,7 +116,6 @@ pub async fn insert<V: VectorStoreMut>(
                 Some(id) => store.insert_at(id, &query).await?,
             };
 
-            let mut request_mutations: Vec<GraphMutation<V::VectorRef>> = vec![];
             request_mutations.push(GraphMutation::AddNode {
                 id: inserted.clone(),
                 height: links.len(),
@@ -110,12 +129,16 @@ pub async fn insert<V: VectorStoreMut>(
                     edge_type: EdgeType::All,
                 });
             }
-            if let Some(rid) = replace_id {
-                request_mutations.push(GraphMutation::RemoveNode { id: rid.clone() });
-            }
 
-            mutations[idx] = Some(GroupedMutations(request_mutations));
             inserted_ids.push(inserted);
+        }
+
+        if let Some(rid) = replace_id {
+            request_mutations.push(GraphMutation::RemoveNode { id: rid.clone() });
+        }
+
+        if !request_mutations.is_empty() {
+            mutations[idx] = Some(GroupedMutations(request_mutations));
         }
     }
 
@@ -262,7 +285,6 @@ mod tests {
             query: Arc::new(IrisCode::default()),
             links: vec![Vec::new(); ins_layer],
             update_ep: ep_update,
-            replace_id: None,
         }
     }
 
@@ -636,5 +658,162 @@ mod tests {
             true,
             &linear_scan_layer_mode,
         );
+    }
+
+    /// Pure deletion is encoded as plans[i] = None, replace_ids[i] = Some(id).
+    /// The returned grouped_mutations should preserve slot order, with the deletion
+    /// slot emitting exactly one RemoveNode for the requested id.
+    #[tokio::test]
+    async fn test_insert_with_pure_deletion_preserves_slot_order() {
+        let mut store = PlaintextStore::default();
+        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let searcher = HnswSearcher::new_with_test_parameters();
+
+        // Seed the store/graph with two existing vectors A and B so we have something
+        // to delete.
+        let a = store.insert(&Arc::new(IrisCode::default())).await;
+        let b = store.insert(&Arc::new(IrisCode::default())).await;
+        // Note: nodes A and B are deliberately not connected by edges — this test
+        // only exercises that the pipeline emits the right mutations in the right
+        // slots, not the bilateral-edge logic which is tested elsewhere.
+
+        // Batch: [insert C, delete A, delete B]
+        let plans = vec![
+            Some(dummy_insert_plan(UpdateEntryPoint::SetUnique { layer: 0 })),
+            None,
+            None,
+        ];
+        let insert_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
+            vec![None, None, None];
+        let replace_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
+            vec![None, Some(a), Some(b)];
+
+        let grouped = insert(
+            &mut store,
+            &mut graph,
+            &searcher,
+            plans,
+            &insert_ids,
+            &replace_ids,
+        )
+        .await
+        .expect("insert should succeed");
+
+        assert_eq!(grouped.len(), 3, "one output per slot");
+
+        // Slot 0 contains an AddNode (the insert of C).
+        let slot0 = grouped[0].as_ref().expect("slot 0 should be Some");
+        assert!(
+            slot0
+                .0
+                .iter()
+                .any(|m| matches!(m, GraphMutation::AddNode { .. })),
+            "slot 0 should contain AddNode"
+        );
+
+        // Slot 1 contains exactly one mutation, RemoveNode(a).
+        let slot1 = grouped[1].as_ref().expect("slot 1 should be Some");
+        assert_eq!(slot1.0.len(), 1, "deletion slot has one mutation");
+        match &slot1.0[0] {
+            GraphMutation::RemoveNode { id } => assert_eq!(*id, a),
+            other => panic!("expected RemoveNode(a) in slot 1, got {:?}", other),
+        }
+
+        // Slot 2 contains exactly one mutation, RemoveNode(b).
+        let slot2 = grouped[2].as_ref().expect("slot 2 should be Some");
+        assert_eq!(slot2.0.len(), 1, "deletion slot has one mutation");
+        match &slot2.0[0] {
+            GraphMutation::RemoveNode { id } => assert_eq!(*id, b),
+            other => panic!("expected RemoveNode(b) in slot 2, got {:?}", other),
+        }
+    }
+
+    /// Reauth-style replacement is encoded as both plans[i] = Some(plan) AND
+    /// replace_ids[i] = Some(old_id). The slot's group should contain an AddNode
+    /// for the new vector followed by a RemoveNode for the old one.
+    #[tokio::test]
+    async fn test_insert_with_combined_replace_emits_addnode_then_removenode() {
+        let mut store = PlaintextStore::default();
+        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let searcher = HnswSearcher::new_with_test_parameters();
+
+        let old = store.insert(&Arc::new(IrisCode::default())).await;
+
+        let plans = vec![Some(dummy_insert_plan(UpdateEntryPoint::SetUnique {
+            layer: 0,
+        }))];
+        let insert_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
+            vec![None];
+        let replace_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
+            vec![Some(old)];
+
+        let grouped = insert(
+            &mut store,
+            &mut graph,
+            &searcher,
+            plans,
+            &insert_ids,
+            &replace_ids,
+        )
+        .await
+        .expect("insert should succeed");
+
+        let slot0 = grouped[0].as_ref().expect("slot 0 should be Some");
+        let mutations: &Vec<_> = &slot0.0;
+
+        let add_count = mutations
+            .iter()
+            .filter(|m| matches!(m, GraphMutation::AddNode { .. }))
+            .count();
+        assert_eq!(add_count, 1, "slot should contain exactly one AddNode");
+
+        let remove_old_count = mutations
+            .iter()
+            .filter(|m| matches!(m, GraphMutation::RemoveNode { id } if *id == old))
+            .count();
+        assert_eq!(
+            remove_old_count, 1,
+            "slot should contain exactly one RemoveNode(old)"
+        );
+
+        let add_pos = mutations
+            .iter()
+            .position(|m| matches!(m, GraphMutation::AddNode { .. }))
+            .expect("must contain AddNode");
+        let remove_pos = mutations
+            .iter()
+            .position(|m| matches!(m, GraphMutation::RemoveNode { id } if *id == old))
+            .expect("must contain RemoveNode(old)");
+        assert!(
+            add_pos < remove_pos,
+            "AddNode should precede the matching RemoveNode in the slot's group"
+        );
+    }
+
+    /// A None slot in both plans and replace_ids passes through as None.
+    #[tokio::test]
+    async fn test_insert_with_none_slot_yields_none() {
+        let mut store = PlaintextStore::default();
+        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let searcher = HnswSearcher::new_with_test_parameters();
+
+        let plans: VecRequests<Option<InsertPlanV<PlaintextStore>>> = vec![None];
+        let insert_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
+            vec![None];
+        let replace_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
+            vec![None];
+
+        let grouped = insert(
+            &mut store,
+            &mut graph,
+            &searcher,
+            plans,
+            &insert_ids,
+            &replace_ids,
+        )
+        .await
+        .expect("insert should succeed");
+
+        assert!(grouped[0].is_none(), "fully-empty slot should yield None");
     }
 }

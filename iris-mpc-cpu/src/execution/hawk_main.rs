@@ -750,7 +750,11 @@ impl HawkActor {
         sessions: &[HawkSession],
         plans: VecRequests<Option<HawkInsertPlan>>,
         update_ids: &VecRequests<Option<VectorId>>,
+        replace_ids: &VecRequests<Option<VectorId>>,
     ) -> Result<VecRequests<Option<ConnectPlan>>> {
+        assert_eq!(plans.len(), replace_ids.len());
+        assert_eq!(plans.len(), update_ids.len());
+
         // Plans are to be inserted at the next version of non-None entries in `update_ids`
         let insertion_ids = update_ids
             .iter()
@@ -763,30 +767,34 @@ impl HawkActor {
             // so that downstream result derivation (merged_results / inserted_id)
             // still sees the correct serial IDs.
             let mut next_serial_id = self.registry[LEFT].read().await.next_id;
-            return Ok(plans
-                .into_iter()
-                .zip(insertion_ids.iter())
-                .map(|(plan, id)| {
-                    plan.map(|plan| {
-                        let mut mutations = Vec::new();
+            return Ok(izip!(plans, insertion_ids.iter(), replace_ids.iter())
+                .map(|(plan, insertion_id, replace_id)| {
+                    let mut mutations = Vec::new();
 
-                        let inserted_vector = if let Some(id) = id {
+                    if let Some(plan) = plan {
+                        let inserted_vector = if let Some(id) = insertion_id {
                             *id
                         } else {
                             let vid = VectorId::from_serial_id(next_serial_id);
                             next_serial_id += 1;
                             vid
                         };
-                        if let Some(replace_id) = &plan.plan.replace_id {
-                            mutations.push(GraphMutation::RemoveNode { id: *replace_id });
-                        }
                         mutations.push(GraphMutation::AddNode {
                             id: inserted_vector,
                             height: plan.plan.links.len(),
                             update_ep: UpdateEntryPoint::False,
                         });
-                        GroupedMutations(mutations)
-                    })
+                    }
+
+                    if let Some(rid) = replace_id {
+                        mutations.push(GraphMutation::RemoveNode { id: *rid });
+                    }
+
+                    if mutations.is_empty() {
+                        None
+                    } else {
+                        Some(GroupedMutations(mutations))
+                    }
                 })
                 .collect_vec());
         }
@@ -805,6 +813,7 @@ impl HawkActor {
             &self.searcher,
             plans,
             &insertion_ids,
+            replace_ids,
         )
         .await
     }
@@ -1949,8 +1958,22 @@ impl HawkHandle {
 
         tracing::info!("Updated decisions (reset + reauth): {:?}", update_ids);
 
-        // Get deleted vector IDs for RemoveNode mutations
+        // Get deleted vector IDs for RemoveNode mutations.
         let deleted_ids = request.deletion_ids(&*hawk_actor.registry[LEFT].read().await);
+
+        // Build replace_ids covering both reauth/identity-update targets (which
+        // pair with an InsertPlan in the same slot) and pure deletions (which
+        // have None as their InsertPlan).
+        let replace_ids = requests_order
+            .iter()
+            .enumerate()
+            .map(|(i, req_index)| match req_index {
+                RequestIndex::UniqueReauthResetCheck(_) | RequestIndex::IdentityUpdate(_) => {
+                    update_ids[i]
+                }
+                RequestIndex::Deletion(j) => Some(deleted_ids[*j]),
+            })
+            .collect_vec();
 
         // Store plans for both sides using BothEyes structure
         let mut plans_both_sides: Vec<BothEyes<Option<ConnectPlan>>> =
@@ -1987,8 +2010,8 @@ impl HawkHandle {
                 unique_insertions_persistence_skipped.len()
             );
 
-            // Collect the HNSW insertion plans for all mutating decisions
-            let mut insert_plans = requests_order
+            // Collect the HNSW insertion plans for all mutating decisions.
+            let insert_plans = requests_order
                 .iter()
                 .map(|req_index| match req_index {
                     RequestIndex::UniqueReauthResetCheck(i) => match decisions[*i] {
@@ -2007,50 +2030,13 @@ impl HawkHandle {
                             .then(|| search_results[*i].center().clone()),
                     },
                     RequestIndex::IdentityUpdate(i) => Some(reset_results[*i].center().clone()),
-                    // Deletions will be handled separately below
                     RequestIndex::Deletion(_) => None,
                 })
                 .collect_vec();
 
-            // Set replace_id on plans for reauth updates and identity updates
-            for (idx, req_index) in requests_order.iter().enumerate() {
-                if let Some(plan) = &mut insert_plans[idx] {
-                    match req_index {
-                        RequestIndex::UniqueReauthResetCheck(i) => {
-                            if matches!(decisions[*i], ReauthUpdate(_)) {
-                                if let Some(update_id) = update_ids[idx] {
-                                    plan.plan.replace_id = Some(update_id);
-                                }
-                            }
-                        }
-                        RequestIndex::IdentityUpdate(_) => {
-                            if let Some(update_id) = update_ids[idx] {
-                                plan.plan.replace_id = Some(update_id);
-                            }
-                        }
-                        RequestIndex::Deletion(_) => {}
-                    }
-                }
-            }
-
-            let mut plans = hawk_actor
-                .insert(sessions, insert_plans, &update_ids)
+            let plans = hawk_actor
+                .insert(sessions, insert_plans, &update_ids, &replace_ids)
                 .await?;
-
-            // Apply deletion mutations directly to the in-memory graph
-            for (idx, req_index) in requests_order.iter().enumerate() {
-                if let RequestIndex::Deletion(i) = req_index {
-                    let vector_id = deleted_ids[*i];
-                    let removal_mutations = vec![GraphMutation::RemoveNode { id: vector_id }];
-
-                    // Store the removal plan for persistence
-                    plans[idx] = Some(GroupedMutations(removal_mutations.clone()));
-
-                    // Apply deletion mutation to the in-memory graph immediately
-                    let mut graph = hawk_actor.graph_store[*side as usize].write().await;
-                    graph.insert_apply(removal_mutations);
-                }
-            }
 
             // Store plans for this side
             for (plan, both_sides) in izip!(plans, &mut plans_both_sides) {

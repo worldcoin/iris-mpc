@@ -389,7 +389,6 @@ async fn per_insert_query<N: Neighborhood<Aby3Store<HawkOps>>>(
             query,
             links: links_unstructured,
             update_ep,
-            replace_id: None,
         },
         classified,
     })
@@ -432,7 +431,6 @@ async fn per_search_query(
             query,
             links: links_unstructured,
             update_ep: UpdateEntryPoint::False,
-            replace_id: None,
         },
         classified,
     })
@@ -473,7 +471,6 @@ pub async fn search_single_query_no_match_count<H: std::hash::Hash>(
         query,
         links: links_unstructured,
         update_ep,
-        replace_id: None,
     })
 }
 
