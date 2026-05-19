@@ -62,7 +62,7 @@ nodeSelector:
   kubernetes.io/arch: arm64
   karpenter.sh/capacity-type: on-demand
   node.kubernetes.io/instance-type: "x8g.2xlarge"
-  topology.k8s.aws/zone-id: "euc1-az2"
+  topology.k8s.aws/zone-id: "euc1-az1"
 
 podSecurityContext:
   runAsUser: 65534
