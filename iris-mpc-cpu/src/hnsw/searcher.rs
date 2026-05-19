@@ -1564,7 +1564,7 @@ impl HnswSearcher {
             });
         }
         let mutations = vec![Some(GraphMutation {
-            id: 0,
+            seq_no: 0,
             ops: group_mutations,
         })];
         let mut grouped = self.insert_prepare_batch(store, graph, mutations).await?;
@@ -1822,7 +1822,7 @@ impl HnswSearcher {
         let mut plan = self
             .insert_prepare(store, graph, inserted_vector, links_unstructured, update_ep)
             .await?;
-        plan.id = graph.next_modification_id();
+        plan.seq_no = graph.next_sequence_number();
         graph.insert_apply(&plan)?;
         Ok(())
     }
@@ -2093,7 +2093,7 @@ mod tests {
             // Apply the mutations to the graph
             graph_store
                 .insert_apply(&GraphMutation {
-                    id: (i as u64) + 1,
+                    seq_no: (i as u64) + 1,
                     ops: mutations,
                 })
                 .unwrap();
@@ -2102,7 +2102,7 @@ mod tests {
         // Create an update for inserting vector id 6
         let next_id = ids[5];
         let mutations = vec![Some(GraphMutation {
-            id: 0,
+            seq_no: 0,
             ops: vec![
                 MutationOp::AddNode {
                     id: next_id,

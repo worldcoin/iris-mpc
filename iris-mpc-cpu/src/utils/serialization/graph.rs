@@ -428,7 +428,7 @@ impl From<graph_v0::GraphV0> for GraphMem<IrisVectorId> {
                 .into_iter()
                 .collect::<Vec<_>>(),
             layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
-            last_modification_id: 0,
+            last_update_seq_no: 0,
         }
     }
 }
@@ -474,7 +474,7 @@ impl From<graph_v1::GraphV1> for GraphMem<IrisVectorId> {
                 .into_iter()
                 .collect::<Vec<_>>(),
             layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
-            last_modification_id: 0,
+            last_update_seq_no: 0,
         }
     }
 }
@@ -519,7 +519,7 @@ impl From<graph_v2::GraphV2> for GraphMem<IrisVectorId> {
                 .into_iter()
                 .collect::<Vec<_>>(),
             layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
-            last_modification_id: 0,
+            last_update_seq_no: 0,
         }
     }
 }
@@ -557,7 +557,7 @@ impl From<graph_v3::GraphV3> for GraphMem<IrisVectorId> {
             // V3 uses a Vec<EntryPoint>, which matches GraphMem
             entry_points: value.entry_point.into_iter().map(|e| e.into()).collect(),
             layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
-            last_modification_id: 0,
+            last_update_seq_no: 0,
         }
     }
 }

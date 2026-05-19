@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphMutation<V: Ord> {
-    pub id: u64,
+    pub seq_no: u64,
     pub ops: Vec<MutationOp<V>>,
 }
 

@@ -65,9 +65,10 @@ pub struct GraphMem<V: Ref + Display + FromStr + Ord> {
     /// each layer represent approximate nearest neighbors within that layer.
     pub layers: Vec<Layer<V>>,
 
-    /// The id of the most recently applied `GraphMutation`. `0` means no
-    /// mutation has been applied. Advanced by `insert_apply` on success.
-    pub last_modification_id: u64,
+    /// The sequence number of the most recently applied `GraphMutation`. `0`
+    /// means no mutation has been applied. Advanced by `insert_apply` on
+    /// success.
+    pub last_update_seq_no: u64,
 }
 
 impl Display for GraphMem<IrisVectorId> {
@@ -108,7 +109,7 @@ impl<V: Ref + Display + FromStr + Ord> Clone for GraphMem<V> {
         GraphMem {
             entry_points: self.entry_points.clone(),
             layers: self.layers.clone(),
-            last_modification_id: self.last_modification_id,
+            last_update_seq_no: self.last_update_seq_no,
         }
     }
 }
@@ -118,14 +119,14 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
         GraphMem {
             entry_points: vec![],
             layers: vec![],
-            last_modification_id: 0,
+            last_update_seq_no: 0,
         }
     }
 
-    /// Returns the id that the next applied `GraphMutation` must equal or
-    /// exceed. This is a pure peek — it does not modify the graph.
-    pub fn next_modification_id(&self) -> u64 {
-        self.last_modification_id + 1
+    /// Returns the sequence number that the next applied `GraphMutation` must
+    /// equal or exceed. This is a pure peek — it does not modify the graph.
+    pub fn next_sequence_number(&self) -> u64 {
+        self.last_update_seq_no + 1
     }
 
     pub fn to_arc(self) -> Arc<RwLock<Self>> {
@@ -142,7 +143,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                 })
                 .collect::<Vec<_>>(),
             layers,
-            last_modification_id: 0,
+            last_update_seq_no: 0,
         }
     }
 
@@ -189,17 +190,17 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
     /// This updates the graph's entry points set and connects the new vector to
     /// its neighbors as specified in the mutations.
     ///
-    /// The supplied `mutation.id` must be strictly greater than
-    /// `self.last_modification_id`; otherwise the call returns `Err` without
-    /// touching the graph. On success `self.last_modification_id` advances to
-    /// `mutation.id`.
+    /// The supplied `mutation.seq_no` must be strictly greater than
+    /// `self.last_update_seq_no`; otherwise the call returns `Err` without
+    /// touching the graph. On success `self.last_update_seq_no` advances to
+    /// `mutation.seq_no`.
     pub fn insert_apply(&mut self, mutation: &GraphMutation<V>) -> Result<()> {
-        if mutation.id <= self.last_modification_id {
+        if mutation.seq_no <= self.last_update_seq_no {
             return Err(eyre::eyre!(
-                "GraphMem::insert_apply: mutation id {} is not strictly greater than \
-                 last_modification_id {}",
-                mutation.id,
-                self.last_modification_id,
+                "GraphMem::insert_apply: mutation seq_no {} is not strictly greater than \
+                 last_update_seq_no {}",
+                mutation.seq_no,
+                self.last_update_seq_no,
             ));
         }
 
@@ -366,7 +367,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
             }
         }
 
-        self.last_modification_id = mutation.id;
+        self.last_update_seq_no = mutation.seq_no;
         Ok(())
     }
 
@@ -783,7 +784,7 @@ where
     V: Ref + Display + FromStr + Ord,
     VecMap: Fn(U) -> V + Copy,
 {
-    let last_modification_id = graph.last_modification_id;
+    let last_update_seq_no = graph.last_update_seq_no;
     let new_entry_point = graph
         .entry_points
         .iter()
@@ -808,7 +809,7 @@ where
     GraphMem::<V> {
         entry_points: new_entry_point,
         layers: new_layers,
-        last_modification_id,
+        last_update_seq_no,
     }
 }
 
@@ -1043,7 +1044,7 @@ mod tests {
         // Seed: a, b, c all exist at layer 0 with no edges.
         graph
             .insert_apply(&GraphMutation {
-                id: 1,
+                seq_no: 1,
                 ops: vec![
                     MutationOp::AddNode {
                         id: a,
@@ -1065,7 +1066,7 @@ mod tests {
             .unwrap();
         graph
             .insert_apply(&GraphMutation {
-                id: 2,
+                seq_no: 2,
                 ops: vec![MutationOp::AddEdges {
                     base: a,
                     layer: 0,
@@ -1093,7 +1094,7 @@ mod tests {
         let c = IrisVectorId::from_serial_id(3);
         graph
             .insert_apply(&GraphMutation {
-                id: 1,
+                seq_no: 1,
                 ops: vec![
                     MutationOp::AddNode {
                         id: a,
@@ -1115,7 +1116,7 @@ mod tests {
             .unwrap();
         graph
             .insert_apply(&GraphMutation {
-                id: 2,
+                seq_no: 2,
                 ops: vec![MutationOp::AddEdges {
                     base: a,
                     layer: 0,
@@ -1140,7 +1141,7 @@ mod tests {
         let c = IrisVectorId::from_serial_id(3);
         graph
             .insert_apply(&GraphMutation {
-                id: 1,
+                seq_no: 1,
                 ops: vec![
                     MutationOp::AddNode {
                         id: a,
@@ -1162,7 +1163,7 @@ mod tests {
             .unwrap();
         graph
             .insert_apply(&GraphMutation {
-                id: 2,
+                seq_no: 2,
                 ops: vec![MutationOp::AddEdges {
                     base: a,
                     layer: 0,
@@ -1184,7 +1185,7 @@ mod tests {
         let c = IrisVectorId::from_serial_id(3);
         graph
             .insert_apply(&GraphMutation {
-                id: 1,
+                seq_no: 1,
                 ops: vec![
                     MutationOp::AddNode {
                         id: a,
@@ -1224,7 +1225,7 @@ mod tests {
             .unwrap();
         graph
             .insert_apply(&GraphMutation {
-                id: 2,
+                seq_no: 2,
                 ops: vec![MutationOp::RemoveEdges {
                     base: a,
                     layer: 0,
@@ -1247,7 +1248,7 @@ mod tests {
         let b = IrisVectorId::from_serial_id(2);
         graph
             .insert_apply(&GraphMutation {
-                id: 1,
+                seq_no: 1,
                 ops: vec![
                     // Listed first: an edge op that references a node not yet created.
                     MutationOp::AddEdges {
@@ -1276,24 +1277,24 @@ mod tests {
     }
 
     #[test]
-    fn next_modification_id_is_one_past_last_and_does_not_mutate() {
+    fn next_seq_no_is_one_past_last_and_does_not_mutate() {
         use crate::hnsw::GraphMem;
         use iris_mpc_common::IrisVectorId;
         let mut graph = GraphMem::<IrisVectorId>::new();
-        assert_eq!(graph.last_modification_id, 0);
-        assert_eq!(graph.next_modification_id(), 1);
-        assert_eq!(graph.next_modification_id(), 1, "peek must not mutate");
-        graph.last_modification_id = 42;
-        assert_eq!(graph.next_modification_id(), 43);
-        assert_eq!(graph.last_modification_id, 42, "peek must not mutate");
+        assert_eq!(graph.last_update_seq_no, 0);
+        assert_eq!(graph.next_sequence_number(), 1);
+        assert_eq!(graph.next_sequence_number(), 1, "peek must not mutate");
+        graph.last_update_seq_no = 42;
+        assert_eq!(graph.next_sequence_number(), 43);
+        assert_eq!(graph.last_update_seq_no, 42, "peek must not mutate");
     }
 
     #[test]
-    fn insert_apply_advances_last_modification_id_on_success() {
+    fn insert_apply_advances_last_update_seq_no_on_success() {
         let mut graph = GraphMem::<IrisVectorId>::new();
         let a = IrisVectorId::from_serial_id(1);
         let mutation = GraphMutation::<IrisVectorId> {
-            id: 1,
+            seq_no: 1,
             ops: vec![MutationOp::AddNode {
                 id: a,
                 height: 1,
@@ -1303,15 +1304,15 @@ mod tests {
         graph
             .insert_apply(&mutation)
             .expect("strict-increase should hold");
-        assert_eq!(graph.last_modification_id, 1);
+        assert_eq!(graph.last_update_seq_no, 1);
     }
 
     #[test]
-    fn insert_apply_rejects_id_equal_to_last_modification_id() {
+    fn insert_apply_rejects_seq_no_equal_to_last_update_seq_no() {
         let mut graph = GraphMem::<IrisVectorId>::new();
-        graph.last_modification_id = 5;
+        graph.last_update_seq_no = 5;
         let mutation = GraphMutation::<IrisVectorId> {
-            id: 5,
+            seq_no: 5,
             ops: vec![MutationOp::AddNode {
                 id: IrisVectorId::from_serial_id(1),
                 height: 1,
@@ -1319,20 +1320,20 @@ mod tests {
             }],
         };
         let res = graph.insert_apply(&mutation);
-        assert!(res.is_err(), "equal id must be rejected");
+        assert!(res.is_err(), "equal seq_no must be rejected");
         assert_eq!(
-            graph.last_modification_id, 5,
+            graph.last_update_seq_no, 5,
             "state must be unchanged on Err"
         );
         assert_eq!(graph.layers.len(), 0, "no ops should have been applied");
     }
 
     #[test]
-    fn insert_apply_rejects_id_below_last_modification_id() {
+    fn insert_apply_rejects_seq_no_below_last_update_seq_no() {
         let mut graph = GraphMem::<IrisVectorId>::new();
-        graph.last_modification_id = 10;
+        graph.last_update_seq_no = 10;
         let mutation = GraphMutation::<IrisVectorId> {
-            id: 9,
+            seq_no: 9,
             ops: vec![MutationOp::AddNode {
                 id: IrisVectorId::from_serial_id(1),
                 height: 1,
@@ -1341,7 +1342,7 @@ mod tests {
         };
         let res = graph.insert_apply(&mutation);
         assert!(res.is_err());
-        assert_eq!(graph.last_modification_id, 10);
+        assert_eq!(graph.last_update_seq_no, 10);
     }
 
     #[test]
@@ -1351,16 +1352,16 @@ mod tests {
         let b = IrisVectorId::from_serial_id(2);
         let mutations = vec![
             GraphMutation::<IrisVectorId> {
-                id: 1,
+                seq_no: 1,
                 ops: vec![MutationOp::AddNode {
                     id: a,
                     height: 1,
                     update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
                 }],
             },
-            // Equal id — should fail.
+            // Equal seq_no — should fail.
             GraphMutation::<IrisVectorId> {
-                id: 1,
+                seq_no: 1,
                 ops: vec![MutationOp::AddNode {
                     id: b,
                     height: 1,
@@ -1370,7 +1371,10 @@ mod tests {
         ];
         let res = graph.insert_apply_all(&mutations);
         assert!(res.is_err(), "second mutation must be rejected");
-        assert_eq!(graph.last_modification_id, 1, "first applied; counter at 1");
+        assert_eq!(
+            graph.last_update_seq_no, 1,
+            "first applied; last_update_seq_no at 1"
+        );
         // First mutation's AddNode took effect, second did not.
         assert!(graph.layers[0].get_links(&a).is_some());
         assert!(graph.layers[0].get_links(&b).is_none());

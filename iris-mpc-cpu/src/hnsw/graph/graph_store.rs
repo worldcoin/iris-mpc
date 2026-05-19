@@ -675,7 +675,7 @@ mod tests {
         let store = TestGraphPg::<PlaintextStore>::new().await?;
 
         let plan_left = GraphMutation::<IrisVectorId> {
-            id: 1,
+            seq_no: 1,
             ops: vec![MutationOp::AddNode {
                 id: IrisVectorId::from_serial_id(1),
                 height: 1,
@@ -683,7 +683,7 @@ mod tests {
             }],
         };
         let plan_right = GraphMutation::<IrisVectorId> {
-            id: 1,
+            seq_no: 1,
             ops: vec![MutationOp::AddNode {
                 id: IrisVectorId::from_serial_id(2),
                 height: 1,
@@ -704,9 +704,9 @@ mod tests {
         assert_eq!(rows.len(), 1);
         let back = rows[0].deserialize_mutations()?;
         assert_eq!(back[0].len(), 1);
-        assert_eq!(back[0][0].id, plan_left.id);
+        assert_eq!(back[0][0].seq_no, plan_left.seq_no);
         assert_eq!(back[1].len(), 1);
-        assert_eq!(back[1][0].id, plan_right.id);
+        assert_eq!(back[1][0].seq_no, plan_right.seq_no);
 
         store.cleanup().await?;
         Ok(())

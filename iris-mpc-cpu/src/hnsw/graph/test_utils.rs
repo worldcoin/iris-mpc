@@ -384,7 +384,7 @@ impl DbContext {
         };
         left_graph
             .insert_apply(&GraphMutation {
-                id: 1,
+                seq_no: 1,
                 ops: vec![ep_mutation],
             })
             .unwrap();
@@ -413,7 +413,7 @@ impl DbContext {
             ];
             left_graph
                 .insert_apply(&GraphMutation {
-                    id: (i as u64) + 1,
+                    seq_no: (i as u64) + 1,
                     ops: mutations,
                 })
                 .unwrap();

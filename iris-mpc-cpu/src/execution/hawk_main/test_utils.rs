@@ -115,7 +115,7 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
             ];
             graph
                 .insert_apply(&GraphMutation {
-                    id: (i as u64) + 1,
+                    seq_no: (i as u64) + 1,
                     ops: mutations,
                 })
                 .unwrap();

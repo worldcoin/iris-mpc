@@ -802,9 +802,9 @@ impl HawkActor {
                     None
                 } else {
                     // The mutation is returned for downstream serialization but
-                    // never applied to a GraphMem, so we use a placeholder id.
+                    // never applied to a GraphMem, so we use a placeholder seq_no.
                     Some(GraphMutation {
-                        id: 0,
+                        seq_no: 0,
                         ops: mutations,
                     })
                 };
@@ -2516,7 +2516,7 @@ mod hawk_mutation_tests {
 
     fn create_test_connect_plan(vector_id: VectorId) -> ConnectPlan {
         GraphMutation {
-            id: 0,
+            seq_no: 0,
             ops: vec![
                 MutationOp::AddNode {
                     id: vector_id,
@@ -2705,7 +2705,7 @@ mod hawk_mutation_tests {
     #[test]
     fn single_hawk_mutation_per_side_vec_round_trips() {
         let plan_a = GraphMutation {
-            id: 5,
+            seq_no: 5,
             ops: vec![MutationOp::AddNode {
                 id: VectorId::from_serial_id(1),
                 height: 1,
@@ -2713,7 +2713,7 @@ mod hawk_mutation_tests {
             }],
         };
         let plan_b = GraphMutation {
-            id: 6,
+            seq_no: 6,
             ops: vec![MutationOp::RemoveNode {
                 id: VectorId::from_serial_id(2),
             }],
@@ -2727,9 +2727,9 @@ mod hawk_mutation_tests {
         let bytes = mutation.serialize().expect("serialize");
         let back: SingleHawkMutation = bincode::deserialize(&bytes).expect("deserialize");
         assert_eq!(back.plans[0].len(), 1);
-        assert_eq!(back.plans[0][0].id, 5);
+        assert_eq!(back.plans[0][0].seq_no, 5);
         assert_eq!(back.plans[1].len(), 1);
-        assert_eq!(back.plans[1][0].id, 6);
+        assert_eq!(back.plans[1][0].seq_no, 6);
         // inserted_id is #[serde(skip)] — round-tripped value is None.
         assert_eq!(back.inserted_id, None);
     }

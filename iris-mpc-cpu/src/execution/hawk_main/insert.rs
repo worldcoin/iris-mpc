@@ -44,23 +44,23 @@ impl<V: VectorStore> Clone for InsertPlanV<V> {
     }
 }
 
-/// Mints sequential `u64` ids for `GraphMutation` groups built during a single
-/// `insert` call. Seeded from `GraphMem::next_modification_id()`; never touches
-/// the graph itself. The graph's `last_modification_id` only advances when each
-/// stamped group is later applied via `GraphMem::insert_apply`.
-struct MutationIdAllocator {
+/// Mints sequential `u64` sequence numbers for `GraphMutation` groups built
+/// during a single `insert` call. Seeded from `GraphMem::next_sequence_number()`;
+/// never touches the graph itself. The graph's `last_update_seq_no` only
+/// advances when each stamped group is later applied via `GraphMem::insert_apply`.
+struct UpdateSeqNoAllocator {
     next: u64,
 }
 
-impl MutationIdAllocator {
+impl UpdateSeqNoAllocator {
     fn new(start: u64) -> Self {
         Self { next: start }
     }
 
     fn mint(&mut self) -> u64 {
-        let id = self.next;
+        let seq_no = self.next;
         self.next += 1;
-        id
+        seq_no
     }
 }
 
@@ -109,7 +109,7 @@ pub async fn insert<V: VectorStoreMut>(
     let insert_plans = join_plans(plans, &searcher.layer_mode);
     validate_ep_updates(&insert_plans, &searcher.layer_mode)?;
 
-    let mut id_allocator = MutationIdAllocator::new(graph.next_modification_id());
+    let mut seq_no_allocator = UpdateSeqNoAllocator::new(graph.next_sequence_number());
     let mut intra_batch_inserted = vec![];
     let m = searcher.params.get_M(0);
 
@@ -174,7 +174,7 @@ pub async fn insert<V: VectorStoreMut>(
 
         if !request_mutations.is_empty() {
             mutations[idx] = Some(GraphMutation {
-                id: id_allocator.mint(),
+                seq_no: seq_no_allocator.mint(),
                 ops: request_mutations,
             });
         }
@@ -866,12 +866,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_insert_stamps_strictly_increasing_ids_per_slot() {
+    async fn test_insert_stamps_strictly_increasing_seq_nos_per_slot() {
         let mut store = PlaintextStore::default();
         let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
 
-        let expected_start = graph.next_modification_id();
+        let expected_start = graph.next_sequence_number();
 
         let plans = vec![
             Some(dummy_insert_plan(UpdateEntryPoint::SetUnique { layer: 0 })),
@@ -894,17 +894,20 @@ mod tests {
         .await
         .expect("insert should succeed");
 
-        let ids: Vec<u64> = grouped
+        let seq_nos: Vec<u64> = grouped
             .iter()
-            .filter_map(|opt| opt.as_ref().map(|g| g.id))
+            .filter_map(|opt| opt.as_ref().map(|g| g.seq_no))
             .collect();
-        assert_eq!(ids.len(), 2, "two non-None slots produce two groups");
-        assert_eq!(ids[0], expected_start, "first id is next_modification_id");
-        assert_eq!(ids[1], expected_start + 1, "ids are sequential");
+        assert_eq!(seq_nos.len(), 2, "two non-None slots produce two groups");
         assert_eq!(
-            graph.last_modification_id,
+            seq_nos[0], expected_start,
+            "first seq_no is next_sequence_number"
+        );
+        assert_eq!(seq_nos[1], expected_start + 1, "seq_nos are sequential");
+        assert_eq!(
+            graph.last_update_seq_no,
             expected_start + 1,
-            "counter advanced"
+            "last_update_seq_no advanced"
         );
 
         assert_eq!(inserted_ids.len(), 3, "inserted_ids aligned with slots");
