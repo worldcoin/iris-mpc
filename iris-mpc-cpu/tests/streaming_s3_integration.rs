@@ -165,8 +165,9 @@ async fn streaming_download_round_trip() -> Result<()> {
     let key = "round-trip.bin";
     create_bucket(&client, &bucket).await?;
 
-    // ~12 MiB payload so the upload spans 3 parts and the download exercises
-    // mid-stream back-pressure (pipe capacity 4 MiB << payload).
+    // ~12 MiB payload so the upload spans 3 parts; 3 MiB range_size forces
+    // the download to issue multiple sequential GetObject(Range) calls and
+    // exercises mid-stream back-pressure (pipe capacity 4 MiB << payload).
     let payload: Vec<u64> = (0..1_500_000u64).collect();
     let buffered = bincode::serialize(&payload).map_err(|e| eyre!("bincode: {e}"))?;
     let expected_hash = *blake3::hash(&buffered).as_bytes();
@@ -189,8 +190,14 @@ async fn streaming_download_round_trip() -> Result<()> {
         return Err(e);
     }
 
-    let download: Result<(Vec<u64>, [u8; 32])> =
-        stream_download_and_deserialize_with(&client, &bucket, key, 4 * 1024 * 1024).await;
+    let download: Result<(Vec<u64>, [u8; 32])> = stream_download_and_deserialize_with(
+        &client,
+        &bucket,
+        key,
+        4 * 1024 * 1024,
+        3 * 1024 * 1024,
+    )
+    .await;
     cleanup_bucket(&client, &bucket).await;
     let (got, got_hash) = download?;
 

@@ -1,58 +1,74 @@
 //! Streaming S3 download + bincode deserialize.
 //!
-//! `stream_download_and_deserialize` issues a single `GetObject`, streams the
-//! body through a BLAKE3 hasher into a bounded async duplex pipe, and
-//! deserializes from the pipe on a `spawn_blocking` thread. The full byte
-//! buffer is never materialized in memory; peak transient memory is the
-//! pipe capacity plus the deserialized value.
+//! `stream_download_and_deserialize` fetches the object via a sequence of
+//! HTTP range GETs, tees the concatenated bytes through a BLAKE3 hasher
+//! into a bounded async duplex pipe, and deserializes from the pipe on a
+//! `spawn_blocking` thread. The full byte buffer is never materialized in
+//! memory; peak transient memory is roughly `range_size + pipe_capacity +
+//! deserialized value`.
 //!
-//! The hash returned is BLAKE3 over the downloaded bytes (i.e. the canonical
-//! bincode encoding of `T`), wire-compatible with the existing
-//! `download_and_hash` path's hex hash in [`super::download_graph_checkpoint`].
+//! The hash returned is BLAKE3 over the downloaded bytes (i.e. the
+//! canonical bincode encoding of `T`), wire-compatible with the existing
+//! `download_and_hash` path's hex hash in
+//! [`super::download_graph_checkpoint`].
 //!
-//! Compare to [`super::multipart::download_graph`], which uses parallel range
-//! GETs into a `BytesMut` and returns a fully buffered `Bytes`. The streaming
-//! path trades that throughput for ~3× lower peak memory on large graphs.
+//! Compare to [`super::multipart::download_graph`], which uses parallel
+//! range GETs into a `BytesMut` and returns a fully buffered `Bytes`. The
+//! streaming path takes one range at a time — slower in aggregate, but the
+//! deserialized value never coexists in memory with a fully buffered copy
+//! of the bytes.
 //!
-//! # Contract on the source byte stream
+//! # Range cadence and retry
 //!
-//! `deserialize_and_hash_from` requires that the source emits **exactly** the
-//! canonical bincode encoding of `T` and then EOFs. Any trailing bytes cause
-//! the tee task to fail with `BrokenPipe` (the deserializer drops its end of
-//! the duplex once bincode is done), which surfaces as an error from the
-//! function. For S3 objects produced by [`super::stream_serialize_and_upload`]
-//! this is automatic; callers wiring up other sources must respect the
-//! contract.
+//! The download is split into `⌈size / range_size⌉` sequential range GETs
+//! (`Range: bytes=START-END`). Each range is fetched independently and
+//! retried up to [`RANGE_MAX_RETRIES`] times with [`RANGE_RETRY_DELAY`]
+//! between attempts before it bubbles up as a fatal error. Transient
+//! network errors thus cost at most one range re-fetch, not a full
+//! restart of the download — which is the property the buffered
+//! parallel-range path also has, kept here without paying for an
+//! out-of-order reassembly buffer.
 //!
-//! # Retry
+//! The `head_object` size probe is subject to the same per-attempt retry.
 //!
-//! `stream_download_and_deserialize` retries the whole GET → body-read →
-//! deserialize pipeline up to [`DOWNLOAD_MAX_RETRIES`] times on any failure,
-//! with [`DOWNLOAD_RETRY_DELAY`] between attempts. This matches the buffered
-//! [`super::multipart::download_graph`] path, which retries each ranged GET.
-//! Each attempt restarts BLAKE3 from scratch and re-issues `get_object`.
-//! Deserialize errors are also retried — bounded cost, simpler surface.
+//! # Contract on the byte stream
+//!
+//! `deserialize_and_hash_from` requires that the source emits **exactly**
+//! the canonical bincode encoding of `T` and then EOFs. Any trailing bytes
+//! cause the tee task to fail with `BrokenPipe` (the deserializer drops
+//! its end of the duplex once bincode is done), which surfaces as an
+//! error from the function. For S3 objects produced by
+//! [`super::stream_serialize_and_upload`] this is automatic; callers
+//! wiring up other sources must respect the contract.
 
 use std::time::Duration;
 
 use aws_sdk_s3::Client as S3Client;
+use bytes::Bytes;
 use eyre::{eyre, Result};
+use futures::stream::{self, Stream};
 use serde::de::DeserializeOwned;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
-use tokio_util::io::SyncIoBridge;
+use tokio::time::sleep;
+use tokio_util::io::{StreamReader, SyncIoBridge};
 
-const DOWNLOAD_MAX_RETRIES: u32 = 3;
-const DOWNLOAD_RETRY_DELAY: Duration = Duration::from_secs(2);
+const RANGE_MAX_RETRIES: u32 = 3;
+const RANGE_RETRY_DELAY: Duration = Duration::from_secs(2);
 
-/// Default duplex pipe capacity. Bounds back-pressure on the S3 reader: when
-/// the deserializer falls behind, the pipe fills, the tee task blocks, and
-/// the S3 reader stops pulling bytes. Sized to absorb a typical part fetch
-/// without blocking on the common path.
+/// Default duplex pipe capacity. Bounds back-pressure on the range
+/// reader: when the deserializer falls behind, the pipe fills, the tee
+/// task blocks, and the range stream stops being polled, which stops the
+/// next `GetObject` from being issued.
 pub const DEFAULT_DOWNLOAD_PIPE_CAPACITY: usize = 8 * 1024 * 1024;
 
-/// Stream the object at `s3://{bucket}/{key}` through BLAKE3 and bincode in
-/// one pass. Returns the deserialized value and the BLAKE3 digest of the
-/// downloaded bytes.
+/// Default per-range fetch size. Each range becomes one `GetObject` with
+/// a `Range` header. Larger ⇒ fewer requests, more work to redo on a
+/// flaky range; smaller ⇒ more requests, finer-grained retry.
+pub const DEFAULT_DOWNLOAD_RANGE_SIZE: usize = 64 * 1024 * 1024;
+
+/// Stream the object at `s3://{bucket}/{key}` through BLAKE3 and bincode
+/// in one pass. Returns the deserialized value and the BLAKE3 digest of
+/// the downloaded bytes.
 ///
 /// Callers verify the digest against the expected checkpoint hash before
 /// trusting `value`. A mismatch indicates the S3 object diverges from the
@@ -65,8 +81,14 @@ pub async fn stream_download_and_deserialize<T>(
 where
     T: DeserializeOwned + Send + 'static,
 {
-    stream_download_and_deserialize_with(s3_client, bucket, key, DEFAULT_DOWNLOAD_PIPE_CAPACITY)
-        .await
+    stream_download_and_deserialize_with(
+        s3_client,
+        bucket,
+        key,
+        DEFAULT_DOWNLOAD_PIPE_CAPACITY,
+        DEFAULT_DOWNLOAD_RANGE_SIZE,
+    )
+    .await
 }
 
 pub async fn stream_download_and_deserialize_with<T>(
@@ -74,56 +96,148 @@ pub async fn stream_download_and_deserialize_with<T>(
     bucket: &str,
     key: &str,
     pipe_capacity: usize,
+    range_size: usize,
 ) -> Result<(T, [u8; 32])>
 where
     T: DeserializeOwned + Send + 'static,
 {
     tracing::info!(
-        "Streaming download + deserialize: bucket={bucket}, key={key}, pipe_capacity={pipe_capacity}"
+        "Streaming download + deserialize: bucket={bucket}, key={key}, \
+         pipe_capacity={pipe_capacity}, range_size={range_size}"
     );
 
+    if range_size == 0 {
+        return Err(eyre!("range_size must be > 0"));
+    }
+
+    let total_size = head_object_size_with_retry(s3_client, bucket, key).await?;
+
+    // `stream::unfold`'s state machine is `!Unpin`; `StreamReader` needs
+    // `Unpin`. Pin the boxed stream once and feed it through.
+    let stream = Box::pin(range_stream(
+        s3_client.clone(),
+        bucket.to_string(),
+        key.to_string(),
+        total_size,
+        range_size as u64,
+    ));
+    let reader = StreamReader::new(stream);
+    deserialize_and_hash_from(reader, pipe_capacity).await
+}
+
+/// `HeadObject` for `content_length`, retried per [`RANGE_MAX_RETRIES`].
+async fn head_object_size_with_retry(s3_client: &S3Client, bucket: &str, key: &str) -> Result<u64> {
     let mut attempts: u32 = 0;
     loop {
-        let attempt_result = try_download_once::<T>(s3_client, bucket, key, pipe_capacity).await;
-        match attempt_result {
-            Ok(pair) => return Ok(pair),
-            Err(e) if attempts < DOWNLOAD_MAX_RETRIES => {
+        match s3_client.head_object().bucket(bucket).key(key).send().await {
+            Ok(out) => {
+                let len = out
+                    .content_length()
+                    .ok_or_else(|| eyre!("head_object {bucket}/{key}: missing content_length"))?;
+                if len < 0 {
+                    return Err(eyre!("head_object {bucket}/{key}: negative content_length"));
+                }
+                return Ok(len as u64);
+            }
+            Err(e) if attempts < RANGE_MAX_RETRIES => {
                 attempts += 1;
-                tracing::warn!("Retry {attempts} for download s3://{bucket}/{key}: {e}");
-                tokio::time::sleep(DOWNLOAD_RETRY_DELAY).await;
+                tracing::warn!("Retry {attempts} for head_object s3://{bucket}/{key}: {e:?}");
+                sleep(RANGE_RETRY_DELAY).await;
             }
             Err(e) => {
                 return Err(eyre!(
-                    "download s3://{bucket}/{key} failed after {attempts} retries: {e:?}"
+                    "head_object s3://{bucket}/{key} failed after {attempts} retries: {e:?}"
                 ));
             }
         }
     }
 }
 
-async fn try_download_once<T>(
-    s3_client: &S3Client,
-    bucket: &str,
-    key: &str,
-    pipe_capacity: usize,
-) -> Result<(T, [u8; 32])>
-where
-    T: DeserializeOwned + Send + 'static,
-{
-    let resp = s3_client
-        .get_object()
-        .bucket(bucket)
-        .key(key)
-        .send()
-        .await
-        .map_err(|e| eyre!("get_object failed: {e:?}"))?;
+/// Produce ranges of the object in ascending offset order, one at a time.
+/// Each yielded `Bytes` is the complete body of one `GetObject(Range)`;
+/// the next range is not requested until the consumer pulls again, so the
+/// duplex pipe's back-pressure naturally throttles fetch cadence.
+///
+/// Per-range retry is internal to each `unfold` step. After
+/// [`RANGE_MAX_RETRIES`] failures on a single range, the stream emits an
+/// `Err` and ends — the downstream `StreamReader` will then surface the
+/// error to its reader.
+fn range_stream(
+    s3_client: S3Client,
+    bucket: String,
+    key: String,
+    total_size: u64,
+    range_size: u64,
+) -> impl Stream<Item = std::io::Result<Bytes>> {
+    stream::unfold(0u64, move |offset| {
+        let s3_client = s3_client.clone();
+        let bucket = bucket.clone();
+        let key = key.clone();
+        async move {
+            if offset >= total_size {
+                return None;
+            }
+            let end_inclusive = std::cmp::min(offset + range_size, total_size) - 1;
+            let range = format!("bytes={offset}-{end_inclusive}");
+            let next_offset = end_inclusive + 1;
 
-    let body = resp.body.into_async_read();
-    deserialize_and_hash_from(body, pipe_capacity).await
+            match fetch_range(&s3_client, &bucket, &key, &range).await {
+                Ok(bytes) => Some((Ok(bytes), next_offset)),
+                Err(e) => Some((
+                    Err(std::io::Error::other(format!(
+                        "range {range} of s3://{bucket}/{key}: {e}"
+                    ))),
+                    // Offset value is irrelevant — stream terminates after
+                    // yielding the error since StreamReader fuses on first
+                    // Err. We pass `total_size` so a buggy continuation
+                    // would short-circuit immediately.
+                    total_size,
+                )),
+            }
+        }
+    })
 }
 
-/// Core: tee an `AsyncRead` through BLAKE3 into a pipe; deserialize from the
-/// pipe on a blocking thread.
+/// Fetch one S3 range. Buffers the response body in memory so a mid-body
+/// network failure cleanly maps to a retry of the same range — no partial
+/// bytes leak into the downstream tee.
+async fn fetch_range(s3_client: &S3Client, bucket: &str, key: &str, range: &str) -> Result<Bytes> {
+    let mut attempts: u32 = 0;
+    loop {
+        let attempt = async {
+            let out = s3_client
+                .get_object()
+                .bucket(bucket)
+                .key(key)
+                .range(range)
+                .send()
+                .await
+                .map_err(|e| eyre!("get_object: {e:?}"))?;
+            let agg = out
+                .body
+                .collect()
+                .await
+                .map_err(|e| eyre!("body collect: {e:?}"))?;
+            Ok::<_, eyre::Report>(agg.into_bytes())
+        }
+        .await;
+
+        match attempt {
+            Ok(bytes) => return Ok(bytes),
+            Err(e) if attempts < RANGE_MAX_RETRIES => {
+                attempts += 1;
+                tracing::warn!("Retry {attempts} for range {range}: {e}");
+                sleep(RANGE_RETRY_DELAY).await;
+            }
+            Err(e) => {
+                return Err(eyre!("range {range} failed after {attempts} retries: {e}"));
+            }
+        }
+    }
+}
+
+/// Core: tee an `AsyncRead` through BLAKE3 into a pipe; deserialize from
+/// the pipe on a blocking thread.
 async fn deserialize_and_hash_from<R, T>(
     mut reader: R,
     pipe_capacity: usize,
