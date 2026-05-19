@@ -334,19 +334,21 @@ async fn run_upload_loop(
         part_number += 1;
     }
 
+    // Fail fast: break on the first part failure rather than draining the
+    // JoinSet to completion. `abort_all` only has an effect while tasks
+    // are still running, so the cancellation of in-flight `UploadPart`s
+    // has to happen before `join_next` is exhausted.
     let mut first_error: Option<eyre::Report> = None;
     while let Some(res) = join_set.join_next().await {
         match res {
             Ok(Ok(part)) => parts.push(part),
             Ok(Err(e)) => {
-                if first_error.is_none() {
-                    first_error = Some(e);
-                }
+                first_error = Some(e);
+                break;
             }
             Err(e) => {
-                if first_error.is_none() {
-                    first_error = Some(eyre!("upload task join error: {e:?}"));
-                }
+                first_error = Some(eyre!("upload task join error: {e:?}"));
+                break;
             }
         }
     }
