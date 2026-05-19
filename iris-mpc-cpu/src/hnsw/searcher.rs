@@ -1576,19 +1576,17 @@ impl HnswSearcher {
 
     /// Prepare connect plans for a batch of graph updates.
     ///
-    /// Takes a `Vec<Option<GroupedMutations>>` with one slot per batch request.
+    /// Takes a `Vec<Option<GraphMutation>>` with one slot per batch request.
     /// `None` slots are passed through unchanged.  Each `Some` group may contain
-    /// an optional `RemoveNode` followed by an `InsertNode`.
+    /// an optional `RemoveNode` followed by an `AddNode`.
     ///
-    /// For every `InsertNode` found, the function computes bilateral neighborhood
+    /// For every `AddNode` found, the function computes bilateral neighborhood
     /// updates (intra-batch inserts are tracked so they see each other's links),
     /// then checks whether any neighborhood has grown past the M limit.  If so,
-    /// a `Compact` mutation is appended to the `GroupedMutations` of whichever
-    /// InsertNode triggered the overflow: the inserted node's own group if it is
-    /// the node being compacted, otherwise the last group whose InsertNode added
+    /// a `RemoveEdges` mutation is appended to the `GraphMutation` of whichever
+    /// AddNode triggered the overflow: the inserted node's own group if it is
+    /// the node being compacted, otherwise the last group whose AddNode added
     /// to that neighborhood.
-    ///
-    /// TODO: finalize batched operation of compaction to minimize latency.
     ///
     /// This function call does *not* update `graph`.
     #[allow(clippy::type_complexity)]

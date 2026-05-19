@@ -7,11 +7,12 @@ pub struct GraphMutation<V: Ord> {
 }
 
 // NOTE: if a new version of any mutation is needed (ex: InsertNodeV2) such that
-// the new variant would behave differently than before and it is desired to still process
-// old variants apppropriately, simply add the new variant to the END of GraphMutation. If
-// the new variant is added to the end then bincode can deserialize it correctly. Adding a new variant
-// in between existing ones will cause bincode to deserialize the old version of GraphMutation with garbage
-// data for its fields.
+// the new variant would behave differently than before and it is desired to
+// still process old variants apppropriately, simply add the new variant to the
+// END of MutationOp. If the new variant is added to the end then bincode can
+// deserialize it correctly. Adding a new variant in between existing ones will
+// cause bincode to deserialize the old version of MutationOp with garbage data
+// for its fields.
 //
 /// Represents a diff to apply to an existing graph.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
