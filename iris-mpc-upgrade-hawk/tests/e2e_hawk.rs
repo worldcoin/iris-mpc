@@ -7,6 +7,11 @@
 //! Test code from genesis (iris-mpc-upgrade-hawk) is reused when possible. It is needed to generate and upload
 //! iris shares, create Config structs, and interact with the databases.
 //!
+//! To run this test, the following is required:
+//! - start docker-compose.dev.yaml
+//! - run the key-manager binary twice per peer, to rotate the keys
+//! - export any needed environment variables before running this test
+//!
 #![allow(unused)] // this is needed to stop warnings that arise from including the utils and workflows modules
 #![recursion_limit = "256"]
 use std::sync::Arc;
