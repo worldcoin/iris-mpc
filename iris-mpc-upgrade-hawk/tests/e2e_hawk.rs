@@ -30,7 +30,10 @@ use iris_mpc_common::{
 use iris_mpc_cpu::{
     execution::hawk_main::BothEyes,
     hawkers::plaintext_store::PlaintextStore,
-    hnsw::graph::{graph_store::GraphPg, GraphMutation, UpdateEntryPoint},
+    hnsw::graph::{
+        graph_store::{GraphMutationRow, GraphPg},
+        GraphMutation, UpdateEntryPoint,
+    },
 };
 use iris_mpc_utils::{
     aws::{AwsClient, AwsClientConfig},
@@ -185,7 +188,7 @@ fn run_test_hawk_init() -> Result<()> {
                             request_type: ModificationType::Uniqueness.to_string(),
                             s3_url: Some(uuid.to_string()),
                             status: MOD_STATUS_COMPLETED.to_string(),
-                            persisted: party_idx != 0,
+                            persisted: mod_idx < (party_idx * 5),
                             result_message_body: Some(format!(r#"{{"node_id":{party_idx}}}"#)),
                         }
                     })
@@ -220,9 +223,11 @@ fn run_test_hawk_init() -> Result<()> {
                     db_ops::write_modification(&mut tx, m).await?;
                 }
                 tx.commit().await?;
-                if party_idx != 0 {
+                // Insert 5 * party_idx mutations: party 0 gets 0, party 1 gets 5, party 2 gets 10
+                let num_mutations = 5 * party_idx;
+                if num_mutations > 0 {
                     let mut graph_tx = node.cpu_stores.graph.tx().await?;
-                    for (mod_id, mutation) in mutations.iter() {
+                    for (mod_id, mutation) in mutations.iter().take(num_mutations) {
                         let serialized = bincode::serialize(mutation)?;
                         graph_tx
                             .insert_hawk_graph_mutations(*mod_id, &serialized)
@@ -235,12 +240,8 @@ fn run_test_hawk_init() -> Result<()> {
         }
         join_runners!(join_set);
 
-        assert_hawk_mutations_len(
-            &[0, uniqueness_mutations.len(), uniqueness_mutations.len()],
-            &configs,
-            line!(),
-        )
-        .await?;
+        // Party 0: 0 mutations, Party 1: 5 mutations, Party 2: 10 mutations
+        assert_hawk_mutations_len(&[0, 5, 10], &configs, line!()).await?;
 
         // server_main holds !Send pprof state, so each server runs on its own
         // OS thread with its own Tokio runtime to avoid the Send requirement.
@@ -296,7 +297,10 @@ fn run_test_hawk_init() -> Result<()> {
 
         // stop zombie threads
         notify.notify_waiters();
-        assert_hawk_mutations_len(&[uniqueness_mutations.len(); 3], &configs, line!()).await?;
+        // After synchronization, all parties should have 10 mutations (the union of all)
+        assert_hawk_mutations_len(&[10, 10, 10], &configs, line!()).await?;
+        // Assert all 3 parties have the same entries in their graph mutation databases
+        assert_hawk_mutations_equal(&configs).await?;
         Ok(())
     })
 }
@@ -328,8 +332,42 @@ async fn assert_hawk_mutations_len(
     Ok(())
 }
 
+/// Assert that all parties have identical hawk graph mutations.
+async fn assert_hawk_mutations_equal(configs: &[Config]) -> Result<()> {
+    let mut all_mutations: Vec<(usize, Vec<GraphMutationRow>)> = Vec::new();
+
+    for config in configs {
+        let url = config
+            .get_cpu_db_url()
+            .ok_or_else(|| eyre!("cpu_database url is required for party {}", config.party_id))?;
+        let schema_name = config.get_cpu_db_schema();
+        let client = PostgresClient::new(&url, &schema_name, AccessMode::ReadOnly).await?;
+        let graph = GraphPg::<PlaintextStore>::new(&client).await?;
+        let mut mutations = graph.get_hawk_graph_mutations(None).await?;
+        // Sort by mod_id for consistent comparison
+        mutations.sort_by_key(|row| row.modification_id);
+        all_mutations.push((config.party_id, mutations));
+    }
+
+    // ensure party ids are different
+    assert_ne!(all_mutations[0].0, all_mutations[1].0);
+    assert_ne!(all_mutations[0].0, all_mutations[2].0);
+
+    // Compare all parties against first party
+    let (ref_id, reference) = &all_mutations[0];
+    for (party_idx, mutations) in all_mutations.iter().skip(1) {
+        assert_eq!(
+            reference, mutations,
+            "Party {} has different hawk graph mutations than party {}",
+            party_idx, ref_id
+        );
+    }
+
+    Ok(())
+}
+
 /// Share irises locally for upload (full-size mask shares).
-pub fn share_irises_for_upload_locally(
+fn share_irises_for_upload_locally(
     irises: &[(IrisCode, IrisCode)],
     rng_seed: u64,
 ) -> Result<Vec<BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]>>> {
