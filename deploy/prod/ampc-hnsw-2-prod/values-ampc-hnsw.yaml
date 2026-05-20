@@ -77,14 +77,20 @@ env:
   - name: SMPC__SHARES_BUCKET_NAME
     value: "wf-mpc-prod-smpcv2-sns-requests"
 
+  - name: SMPC__SCHEMA_NAME
+    value: "SMPC_rerand"
+
+  - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
+    value: "_genesis_restored_v2"
+
   - name: SMPC__ENABLE_S3_IMPORTER
-    value: "false"
+    value: "true"
 
   - name: SMPC__DB_CHUNKS_BUCKET_NAME
-    value: "iris-mpc-db-exporter-store-node-2-prod--eun1-az3--x-s3"
+    value: "iris-mpc-db-exporter-store-node-0-prod--eun1-az3--x-s3"
 
   - name: SMPC__DB_CHUNKS_FOLDER_NAME
-    value: "hnsw_even_odd_with_version_id_output_16k"
+    value: "genesis_base_even_odd_with_version_id_output_16k_rerandomized"
 
   - name: SMPC__LOAD_CHUNKS_PARALLELISM
     value: "64"
@@ -142,8 +148,28 @@ env:
   - name: SMPC__GRAPH_CHECKPOINT_BUCKET_REGION
     value: "eu-central-1"
 
+  # Parallelism settings
+  - name: SMPC__HAWK_REQUEST_PARALLELISM
+    value: "96"
+
+  - name: SMPC__HAWK_CONNECTION_PARALLELISM
+    value: "96"
+
   - name: SMPC__SEPARATE_TOKIO_CORES_PER_NODE
     value: "32"
+
+  # HNSW parameter settings
+  - name: SMPC__HNSW_PARAM_EF_CONSTR
+    value: "320"
+
+  - name: SMPC__HNSW_PARAM_EF_SEARCH
+    value: "320"
+
+  - name: SMPC__HNSW_PARAM_M
+    value: "320"
+
+  - name: SMPC__HNSW_LAYER_DENSITY
+    value: "240"
 
   - name: SMPC__TLS__PRIVATE_KEY
     value: "/etc/ssl/private/key.pem"
