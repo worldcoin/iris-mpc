@@ -462,13 +462,9 @@ pub struct HawkInsertPlan {
     pub classified: ClassifiedMatches,
 }
 
-/// A list of graph mutations to apply to connect a new node into the HNSW graph.
-///
-/// A `ConnectPlan` is the final output of the insertion preparation phase (`HnswSearcher::insert_prepare_batch`).
-/// Unlike `InsertPlanV`, which specifies the *desired* neighbors for the new node, `ConnectPlan`
-/// represents the full set of atomic graph updates required. This includes not only the new
-/// node's neighbors but also the reciprocal (bilateral) connections from existing nodes back to the
-/// new one. It is the definitive set of changes that will be applied to the graph storage.
+/// A `ConnectPlan` is one finalized step of the HNSW insertion pipeline —
+/// a `GraphMutation` produced by the per-slot insert loop or by the
+/// post-batch `compact_batch` / `prune_invalid_links` helpers.
 pub type ConnectPlan = GraphMutation<VectorId>;
 
 /// Build the MPC network handle. Cheap — just TCP listener setup.
