@@ -39,7 +39,7 @@ env:
     value: "32"
 
   - name: SMPC__DISABLE_PERSISTENCE
-    value: "false"
+    value: "true"
 
   - name: SMPC__HAWK_SERVER_REAUTHS_ENABLED
     value: "true"
@@ -136,6 +136,11 @@ env:
   - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
     value: "true"
 
+  - name: SMPC__GRAPH_CHECKPOINT_BUCKET_NAME
+    value: "ampc-hnsw-graph-store-node-0-prod-eu-central-1"
+
+  - name: SMPC__GRAPH_CHECKPOINT_BUCKET_REGION
+    value: "eu-central-1"
 
   - name: SMPC__TLS__PRIVATE_KEY
     value: "/etc/ssl/private/key.pem"
