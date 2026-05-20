@@ -1529,6 +1529,80 @@ impl HnswSearcher {
         Ok((links, update_ep))
     }
 
+    /// Computes RemoveEdges ops for any of the `candidates` neighborhoods
+    /// that currently exceed `M_limit(layer)`. Calls
+    /// `store.compact_neighborhood_batch(...)` once with the oversized set
+    /// (target size = `M_max(layer)`). Returns the resulting ops; the caller
+    /// wraps them into a `GraphMutation`, stamps a sequence number, and
+    /// applies.
+    ///
+    /// Note: `compact_neighborhood_batch` does top-K-by-distance selection
+    /// without validity filtering. Callers should run `prune_invalid_links`
+    /// on a superset of these candidates first so that the input
+    /// neighborhoods are free of stale references.
+    pub async fn compact_batch<V: VectorStore>(
+        &self,
+        store: &mut V,
+        graph: &GraphMem<V::VectorRef>,
+        candidates: &BTreeSet<(V::VectorRef, usize)>,
+    ) -> Result<Vec<MutationOp<V::VectorRef>>> {
+        // Read the current neighborhood for each candidate; keep only those
+        // exceeding M_limit on their layer.
+        let mut oversized: Vec<(V::VectorRef, usize, Vec<V::VectorRef>)> = Vec::new();
+        for (id, layer) in candidates {
+            let nbhd = graph.get_links(id, *layer).await.to_vec();
+            if nbhd.len() > self.params.get_M_limit(*layer) {
+                oversized.push((id.clone(), *layer, nbhd));
+            }
+        }
+
+        metrics::histogram!("neighborhooods_compacted").record(oversized.len() as f64);
+        tracing::info!(
+            "Batch compacting {} oversized neighborhoods",
+            oversized.len()
+        );
+
+        if oversized.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Build parallel slices for the batched MPC compaction call.
+        let base_nodes: Vec<_> = oversized.iter().map(|(id, _, _)| id.clone()).collect();
+        let neighborhoods: Vec<_> = oversized.iter().map(|(_, _, nbhd)| nbhd.clone()).collect();
+        let max_sizes: Vec<_> = oversized
+            .iter()
+            .map(|(_, layer, _)| self.params.get_M_max(*layer))
+            .collect();
+        let layers: Vec<_> = oversized.iter().map(|(_, layer, _)| *layer).collect();
+
+        let compacted_nbhds = store
+            .compact_neighborhood_batch(&base_nodes, &neighborhoods, &max_sizes)
+            .await?;
+
+        // Diff each (original, compacted) to derive RemoveEdges ops.
+        let mut ops = Vec::with_capacity(compacted_nbhds.len());
+        for (id, layer, original, compacted) in
+            izip!(&base_nodes, &layers, &neighborhoods, compacted_nbhds)
+        {
+            let compacted_set: HashSet<_> = compacted.iter().collect();
+            let to_remove: Vec<V::VectorRef> = original
+                .iter()
+                .filter(|v| !compacted_set.contains(v))
+                .cloned()
+                .collect();
+            if !to_remove.is_empty() {
+                ops.push(MutationOp::RemoveEdges {
+                    base: id.clone(),
+                    layer: *layer,
+                    neighbors: to_remove,
+                    edge_type: EdgeType::Base,
+                });
+            }
+        }
+
+        Ok(ops)
+    }
+
     /// Computes RemoveEdges ops for any of the `candidates` neighborhoods that
     /// contain references to vectors no longer present in `store`. Returns
     /// the ops; the caller wraps them into a `GraphMutation`, stamps a
@@ -2199,6 +2273,130 @@ mod tests {
             .prune_invalid_links(&mut store, &graph, &candidates)
             .await?;
         assert!(ops.is_empty(), "expected no RemoveEdges, got {:?}", ops);
+        Ok(())
+    }
+
+    /// `compact_batch` returns RemoveEdges for any candidate neighborhood
+    /// whose size exceeds M_limit on its layer.
+    #[tokio::test]
+    async fn compact_batch_emits_remove_edges_for_oversized() -> Result<()> {
+        use crate::hawkers::plaintext_store::PlaintextStore;
+        use crate::hnsw::graph::mutation::EdgeType;
+        use crate::hnsw::GraphMem;
+        use crate::hnsw::VectorStore;
+        use iris_mpc_common::iris_db::iris::IrisCode;
+        use std::collections::{BTreeSet, HashSet};
+        use std::sync::Arc;
+
+        let mut store = PlaintextStore::<FhdOps>::new();
+        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let searcher = HnswSearcher::new_with_test_parameters();
+
+        // Seed a base vector and enough neighbors to exceed M_limit at layer 0.
+        let base = store.insert(&Arc::new(IrisCode::default())).await;
+        let mut nbrs = Vec::new();
+        let oversized_count = searcher.params.get_M_limit(0) + 5;
+        for _ in 0..oversized_count {
+            nbrs.push(store.insert(&Arc::new(IrisCode::default())).await);
+        }
+
+        let setup = GraphMutation {
+            seq_no: graph.next_sequence_number(),
+            ops: vec![
+                MutationOp::AddNode {
+                    id: base,
+                    height: 1,
+                    update_ep: UpdateEntryPoint::False,
+                },
+                MutationOp::AddEdges {
+                    base,
+                    neighbors: nbrs.clone(),
+                    layer: 0,
+                    edge_type: EdgeType::Base,
+                },
+            ],
+        };
+        graph.insert_apply(&setup)?;
+
+        let mut candidates = BTreeSet::new();
+        candidates.insert((base, 0));
+
+        let ops = searcher
+            .compact_batch(&mut store, &graph, &candidates)
+            .await?;
+
+        assert_eq!(ops.len(), 1, "exactly one RemoveEdges expected");
+        match &ops[0] {
+            MutationOp::RemoveEdges {
+                base: b,
+                layer,
+                neighbors,
+                edge_type,
+            } => {
+                assert_eq!(*b, base);
+                assert_eq!(layer, &0);
+                assert_eq!(edge_type, &EdgeType::Base);
+                let expected_trim = oversized_count - searcher.params.get_M_max(0);
+                assert_eq!(neighbors.len(), expected_trim);
+                // Every removed neighbor came from the original set.
+                let orig: HashSet<_> = nbrs.iter().collect();
+                for n in neighbors {
+                    assert!(
+                        orig.contains(n),
+                        "removed neighbor {:?} not in original set",
+                        n
+                    );
+                }
+            }
+            other => panic!("expected RemoveEdges, got {:?}", other),
+        }
+
+        Ok(())
+    }
+
+    /// `compact_batch` returns an empty Vec when no candidate exceeds M_limit.
+    #[tokio::test]
+    async fn compact_batch_noop_for_undersized() -> Result<()> {
+        use crate::hawkers::plaintext_store::PlaintextStore;
+        use crate::hnsw::graph::mutation::EdgeType;
+        use crate::hnsw::GraphMem;
+        use crate::hnsw::VectorStore;
+        use iris_mpc_common::iris_db::iris::IrisCode;
+        use std::collections::BTreeSet;
+        use std::sync::Arc;
+
+        let mut store = PlaintextStore::<FhdOps>::new();
+        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let searcher = HnswSearcher::new_with_test_parameters();
+
+        let a = store.insert(&Arc::new(IrisCode::default())).await;
+        let b = store.insert(&Arc::new(IrisCode::default())).await;
+
+        let setup = GraphMutation {
+            seq_no: graph.next_sequence_number(),
+            ops: vec![
+                MutationOp::AddNode {
+                    id: a,
+                    height: 1,
+                    update_ep: UpdateEntryPoint::False,
+                },
+                MutationOp::AddEdges {
+                    base: a,
+                    neighbors: vec![b],
+                    layer: 0,
+                    edge_type: EdgeType::Base,
+                },
+            ],
+        };
+        graph.insert_apply(&setup)?;
+
+        let mut candidates = BTreeSet::new();
+        candidates.insert((a, 0));
+
+        let ops = searcher
+            .compact_batch(&mut store, &graph, &candidates)
+            .await?;
+        assert!(ops.is_empty());
         Ok(())
     }
 
