@@ -29,6 +29,13 @@ pub enum GraphFormat {
     Current,
 
     /// Stable graph serialization format Version 4.
+    ///
+    /// - Binary format
+    /// - Multiple entry-points
+    /// - VectorId = (SerialId, VersionId)
+    /// - Contains layer checksums
+    /// - Edges store VectorIds only
+    /// - Sequence number for timestamping graph mutations <-- DIFF with V3
     V4,
 
     /// Stable graph serialization format Version 3.
