@@ -1644,51 +1644,6 @@ impl HnswSearcher {
         Ok(ops)
     }
 
-    /// Prepare a `ConnectPlan` representing the updates required to insert
-    /// `inserted_vector` into `graph` with the specified neighbors `links` and
-    /// to update the entry point according to the `update_ep` argument. The
-    /// `links` vector contains the neighbor lists for the newly inserted node
-    /// in different graph layers in which it is to be inserted, starting with
-    /// layer 0. Specified links are inserted as-is, without additional
-    /// truncation.
-    ///
-    /// This function call does *not* update `graph`.
-    pub async fn insert_prepare<V: VectorStore>(
-        &self,
-        // this may be used in the future to trim l_links
-        store: &mut V,
-        graph: &mut GraphMem<V::VectorRef>,
-        inserted_vector: V::VectorRef,
-        links: Vec<Vec<V::VectorRef>>,
-        update_ep: UpdateEntryPoint,
-    ) -> Result<ConnectPlanV<V>> {
-        let layers: Vec<(usize, Vec<V::VectorRef>)> = links.into_iter().enumerate().collect();
-
-        let height = layers.len();
-        let mut group_mutations: Vec<MutationOp<V::VectorRef>> = vec![MutationOp::AddNode {
-            id: inserted_vector.clone(),
-            height,
-            update_ep,
-        }];
-        for (layer_idx, layer_links) in layers.into_iter() {
-            group_mutations.push(MutationOp::AddEdges {
-                base: inserted_vector.clone(),
-                layer: layer_idx,
-                neighbors: layer_links,
-                edge_type: EdgeType::All,
-            });
-        }
-        let mutations = vec![Some(GraphMutation {
-            seq_no: 0,
-            ops: group_mutations,
-        })];
-        let mut grouped = self.insert_prepare_batch(store, graph, mutations).await?;
-        grouped
-            .pop()
-            .flatten()
-            .ok_or(eyre!("insert_prepare produced no mutations"))
-    }
-
     /// Prepare connect plans for a batch of graph updates.
     ///
     /// Takes a `Vec<Option<GraphMutation>>` with one slot per batch request.
@@ -1926,19 +1881,63 @@ impl HnswSearcher {
         links: Vec<N>,
         update_ep: UpdateEntryPoint,
     ) -> Result<()> {
-        // Trim and extract unstructured vector lists
-        let mut links_unstructured = Vec::new();
+        // Trim and extract unstructured vector lists.
+        let mut links_unstructured: Vec<Vec<V::VectorRef>> = Vec::new();
         for (lc, mut l) in links.iter().cloned().enumerate() {
             let m = self.params.get_M(lc);
             l.trim(store, m).await?;
-            links_unstructured.push(l.edge_ids())
+            links_unstructured.push(l.edge_ids());
         }
 
-        let mut plan = self
-            .insert_prepare(store, graph, inserted_vector, links_unstructured, update_ep)
-            .await?;
-        plan.seq_no = graph.next_sequence_number();
+        // Build the AddNode + per-layer AddEdges mutation, apply it, then run
+        // the same post-apply prune + compaction the batched path uses.
+        let height = links_unstructured.len();
+        let mut ops: Vec<MutationOp<V::VectorRef>> = vec![MutationOp::AddNode {
+            id: inserted_vector.clone(),
+            height,
+            update_ep,
+        }];
+        for (layer_idx, layer_links) in links_unstructured.into_iter().enumerate() {
+            ops.push(MutationOp::AddEdges {
+                base: inserted_vector.clone(),
+                layer: layer_idx,
+                neighbors: layer_links,
+                edge_type: EdgeType::All,
+            });
+        }
+        let plan = GraphMutation {
+            seq_no: graph.next_sequence_number(),
+            ops,
+        };
+        let updated: BTreeSet<_> = plan.updated_neighborhoods().into_iter().collect();
+        let expanded: BTreeSet<_> = plan.expanded_neighborhoods().into_iter().collect();
         graph.insert_apply(&plan)?;
+
+        // Per-slot invalid-link prune (single-slot here). To be removed once
+        // neighborhood-versioning makes this implicit.
+        if !updated.is_empty() {
+            let ops = self.prune_invalid_links(store, graph, &updated).await?;
+            if !ops.is_empty() {
+                let m = GraphMutation {
+                    seq_no: graph.next_sequence_number(),
+                    ops,
+                };
+                graph.insert_apply(&m)?;
+            }
+        }
+
+        // Single-insert compaction.
+        if !expanded.is_empty() {
+            let ops = self.compact_batch(store, graph, &expanded).await?;
+            if !ops.is_empty() {
+                let m = GraphMutation {
+                    seq_no: graph.next_sequence_number(),
+                    ops,
+                };
+                graph.insert_apply(&m)?;
+            }
+        }
+
         Ok(())
     }
 
