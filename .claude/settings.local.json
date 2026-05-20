@@ -1,9 +1,0 @@
-{
-  "enableAllProjectMcpServers": false,
-  "permissions": {
-    "allow": [
-      "Bash(git add:*)",
-      "Bash(git commit -m \"$\\(cat <<''EOF''\ndocs: map existing codebase\n\n- STACK.md - Technologies and dependencies\n- ARCHITECTURE.md - System design and patterns\n- STRUCTURE.md - Directory layout\n- CONVENTIONS.md - Code style and patterns\n- TESTING.md - Test structure\n- INTEGRATIONS.md - External services\n- CONCERNS.md - Technical debt and issues\nEOF\n\\)\")"
-    ]
-  }
-}
