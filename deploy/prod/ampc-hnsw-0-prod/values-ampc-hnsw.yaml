@@ -29,25 +29,19 @@ env:
   - name: SMPC__PROCESSING_TIMEOUT_SECS
     value: "1240"
 
-  - name: SMPC__HAWK_REQUEST_PARALLELISM
-    value: "1024"
-
-  - name: SMPC__HAWK_CONNECTION_PARALLELISM
-    value: "48"
-
   - name: SMPC__HAWK_STREAM_PARALLELISM
     value: "32"
 
   - name: SMPC__DISABLE_PERSISTENCE
     value: "true"
 
-  - name: SMPC__HAWK_SERVER_REAUTHS_ENABLED
+  - name: SMPC__ENABLE_REAUTH
     value: "true"
 
-  - name: SMPC__HAWK_SERVER_RESETS_ENABLED
+  - name: SMPC__ENABLE_RESET
     value: "true"
 
-  - name: SMPC__HAWK_SERVER_DELETIONS_ENABLED
+  - name: SMPC__ENABLE_DELETION
     value: "true"
 
   - name: SMPC__LUC_ENABLED
