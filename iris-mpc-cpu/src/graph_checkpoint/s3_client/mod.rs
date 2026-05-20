@@ -175,6 +175,9 @@ pub async fn download_graph_checkpoint(
     state: &GraphCheckpointState,
 ) -> Result<BothEyes<GraphMem<IrisVectorId>>> {
     let format = GraphFormat::try_from(state.graph_version)?;
+    if format == GraphFormat::Raw {
+        bail!("Unexpected graph checkpoint format: Raw");
+    }
     let binary_graph = download_and_hash(s3_client, bucket, state).await?;
 
     // todo: deserialize in a way that does not require holding 2 graphs in memory at once.

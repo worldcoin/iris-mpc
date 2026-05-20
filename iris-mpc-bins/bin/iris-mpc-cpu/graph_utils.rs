@@ -246,7 +246,7 @@ fn upgrade_format(
 
         println!(
             "Writing graph pair to file using current stable graph format {}: {}",
-            GraphFormat::Current.version(),
+            GraphFormat::Current,
             path_string(&dst_file)
         );
         write_graph_pair_to_file(dst_file, graph_pair)
@@ -265,7 +265,7 @@ fn upgrade_format(
 
         println!(
             "Writing graph to file using current stable graph format {}: {}",
-            GraphFormat::Current.version(),
+            GraphFormat::Current,
             path_string(&dst_file)
         );
         write_graph_to_file(dst_file, graph)
@@ -369,7 +369,7 @@ fn graph_statistics(src_file: PathBuf, src_format: GraphFormat) -> Result<()> {
     println!("=== Graph Statistics ===");
 
     if matches!(src_format, GraphFormat::Current) {
-        println!("File format: {}", GraphFormat::Current.version());
+        println!("File format: {}", GraphFormat::Current);
     } else {
         println!("File format: {}", src_format);
     }

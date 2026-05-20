@@ -76,7 +76,6 @@ pub enum GraphFormat {
 
 impl GraphFormat {
     /// Convert GraphFormat to its corresponding i32 value for storage.
-    /// Current and V3 both map to 3.
     pub fn version(&self) -> i32 {
         match self {
             GraphFormat::Current | GraphFormat::V4 => 4,

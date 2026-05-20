@@ -5,7 +5,7 @@ use std::collections::HashMap;
 ///
 /// This type is a serialization-focused adapter, provided for long-term
 /// compatibility and portability of serialized data.
-#[derive(Default, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphV4 {
     pub entry_points: Vec<EntryPoint>,
     pub layers: Vec<Layer>,
