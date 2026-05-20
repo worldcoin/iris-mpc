@@ -109,6 +109,42 @@ impl<V: Clone + Ord> GraphMutation<V> {
         }
         out
     }
+
+    /// Neighborhoods touched by `AddEdges` OR `RemoveEdges` in this mutation.
+    /// Used by the per-slot invalid-link prune step: any neighborhood whose
+    /// edge set was modified is a candidate for stale-reference cleanup.
+    /// The returned Vec is the raw walk and may contain duplicates; callers
+    /// fold into a set to dedup.
+    pub fn updated_neighborhoods(&self) -> Vec<(V, usize)> {
+        let mut out = Vec::new();
+        for op in &self.ops {
+            match op {
+                MutationOp::AddEdges {
+                    base,
+                    layer,
+                    neighbors,
+                    edge_type,
+                }
+                | MutationOp::RemoveEdges {
+                    base,
+                    layer,
+                    neighbors,
+                    edge_type,
+                } => {
+                    if matches!(edge_type, EdgeType::Base | EdgeType::All) {
+                        out.push((base.clone(), *layer));
+                    }
+                    if matches!(edge_type, EdgeType::Neighbors | EdgeType::All) {
+                        for n in neighbors {
+                            out.push((n.clone(), *layer));
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
+    }
 }
 
 /// Type of edges between `base` and the nodes listed in `neighbors` affected by
@@ -363,5 +399,71 @@ mod tests {
         let mut got = mutation.expanded_neighborhoods();
         got.sort();
         assert_eq!(got, vec![(6, 0), (7, 0)]);
+    }
+
+    // ── updated_neighborhoods ─────────────────────────────────────────────────
+
+    #[test]
+    fn updated_neighborhoods_includes_removeedges() {
+        let mutation = GraphMutation {
+            seq_no: 1,
+            ops: vec![
+                MutationOp::RemoveEdges {
+                    base: 1,
+                    neighbors: vec![2, 3],
+                    layer: 0,
+                    edge_type: EdgeType::All,
+                },
+                MutationOp::AddEdges {
+                    base: 10,
+                    neighbors: vec![11],
+                    layer: 1,
+                    edge_type: EdgeType::Base,
+                },
+            ],
+        };
+        let mut got = mutation.updated_neighborhoods();
+        got.sort();
+        assert_eq!(got, vec![(1, 0), (2, 0), (3, 0), (10, 1)]);
+    }
+
+    #[test]
+    fn updated_neighborhoods_removeedges_respects_edge_type() {
+        let mutation = GraphMutation {
+            seq_no: 1,
+            ops: vec![
+                MutationOp::RemoveEdges {
+                    base: 1,
+                    neighbors: vec![2, 3],
+                    layer: 0,
+                    edge_type: EdgeType::Base,
+                },
+                MutationOp::RemoveEdges {
+                    base: 5,
+                    neighbors: vec![6, 7],
+                    layer: 0,
+                    edge_type: EdgeType::Neighbors,
+                },
+            ],
+        };
+        let mut got = mutation.updated_neighborhoods();
+        got.sort();
+        assert_eq!(got, vec![(1, 0), (6, 0), (7, 0)]);
+    }
+
+    #[test]
+    fn updated_neighborhoods_ignores_addnode_removenode() {
+        let mutation = GraphMutation {
+            seq_no: 1,
+            ops: vec![
+                MutationOp::AddNode {
+                    id: 1,
+                    height: 1,
+                    update_ep: UpdateEntryPoint::False,
+                },
+                MutationOp::RemoveNode { id: 2 },
+            ],
+        };
+        assert!(mutation.updated_neighborhoods().is_empty());
     }
 }
