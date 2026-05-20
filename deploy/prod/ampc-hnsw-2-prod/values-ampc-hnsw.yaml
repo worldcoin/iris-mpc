@@ -142,6 +142,9 @@ env:
   - name: SMPC__GRAPH_CHECKPOINT_BUCKET_REGION
     value: "eu-central-1"
 
+  - name: SMPC__SEPARATE_TOKIO_CORES_PER_NODE
+    value: "32"
+
   - name: SMPC__TLS__PRIVATE_KEY
     value: "/etc/ssl/private/key.pem"
 
