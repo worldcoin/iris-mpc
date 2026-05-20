@@ -29,7 +29,7 @@ use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher13;
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     hash::{Hash, Hasher},
     iter::once,
 };
@@ -1529,6 +1529,47 @@ impl HnswSearcher {
         Ok((links, update_ep))
     }
 
+    /// Computes RemoveEdges ops for any of the `candidates` neighborhoods that
+    /// contain references to vectors no longer present in `store`. Returns
+    /// the ops; the caller wraps them into a `GraphMutation`, stamps a
+    /// sequence number, and applies.
+    ///
+    /// TODO: remove once neighborhood-versioning lands. With per-edge
+    /// sequence numbers, stale-edge filtering becomes implicit in
+    /// `insert_apply` and this step is unnecessary.
+    pub async fn prune_invalid_links<V: VectorStore>(
+        &self,
+        store: &mut V,
+        graph: &GraphMem<V::VectorRef>,
+        candidates: &BTreeSet<(V::VectorRef, usize)>,
+    ) -> Result<Vec<MutationOp<V::VectorRef>>> {
+        let mut ops = Vec::new();
+        for (id, layer) in candidates {
+            let current_links = graph.get_links(id, *layer).await.to_vec();
+            if current_links.is_empty() {
+                continue;
+            }
+            let valid_links = store.only_valid_vectors(current_links.clone()).await;
+            if valid_links.len() == current_links.len() {
+                continue;
+            }
+            let valid_set: HashSet<_> = valid_links.iter().collect();
+            let to_remove: Vec<V::VectorRef> = current_links
+                .into_iter()
+                .filter(|v| !valid_set.contains(v))
+                .collect();
+            if !to_remove.is_empty() {
+                ops.push(MutationOp::RemoveEdges {
+                    base: id.clone(),
+                    layer: *layer,
+                    neighbors: to_remove,
+                    edge_type: EdgeType::Base,
+                });
+            }
+        }
+        Ok(ops)
+    }
+
     /// Prepare a `ConnectPlan` representing the updates required to insert
     /// `inserted_vector` into `graph` with the specified neighbors `links` and
     /// to update the entry point according to the `update_ep` argument. The
@@ -2041,6 +2082,123 @@ mod tests {
                 .await?;
         }
 
+        Ok(())
+    }
+
+    /// `prune_invalid_links` returns RemoveEdges ops for any neighborhood that
+    /// contains references to vectors no longer present in the store. The
+    /// stale id here is constructed directly (never inserted) so the test
+    /// doesn't depend on a "remove vector" API.
+    #[tokio::test]
+    async fn prune_invalid_links_emits_remove_edges_for_stale_refs() -> Result<()> {
+        use crate::hawkers::plaintext_store::PlaintextStore;
+        use crate::hnsw::graph::mutation::EdgeType;
+        use crate::hnsw::GraphMem;
+        use crate::hnsw::VectorStore;
+        use iris_mpc_common::iris_db::iris::IrisCode;
+        use iris_mpc_common::vector_id::VectorId;
+        use std::collections::BTreeSet;
+        use std::sync::Arc;
+
+        let mut store = PlaintextStore::<FhdOps>::new();
+        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let searcher = HnswSearcher::new_with_test_parameters();
+
+        // Real, inserted vector.
+        let a = store.insert(&Arc::new(IrisCode::default())).await;
+        // Stale id — never inserted into the store.
+        let stale = VectorId::from_serial_id(999_999);
+
+        // Wire a → [stale] directly into the graph.
+        let setup = GraphMutation {
+            seq_no: graph.next_sequence_number(),
+            ops: vec![
+                MutationOp::AddNode {
+                    id: a,
+                    height: 1,
+                    update_ep: UpdateEntryPoint::False,
+                },
+                MutationOp::AddEdges {
+                    base: a,
+                    neighbors: vec![stale],
+                    layer: 0,
+                    edge_type: EdgeType::Base,
+                },
+            ],
+        };
+        graph.insert_apply(&setup)?;
+
+        let mut candidates: BTreeSet<(<PlaintextStore as VectorStore>::VectorRef, usize)> =
+            BTreeSet::new();
+        candidates.insert((a, 0));
+
+        let ops = searcher
+            .prune_invalid_links(&mut store, &graph, &candidates)
+            .await?;
+
+        assert_eq!(ops.len(), 1, "exactly one RemoveEdges expected");
+        match &ops[0] {
+            MutationOp::RemoveEdges {
+                base,
+                layer,
+                neighbors,
+                edge_type,
+            } => {
+                assert_eq!(*base, a);
+                assert_eq!(layer, &0);
+                assert_eq!(edge_type, &EdgeType::Base);
+                assert_eq!(neighbors, &vec![stale]);
+            }
+            other => panic!("expected RemoveEdges, got {:?}", other),
+        }
+
+        Ok(())
+    }
+
+    /// When every reference in the candidate neighborhoods is valid,
+    /// `prune_invalid_links` returns an empty Vec.
+    #[tokio::test]
+    async fn prune_invalid_links_noop_when_all_valid() -> Result<()> {
+        use crate::hawkers::plaintext_store::PlaintextStore;
+        use crate::hnsw::graph::mutation::EdgeType;
+        use crate::hnsw::GraphMem;
+        use crate::hnsw::VectorStore;
+        use iris_mpc_common::iris_db::iris::IrisCode;
+        use std::collections::BTreeSet;
+        use std::sync::Arc;
+
+        let mut store = PlaintextStore::<FhdOps>::new();
+        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let searcher = HnswSearcher::new_with_test_parameters();
+
+        let a = store.insert(&Arc::new(IrisCode::default())).await;
+        let b = store.insert(&Arc::new(IrisCode::default())).await;
+
+        let setup = GraphMutation {
+            seq_no: graph.next_sequence_number(),
+            ops: vec![
+                MutationOp::AddNode {
+                    id: a,
+                    height: 1,
+                    update_ep: UpdateEntryPoint::False,
+                },
+                MutationOp::AddEdges {
+                    base: a,
+                    neighbors: vec![b],
+                    layer: 0,
+                    edge_type: EdgeType::Base,
+                },
+            ],
+        };
+        graph.insert_apply(&setup)?;
+
+        let mut candidates = BTreeSet::new();
+        candidates.insert((a, 0));
+
+        let ops = searcher
+            .prune_invalid_links(&mut store, &graph, &candidates)
+            .await?;
+        assert!(ops.is_empty(), "expected no RemoveEdges, got {:?}", ops);
         Ok(())
     }
 
