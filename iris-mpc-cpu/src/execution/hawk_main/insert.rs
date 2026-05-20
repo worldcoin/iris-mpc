@@ -358,6 +358,19 @@ mod tests {
         }
     }
 
+    /// Like `dummy_insert_plan` but with caller-provided per-layer links.
+    /// Lets tests construct insertions that produce real `AddEdges` ops.
+    fn dummy_insert_plan_with_links(
+        ep_update: UpdateEntryPoint,
+        links: Vec<Vec<<PlaintextStore as VectorStore>::VectorRef>>,
+    ) -> InsertPlanV<PlaintextStore> {
+        InsertPlanV {
+            query: Arc::new(IrisCode::default()),
+            links,
+            update_ep: ep_update,
+        }
+    }
+
     /// Helper function to test join_plans with multiple scenarios
     fn test_join_plans_helper(
         test_cases: &[UpdateEntryPoint],
@@ -809,10 +822,11 @@ mod tests {
     }
 
     /// Reauth-style replacement is encoded as both plans[i] = Some(plan) AND
-    /// replace_ids[i] = Some(old_id). The slot's group should contain an AddNode
-    /// for the new vector followed by a RemoveNode for the old one.
+    /// replace_ids[i] = Some(old_id). The slot should contain a RemoveNode
+    /// GraphMutation with a lower seq_no than the subsequent AddNode
+    /// GraphMutation (delete-then-add ordering), each in its own group.
     #[tokio::test]
-    async fn test_insert_with_combined_replace_emits_addnode_then_removenode() {
+    async fn test_insert_with_combined_replace_emits_removenode_then_addnode() {
         let mut store = PlaintextStore::default();
         let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
@@ -992,47 +1006,76 @@ mod tests {
     }
 
     /// When the batch grows neighborhoods past M_limit, the global compaction
-    /// mutation is appended to the LAST non-empty slot's Vec. Verified by
-    /// the seq_no of the last mutation on that slot being strictly greater
-    /// than every other mutation in the batch.
+    /// mutation is appended to the LAST non-empty slot's Vec, AFTER all
+    /// per-slot mutations.
     #[tokio::test]
     async fn test_insert_appends_global_compaction_to_last_nonempty_slot() {
         let mut store = PlaintextStore::default();
         let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
+        let m_limit = searcher.params.get_M_limit(0);
 
-        // Insert enough vectors to trigger compaction on the bottom layer.
-        // We do it across two batches: first seed the graph with one large
-        // batch, then run a second batch and verify compaction is attributed
-        // to its last non-empty slot.
-        let seed_count = searcher.params.get_M_limit(0) + 5;
-        let mut seed_plans = Vec::with_capacity(seed_count);
+        // Seed the graph with (m_limit + 1) nodes, each at layer 0, with
+        // base-edge neighborhoods exactly at M_limit (so a single new edge
+        // tips each over the threshold).
+        let seed_count = m_limit + 1;
+        let mut seed_ids = Vec::with_capacity(seed_count);
         for _ in 0..seed_count {
-            seed_plans.push(Some(dummy_insert_plan(UpdateEntryPoint::SetUnique {
-                layer: 0,
-            })));
+            seed_ids.push(store.insert(&Arc::new(IrisCode::default())).await);
         }
-        let seed_insert_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
-            vec![None; seed_count];
-        let seed_replace_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
-            vec![None; seed_count];
-        let _ = insert(
-            &mut store,
-            &mut graph,
-            &searcher,
-            seed_plans,
-            &seed_insert_ids,
-            &seed_replace_ids,
-        )
-        .await
-        .expect("seed insert should succeed");
 
-        // Now run a small batch with a no-op trailing slot and a non-empty
-        // earlier slot; the compaction should land on the LAST non-empty
-        // slot, which is the first one.
-        let plans = vec![Some(dummy_insert_plan(UpdateEntryPoint::False)), None];
-        let insert_ids = vec![None, None];
-        let replace_ids = vec![None, None];
+        // Apply a setup mutation that:
+        //   - Registers each seed node at layer 0.
+        //   - Gives each seed node a base-only neighborhood of the OTHER seed
+        //     nodes (size m_limit, since there are m_limit + 1 seeds total).
+        // EdgeType::Base ensures the back-edges aren't auto-created — keeps
+        // each neighborhood exactly at m_limit.
+        let mut setup_ops: Vec<MutationOp<<PlaintextStore as VectorStore>::VectorRef>> =
+            Vec::with_capacity(seed_count * 2);
+        for (i, &id) in seed_ids.iter().enumerate() {
+            setup_ops.push(MutationOp::AddNode {
+                id,
+                height: 1,
+                update_ep: if i == 0 {
+                    UpdateEntryPoint::SetUnique { layer: 0 }
+                } else {
+                    UpdateEntryPoint::False
+                },
+            });
+        }
+        for (i, &id) in seed_ids.iter().enumerate() {
+            let neighbors: Vec<_> = seed_ids
+                .iter()
+                .enumerate()
+                .filter(|(j, _)| *j != i)
+                .map(|(_, v)| *v)
+                .collect();
+            assert_eq!(neighbors.len(), m_limit);
+            setup_ops.push(MutationOp::AddEdges {
+                base: id,
+                layer: 0,
+                neighbors,
+                edge_type: EdgeType::Base,
+            });
+        }
+        let setup = GraphMutation {
+            seq_no: graph.next_sequence_number(),
+            ops: setup_ops,
+        };
+        graph.insert_apply(&setup).expect("setup insert_apply");
+
+        // Now insert one new node whose layer-0 links target every seed node.
+        // With EdgeType::All, each seed's neighborhood gains the new node,
+        // pushing each from m_limit → m_limit + 1, which exceeds M_limit and
+        // triggers compaction.
+        let new_plan =
+            dummy_insert_plan_with_links(UpdateEntryPoint::False, vec![seed_ids.clone()]);
+        let plans = vec![Some(new_plan), None];
+        let insert_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
+            vec![None, None];
+        let replace_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
+            vec![None, None];
+
         let (grouped, _) = insert(
             &mut store,
             &mut graph,
@@ -1042,29 +1085,47 @@ mod tests {
             &replace_ids,
         )
         .await
-        .expect("second insert should succeed");
+        .expect("insert should succeed");
 
-        // Slot 1 is a None slot and must remain empty.
+        // Slot 1 (the trailing None slot) must be untouched.
         assert!(
             grouped[1].is_empty(),
             "trailing None slot must remain empty"
         );
 
-        // The maximum seq_no in the batch must live on slot 0 (the only
-        // non-empty slot, which receives the global compaction).
+        // Slot 0 must contain at least the insert mutation AND a compaction
+        // mutation (the latter appended by the global compaction step).
+        let slot0 = &grouped[0];
+        assert!(
+            slot0.len() >= 2,
+            "slot 0 should contain the insert mutation plus the global compaction; got {} mutations",
+            slot0.len()
+        );
+
+        // At least one mutation must contain RemoveEdges — i.e. compaction
+        // actually fired (not just attribution to an empty op list).
+        let has_remove_edges = slot0.iter().any(|g| {
+            g.ops
+                .iter()
+                .any(|op| matches!(op, MutationOp::RemoveEdges { .. }))
+        });
+        assert!(
+            has_remove_edges,
+            "global compaction should have emitted at least one RemoveEdges op"
+        );
+
+        // The compaction mutation has the maximum seq_no in the batch (it
+        // was minted last). Verify by checking that the LAST mutation in
+        // slot 0 has the max seq_no across the whole grouped output.
         let max_seq_overall = grouped
             .iter()
             .flat_map(|v| v.iter().map(|g| g.seq_no))
             .max()
             .expect("expected at least one mutation");
-        let max_seq_slot0 = grouped[0]
-            .iter()
-            .map(|g| g.seq_no)
-            .max()
-            .expect("slot 0 should be non-empty");
+        let last_seq_slot0 = slot0.last().expect("slot 0 should be non-empty").seq_no;
         assert_eq!(
-            max_seq_overall, max_seq_slot0,
-            "global compaction mutation should be attributed to the last non-empty slot"
+            max_seq_overall, last_seq_slot0,
+            "global compaction mutation should be the LAST entry in the last non-empty slot"
         );
     }
 }
