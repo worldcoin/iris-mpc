@@ -23,11 +23,12 @@ jobs:
               'eaypek-tfh',
               'carlomazzaferro',
               'wojciechsromek',
-              'danielle-tfh'
+              'danielle-tfh',
+              'leonanos8',
+              'gryaele'
             ];
 
             approversGroupB = [
-              'leonanos8',
               'camelop',      // UC Berkeley
               'stneng',       // UC Berkeley
               'jweberphipps', // UC Berkeley
