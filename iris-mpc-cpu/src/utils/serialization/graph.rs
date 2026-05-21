@@ -581,55 +581,6 @@ impl From<graph_v3::GraphV3> for GraphMem<IrisVectorId> {
     }
 }
 
-/* --------------- Conversion GraphMem -> GraphV3 ------------------- */
-
-impl From<IrisVectorId> for graph_v3::VectorId {
-    fn from(value: IrisVectorId) -> Self {
-        graph_v3::VectorId {
-            id: value.serial_id(),
-            version: value.version_id(),
-        }
-    }
-}
-
-impl From<layered_graph::EntryPoint<IrisVectorId>> for graph_v3::EntryPoint {
-    fn from(value: layered_graph::EntryPoint<IrisVectorId>) -> Self {
-        graph_v3::EntryPoint {
-            point: value.point.into(),
-            layer: value.layer,
-        }
-    }
-}
-
-impl From<Layer<IrisVectorId>> for graph_v3::Layer {
-    fn from(value: Layer<IrisVectorId>) -> Self {
-        graph_v3::Layer {
-            links: value
-                .links
-                .into_iter()
-                .map(|(v, nb)| {
-                    (
-                        v.into(),
-                        graph_v3::EdgeIds(nb.into_iter().map(|x| x.into()).collect()),
-                    )
-                })
-                .collect(),
-            // This is ignored when deserializing
-            // But it needs to exist
-            set_hash: 0,
-        }
-    }
-}
-
-impl From<GraphMem<IrisVectorId>> for graph_v3::GraphV3 {
-    fn from(value: GraphMem<IrisVectorId>) -> Self {
-        graph_v3::GraphV3 {
-            entry_point: value.entry_points.into_iter().map(|ep| ep.into()).collect(),
-            layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
-        }
-    }
-}
-
 /* --------------- Conversion GraphV4 -> GraphMem ------------------- */
 
 impl From<graph_v4::VectorId> for IrisVectorId {
