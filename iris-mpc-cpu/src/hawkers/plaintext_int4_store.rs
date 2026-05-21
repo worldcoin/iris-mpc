@@ -8,19 +8,12 @@
 
 use crate::{
     hawkers::shared_irises::{SharedIrises, SharedIrisesRef},
-    hnsw::{vector_store::VectorStoreMut, VectorStore},
+    hnsw::{vector_store::VectorStoreMut, GraphMem, HnswSearcher, SortedNeighborhood, VectorStore},
 };
-#[allow(unused_imports)]
-use crate::hnsw::{GraphMem, HnswSearcher, SortedNeighborhood};
-#[allow(unused_imports)]
 use aes_prng::AesRng;
-use eyre::Result;
-#[allow(unused_imports)]
-use eyre::bail;
+use eyre::{bail, Result};
 use iris_mpc_common::vector_id::VectorId;
-use rand::RngCore;
-#[allow(unused_imports)]
-use rand::{CryptoRng, Rng, SeedableRng};
+use rand::{CryptoRng, Rng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 use std::sync::Arc;
@@ -158,6 +151,48 @@ impl PlaintextInt4Store {
     pub fn insert_with_id(&mut self, id: VectorId, v: Arc<Int4Vector>) -> VectorId {
         self.storage.insert(id, v)
     }
+
+    /// Build an HNSW graph over the first `graph_size` entries of this store
+    /// (sorted by serial id) using the given searcher and randomness.
+    ///
+    /// Mirrors [`PlaintextStore::generate_graph`] at
+    /// `iris-mpc-cpu/src/hawkers/plaintext_store.rs:105`.
+    ///
+    /// [`PlaintextStore::generate_graph`]: super::plaintext_store::PlaintextStore::generate_graph
+    pub async fn generate_graph<R: RngCore + Clone + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+        graph_size: usize,
+        searcher: &HnswSearcher,
+    ) -> Result<GraphMem<<Self as VectorStore>::VectorRef>> {
+        let mut graph = GraphMem::new();
+        let mut rng = AesRng::from_rng(rng.clone())?;
+
+        if graph_size > self.len() {
+            bail!("Cannot generate graph larger than underlying vector store");
+        }
+
+        let mut serial_ids: Vec<_> = self.storage.get_sorted_serial_ids();
+        serial_ids.truncate(graph_size);
+
+        for serial_id in serial_ids {
+            let query = self
+                .storage
+                .get_vector_by_serial_id(serial_id)
+                .unwrap()
+                .clone();
+            let query_id = VectorId::from_serial_id(serial_id);
+            let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
+            let (neighbors, update_ep) = searcher
+                .search_to_insert::<_, SortedNeighborhood<_>>(self, &graph, &query, insertion_layer)
+                .await?;
+            searcher
+                .insert_from_search_results(self, &mut graph, query_id, neighbors, update_ep)
+                .await?;
+        }
+
+        Ok(graph)
+    }
 }
 
 impl VectorStore for PlaintextInt4Store {
@@ -229,8 +264,6 @@ impl VectorStoreMut for PlaintextInt4Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aes_prng::AesRng;
-    use rand::SeedableRng;
 
     #[test]
     fn test_int4_pack_roundtrip() {
@@ -364,5 +397,71 @@ mod tests {
         let q_zero = store.prepare_query((*zero).clone());
         let d_zero = store.eval_distance(&q_zero, &id_zero).await.unwrap();
         assert!(!store.is_match(&d_zero).await.unwrap());
+    }
+
+    /// Flip a single nibble of `v` by adding `delta` (clamped to {-7..=7}).
+    fn perturb(v: &Int4Vector, index: usize, delta: i8) -> Int4Vector {
+        let mut out = v.clone();
+        let cur = out.get(index);
+        let new = (cur + delta).clamp(-7, 7);
+        let byte = out.packed[index / 2];
+        let n = Int4Vector::encode_nibble(new);
+        out.packed[index / 2] = if index.is_multiple_of(2) {
+            (byte & 0xF0) | n
+        } else {
+            (byte & 0x0F) | (n << 4)
+        };
+        out
+    }
+
+    #[tokio::test]
+    async fn test_plaintext_int4_hnsw_matcher() {
+        let mut rng = AesRng::seed_from_u64(0xFEEDFACE);
+
+        // Threshold sits well above the random-pair dot (~0 ± hundreds) and well
+        // below a random vector's self-dot (~512 * 18.67 ≈ 9_560 on average).
+        let mut store = PlaintextInt4Store::new(/* threshold */ 5_000);
+
+        // Insert 64 random vectors and remember one to perturb later.
+        let mut anchor: Option<(VectorId, Arc<Int4Vector>)> = None;
+        for i in 0..64 {
+            let v = Arc::new(Int4Vector::random(&mut rng));
+            let id = VectorStoreMut::insert(&mut store, &v).await;
+            if i == 7 {
+                anchor = Some((id, v));
+            }
+        }
+        let (anchor_id, anchor_vec) = anchor.expect("anchor was set");
+
+        // Build the HNSW graph.
+        let searcher = HnswSearcher::new_with_test_parameters();
+        let graph = store
+            .generate_graph(&mut rng, /* graph_size */ 64, &searcher)
+            .await
+            .expect("graph generation succeeds");
+
+        // Query = anchor with one element perturbed by 1.
+        let query = store.prepare_query(perturb(&anchor_vec, 17, 1));
+        let results: SortedNeighborhood<_> = searcher
+            .search(&mut store, &graph, &query, /* k */ 5)
+            .await
+            .expect("search succeeds");
+        let results = results.as_vec_ref();
+
+        let neighbor_ids: Vec<_> = results.iter().map(|(id, _)| *id).collect();
+        assert!(
+            neighbor_ids.contains(&anchor_id),
+            "anchor {anchor_id} not in top-5 neighbors {neighbor_ids:?}",
+        );
+
+        // The anchor's distance must be a match.
+        let (_, anchor_distance) = results
+            .iter()
+            .find(|(id, _)| *id == anchor_id)
+            .expect("anchor present");
+        assert!(
+            store.is_match(anchor_distance).await.unwrap(),
+            "perturbed-anchor dot {anchor_distance} should exceed threshold 5_000",
+        );
     }
 }
