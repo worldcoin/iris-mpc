@@ -6,19 +6,21 @@
 //! (similarity, not Hamming distance). The store fires a match when the inner
 //! product exceeds a configurable threshold.
 
-#[allow(unused_imports)]
 use crate::{
     hawkers::shared_irises::{SharedIrises, SharedIrisesRef},
-    hnsw::{vector_store::VectorStoreMut, GraphMem, HnswSearcher, SortedNeighborhood, VectorStore},
+    hnsw::{vector_store::VectorStoreMut, VectorStore},
 };
 #[allow(unused_imports)]
+use crate::hnsw::{GraphMem, HnswSearcher, SortedNeighborhood};
+#[allow(unused_imports)]
 use aes_prng::AesRng;
+use eyre::Result;
 #[allow(unused_imports)]
-use eyre::{bail, Result};
-#[allow(unused_imports)]
+use eyre::bail;
 use iris_mpc_common::vector_id::VectorId;
+use rand::RngCore;
 #[allow(unused_imports)]
-use rand::{CryptoRng, Rng, RngCore, SeedableRng};
+use rand::{CryptoRng, Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 use std::sync::Arc;
@@ -117,6 +119,113 @@ impl Int4Vector {
     }
 }
 
+/// Single-threaded plaintext store over packed int4 vectors.
+///
+/// Distance is the integer inner product; a pair is a "match" iff the dot
+/// exceeds `threshold`. Mirrors the shape of [`PlaintextStore`] but with
+/// simpler distance and no dependency on iris codes.
+///
+/// [`PlaintextStore`]: super::plaintext_store::PlaintextStore
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(bound(serialize = "", deserialize = ""))]
+pub struct PlaintextInt4Store {
+    pub storage: Int4SharedVectors,
+    pub threshold: i16,
+}
+
+impl PlaintextInt4Store {
+    /// New empty store with the given match threshold.
+    pub fn new(threshold: i16) -> Self {
+        Self::with_storage(threshold, Int4SharedVectors::default())
+    }
+
+    pub fn with_storage(threshold: i16, storage: Int4SharedVectors) -> Self {
+        Self { storage, threshold }
+    }
+
+    pub fn len(&self) -> usize {
+        self.storage.db_size()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.storage.db_size() == 0
+    }
+
+    pub fn prepare_query(&self, v: Int4Vector) -> Arc<Int4Vector> {
+        Arc::new(v)
+    }
+
+    pub fn insert_with_id(&mut self, id: VectorId, v: Arc<Int4Vector>) -> VectorId {
+        self.storage.insert(id, v)
+    }
+}
+
+impl VectorStore for PlaintextInt4Store {
+    type QueryRef = Arc<Int4Vector>;
+    type VectorRef = VectorId;
+    type DistanceRef = i16;
+
+    async fn vectors_as_queries(
+        &mut self,
+        vectors: Vec<Self::VectorRef>,
+    ) -> Result<Vec<Self::QueryRef>> {
+        Ok(vectors
+            .iter()
+            .map(|id| self.storage.get_vector(id).unwrap().clone())
+            .collect())
+    }
+
+    async fn eval_distance(
+        &mut self,
+        query: &Self::QueryRef,
+        vector: &Self::VectorRef,
+    ) -> Result<Self::DistanceRef> {
+        let stored = self.storage.get_vector(vector).ok_or_else(|| {
+            eyre::eyre!(
+                "Vector ID not found in store for serial {}",
+                vector.serial_id()
+            )
+        })?;
+        Ok(query.dot(stored))
+    }
+
+    async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
+        // dot > threshold means "similar enough" (similarity, not distance).
+        Ok(*distance > self.threshold)
+    }
+
+    async fn less_than(
+        &mut self,
+        d1: &Self::DistanceRef,
+        d2: &Self::DistanceRef,
+    ) -> Result<bool> {
+        // Larger dot = closer, so "d1 closer than d2" iff dot1 > dot2.
+        Ok(d1 > d2)
+    }
+
+    async fn only_valid_vectors(
+        &mut self,
+        mut vectors: Vec<Self::VectorRef>,
+    ) -> Vec<Self::VectorRef> {
+        vectors.retain(|v| self.storage.contains(v));
+        vectors
+    }
+}
+
+impl VectorStoreMut for PlaintextInt4Store {
+    async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
+        self.storage.append(query.clone())
+    }
+
+    async fn insert_at(
+        &mut self,
+        vector_ref: &Self::VectorRef,
+        query: &Self::QueryRef,
+    ) -> Result<Self::VectorRef> {
+        Ok(self.storage.insert(*vector_ref, query.clone()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +293,76 @@ mod tests {
             split.packed[i] = n | (n << 4);
         }
         assert_eq!(split.dot(&all_plus_7), 0);
+    }
+
+    /// Build a store with `n` random vectors and return the store plus the list
+    /// of `(id, vector)` pairs that were inserted, in insertion order.
+    async fn build_store_with_random_vectors(
+        threshold: i16,
+        n: usize,
+        seed: u64,
+    ) -> (PlaintextInt4Store, Vec<(VectorId, Arc<Int4Vector>)>) {
+        let mut rng = AesRng::seed_from_u64(seed);
+        let mut store = PlaintextInt4Store::new(threshold);
+        let mut ids = Vec::with_capacity(n);
+        for _ in 0..n {
+            let v = Arc::new(Int4Vector::random(&mut rng));
+            let id = VectorStoreMut::insert(&mut store, &v).await;
+            ids.push((id, v));
+        }
+        (store, ids)
+    }
+
+    #[tokio::test]
+    async fn test_eval_distance_self_matches_dot() {
+        let (mut store, ids) = build_store_with_random_vectors(12_000, 8, 0xCAFEBABE).await;
+
+        // eval_distance(self, self) should equal vector.dot(vector)
+        for (id, v) in &ids {
+            let q = store.prepare_query((**v).clone());
+            let d = store.eval_distance(&q, id).await.unwrap();
+            assert_eq!(d, v.dot(v));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_less_than_antisymmetric() {
+        let (mut store, ids) = build_store_with_random_vectors(12_000, 8, 0xCAFEBABE).await;
+
+        let q0 = store.prepare_query((*ids[0].1).clone());
+        let d_self = store.eval_distance(&q0, &ids[0].0).await.unwrap();
+        let d_other = store.eval_distance(&q0, &ids[1].0).await.unwrap();
+        if d_self != d_other {
+            let ab = store.less_than(&d_self, &d_other).await.unwrap();
+            let ba = store.less_than(&d_other, &d_self).await.unwrap();
+            assert_ne!(ab, ba, "less_than must be antisymmetric for distinct values");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_is_match_high_magnitude_self_dot() {
+        let mut store = PlaintextInt4Store::new(12_000);
+
+        // is_match: identity dot of a high-magnitude vector exceeds the threshold
+        let high = Arc::new(make_vec_with(7));
+        let id_high = VectorStoreMut::insert(&mut store, &high).await;
+        let q_high = store.prepare_query((*high).clone());
+        let d_high = store.eval_distance(&q_high, &id_high).await.unwrap();
+        assert!(
+            store.is_match(&d_high).await.unwrap(),
+            "self-dot {d_high} should exceed threshold 12_000",
+        );
+    }
+
+    #[tokio::test]
+    async fn test_is_match_zero_vector_does_not_match() {
+        let mut store = PlaintextInt4Store::new(12_000);
+
+        // is_match: zero vector against itself does NOT match
+        let zero = Arc::new(Int4Vector::default());
+        let id_zero = VectorStoreMut::insert(&mut store, &zero).await;
+        let q_zero = store.prepare_query((*zero).clone());
+        let d_zero = store.eval_distance(&q_zero, &id_zero).await.unwrap();
+        assert!(!store.is_match(&d_zero).await.unwrap());
     }
 }
