@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - chore/unify-arm-and-amd-build-under-a-single-manifest
   release:
     types:
       - 'published'
@@ -18,9 +19,28 @@ env:
 
 jobs:
   docker:
+    name: Build and push ${{ matrix.arch }} image
     timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-22.04-16core
+            platform: linux/amd64
+            build_architecture: x86_64
+            dockerfile: Dockerfile.hawk
+            install_docker: false
+            setup_qemu: true
+          - arch: arm64
+            runner: arm64-ubuntu-22.04-16core
+            platform: linux/arm64
+            build_architecture: aarch64
+            dockerfile: Dockerfile.arm64.hawk
+            install_docker: true
+            setup_qemu: false
     runs-on:
-      labels: ubuntu-22.04-16core
+      labels: ${{ matrix.runner }}
     permissions:
       packages: write
       contents: read
@@ -29,7 +49,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+      - name: Install Docker
+        if: ${{ matrix.install_docker }}
+        run: |
+          curl -fsSL https://get.docker.com | sh
+          sudo usermod -aG docker $USER
+          sudo apt-get install acl
+          sudo setfacl --modify user:$USER:rw /var/run/docker.sock
       - name: Set up QEMU
+        if: ${{ matrix.setup_qemu }}
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
@@ -51,21 +79,101 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076
 
+      - name: Prepare image tags
+        id: tags
+        env:
+          AWS_ECR_IRIS_MPC_CPU: ${{ secrets.AWS_ECR_IRIS_MPC_CPU }}
+          ARCH: ${{ matrix.arch }}
+          RELEASE_TAG_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          {
+            echo "tags<<EOF"
+            echo "${REGISTRY}/${IMAGE_NAME}:${GITHUB_SHA}-${ARCH}"
+            echo "${REGISTRY}/${IMAGE_NAME}:latest-${ARCH}"
+            echo "${AWS_ECR_IRIS_MPC_CPU}:${GITHUB_SHA}-${ARCH}"
+            echo "${AWS_ECR_IRIS_MPC_CPU}:latest-${ARCH}"
+            if [ -n "${RELEASE_TAG_NAME}" ]; then
+              echo "${REGISTRY}/${IMAGE_NAME}:${RELEASE_TAG_NAME}-${ARCH}"
+              echo "${AWS_ECR_IRIS_MPC_CPU}:${RELEASE_TAG_NAME}-${ARCH}"
+            fi
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
       - name: Build and Push
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83
         with:
           context: .
           push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ secrets.AWS_ECR_IRIS_MPC_CPU }}:${{ github.sha }}
-            ${{ secrets.AWS_ECR_IRIS_MPC_CPU }}:latest
-            ${{ github.event.release.tag_name && format('{0}/{1}:{2}', env.REGISTRY, env.IMAGE_NAME, github.event.release.tag_name) || '' }}
-            ${{ github.event.release.tag_name && format('{0}:{1}', secrets.AWS_ECR_IRIS_MPC_CPU, github.event.release.tag_name) || '' }}
-          platforms: linux/amd64
+          tags: ${{ steps.tags.outputs.tags }}
+          platforms: ${{ matrix.platform }}
           build-args: |
-            ARCHITECTURE=x86_64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          file: Dockerfile.hawk
+            ARCHITECTURE=${{ matrix.build_architecture }}
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+          file: ${{ matrix.dockerfile }}
+
+  manifest:
+    name: Create multi-arch manifests
+    needs: docker
+    timeout-minutes: 10
+    runs-on:
+      labels: ubuntu-22.04-16core
+    permissions:
+      packages: write
+      contents: read
+      id-token: write
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@49f33fe638c0cba4fb16037a27915a7ab7740259
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE }}
+          aws-region: eu-central-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076
+
+      - name: Create GHCR multi-arch manifests
+        env:
+          RELEASE_TAG_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          docker buildx imagetools create \
+            --tag "${REGISTRY}/${IMAGE_NAME}:${GITHUB_SHA}" \
+            --tag "${REGISTRY}/${IMAGE_NAME}:latest" \
+            "${REGISTRY}/${IMAGE_NAME}:${GITHUB_SHA}-amd64" \
+            "${REGISTRY}/${IMAGE_NAME}:${GITHUB_SHA}-arm64"
+
+          if [ -n "${RELEASE_TAG_NAME}" ]; then
+            docker buildx imagetools create \
+              --tag "${REGISTRY}/${IMAGE_NAME}:${RELEASE_TAG_NAME}" \
+              "${REGISTRY}/${IMAGE_NAME}:${RELEASE_TAG_NAME}-amd64" \
+              "${REGISTRY}/${IMAGE_NAME}:${RELEASE_TAG_NAME}-arm64"
+          fi
+
+      - name: Create ECR multi-arch manifests
+        env:
+          AWS_ECR_IRIS_MPC_CPU: ${{ secrets.AWS_ECR_IRIS_MPC_CPU }}
+          RELEASE_TAG_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          docker buildx imagetools create \
+            --tag "${AWS_ECR_IRIS_MPC_CPU}:${GITHUB_SHA}" \
+            --tag "${AWS_ECR_IRIS_MPC_CPU}:latest" \
+            "${AWS_ECR_IRIS_MPC_CPU}:${GITHUB_SHA}-amd64" \
+            "${AWS_ECR_IRIS_MPC_CPU}:${GITHUB_SHA}-arm64"
+
+          if [ -n "${RELEASE_TAG_NAME}" ]; then
+            docker buildx imagetools create \
+              --tag "${AWS_ECR_IRIS_MPC_CPU}:${RELEASE_TAG_NAME}" \
+              "${AWS_ECR_IRIS_MPC_CPU}:${RELEASE_TAG_NAME}-amd64" \
+              "${AWS_ECR_IRIS_MPC_CPU}:${RELEASE_TAG_NAME}-arm64"
+          fi
