@@ -29,16 +29,14 @@ jobs:
             ];
 
             approversGroupB = [
-              'camelop',      // UC Berkeley
-              'stneng',       // UC Berkeley
-              'jweberphipps', // UC Berkeley
-              'Tedlar',       // Nethermind
-              '0xDones',      // Nethermind
-              'matilote',     // Nethermind
-              'nmjustinchan', // Nethermind
-              'reneraab',     // FAU
-              'SyrineSlim',   // FAU
-              'sebhlr'        // FAU
+              'camelop',       // UC Berkeley
+              'stneng',        // UC Berkeley
+              'jweberphipps',  // UC Berkeley
+              'happyhappy-jun` // KAIST
+              'ismty0805`      // KAIST
+              'reneraab',      // FAU
+              'SyrineSlim',    // FAU
+              'sebhlr'         // FAU
             ];
 
             const approvalGroups = new Map([
