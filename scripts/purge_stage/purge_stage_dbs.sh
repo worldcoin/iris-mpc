@@ -18,6 +18,7 @@ SCHEMA_NAME_SUFFIX=$2
 
 # Set the appropriate secret name based on cleanup type
 if [ "$CLEANUP_TYPE" == "cpu" ] || [ "$CLEANUP_TYPE" == "cpu_temp" ]; then
+  REGION="eu-central-1"
   if [ "$CLEANUP_TYPE" == "cpu_temp" ]; then
     SECRET_NAME="stage/iris-mpc-dev/rds-aurora-master-password"
     echo "Using CPU_TEMP secret: $SECRET_NAME"
@@ -30,6 +31,7 @@ if [ "$CLEANUP_TYPE" == "cpu" ] || [ "$CLEANUP_TYPE" == "cpu_temp" ]; then
   echo "Using CPU cluster name: $CLUSTER_NAME"
   echo "Using CPU namespace: $NAMESPACE"
 elif [ "$CLEANUP_TYPE" == "gpu" ]; then
+  REGION="eu-north-1"
   SECRET_NAME="stage/iris-mpc/rds-aurora-master-password"
   CLUSTER_NAME="smpcv2"
   NAMESPACE="iris-mpc"
@@ -44,7 +46,7 @@ fi
 
 echo "Using Schema name suffix: $SCHEMA_NAME_SUFFIX"
 
-REGION="eu-north-1"
+
 SECRET_KEY="DATABASE_URL"
 
 get_aws_secret() {
@@ -86,7 +88,7 @@ clean_mpc_database() {
     exit 1
   fi
 
-  CLUSTER="arn:aws:eks:eu-north-1:$ACCOUNT_ID:cluster/$CLUSTER_NAME-$PARTY_ID-stage"
+  CLUSTER="arn:aws:eks:$REGION:$ACCOUNT_ID:cluster/$CLUSTER_NAME-$PARTY_ID-stage"
   echo "Cleaning database for $PARTY_ID with cluster name $CLUSTER${SCHEMA_NAME_SUFFIX:+ and schema name suffix $SCHEMA_NAME_SUFFIX}"
 
   # Switch to the appropriate Kubernetes context
@@ -105,6 +107,9 @@ clean_mpc_database() {
   kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO \"$SCHEMA_NAME\"; TRUNCATE persistent_state RESTART IDENTITY;'"
   kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO \"$SCHEMA_NAME\"; TRUNCATE modifications RESTART IDENTITY;'"
   kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO \"$SCHEMA_NAME\"; TRUNCATE hawk_graph_entry RESTART IDENTITY;'"
+  kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO \"$SCHEMA_NAME\"; TRUNCATE hawk_graph_links RESTART IDENTITY;'"
+  kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO \"$SCHEMA_NAME\"; TRUNCATE hawk_graph_mutations RESTART IDENTITY;'"
+  kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO \"$SCHEMA_NAME\"; TRUNCATE genesis_graph_checkpoint RESTART IDENTITY;'"
   kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO anon_stats_mpc; TRUNCATE anon_stats_1d RESTART IDENTITY;'"
   kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO anon_stats_mpc; TRUNCATE anon_stats_1d_lifted RESTART IDENTITY;'"
   kubectl exec -it db-cleaner -- bash -c "psql -H $DATABASE_URL -c 'SET search_path TO anon_stats_mpc; TRUNCATE anon_stats_2d RESTART IDENTITY;'"
