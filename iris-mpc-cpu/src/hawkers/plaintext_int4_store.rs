@@ -261,6 +261,117 @@ impl VectorStoreMut for PlaintextInt4Store {
     }
 }
 
+/// `PlaintextInt4Store` with synchronization primitives for multithreaded use.
+#[derive(Debug, Clone)]
+pub struct SharedPlaintextInt4Store {
+    pub storage: Int4SharedVectorsRef,
+    pub threshold: i16,
+}
+
+impl SharedPlaintextInt4Store {
+    pub fn new(threshold: i16) -> Self {
+        Self {
+            storage: Int4SharedVectors::default().to_arc(),
+            threshold,
+        }
+    }
+
+    pub async fn len(&self) -> usize {
+        self.storage.read().await.db_size()
+    }
+
+    pub async fn is_empty(&self) -> bool {
+        self.len().await == 0
+    }
+}
+
+impl From<PlaintextInt4Store> for SharedPlaintextInt4Store {
+    fn from(value: PlaintextInt4Store) -> Self {
+        Self {
+            storage: value.storage.to_arc(),
+            threshold: value.threshold,
+        }
+    }
+}
+
+impl VectorStore for SharedPlaintextInt4Store {
+    type QueryRef = Arc<Int4Vector>;
+    type VectorRef = VectorId;
+    type DistanceRef = i16;
+
+    async fn vectors_as_queries(
+        &mut self,
+        vectors: Vec<Self::VectorRef>,
+    ) -> Result<Vec<Self::QueryRef>> {
+        let store = self.storage.read().await;
+        Ok(vectors
+            .iter()
+            .map(|id| store.get_vector(id).unwrap().clone())
+            .collect())
+    }
+
+    async fn eval_distance(
+        &mut self,
+        query: &Self::QueryRef,
+        vector: &Self::VectorRef,
+    ) -> Result<Self::DistanceRef> {
+        let distances = self.eval_distance_batch(query, &[*vector]).await?;
+        Ok(distances[0])
+    }
+
+    async fn eval_distance_batch(
+        &mut self,
+        query: &Self::QueryRef,
+        vectors: &[Self::VectorRef],
+    ) -> Result<Vec<Self::DistanceRef>> {
+        let store = self.storage.read().await;
+        let stored = vectors
+            .iter()
+            .map(|v| {
+                store.get_vector(v).ok_or_else(|| {
+                    eyre::eyre!("Vector ID not found in store for serial {}", v.serial_id())
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(stored.into_iter().map(|s| query.dot(s)).collect())
+    }
+
+    async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
+        Ok(*distance > self.threshold)
+    }
+
+    async fn less_than(
+        &mut self,
+        d1: &Self::DistanceRef,
+        d2: &Self::DistanceRef,
+    ) -> Result<bool> {
+        Ok(d1 > d2)
+    }
+
+    async fn only_valid_vectors(
+        &mut self,
+        mut vectors: Vec<Self::VectorRef>,
+    ) -> Vec<Self::VectorRef> {
+        let store = self.storage.read().await;
+        vectors.retain(|v| store.contains(v));
+        vectors
+    }
+}
+
+impl VectorStoreMut for SharedPlaintextInt4Store {
+    async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
+        self.storage.append(query).await
+    }
+
+    async fn insert_at(
+        &mut self,
+        vector_ref: &Self::VectorRef,
+        query: &Self::QueryRef,
+    ) -> Result<Self::VectorRef> {
+        Ok(self.storage.insert(*vector_ref, query).await)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -463,5 +574,56 @@ mod tests {
             store.is_match(anchor_distance).await.unwrap(),
             "perturbed-anchor dot {anchor_distance} should exceed threshold 5_000",
         );
+    }
+
+    #[tokio::test]
+    async fn test_parallel_plaintext_int4_hnsw_matcher() {
+        use tokio::task::JoinSet;
+
+        let mut rng = AesRng::seed_from_u64(0x5EED5EED);
+        let mut store = PlaintextInt4Store::new(/* threshold */ 0);
+
+        // Insert 32 random vectors, keep all of them as candidate queries.
+        let mut originals: Vec<(VectorId, Arc<Int4Vector>)> = Vec::new();
+        for _ in 0..32 {
+            let v = Arc::new(Int4Vector::random(&mut rng));
+            let id = VectorStoreMut::insert(&mut store, &v).await;
+            originals.push((id, v));
+        }
+
+        let searcher = HnswSearcher::new_with_test_parameters();
+        let graph = store
+            .generate_graph(&mut rng, 32, &searcher)
+            .await
+            .expect("graph generation succeeds");
+
+        // Convert to the shared store and search the first 8 originals in parallel.
+        let shared: SharedPlaintextInt4Store = store.into();
+        let searcher = Arc::new(searcher);
+        let graph = Arc::new(graph);
+
+        let mut join_set = JoinSet::new();
+        for (expected_id, vec) in originals.into_iter().take(8) {
+            let mut shared = shared.clone();
+            let searcher = Arc::clone(&searcher);
+            let graph = Arc::clone(&graph);
+            join_set.spawn(async move {
+                let query = Arc::new((*vec).clone());
+                let results: SortedNeighborhood<_> = searcher
+                    .search(&mut shared, &graph, &query, /* k */ 1)
+                    .await
+                    .expect("search succeeds");
+                let pairs = results.as_vec_ref();
+                assert!(!pairs.is_empty(), "expected at least one result");
+                // With threshold = 0, the self-dot (=positive) must match.
+                let (top_id, top_dist) = &pairs[0];
+                assert_eq!(*top_id, expected_id);
+                assert!(*top_dist > 0);
+            });
+        }
+
+        while let Some(res) = join_set.join_next().await {
+            res.expect("task panicked");
+        }
     }
 }
