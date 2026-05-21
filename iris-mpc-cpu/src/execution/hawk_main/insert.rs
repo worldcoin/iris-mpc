@@ -120,7 +120,7 @@ pub async fn insert<V: VectorStoreMut>(
     let mut slot_inserted_ids: Vec<Option<V::VectorRef>> = vec![None; insert_plans.len()];
     let mut batch_expanded: BTreeSet<(V::VectorRef, usize)> = BTreeSet::new();
 
-    for (idx, (plan, update_id, replace_id)) in
+    for (idx, (plan, insert_id, replace_id)) in
         izip!(insert_plans, insert_ids, replace_ids).enumerate()
     {
         let mut slot_updated: BTreeSet<(V::VectorRef, usize)> = BTreeSet::new();
@@ -150,7 +150,8 @@ pub async fn insert<V: VectorStoreMut>(
                 }
             }
 
-            let inserted_id = match update_id {
+            // Vector id actually inserted by this update
+            let inserted_id = match insert_id {
                 None => store.insert(&query).await,
                 Some(id) => store.insert_at(id, &query).await?,
             };

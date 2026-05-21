@@ -1529,17 +1529,17 @@ impl HnswSearcher {
         Ok((links, update_ep))
     }
 
-    /// Computes RemoveEdges ops for any of the `candidates` neighborhoods
-    /// that currently exceed `M_limit(layer)`. Calls
+    /// Computes RemoveEdges ops for any of the `candidates` neighborhoods that
+    /// currently exceed `M_limit(layer)`. Calls
     /// `store.compact_neighborhood_batch(...)` once with the oversized set
-    /// (target size = `M_max(layer)`). Returns the resulting ops; the caller
-    /// wraps them into a `GraphMutation`, stamps a sequence number, and
-    /// applies.
+    /// (target size = `M_max(layer)`). Returns the resulting ops, with ordering
+    /// from the iteration order of the input candidates list; the caller wraps
+    /// them into a `GraphMutation`, stamps a sequence number, and applies.
     ///
     /// Note: `compact_neighborhood_batch` does top-K-by-distance selection
-    /// without validity filtering. Callers should run `prune_invalid_links`
-    /// on a superset of these candidates first so that the input
-    /// neighborhoods are free of stale references.
+    /// without validity filtering. Callers should run `prune_invalid_links` on
+    /// a superset of these candidates first so that the input neighborhoods are
+    /// free of stale references.
     pub async fn compact_batch<V: VectorStore>(
         &self,
         store: &mut V,
@@ -1606,7 +1606,8 @@ impl HnswSearcher {
     /// Computes RemoveEdges ops for any of the `candidates` neighborhoods that
     /// contain references to vectors no longer present in `store`. Returns
     /// the ops; the caller wraps them into a `GraphMutation`, stamps a
-    /// sequence number, and applies.
+    /// sequence number, and applies.  Ordering of the returned ops is the
+    /// same as the ordering of associated input candidates.
     ///
     /// TODO: remove once neighborhood-versioning lands. With per-edge
     /// sequence numbers, stale-edge filtering becomes implicit in
@@ -1756,7 +1757,10 @@ mod tests {
         hnsw::{GraphMem, SortedNeighborhood},
     };
     use aes_prng::AesRng;
-    use iris_mpc_common::iris_db::db::IrisDB;
+    use iris_mpc_common::{
+        iris_db::{db::IrisDB, iris::IrisCode},
+        vector_id::VectorId,
+    };
     use rand::SeedableRng;
     use tokio;
 
@@ -1942,15 +1946,6 @@ mod tests {
     /// doesn't depend on a "remove vector" API.
     #[tokio::test]
     async fn prune_invalid_links_emits_remove_edges_for_stale_refs() -> Result<()> {
-        use crate::hawkers::plaintext_store::PlaintextStore;
-        use crate::hnsw::graph::mutation::EdgeType;
-        use crate::hnsw::GraphMem;
-        use crate::hnsw::VectorStore;
-        use iris_mpc_common::iris_db::iris::IrisCode;
-        use iris_mpc_common::vector_id::VectorId;
-        use std::collections::BTreeSet;
-        use std::sync::Arc;
-
         let mut store = PlaintextStore::<FhdOps>::new();
         let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
@@ -2010,14 +2005,6 @@ mod tests {
     /// `prune_invalid_links` returns an empty Vec.
     #[tokio::test]
     async fn prune_invalid_links_noop_when_all_valid() -> Result<()> {
-        use crate::hawkers::plaintext_store::PlaintextStore;
-        use crate::hnsw::graph::mutation::EdgeType;
-        use crate::hnsw::GraphMem;
-        use crate::hnsw::VectorStore;
-        use iris_mpc_common::iris_db::iris::IrisCode;
-        use std::collections::BTreeSet;
-        use std::sync::Arc;
-
         let mut store = PlaintextStore::<FhdOps>::new();
         let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
@@ -2057,14 +2044,6 @@ mod tests {
     /// whose size exceeds M_limit on its layer.
     #[tokio::test]
     async fn compact_batch_emits_remove_edges_for_oversized() -> Result<()> {
-        use crate::hawkers::plaintext_store::PlaintextStore;
-        use crate::hnsw::graph::mutation::EdgeType;
-        use crate::hnsw::GraphMem;
-        use crate::hnsw::VectorStore;
-        use iris_mpc_common::iris_db::iris::IrisCode;
-        use std::collections::{BTreeSet, HashSet};
-        use std::sync::Arc;
-
         let mut store = PlaintextStore::<FhdOps>::new();
         let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
