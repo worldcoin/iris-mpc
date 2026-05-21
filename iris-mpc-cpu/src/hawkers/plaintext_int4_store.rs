@@ -9,9 +9,7 @@
 #[allow(unused_imports)]
 use crate::{
     hawkers::shared_irises::{SharedIrises, SharedIrisesRef},
-    hnsw::{
-        vector_store::VectorStoreMut, GraphMem, HnswSearcher, SortedNeighborhood, VectorStore,
-    },
+    hnsw::{vector_store::VectorStoreMut, GraphMem, HnswSearcher, SortedNeighborhood, VectorStore},
 };
 #[allow(unused_imports)]
 use aes_prng::AesRng;
@@ -83,6 +81,23 @@ impl Int4Vector {
         Self::decode_nibble(nibble)
     }
 
+    /// Integer inner product of two int4 vectors.
+    ///
+    /// Decodes nibbles on the fly and accumulates element-wise products in
+    /// `i16`. The tightest bound is `512 * 7 * 7 = 25_088 < i16::MAX = 32_767`,
+    /// so the sum never overflows for vectors produced by [`Int4Vector::random`].
+    pub fn dot(&self, other: &Self) -> i16 {
+        let mut acc: i16 = 0;
+        for (a, b) in self.packed.iter().zip(other.packed.iter()) {
+            let a_lo = i16::from(Self::decode_nibble(*a & 0x0F));
+            let a_hi = i16::from(Self::decode_nibble(*a >> 4));
+            let b_lo = i16::from(Self::decode_nibble(*b & 0x0F));
+            let b_hi = i16::from(Self::decode_nibble(*b >> 4));
+            acc += a_lo * b_lo + a_hi * b_hi;
+        }
+        acc
+    }
+
     /// Encode a value in `{-7..=7}` (also accepts `-8`) as a 4-bit
     /// two's-complement nibble.
     #[inline]
@@ -131,5 +146,43 @@ mod tests {
             let expected = if i.is_multiple_of(2) { 7 } else { -7 };
             assert_eq!(v.get(i), expected, "mismatch at element {i}");
         }
+    }
+
+    fn make_vec_with(value: i8) -> Int4Vector {
+        let mut packed = [0u8; INT4_PACKED_BYTES];
+        let n = Int4Vector::encode_nibble(value);
+        let byte = n | (n << 4);
+        for b in packed.iter_mut() {
+            *b = byte;
+        }
+        Int4Vector { packed }
+    }
+
+    #[test]
+    fn test_dot_known_values() {
+        let zero = Int4Vector::default();
+        assert_eq!(zero.dot(&zero), 0);
+
+        let all_plus_7 = make_vec_with(7);
+        let all_minus_7 = make_vec_with(-7);
+
+        // 512 * 7 * 7 = 25_088
+        assert_eq!(all_plus_7.dot(&all_plus_7), 25_088);
+        assert_eq!(all_minus_7.dot(&all_minus_7), 25_088);
+        assert_eq!(all_plus_7.dot(&all_minus_7), -25_088);
+
+        // Half +7, half -7 in one vector; dotted against all +7 → 0
+        let mut split = Int4Vector::default();
+        for i in 0..INT4_PACKED_BYTES {
+            // first 128 bytes: both nibbles +7; next 128 bytes: both nibbles -7
+            let v = if i < INT4_PACKED_BYTES / 2 {
+                7_i8
+            } else {
+                -7_i8
+            };
+            let n = Int4Vector::encode_nibble(v);
+            split.packed[i] = n | (n << 4);
+        }
+        assert_eq!(split.dot(&all_plus_7), 0);
     }
 }
