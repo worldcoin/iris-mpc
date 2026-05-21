@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - chore/unify-arm-and-amd-build-under-a-single-manifest
   release:
     types:
       - 'published'
