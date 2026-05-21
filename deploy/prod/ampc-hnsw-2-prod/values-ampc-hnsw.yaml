@@ -99,7 +99,7 @@ env:
     value: "true"
 
   - name: SMPC__DB_CHUNKS_BUCKET_NAME
-    value: "iris-mpc-db-exporter-store-node-0-prod--eun1-az3--x-s3"
+    value: "iris-mpc-db-exporter-store-node-2-prod--eun1-az3--x-s3"
 
   - name: SMPC__DB_CHUNKS_FOLDER_NAME
     value: "genesis_base_even_odd_with_version_id_output_16k_rerandomized"
