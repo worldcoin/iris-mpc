@@ -75,7 +75,10 @@ impl<V: VectorStore + Send + Sync> MutationStore for GraphPg<V> {
 mod tests {
     use super::*;
     use crate::hawkers::plaintext_store::PlaintextStore;
-    use crate::hnsw::graph::{graph_store::test_utils::TestGraphPg, mutation::GraphMutation};
+    use crate::hnsw::graph::{
+        graph_store::test_utils::TestGraphPg,
+        mutation::{GraphMutation, MutationOp},
+    };
     use futures::TryStreamExt;
     use iris_mpc_common::vector_id::VectorId;
 
@@ -86,10 +89,11 @@ mod tests {
     /// Builds a `BothEyes<Vec<GraphMutation<VectorId>>>` with one RemoveNode per eye,
     /// targeting different ids so left/right are distinguishable in the test.
     fn both_eyes_payload(left_id: u32, right_id: u32) -> BothEyes<Vec<GraphMutation<VectorId>>> {
-        [
-            vec![GraphMutation::RemoveNode { id: vid(left_id) }],
-            vec![GraphMutation::RemoveNode { id: vid(right_id) }],
-        ]
+        let mk = |id: u32| GraphMutation {
+            seq_no: 1,
+            ops: vec![MutationOp::RemoveNode { id: vid(id) }],
+        };
+        [vec![mk(left_id)], vec![mk(right_id)]]
     }
 
     async fn insert_row(
@@ -163,8 +167,12 @@ mod tests {
         assert_eq!(rows.len(), 2, "(1,9] should include ids 5 and 9");
         for (row, expected) in rows.iter().zip([(105, 205), (109, 209)]) {
             let [left, right] = row;
-            assert!(matches!(left[0], GraphMutation::RemoveNode { id } if id == vid(expected.0)));
-            assert!(matches!(right[0], GraphMutation::RemoveNode { id } if id == vid(expected.1)));
+            assert!(
+                matches!(&left[0].ops[..], [MutationOp::RemoveNode { id }] if *id == vid(expected.0))
+            );
+            assert!(
+                matches!(&right[0].ops[..], [MutationOp::RemoveNode { id }] if *id == vid(expected.1))
+            );
         }
 
         Ok(())

@@ -99,8 +99,12 @@ async fn apply_wal_stream(
     use crate::execution::hawk_main::{LEFT, RIGHT};
     while let Some(row) = stream.try_next().await? {
         let [left_muts, right_muts] = row;
-        graph[LEFT].insert_apply(left_muts);
-        graph[RIGHT].insert_apply(right_muts);
+        graph[LEFT]
+            .insert_apply_all(&left_muts)
+            .map_err(|e| CycleError::Fatal(format!("WAL replay (LEFT) failed: {e}")))?;
+        graph[RIGHT]
+            .insert_apply_all(&right_muts)
+            .map_err(|e| CycleError::Fatal(format!("WAL replay (RIGHT) failed: {e}")))?;
     }
     Ok(())
 }
@@ -110,18 +114,24 @@ mod tests {
     use super::*;
     use crate::execution::hawk_main::{LEFT, RIGHT};
     use crate::hnsw::graph::layered_graph::GraphMem;
-    use crate::hnsw::graph::mutation::{GraphMutation, UpdateEntryPoint};
+    use crate::hnsw::graph::mutation::{GraphMutation, MutationOp, UpdateEntryPoint};
     use futures::{stream, StreamExt};
 
     fn vid(n: u32) -> VectorId {
         VectorId::from_serial_id(n)
     }
 
+    // Use `n` itself as the seq_no — every test below picks node ids that
+    // are strictly increasing within a given eye, so this satisfies the
+    // strict-increase invariant `insert_apply_all` enforces.
     fn add_node(n: u32) -> GraphMutation<VectorId> {
-        GraphMutation::AddNode {
-            id: vid(n),
-            height: 1,
-            update_ep: UpdateEntryPoint::False,
+        GraphMutation {
+            seq_no: n as u64,
+            ops: vec![MutationOp::AddNode {
+                id: vid(n),
+                height: 1,
+                update_ep: UpdateEntryPoint::False,
+            }],
         }
     }
 

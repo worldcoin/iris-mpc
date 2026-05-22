@@ -7,7 +7,7 @@ use crate::{
     execution::hawk_main::state_check::SetHash,
     hawkers::ideal_knn_engines::{read_knn_results_from_file, Engine, EngineChoice, KNNResult},
     hnsw::{
-        graph::{mutation::EdgeType, GraphMutation, UpdateEntryPoint},
+        graph::{mutation::EdgeType, GraphMutation, MutationOp, UpdateEntryPoint},
         searcher::LayerMode,
         vector_store::Ref,
         HnswSearcher,
@@ -64,6 +64,11 @@ pub struct GraphMem<V: Ref + Display + FromStr + Ord> {
     /// subset of the nodes of the previous layer, and graph neighborhoods in
     /// each layer represent approximate nearest neighbors within that layer.
     pub layers: Vec<Layer<V>>,
+
+    /// The sequence number of the most recently applied `GraphMutation`. `0`
+    /// means no mutation has been applied. Advanced by `insert_apply` on
+    /// success.
+    pub last_update_seq_no: u64,
 }
 
 impl Display for GraphMem<IrisVectorId> {
@@ -104,6 +109,7 @@ impl<V: Ref + Display + FromStr + Ord> Clone for GraphMem<V> {
         GraphMem {
             entry_points: self.entry_points.clone(),
             layers: self.layers.clone(),
+            last_update_seq_no: self.last_update_seq_no,
         }
     }
 }
@@ -113,7 +119,14 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
         GraphMem {
             entry_points: vec![],
             layers: vec![],
+            last_update_seq_no: 0,
         }
+    }
+
+    /// Returns the sequence number that the next applied `GraphMutation` must
+    /// equal or exceed. This is a pure peek — it does not modify the graph.
+    pub fn next_sequence_number(&self) -> u64 {
+        self.last_update_seq_no + 1
     }
 
     pub fn to_arc(self) -> Arc<RwLock<Self>> {
@@ -130,6 +143,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                 })
                 .collect::<Vec<_>>(),
             layers,
+            last_update_seq_no: 0,
         }
     }
 
@@ -173,19 +187,33 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
 
     /// Applies a list of graph mutations to the in-memory graph.
     ///
-    /// This updates the graph's entry points set and connects the new vector to its
-    /// neighbors as specified in the mutations.
-    pub fn insert_apply(&mut self, plan: Vec<GraphMutation<V>>) {
+    /// This updates the graph's entry points set and connects the new vector to
+    /// its neighbors as specified in the mutations.
+    ///
+    /// The supplied `mutation.seq_no` must be strictly greater than
+    /// `self.last_update_seq_no`; otherwise the call returns `Err` without
+    /// touching the graph. On success `self.last_update_seq_no` advances to
+    /// `mutation.seq_no`.
+    pub fn insert_apply(&mut self, mutation: &GraphMutation<V>) -> Result<()> {
+        if mutation.seq_no <= self.last_update_seq_no {
+            return Err(eyre::eyre!(
+                "GraphMem::insert_apply: mutation seq_no {} is not strictly greater than \
+                 last_update_seq_no {}",
+                mutation.seq_no,
+                self.last_update_seq_no,
+            ));
+        }
+
         // Pass 1: apply node-level mutations.
-        for mutation in plan.iter() {
-            match mutation {
-                GraphMutation::RemoveNode { id } => {
+        for op in mutation.ops.iter() {
+            match op {
+                MutationOp::RemoveNode { id } => {
                     for layer in &mut self.layers {
                         layer.remove_node(id);
                     }
                     self.entry_points.retain(|ep| &ep.point != id);
                 }
-                GraphMutation::AddNode {
+                MutationOp::AddNode {
                     id,
                     height,
                     update_ep,
@@ -216,37 +244,38 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                         self.layers[layer_idx].insert_node(id, Vec::new());
                     }
                 }
-                GraphMutation::AddEdges { .. } | GraphMutation::RemoveEdges { .. } => {}
+                MutationOp::AddEdges { .. } | MutationOp::RemoveEdges { .. } => {}
             }
         }
 
         // Pass 2: apply edge-level mutations.
-        for mutation in plan.into_iter() {
-            match mutation {
-                GraphMutation::AddNode { .. } | GraphMutation::RemoveNode { .. } => {}
-                GraphMutation::AddEdges {
+        for op in mutation.ops.iter() {
+            match op {
+                MutationOp::AddNode { .. } | MutationOp::RemoveNode { .. } => {}
+                MutationOp::AddEdges {
                     base,
                     layer,
                     neighbors: to_add,
                     edge_type,
                 } => {
+                    let layer = *layer;
                     if self.layers.len() < layer + 1 {
                         self.layers.resize(layer + 1, Layer::new());
                     }
                     let layer_mut = &mut self.layers[layer];
                     match edge_type {
                         EdgeType::Base => {
-                            if layer_mut.get_links(&base).is_none() {
+                            if layer_mut.get_links(base).is_none() {
                                 warn!(
                                     "AddEdges(Base): base={:?} missing at layer {layer}; skipping",
                                     base
                                 );
                             } else {
-                                layer_mut.link_neighbors_to_node(&base, to_add);
+                                layer_mut.link_neighbors_to_node(base, to_add.clone());
                             }
                         }
                         EdgeType::Neighbors => {
-                            for target in &to_add {
+                            for target in to_add {
                                 if layer_mut.get_links(target).is_none() {
                                     warn!(
                                         "AddEdges(Neighbors): target={:?} missing at layer {layer} (base={:?}); add_neighbor will no-op for this target",
@@ -254,18 +283,18 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     );
                                 }
                             }
-                            layer_mut.link_node_to_neighbors(&base, to_add);
+                            layer_mut.link_node_to_neighbors(base, to_add.clone());
                         }
                         EdgeType::All => {
-                            if layer_mut.get_links(&base).is_none() {
+                            if layer_mut.get_links(base).is_none() {
                                 warn!(
                                     "AddEdges(All): base={:?} missing at layer {layer}; skipping outgoing half",
                                     base
                                 );
                             } else {
-                                layer_mut.link_neighbors_to_node(&base, to_add.clone());
+                                layer_mut.link_neighbors_to_node(base, to_add.clone());
                             }
-                            for target in &to_add {
+                            for target in to_add {
                                 if layer_mut.get_links(target).is_none() {
                                     warn!(
                                         "AddEdges(All): target={:?} missing at layer {layer} (base={:?}); add_neighbor will no-op for this target",
@@ -273,16 +302,17 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     );
                                 }
                             }
-                            layer_mut.link_node_to_neighbors(&base, to_add);
+                            layer_mut.link_node_to_neighbors(base, to_add.clone());
                         }
                     }
                 }
-                GraphMutation::RemoveEdges {
+                MutationOp::RemoveEdges {
                     base,
                     layer,
                     neighbors: to_remove,
                     edge_type,
                 } => {
+                    let layer = *layer;
                     if self.layers.len() < layer + 1 {
                         warn!(
                             "RemoveEdges: layer {layer} does not exist (base={:?}); skipping",
@@ -293,17 +323,17 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                     let layer_mut = &mut self.layers[layer];
                     match edge_type {
                         EdgeType::Base => {
-                            if layer_mut.get_links(&base).is_none() {
+                            if layer_mut.get_links(base).is_none() {
                                 warn!(
                                     "RemoveEdges(Base): base={:?} missing at layer {layer}; skipping",
                                     base
                                 );
                             } else {
-                                layer_mut.unlink_neighbors_from_node(&base, to_remove);
+                                layer_mut.unlink_neighbors_from_node(base, to_remove.clone());
                             }
                         }
                         EdgeType::Neighbors => {
-                            for target in &to_remove {
+                            for target in to_remove {
                                 if layer_mut.get_links(target).is_none() {
                                     warn!(
                                         "RemoveEdges(Neighbors): target={:?} missing at layer {layer} (base={:?}); remove_incoming_edges will no-op for this target",
@@ -311,18 +341,18 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     );
                                 }
                             }
-                            layer_mut.unlink_node_from_neighbors(&base, to_remove);
+                            layer_mut.unlink_node_from_neighbors(base, to_remove.clone());
                         }
                         EdgeType::All => {
-                            if layer_mut.get_links(&base).is_none() {
+                            if layer_mut.get_links(base).is_none() {
                                 warn!(
                                     "RemoveEdges(All): base={:?} missing at layer {layer}; skipping outgoing half",
                                     base
                                 );
                             } else {
-                                layer_mut.unlink_neighbors_from_node(&base, to_remove.clone());
+                                layer_mut.unlink_neighbors_from_node(base, to_remove.clone());
                             }
-                            for target in &to_remove {
+                            for target in to_remove {
                                 if layer_mut.get_links(target).is_none() {
                                     warn!(
                                         "RemoveEdges(All): target={:?} missing at layer {layer} (base={:?}); remove_incoming_edges will no-op for this target",
@@ -330,12 +360,22 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     );
                                 }
                             }
-                            layer_mut.unlink_node_from_neighbors(&base, to_remove);
+                            layer_mut.unlink_node_from_neighbors(base, to_remove.clone());
                         }
                     }
                 }
             }
         }
+
+        self.last_update_seq_no = mutation.seq_no;
+        Ok(())
+    }
+
+    pub fn insert_apply_all(&mut self, mutations: &[GraphMutation<V>]) -> Result<()> {
+        for m in mutations {
+            self.insert_apply(m)?;
+        }
+        Ok(())
     }
 
     pub async fn get_first_entry_point(&self) -> Option<(V, usize)> {
@@ -744,6 +784,7 @@ where
     V: Ref + Display + FromStr + Ord,
     VecMap: Fn(U) -> V + Copy,
 {
+    let last_update_seq_no = graph.last_update_seq_no;
     let new_entry_point = graph
         .entry_points
         .iter()
@@ -768,6 +809,7 @@ where
     GraphMem::<V> {
         entry_points: new_entry_point,
         layers: new_layers,
+        last_update_seq_no,
     }
 }
 
@@ -991,7 +1033,7 @@ mod tests {
         Ok(())
     }
 
-    use crate::hnsw::graph::mutation::{EdgeType, GraphMutation, UpdateEntryPoint};
+    use crate::hnsw::graph::mutation::{EdgeType, GraphMutation, MutationOp, UpdateEntryPoint};
 
     #[test]
     fn add_edges_outgoing_writes_only_to_id_list() {
@@ -1000,29 +1042,39 @@ mod tests {
         let b = IrisVectorId::from_serial_id(2);
         let c = IrisVectorId::from_serial_id(3);
         // Seed: a, b, c all exist at layer 0 with no edges.
-        graph.insert_apply(vec![
-            GraphMutation::AddNode {
-                id: a,
-                height: 1,
-                update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
-            },
-            GraphMutation::AddNode {
-                id: b,
-                height: 1,
-                update_ep: UpdateEntryPoint::False,
-            },
-            GraphMutation::AddNode {
-                id: c,
-                height: 1,
-                update_ep: UpdateEntryPoint::False,
-            },
-        ]);
-        graph.insert_apply(vec![GraphMutation::AddEdges {
-            base: a,
-            layer: 0,
-            neighbors: vec![b, c],
-            edge_type: EdgeType::Base,
-        }]);
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 1,
+                ops: vec![
+                    MutationOp::AddNode {
+                        id: a,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
+                    },
+                    MutationOp::AddNode {
+                        id: b,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::False,
+                    },
+                    MutationOp::AddNode {
+                        id: c,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::False,
+                    },
+                ],
+            })
+            .unwrap();
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 2,
+                ops: vec![MutationOp::AddEdges {
+                    base: a,
+                    layer: 0,
+                    neighbors: vec![b, c],
+                    edge_type: EdgeType::Base,
+                }],
+            })
+            .unwrap();
         assert_eq!(graph.layers[0].get_links(&a).unwrap(), &[b, c]);
         assert_eq!(
             graph.layers[0].get_links(&b).unwrap(),
@@ -1040,29 +1092,39 @@ mod tests {
         let a = IrisVectorId::from_serial_id(1);
         let b = IrisVectorId::from_serial_id(2);
         let c = IrisVectorId::from_serial_id(3);
-        graph.insert_apply(vec![
-            GraphMutation::AddNode {
-                id: a,
-                height: 1,
-                update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
-            },
-            GraphMutation::AddNode {
-                id: b,
-                height: 1,
-                update_ep: UpdateEntryPoint::False,
-            },
-            GraphMutation::AddNode {
-                id: c,
-                height: 1,
-                update_ep: UpdateEntryPoint::False,
-            },
-        ]);
-        graph.insert_apply(vec![GraphMutation::AddEdges {
-            base: a,
-            layer: 0,
-            neighbors: vec![b, c],
-            edge_type: EdgeType::Neighbors,
-        }]);
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 1,
+                ops: vec![
+                    MutationOp::AddNode {
+                        id: a,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
+                    },
+                    MutationOp::AddNode {
+                        id: b,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::False,
+                    },
+                    MutationOp::AddNode {
+                        id: c,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::False,
+                    },
+                ],
+            })
+            .unwrap();
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 2,
+                ops: vec![MutationOp::AddEdges {
+                    base: a,
+                    layer: 0,
+                    neighbors: vec![b, c],
+                    edge_type: EdgeType::Neighbors,
+                }],
+            })
+            .unwrap();
         assert_eq!(
             graph.layers[0].get_links(&a).unwrap(),
             &[] as &[IrisVectorId]
@@ -1077,29 +1139,39 @@ mod tests {
         let a = IrisVectorId::from_serial_id(1);
         let b = IrisVectorId::from_serial_id(2);
         let c = IrisVectorId::from_serial_id(3);
-        graph.insert_apply(vec![
-            GraphMutation::AddNode {
-                id: a,
-                height: 1,
-                update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
-            },
-            GraphMutation::AddNode {
-                id: b,
-                height: 1,
-                update_ep: UpdateEntryPoint::False,
-            },
-            GraphMutation::AddNode {
-                id: c,
-                height: 1,
-                update_ep: UpdateEntryPoint::False,
-            },
-        ]);
-        graph.insert_apply(vec![GraphMutation::AddEdges {
-            base: a,
-            layer: 0,
-            neighbors: vec![b, c],
-            edge_type: EdgeType::All,
-        }]);
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 1,
+                ops: vec![
+                    MutationOp::AddNode {
+                        id: a,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
+                    },
+                    MutationOp::AddNode {
+                        id: b,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::False,
+                    },
+                    MutationOp::AddNode {
+                        id: c,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::False,
+                    },
+                ],
+            })
+            .unwrap();
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 2,
+                ops: vec![MutationOp::AddEdges {
+                    base: a,
+                    layer: 0,
+                    neighbors: vec![b, c],
+                    edge_type: EdgeType::All,
+                }],
+            })
+            .unwrap();
         assert_eq!(graph.layers[0].get_links(&a).unwrap(), &[b, c]);
         assert_eq!(graph.layers[0].get_links(&b).unwrap(), &[a]);
         assert_eq!(graph.layers[0].get_links(&c).unwrap(), &[a]);
@@ -1111,47 +1183,57 @@ mod tests {
         let a = IrisVectorId::from_serial_id(1);
         let b = IrisVectorId::from_serial_id(2);
         let c = IrisVectorId::from_serial_id(3);
-        graph.insert_apply(vec![
-            GraphMutation::AddNode {
-                id: a,
-                height: 1,
-                update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
-            },
-            GraphMutation::AddEdges {
-                base: a,
-                layer: 0,
-                neighbors: vec![b, c],
-                edge_type: EdgeType::Base,
-            },
-            GraphMutation::AddNode {
-                id: b,
-                height: 1,
-                update_ep: UpdateEntryPoint::False,
-            },
-            GraphMutation::AddEdges {
-                base: b,
-                layer: 0,
-                neighbors: vec![a],
-                edge_type: EdgeType::Base,
-            },
-            GraphMutation::AddNode {
-                id: c,
-                height: 1,
-                update_ep: UpdateEntryPoint::False,
-            },
-            GraphMutation::AddEdges {
-                base: c,
-                layer: 0,
-                neighbors: vec![a],
-                edge_type: EdgeType::Base,
-            },
-        ]);
-        graph.insert_apply(vec![GraphMutation::RemoveEdges {
-            base: a,
-            layer: 0,
-            neighbors: vec![b],
-            edge_type: EdgeType::Base,
-        }]);
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 1,
+                ops: vec![
+                    MutationOp::AddNode {
+                        id: a,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
+                    },
+                    MutationOp::AddEdges {
+                        base: a,
+                        layer: 0,
+                        neighbors: vec![b, c],
+                        edge_type: EdgeType::Base,
+                    },
+                    MutationOp::AddNode {
+                        id: b,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::False,
+                    },
+                    MutationOp::AddEdges {
+                        base: b,
+                        layer: 0,
+                        neighbors: vec![a],
+                        edge_type: EdgeType::Base,
+                    },
+                    MutationOp::AddNode {
+                        id: c,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::False,
+                    },
+                    MutationOp::AddEdges {
+                        base: c,
+                        layer: 0,
+                        neighbors: vec![a],
+                        edge_type: EdgeType::Base,
+                    },
+                ],
+            })
+            .unwrap();
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 2,
+                ops: vec![MutationOp::RemoveEdges {
+                    base: a,
+                    layer: 0,
+                    neighbors: vec![b],
+                    edge_type: EdgeType::Base,
+                }],
+            })
+            .unwrap();
         assert_eq!(graph.layers[0].get_links(&a).unwrap(), &[c]);
         // Bidirectional cleanup is not implied — b's list still contains a.
         assert_eq!(graph.layers[0].get_links(&b).unwrap(), &[a]);
@@ -1164,28 +1246,137 @@ mod tests {
         let mut graph = GraphMem::<IrisVectorId>::new();
         let a = IrisVectorId::from_serial_id(1);
         let b = IrisVectorId::from_serial_id(2);
-        graph.insert_apply(vec![
-            // Listed first: an edge op that references a node not yet created.
-            GraphMutation::AddEdges {
-                base: a,
-                layer: 0,
-                neighbors: vec![b],
-                edge_type: EdgeType::Base,
-            },
-            // Listed second: the node creation.
-            GraphMutation::AddNode {
-                id: a,
-                height: 1,
-                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
-            },
-            GraphMutation::AddNode {
-                id: b,
-                height: 1,
-                update_ep: UpdateEntryPoint::False,
-            },
-        ]);
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 1,
+                ops: vec![
+                    // Listed first: an edge op that references a node not yet created.
+                    MutationOp::AddEdges {
+                        base: a,
+                        layer: 0,
+                        neighbors: vec![b],
+                        edge_type: EdgeType::Base,
+                    },
+                    // Listed second: the node creation.
+                    MutationOp::AddNode {
+                        id: a,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+                    },
+                    MutationOp::AddNode {
+                        id: b,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::False,
+                    },
+                ],
+            })
+            .unwrap();
         // Pass-1 created the nodes, then pass-2 applied the edge — so a should
         // now have b in its outgoing list.
         assert_eq!(graph.layers[0].get_links(&a).unwrap(), &[b]);
+    }
+
+    #[test]
+    fn next_seq_no_is_one_past_last_and_does_not_mutate() {
+        use crate::hnsw::GraphMem;
+        use iris_mpc_common::IrisVectorId;
+        let mut graph = GraphMem::<IrisVectorId>::new();
+        assert_eq!(graph.last_update_seq_no, 0);
+        assert_eq!(graph.next_sequence_number(), 1);
+        assert_eq!(graph.next_sequence_number(), 1, "peek must not mutate");
+        graph.last_update_seq_no = 42;
+        assert_eq!(graph.next_sequence_number(), 43);
+        assert_eq!(graph.last_update_seq_no, 42, "peek must not mutate");
+    }
+
+    #[test]
+    fn insert_apply_advances_last_update_seq_no_on_success() {
+        let mut graph = GraphMem::<IrisVectorId>::new();
+        let a = IrisVectorId::from_serial_id(1);
+        let mutation = GraphMutation::<IrisVectorId> {
+            seq_no: 1,
+            ops: vec![MutationOp::AddNode {
+                id: a,
+                height: 1,
+                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+            }],
+        };
+        graph
+            .insert_apply(&mutation)
+            .expect("strict-increase should hold");
+        assert_eq!(graph.last_update_seq_no, 1);
+    }
+
+    #[test]
+    fn insert_apply_rejects_seq_no_equal_to_last_update_seq_no() {
+        let mut graph = GraphMem::<IrisVectorId>::new();
+        graph.last_update_seq_no = 5;
+        let mutation = GraphMutation::<IrisVectorId> {
+            seq_no: 5,
+            ops: vec![MutationOp::AddNode {
+                id: IrisVectorId::from_serial_id(1),
+                height: 1,
+                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+            }],
+        };
+        let res = graph.insert_apply(&mutation);
+        assert!(res.is_err(), "equal seq_no must be rejected");
+        assert_eq!(
+            graph.last_update_seq_no, 5,
+            "state must be unchanged on Err"
+        );
+        assert_eq!(graph.layers.len(), 0, "no ops should have been applied");
+    }
+
+    #[test]
+    fn insert_apply_rejects_seq_no_below_last_update_seq_no() {
+        let mut graph = GraphMem::<IrisVectorId>::new();
+        graph.last_update_seq_no = 10;
+        let mutation = GraphMutation::<IrisVectorId> {
+            seq_no: 9,
+            ops: vec![MutationOp::AddNode {
+                id: IrisVectorId::from_serial_id(1),
+                height: 1,
+                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+            }],
+        };
+        let res = graph.insert_apply(&mutation);
+        assert!(res.is_err());
+        assert_eq!(graph.last_update_seq_no, 10);
+    }
+
+    #[test]
+    fn insert_apply_all_short_circuits_on_first_violation() {
+        let mut graph = GraphMem::<IrisVectorId>::new();
+        let a = IrisVectorId::from_serial_id(1);
+        let b = IrisVectorId::from_serial_id(2);
+        let mutations = vec![
+            GraphMutation::<IrisVectorId> {
+                seq_no: 1,
+                ops: vec![MutationOp::AddNode {
+                    id: a,
+                    height: 1,
+                    update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+                }],
+            },
+            // Equal seq_no — should fail.
+            GraphMutation::<IrisVectorId> {
+                seq_no: 1,
+                ops: vec![MutationOp::AddNode {
+                    id: b,
+                    height: 1,
+                    update_ep: UpdateEntryPoint::False,
+                }],
+            },
+        ];
+        let res = graph.insert_apply_all(&mutations);
+        assert!(res.is_err(), "second mutation must be rejected");
+        assert_eq!(
+            graph.last_update_seq_no, 1,
+            "first applied; last_update_seq_no at 1"
+        );
+        // First mutation's AddNode took effect, second did not.
+        assert!(graph.layers[0].get_links(&a).is_some());
+        assert!(graph.layers[0].get_links(&b).is_none());
     }
 }

@@ -187,7 +187,7 @@ impl TerminalAction for InstallAsServing {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hnsw::graph::mutation::{GraphMutation, UpdateEntryPoint};
+    use crate::hnsw::graph::mutation::{GraphMutation, MutationOp, UpdateEntryPoint};
 
     fn vid(n: u32) -> VectorId {
         VectorId::from_serial_id(n)
@@ -216,11 +216,15 @@ mod tests {
         ];
         for eye in &target {
             let mut g = eye.write().await;
-            g.insert_apply(vec![GraphMutation::AddNode {
-                id: vid(99),
-                height: 1,
-                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
-            }]);
+            g.insert_apply(&GraphMutation {
+                seq_no: 1,
+                ops: vec![MutationOp::AddNode {
+                    id: vid(99),
+                    height: 1,
+                    update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+                }],
+            })
+            .unwrap();
         }
 
         // Snapshot graph carries a different graph (node 1).
@@ -228,11 +232,15 @@ mod tests {
             let mut left = GraphMem::new();
             let mut right = GraphMem::new();
             for g in [&mut left, &mut right] {
-                g.insert_apply(vec![GraphMutation::AddNode {
-                    id: vid(1),
-                    height: 1,
-                    update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
-                }]);
+                g.insert_apply(&GraphMutation {
+                    seq_no: 1,
+                    ops: vec![MutationOp::AddNode {
+                        id: vid(1),
+                        height: 1,
+                        update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+                    }],
+                })
+                .unwrap();
             }
             [left, right]
         };
@@ -283,16 +291,25 @@ mod tests {
         // swaps would fail the assertion loudly.
         let mut left = GraphMem::<VectorId>::new();
         let mut right = GraphMem::<VectorId>::new();
-        left.insert_apply(vec![GraphMutation::AddNode {
-            id: vid(7),
-            height: 2,
-            update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
-        }]);
-        right.insert_apply(vec![GraphMutation::AddNode {
-            id: vid(11),
-            height: 1,
-            update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
-        }]);
+        left.insert_apply(&GraphMutation {
+            seq_no: 1,
+            ops: vec![MutationOp::AddNode {
+                id: vid(7),
+                height: 2,
+                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+            }],
+        })
+        .unwrap();
+        right
+            .insert_apply(&GraphMutation {
+                seq_no: 1,
+                ops: vec![MutationOp::AddNode {
+                    id: vid(11),
+                    height: 1,
+                    update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+                }],
+            })
+            .unwrap();
         let graph = [left, right];
 
         // Consensus path.

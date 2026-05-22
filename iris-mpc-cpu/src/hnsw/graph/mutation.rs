@@ -1,18 +1,22 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct GroupedMutations<V: Ord>(pub Vec<GraphMutation<V>>);
+pub struct GraphMutation<V: Ord> {
+    pub seq_no: u64,
+    pub ops: Vec<MutationOp<V>>,
+}
 
 // NOTE: if a new version of any mutation is needed (ex: InsertNodeV2) such that
-// the new variant would behave differently than before and it is desired to still process
-// old variants apppropriately, simply add the new variant to the END of GraphMutation. If
-// the new variant is added to the end then bincode can deserialize it correctly. Adding a new variant
-// in between existing ones will cause bincode to deserialize the old version of GraphMutation with garbage
-// data for its fields.
+// the new variant would behave differently than before and it is desired to
+// still process old variants apppropriately, simply add the new variant to the
+// END of MutationOp. If the new variant is added to the end then bincode can
+// deserialize it correctly. Adding a new variant in between existing ones will
+// cause bincode to deserialize the old version of MutationOp with garbage data
+// for its fields.
 //
 /// Represents a diff to apply to an existing graph.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum GraphMutation<Vector: Ord> {
+pub enum MutationOp<Vector: Ord> {
     AddNode {
         id: Vector,
         /// Number of real graph layers this node is included in. The node will
@@ -37,7 +41,7 @@ pub enum GraphMutation<Vector: Ord> {
     },
 }
 
-impl<V: std::fmt::Debug + Ord> std::fmt::Debug for GraphMutation<V> {
+impl<V: std::fmt::Debug + Ord> std::fmt::Debug for MutationOp<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::RemoveNode { id } => f.debug_struct("RemoveNode").field("id", id).finish(),
