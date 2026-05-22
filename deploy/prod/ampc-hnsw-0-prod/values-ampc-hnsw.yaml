@@ -21,7 +21,7 @@ env:
     value: "20000000"
 
   - name: SMPC__MAX_BATCH_SIZE
-    value: "32"
+    value: "8"
 
   - name: SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS
     value: "30"
@@ -29,25 +29,19 @@ env:
   - name: SMPC__PROCESSING_TIMEOUT_SECS
     value: "1240"
 
-  - name: SMPC__HAWK_REQUEST_PARALLELISM
-    value: "1024"
-
-  - name: SMPC__HAWK_CONNECTION_PARALLELISM
-    value: "48"
-
   - name: SMPC__HAWK_STREAM_PARALLELISM
     value: "32"
 
   - name: SMPC__DISABLE_PERSISTENCE
-    value: "false"
-
-  - name: SMPC__HAWK_SERVER_REAUTHS_ENABLED
     value: "true"
 
-  - name: SMPC__HAWK_SERVER_RESETS_ENABLED
+  - name: SMPC__ENABLE_REAUTH
     value: "true"
 
-  - name: SMPC__HAWK_SERVER_DELETIONS_ENABLED
+  - name: SMPC__ENABLE_RESET
+    value: "true"
+
+  - name: SMPC__ENABLE_DELETION
     value: "true"
 
   - name: SMPC__LUC_ENABLED
@@ -74,17 +68,41 @@ env:
   - name: SMPC__SERVER_COORDINATION__IMAGE_NAME
     value: $(IMAGE_NAME)
 
+  - name: SMPC__SERVER_COORDINATION__STARTUP_SYNC_TIMEOUT_SECS
+    value: "3600"
+
+  - name: SMPC__SERVER_COORDINATION__HEARTBEAT_INITIAL_RETRIES
+    value: "65"
+
+  - name: SMPC__SERVER_COORDINATION__HTTP_QUERY_RETRY_DELAY_MS
+    value: "5000"
+
+  - name: SMPC__SERVER_COORDINATION__HEARTBEAT_INTERVAL_SECS
+    value: "3"
+
+  - name: SMPC__SERVER_COORDINATION__SHUTDOWN_LAST_RESULTS_SYNC_TIMEOUT_SECS
+    value: "60"
+
+  - name: SMPC__SERVER_COORDINATION__HEALTHCHECK_PORTS
+    value: '["8000","8000","8000"]'
+
   - name: SMPC__SHARES_BUCKET_NAME
     value: "wf-mpc-prod-smpcv2-sns-requests"
 
+  - name: SMPC__SCHEMA_NAME
+    value: "SMPC_rerand"
+
+  - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
+    value: "_genesis_restored_v2"
+
   - name: SMPC__ENABLE_S3_IMPORTER
-    value: "false"
+    value: "true"
 
   - name: SMPC__DB_CHUNKS_BUCKET_NAME
     value: "iris-mpc-db-exporter-store-node-0-prod--eun1-az3--x-s3"
 
   - name: SMPC__DB_CHUNKS_FOLDER_NAME
-    value: "hnsw_even_odd_with_version_id_output_16k"
+    value: "genesis_base_even_odd_with_version_id_output_16k_rerandomized"
 
   - name: SMPC__LOAD_CHUNKS_PARALLELISM
     value: "64"
@@ -136,6 +154,34 @@ env:
   - name: SMPC__ENABLE_MODIFICATIONS_REPLAY
     value: "true"
 
+  - name: SMPC__GRAPH_CHECKPOINT_BUCKET_NAME
+    value: "ampc-hnsw-graph-store-node-0-prod-eu-central-1"
+
+  - name: SMPC__GRAPH_CHECKPOINT_BUCKET_REGION
+    value: "eu-central-1"
+
+  # Parallelism settings
+  - name: SMPC__HAWK_REQUEST_PARALLELISM
+    value: "96"
+
+  - name: SMPC__HAWK_CONNECTION_PARALLELISM
+    value: "96"
+
+  - name: SMPC__SEPARATE_TOKIO_CORES_PER_NODE
+    value: "32"
+
+  # HNSW parameter settings
+  - name: SMPC__HNSW_PARAM_EF_CONSTR
+    value: "320"
+
+  - name: SMPC__HNSW_PARAM_EF_SEARCH
+    value: "320"
+
+  - name: SMPC__HNSW_PARAM_M
+    value: "320"
+
+  - name: SMPC__HNSW_LAYER_DENSITY
+    value: "240"
 
   - name: SMPC__TLS__PRIVATE_KEY
     value: "/etc/ssl/private/key.pem"
