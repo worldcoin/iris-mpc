@@ -1,10 +1,3 @@
-//! [`Materializer`] implementation for the checkpoint protocol.
-//!
-//! [`RebuildFromCheckpoint`] downloads the base checkpoint from S3 and
-//! replays WAL rows up to `freeze`. Deterministic; used by the sidecar
-//! daemon and by Hawk restart. Both eyes of each WAL row are applied
-//! atomically via [`GraphMem::insert_apply`], so left/right cannot drift.
-
 use async_trait::async_trait;
 use aws_sdk_s3::Client as S3Client;
 
@@ -18,9 +11,7 @@ use crate::utils::serialization::graph::GraphFormat;
 use futures::TryStreamExt;
 use iris_mpc_common::vector_id::VectorId;
 
-/// Materializer that rebuilds the graph deterministically from an S3
-/// checkpoint plus WAL replay. Used by the sidecar daemon and by Hawk
-/// restart.
+/// Rebuilds the graph from an S3 checkpoint plus WAL replay.
 pub struct RebuildFromCheckpoint<'a, V: VectorStore> {
     pub graph_store: &'a GraphPg<V>,
     pub s3_client: &'a S3Client,
@@ -44,10 +35,6 @@ impl<V: VectorStore + Send + Sync> Materializer for RebuildFromCheckpoint<'_, V>
         base: CheckpointMeta,
         freeze: FreezeHeight,
     ) -> Result<Graph, CycleError> {
-        // Phase A: stream the base graph down from S3. Peak transient memory
-        // is ~`DEFAULT_DOWNLOAD_PIPE_CAPACITY` + 1× deserialized graph; the
-        // BLAKE3 over the wire bytes is tee'd inline and returned for the
-        // hash-equality check below.
         if base.graph_version != GraphFormat::Current.version() {
             return Err(CycleError::Fatal(format!(
                 "unsupported checkpoint graph_version={} for {}/{}",
@@ -73,10 +60,9 @@ impl<V: VectorStore + Send + Sync> Materializer for RebuildFromCheckpoint<'_, V>
             )));
         }
 
-        // Phase B: replay WAL rows in `(base.graph_mutation_id, freeze]`.
-        // Runner contract: `freeze.0 >= lo` (else `Skipped(PeerBehindBase)`),
-        // so `hi < lo` is a broken upstream invariant — fail loudly.
-        // `hi == lo` is a valid empty replay (restart with no new mutations).
+        // Replay WAL rows in `(base.graph_mutation_id, freeze]`. The Runner's
+        // `PeerBehindBase` skip ensures `freeze >= lo` here; `hi == lo` is a
+        // valid empty replay.
         let lo = base.graph_mutation_id.unwrap_or(0);
         let hi = freeze.0;
         if hi < lo {

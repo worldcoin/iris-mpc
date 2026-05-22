@@ -1,10 +1,6 @@
-//! Unified checkpoint protocol.
-//!
-//! Shared by the sidecar binary, an in-Hawk background checkpointing task,
-//! and the Hawk startup/restart path. The protocol orchestrates five
-//! phases (base agreement → height agreement → materialize → hash → hash
-//! consensus) over pluggable traits. Daemon loops, sleep cadence, and
-//! process lifecycle live outside this module in each caller's binary.
+//! Unified checkpoint protocol shared by the sidecar binary, an in-Hawk
+//! background task, and the Hawk restart path. Five phases over pluggable
+//! traits: base agreement → height → materialize → hash → hash consensus.
 
 pub mod hasher;
 pub mod materializer;
@@ -49,10 +45,8 @@ pub type Graph = BothEyes<GraphMem<VectorId>>;
 
 /// Metadata for the base checkpoint a cycle starts from.
 ///
-/// All fields participate in base agreement (strict equality across parties).
-/// `graph_version` lives here so the materializer doesn't need a separate
-/// lookup to drive S3 download, and so version-skewed parties fail the base
-/// round rather than the hash round.
+/// `graph_version` is included so version-skewed parties fail the base
+/// round rather than slipping through to a hash mismatch.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckpointMeta {
     pub checkpoint_id: i64,
@@ -84,29 +78,22 @@ pub enum SkipReason {
         available: u64,
         required: u64,
     },
-    /// `min(peer heights)` came in below the agreed base — a peer is behind
-    /// the base checkpoint. Materializing under this condition would write
-    /// a regressing WAL anchor (UploadAndRecord) or install the base graph
-    /// while claiming a lower height (InstallAsServing). Caller decides
-    /// whether to wait + retry.
+    /// `min(peer heights)` came in below the agreed base. Materializing here
+    /// would either regress the WAL anchor on the next checkpoint or install
+    /// the base graph while reporting a lower freeze height.
     PeerBehindBase {
         freeze: GraphMutationId,
         base: GraphMutationId,
     },
-    /// The [`BaseSelector`] found no checkpoint shared across all parties.
-    /// With `MostRecentCommon`, this means even the deepest entry of every
-    /// peer's recent list has no overlap with mine — operator intervention
-    /// is likely needed. With `StrictLatest`, this means the newest rows
-    /// don't match (peers may catch up on retry).
+    /// [`BaseSelector::pick`] returned `None` — no checkpoint shared across
+    /// all parties.
     NoCommonBase,
 }
 
 #[derive(Debug, Error)]
 pub enum CycleError {
-    /// Caller decides whether to retry-and-loop or exit-and-fail.
     #[error("transient: {0}")]
     Transient(String),
-    /// Caller exits. The crash signal is the alert.
     #[error("fatal: {0}")]
     Fatal(String),
 }
@@ -117,10 +104,7 @@ pub struct CycleConfig {
     /// `0` for the restart path; e.g. `10_000` for sidecar/in-Hawk loops.
     pub min_mutations_to_apply: u64,
     pub peer_round_timeout: Duration,
-    /// Window of recent checkpoints to advertise during Phase 1's base
-    /// agreement. Mirrors the genesis design's 10-deep horizon. Larger
-    /// values increase resilience to per-party history skew at the cost of
-    /// a slightly bigger Phase 1 message.
+    /// Newest-first window of recent checkpoints advertised in Phase 1.
     pub checkpoint_window: usize,
 }
 
@@ -138,11 +122,6 @@ pub trait Materializer {
 
 #[async_trait]
 pub trait TerminalAction {
-    /// `base` is the agreed-upon checkpoint the cycle started from;
-    /// `freeze` is the agreed freeze height; `graph` is the materialized
-    /// snapshot at that height; `hash` is the consensus-agreed BLAKE3 over
-    /// the canonical bytes of `graph`.
-    ///
     /// Implementations may carry fields forward from `base` that aren't
     /// tracked elsewhere (e.g. `last_indexed_iris_id` for Hawk Main).
     async fn finalize(
@@ -238,11 +217,7 @@ where
     H: GraphHasher,
     Sel: BaseSelector,
 {
-    // Phase 1 — base agreement. Each party advertises its recent-checkpoints
-    // list (newest first); the selector picks the agreed row.
-    //   - StrictLatest: all parties' newest must match exactly.
-    //   - MostRecentCommon: pick the most recent row everyone has.
-    // No common entry → Skipped(NoCommonBase); the caller may retry later.
+    // Phase 1 — base agreement.
     let my_recent = store.recent_checkpoints(cfg.checkpoint_window).await?;
     let peer_lists = transport
         .exchange(
@@ -288,11 +263,6 @@ where
             .fold(local_height, GraphMutationId::min),
     );
 
-    // A peer reporting a height below our agreed base means they haven't
-    // ingested up to the base WAL position yet. Replaying would either
-    // (a) regress the WAL anchor stored at the next checkpoint, or
-    // (b) install the base graph while reporting a freeze height that's
-    // lower than the base's. Bail with Skipped so callers can wait.
     let lo = agreed_base.graph_mutation_id.unwrap_or(0);
     if freeze.0 < lo {
         return Ok(Outcome::Skipped(SkipReason::PeerBehindBase {

@@ -1,45 +1,14 @@
-//! `Blake3GraphHasher` — streaming BLAKE3 over the canonical bytes of a
-//! `Graph` (i.e. `BothEyes<GraphMem<VectorId>>`).
+//! Streaming BLAKE3 over the canonical bytes of a `Graph`.
 //!
-//! # Canonical bytes contract
+//! Cross-party determinism depends on two non-obvious invariants:
 //!
-//! Three parties materialize the same WAL replay independently and must
-//! produce byte-identical serializations for hash consensus to work. The
-//! canonical bytes are defined as `bincode::serialize(&graph)` where `graph:
-//! &BothEyes<GraphMem<VectorId>>`, with these determinism guarantees:
-//!
-//! 1. **Eye order**: `[LEFT, RIGHT]`, by the existing `BothEyes<T> = [T; 2]`
-//!    convention.
-//! 2. **`GraphMem.layers`** is a `Vec<Layer<V>>` indexed by layer number; Vec
-//!    iteration order matches layer index, deterministic by construction.
-//! 3. **`GraphMem.entry_points`** is a `Vec<EntryPoint<V>>` in the order the
-//!    parties applied entry-point operations. Because all parties replay the
-//!    same WAL in the same order, this Vec ends up identical across parties.
-//! 4. **`Layer.links: HashMap<V, Vec<V>>`** is serialized via the custom
-//!    [`SortedLinks`] wrapper at `layered_graph.rs:380`, which sorts entries
-//!    by key before emitting. HashMap iteration order is therefore *not* a
-//!    determinism risk at serialize time.
-//! 5. **Per-key neighbor `Vec<V>`** is emitted in insertion order. The
-//!    invariant is that the planner sorts neighbors before calling
-//!    `set_links`, and `Layer::add_neighbor` maintains sortedness via
-//!    `binary_search + insert`. Any caller bypassing the planner can break
-//!    this invariant and corrupt hash consensus.
-//! 6. **`Layer.set_hash: SetHash`** is order-agnostic by design (wrapping
-//!    add + SipHash13). Trivially deterministic given the final
-//!    `(key, value)` pairs.
-//!
-//! Of these, only (5) depends on a load-bearing invariant in the planner
-//! rather than the serializer itself. If neighbor lists ever get out of
-//! order, hash consensus fails immediately (a fatal cycle error) — loud
-//! rather than silent. A debug-only assertion that neighbor lists are
-//! sorted at serialize time is a candidate follow-up.
-//!
-//! # Streaming
-//!
-//! `blake3::Hasher` implements `std::io::Write`, so `bincode::serialize_into`
-//! feeds bytes straight into the hasher with no intermediate buffer. The
-//! hash bytes the existing buffered `blake3::hash(bincode::serialize(...))`
-//! call produces are bit-identical to what this hasher returns.
+//! - **`Layer.links: HashMap<V, Vec<V>>`** is serialized via the custom
+//!   `SortedLinks` wrapper in `layered_graph.rs`, which sorts entries by
+//!   key before emitting — so HashMap iteration order is not a hash risk.
+//! - **Per-key neighbor `Vec<V>`** is emitted in insertion order; the
+//!   planner is responsible for sorting neighbors before `set_links`, and
+//!   `Layer::add_neighbor` maintains sortedness. Bypassing the planner
+//!   breaks hash consensus.
 
 use crate::checkpoint_protocol::{Blake3Hash, Graph, GraphHasher};
 
@@ -73,9 +42,8 @@ mod tests {
 
     type LayerInput = Vec<(usize, Vec<(VectorId, Vec<VectorId>)>)>;
 
-    /// Hand-build a graph with controlled state. Skipping `set_links` etc.
-    /// lets the tests check serializer-level determinism rather than the
-    /// planner's sortedness invariant.
+    /// Bypasses the planner so tests can pin serializer-level determinism
+    /// independently of the planner's sortedness invariant.
     fn graph_from(eyes: [LayerInput; 2]) -> Graph {
         let build = |layers_in: LayerInput| -> GraphMem<VectorId> {
             let mut g = GraphMem::<VectorId>::new();
@@ -130,10 +98,8 @@ mod tests {
         assert_ne!(h.hash_canonical(&g1), h.hash_canonical(&g2));
     }
 
-    /// HashMap iteration order is unspecified across runs; the custom
-    /// `SortedLinks` Serialize impl on `Layer` is what makes the hash
-    /// deterministic. This test simulates two parties' HashMaps populated in
-    /// different orders and asserts the canonical bytes match.
+    /// Load-bearing: pins the `SortedLinks` Serialize impl that makes
+    /// HashMap iteration order irrelevant to the hash.
     #[test]
     fn hash_is_independent_of_hashmap_insertion_order() {
         let entries: Vec<(VectorId, Vec<VectorId>)> = (0..32)
@@ -150,10 +116,9 @@ mod tests {
         assert_eq!(h.hash_canonical(&g_forward), h.hash_canonical(&g_reversed));
     }
 
-    /// The hash is BLAKE3 of the bincode bytes — wire-compatible with the
-    /// existing buffered `upload_graph_checkpoint` path's hex hash. If this
-    /// equality ever breaks, every checkpoint written by the new pipeline
-    /// will be unverifiable by readers using the old format. Lock it in.
+    /// Wire-compat gate: the streaming hash must equal the buffered
+    /// `blake3::hash(bincode::serialize(&graph))` used by the existing
+    /// `upload_graph_checkpoint` path.
     #[test]
     fn streaming_hash_matches_buffered_blake3_of_bincode_bytes() {
         let g = graph_from([

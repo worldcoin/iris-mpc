@@ -1,27 +1,11 @@
-//! `ConsensusTransport` over ampc-common's [`ControlChannel`].
+//! `ConsensusTransport` over ampc-common's [`ControlChannel`]. Each proposal
+//! is bincode-serialized into a `WireFrame { cycle_nonce, msg }`; nonce or
+//! variant mismatch is fatal.
 //!
-//! Each party has a `next` and a `prev` neighbour; sends block until
-//! flushed, receives block until a complete message arrives. Production
-//! callers obtain a `Box<dyn ControlChannel>` from
-//! `NetworkHandle::control_channel()`; tests drive an in-memory triangle
-//! ring (see [`test_ring`]) that implements `ControlChannel` over mpsc.
-//!
-//! # Wire format
-//!
-//! Each proposal is bincode-serialized into a `WireFrame { cycle_nonce, msg }`,
-//! wrapped in [`NetworkValue::Bytes`], and sent as a single message on the
-//! channel. The nonce lets a party detect cross-wires from a stale cycle
-//! (fatal). Variant mismatches (a peer responding with `HeightProposal` to
-//! our `BaseProposal`) are also fatal. Any other `NetworkValue` variant on
-//! receive is fatal too — we never share a control channel with non-protocol
-//! traffic.
-//!
-//! # Send-before-recv
-//!
-//! `exchange` issues both sends before either receive. This matches
-//! `ControlChannel::sync`'s deadlock-avoidance pattern: as long as the wire
-//! has enough buffering to absorb a single proposal, all parties can finish
-//! their sends concurrently before any of them blocks on a recv.
+//! `exchange` issues both sends before either receive — matches
+//! `ControlChannel::sync`'s deadlock-avoidance pattern. With enough channel
+//! buffering for one proposal, all parties' sends finish before any blocks
+//! on a recv.
 
 use std::time::Duration;
 

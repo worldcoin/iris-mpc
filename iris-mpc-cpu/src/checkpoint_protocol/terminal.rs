@@ -1,14 +1,3 @@
-//! [`TerminalAction`] implementations for the checkpoint protocol.
-//!
-//! Two v0 actions:
-//!
-//! - [`UploadAndRecord`] serializes the materialized graph, uploads it to
-//!   S3, and records a `genesis_graph_checkpoint` row. Used by the
-//!   sidecar daemon and by in-Hawk background checkpointing.
-//!
-//! - [`InstallAsServing`] swaps the materialized graph into the live
-//!   in-Hawk graph reference. Used by the Hawk restart path.
-
 use async_trait::async_trait;
 use aws_sdk_s3::Client as S3Client;
 use std::sync::Arc;
@@ -29,13 +18,11 @@ use crate::hnsw::{
 use crate::utils::serialization::graph::GraphFormat;
 use iris_mpc_common::vector_id::VectorId;
 
-/// Terminal action that uploads the materialized graph to S3 and inserts a
-/// new `genesis_graph_checkpoint` row.
+/// Uploads the materialized graph to S3 and inserts a new
+/// `genesis_graph_checkpoint` row.
 ///
-/// `last_indexed_iris_id` is carried forward from `base` — Hawk Main does
-/// not maintain per-mutation iris-id tracking, and the field is
-/// observability-only in this code path. `last_indexed_modification_id`
-/// and `graph_mutation_id` are both set to `snapshot.actual_height`.
+/// `last_indexed_iris_id` is carried forward from `base` (Hawk Main doesn't
+/// track per-mutation iris ids; the field is observability-only on this path).
 pub struct UploadAndRecord<'a, V: VectorStore> {
     pub graph_store: &'a GraphPg<V>,
     pub s3_client: &'a S3Client,
@@ -79,13 +66,9 @@ impl<V: VectorStore + Send + Sync> TerminalAction for UploadAndRecord<'_, V> {
             uuid::Uuid::new_v4()
         );
 
-        // Stream the canonical bincode bytes through BLAKE3 (tee) into a
-        // multipart upload. Peak RAM stays ~= 1× graph + part buffers; no
-        // fully serialized `Vec<u8>` ever exists. The hash comes back via a
-        // oneshot — sent from inside the serializer closure right after
-        // `bincode::serialize_into` finishes — and is ready by the time
-        // `stream_serialize_and_upload_with` returns (the closure completes
-        // before the pipe drains, which happens before `complete_multipart_upload`).
+        // BlakeTee hashes wire bytes inline while bincode streams into the
+        // multipart upload pipe — no fully serialized `Vec<u8>` exists. The
+        // oneshot returns the digest from inside the closure.
         let (hash_tx, hash_rx) = oneshot::channel::<Blake3Hash>();
         stream_serialize_and_upload_with(
             self.s3_client,
@@ -112,13 +95,7 @@ impl<V: VectorStore + Send + Sync> TerminalAction for UploadAndRecord<'_, V> {
             )
         })?;
 
-        // Defensive check: the consensus hash (from `Blake3GraphHasher`) and
-        // the upload-time hash (from `BlakeTee` over the same `serialize_into`)
-        // must agree. They're structurally equal today — same canonical
-        // bytes, same algorithm — but if either path's serializer ever
-        // drifts, every subsequent cycle starting from this checkpoint would
-        // silently fail base or hash agreement. Catch drift at the writing
-        // party.
+        // Guards against serializer drift between the hasher and upload paths.
         if upload_hash != hash {
             return Err(CycleError::Fatal(format!(
                 "consensus/upload hash mismatch: consensus={} upload={}",
@@ -154,10 +131,7 @@ impl<V: VectorStore + Send + Sync> TerminalAction for UploadAndRecord<'_, V> {
     }
 }
 
-/// Terminal action that swaps the materialized graph into the live in-Hawk
-/// graph reference. Used at startup so the first request hits the rebuilt
-/// graph; the protocol's hash consensus has already proven the graph is
-/// byte-identical across parties.
+/// Swaps the materialized graph into the live in-Hawk graph reference.
 pub struct InstallAsServing {
     pub target: BothEyes<Arc<RwLock<GraphMem<VectorId>>>>,
 }
@@ -266,29 +240,17 @@ mod tests {
         }
     }
 
-    /// The protocol's consensus hash (computed by [`Blake3GraphHasher`])
-    /// MUST equal the hash that `upload_graph_checkpoint` recomputes and
-    /// stores in `genesis_graph_checkpoint.blake3_hash`. Both paths
-    /// bincode-serialize the same `BothEyes<GraphMem<VectorId>>`, but
-    /// through different argument shapes:
-    ///
-    /// - Hasher: `bincode::serialize_into(blake3, &graph)` where
-    ///   `graph: &[GraphMem; 2]`.
-    /// - Upload: `bincode::serialize(&[&*left, &*right])` where the
-    ///   argument is `&[&GraphMem; 2]`.
-    ///
-    /// If they ever diverge, every cycle from the resulting checkpoint
-    /// fails base or hash agreement silently. `UploadAndRecord::finalize`
-    /// has a runtime mismatch check; this test pins the property down at
-    /// the serializer level so any drift surfaces in unit tests.
+    /// Pins serializer-level equality between the consensus hash
+    /// (`bincode::serialize_into(blake3, &[GraphMem; 2])`) and the upload-path
+    /// hash (`bincode::serialize(&[&GraphMem; 2])`). Drift here silently breaks
+    /// every cycle reading the resulting checkpoint.
     #[test]
     fn consensus_hash_matches_upload_path_serialization() {
         use crate::checkpoint_protocol::Blake3GraphHasher;
         use crate::checkpoint_protocol::GraphHasher;
         use crate::execution::hawk_main::{LEFT, RIGHT};
 
-        // Build a non-trivial graph: distinct content per eye so eye-order
-        // swaps would fail the assertion loudly.
+        // Distinct content per eye so any eye-order swap surfaces in the assertion.
         let mut left = GraphMem::<VectorId>::new();
         let mut right = GraphMem::<VectorId>::new();
         left.insert_apply(&GraphMutation {

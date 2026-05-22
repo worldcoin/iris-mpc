@@ -1,17 +1,8 @@
-//! Cycle drivers. Two callers wire the checkpoint protocol into a runtime:
+//! Cycle drivers: [`sidecar_main`] (daemon loop) and
+//! [`restart_from_checkpoint`] (one-shot Hawk startup).
 //!
-//! - [`sidecar_main`] — the daemon loop: sleep / open ControlChannel /
-//!   `run_cycle` with [`RebuildFromCheckpoint`] + [`UploadAndRecord`] /
-//!   classify outcome / sleep again. Honours a [`CancellationToken`]
-//!   between cycles.
-//!
-//! - [`restart_from_checkpoint`] — one-shot Hawk startup helper: same
-//!   protocol cycle but with [`InstallAsServing`] terminal and
-//!   `min_mutations_to_apply = 0`. Returns a [`RestartOutcome`] so the
-//!   caller can distinguish installed / no checkpoint / peer behind base.
-//!
-//! Both functions get a fresh `ControlChannel` per call: nothing is reused
-//! across cycles, so per-cycle failures stay isolated.
+//! Each cycle opens a fresh `ControlChannel`; no transport state crosses
+//! cycle boundaries, so per-cycle failures stay isolated.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -53,9 +44,7 @@ pub struct SidecarConfig {
     /// Lower-bound for cycle work; below this the cycle is skipped (no
     /// upload / no DB write) to avoid hammering S3 with near-empty deltas.
     pub min_mutations_per_cycle: u64,
-    /// Window of recent checkpoints advertised in Phase 1's base-list
-    /// exchange. Matches the genesis design's 10-deep horizon. Larger
-    /// values increase resilience to per-party history skew.
+    /// Newest-first window of recent checkpoints advertised in Phase 1.
     pub checkpoint_window: usize,
     /// Marks the produced row as archival (skipped by pruning).
     pub is_archival: bool,
@@ -235,12 +224,8 @@ pub async fn restart_from_checkpoint<V: VectorStore + Send + Sync>(
             tracing::warn!("restart skipped: no common base across parties");
             Ok(RestartOutcome::NoCommonBase)
         }
-        Outcome::Skipped(SkipReason::NotEnoughMutations { .. }) => {
-            // Structurally impossible: min_mutations_to_apply=0 cannot
-            // trigger this branch.
-            Err(eyre!(
-                "restart unexpectedly skipped on NotEnoughMutations despite min=0"
-            ))
-        }
+        Outcome::Skipped(SkipReason::NotEnoughMutations { .. }) => Err(eyre!(
+            "restart unexpectedly skipped on NotEnoughMutations despite min=0"
+        )),
     }
 }

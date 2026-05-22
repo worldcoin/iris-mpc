@@ -1,9 +1,5 @@
-//! Protocol-level unit tests using mocks for all five traits.
-//!
-//! Goal: exercise `run_cycle` in isolation — every phase, every fatal path,
-//! every gating condition — without S3, Postgres, or peers. The mocks below
-//! are deliberately dumb; their only job is to record what `run_cycle`
-//! called on them and to return canned responses.
+//! Mocked-trait protocol tests for `run_cycle`. The three-party tests at
+//! the bottom drive a real in-memory ring transport.
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -50,8 +46,7 @@ fn meta(id: i64, mut_id: Option<i64>) -> CheckpointMeta {
 
 #[derive(Clone)]
 struct MockStore {
-    /// Recent checkpoints, newest first. Tests that previously used `latest:`
-    /// now seed this with a single entry.
+    /// Newest first.
     recent: Vec<CheckpointMeta>,
     max_id: GraphMutationId,
 }
@@ -84,11 +79,6 @@ impl MutationStore for MockStore {
 }
 
 // ── mock ConsensusTransport ──────────────────────────────────────────────
-//
-// Records every `exchange` call (msg variant + nonce + timeout) and returns
-// canned peer responses. Each canned response is a `ConsensusMessage` —
-// the caller's `expect` closure projects it. Returning a wrong variant
-// drives the "variant mismatch is fatal" path.
 
 #[derive(Clone)]
 struct ExchangeCall {
