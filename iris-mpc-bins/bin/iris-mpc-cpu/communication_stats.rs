@@ -147,7 +147,7 @@ impl NetworkHandle for CountingNetworkHandle {
     }
 
     async fn sync_peers(&mut self) -> Result<()> {
-        self.inner.sync_peers().await
+        self.inner.control_channel().await?.sync().await
     }
 }
 
