@@ -5,7 +5,7 @@ use ampc_server_utils::{try_get_endpoint_other_nodes, ServerCoordinationConfig};
 pub use data::*;
 pub use s3_client::*;
 
-use eyre::{bail, Result};
+use eyre::{bail, Context, Result};
 
 use crate::{
     execution::hawk_main::HawkOps, hawkers::aby3::aby3_store::Aby3Store,
@@ -98,12 +98,15 @@ pub async fn get_others_graph_hashes(
     let connected_and_ready =
         try_get_endpoint_other_nodes(config, GRAPH_CHECKPOINT_ENDPOINT).await?;
 
-    let response_texts_futs: Vec<_> = connected_and_ready
-        .into_iter()
-        .map(|resp| resp.json())
-        .collect();
-    let graph_checkpoints: Vec<GraphCheckpointHashes> =
-        futures::future::try_join_all(response_texts_futs).await?;
+    let mut graph_checkpoints = Vec::with_capacity(connected_and_ready.len());
+    for (status_code, body) in connected_and_ready.into_iter() {
+        if !status_code.is_success() {
+            bail!("failed to get graph checkpoint: {:?}", status_code);
+        }
+        let cp = serde_json::from_slice(&body)
+            .wrap_err("Failed to deserialize graph checkpoint hashes")?;
+        graph_checkpoints.push(cp);
+    }
 
     Ok(graph_checkpoints)
 }
