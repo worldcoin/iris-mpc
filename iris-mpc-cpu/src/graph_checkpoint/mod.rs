@@ -95,11 +95,10 @@ pub async fn get_others_graph_hashes(
 ) -> Result<Vec<GraphCheckpointHashes>> {
     tracing::info!("⚓️ ANCHOR: Syncing latest graph checkpoints");
 
-    let connected_and_ready =
-        try_get_endpoint_other_nodes(config, GRAPH_CHECKPOINT_ENDPOINT).await?;
+    let responses = try_get_endpoint_other_nodes(config, GRAPH_CHECKPOINT_ENDPOINT).await?;
 
-    let mut graph_checkpoints = Vec::with_capacity(connected_and_ready.len());
-    for (status_code, body) in connected_and_ready.into_iter() {
+    let mut graph_checkpoints = Vec::with_capacity(responses.len());
+    for (status_code, body) in responses.into_iter() {
         if !status_code.is_success() {
             bail!("failed to get graph checkpoint: {:?}", status_code);
         }
