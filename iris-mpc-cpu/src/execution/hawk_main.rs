@@ -708,7 +708,7 @@ impl HawkActor {
     }
 
     pub async fn sync_peers(&mut self) -> Result<()> {
-        self.networking.sync_peers().await
+        self.networking.control_channel().await?.sync().await
     }
 
     fn create_session(
