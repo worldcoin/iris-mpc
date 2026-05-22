@@ -9,6 +9,7 @@
 pub mod hasher;
 pub mod materializer;
 pub mod runner;
+pub mod selector;
 pub mod store;
 pub mod terminal;
 pub mod transport;
@@ -19,6 +20,7 @@ mod tests;
 pub use hasher::Blake3GraphHasher;
 pub use materializer::RebuildFromCheckpoint;
 pub use runner::{restart_from_checkpoint, sidecar_main, RestartOutcome, SidecarConfig};
+pub use selector::{BaseSelector, MostRecentCommon, StrictLatest};
 pub use terminal::{InstallAsServing, UploadAndRecord};
 pub use transport::RingConsensusTransport;
 
@@ -91,6 +93,12 @@ pub enum SkipReason {
         freeze: GraphMutationId,
         base: GraphMutationId,
     },
+    /// The [`BaseSelector`] found no checkpoint shared across all parties.
+    /// With `MostRecentCommon`, this means even the deepest entry of every
+    /// peer's recent list has no overlap with mine — operator intervention
+    /// is likely needed. With `StrictLatest`, this means the newest rows
+    /// don't match (peers may catch up on retry).
+    NoCommonBase,
 }
 
 #[derive(Debug, Error)]
@@ -109,6 +117,11 @@ pub struct CycleConfig {
     /// `0` for the restart path; e.g. `10_000` for sidecar/in-Hawk loops.
     pub min_mutations_to_apply: u64,
     pub peer_round_timeout: Duration,
+    /// Window of recent checkpoints to advertise during Phase 1's base
+    /// agreement. Mirrors the genesis design's 10-deep horizon. Larger
+    /// values increase resilience to per-party history skew at the cost of
+    /// a slightly bigger Phase 1 message.
+    pub checkpoint_window: usize,
 }
 
 #[async_trait]
@@ -144,9 +157,18 @@ pub trait TerminalAction {
 /// Wire-level message types exchanged with peers during consensus rounds.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ConsensusMessage {
-    BaseProposal { checkpoint: CheckpointMeta },
-    HeightProposal { height: GraphMutationId },
-    HashProposal { hash: Blake3Hash },
+    /// Recent checkpoints (newest first, up to `CycleConfig.checkpoint_window`).
+    /// The [`BaseSelector`] decides which row across all parties' lists is
+    /// the agreed base — strict-newest or most-recent-common.
+    BaseProposal {
+        recent: Vec<CheckpointMeta>,
+    },
+    HeightProposal {
+        height: GraphMutationId,
+    },
+    HashProposal {
+        hash: Blake3Hash,
+    },
 }
 
 #[async_trait]
@@ -166,7 +188,10 @@ pub trait ConsensusTransport {
 
 #[async_trait]
 pub trait MutationStore {
-    async fn latest_checkpoint(&self) -> Result<CheckpointMeta, CycleError>;
+    /// Returns up to `window` most recent `genesis_graph_checkpoint` rows,
+    /// **newest first**. Empty vec means no checkpoints exist yet — callers
+    /// (e.g. the restart path) treat this as a bootstrap signal.
+    async fn recent_checkpoints(&self, window: usize) -> Result<Vec<CheckpointMeta>, CycleError>;
 
     /// Stream WAL rows in `(lo_exclusive, hi_inclusive]` in ascending
     /// `modification_id` order. Each item is one DB row's deserialized
@@ -187,14 +212,22 @@ pub trait GraphHasher: Send + Sync {
     fn hash_canonical(&self, graph: &Graph) -> Blake3Hash;
 }
 
+/// Sentinel nonce for Phase 1's base-list exchange. The nonce-derived-from-
+/// agreed-base trick can't be used yet (we're trying to agree on the base),
+/// so we use a fixed value. Cross-cycle crossed-wire detection is weaker for
+/// Phase 1 only — Phases 2-5 use `agreed_base.checkpoint_id` as the nonce and
+/// remain fully protected.
+const BASE_PHASE_NONCE: u128 = 0xC4EC_B45E_C4EC_B45E_C4EC_B45E_C4EC_B45E_u128;
+
 /// Runs one cycle of the protocol. No looping, no sleeping; the caller's
 /// daemon loop owns cadence and retry policy.
-pub async fn run_cycle<M, F, T, S, H>(
+pub async fn run_cycle<M, F, T, S, H, Sel>(
     materializer: &mut M,
     finalizer: &mut F,
     transport: &T,
     store: &S,
     hasher: &H,
+    selector: &Sel,
     cfg: &CycleConfig,
 ) -> Result<Outcome, CycleError>
 where
@@ -203,39 +236,34 @@ where
     T: ConsensusTransport + Send + Sync,
     S: MutationStore + Send + Sync,
     H: GraphHasher,
+    Sel: BaseSelector,
 {
-    // Phase 1 — base agreement. All parties must point at the same checkpoint
-    // row; any disagreement is fatal (a party that diverged on which base to
-    // start from cannot reach a matching hash later).
-    //
-    // Nonce derived from `agreed_base.checkpoint_id`: deterministic across
-    // parties once Phase 1 succeeds (they agree on the row, therefore on the
-    // id). For Phase 1's own exchange we use the local checkpoint_id — if
-    // parties disagree on base, they'll either see the nonce mismatch or the
-    // base-content mismatch, both Fatal.
-    let local_base = store.latest_checkpoint().await?;
-    let cycle_nonce = local_base.checkpoint_id as u128;
-    let peer_bases = transport
+    // Phase 1 — base agreement. Each party advertises its recent-checkpoints
+    // list (newest first); the selector picks the agreed row.
+    //   - StrictLatest: all parties' newest must match exactly.
+    //   - MostRecentCommon: pick the most recent row everyone has.
+    // No common entry → Skipped(NoCommonBase); the caller may retry later.
+    let my_recent = store.recent_checkpoints(cfg.checkpoint_window).await?;
+    let peer_lists = transport
         .exchange(
             ConsensusMessage::BaseProposal {
-                checkpoint: local_base.clone(),
+                recent: my_recent.clone(),
             },
             |m| match m {
-                ConsensusMessage::BaseProposal { checkpoint } => Some(checkpoint),
+                ConsensusMessage::BaseProposal { recent } => Some(recent),
                 _ => None,
             },
-            cycle_nonce,
+            BASE_PHASE_NONCE,
             cfg.peer_round_timeout,
         )
         .await?;
-    for peer in &peer_bases {
-        if peer != &local_base {
-            return Err(CycleError::Fatal(format!(
-                "base mismatch: local={local_base:?} peer={peer:?}"
-            )));
-        }
-    }
-    let agreed_base = local_base;
+    let agreed_base = match selector.pick(&my_recent, &peer_lists) {
+        Some(b) => b,
+        None => return Ok(Outcome::Skipped(SkipReason::NoCommonBase)),
+    };
+    // Phases 2-5 share a nonce derived from the agreed base — preserves the
+    // crossed-wire detection the original strict-equality design had.
+    let cycle_nonce = agreed_base.checkpoint_id as u128;
 
     // Phase 2 — height agreement. Pick the min across parties so every party
     // is guaranteed to have all WAL rows up to and including the freeze.

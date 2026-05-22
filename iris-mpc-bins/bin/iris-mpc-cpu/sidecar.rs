@@ -67,6 +67,11 @@ pub struct SidecarArgs {
     #[clap(long, default_value = "10000")]
     pub min_mutations_per_cycle: u64,
 
+    /// Window of recent checkpoints advertised in Phase 1's base-list
+    /// exchange. Matches genesis's 10-deep horizon.
+    #[clap(long, default_value = "10")]
+    pub checkpoint_window: usize,
+
     /// Mark produced rows as archival (kept by pruning).
     #[clap(long, default_value_t = false)]
     pub is_archival: bool,
@@ -154,6 +159,7 @@ async fn main() -> Result<()> {
         retry_interval: args.retry_interval(),
         peer_round_timeout: args.peer_round_timeout(),
         min_mutations_per_cycle: args.min_mutations_per_cycle,
+        checkpoint_window: args.checkpoint_window,
         is_archival: args.is_archival,
     };
 

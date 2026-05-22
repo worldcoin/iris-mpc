@@ -14,8 +14,8 @@ use iris_mpc_common::vector_id::VectorId;
 
 use crate::checkpoint_protocol::{
     run_cycle, Blake3Hash, CheckpointMeta, ConsensusMessage, ConsensusTransport, CycleConfig,
-    CycleError, FreezeHeight, Graph, GraphHasher, GraphMutationId, Materializer, MutationStore,
-    Outcome, SkipReason, TerminalAction,
+    CycleError, FreezeHeight, Graph, GraphHasher, GraphMutationId, Materializer, MostRecentCommon,
+    MutationStore, Outcome, SkipReason, StrictLatest, TerminalAction,
 };
 use crate::execution::hawk_main::BothEyes;
 use crate::hnsw::{graph::mutation::GraphMutation, GraphMem};
@@ -30,6 +30,7 @@ fn cfg(min: u64) -> CycleConfig {
     CycleConfig {
         min_mutations_to_apply: min,
         peer_round_timeout: Duration::from_millis(100),
+        checkpoint_window: 10,
     }
 }
 
@@ -49,14 +50,25 @@ fn meta(id: i64, mut_id: Option<i64>) -> CheckpointMeta {
 
 #[derive(Clone)]
 struct MockStore {
-    latest: CheckpointMeta,
+    /// Recent checkpoints, newest first. Tests that previously used `latest:`
+    /// now seed this with a single entry.
+    recent: Vec<CheckpointMeta>,
     max_id: GraphMutationId,
+}
+
+impl MockStore {
+    fn with_latest(latest: CheckpointMeta, max_id: GraphMutationId) -> Self {
+        Self {
+            recent: vec![latest],
+            max_id,
+        }
+    }
 }
 
 #[async_trait]
 impl MutationStore for MockStore {
-    async fn latest_checkpoint(&self) -> Result<CheckpointMeta, CycleError> {
-        Ok(self.latest.clone())
+    async fn recent_checkpoints(&self, window: usize) -> Result<Vec<CheckpointMeta>, CycleError> {
+        Ok(self.recent.iter().take(window).cloned().collect())
     }
     async fn mutations_in_range(
         &self,
@@ -229,18 +241,15 @@ fn hash_b() -> Blake3Hash {
 async fn happy_path_finalizes() {
     let mut mat = MockMaterializer::new();
     let mut fin = MockFinalizer::new();
-    let store = MockStore {
-        latest: meta(1, Some(0)),
-        max_id: 100,
-    };
+    let store = MockStore::with_latest(meta(1, Some(0)), 100);
     let canned = vec![
         // Phase 1 base: peers agree
         vec![
             ConsensusMessage::BaseProposal {
-                checkpoint: meta(1, Some(0)),
+                recent: vec![meta(1, Some(0))],
             },
             ConsensusMessage::BaseProposal {
-                checkpoint: meta(1, Some(0)),
+                recent: vec![meta(1, Some(0))],
             },
         ],
         // Phase 2 height: peers propose same height
@@ -257,9 +266,17 @@ async fn happy_path_finalizes() {
     let transport = MockTransport::new(canned);
     let hasher = ConstHasher(hash_a());
 
-    let outcome = run_cycle(&mut mat, &mut fin, &transport, &store, &hasher, &cfg(10))
-        .await
-        .expect("happy path");
+    let outcome = run_cycle(
+        &mut mat,
+        &mut fin,
+        &transport,
+        &store,
+        &hasher,
+        &StrictLatest,
+        &cfg(10),
+    )
+    .await
+    .expect("happy path");
 
     match outcome {
         Outcome::Finalized { hash, height } => {
@@ -276,9 +293,15 @@ async fn happy_path_finalizes() {
     let variants: Vec<_> = calls.iter().map(|c| c.msg_variant).collect();
     assert_eq!(variants, vec!["Base", "Height", "Hash"]);
 
-    // All exchanges share one cycle nonce.
+    // Phase 1 uses the fixed BASE_PHASE_NONCE sentinel (the agreed base
+    // isn't known yet); Phases 2-5 share a nonce derived from the agreed
+    // base's checkpoint_id. Two distinct nonces overall.
     let nonces: std::collections::HashSet<u128> = calls.iter().map(|c| c.nonce).collect();
-    assert_eq!(nonces.len(), 1, "all phases must reuse the same nonce");
+    assert_eq!(nonces.len(), 2, "phase 1 nonce differs from phases 2-5");
+    assert_eq!(
+        calls[1].nonce, calls[2].nonce,
+        "phases 2 and 5 must share the cycle nonce"
+    );
 
     // Timeout is propagated from config.
     for c in calls.iter() {
@@ -292,17 +315,14 @@ async fn happy_path_finalizes() {
 async fn skips_when_not_enough_mutations() {
     let mut mat = MockMaterializer::new();
     let mut fin = MockFinalizer::new();
-    let store = MockStore {
-        latest: meta(1, Some(95)),
-        max_id: 100,
-    };
+    let store = MockStore::with_latest(meta(1, Some(95)), 100);
     let canned = vec![
         vec![
             ConsensusMessage::BaseProposal {
-                checkpoint: meta(1, Some(95)),
+                recent: vec![meta(1, Some(95))],
             },
             ConsensusMessage::BaseProposal {
-                checkpoint: meta(1, Some(95)),
+                recent: vec![meta(1, Some(95))],
             },
         ],
         vec![
@@ -313,9 +333,17 @@ async fn skips_when_not_enough_mutations() {
     let transport = MockTransport::new(canned);
     let hasher = ConstHasher(hash_a());
 
-    let outcome = run_cycle(&mut mat, &mut fin, &transport, &store, &hasher, &cfg(100))
-        .await
-        .expect("should skip cleanly");
+    let outcome = run_cycle(
+        &mut mat,
+        &mut fin,
+        &transport,
+        &store,
+        &hasher,
+        &StrictLatest,
+        &cfg(100),
+    )
+    .await
+    .expect("should skip cleanly");
 
     match outcome {
         Outcome::Skipped(SkipReason::NotEnoughMutations {
@@ -344,13 +372,10 @@ async fn skips_when_not_enough_mutations() {
 async fn restart_with_min_zero_runs_even_with_no_new_mutations() {
     let mut mat = MockMaterializer::new();
     let mut fin = MockFinalizer::new();
-    let store = MockStore {
-        latest: meta(1, Some(100)),
-        max_id: 100,
-    };
+    let store = MockStore::with_latest(meta(1, Some(100)), 100);
     let canned = vec![
         vec![ConsensusMessage::BaseProposal {
-            checkpoint: meta(1, Some(100)),
+            recent: vec![meta(1, Some(100))],
         }],
         vec![ConsensusMessage::HeightProposal { height: 100 }],
         vec![ConsensusMessage::HashProposal { hash: hash_a() }],
@@ -358,45 +383,153 @@ async fn restart_with_min_zero_runs_even_with_no_new_mutations() {
     let transport = MockTransport::new(canned);
     let hasher = ConstHasher(hash_a());
 
-    let outcome = run_cycle(&mut mat, &mut fin, &transport, &store, &hasher, &cfg(0))
-        .await
-        .expect("min=0 should always run");
+    let outcome = run_cycle(
+        &mut mat,
+        &mut fin,
+        &transport,
+        &store,
+        &hasher,
+        &StrictLatest,
+        &cfg(0),
+    )
+    .await
+    .expect("min=0 should always run");
 
     assert!(matches!(outcome, Outcome::Finalized { .. }));
     assert_eq!(mat.freezes.lock().unwrap().len(), 1);
     assert_eq!(fin.calls.lock().unwrap().len(), 1);
 }
 
-// ── fatal: base disagreement ─────────────────────────────────────────────
+// ── base disagreement: StrictLatest skips; MostRecentCommon falls back ──
 
 #[tokio::test]
-async fn base_mismatch_is_fatal() {
+async fn base_mismatch_skips_with_strict_latest_selector() {
     let mut mat = MockMaterializer::new();
     let mut fin = MockFinalizer::new();
-    let store = MockStore {
-        latest: meta(1, Some(0)),
-        max_id: 100,
-    };
+    let store = MockStore::with_latest(meta(1, Some(0)), 100);
     let canned = vec![vec![
         ConsensusMessage::BaseProposal {
-            checkpoint: meta(2, Some(50)),
+            recent: vec![meta(2, Some(50))],
         },
         ConsensusMessage::BaseProposal {
-            checkpoint: meta(1, Some(0)),
+            recent: vec![meta(1, Some(0))],
         },
     ]];
     let transport = MockTransport::new(canned);
     let hasher = ConstHasher(hash_a());
 
-    let err = run_cycle(&mut mat, &mut fin, &transport, &store, &hasher, &cfg(0))
-        .await
-        .expect_err("must be fatal");
-    assert!(matches!(err, CycleError::Fatal(_)));
+    let outcome = run_cycle(
+        &mut mat,
+        &mut fin,
+        &transport,
+        &store,
+        &hasher,
+        &StrictLatest,
+        &cfg(0),
+    )
+    .await
+    .expect("disagreement is Skipped(NoCommonBase), not Fatal");
+    assert!(matches!(
+        outcome,
+        Outcome::Skipped(SkipReason::NoCommonBase)
+    ));
     assert_eq!(
         mat.freezes.lock().unwrap().len(),
         0,
         "must not materialize after base mismatch"
     );
+}
+
+/// When one peer is one row behind on the newest checkpoint,
+/// `MostRecentCommon` finds the deepest entry everyone shares and the cycle
+/// proceeds against that fallback base.
+#[tokio::test]
+async fn most_recent_common_falls_back_to_shared_ancestor() {
+    let mut mat = MockMaterializer::new();
+    let mut fin = MockFinalizer::new();
+    // My recent list: newest first [cp(5), cp(4)].
+    let store = MockStore {
+        recent: vec![meta(5, Some(50)), meta(4, Some(40))],
+        max_id: 200,
+    };
+    let canned = vec![
+        // Phase 1: peer 0 has the full list; peer 1 is missing cp(5).
+        vec![
+            ConsensusMessage::BaseProposal {
+                recent: vec![meta(5, Some(50)), meta(4, Some(40))],
+            },
+            ConsensusMessage::BaseProposal {
+                recent: vec![meta(4, Some(40))],
+            },
+        ],
+        // Phase 2: all parties report the same height.
+        vec![
+            ConsensusMessage::HeightProposal { height: 200 },
+            ConsensusMessage::HeightProposal { height: 200 },
+        ],
+        // Phase 5: hash agreement.
+        vec![
+            ConsensusMessage::HashProposal { hash: hash_a() },
+            ConsensusMessage::HashProposal { hash: hash_a() },
+        ],
+    ];
+    let transport = MockTransport::new(canned);
+    let hasher = ConstHasher(hash_a());
+
+    let outcome = run_cycle(
+        &mut mat,
+        &mut fin,
+        &transport,
+        &store,
+        &hasher,
+        &MostRecentCommon,
+        &cfg(0),
+    )
+    .await
+    .expect("MostRecentCommon should pick cp(4)");
+
+    assert!(matches!(outcome, Outcome::Finalized { .. }));
+    assert_eq!(mat.freezes.lock().unwrap().len(), 1);
+    assert_eq!(fin.calls.lock().unwrap().len(), 1);
+}
+
+/// If no entry appears in every peer's list, even `MostRecentCommon` skips.
+#[tokio::test]
+async fn most_recent_common_skips_when_no_overlap() {
+    let mut mat = MockMaterializer::new();
+    let mut fin = MockFinalizer::new();
+    let store = MockStore {
+        recent: vec![meta(5, Some(50)), meta(4, Some(40))],
+        max_id: 200,
+    };
+    let canned = vec![vec![
+        ConsensusMessage::BaseProposal {
+            recent: vec![meta(10, Some(100))],
+        },
+        ConsensusMessage::BaseProposal {
+            recent: vec![meta(11, Some(110))],
+        },
+    ]];
+    let transport = MockTransport::new(canned);
+    let hasher = ConstHasher(hash_a());
+
+    let outcome = run_cycle(
+        &mut mat,
+        &mut fin,
+        &transport,
+        &store,
+        &hasher,
+        &MostRecentCommon,
+        &cfg(0),
+    )
+    .await
+    .expect("no overlap → Skipped");
+    assert!(matches!(
+        outcome,
+        Outcome::Skipped(SkipReason::NoCommonBase)
+    ));
+    assert_eq!(mat.freezes.lock().unwrap().len(), 0);
+    assert_eq!(fin.calls.lock().unwrap().len(), 0);
 }
 
 // ── height = min across parties ──────────────────────────────────────────
@@ -405,17 +538,14 @@ async fn base_mismatch_is_fatal() {
 async fn height_is_min_across_parties() {
     let mut mat = MockMaterializer::new();
     let mut fin = MockFinalizer::new();
-    let store = MockStore {
-        latest: meta(1, Some(0)),
-        max_id: 200, // local is highest
-    };
+    let store = MockStore::with_latest(meta(1, Some(0)), 200);
     let canned = vec![
         vec![
             ConsensusMessage::BaseProposal {
-                checkpoint: meta(1, Some(0)),
+                recent: vec![meta(1, Some(0))],
             },
             ConsensusMessage::BaseProposal {
-                checkpoint: meta(1, Some(0)),
+                recent: vec![meta(1, Some(0))],
             },
         ],
         vec![
@@ -430,9 +560,17 @@ async fn height_is_min_across_parties() {
     let transport = MockTransport::new(canned);
     let hasher = ConstHasher(hash_a());
 
-    let outcome = run_cycle(&mut mat, &mut fin, &transport, &store, &hasher, &cfg(0))
-        .await
-        .expect("should finalize");
+    let outcome = run_cycle(
+        &mut mat,
+        &mut fin,
+        &transport,
+        &store,
+        &hasher,
+        &StrictLatest,
+        &cfg(0),
+    )
+    .await
+    .expect("should finalize");
 
     let freeze = mat.freezes.lock().unwrap()[0];
     assert_eq!(
@@ -453,13 +591,10 @@ async fn height_is_min_across_parties() {
 async fn hash_mismatch_is_fatal_and_skips_finalize() {
     let mut mat = MockMaterializer::new();
     let mut fin = MockFinalizer::new();
-    let store = MockStore {
-        latest: meta(1, Some(0)),
-        max_id: 100,
-    };
+    let store = MockStore::with_latest(meta(1, Some(0)), 100);
     let canned = vec![
         vec![ConsensusMessage::BaseProposal {
-            checkpoint: meta(1, Some(0)),
+            recent: vec![meta(1, Some(0))],
         }],
         vec![ConsensusMessage::HeightProposal { height: 100 }],
         vec![ConsensusMessage::HashProposal { hash: hash_b() }],
@@ -467,9 +602,17 @@ async fn hash_mismatch_is_fatal_and_skips_finalize() {
     let transport = MockTransport::new(canned);
     let hasher = ConstHasher(hash_a());
 
-    let err = run_cycle(&mut mat, &mut fin, &transport, &store, &hasher, &cfg(0))
-        .await
-        .expect_err("hash mismatch must be fatal");
+    let err = run_cycle(
+        &mut mat,
+        &mut fin,
+        &transport,
+        &store,
+        &hasher,
+        &StrictLatest,
+        &cfg(0),
+    )
+    .await
+    .expect_err("hash mismatch must be fatal");
     assert!(matches!(err, CycleError::Fatal(_)));
     assert_eq!(
         mat.freezes.lock().unwrap().len(),
@@ -489,18 +632,23 @@ async fn hash_mismatch_is_fatal_and_skips_finalize() {
 async fn peer_returning_wrong_variant_is_fatal() {
     let mut mat = MockMaterializer::new();
     let mut fin = MockFinalizer::new();
-    let store = MockStore {
-        latest: meta(1, Some(0)),
-        max_id: 100,
-    };
+    let store = MockStore::with_latest(meta(1, Some(0)), 100);
     // Phase 1 asks for BaseProposal; peer replies with HeightProposal.
     let canned = vec![vec![ConsensusMessage::HeightProposal { height: 100 }]];
     let transport = MockTransport::new(canned);
     let hasher = ConstHasher(hash_a());
 
-    let err = run_cycle(&mut mat, &mut fin, &transport, &store, &hasher, &cfg(0))
-        .await
-        .expect_err("wrong variant must be fatal");
+    let err = run_cycle(
+        &mut mat,
+        &mut fin,
+        &transport,
+        &store,
+        &hasher,
+        &StrictLatest,
+        &cfg(0),
+    )
+    .await
+    .expect_err("wrong variant must be fatal");
     assert!(matches!(err, CycleError::Fatal(_)));
 }
 
@@ -515,13 +663,10 @@ async fn peer_returning_wrong_variant_is_fatal() {
 async fn freeze_below_base_skips_as_peer_behind_even_when_min_is_zero() {
     let mut mat = MockMaterializer::new();
     let mut fin = MockFinalizer::new();
-    let store = MockStore {
-        latest: meta(1, Some(500)),
-        max_id: 100,
-    };
+    let store = MockStore::with_latest(meta(1, Some(500)), 100);
     let canned = vec![
         vec![ConsensusMessage::BaseProposal {
-            checkpoint: meta(1, Some(500)),
+            recent: vec![meta(1, Some(500))],
         }],
         vec![ConsensusMessage::HeightProposal { height: 100 }],
     ];
@@ -529,9 +674,17 @@ async fn freeze_below_base_skips_as_peer_behind_even_when_min_is_zero() {
     let hasher = ConstHasher(hash_a());
 
     // min=0 mimics the restart path; the PeerBehindBase check must still fire.
-    let outcome = run_cycle(&mut mat, &mut fin, &transport, &store, &hasher, &cfg(0))
-        .await
-        .expect("freeze < base must not error, just skip");
+    let outcome = run_cycle(
+        &mut mat,
+        &mut fin,
+        &transport,
+        &store,
+        &hasher,
+        &StrictLatest,
+        &cfg(0),
+    )
+    .await
+    .expect("freeze < base must not error, just skip");
 
     match outcome {
         Outcome::Skipped(SkipReason::PeerBehindBase { freeze, base }) => {
@@ -553,13 +706,10 @@ async fn freeze_below_base_skips_as_peer_behind_even_when_min_is_zero() {
 async fn fresh_base_with_no_graph_mutation_id_uses_zero_as_lo() {
     let mut mat = MockMaterializer::new();
     let mut fin = MockFinalizer::new();
-    let store = MockStore {
-        latest: meta(1, None), // brand-new checkpoint with no WAL anchor yet
-        max_id: 42,
-    };
+    let store = MockStore::with_latest(meta(1, None), 42);
     let canned = vec![
         vec![ConsensusMessage::BaseProposal {
-            checkpoint: meta(1, None),
+            recent: vec![meta(1, None)],
         }],
         vec![ConsensusMessage::HeightProposal { height: 42 }],
         vec![ConsensusMessage::HashProposal { hash: hash_a() }],
@@ -567,9 +717,17 @@ async fn fresh_base_with_no_graph_mutation_id_uses_zero_as_lo() {
     let transport = MockTransport::new(canned);
     let hasher = ConstHasher(hash_a());
 
-    let outcome = run_cycle(&mut mat, &mut fin, &transport, &store, &hasher, &cfg(40))
-        .await
-        .expect("None base → lo=0 should let 42 mutations through");
+    let outcome = run_cycle(
+        &mut mat,
+        &mut fin,
+        &transport,
+        &store,
+        &hasher,
+        &StrictLatest,
+        &cfg(40),
+    )
+    .await
+    .expect("None base → lo=0 should let 42 mutations through");
     assert!(matches!(outcome, Outcome::Finalized { .. }));
 }
 
@@ -588,13 +746,11 @@ async fn three_parties_finalize_in_lockstep() {
     let t2 = RingConsensusTransport::new(Box::new(r2));
 
     let base = meta(7, Some(0));
-    let store_for_party = |b: CheckpointMeta| MockStore {
-        latest: b,
-        max_id: 100,
-    };
+    let store_for_party = |b: CheckpointMeta| MockStore::with_latest(b, 100);
     let config = CycleConfig {
         min_mutations_to_apply: 1,
         peer_round_timeout: Duration::from_secs(2),
+        checkpoint_window: 10,
     };
 
     let h0 = tokio::spawn({
@@ -604,7 +760,16 @@ async fn three_parties_finalize_in_lockstep() {
             let mut mat = MockMaterializer::new();
             let mut fin = MockFinalizer::new();
             let hasher = ConstHasher(hash_a());
-            run_cycle(&mut mat, &mut fin, &t0, &store, &hasher, &cfg).await
+            run_cycle(
+                &mut mat,
+                &mut fin,
+                &t0,
+                &store,
+                &hasher,
+                &StrictLatest,
+                &cfg,
+            )
+            .await
         }
     });
     let h1 = tokio::spawn({
@@ -614,7 +779,16 @@ async fn three_parties_finalize_in_lockstep() {
             let mut mat = MockMaterializer::new();
             let mut fin = MockFinalizer::new();
             let hasher = ConstHasher(hash_a());
-            run_cycle(&mut mat, &mut fin, &t1, &store, &hasher, &cfg).await
+            run_cycle(
+                &mut mat,
+                &mut fin,
+                &t1,
+                &store,
+                &hasher,
+                &StrictLatest,
+                &cfg,
+            )
+            .await
         }
     });
     let h2 = tokio::spawn({
@@ -624,7 +798,16 @@ async fn three_parties_finalize_in_lockstep() {
             let mut mat = MockMaterializer::new();
             let mut fin = MockFinalizer::new();
             let hasher = ConstHasher(hash_a());
-            run_cycle(&mut mat, &mut fin, &t2, &store, &hasher, &cfg).await
+            run_cycle(
+                &mut mat,
+                &mut fin,
+                &t2,
+                &store,
+                &hasher,
+                &StrictLatest,
+                &cfg,
+            )
+            .await
         }
     });
 
@@ -643,9 +826,10 @@ async fn three_parties_finalize_in_lockstep() {
     }
 }
 
-/// One party disagrees on the base — every party should report a Fatal.
+/// One party disagrees on the base — every party should `Skipped(NoCommonBase)`
+/// under `StrictLatest`. Operator decides whether to retry.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn three_parties_fail_on_base_disagreement() {
+async fn three_parties_skip_on_base_disagreement_with_strict_latest() {
     let [r0, r1, r2] = triangle(8);
     let t0 = RingConsensusTransport::new(Box::new(r0));
     let t1 = RingConsensusTransport::new(Box::new(r1));
@@ -654,6 +838,7 @@ async fn three_parties_fail_on_base_disagreement() {
     let config = CycleConfig {
         min_mutations_to_apply: 0,
         peer_round_timeout: Duration::from_secs(2),
+        checkpoint_window: 10,
     };
 
     let h0 = tokio::spawn({
@@ -661,12 +846,18 @@ async fn three_parties_fail_on_base_disagreement() {
         async move {
             let mut mat = MockMaterializer::new();
             let mut fin = MockFinalizer::new();
-            let store = MockStore {
-                latest: meta(1, Some(0)),
-                max_id: 50,
-            };
+            let store = MockStore::with_latest(meta(1, Some(0)), 50);
             let hasher = ConstHasher(hash_a());
-            run_cycle(&mut mat, &mut fin, &t0, &store, &hasher, &cfg).await
+            run_cycle(
+                &mut mat,
+                &mut fin,
+                &t0,
+                &store,
+                &hasher,
+                &StrictLatest,
+                &cfg,
+            )
+            .await
         }
     });
     let h1 = tokio::spawn({
@@ -675,12 +866,18 @@ async fn three_parties_fail_on_base_disagreement() {
             let mut mat = MockMaterializer::new();
             let mut fin = MockFinalizer::new();
             // Different base — id=9 vs the others' id=1.
-            let store = MockStore {
-                latest: meta(9, Some(0)),
-                max_id: 50,
-            };
+            let store = MockStore::with_latest(meta(9, Some(0)), 50);
             let hasher = ConstHasher(hash_a());
-            run_cycle(&mut mat, &mut fin, &t1, &store, &hasher, &cfg).await
+            run_cycle(
+                &mut mat,
+                &mut fin,
+                &t1,
+                &store,
+                &hasher,
+                &StrictLatest,
+                &cfg,
+            )
+            .await
         }
     });
     let h2 = tokio::spawn({
@@ -688,12 +885,18 @@ async fn three_parties_fail_on_base_disagreement() {
         async move {
             let mut mat = MockMaterializer::new();
             let mut fin = MockFinalizer::new();
-            let store = MockStore {
-                latest: meta(1, Some(0)),
-                max_id: 50,
-            };
+            let store = MockStore::with_latest(meta(1, Some(0)), 50);
             let hasher = ConstHasher(hash_a());
-            run_cycle(&mut mat, &mut fin, &t2, &store, &hasher, &cfg).await
+            run_cycle(
+                &mut mat,
+                &mut fin,
+                &t2,
+                &store,
+                &hasher,
+                &StrictLatest,
+                &cfg,
+            )
+            .await
         }
     });
 
@@ -703,8 +906,8 @@ async fn three_parties_fail_on_base_disagreement() {
 
     for (i, r) in [&r0, &r1, &r2].iter().enumerate() {
         match r {
-            Err(CycleError::Fatal(_)) => {}
-            other => panic!("party {i}: expected Fatal, got {other:?}"),
+            Ok(Outcome::Skipped(SkipReason::NoCommonBase)) => {}
+            other => panic!("party {i}: expected Skipped(NoCommonBase), got {other:?}"),
         }
     }
 }
@@ -722,6 +925,7 @@ async fn three_parties_fail_on_hash_disagreement() {
     let config = CycleConfig {
         min_mutations_to_apply: 0,
         peer_round_timeout: Duration::from_secs(2),
+        checkpoint_window: 10,
     };
 
     let fin0 = MockFinalizer::new();
@@ -737,12 +941,18 @@ async fn three_parties_fail_on_hash_disagreement() {
         async move {
             let mut mat = MockMaterializer::new();
             let mut fin = fin0;
-            let store = MockStore {
-                latest: base,
-                max_id: 50,
-            };
+            let store = MockStore::with_latest(base, 50);
             let hasher = ConstHasher(hash_a());
-            run_cycle(&mut mat, &mut fin, &t0, &store, &hasher, &cfg).await
+            run_cycle(
+                &mut mat,
+                &mut fin,
+                &t0,
+                &store,
+                &hasher,
+                &StrictLatest,
+                &cfg,
+            )
+            .await
         }
     });
     let h1 = tokio::spawn({
@@ -751,12 +961,18 @@ async fn three_parties_fail_on_hash_disagreement() {
         async move {
             let mut mat = MockMaterializer::new();
             let mut fin = fin1;
-            let store = MockStore {
-                latest: base,
-                max_id: 50,
-            };
+            let store = MockStore::with_latest(base, 50);
             let hasher = ConstHasher(hash_b()); // dissident
-            run_cycle(&mut mat, &mut fin, &t1, &store, &hasher, &cfg).await
+            run_cycle(
+                &mut mat,
+                &mut fin,
+                &t1,
+                &store,
+                &hasher,
+                &StrictLatest,
+                &cfg,
+            )
+            .await
         }
     });
     let h2 = tokio::spawn({
@@ -765,12 +981,18 @@ async fn three_parties_fail_on_hash_disagreement() {
         async move {
             let mut mat = MockMaterializer::new();
             let mut fin = fin2;
-            let store = MockStore {
-                latest: base,
-                max_id: 50,
-            };
+            let store = MockStore::with_latest(base, 50);
             let hasher = ConstHasher(hash_a());
-            run_cycle(&mut mat, &mut fin, &t2, &store, &hasher, &cfg).await
+            run_cycle(
+                &mut mat,
+                &mut fin,
+                &t2,
+                &store,
+                &hasher,
+                &StrictLatest,
+                &cfg,
+            )
+            .await
         }
     });
 

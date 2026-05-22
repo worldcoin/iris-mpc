@@ -24,7 +24,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::checkpoint_protocol::{
     run_cycle, Blake3GraphHasher, CycleConfig, CycleError, GraphMutationId, InstallAsServing,
-    Outcome, RebuildFromCheckpoint, RingConsensusTransport, SkipReason, UploadAndRecord,
+    MostRecentCommon, Outcome, RebuildFromCheckpoint, RingConsensusTransport, SkipReason,
+    UploadAndRecord,
 };
 use crate::execution::hawk_main::BothEyes;
 use crate::hnsw::{
@@ -52,6 +53,10 @@ pub struct SidecarConfig {
     /// Lower-bound for cycle work; below this the cycle is skipped (no
     /// upload / no DB write) to avoid hammering S3 with near-empty deltas.
     pub min_mutations_per_cycle: u64,
+    /// Window of recent checkpoints advertised in Phase 1's base-list
+    /// exchange. Matches the genesis design's 10-deep horizon. Larger
+    /// values increase resilience to per-party history skew.
+    pub checkpoint_window: usize,
     /// Marks the produced row as archival (skipped by pruning).
     pub is_archival: bool,
 }
@@ -132,6 +137,7 @@ async fn sidecar_cycle<V: VectorStore + Send + Sync>(
     let cycle_cfg = CycleConfig {
         min_mutations_to_apply: cfg.min_mutations_per_cycle,
         peer_round_timeout: cfg.peer_round_timeout,
+        checkpoint_window: cfg.checkpoint_window,
     };
 
     run_cycle(
@@ -140,6 +146,7 @@ async fn sidecar_cycle<V: VectorStore + Send + Sync>(
         &transport,
         graph_store,
         &hasher,
+        &MostRecentCommon,
         &cycle_cfg,
     )
     .await
@@ -161,6 +168,9 @@ pub enum RestartOutcome {
         freeze: GraphMutationId,
         base: GraphMutationId,
     },
+    /// The selector found no checkpoint shared across all parties (even
+    /// within the recent window). Operator intervention is likely needed.
+    NoCommonBase,
 }
 
 /// Rebuild the live graph from the latest checkpoint + WAL replay, then
@@ -173,6 +183,7 @@ pub async fn restart_from_checkpoint<V: VectorStore + Send + Sync>(
     networking: &mut Box<dyn NetworkHandle>,
     target: BothEyes<Arc<RwLock<GraphMem<VectorId>>>>,
     peer_round_timeout: Duration,
+    checkpoint_window: usize,
 ) -> Result<RestartOutcome> {
     if graph_store
         .get_latest_genesis_graph_checkpoint()
@@ -196,6 +207,7 @@ pub async fn restart_from_checkpoint<V: VectorStore + Send + Sync>(
     let cfg = CycleConfig {
         min_mutations_to_apply: 0,
         peer_round_timeout,
+        checkpoint_window,
     };
 
     let outcome = run_cycle(
@@ -204,6 +216,7 @@ pub async fn restart_from_checkpoint<V: VectorStore + Send + Sync>(
         &transport,
         graph_store,
         &hasher,
+        &MostRecentCommon,
         &cfg,
     )
     .await
@@ -217,6 +230,10 @@ pub async fn restart_from_checkpoint<V: VectorStore + Send + Sync>(
         Outcome::Skipped(SkipReason::PeerBehindBase { freeze, base }) => {
             tracing::warn!(freeze, base, "restart skipped: peer behind base");
             Ok(RestartOutcome::PeerBehindBase { freeze, base })
+        }
+        Outcome::Skipped(SkipReason::NoCommonBase) => {
+            tracing::warn!("restart skipped: no common base across parties");
+            Ok(RestartOutcome::NoCommonBase)
         }
         Outcome::Skipped(SkipReason::NotEnoughMutations { .. }) => {
             // Structurally impossible: min_mutations_to_apply=0 cannot

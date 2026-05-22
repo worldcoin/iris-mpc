@@ -1,7 +1,7 @@
 //! Postgres-backed [`MutationStore`] for the checkpoint protocol.
 //!
 //! Adapts [`GraphPg`] to the trait surface that `run_cycle` consumes:
-//! the latest genesis checkpoint, a streaming WAL range over
+//! recent genesis checkpoints (newest first), a streaming WAL range over
 //! `hawk_graph_mutations`, and the live max `modification_id`.
 
 use async_trait::async_trait;
@@ -17,28 +17,26 @@ use iris_mpc_common::vector_id::VectorId;
 
 #[async_trait]
 impl<V: VectorStore + Send + Sync> MutationStore for GraphPg<V> {
-    async fn latest_checkpoint(&self) -> Result<CheckpointMeta, CycleError> {
-        let row = self
-            .get_latest_genesis_graph_checkpoint()
+    async fn recent_checkpoints(&self, window: usize) -> Result<Vec<CheckpointMeta>, CycleError> {
+        let rows = self
+            .get_genesis_graph_checkpoints()
             .await
-            .map_err(|e| {
-                CycleError::Transient(format!("get_latest_genesis_graph_checkpoint: {e}"))
-            })?
-            .ok_or_else(|| {
-                CycleError::Fatal(
-                    "no genesis_graph_checkpoint row exists; cannot start a cycle".into(),
-                )
-            })?;
+            .map_err(|e| CycleError::Transient(format!("get_genesis_graph_checkpoints: {e}")))?;
 
-        Ok(CheckpointMeta {
-            checkpoint_id: row.id,
-            s3_key: row.s3_key,
-            last_indexed_iris_id: row.last_indexed_iris_id,
-            last_indexed_modification_id: row.last_indexed_modification_id,
-            graph_mutation_id: row.graph_mutation_id,
-            blake3_hash: row.blake3_hash,
-            graph_version: row.graph_version,
-        })
+        // `get_genesis_graph_checkpoints` returns DESC by id (newest first).
+        Ok(rows
+            .into_iter()
+            .take(window)
+            .map(|row| CheckpointMeta {
+                checkpoint_id: row.id,
+                s3_key: row.s3_key,
+                last_indexed_iris_id: row.last_indexed_iris_id,
+                last_indexed_modification_id: row.last_indexed_modification_id,
+                graph_mutation_id: row.graph_mutation_id,
+                blake3_hash: row.blake3_hash,
+                graph_version: row.graph_version,
+            })
+            .collect())
     }
 
     async fn mutations_in_range(
@@ -110,43 +108,46 @@ mod tests {
         Ok(())
     }
 
-    /// `latest_checkpoint` errors when no genesis_graph_checkpoint row exists;
-    /// returns the row's fields when one does.
+    /// `recent_checkpoints` is empty on an empty table; returns rows
+    /// newest-first when populated.
     #[tokio::test]
-    async fn test_latest_checkpoint_round_trip() -> eyre::Result<()> {
+    async fn test_recent_checkpoints_round_trip() -> eyre::Result<()> {
         let store = TestGraphPg::<PlaintextStore>::new().await?;
 
-        // Empty table => Fatal (cycle cannot proceed without a base).
-        let err = MutationStore::latest_checkpoint(&store.graph)
-            .await
-            .unwrap_err();
+        let rows = MutationStore::recent_checkpoints(&store.graph, 10).await?;
         assert!(
-            matches!(err, CycleError::Fatal(_)),
-            "expected Fatal, got {err:?}"
+            rows.is_empty(),
+            "empty genesis_graph_checkpoint should give empty list"
         );
 
-        // Insert a checkpoint and read it back through the trait.
-        let mut graph_tx = store.tx().await?;
-        GraphPg::<PlaintextStore>::insert_genesis_graph_checkpoint(
-            &mut graph_tx.tx,
-            "cp/42",
-            123,
-            456,
-            Some(789),
-            "deadbeefcafebabe",
-            false,
-            1,
-        )
-        .await?;
-        graph_tx.tx.commit().await?;
+        // Insert two checkpoints; expect newest-first ordering.
+        for (s3_key, iris_id, mut_id) in [("cp/42", 123_i64, 456_i64), ("cp/43", 200_i64, 500_i64)]
+        {
+            let mut graph_tx = store.tx().await?;
+            GraphPg::<PlaintextStore>::insert_genesis_graph_checkpoint(
+                &mut graph_tx.tx,
+                s3_key,
+                iris_id,
+                mut_id,
+                Some(mut_id + 1),
+                "deadbeefcafebabe",
+                false,
+                1,
+            )
+            .await?;
+            graph_tx.tx.commit().await?;
+        }
 
-        let meta = MutationStore::latest_checkpoint(&store.graph).await?;
-        assert_eq!(meta.s3_key, "cp/42");
-        assert_eq!(meta.last_indexed_iris_id, 123);
-        assert_eq!(meta.last_indexed_modification_id, 456);
-        assert_eq!(meta.graph_mutation_id, Some(789));
-        assert_eq!(meta.blake3_hash, "deadbeefcafebabe");
-        assert_eq!(meta.graph_version, 1);
+        let rows = MutationStore::recent_checkpoints(&store.graph, 10).await?;
+        assert_eq!(rows.len(), 2);
+        // Newest first: cp/43 inserted second → id is higher.
+        assert_eq!(rows[0].s3_key, "cp/43");
+        assert_eq!(rows[1].s3_key, "cp/42");
+
+        // `window` truncates.
+        let rows = MutationStore::recent_checkpoints(&store.graph, 1).await?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].s3_key, "cp/43");
 
         Ok(())
     }
