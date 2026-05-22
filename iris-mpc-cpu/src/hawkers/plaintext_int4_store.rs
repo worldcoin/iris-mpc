@@ -155,8 +155,7 @@ impl PlaintextInt4Store {
     /// Build an HNSW graph over the first `graph_size` entries of this store
     /// (sorted by serial id) using the given searcher and randomness.
     ///
-    /// Mirrors [`PlaintextStore::generate_graph`] at
-    /// `iris-mpc-cpu/src/hawkers/plaintext_store.rs:105`.
+    /// Mirrors [`PlaintextStore::generate_graph`].
     ///
     /// [`PlaintextStore::generate_graph`]: super::plaintext_store::PlaintextStore::generate_graph
     pub async fn generate_graph<R: RngCore + Clone + CryptoRng>(
@@ -172,6 +171,7 @@ impl PlaintextInt4Store {
             bail!("Cannot generate graph larger than underlying vector store");
         }
 
+        // sort in order to ensure deterministic behavior
         let mut serial_ids: Vec<_> = self.storage.get_sorted_serial_ids();
         serial_ids.truncate(graph_size);
 
@@ -229,11 +229,7 @@ impl VectorStore for PlaintextInt4Store {
         Ok(*distance > self.threshold)
     }
 
-    async fn less_than(
-        &mut self,
-        d1: &Self::DistanceRef,
-        d2: &Self::DistanceRef,
-    ) -> Result<bool> {
+    async fn less_than(&mut self, d1: &Self::DistanceRef, d2: &Self::DistanceRef) -> Result<bool> {
         // Larger dot = closer, so "d1 closer than d2" iff dot1 > dot2.
         Ok(d1 > d2)
     }
@@ -340,11 +336,7 @@ impl VectorStore for SharedPlaintextInt4Store {
         Ok(*distance > self.threshold)
     }
 
-    async fn less_than(
-        &mut self,
-        d1: &Self::DistanceRef,
-        d2: &Self::DistanceRef,
-    ) -> Result<bool> {
+    async fn less_than(&mut self, d1: &Self::DistanceRef, d2: &Self::DistanceRef) -> Result<bool> {
         Ok(d1 > d2)
     }
 
@@ -375,6 +367,7 @@ impl VectorStoreMut for SharedPlaintextInt4Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::task::JoinSet;
 
     #[test]
     fn test_int4_pack_roundtrip() {
@@ -457,6 +450,21 @@ mod tests {
         (store, ids)
     }
 
+    /// Flip a single nibble of `v` by adding `delta` (clamped to {-7..=7}).
+    fn perturb(v: &Int4Vector, index: usize, delta: i8) -> Int4Vector {
+        let mut out = v.clone();
+        let cur = out.get(index);
+        let new = (cur + delta).clamp(-7, 7);
+        let byte = out.packed[index / 2];
+        let n = Int4Vector::encode_nibble(new);
+        out.packed[index / 2] = if index.is_multiple_of(2) {
+            (byte & 0xF0) | n
+        } else {
+            (byte & 0x0F) | (n << 4)
+        };
+        out
+    }
+
     #[tokio::test]
     async fn test_eval_distance_self_matches_dot() {
         let (mut store, ids) = build_store_with_random_vectors(12_000, 8, 0xCAFEBABE).await;
@@ -479,7 +487,10 @@ mod tests {
         if d_self != d_other {
             let ab = store.less_than(&d_self, &d_other).await.unwrap();
             let ba = store.less_than(&d_other, &d_self).await.unwrap();
-            assert_ne!(ab, ba, "less_than must be antisymmetric for distinct values");
+            assert_ne!(
+                ab, ba,
+                "less_than must be antisymmetric for distinct values"
+            );
         }
     }
 
@@ -508,21 +519,6 @@ mod tests {
         let q_zero = store.prepare_query((*zero).clone());
         let d_zero = store.eval_distance(&q_zero, &id_zero).await.unwrap();
         assert!(!store.is_match(&d_zero).await.unwrap());
-    }
-
-    /// Flip a single nibble of `v` by adding `delta` (clamped to {-7..=7}).
-    fn perturb(v: &Int4Vector, index: usize, delta: i8) -> Int4Vector {
-        let mut out = v.clone();
-        let cur = out.get(index);
-        let new = (cur + delta).clamp(-7, 7);
-        let byte = out.packed[index / 2];
-        let n = Int4Vector::encode_nibble(new);
-        out.packed[index / 2] = if index.is_multiple_of(2) {
-            (byte & 0xF0) | n
-        } else {
-            (byte & 0x0F) | (n << 4)
-        };
-        out
     }
 
     #[tokio::test]
@@ -578,8 +574,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_parallel_plaintext_int4_hnsw_matcher() {
-        use tokio::task::JoinSet;
-
         let mut rng = AesRng::seed_from_u64(0x5EED5EED);
         let mut store = PlaintextInt4Store::new(/* threshold */ 0);
 
@@ -615,7 +609,7 @@ mod tests {
                     .expect("search succeeds");
                 let pairs = results.as_vec_ref();
                 assert!(!pairs.is_empty(), "expected at least one result");
-                // With threshold = 0, the self-dot (=positive) must match.
+                // Self-dot of any non-zero random vector is positive.
                 let (top_id, top_dist) = &pairs[0];
                 assert_eq!(*top_id, expected_id);
                 assert!(*top_dist > 0);
