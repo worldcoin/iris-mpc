@@ -74,12 +74,18 @@ impl<V: VectorStore + Send + Sync> Materializer for RebuildFromCheckpoint<'_, V>
         }
 
         // Phase B: replay WAL rows in `(base.graph_mutation_id, freeze]`.
+        // Runner contract: `freeze.0 >= lo` (else `Skipped(PeerBehindBase)`),
+        // so `hi < lo` is a broken upstream invariant — fail loudly.
+        // `hi == lo` is a valid empty replay (restart with no new mutations).
         let lo = base.graph_mutation_id.unwrap_or(0);
         let hi = freeze.0;
-        if hi > lo {
-            let stream = MutationStore::mutations_in_range(self.graph_store, lo, hi).await?;
-            apply_wal_stream(&mut graph, stream).await?;
+        if hi < lo {
+            return Err(CycleError::Fatal(format!(
+                "materializer invariant violated: freeze ({hi}) < base.graph_mutation_id ({lo})"
+            )));
         }
+        let stream = MutationStore::mutations_in_range(self.graph_store, lo, hi).await?;
+        apply_wal_stream(&mut graph, stream).await?;
 
         Ok(graph)
     }

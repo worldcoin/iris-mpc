@@ -5,8 +5,6 @@
 //! phases (base agreement → height agreement → materialize → hash → hash
 //! consensus) over pluggable traits. Daemon loops, sleep cadence, and
 //! process lifecycle live outside this module in each caller's binary.
-//!
-//! See `Checkpoint Protocol - Unified Design.md` for the design rationale.
 
 pub mod hasher;
 pub mod materializer;
