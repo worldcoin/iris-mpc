@@ -462,13 +462,9 @@ pub struct HawkInsertPlan {
     pub classified: ClassifiedMatches,
 }
 
-/// A list of graph mutations to apply to connect a new node into the HNSW graph.
-///
-/// A `ConnectPlan` is the final output of the insertion preparation phase (`HnswSearcher::insert_prepare_batch`).
-/// Unlike `InsertPlanV`, which specifies the *desired* neighbors for the new node, `ConnectPlan`
-/// represents the full set of atomic graph updates required. This includes not only the new
-/// node's neighbors but also the reciprocal (bilateral) connections from existing nodes back to the
-/// new one. It is the definitive set of changes that will be applied to the graph storage.
+/// A `ConnectPlan` is one finalized step of the HNSW insertion pipeline —
+/// a `GraphMutation` produced by the per-slot insert loop or by the
+/// post-batch `compact_batch` / `prune_invalid_links` helpers.
 pub type ConnectPlan = GraphMutation<VectorId>;
 
 /// Build the MPC network handle. Cheap — just TCP listener setup.
@@ -751,10 +747,7 @@ impl HawkActor {
         plans: VecRequests<Option<HawkInsertPlan>>,
         update_ids: &VecRequests<Option<VectorId>>,
         replace_ids: &VecRequests<Option<VectorId>>,
-    ) -> Result<(
-        VecRequests<Option<ConnectPlan>>,
-        VecRequests<Option<VectorId>>,
-    )> {
+    ) -> Result<(VecRequests<Vec<ConnectPlan>>, VecRequests<Option<VectorId>>)> {
         assert_eq!(plans.len(), replace_ids.len());
         assert_eq!(plans.len(), update_ids.len());
 
@@ -770,13 +763,21 @@ impl HawkActor {
             // so that downstream result derivation (merged_results / inserted_id)
             // still sees the correct serial IDs.
             let mut next_serial_id = self.registry[LEFT].read().await.next_id;
-            let mut connect_plans: Vec<Option<ConnectPlan>> = Vec::with_capacity(plans.len());
+            let mut connect_plans: Vec<Vec<ConnectPlan>> = Vec::with_capacity(plans.len());
             let mut slot_inserted_ids: Vec<Option<VectorId>> = Vec::with_capacity(plans.len());
             for (plan, insertion_id, replace_id) in
                 izip!(plans, insertion_ids.iter(), replace_ids.iter())
             {
-                let mut mutations = Vec::new();
+                let mut slot_mutations: Vec<ConnectPlan> = Vec::new();
                 let mut inserted_id: Option<VectorId> = None;
+
+                // Delete-then-add ordering, each in its own GraphMutation.
+                if let Some(rid) = replace_id {
+                    slot_mutations.push(GraphMutation {
+                        seq_no: 0,
+                        ops: vec![MutationOp::RemoveNode { id: *rid }],
+                    });
+                }
 
                 if let Some(plan) = plan {
                     let inserted_vector = if let Some(id) = insertion_id {
@@ -786,30 +787,18 @@ impl HawkActor {
                         next_serial_id += 1;
                         vid
                     };
-                    mutations.push(MutationOp::AddNode {
-                        id: inserted_vector,
-                        height: plan.plan.links.len(),
-                        update_ep: UpdateEntryPoint::False,
+                    slot_mutations.push(GraphMutation {
+                        seq_no: 0,
+                        ops: vec![MutationOp::AddNode {
+                            id: inserted_vector,
+                            height: plan.plan.links.len(),
+                            update_ep: UpdateEntryPoint::False,
+                        }],
                     });
                     inserted_id = Some(inserted_vector);
                 }
 
-                if let Some(rid) = replace_id {
-                    mutations.push(MutationOp::RemoveNode { id: *rid });
-                }
-
-                let plan = if mutations.is_empty() {
-                    None
-                } else {
-                    // The mutation is returned for downstream serialization but
-                    // never applied to a GraphMem, so we use a placeholder seq_no.
-                    Some(GraphMutation {
-                        seq_no: 0,
-                        ops: mutations,
-                    })
-                };
-
-                connect_plans.push(plan);
+                connect_plans.push(slot_mutations);
                 slot_inserted_ids.push(inserted_id);
             }
             return Ok((connect_plans, slot_inserted_ids));
@@ -2052,11 +2041,11 @@ impl HawkHandle {
                 .insert(sessions, insert_plans, &update_ids, &replace_ids)
                 .await?;
 
-            // Store plans for this side
-            for (plan, both_sides) in izip!(plans, &mut plans_both_sides) {
-                if let Some(p) = plan {
-                    both_sides[*side as usize].push(p);
-                }
+            // Store plans for this side. Each slot's Vec is extended onto
+            // the per-side aggregator, preserving per-slot association via
+            // the outer izip.
+            for (plan_vec, both_sides) in izip!(plans, &mut plans_both_sides) {
+                both_sides[*side as usize].extend(plan_vec);
             }
 
             // Inserted ids must be the same on both sides. Capture the whole
