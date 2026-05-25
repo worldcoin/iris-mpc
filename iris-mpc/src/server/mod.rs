@@ -23,10 +23,11 @@ use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use ampc_server_utils::{
     delete_messages_until_sequence_num, get_next_sns_seq_num, get_others_sync_state,
     init_heartbeat_task, set_node_ready, start_coordination_server_with_extra_routes,
-    wait_for_others_ready, wait_for_others_unready, BatchSyncSharedState, TaskMonitor,
+    try_get_endpoint_other_nodes, wait_for_others_ready, wait_for_others_unready,
+    BatchSyncSharedState, ReadyProbeResponse, ServerCoordinationConfig, TaskMonitor,
 };
 use chrono::Utc;
-use eyre::{bail, eyre, Report, Result};
+use eyre::{bail, eyre, Report, Result, WrapErr};
 use iris_mpc_common::config::{CommonConfig, Config};
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::sha256::sha256_bytes;
@@ -128,6 +129,7 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     // Wait for other servers to be un-ready (syncing on startup)
     wait_for_others_unready(&server_coord_config, &verified_peers, &my_uuid).await?;
+    wait_until_peers_verified_me(&server_coord_config, &my_uuid).await?;
 
     let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
@@ -281,6 +283,69 @@ fn process_config(config: &Config) {
     }
     // Load batch_size config
     tracing::info!("Set max batch size to {}", config.max_batch_size);
+}
+
+/// Waits until every peer has observed this node during startup.
+///
+/// `wait_for_others_unready` proves that this node saw its peers, but not that
+/// the peers saw this node. HNSW startup does heavy loading immediately after
+/// the unready check, so hold here until the observation is mutual.
+async fn wait_until_peers_verified_me(
+    config: &ServerCoordinationConfig,
+    my_uuid: &str,
+) -> Result<()> {
+    tracing::info!("Waiting for peer nodes to verify this node during startup");
+
+    let started = Instant::now();
+    let startup_timeout = Duration::from_secs(config.startup_sync_timeout_secs);
+    let retry_duration = Duration::from_millis(config.http_query_retry_delay_ms);
+
+    loop {
+        let connected_health_resps = match try_get_endpoint_other_nodes(config, "health").await {
+            Ok(resps) => resps,
+            Err(err) if started.elapsed() < startup_timeout => {
+                tracing::warn!(
+                    "Failed to query peer health while waiting for mutual startup verification: {:?}",
+                    err
+                );
+                tokio::time::sleep(retry_duration).await;
+                continue;
+            }
+            Err(err) => {
+                return Err(err.wrap_err(
+                    "timed out waiting for peer nodes to verify this node during startup",
+                ));
+            }
+        };
+
+        let mut unverified_peers = Vec::new();
+        for (_status, body) in connected_health_resps {
+            let probe_response: ReadyProbeResponse = serde_json::from_slice(&body)
+                .wrap_err("Failed to deserialize ReadyProbeResponse")?;
+
+            if !probe_response.verified_peers.contains(my_uuid) {
+                unverified_peers.push(probe_response.uuid);
+            }
+        }
+
+        if unverified_peers.is_empty() {
+            tracing::info!("All peer nodes verified this node during startup");
+            return Ok(());
+        }
+
+        if started.elapsed() >= startup_timeout {
+            bail!(
+                "Timed out waiting for peer nodes to verify this node during startup: {:?}",
+                unverified_peers
+            );
+        }
+
+        tracing::debug!(
+            "Waiting for peer nodes to verify this node during startup: {:?}",
+            unverified_peers
+        );
+        tokio::time::sleep(retry_duration).await;
+    }
 }
 
 /// Returns initialized PostgreSQL clients for interacting
