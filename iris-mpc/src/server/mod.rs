@@ -126,8 +126,6 @@ pub async fn server_main(config: Config) -> Result<()> {
     )
     .await;
     tracing::info!("Coordination server started");
-    background_tasks.check_tasks();
-    wait_until_own_coordination_server_responds(&server_coord_config, &my_uuid).await?;
 
     // Wait for other servers to be un-ready (syncing on startup)
     wait_for_others_unready(&server_coord_config, &verified_peers, &my_uuid).await?;
@@ -288,103 +286,6 @@ fn process_config(config: &Config) {
     tracing::info!("Set max batch size to {}", config.max_batch_size);
 }
 
-/// Waits until this node's coordination server is actually serving `/health`.
-///
-/// `start_coordination_server_with_extra_routes` returns after spawning the
-/// server task, before the listener bind has necessarily succeeded. Probe the
-/// local endpoint so startup failures surface on the node that owns them instead
-/// of only appearing as peer connection errors.
-async fn wait_until_own_coordination_server_responds(
-    config: &ServerCoordinationConfig,
-    my_uuid: &str,
-) -> Result<()> {
-    let healthcheck_port = config.get_own_healthcheck_port()?;
-    let health_url = format!("http://127.0.0.1:{healthcheck_port}/health");
-    let started = Instant::now();
-    let startup_timeout = Duration::from_secs(config.startup_sync_timeout_secs);
-    let retry_duration = Duration::from_millis(config.http_query_retry_delay_ms);
-    let request_timeout = Duration::from_millis(config.http_query_timeout_ms);
-    let client = reqwest::Client::new();
-
-    tracing::info!(
-        "Waiting for local coordination health endpoint to respond: {}",
-        health_url
-    );
-
-    loop {
-        let response = tokio::time::timeout(request_timeout, client.get(&health_url).send()).await;
-        match response {
-            Ok(Ok(response)) if response.status().is_success() => {
-                let status = response.status();
-                let body = tokio::time::timeout(request_timeout, response.bytes()).await;
-                match body {
-                    Ok(Ok(body)) => {
-                        let probe_response: ReadyProbeResponse = serde_json::from_slice(&body)
-                            .wrap_err("Failed to deserialize local ReadyProbeResponse")?;
-                        if probe_response.uuid == my_uuid {
-                            tracing::info!(
-                                "Local coordination health endpoint is responding: status={}, uuid={}, verified_peers={:?}",
-                                status,
-                                probe_response.uuid,
-                                probe_response.verified_peers
-                            );
-                            return Ok(());
-                        }
-
-                        tracing::warn!(
-                            "Local coordination health endpoint returned unexpected uuid: expected={}, got={}, verified_peers={:?}",
-                            my_uuid,
-                            probe_response.uuid,
-                            probe_response.verified_peers
-                        );
-                    }
-                    Ok(Err(err)) => {
-                        tracing::warn!(
-                            "Failed to read local coordination health response body: {:?}",
-                            err
-                        );
-                    }
-                    Err(_) => {
-                        tracing::warn!(
-                            "Timed out reading local coordination health response body after {:?}",
-                            request_timeout
-                        );
-                    }
-                }
-            }
-            Ok(Ok(response)) => {
-                tracing::warn!(
-                    "Local coordination health endpoint returned non-success status: {}",
-                    response.status()
-                );
-            }
-            Ok(Err(err)) => {
-                tracing::warn!(
-                    "Failed to reach local coordination health endpoint {}: {:?}",
-                    health_url,
-                    err
-                );
-            }
-            Err(_) => {
-                tracing::warn!(
-                    "Local coordination health endpoint {} timed out after {:?}",
-                    health_url,
-                    request_timeout
-                );
-            }
-        }
-
-        if started.elapsed() >= startup_timeout {
-            bail!(
-                "Timed out waiting for local coordination health endpoint {} to respond",
-                health_url
-            );
-        }
-
-        tokio::time::sleep(retry_duration).await;
-    }
-}
-
 /// Waits until every node has observed every other node during startup.
 ///
 /// `wait_for_others_unready` proves that this node saw its peers, but not that
@@ -401,19 +302,6 @@ async fn wait_until_startup_visibility_is_complete(
     let started = Instant::now();
     let startup_timeout = Duration::from_secs(config.startup_sync_timeout_secs);
     let retry_duration = Duration::from_millis(config.http_query_retry_delay_ms);
-    let expected_uuids = {
-        let mut expected = verified_peers.lock().await.clone();
-        expected.insert(my_uuid.to_owned());
-        expected
-    };
-    tracing::info!(
-        "Startup visibility expected UUID set: my_uuid={}, expected_uuids={:?}",
-        my_uuid,
-        expected_uuids
-    );
-
-    let visibility_log_interval = Duration::from_secs(10);
-    let mut last_visibility_log: Option<Instant> = None;
     loop {
         let connected_health_resps = match try_get_endpoint_other_nodes(config, "health").await {
             Ok(resps) => resps,
@@ -432,17 +320,29 @@ async fn wait_until_startup_visibility_is_complete(
             }
         };
 
-        let mut incomplete_visibility = Vec::new();
+        let mut peer_responses = Vec::with_capacity(connected_health_resps.len());
         for (_status, body) in connected_health_resps {
             let probe_response: ReadyProbeResponse = serde_json::from_slice(&body)
                 .wrap_err("Failed to deserialize ReadyProbeResponse")?;
+            peer_responses.push(probe_response);
+        }
 
-            let missing_uuids = expected_uuids
-                .iter()
-                .filter(|uuid| *uuid != &probe_response.uuid)
-                .filter(|uuid| !probe_response.verified_peers.contains(*uuid))
-                .cloned()
-                .collect::<Vec<_>>();
+        {
+            let mut verified = verified_peers.lock().await;
+            for probe_response in &peer_responses {
+                verified.insert(probe_response.uuid.clone());
+            }
+        }
+
+        let expected_uuids = current_startup_uuid_set(my_uuid, &peer_responses);
+
+        let mut incomplete_visibility = Vec::new();
+        for probe_response in peer_responses {
+            let missing_uuids = missing_startup_visibility(
+                &expected_uuids,
+                &probe_response.uuid,
+                &probe_response.verified_peers,
+            );
 
             if !missing_uuids.is_empty() {
                 incomplete_visibility.push((
@@ -469,20 +369,36 @@ async fn wait_until_startup_visibility_is_complete(
             "Waiting for full peer visibility during startup: {:?}",
             incomplete_visibility
         );
-        let should_log_visibility = match last_visibility_log {
-            Some(last_log) => last_log.elapsed() >= visibility_log_interval,
-            None => true,
-        };
-        if should_log_visibility {
-            tracing::warn!(
-                "Startup visibility incomplete: expected_uuids={:?}, incomplete_peers={:?}",
-                expected_uuids,
-                incomplete_visibility
-            );
-            last_visibility_log = Some(Instant::now());
-        }
         tokio::time::sleep(retry_duration).await;
     }
+}
+
+fn current_startup_uuid_set(
+    my_uuid: &str,
+    peer_responses: &[ReadyProbeResponse],
+) -> HashSet<String> {
+    let mut expected_uuids = HashSet::from([my_uuid.to_owned()]);
+    expected_uuids.extend(
+        peer_responses
+            .iter()
+            .map(|probe_response| probe_response.uuid.clone()),
+    );
+    expected_uuids
+}
+
+fn missing_startup_visibility(
+    expected_uuids: &HashSet<String>,
+    peer_uuid: &str,
+    peer_verified_peers: &HashSet<String>,
+) -> Vec<String> {
+    let mut missing_uuids = expected_uuids
+        .iter()
+        .filter(|uuid| uuid.as_str() != peer_uuid)
+        .filter(|uuid| !peer_verified_peers.contains(*uuid))
+        .cloned()
+        .collect::<Vec<_>>();
+    missing_uuids.sort();
+    missing_uuids
 }
 
 /// Returns initialized PostgreSQL clients for interacting
@@ -1142,4 +1058,32 @@ async fn run_main_server_loop(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn set(values: &[&str]) -> HashSet<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn missing_startup_visibility_ignores_peer_own_uuid() {
+        let expected = set(&["node-0", "node-1", "node-2"]);
+        let verified = set(&["node-0"]);
+
+        assert_eq!(
+            missing_startup_visibility(&expected, "node-1", &verified),
+            vec!["node-2".to_string()]
+        );
+    }
+
+    #[test]
+    fn missing_startup_visibility_accepts_full_peer_visibility() {
+        let expected = set(&["node-0", "node-1", "node-2"]);
+        let verified = set(&["node-0", "node-2", "stale-node-2"]);
+
+        assert!(missing_startup_visibility(&expected, "node-1", &verified).is_empty());
+    }
 }
