@@ -21,6 +21,7 @@ eyre.workspace = true
 clap.workspace = true
 bytemuck.workspace = true
 rand.workspace = true
+reqwest.workspace = true
 base64.workspace = true
 uuid.workspace = true
 sodiumoxide.workspace = true
