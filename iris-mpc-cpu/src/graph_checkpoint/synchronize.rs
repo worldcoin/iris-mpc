@@ -165,6 +165,9 @@ pub fn apply_graph_mutations(
     both_eyes: &mut BothEyes<GraphMem<IrisVectorId>>,
     mutation_rows: Vec<GraphMutationRow>,
 ) -> Result<()> {
+    debug_assert!(mutation_rows
+        .windows(2)
+        .all(|w| w[0].modification_id < w[1].modification_id));
     for row in mutation_rows {
         let [left_mutations, right_mutations]: [Vec<GraphMutation<IrisVectorId>>; 2] =
             row.deserialize_mutations()?;
