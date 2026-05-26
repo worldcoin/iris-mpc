@@ -362,7 +362,8 @@ mod sync_graph_mutations_tests {
     fn single_party_inserts_some_entry() {
         let bytes = vec![1u8, 2, 3];
         let state = make_state(vec![(1, Some(bytes.clone()))]);
-        let result = build_mutation_bytes(&[state]).unwrap();
+        let binding = [state];
+        let result = build_mutation_bytes(&binding).unwrap();
         assert_eq!(result[&1], &Some(bytes));
     }
 
@@ -372,7 +373,8 @@ mod sync_graph_mutations_tests {
         let a = make_state(vec![(1, None)]);
         let b = make_state(vec![(1, None)]);
         let c = make_state(vec![(1, None)]);
-        let result = build_mutation_bytes(&[a, b, c]).unwrap();
+        let binding = [a, b, c];
+        let result = build_mutation_bytes(&binding).unwrap();
         assert_eq!(result[&1], &None);
     }
 
@@ -382,7 +384,8 @@ mod sync_graph_mutations_tests {
         let bytes = vec![4u8, 5, 6];
         let a = make_state(vec![(1, None)]);
         let b = make_state(vec![(1, Some(bytes.clone()))]);
-        let result = build_mutation_bytes(&[a, b]).unwrap();
+        let binding = [a, b];
+        let result = build_mutation_bytes(&binding).unwrap();
         assert_eq!(result[&1], &Some(bytes));
     }
 
@@ -392,7 +395,8 @@ mod sync_graph_mutations_tests {
         let bytes = vec![4u8, 5, 6];
         let a = make_state(vec![(1, Some(bytes.clone()))]);
         let b = make_state(vec![(1, None)]);
-        let result = build_mutation_bytes(&[a, b]).unwrap();
+        let binding = [a, b];
+        let result = build_mutation_bytes(&binding).unwrap();
         assert_eq!(result[&1], &Some(bytes));
     }
 
@@ -402,7 +406,8 @@ mod sync_graph_mutations_tests {
         let bytes = vec![7u8, 8, 9];
         let a = make_state(vec![(1, Some(bytes.clone()))]);
         let b = make_state(vec![(1, Some(bytes.clone()))]);
-        let result = build_mutation_bytes(&[a, b]).unwrap();
+        let binding = [a, b];
+        let result = build_mutation_bytes(&binding).unwrap();
         assert_eq!(result[&1], &Some(bytes));
     }
 
@@ -427,7 +432,8 @@ mod sync_graph_mutations_tests {
         let p0 = make_state(vec![(1, Some(bytes_a.clone())), (2, None)]);
         // party 1: mod 1 = None,    mod 2 = Some(B)
         let p1 = make_state(vec![(1, None), (2, Some(bytes_b.clone()))]);
-        let result = build_mutation_bytes(&[p0, p1]).unwrap();
+        let binding = [p0, p1];
+        let result = build_mutation_bytes(&binding).unwrap();
         assert_eq!(result[&1], &Some(bytes_a), "mod 1 should be upgraded");
         assert_eq!(result[&2], &Some(bytes_b), "mod 2 should be upgraded");
     }

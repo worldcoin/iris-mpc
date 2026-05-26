@@ -403,7 +403,9 @@ fn run_test_hawk_sync_mutation_mismatch() -> Result<()> {
             aws_clients.push(client);
         }
         for aws_client in aws_clients.iter() {
-            aws_client.s3_upload_iris_shares(&uuid, &upload_shares[0]).await?;
+            aws_client
+                .s3_upload_iris_shares(&uuid, &upload_shares[0])
+                .await?;
         }
 
         // Build two distinct serialised mutations for the same modification_id.
@@ -418,7 +420,10 @@ fn run_test_hawk_sync_mutation_mismatch() -> Result<()> {
         };
         let bytes_a = bincode::serialize(&make_mutation(1))?;
         let bytes_b = bincode::serialize(&make_mutation(99))?;
-        assert_ne!(bytes_a, bytes_b, "mutation bytes must differ to trigger mismatch");
+        assert_ne!(
+            bytes_a, bytes_b,
+            "mutation bytes must differ to trigger mismatch"
+        );
 
         // Party 0: not yet persisted – will try to roll forward and discover the conflict.
         // Party 1: persisted, stored bytes_a.
@@ -452,9 +457,7 @@ fn run_test_hawk_sync_mutation_mismatch() -> Result<()> {
                 tx.commit().await?;
                 if let Some(bytes) = party_bytes {
                     let mut graph_tx = node.cpu_stores.graph.tx().await?;
-                    graph_tx
-                        .upsert_hawk_graph_mutations(mod_id, &bytes)
-                        .await?;
+                    graph_tx.upsert_hawk_graph_mutations(mod_id, &bytes).await?;
                     graph_tx.tx.commit().await?;
                 }
                 Ok::<_, eyre::Report>(())
@@ -501,8 +504,8 @@ fn run_test_hawk_sync_mutation_mismatch() -> Result<()> {
         // Shut down any surviving servers before asserting.
         notify.notify_waiters();
 
-        let err = first_result
-            .expect_err("expected server_main to fail with mutation mismatch error");
+        let err =
+            first_result.expect_err("expected server_main to fail with mutation mismatch error");
         assert!(
             format!("{err:#}").contains("graph mutation mismatch between parties"),
             "unexpected error – wanted mismatch message, got: {err:#}"
