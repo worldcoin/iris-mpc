@@ -38,12 +38,17 @@ type Store struct {
 }
 
 func NewStore(ctx context.Context, db *sql.DB, config config.Config) *Store {
-	schema := fmt.Sprintf(irisDbSchemaFormat, config.SmpcSchemaName, config.Environment, config.NodeId)
+	var schema string
+	if config.ForceOverrideSchemaName {
+		schema = config.OverriddenSchemaName
+	} else {
+		schema = fmt.Sprintf(irisDbSchemaFormat, config.SmpcSchemaName, config.Environment, config.NodeId)
+	}
 
 	// create schema if not exists - used for db populate in local environment
 	o11y.S(ctx).Infof("ENV: %s", config.Environment)
 	if config.Environment == "local" || config.Environment == "CI" {
-		o11y.S(ctx).Info("Creating schema if not exists in local environment")
+		o11y.S(ctx).Infof("Creating schema %s if not exists in local environment", schema)
 		createSchemaIfNotExistsCmd := fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS \"%s\";", schema)
 		_, err := db.Exec(createSchemaIfNotExistsCmd)
 		if err != nil {
