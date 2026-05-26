@@ -731,7 +731,7 @@ mod tests {
 
         let mut graph_tx = store.tx().await?;
         store
-            .insert_hawk_graph_mutations(&mut graph_tx.tx, 42, &payload)
+            .upsert_hawk_graph_mutations(&mut graph_tx.tx, 42, &payload)
             .await?;
         graph_tx.tx.commit().await?;
 
