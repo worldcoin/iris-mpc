@@ -2,7 +2,10 @@ use std::collections::HashMap;
 
 use aws_sdk_s3::Client;
 use eyre::{bail, eyre, Result};
-use iris_mpc_common::{helpers::sync::SyncResult, IrisVectorId};
+use iris_mpc_common::{
+    helpers::sync::{SyncResult, SyncState},
+    IrisVectorId,
+};
 use itertools::izip;
 
 use super::{download_graph_checkpoint, GraphCheckpointState};
@@ -38,36 +41,7 @@ pub async fn sync_graph_mutations(
         return Ok(());
     }
 
-    // lookup: modification_id -> bytes
-    let mut mutation_bytes: HashMap<i64, &Option<Vec<u8>>> = HashMap::new();
-    for state in sync_result.all_states.iter() {
-        if state.modifications.len() != state.graph_mutation_bytes.len() {
-            bail!("length mismatch in sync_graph_mutations(). modifications len: {}; graph mutations len: {}", state.modifications.len(), state.graph_mutation_bytes.len());
-        }
-        for (modification, graph_mutation) in
-            izip!(&state.modifications, &state.graph_mutation_bytes)
-        {
-            match (mutation_bytes.get(&modification.id), graph_mutation) {
-                // first time seeing this id: insert whatever the party reported
-                (None, _) => {
-                    mutation_bytes.insert(modification.id, graph_mutation);
-                }
-                // existing entry has no bytes but incoming does: upgrade
-                (Some(None), Some(_)) => {
-                    mutation_bytes.insert(modification.id, graph_mutation);
-                }
-                // both sides agree (including both-None): nothing to do
-                (Some(existing), incoming) if *existing == incoming => {}
-                // conflict: two parties reported different non-None bytes
-                _ => {
-                    bail!(
-                        "graph mutation mismatch between parties. modification id: {}",
-                        modification.id
-                    );
-                }
-            }
-        }
-    }
+    let mutation_bytes = build_mutation_bytes(&sync_result.all_states)?;
 
     let mut tx = graph_pg.begin_tx().await?;
     for modification in &to_update {
@@ -96,6 +70,54 @@ pub async fn sync_graph_mutations(
     tracing::info!("synced graph mutations per party");
 
     Ok(())
+}
+
+/// Merges per-party `graph_mutation_bytes` slices into a single
+/// `modification_id → &Option<Vec<u8>>` lookup, applying the following
+/// peer-merge semantics for each id:
+///
+/// | existing entry | incoming | result |
+/// |---|---|---|
+/// | *(absent)* | any | insert |
+/// | `None` | `Some(_)` | upgrade to `Some` |
+/// | `Some(a)` / `None` | equal value | keep (noop) |
+/// | `Some(a)` | `Some(b)` where `a ≠ b` | **error** |
+fn build_mutation_bytes(all_states: &[SyncState]) -> Result<HashMap<i64, &Option<Vec<u8>>>> {
+    let mut mutation_bytes: HashMap<i64, &Option<Vec<u8>>> = HashMap::new();
+    for state in all_states.iter() {
+        if state.modifications.len() != state.graph_mutation_bytes.len() {
+            bail!(
+                "length mismatch in sync_graph_mutations(). modifications len: {}; graph \
+                 mutations len: {}",
+                state.modifications.len(),
+                state.graph_mutation_bytes.len()
+            );
+        }
+        for (modification, graph_mutation) in
+            izip!(&state.modifications, &state.graph_mutation_bytes)
+        {
+            match (mutation_bytes.get(&modification.id), graph_mutation) {
+                // first time seeing this id: insert whatever the party reported
+                (None, _) => {
+                    mutation_bytes.insert(modification.id, graph_mutation);
+                }
+                // existing entry has no bytes but incoming does: upgrade
+                (Some(None), Some(_)) => {
+                    mutation_bytes.insert(modification.id, graph_mutation);
+                }
+                // both sides agree (including both-None): nothing to do
+                (Some(existing), incoming) if *existing == incoming => {}
+                // conflict: two parties reported different non-None bytes
+                _ => {
+                    bail!(
+                        "graph mutation mismatch between parties. modification id: {}",
+                        modification.id
+                    );
+                }
+            }
+        }
+    }
+    Ok(mutation_bytes)
 }
 
 /// Loads the in-memory graph from an optional S3 checkpoint and replays a
@@ -285,6 +307,145 @@ mod tests {
         assert!(
             apply_graph_mutations(&mut both_eyes, vec![bad_row]).is_err(),
             "expected an error for garbage serialized_mutations"
+        );
+    }
+}
+
+#[cfg(test)]
+mod sync_graph_mutations_tests {
+    use iris_mpc_common::{
+        config::CommonConfig,
+        helpers::sync::{Modification, SyncState},
+    };
+
+    use super::*;
+
+    // ── helpers ───────────────────────────────────────────────────────────────
+
+    /// Build a minimal `SyncState` from `(modification_id, graph_mutation_bytes)` pairs.
+    fn make_state(pairs: Vec<(i64, Option<Vec<u8>>)>) -> SyncState {
+        let (modifications, graph_mutation_bytes): (Vec<_>, Vec<_>) = pairs
+            .into_iter()
+            .map(|(id, bytes)| {
+                (
+                    Modification {
+                        id,
+                        ..Default::default()
+                    },
+                    bytes,
+                )
+            })
+            .unzip();
+        SyncState {
+            db_len: 0,
+            modifications,
+            next_sns_sequence_num: None,
+            common_config: CommonConfig::default(),
+            graph_mutation_bytes,
+        }
+    }
+
+    // ── build_mutation_bytes ──────────────────────────────────────────────────
+
+    /// No parties → empty map (mirrors the `to_update.is_empty()` early-return path).
+    #[test]
+    fn empty_states_returns_empty_map() {
+        let result = build_mutation_bytes(&[]).unwrap();
+        assert!(result.is_empty());
+    }
+
+    /// Single party with a `Some` entry inserts it as-is.
+    #[test]
+    fn single_party_inserts_some_entry() {
+        let bytes = vec![1u8, 2, 3];
+        let state = make_state(vec![(1, Some(bytes.clone()))]);
+        let result = build_mutation_bytes(&[state]).unwrap();
+        assert_eq!(result[&1], &Some(bytes));
+    }
+
+    /// All parties report `None` for the same id → the map entry stays `None`.
+    #[test]
+    fn all_none_across_parties() {
+        let a = make_state(vec![(1, None)]);
+        let b = make_state(vec![(1, None)]);
+        let c = make_state(vec![(1, None)]);
+        let result = build_mutation_bytes(&[a, b, c]).unwrap();
+        assert_eq!(result[&1], &None);
+    }
+
+    /// `None` then `Some`: the `Some` upgrades the existing `None` entry.
+    #[test]
+    fn none_then_some_upgrades() {
+        let bytes = vec![4u8, 5, 6];
+        let a = make_state(vec![(1, None)]);
+        let b = make_state(vec![(1, Some(bytes.clone()))]);
+        let result = build_mutation_bytes(&[a, b]).unwrap();
+        assert_eq!(result[&1], &Some(bytes));
+    }
+
+    /// `Some` then `None`: the existing `Some` is preserved (no downgrade).
+    #[test]
+    fn some_then_none_preserves_existing() {
+        let bytes = vec![4u8, 5, 6];
+        let a = make_state(vec![(1, Some(bytes.clone()))]);
+        let b = make_state(vec![(1, None)]);
+        let result = build_mutation_bytes(&[a, b]).unwrap();
+        assert_eq!(result[&1], &Some(bytes));
+    }
+
+    /// Both parties report identical `Some` bytes → noop, result unchanged.
+    #[test]
+    fn matching_some_bytes_is_noop() {
+        let bytes = vec![7u8, 8, 9];
+        let a = make_state(vec![(1, Some(bytes.clone()))]);
+        let b = make_state(vec![(1, Some(bytes.clone()))]);
+        let result = build_mutation_bytes(&[a, b]).unwrap();
+        assert_eq!(result[&1], &Some(bytes));
+    }
+
+    /// Two parties report different `Some` bytes for the same id → bail.
+    #[test]
+    fn mismatched_some_bytes_bail() {
+        let a = make_state(vec![(1, Some(vec![1, 2, 3]))]);
+        let b = make_state(vec![(1, Some(vec![9, 9, 9]))]);
+        let err = build_mutation_bytes(&[a, b]).unwrap_err();
+        assert!(
+            err.to_string().contains("mismatch"),
+            "expected a mismatch error, got: {err}"
+        );
+    }
+
+    /// Multiple modification ids are tracked independently in the same merge.
+    #[test]
+    fn multiple_ids_tracked_independently() {
+        let bytes_a = vec![0xAu8];
+        let bytes_b = vec![0xBu8];
+        // party 0: mod 1 = Some(A), mod 2 = None
+        let p0 = make_state(vec![(1, Some(bytes_a.clone())), (2, None)]);
+        // party 1: mod 1 = None,    mod 2 = Some(B)
+        let p1 = make_state(vec![(1, None), (2, Some(bytes_b.clone()))]);
+        let result = build_mutation_bytes(&[p0, p1]).unwrap();
+        assert_eq!(result[&1], &Some(bytes_a), "mod 1 should be upgraded");
+        assert_eq!(result[&2], &Some(bytes_b), "mod 2 should be upgraded");
+    }
+
+    /// `modifications` and `graph_mutation_bytes` length mismatch → bail.
+    #[test]
+    fn length_mismatch_bails() {
+        let state = SyncState {
+            db_len: 0,
+            modifications: vec![Modification {
+                id: 1,
+                ..Default::default()
+            }],
+            next_sns_sequence_num: None,
+            common_config: CommonConfig::default(),
+            graph_mutation_bytes: vec![], // one modification, zero byte entries
+        };
+        let err = build_mutation_bytes(&[state]).unwrap_err();
+        assert!(
+            err.to_string().contains("length mismatch"),
+            "expected a length mismatch error, got: {err}"
         );
     }
 }
