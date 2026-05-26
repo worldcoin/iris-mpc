@@ -19,20 +19,20 @@ use tokio::sync::mpsc::{self, Receiver};
 #[allow(clippy::needless_lifetimes)]
 async fn load_db_records_from_aurora<'a>(
     actor: &mut impl InMemoryStore,
-    mut record_counter: i32,
+    record_counter: &mut i32,
     all_serial_ids: &mut HashSet<i64>,
     mut stream_db: BoxStream<'a, eyre::Result<DbStoredIris>>,
-) {
+) -> eyre::Result<()> {
     let mut load_summary_ts = Instant::now();
     let mut time_waiting_for_stream = Duration::from_secs(0);
     let mut time_loading_into_memory = Duration::from_secs(0);
-    let n_loaded_via_s3 = record_counter;
+    let n_loaded_via_s3 = *record_counter;
     while let Some(iris) = stream_db.next().await {
         // Update time waiting for the stream
         time_waiting_for_stream += load_summary_ts.elapsed();
         load_summary_ts = Instant::now();
 
-        let iris = iris.unwrap();
+        let iris = iris?;
 
         actor.load_single_record_from_db(
             iris.serial_id() - 1,
@@ -47,7 +47,7 @@ async fn load_db_records_from_aurora<'a>(
         if all_serial_ids.contains(&(iris.serial_id() as i64)) {
             actor.increment_db_size(iris.serial_id() - 1);
             all_serial_ids.remove(&(iris.serial_id() as i64));
-            record_counter += 1;
+            *record_counter += 1;
         }
 
         // Update time spent loading into memory
@@ -58,10 +58,12 @@ async fn load_db_records_from_aurora<'a>(
     tracing::info!(
         "Aurora Loading summary => Loaded {:?} items. Waited for stream: {:?}, Loaded into \
          memory: {:?}",
-        record_counter - n_loaded_via_s3,
+        *record_counter - n_loaded_via_s3,
         time_waiting_for_stream,
         time_loading_into_memory,
     );
+
+    Ok(())
 }
 
 /// Main iris loader method into memory. Load from either S3 + Aurora or only Aurora based on the config.
@@ -124,13 +126,24 @@ pub async fn load_iris_db(
                 s3_chunks_folder_name.clone(),
                 last_snapshot_details,
                 s3_max_serial_id_to_load,
-                tx.clone(),
+                tx,
                 s3_load_max_retries,
                 s3_load_initial_backoff_ms,
             )
             .await
             .expect("Couldn't fetch and parse chunks from s3");
         });
+        // Guard that calls shutdown_background() on drop so the runtime threads
+        // are always released non-blockingly, even on early returns / errors.
+        struct RuntimeShutdownGuard(Option<tokio::runtime::Runtime>);
+        impl Drop for RuntimeShutdownGuard {
+            fn drop(&mut self) {
+                if let Some(rt) = self.0.take() {
+                    rt.shutdown_background();
+                }
+            }
+        }
+        let _drop_guard = RuntimeShutdownGuard(Some(import_runtime));
 
         // Stream that yields S3StoredIris items from the channel while monitoring
         // fetch_handle for errors.  Once fetch_handle finishes successfully we
@@ -249,14 +262,16 @@ pub async fn load_iris_db(
             )
             .await
             .boxed();
-        load_db_records_from_aurora(actor, record_counter, &mut all_serial_ids, stream_db).await;
+        load_db_records_from_aurora(actor, &mut record_counter, &mut all_serial_ids, stream_db)
+            .await?;
     } else {
         tracing::info!("S3 importer disabled. Fetching only from Aurora db");
         let stream_db = store
             .stream_irises_par(None, store_load_parallelism, Some(max_serial_id_to_load))
             .await
             .boxed();
-        load_db_records_from_aurora(actor, record_counter, &mut all_serial_ids, stream_db).await;
+        load_db_records_from_aurora(actor, &mut record_counter, &mut all_serial_ids, stream_db)
+            .await?;
     }
 
     if !all_serial_ids.is_empty() {
