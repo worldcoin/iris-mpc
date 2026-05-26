@@ -195,7 +195,11 @@ impl PlaintextDeepIDStore {
                 .get_vector_by_serial_id(serial_id)
                 .unwrap()
                 .clone();
-            let query_id = VectorId::from_serial_id(serial_id);
+            let query_id = self
+                .storage
+                .get_current_version(serial_id)
+                .map(|version| VectorId::new(serial_id, version))
+                .unwrap_or_else(|| VectorId::from_serial_id(serial_id));
             let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
             let (neighbors, update_ep) = searcher
                 .search_to_insert::<_, SortedNeighborhood<_>>(self, &graph, &query, insertion_layer)
