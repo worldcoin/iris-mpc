@@ -608,14 +608,15 @@ async fn init_hawk_actor(
     let graph_load_future = async move {
         // Fetch WAL mutations that were committed after the checkpoint was taken.
         // Three cases:
-        //   • No checkpoint at all → graph starts empty, nothing to replay.
+        //   • No checkpoint at all → replay the entire WAL (covers a fresh start
+        //     that crashed before its first checkpoint was written).
         //   • Checkpoint with a known graph_mutation_id → replay only the rows
         //     that follow that id (the common case).
-        //   • Checkpoint whose graph_mutation_id is None (pre-dates WAL tracking)
-        //     → replay the *entire* WAL so the in-memory graph converges to the
-        //     correct state rather than silently staying at the checkpoint height.
+        //   • Checkpoint whose graph_mutation_id is None (genesis or pre-WAL checkpoint)
+        //     → replay the entire WAL on top of it so the in-memory graph converges
+        //     to the correct state.
         let wal_mutation_rows = match checkpoint.as_ref() {
-            None => vec![],
+            None => graph_store.get_hawk_graph_mutations_after(None).await?,
             Some(cp) => {
                 let after = cp.graph_mutation_id;
                 match after {
@@ -624,8 +625,9 @@ async fn init_hawk_actor(
                         "fetching WAL graph mutations to replay on top of checkpoint"
                     ),
                     None => tracing::info!(
-                    "checkpoint predates WAL tracking; replaying entire WAL on top of checkpoint"
-                ),
+                        "checkpoint has no graph_mutation_id (genesis or pre-WAL); \
+                         replaying entire WAL on top of checkpoint"
+                    ),
                 }
                 graph_store.get_hawk_graph_mutations_after(after).await?
             }
