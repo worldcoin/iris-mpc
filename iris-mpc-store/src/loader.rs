@@ -114,8 +114,9 @@ pub async fn load_iris_db(
         let import_runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(s3_load_parallelism)
             .thread_name("s3-importer")
+            .enable_all()
             .build()?;
-        import_runtime.spawn(async move {
+        let fetch_handle = import_runtime.spawn(async move {
             fetch_and_parse_chunks(
                 s3_arc,
                 s3_load_parallelism,
