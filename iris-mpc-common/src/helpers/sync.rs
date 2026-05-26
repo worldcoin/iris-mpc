@@ -301,7 +301,7 @@ impl SyncResult {
                             roll_forward.status = ModificationStatus::Completed.to_string();
                             roll_forward.persisted = any_persisted;
                             tracing::warn!(
-                                "Updating modification row from {:?} to {:?}",
+                                "Planning to update modification row from {:?} to {:?}",
                                 local_m,
                                 roll_forward
                             );

@@ -446,6 +446,7 @@ fn run_test_hawk_sync_mutation_mismatch() -> Result<()> {
             let party_shares = secret_shared_irises[party_idx].clone();
             let modification = per_party_modifications[party_idx].clone();
             let party_bytes: Option<Vec<u8>> = match party_idx {
+                0 => Some(bytes_a.clone()),
                 1 => Some(bytes_a.clone()),
                 2 => Some(bytes_b.clone()),
                 _ => None,
