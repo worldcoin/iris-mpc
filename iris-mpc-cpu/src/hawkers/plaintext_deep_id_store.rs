@@ -193,7 +193,12 @@ impl PlaintextDeepIDStore {
             let query = self
                 .storage
                 .get_vector_by_serial_id(serial_id)
-                .ok_or_else(|| eyre::eyre!("Vector for serial {} not found while generating graph", serial_id))?
+                .ok_or_else(|| {
+                    eyre::eyre!(
+                        "Vector for serial {} not found while generating graph",
+                        serial_id
+                    )
+                })?
                 .clone();
             let query_id = self
                 .storage
@@ -231,6 +236,7 @@ impl VectorStore for PlaintextDeepIDStore {
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(queries)
+    }
 
     async fn eval_distance(
         &mut self,
@@ -350,6 +356,7 @@ impl VectorStore for SharedPlaintextDeepIDStore {
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(queries)
+    }
 
     async fn eval_distance(
         &mut self,
