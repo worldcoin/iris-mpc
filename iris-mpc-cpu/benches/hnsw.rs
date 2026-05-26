@@ -284,9 +284,10 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                         for (vector_store, graph_store) in vectors_graphs.into_iter() {
                             let player_index = get_owner_index(&vector_store).await.unwrap();
                             let iris = Arc::new(raw_query[player_index].clone());
-                            let query = cache_iris(&vector_store.lock().await.workers, iris)
-                                .await
-                                .unwrap();
+                            let query =
+                                cache_iris(vector_store.lock().await.workers.as_ref(), iris)
+                                    .await
+                                    .unwrap();
                             let searcher = searcher.clone();
                             let mut rng = rng.clone();
 
@@ -331,9 +332,10 @@ fn bench_gr_ready_made_hnsw(c: &mut Criterion) {
                         for (vector_store, graph_store) in vectors_graphs.into_iter() {
                             let player_index = get_owner_index(&vector_store).await.unwrap();
                             let iris = Arc::new(raw_query[player_index].clone());
-                            let query = cache_iris(&vector_store.lock().await.workers, iris)
-                                .await
-                                .unwrap();
+                            let query =
+                                cache_iris(vector_store.lock().await.workers.as_ref(), iris)
+                                    .await
+                                    .unwrap();
                             let searcher = searcher.clone();
                             let vector_store = vector_store.clone();
                             jobs.spawn(async move {

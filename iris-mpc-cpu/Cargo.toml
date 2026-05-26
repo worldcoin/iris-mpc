@@ -99,5 +99,9 @@ harness = false
 name = "dot"
 harness = false
 
+[[bench]]
+name = "encoded_neighborhood"
+harness = false
+
 [[example]]
 name = "hnsw-ex"
