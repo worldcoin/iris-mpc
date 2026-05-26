@@ -175,8 +175,8 @@ pub fn apply_graph_mutations(
     for row in mutation_rows {
         let [left_mutations, right_mutations]: [Vec<GraphMutation<IrisVectorId>>; 2] =
             row.deserialize_mutations()?;
-        both_eyes[0].insert_apply(left_mutations);
-        both_eyes[1].insert_apply(right_mutations);
+        both_eyes[0].insert_apply_all(&left_mutations)?;
+        both_eyes[1].insert_apply_all(&right_mutations)?;
     }
     Ok(())
 }
