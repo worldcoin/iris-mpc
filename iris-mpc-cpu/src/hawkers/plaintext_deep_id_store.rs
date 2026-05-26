@@ -8,7 +8,11 @@
 
 use crate::{
     hawkers::shared_irises::{SharedIrises, SharedIrisesRef},
-    hnsw::{vector_store::VectorStoreMut, GraphMem, HnswSearcher, SortedNeighborhood, VectorStore},
+    hnsw::{
+        metrics::ops_counter::Operation::{CompareDistance, EvaluateDistance},
+        vector_store::VectorStoreMut,
+        GraphMem, HnswSearcher, SortedNeighborhood, VectorStore,
+    },
 };
 use aes_prng::AesRng;
 use eyre::{bail, Result};
@@ -17,6 +21,7 @@ use rand::{CryptoRng, Rng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 use std::sync::Arc;
+use tracing::debug;
 
 /// Number of int4 elements in each vector.
 pub const INT4_DIM: usize = 512;
@@ -28,9 +33,10 @@ pub const INT4_PACKED_BYTES: usize = INT4_DIM / 2;
 /// using two's-complement nibbles.
 ///
 /// Byte `i` carries element `2*i` in its low nibble and element `2*i+1` in its
-/// high nibble. Encoded nibble values are `0x0..=0x7` (positive 0..7) and
-/// `0x9..=0xF` (negative -7..-1). `0x8` (-8) is never produced by `random`; it
-/// decodes correctly to -8 if encountered, but no test path generates it.
+/// high nibble. Valid nibble values are `0x0..=0x7` (positive 0..7) and
+/// `0x9..=0xF` (negative -7..-1). The nibble `0x8` (-8) is outside the
+/// supported domain — `dot`'s i16 bound assumes `{-7..=7}` and is no longer
+/// safe if it appears.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Int4Vector {
     #[serde(with = "BigArray")]
@@ -80,7 +86,8 @@ impl Int4Vector {
     ///
     /// Decodes nibbles on the fly and accumulates element-wise products in
     /// `i16`. The tightest bound is `512 * 7 * 7 = 25_088 < i16::MAX = 32_767`,
-    /// so the sum never overflows for vectors produced by [`Int4Vector::random`].
+    /// which holds for any vector whose nibbles all decode within `{-7..=7}`.
+    /// Vectors containing the out-of-domain nibble `0x8` (-8) can overflow.
     pub fn dot(&self, other: &Self) -> i16 {
         let mut acc: i16 = 0;
         for (a, b) in self.packed.iter().zip(other.packed.iter()) {
@@ -93,10 +100,17 @@ impl Int4Vector {
         acc
     }
 
-    /// Encode a value in `{-7..=7}` (also accepts `-8`) as a 4-bit
-    /// two's-complement nibble.
+    /// Encode a value in `{-7..=7}` as a 4-bit two's-complement nibble.
+    ///
+    /// Values outside `{-7..=7}` are masked to a nibble silently in release;
+    /// `+8` aliases to `-8` (both encode to `0x08`). A debug assertion catches
+    /// out-of-range inputs to surface misuse early.
     #[inline]
     fn encode_nibble(value: i8) -> u8 {
+        debug_assert!(
+            (-7..=7).contains(&value),
+            "Int4Vector value {value} outside supported domain {{-7..=7}}",
+        );
         (value as u8) & 0x0F
     }
 
@@ -119,7 +133,7 @@ impl Int4Vector {
 /// simpler distance and no dependency on iris codes.
 ///
 /// [`PlaintextStore`]: super::plaintext_store::PlaintextStore
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(bound(serialize = "", deserialize = ""))]
 pub struct PlaintextDeepIDStore {
     pub storage: Int4SharedVectors,
@@ -215,6 +229,7 @@ impl VectorStore for PlaintextDeepIDStore {
         query: &Self::QueryRef,
         vector: &Self::VectorRef,
     ) -> Result<Self::DistanceRef> {
+        debug!(event_type = EvaluateDistance.id());
         let stored = self.storage.get_vector(vector).ok_or_else(|| {
             eyre::eyre!(
                 "Vector ID not found in store for serial {}",
@@ -230,8 +245,22 @@ impl VectorStore for PlaintextDeepIDStore {
     }
 
     async fn less_than(&mut self, d1: &Self::DistanceRef, d2: &Self::DistanceRef) -> Result<bool> {
+        debug!(event_type = CompareDistance.id());
         // Larger dot = closer, so "d1 closer than d2" iff dot1 > dot2.
         Ok(d1 > d2)
+    }
+
+    // Default implementation + metrics, mirroring PlaintextStore.
+    async fn less_than_batch(
+        &mut self,
+        distances: &[(Self::DistanceRef, Self::DistanceRef)],
+    ) -> Result<Vec<bool>> {
+        let mut results: Vec<bool> = Vec::with_capacity(distances.len());
+        for (d1, d2) in distances {
+            results.push(self.less_than(d1, d2).await?);
+        }
+        metrics::counter!("less_than").increment(distances.len() as u64);
+        Ok(results)
     }
 
     async fn only_valid_vectors(
@@ -279,6 +308,10 @@ impl SharedPlaintextDeepIDStore {
     pub async fn is_empty(&self) -> bool {
         self.len().await == 0
     }
+
+    pub fn prepare_query(&self, v: Int4Vector) -> Arc<Int4Vector> {
+        Arc::new(v)
+    }
 }
 
 impl From<PlaintextDeepIDStore> for SharedPlaintextDeepIDStore {
@@ -320,16 +353,21 @@ impl VectorStore for SharedPlaintextDeepIDStore {
         query: &Self::QueryRef,
         vectors: &[Self::VectorRef],
     ) -> Result<Vec<Self::DistanceRef>> {
-        let store = self.storage.read().await;
-        let stored = vectors
-            .iter()
-            .map(|v| {
-                store.get_vector(v).ok_or_else(|| {
-                    eyre::eyre!("Vector ID not found in store for serial {}", v.serial_id())
+        debug!(event_type = EvaluateDistance.id());
+        // Snapshot Arc handles under the read lock, drop the guard, then
+        // compute dots without blocking concurrent writers.
+        let stored = {
+            let store = self.storage.read().await;
+            vectors
+                .iter()
+                .map(|v| {
+                    store.get_vector(v).cloned().ok_or_else(|| {
+                        eyre::eyre!("Vector ID not found in store for serial {}", v.serial_id())
+                    })
                 })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(stored.into_iter().map(|s| query.dot(s)).collect())
+                .collect::<Result<Vec<_>>>()?
+        };
+        Ok(stored.into_iter().map(|s| query.dot(&s)).collect())
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
@@ -337,7 +375,21 @@ impl VectorStore for SharedPlaintextDeepIDStore {
     }
 
     async fn less_than(&mut self, d1: &Self::DistanceRef, d2: &Self::DistanceRef) -> Result<bool> {
+        debug!(event_type = CompareDistance.id());
         Ok(d1 > d2)
+    }
+
+    // Default implementation + metrics, mirroring SharedPlaintextStore.
+    async fn less_than_batch(
+        &mut self,
+        distances: &[(Self::DistanceRef, Self::DistanceRef)],
+    ) -> Result<Vec<bool>> {
+        let mut results: Vec<bool> = Vec::with_capacity(distances.len());
+        for (d1, d2) in distances {
+            results.push(self.less_than(d1, d2).await?);
+        }
+        metrics::counter!("less_than").increment(distances.len() as u64);
+        Ok(results)
     }
 
     async fn only_valid_vectors(
@@ -609,10 +661,10 @@ mod tests {
                     .expect("search succeeds");
                 let pairs = results.as_vec_ref();
                 assert!(!pairs.is_empty(), "expected at least one result");
-                // Self-dot of any non-zero random vector is positive.
+                // Self-dot of any random vector is a sum of squares ≥ 0.
                 let (top_id, top_dist) = &pairs[0];
                 assert_eq!(*top_id, expected_id);
-                assert!(*top_dist > 0);
+                assert!(*top_dist >= 0);
             });
         }
 
