@@ -47,21 +47,24 @@ pub async fn sync_graph_mutations(
         for (modification, graph_mutation) in
             izip!(&state.modifications, &state.graph_mutation_bytes)
         {
-            let entry = mutation_bytes
-                .entry(modification.id)
-                .and_modify(|e| {
-                    // if one party has not written the graph mutation yet (e would be None) but the other had,
-                    // then update the graph mutation
-                    if e.is_none() && graph_mutation.is_some() {
-                        *e = graph_mutation;
-                    }
-                })
-                .or_insert(graph_mutation);
-            if entry.is_some() && graph_mutation.is_some() && *entry != graph_mutation {
-                bail!(
-                    "graph mutation mismatch between parties. modification id: {}",
-                    modification.id
-                );
+            match (mutation_bytes.get(&modification.id), graph_mutation) {
+                // first time seeing this id: insert whatever the party reported
+                (None, _) => {
+                    mutation_bytes.insert(modification.id, graph_mutation);
+                }
+                // existing entry has no bytes but incoming does: upgrade
+                (Some(None), Some(_)) => {
+                    mutation_bytes.insert(modification.id, graph_mutation);
+                }
+                // both sides agree (including both-None): nothing to do
+                (Some(existing), incoming) if *existing == incoming => {}
+                // conflict: two parties reported different non-None bytes
+                _ => {
+                    bail!(
+                        "graph mutation mismatch between parties. modification id: {}",
+                        modification.id
+                    );
+                }
             }
         }
     }
