@@ -17,6 +17,7 @@ use crate::{
         graph_v1::{self, read_graph_v1, GraphV1},
         graph_v2::{self, read_graph_v2, GraphV2},
         graph_v3::{self, read_graph_v3, GraphV3},
+        graph_v4::{self, read_graph_v4, GraphV4},
     },
 };
 
@@ -26,6 +27,16 @@ use crate::{
 pub enum GraphFormat {
     /// Designated current stable format for `GraphMem` serialization.
     Current,
+
+    /// Stable graph serialization format Version 4.
+    ///
+    /// - Binary format
+    /// - Multiple entry-points
+    /// - VectorId = (SerialId, VersionId)
+    /// - Contains layer checksums
+    /// - Edges store VectorIds only
+    /// - Sequence number for timestamping graph mutations <-- DIFF with V3
+    V4,
 
     /// Stable graph serialization format Version 3.
     ///
@@ -72,10 +83,10 @@ pub enum GraphFormat {
 
 impl GraphFormat {
     /// Convert GraphFormat to its corresponding i32 value for storage.
-    /// Current and V3 both map to 3.
     pub fn version(&self) -> i32 {
         match self {
-            GraphFormat::Current | GraphFormat::V3 => 3,
+            GraphFormat::Current | GraphFormat::V4 => 4,
+            GraphFormat::V3 => 3,
             GraphFormat::V2 => 2,
             GraphFormat::V1 => 1,
             GraphFormat::V0 => 0,
@@ -88,7 +99,8 @@ impl GraphFormat {
 }
 
 /// Array of all concrete graph formats
-pub const ALL_CONCRETE_GRAPH_FORMATS: [GraphFormat; 5] = [
+pub const ALL_CONCRETE_GRAPH_FORMATS: [GraphFormat; 6] = [
+    GraphFormat::V4,
     GraphFormat::V3,
     GraphFormat::V2,
     GraphFormat::V1,
@@ -96,13 +108,11 @@ pub const ALL_CONCRETE_GRAPH_FORMATS: [GraphFormat; 5] = [
     GraphFormat::Raw,
 ];
 
-/// Current standard serialization format
-pub const GRAPH_FORMAT_CURRENT: GraphFormat = GraphFormat::V3;
-
 impl Display for GraphFormat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             GraphFormat::Current => "Current",
+            GraphFormat::V4 => "V4",
             GraphFormat::V3 => "V3",
             GraphFormat::V2 => "V2",
             GraphFormat::V1 => "V1",
@@ -122,6 +132,7 @@ impl TryFrom<i32> for GraphFormat {
             1 => Ok(GraphFormat::V1),
             2 => Ok(GraphFormat::V2),
             3 => Ok(GraphFormat::V3),
+            4 => Ok(GraphFormat::V4),
             -1 => Ok(GraphFormat::Raw),
             _ => Err(eyre::eyre!("unsupported graph format version: {}", value)),
         }
@@ -129,21 +140,21 @@ impl TryFrom<i32> for GraphFormat {
 }
 
 /// Designated method for reading a `GraphMem`. Currently goes through the
-/// `GraphV3` serialization type.
+/// `GraphV4` serialization type.
 pub fn read_graph_current<R: std::io::Read>(
     reader: &mut R,
 ) -> eyre::Result<GraphMem<IrisVectorId>> {
-    let data = bincode::deserialize_from::<_, GraphV3>(reader)?.into();
+    let data = bincode::deserialize_from::<_, GraphV4>(reader)?.into();
     Ok(data)
 }
 
 /// Designated method for writing a `GraphMem`. Currently goes through the
-/// `GraphV3` serialization type.
+/// `GraphV4` serialization type.
 pub fn write_graph_current<W: std::io::Write>(
     writer: &mut W,
     data: GraphMem<IrisVectorId>,
 ) -> Result<()> {
-    bincode::serialize_into::<_, GraphV3>(writer, &(data.into()))?;
+    bincode::serialize_into::<_, GraphV4>(writer, &(data.into()))?;
     Ok(())
 }
 
@@ -177,6 +188,10 @@ pub fn read_graph<R: std::io::Read>(
 ) -> Result<GraphMem<IrisVectorId>> {
     match format {
         GraphFormat::Current => read_graph_current(reader),
+        GraphFormat::V4 => {
+            let graph = read_graph_v4(reader)?;
+            Ok(graph.into())
+        }
         GraphFormat::V3 => {
             let graph = read_graph_v3(reader)?;
             Ok(graph.into())
@@ -242,7 +257,7 @@ pub fn check_valid_graph_formats(data: &[u8]) -> Vec<GraphFormat> {
 }
 
 /// Write a `GraphMem` to file using the `GraphFormat::Current` serialization
-/// format, currently `GraphV3`.
+/// format, currently `GraphV4`.
 pub fn write_graph_to_file<P: AsRef<Path>>(path: P, data: GraphMem<IrisVectorId>) -> Result<()> {
     let file = File::create(path)?;
     let mut writer = BufWriter::new(file);
@@ -258,22 +273,22 @@ fn read_pair<R: std::io::Read, G: for<'a> Deserialize<'a>>(reader: &mut R) -> Re
 }
 
 /// Designated method for reading a pair of `GraphMem` structs. Currently goes
-/// through the `GraphV3` serialization type.
+/// through the `GraphV4` serialization type.
 pub fn read_graph_pair_current<R: std::io::Read>(
     reader: &mut R,
 ) -> Result<[GraphMem<IrisVectorId>; 2]> {
-    let data = read_pair::<_, GraphV3>(reader)?.map(|graph| graph.into());
+    let data = read_pair::<_, GraphV4>(reader)?.map(|graph| graph.into());
     Ok(data)
 }
 
 /// Designated method for writing a pair of `GraphMem` structs. Currently goes
-/// through the `GraphV3` serialization type.
+/// through the `GraphV4` serialization type.
 pub fn write_graph_pair_current<W: std::io::Write>(
     writer: &mut W,
     data: [GraphMem<IrisVectorId>; 2],
 ) -> Result<()> {
     let data = data.map(|graph| graph.into());
-    bincode::serialize_into::<_, [GraphV3; 2]>(writer, &data)?;
+    bincode::serialize_into::<_, [GraphV4; 2]>(writer, &data)?;
     Ok(())
 }
 
@@ -309,6 +324,10 @@ pub fn read_graph_pair<R: std::io::Read>(
 ) -> Result<[GraphMem<IrisVectorId>; 2]> {
     match format {
         GraphFormat::Current => read_graph_pair_current(reader),
+        GraphFormat::V4 => {
+            let graphs = read_pair::<_, GraphV4>(reader)?;
+            Ok(graphs.map(|graph| graph.into()))
+        }
         GraphFormat::V3 => {
             let graphs = read_pair::<_, GraphV3>(reader)?;
             Ok(graphs.map(|graph| graph.into()))
@@ -378,7 +397,7 @@ pub fn check_valid_graph_pair_formats(data: &[u8]) -> Vec<GraphFormat> {
 }
 
 /// Write a pair of `GraphMem` structs to file using the `GraphFormat::Current`
-/// graph serialization format, currently `GraphV3`.
+/// graph serialization format, currently `GraphV4`.
 pub fn write_graph_pair_to_file<P: AsRef<Path>>(
     path: P,
     data: [GraphMem<IrisVectorId>; 2],
@@ -428,6 +447,7 @@ impl From<graph_v0::GraphV0> for GraphMem<IrisVectorId> {
                 .into_iter()
                 .collect::<Vec<_>>(),
             layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
+            last_update_seq_no: 0,
         }
     }
 }
@@ -473,6 +493,7 @@ impl From<graph_v1::GraphV1> for GraphMem<IrisVectorId> {
                 .into_iter()
                 .collect::<Vec<_>>(),
             layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
+            last_update_seq_no: 0,
         }
     }
 }
@@ -517,6 +538,7 @@ impl From<graph_v2::GraphV2> for GraphMem<IrisVectorId> {
                 .into_iter()
                 .collect::<Vec<_>>(),
             layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
+            last_update_seq_no: 0,
         }
     }
 }
@@ -554,55 +576,93 @@ impl From<graph_v3::GraphV3> for GraphMem<IrisVectorId> {
             // V3 uses a Vec<EntryPoint>, which matches GraphMem
             entry_points: value.entry_point.into_iter().map(|e| e.into()).collect(),
             layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
+            last_update_seq_no: 0,
         }
     }
 }
 
-/* --------------- Conversion GraphMem -> GraphV3 ------------------- */
+/* --------------- Conversion GraphV4 -> GraphMem ------------------- */
 
-impl From<IrisVectorId> for graph_v3::VectorId {
-    fn from(value: IrisVectorId) -> Self {
-        graph_v3::VectorId {
-            id: value.serial_id(),
-            version: value.version_id(),
-        }
+impl From<graph_v4::VectorId> for IrisVectorId {
+    fn from(value: graph_v4::VectorId) -> Self {
+        IrisVectorId::new(value.id, value.version)
     }
 }
 
-impl From<layered_graph::EntryPoint<IrisVectorId>> for graph_v3::EntryPoint {
-    fn from(value: layered_graph::EntryPoint<IrisVectorId>) -> Self {
-        graph_v3::EntryPoint {
+impl From<graph_v4::EntryPoint> for layered_graph::EntryPoint<IrisVectorId> {
+    fn from(value: graph_v4::EntryPoint) -> Self {
+        layered_graph::EntryPoint {
             point: value.point.into(),
             layer: value.layer,
         }
     }
 }
 
-impl From<Layer<IrisVectorId>> for graph_v3::Layer {
+impl From<graph_v4::Layer> for Layer<IrisVectorId> {
+    fn from(value: graph_v4::Layer) -> Self {
+        let mut layer = Layer::new();
+        for (v, nb) in value.links.into_iter() {
+            layer.set_links(v.into(), nb.0.into_iter().map(|x| x.into()).collect());
+        }
+        layer
+    }
+}
+
+impl From<graph_v4::GraphV4> for GraphMem<IrisVectorId> {
+    fn from(value: graph_v4::GraphV4) -> Self {
+        GraphMem {
+            entry_points: value.entry_points.into_iter().map(|e| e.into()).collect(),
+            layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
+            last_update_seq_no: value.last_update_seq_no,
+        }
+    }
+}
+
+/* --------------- Conversion GraphMem -> GraphV4 ------------------- */
+
+impl From<IrisVectorId> for graph_v4::VectorId {
+    fn from(value: IrisVectorId) -> Self {
+        graph_v4::VectorId {
+            id: value.serial_id(),
+            version: value.version_id(),
+        }
+    }
+}
+
+impl From<layered_graph::EntryPoint<IrisVectorId>> for graph_v4::EntryPoint {
+    fn from(value: layered_graph::EntryPoint<IrisVectorId>) -> Self {
+        graph_v4::EntryPoint {
+            point: value.point.into(),
+            layer: value.layer,
+        }
+    }
+}
+
+impl From<Layer<IrisVectorId>> for graph_v4::Layer {
     fn from(value: Layer<IrisVectorId>) -> Self {
-        graph_v3::Layer {
+        let set_hash = value.checksum();
+        graph_v4::Layer {
             links: value
                 .links
                 .into_iter()
                 .map(|(v, nb)| {
                     (
                         v.into(),
-                        graph_v3::EdgeIds(nb.into_iter().map(|x| x.into()).collect()),
+                        graph_v4::EdgeIds(nb.into_iter().map(|x| x.into()).collect()),
                     )
                 })
                 .collect(),
-            // This is ignored when deserializing
-            // But it needs to exist
-            set_hash: 0,
+            set_hash,
         }
     }
 }
 
-impl From<GraphMem<IrisVectorId>> for graph_v3::GraphV3 {
+impl From<GraphMem<IrisVectorId>> for graph_v4::GraphV4 {
     fn from(value: GraphMem<IrisVectorId>) -> Self {
-        graph_v3::GraphV3 {
-            entry_point: value.entry_points.into_iter().map(|ep| ep.into()).collect(),
+        graph_v4::GraphV4 {
+            entry_points: value.entry_points.into_iter().map(|ep| ep.into()).collect(),
             layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
+            last_update_seq_no: value.last_update_seq_no,
         }
     }
 }

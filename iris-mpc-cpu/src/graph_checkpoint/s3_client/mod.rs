@@ -1,5 +1,7 @@
 mod multipart;
-use std::{fmt::Display, io::Cursor, str::FromStr, time::Instant};
+mod streaming;
+mod streaming_download;
+use std::{io::Cursor, time::Instant};
 
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client as S3Client;
@@ -14,15 +16,16 @@ use crate::{
             graph_store::{self, GraphPg},
             layered_graph::GraphMem,
         },
-        vector_store::Ref,
         VectorStore,
     },
-    utils::serialization::graph::GraphFormat,
+    utils::serialization::graph::{read_graph_pair, GraphFormat},
 };
 
 use crate::graph_checkpoint::data::*;
-use iris_mpc_common::IrisSerialId;
+use iris_mpc_common::{IrisSerialId, IrisVectorId};
 pub use multipart::*;
+pub use streaming::*;
+pub use streaming_download::*;
 
 /// Creates an S3 graph checkpoint.
 #[allow(clippy::too_many_arguments)]
@@ -166,21 +169,21 @@ async fn _upload_graph_checkpoint(
     Ok(checkpoint)
 }
 
-pub async fn download_graph_checkpoint<T: Ref + Display + FromStr + Ord>(
+pub async fn download_graph_checkpoint(
     s3_client: &S3Client,
     bucket: &str,
     state: &GraphCheckpointState,
-) -> Result<BothEyes<GraphMem<T>>> {
-    if state.graph_version != GraphFormat::Current.version() {
-        bail!("unexpected graph version: {}", state.graph_version);
+) -> Result<BothEyes<GraphMem<IrisVectorId>>> {
+    let format = GraphFormat::try_from(state.graph_version)?;
+    if format == GraphFormat::Raw {
+        bail!("Unexpected graph checkpoint format: Raw");
     }
-
     let binary_graph = download_and_hash(s3_client, bucket, state).await?;
 
     // todo: deserialize in a way that does not require holding 2 graphs in memory at once.
     // currently binary_graph and graphs make two graphs in RAM at once
     let mut cursor = Cursor::new(&binary_graph);
-    let graphs: BothEyes<GraphMem<_>> = bincode::deserialize_from(&mut cursor)?;
+    let graphs = read_graph_pair(&mut cursor, format)?;
     Ok(graphs)
 }
 

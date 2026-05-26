@@ -322,8 +322,12 @@ async fn main() -> Result<()> {
     );
     for row in &mutation_rows {
         let both_eyes = row.deserialize_mutations()?;
-        graphs[LEFT].insert_apply(both_eyes[LEFT].clone());
-        graphs[RIGHT].insert_apply(both_eyes[RIGHT].clone());
+        for m in &both_eyes[LEFT] {
+            graphs[LEFT].insert_apply(m)?;
+        }
+        for m in &both_eyes[RIGHT] {
+            graphs[RIGHT].insert_apply(m)?;
+        }
     }
     rpt!(rpt, "  All mutations applied.");
 
