@@ -11,13 +11,13 @@ function _main()
     pushd "$(_get_path_to_monorepo)/iris-mpc-upgrade-hawk" || exit
 
     # needs to run twice to create the keys with both AWSCURRENT and AWSPREVIOUS states
-    cargo run --release -p iris-mpc-bins --bin key-manager --  --region us-east-1 --node-id 0 --env dev rotate --public-key-bucket-name wf-dev-public-keys
-    cargo run --release -p iris-mpc-bins --bin key-manager --  --region us-east-1 --node-id 1 --env dev rotate --public-key-bucket-name wf-dev-public-keys
-    cargo run --release -p iris-mpc-bins --bin key-manager --  --region us-east-1 --node-id 2 --env dev rotate --public-key-bucket-name wf-dev-public-keys
+    cargo run --release -p iris-mpc-bins --bin key-manager --  --region us-east-1 --endpoint-url http://localstack:4566 --node-id 0 --env dev rotate --public-key-bucket-name wf-dev-public-keys
+    cargo run --release -p iris-mpc-bins --bin key-manager --  --region us-east-1 --endpoint-url http://localstack:4566 --node-id 1 --env dev rotate --public-key-bucket-name wf-dev-public-keys
+    cargo run --release -p iris-mpc-bins --bin key-manager --  --region us-east-1 --endpoint-url http://localstack:4566 --node-id 2 --env dev rotate --public-key-bucket-name wf-dev-public-keys
 
-    cargo run --release -p iris-mpc-bins --bin key-manager --  --region us-east-1 --node-id 0 --env dev rotate --public-key-bucket-name wf-dev-public-keys
-    cargo run --release -p iris-mpc-bins --bin key-manager --  --region us-east-1 --node-id 1 --env dev rotate --public-key-bucket-name wf-dev-public-keys
-    cargo run --release -p iris-mpc-bins --bin key-manager --  --region us-east-1 --node-id 2 --env dev rotate --public-key-bucket-name wf-dev-public-keys
+    cargo run --release -p iris-mpc-bins --bin key-manager --  --region us-east-1 --endpoint-url http://localstack:4566 --node-id 0 --env dev rotate --public-key-bucket-name wf-dev-public-keys
+    cargo run --release -p iris-mpc-bins --bin key-manager --  --region us-east-1 --endpoint-url http://localstack:4566 --node-id 1 --env dev rotate --public-key-bucket-name wf-dev-public-keys
+    cargo run --release -p iris-mpc-bins --bin key-manager --  --region us-east-1 --endpoint-url http://localstack:4566 --node-id 2 --env dev rotate --public-key-bucket-name wf-dev-public-keys
 
     cargo test --release --test e2e_hawk -- --include-ignored
     popd || exit
