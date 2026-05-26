@@ -341,11 +341,15 @@ impl VectorStore for SharedPlaintextDeepIDStore {
         vectors: Vec<Self::VectorRef>,
     ) -> Result<Vec<Self::QueryRef>> {
         let store = self.storage.read().await;
-        Ok(vectors
-            .iter()
-            .map(|id| store.get_vector(id).unwrap().clone())
-            .collect())
-    }
+        let queries = vectors
+            .into_iter()
+            .map(|id| {
+                store.get_vector(&id).cloned().ok_or_else(|| {
+                    eyre::eyre!("Vector ID not found in store for serial {}", id.serial_id())
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(queries)
 
     async fn eval_distance(
         &mut self,
