@@ -151,7 +151,7 @@ for i in "${!CLUSTERS[@]}"; do
     fi
 
     echo "Syncing application $ARGOCD_APP in $CLUSTER..."
-    argocd app sync $ARGOCD_APP 1> /dev/null
+    argocd app sync "$ARGOCD_APP" 1> /dev/null
     if [ $? -ne 0 ]; then
         echo "Failed to sync application $ARGOCD_APP in $CLUSTER. Skipping..."
         continue
