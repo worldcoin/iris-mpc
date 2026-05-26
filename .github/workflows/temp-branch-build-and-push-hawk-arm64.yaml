@@ -6,7 +6,6 @@ on:
       - "dev"
       - "feat/recovery-update"
       - "pop-3712-reauth-skip-persistence-alias"
-      - "POP-3883/debug-hnsw-production-sync-issues"
 
     paths-ignore:
       - "deploy/**"
