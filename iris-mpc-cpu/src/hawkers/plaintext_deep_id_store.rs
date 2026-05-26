@@ -121,12 +121,12 @@ impl Int4Vector {
 /// [`PlaintextStore`]: super::plaintext_store::PlaintextStore
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(bound(serialize = "", deserialize = ""))]
-pub struct PlaintextInt4Store {
+pub struct PlaintextDeepIDStore {
     pub storage: Int4SharedVectors,
     pub threshold: i16,
 }
 
-impl PlaintextInt4Store {
+impl PlaintextDeepIDStore {
     /// New empty store with the given match threshold.
     pub fn new(threshold: i16) -> Self {
         Self::with_storage(threshold, Int4SharedVectors::default())
@@ -195,7 +195,7 @@ impl PlaintextInt4Store {
     }
 }
 
-impl VectorStore for PlaintextInt4Store {
+impl VectorStore for PlaintextDeepIDStore {
     type QueryRef = Arc<Int4Vector>;
     type VectorRef = VectorId;
     type DistanceRef = i16;
@@ -243,7 +243,7 @@ impl VectorStore for PlaintextInt4Store {
     }
 }
 
-impl VectorStoreMut for PlaintextInt4Store {
+impl VectorStoreMut for PlaintextDeepIDStore {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         self.storage.append(query.clone())
     }
@@ -257,14 +257,14 @@ impl VectorStoreMut for PlaintextInt4Store {
     }
 }
 
-/// `PlaintextInt4Store` with synchronization primitives for multithreaded use.
+/// `PlaintextDeepIDStore` with synchronization primitives for multithreaded use.
 #[derive(Debug, Clone)]
-pub struct SharedPlaintextInt4Store {
+pub struct SharedPlaintextDeepIDStore {
     pub storage: Int4SharedVectorsRef,
     pub threshold: i16,
 }
 
-impl SharedPlaintextInt4Store {
+impl SharedPlaintextDeepIDStore {
     pub fn new(threshold: i16) -> Self {
         Self {
             storage: Int4SharedVectors::default().to_arc(),
@@ -281,8 +281,8 @@ impl SharedPlaintextInt4Store {
     }
 }
 
-impl From<PlaintextInt4Store> for SharedPlaintextInt4Store {
-    fn from(value: PlaintextInt4Store) -> Self {
+impl From<PlaintextDeepIDStore> for SharedPlaintextDeepIDStore {
+    fn from(value: PlaintextDeepIDStore) -> Self {
         Self {
             storage: value.storage.to_arc(),
             threshold: value.threshold,
@@ -290,7 +290,7 @@ impl From<PlaintextInt4Store> for SharedPlaintextInt4Store {
     }
 }
 
-impl VectorStore for SharedPlaintextInt4Store {
+impl VectorStore for SharedPlaintextDeepIDStore {
     type QueryRef = Arc<Int4Vector>;
     type VectorRef = VectorId;
     type DistanceRef = i16;
@@ -350,7 +350,7 @@ impl VectorStore for SharedPlaintextInt4Store {
     }
 }
 
-impl VectorStoreMut for SharedPlaintextInt4Store {
+impl VectorStoreMut for SharedPlaintextDeepIDStore {
     async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
         self.storage.append(query).await
     }
@@ -438,9 +438,9 @@ mod tests {
         threshold: i16,
         n: usize,
         seed: u64,
-    ) -> (PlaintextInt4Store, Vec<(VectorId, Arc<Int4Vector>)>) {
+    ) -> (PlaintextDeepIDStore, Vec<(VectorId, Arc<Int4Vector>)>) {
         let mut rng = AesRng::seed_from_u64(seed);
-        let mut store = PlaintextInt4Store::new(threshold);
+        let mut store = PlaintextDeepIDStore::new(threshold);
         let mut ids = Vec::with_capacity(n);
         for _ in 0..n {
             let v = Arc::new(Int4Vector::random(&mut rng));
@@ -496,7 +496,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_is_match_high_magnitude_self_dot() {
-        let mut store = PlaintextInt4Store::new(12_000);
+        let mut store = PlaintextDeepIDStore::new(12_000);
 
         // is_match: identity dot of a high-magnitude vector exceeds the threshold
         let high = Arc::new(make_vec_with(7));
@@ -511,7 +511,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_is_match_zero_vector_does_not_match() {
-        let mut store = PlaintextInt4Store::new(12_000);
+        let mut store = PlaintextDeepIDStore::new(12_000);
 
         // is_match: zero vector against itself does NOT match
         let zero = Arc::new(Int4Vector::default());
@@ -527,7 +527,7 @@ mod tests {
 
         // Threshold sits well above the random-pair dot (~0 ± hundreds) and well
         // below a random vector's self-dot (~512 * 18.67 ≈ 9_560 on average).
-        let mut store = PlaintextInt4Store::new(/* threshold */ 5_000);
+        let mut store = PlaintextDeepIDStore::new(/* threshold */ 5_000);
 
         // Insert 64 random vectors and remember one to perturb later.
         let mut anchor: Option<(VectorId, Arc<Int4Vector>)> = None;
@@ -575,7 +575,7 @@ mod tests {
     #[tokio::test]
     async fn test_parallel_plaintext_int4_hnsw_matcher() {
         let mut rng = AesRng::seed_from_u64(0x5EED5EED);
-        let mut store = PlaintextInt4Store::new(/* threshold */ 0);
+        let mut store = PlaintextDeepIDStore::new(/* threshold */ 0);
 
         // Insert 32 random vectors, keep all of them as candidate queries.
         let mut originals: Vec<(VectorId, Arc<Int4Vector>)> = Vec::new();
@@ -592,7 +592,7 @@ mod tests {
             .expect("graph generation succeeds");
 
         // Convert to the shared store and search the first 8 originals in parallel.
-        let shared: SharedPlaintextInt4Store = store.into();
+        let shared: SharedPlaintextDeepIDStore = store.into();
         let searcher = Arc::new(searcher);
         let graph = Arc::new(graph);
 
