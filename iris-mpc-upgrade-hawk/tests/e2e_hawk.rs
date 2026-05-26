@@ -38,7 +38,7 @@ use iris_mpc_cpu::{
 };
 use iris_mpc_utils::{
     aws::{AwsClient, AwsClientConfig},
-    constants::{AWS_PUBLIC_KEY_BASE_URL, N_PARTIES},
+    constants::N_PARTIES,
     irises::{generate_iris_shares_for_upload_both_eyes, GaloisRingSharedIrisForUpload},
 };
 use itertools::izip;
@@ -60,6 +60,7 @@ use crate::utils::{
     irises::{self},
     modifications::{ModificationInput, ModificationType},
     mpc_node::{db_ops, MpcNodes},
+    runner::TestRunEnvironment,
 };
 
 #[test]
@@ -148,7 +149,7 @@ fn run_test_hawk_init() -> Result<()> {
         for config in configs.iter() {
             let aws_config = AwsClientConfig::new(
                 config.environment.clone(),
-                AWS_PUBLIC_KEY_BASE_URL.into(),
+                TestRunEnvironment::new().public_key_base_url().to_string(),
                 config.shares_bucket_name.clone(),
                 String::new(), // sns_request_topic_arn - not needed for upload
                 0,             // sqs_long_poll_wait_time - not needed for upload
@@ -204,7 +205,7 @@ fn run_test_hawk_init() -> Result<()> {
                 .map(|(idx, m)| {
                     let vector_id = IrisVectorId::new(m.serial_id as u32, 0);
                     let mutation = GraphMutation {
-                        seq_no: idx as _,
+                        seq_no: idx as u64 + 1,
                         ops: vec![MutationOp::AddNode {
                             id: vector_id,
                             height: 1,
@@ -396,7 +397,7 @@ fn run_test_hawk_sync_mutation_mismatch() -> Result<()> {
         for config in configs.iter() {
             let aws_config = AwsClientConfig::new(
                 config.environment.clone(),
-                AWS_PUBLIC_KEY_BASE_URL.into(),
+                TestRunEnvironment::new().public_key_base_url().to_string(),
                 config.shares_bucket_name.clone(),
                 String::new(),
                 0,
@@ -417,7 +418,7 @@ fn run_test_hawk_sync_mutation_mismatch() -> Result<()> {
         // Different IrisVectorId values guarantee different byte sequences.
         let make_mutation = |vector_serial_id: u32| -> BothEyes<Vec<GraphMutation<IrisVectorId>>> {
             use std::sync::atomic::{AtomicU64, Ordering};
-            static SEQ_COUNTER: AtomicU64 = AtomicU64::new(0);
+            static SEQ_COUNTER: AtomicU64 = AtomicU64::new(1);
 
             let seq_no = SEQ_COUNTER.fetch_add(1, Ordering::SeqCst);
             let v = GraphMutation {

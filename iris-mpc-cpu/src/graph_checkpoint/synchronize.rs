@@ -218,7 +218,7 @@ mod tests {
     /// updating entry points. Uses a static counter to assign incrementing seq_no.
     fn add_node(id: IrisVectorId) -> GraphMutation<IrisVectorId> {
         use std::sync::atomic::{AtomicU64, Ordering};
-        static SEQ_COUNTER: AtomicU64 = AtomicU64::new(0);
+        static SEQ_COUNTER: AtomicU64 = AtomicU64::new(1);
 
         let seq_no = SEQ_COUNTER.fetch_add(1, Ordering::SeqCst);
         GraphMutation {
