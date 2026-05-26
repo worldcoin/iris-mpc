@@ -184,7 +184,7 @@ pub fn apply_graph_mutations(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hnsw::graph::mutation::UpdateEntryPoint;
+    use crate::hnsw::graph::mutation::{MutationOp, UpdateEntryPoint};
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
@@ -215,12 +215,19 @@ mod tests {
     }
 
     /// A minimal `AddNode` mutation that adds the node to layer 0 without
-    /// updating entry points.
+    /// updating entry points. Uses a static counter to assign incrementing seq_no.
     fn add_node(id: IrisVectorId) -> GraphMutation<IrisVectorId> {
-        GraphMutation::AddNode {
-            id,
-            height: 1,
-            update_ep: UpdateEntryPoint::False,
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        let seq_no = SEQ_COUNTER.fetch_add(1, Ordering::SeqCst);
+        GraphMutation {
+            seq_no,
+            ops: vec![MutationOp::AddNode {
+                id,
+                height: 1,
+                update_ep: UpdateEntryPoint::False,
+            }],
         }
     }
 

@@ -32,6 +32,7 @@ use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore,
     hnsw::graph::{
         graph_store::{GraphMutationRow, GraphPg},
+        mutation::MutationOp,
         GraphMutation, UpdateEntryPoint,
     },
 };
@@ -199,12 +200,16 @@ fn run_test_hawk_init() -> Result<()> {
         let uniqueness_mutations: Vec<(i64, BothEyes<Vec<GraphMutation<IrisVectorId>>>)> =
             uniqueness_modifications
                 .iter()
-                .map(|m| {
+                .enumerate()
+                .map(|(idx, m)| {
                     let vector_id = IrisVectorId::new(m.serial_id as u32, 0);
-                    let mutation = GraphMutation::AddNode {
-                        id: vector_id,
-                        height: 1,
-                        update_ep: UpdateEntryPoint::False,
+                    let mutation = GraphMutation {
+                        seq_no: idx as _,
+                        ops: vec![MutationOp::AddNode {
+                            id: vector_id,
+                            height: 1,
+                            update_ep: UpdateEntryPoint::False,
+                        }],
                     };
                     (m.mod_id, [vec![mutation.clone()], vec![mutation]])
                 })
@@ -411,10 +416,17 @@ fn run_test_hawk_sync_mutation_mismatch() -> Result<()> {
         // Build two distinct serialised mutations for the same modification_id.
         // Different IrisVectorId values guarantee different byte sequences.
         let make_mutation = |vector_serial_id: u32| -> BothEyes<Vec<GraphMutation<IrisVectorId>>> {
-            let v = GraphMutation::AddNode {
-                id: IrisVectorId::new(vector_serial_id, 0),
-                height: 1,
-                update_ep: UpdateEntryPoint::False,
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static SEQ_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+            let seq_no = SEQ_COUNTER.fetch_add(1, Ordering::SeqCst);
+            let v = GraphMutation {
+                seq_no,
+                ops: vec![MutationOp::AddNode {
+                    id: IrisVectorId::new(vector_serial_id, 0),
+                    height: 1,
+                    update_ep: UpdateEntryPoint::False,
+                }],
             };
             [vec![v.clone()], vec![v]]
         };
