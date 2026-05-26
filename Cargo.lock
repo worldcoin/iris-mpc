@@ -3120,6 +3120,7 @@ name = "iris-mpc-store"
 version = "0.1.0"
 dependencies = [
  "ampc-server-utils",
+ "async-stream",
  "async-trait",
  "aws-config",
  "aws-sdk-s3",
