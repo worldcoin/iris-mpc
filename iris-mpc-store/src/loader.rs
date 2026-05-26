@@ -14,6 +14,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{self, Receiver};
+use tokio::task::JoinHandle;
 
 /// Helper function to load Aurora db records from the stream into memory
 #[allow(clippy::needless_lifetimes)]
@@ -131,7 +132,6 @@ pub async fn load_iris_db(
                 s3_load_initial_backoff_ms,
             )
             .await
-            .expect("Couldn't fetch and parse chunks from s3");
         });
         // Guard that calls shutdown_background() on drop so the runtime threads
         // are always released non-blockingly, even on early returns / errors.
@@ -150,7 +150,7 @@ pub async fn load_iris_db(
         // switch to draining the channel directly; if it exits with a JoinError
         // (i.e. a panic inside the spawned task) we surface that as a stream error.
         fn get_s3_stream(
-            join_handle: tokio::task::JoinHandle<()>,
+            join_handle: JoinHandle<eyre::Result<()>>,
             mut rx: Receiver<S3StoredIris>,
         ) -> impl Stream<Item = Result<S3StoredIris, eyre::Report>> {
             try_stream! {
