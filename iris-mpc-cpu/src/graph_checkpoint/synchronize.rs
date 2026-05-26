@@ -80,7 +80,9 @@ pub async fn sync_graph_mutations(
 /// |---|---|---|
 /// | *(absent)* | any | insert |
 /// | `None` | `Some(_)` | upgrade to `Some` |
-/// | `Some(a)` / `None` | equal value | keep (noop) |
+/// | `Some(a)` | `None` | keep `Some(a)` |
+/// | `Some(a)` | `Some(a)` | keep (noop) |
+/// | `None` | `None` | keep (noop) |
 /// | `Some(a)` | `Some(b)` where `a ≠ b` | **error** |
 fn build_mutation_bytes(all_states: &[SyncState]) -> Result<HashMap<i64, &Option<Vec<u8>>>> {
     let mut mutation_bytes: HashMap<i64, &Option<Vec<u8>>> = HashMap::new();
@@ -101,6 +103,8 @@ fn build_mutation_bytes(all_states: &[SyncState]) -> Result<HashMap<i64, &Option
                 (None, _) => {
                     mutation_bytes.insert(modification.id, graph_mutation);
                 }
+                // existing entry has Some bytes but incoming is None: keep existing
+                (Some(Some(_)), None) => {}
                 // existing entry has no bytes but incoming does: upgrade
                 (Some(None), Some(_)) => {
                     mutation_bytes.insert(modification.id, graph_mutation);
