@@ -230,7 +230,7 @@ fn run_test_hawk_init() -> Result<()> {
                     for (mod_id, mutation) in mutations.iter().take(num_mutations) {
                         let serialized = bincode::serialize(mutation)?;
                         graph_tx
-                            .insert_hawk_graph_mutations(*mod_id, &serialized)
+                            .upsert_hawk_graph_mutations(*mod_id, &serialized)
                             .await?;
                     }
                     graph_tx.tx.commit().await?;

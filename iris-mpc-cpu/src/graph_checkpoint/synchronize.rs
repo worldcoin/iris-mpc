@@ -79,7 +79,7 @@ pub async fn sync_graph_mutations(
         // mutation would be None
         if let Some(mutation) = mutation {
             graph_pg
-                .insert_hawk_graph_mutations(&mut tx, modification.id, mutation)
+                .upsert_hawk_graph_mutations(&mut tx, modification.id, mutation)
                 .await
                 .map_err(|e| {
                     eyre!(

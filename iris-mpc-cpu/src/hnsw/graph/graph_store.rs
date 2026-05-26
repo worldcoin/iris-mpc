@@ -280,7 +280,7 @@ impl<V: VectorStore> GraphPg<V> {
         Ok(())
     }
 
-    pub async fn insert_hawk_graph_mutations(
+    pub async fn upsert_hawk_graph_mutations(
         &self,
         tx: &mut Transaction<'_, Postgres>,
         modification_id: i64,
@@ -424,7 +424,7 @@ pub struct GraphTx<'a, V> {
 
 impl<'b, V: VectorStore> GraphTx<'b, V> {
     /// Insert a single graph mutation row into hawk_graph_mutations.
-    pub async fn insert_hawk_graph_mutations(
+    pub async fn upsert_hawk_graph_mutations(
         &mut self,
         modification_id: i64,
         serialized_mutations: &[u8],
@@ -599,7 +599,7 @@ mod tests {
 
         let mut graph_tx = store.tx().await?;
         let returned = store
-            .insert_hawk_graph_mutations(&mut graph_tx.tx, modification_id, payload)
+            .upsert_hawk_graph_mutations(&mut graph_tx.tx, modification_id, payload)
             .await?;
         graph_tx.tx.commit().await?;
 
@@ -629,7 +629,7 @@ mod tests {
         for &id in &[10i64, 20, 30] {
             let mut graph_tx = store.tx().await?;
             store
-                .insert_hawk_graph_mutations(&mut graph_tx.tx, id, &id.to_le_bytes())
+                .upsert_hawk_graph_mutations(&mut graph_tx.tx, id, &id.to_le_bytes())
                 .await?;
             graph_tx.tx.commit().await?;
         }
@@ -679,7 +679,7 @@ mod tests {
         // Insert id=5 => max is Some(5)
         let mut graph_tx = store.tx().await?;
         store
-            .insert_hawk_graph_mutations(&mut graph_tx.tx, 5, b"a")
+            .upsert_hawk_graph_mutations(&mut graph_tx.tx, 5, b"a")
             .await?;
         graph_tx.tx.commit().await?;
         assert_eq!(store.get_max_hawk_graph_mutation_id().await?, Some(5));
@@ -687,7 +687,7 @@ mod tests {
         // Insert id=3 (below current max) => max stays Some(5)
         let mut graph_tx = store.tx().await?;
         store
-            .insert_hawk_graph_mutations(&mut graph_tx.tx, 3, b"b")
+            .upsert_hawk_graph_mutations(&mut graph_tx.tx, 3, b"b")
             .await?;
         graph_tx.tx.commit().await?;
         assert_eq!(store.get_max_hawk_graph_mutation_id().await?, Some(5));
@@ -695,7 +695,7 @@ mod tests {
         // Insert id=10 => max becomes Some(10)
         let mut graph_tx = store.tx().await?;
         store
-            .insert_hawk_graph_mutations(&mut graph_tx.tx, 10, b"c")
+            .upsert_hawk_graph_mutations(&mut graph_tx.tx, 10, b"c")
             .await?;
         graph_tx.tx.commit().await?;
         assert_eq!(store.get_max_hawk_graph_mutation_id().await?, Some(10));

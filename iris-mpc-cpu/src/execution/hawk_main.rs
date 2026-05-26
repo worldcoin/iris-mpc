@@ -1647,7 +1647,7 @@ impl HawkMutation {
 
                     // Insert into hawk_graph_mutations; modification_id is the natural key.
                     graph_tx
-                        .insert_hawk_graph_mutations(modification.id, &serialized)
+                        .upsert_hawk_graph_mutations(modification.id, &serialized)
                         .await?;
                 } else {
                     tracing::warn!(
