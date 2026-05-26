@@ -305,6 +305,213 @@ fn run_test_hawk_init() -> Result<()> {
     })
 }
 
+/// Test that `server_main` fails with a clear error when two parties hold
+/// conflicting (non-equal) `graph_mutation_bytes` for the same modification_id.
+///
+/// Setup
+/// -----
+///   Party 0 – modification **not** persisted → needs to roll forward.
+///             No bytes stored in `hawk_graph_mutations`.
+///   Party 1 – modification persisted, stored `bytes_a` (vector serial-id 1).
+///   Party 2 – modification persisted, stored `bytes_b` (vector serial-id 99).
+///             **Different** bytes from party 1 → triggers the mismatch bail!
+///
+/// Party 0 calls `sync_graph_mutations`, which calls `build_mutation_bytes` and
+/// detects the conflict between parties 1 and 2, producing the error:
+///   "graph mutation mismatch between parties. modification id: 1"
+#[test]
+#[serial]
+#[ignore = "requires external setup"]
+fn test_hawk_sync_mutation_mismatch() -> Result<()> {
+    std::thread::Builder::new()
+        .name("test_hawk_sync_mutation_mismatch()".into())
+        .stack_size(64 * 1024 * 1024)
+        .spawn(run_test_hawk_sync_mutation_mismatch)
+        .expect("failed to spawn test thread")
+        .join()
+        .expect("test thread panicked")
+}
+
+fn run_test_hawk_sync_mutation_mismatch() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(format!(
+            "iris_mpc={RUST_LOG},iris_mpc_cpu={RUST_LOG},iris_mpc_common={RUST_LOG},\
+             iris_mpc_upgrade_hawk={RUST_LOG},ampc_server_utils={RUST_LOG},\
+             {}={RUST_LOG}",
+            env!("CARGO_CRATE_NAME")
+        ))
+        .try_init()
+        .ok();
+
+    let rt = tokio::runtime::Runtime::new()?;
+    rt.block_on(async move {
+        let mut configs = genesis_runner::get_node_configs();
+        for config in configs.iter_mut() {
+            config.database = config.cpu_database.clone();
+            config.gpu_schema_name_suffix = config.hnsw_schema_name_suffix.clone();
+        }
+
+        let alloc_ports = |n: usize| -> Vec<String> {
+            let listeners: Vec<std::net::TcpListener> = (0..n)
+                .map(|_| {
+                    std::net::TcpListener::bind("127.0.0.1:0").expect("failed to bind free port")
+                })
+                .collect();
+            listeners
+                .iter()
+                .map(|l| l.local_addr().unwrap().port().to_string())
+                .collect()
+        };
+        let n = configs.len();
+        let healthcheck_ports = alloc_ports(n);
+        let service_ports = alloc_ports(n);
+        let service_outbound_ports = alloc_ports(n);
+        for config in configs.iter_mut() {
+            if let Some(ref mut sc) = config.server_coordination {
+                sc.healthcheck_ports = healthcheck_ports.clone();
+            }
+            config.service_ports = service_ports.clone();
+            config.service_outbound_ports = service_outbound_ports.clone();
+            config.enable_modifications_sync = true;
+        }
+
+        // Use only the first iris to keep setup minimal.
+        let plaintext_irises = genesis_runner::get_irises();
+        let first_iris = plaintext_irises[..1].to_vec();
+        let shares_rng_seed: u64 = thread_rng().gen();
+        let secret_shared_irises = irises::share_irises_locally(&first_iris, shares_rng_seed)?;
+        let upload_shares = share_irises_for_upload_locally(&first_iris, shares_rng_seed)?;
+
+        let mod_id = 1i64;
+        let uuid = Uuid::from_u128(mod_id as u128);
+
+        // Upload the single iris share to S3 so server_main's initialization can
+        // proceed far enough to reach the graph-sync step.
+        let mut aws_clients: Vec<AwsClient> = Vec::with_capacity(configs.len());
+        for config in configs.iter() {
+            let aws_config = AwsClientConfig::new(
+                config.environment.clone(),
+                AWS_PUBLIC_KEY_BASE_URL.into(),
+                config.shares_bucket_name.clone(),
+                String::new(),
+                0,
+                vec![],
+            )
+            .await;
+            let mut client = AwsClient::new(aws_config);
+            client.set_public_keyset().await?;
+            aws_clients.push(client);
+        }
+        for aws_client in aws_clients.iter() {
+            aws_client.s3_upload_iris_shares(&uuid, &upload_shares[0]).await?;
+        }
+
+        // Build two distinct serialised mutations for the same modification_id.
+        // Different IrisVectorId values guarantee different byte sequences.
+        let make_mutation = |vector_serial_id: u32| -> BothEyes<Vec<GraphMutation<IrisVectorId>>> {
+            let v = GraphMutation::AddNode {
+                id: IrisVectorId::new(vector_serial_id, 0),
+                height: 1,
+                update_ep: UpdateEntryPoint::False,
+            };
+            [vec![v.clone()], vec![v]]
+        };
+        let bytes_a = bincode::serialize(&make_mutation(1))?;
+        let bytes_b = bincode::serialize(&make_mutation(99))?;
+        assert_ne!(bytes_a, bytes_b, "mutation bytes must differ to trigger mismatch");
+
+        // Party 0: not yet persisted – will try to roll forward and discover the conflict.
+        // Party 1: persisted, stored bytes_a.
+        // Party 2: persisted, stored bytes_b  ← conflicts with party 1.
+        let per_party_modifications: Vec<Modification> = (0..configs.len())
+            .map(|party_idx| Modification {
+                id: mod_id,
+                serial_id: Some(1),
+                request_type: ModificationType::Uniqueness.to_string(),
+                s3_url: Some(uuid.to_string()),
+                status: MOD_STATUS_COMPLETED.to_string(),
+                persisted: party_idx > 0,
+                result_message_body: Some(format!(r#"{{"node_id":{party_idx}}}"#)),
+            })
+            .collect();
+
+        let nodes = MpcNodes::new(&configs).await;
+        let mut join_set = JoinSet::new();
+        for (party_idx, node) in nodes.into_iter().enumerate() {
+            let party_shares = secret_shared_irises[party_idx].clone();
+            let modification = per_party_modifications[party_idx].clone();
+            let party_bytes: Option<Vec<u8>> = match party_idx {
+                1 => Some(bytes_a.clone()),
+                2 => Some(bytes_b.clone()),
+                _ => None,
+            };
+            join_set.spawn(async move {
+                node.init_tables(&party_shares).await?;
+                let mut tx = node.gpu_stores.iris.tx().await?;
+                db_ops::write_modification(&mut tx, &modification).await?;
+                tx.commit().await?;
+                if let Some(bytes) = party_bytes {
+                    let mut graph_tx = node.cpu_stores.graph.tx().await?;
+                    graph_tx
+                        .upsert_hawk_graph_mutations(mod_id, &bytes)
+                        .await?;
+                    graph_tx.tx.commit().await?;
+                }
+                Ok::<_, eyre::Report>(())
+            });
+        }
+        join_runners!(join_set);
+
+        // Spin up the servers.  Party 0 should fail inside `sync_graph_mutations`
+        // because parties 1 and 2 reported conflicting bytes for mod_id=1.
+        let (exit_tx, mut exit_rx) =
+            tokio::sync::mpsc::unbounded_channel::<Result<(), eyre::Report>>();
+        let notify = Arc::new(Notify::new());
+        let _server_threads: Vec<_> = configs
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(party_idx, config)| {
+                let exit_tx = exit_tx.clone();
+                let notify = notify.clone();
+                std::thread::spawn(move || {
+                    let rt = tokio::runtime::Builder::new_multi_thread()
+                        .enable_all()
+                        .build()
+                        .expect("failed to build server runtime");
+                    let span = info_span!("mpc_node", idx = party_idx);
+                    let result = rt.block_on(async {
+                        tokio::select! {
+                            res = server_main(config).instrument(span) => res,
+                            _ = notify.notified() => Ok(()),
+                        }
+                    });
+                    let _ = exit_tx.send(result);
+                })
+            })
+            .collect();
+        drop(exit_tx);
+
+        // The first server to exit must carry the mismatch error.
+        let first_result = timeout(Duration::from_secs(30), exit_rx.recv())
+            .await
+            .map_err(|_| eyre!("timed out waiting for server to fail with mismatch error"))?
+            .ok_or_else(|| eyre!("channel closed without an exit result"))?;
+
+        // Shut down any surviving servers before asserting.
+        notify.notify_waiters();
+
+        let err = first_result
+            .expect_err("expected server_main to fail with mutation mismatch error");
+        assert!(
+            format!("{err:#}").contains("graph mutation mismatch between parties"),
+            "unexpected error – wanted mismatch message, got: {err:#}"
+        );
+
+        Ok(())
+    })
+}
+
 async fn assert_hawk_mutations_len(
     expected_lengths: &[usize],
     configs: &[Config],
