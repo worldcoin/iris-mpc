@@ -99,10 +99,10 @@ env:
     value: "true"
 
   - name: SMPC__DB_CHUNKS_BUCKET_NAME
-    value: "iris-mpc-db-exporter-store-node-0-prod--eun1-az3--x-s3"
+    value: "ampc-hnsw-db-exporter-store-node-0-prod--eun1-az3--x-s3"
 
   - name: SMPC__DB_CHUNKS_FOLDER_NAME
-    value: "genesis_base_even_odd_with_version_id_output_16k_rerandomized"
+    value: "hnsw_even_odd_with_version_id_output_16k"
 
   - name: SMPC__LOAD_CHUNKS_PARALLELISM
     value: "64"
