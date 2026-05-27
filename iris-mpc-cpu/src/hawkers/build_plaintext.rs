@@ -341,12 +341,15 @@ mod tests {
         assert_eq!(final_store.len().await, database_size + to_insert);
 
         // Each inserted vector should be its own top-1 neighbor.
-        for (_id, v) in to_insert_vectors {
+        for (id, v) in to_insert_vectors {
             let query = Arc::new(v);
             let results: SortedNeighborhood<_> = searcher
                 .search(&mut final_store, &final_graph, &query, /* k */ 1)
                 .await?;
-            assert!(!results.as_vec_ref().is_empty());
+            let pairs = results.as_vec_ref();
+            assert!(!pairs.is_empty());
+            assert_eq!(pairs[0].0, id, "expected top-1 to be self for id {id}");
+            assert!(pairs[0].1 >= 0, "self-dot should be non-negative, got {}", pairs[0].1);
         }
 
         Ok(())
