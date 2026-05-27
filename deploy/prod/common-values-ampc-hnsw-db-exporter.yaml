@@ -4,7 +4,7 @@ replicaCount: 0
 
 environment: prod
 
-schedule: "0 10 * * *"
+schedule: "0 11 * * *"
 
 # this is needed to prevent the job from restarting if it fails
 backoffLimit: 0
