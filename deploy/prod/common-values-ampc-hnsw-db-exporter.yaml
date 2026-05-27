@@ -1,10 +1,10 @@
-image: "ghcr.io/worldcoin/iris-mpc-database-exporter:v0.31.8@sha256:fd14a8270fd78f285b45f30df551f7be49a42b2f9cd928b5536b35977dfc14ea"
+image: "ghcr.io/worldcoin/iris-mpc-database-exporter:v0.31.11@sha256:0dcd552aa455b6af8064529298eab4787bbfa0c539a5bcd01e009b408ec14149"
 
 replicaCount: 0
 
 environment: prod
 
-schedule: "0 10 * * *"
+schedule: "50 12 * * *"
 
 # this is needed to prevent the job from restarting if it fails
 backoffLimit: 0
