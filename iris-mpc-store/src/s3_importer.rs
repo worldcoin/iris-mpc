@@ -593,6 +593,7 @@ mod tests {
             tx,
             1,
             0,
+            Arc::new(ShutdownHandler::new(1)),
         )
         .await;
         let mut count = 0;
@@ -638,6 +639,7 @@ mod tests {
             tx,
             1,
             0,
+            Arc::new(ShutdownHandler::new(1)),
         )
         .await;
 
@@ -695,6 +697,7 @@ mod tests {
             tx,
             5,
             100,
+            Arc::new(ShutdownHandler::new(1)),
         )
         .await;
 
