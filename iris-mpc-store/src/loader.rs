@@ -65,8 +65,34 @@ async fn load_db_records_from_aurora<'a>(
     Ok(())
 }
 
-/// Main iris loader method into memory. Load from either S3 + Aurora or only Aurora based on the config.
 pub async fn load_iris_db(
+    actor: &mut impl InMemoryStore,
+    store: &Store,
+    max_serial_id_to_load: usize,
+    store_load_parallelism: usize,
+    s3_max_serial_id_to_load: Option<usize>,
+    config: &Config,
+    download_shutdown_handler: Arc<ShutdownHandler>,
+) -> Result<()> {
+    let shutdown = download_shutdown_handler.clone();
+    tokio::select! {
+        r = load_iris_db_internal(
+            actor,
+            store,
+            max_serial_id_to_load,
+            store_load_parallelism,
+            s3_max_serial_id_to_load,
+            config,
+            download_shutdown_handler
+        ) => r,
+        _ = shutdown.wait_for_shutdown() => {
+            tracing::warn!("Shutdown requested by shutdown_handler.");
+            Err(eyre::eyre!("Shutdown requested"))
+        },
+    }
+}
+/// Main iris loader method into memory. Load from either S3 + Aurora or only Aurora based on the config.
+async fn load_iris_db_internal(
     actor: &mut impl InMemoryStore,
     store: &Store,
     max_serial_id_to_load: usize,
@@ -118,6 +144,7 @@ pub async fn load_iris_db(
             .thread_name("s3-importer")
             .enable_all()
             .build()?;
+        let shutdown = download_shutdown_handler.clone();
         let fetch_handle = import_runtime.spawn(async move {
             fetch_and_parse_chunks(
                 s3_arc,
@@ -128,11 +155,14 @@ pub async fn load_iris_db(
                 tx,
                 s3_load_max_retries,
                 s3_load_initial_backoff_ms,
+                shutdown,
             )
             .await
         });
         // Guard that calls shutdown_background() on drop so the runtime threads
         // are always released non-blockingly, even on early returns / errors.
+        // in the event that the shutdown handler causes this function to terminate before the RuntimeShutdownGuard
+        // is created, fetch_and_parse_chunks will terminate anyway because it also listens for the shutdown signal.
         struct RuntimeShutdownGuard(Option<tokio::runtime::Runtime>);
         impl Drop for RuntimeShutdownGuard {
             fn drop(&mut self) {
@@ -163,7 +193,7 @@ pub async fn load_iris_db(
                             return Err(eyre::eyre!("S3 fetch task panicked: {}", join_err))
                         }
                     }
-                }
+                },
                 item = rx.recv() => match item {
                     Some(iris) => iris,
                     None => break,
@@ -210,10 +240,6 @@ pub async fn load_iris_db(
                     elapsed,
                     record_counter as f64 / elapsed.as_secs_f64()
                 );
-                if download_shutdown_handler.is_shutting_down() {
-                    tracing::warn!("Shutdown requested by shutdown_handler.");
-                    return Err(eyre::eyre!("Shutdown requested"));
-                }
             }
 
             time_loading_into_memory += load_summary_ts.elapsed();

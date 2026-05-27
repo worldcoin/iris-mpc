@@ -1,3 +1,4 @@
+use ampc_server_utils::ShutdownHandler;
 use async_trait::async_trait;
 use aws_config::{retry::RetryConfig, timeout::TimeoutConfig};
 use aws_sdk_s3::config::StalledStreamProtectionConfig;
@@ -277,6 +278,7 @@ pub async fn fetch_and_parse_chunks(
     tx: Sender<S3StoredIris>,
     max_retries: usize,
     initial_backoff_ms: u64,
+    shutdown_handler: Arc<ShutdownHandler>,
 ) -> Result<()> {
     let effective_last_serial_id = max_serial_id_to_load
         .map(|max_serial_id| {
@@ -320,6 +322,7 @@ pub async fn fetch_and_parse_chunks(
             handle.await??;
         }
 
+        let shutdown = shutdown_handler.clone();
         handles.push_back(task::spawn({
             let store = Arc::clone(&store);
             let tx = tx.clone();
@@ -331,15 +334,19 @@ pub async fn fetch_and_parse_chunks(
                 // Retry reading the range with exponential backoff
                 loop {
                     attempt += 1;
-                    match read_range_in_chunk(
-                        Arc::clone(&store),
-                        &key,
-                        offset_within_chunk,
-                        requested_range_size,
-                        tx.clone(),
-                    )
-                    .await
-                    {
+                    let res = tokio::select! {
+                        r = read_range_in_chunk(
+                            Arc::clone(&store),
+                            &key,
+                            offset_within_chunk,
+                            requested_range_size,
+                            tx.clone(),
+                        ) => r,
+                        _ = shutdown.wait_for_shutdown() => {
+                            return Err(eyre::eyre!("Shutdown requested"));
+                        },
+                    };
+                    match res {
                         Ok(_) => {
                             return Ok(());
                         }
