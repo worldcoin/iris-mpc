@@ -372,7 +372,12 @@ pub async fn fetch_and_parse_chunks(
                                 backoff_ms
                             );
 
-                            tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                            tokio::select! {
+                                _ = tokio::time::sleep(Duration::from_millis(backoff_ms)) => {},
+                                _ = &mut shutdown_fut => {
+                                    return Err(eyre::eyre!("Shutdown requested"));
+                                }
+                            }
                             backoff_ms *= 2; // exponential backoff
                         }
                     }
