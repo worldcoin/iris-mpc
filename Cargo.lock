@@ -3063,6 +3063,7 @@ dependencies = [
  "sqlx",
  "static_assertions",
  "statrs",
+ "tempfile",
  "thiserror 1.0.65",
  "tokio",
  "tokio-rustls 0.26.2",

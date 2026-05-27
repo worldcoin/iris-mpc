@@ -7,6 +7,7 @@ use std::path::Path;
 
 pub mod graph;
 pub mod iris_ndjson;
+pub mod int4_ndjson;
 pub mod types;
 
 pub fn write_bin<T: Serialize>(data: &T, filename: &str) -> Result<()> {

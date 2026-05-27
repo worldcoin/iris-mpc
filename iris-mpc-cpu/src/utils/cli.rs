@@ -10,12 +10,14 @@ use rand::{rngs::StdRng, RngCore, SeedableRng};
 use serde::Deserialize;
 
 use crate::{
+    hawkers::plaintext_deep_id_store::Int4Vector,
     hnsw::{
         searcher::{LayerDistribution, LayerMode, N_PARAM_LAYERS},
         GraphMem, HnswParams, HnswSearcher,
     },
     utils::serialization::{
         graph::GraphFormat,
+        int4_ndjson::{int4_vectors_from_ndjson_iter, write_int4_vectors_ndjson},
         iris_ndjson::{irises_from_ndjson_iter, IrisSelection},
         types::iris_base64::write_to_iris_ndjson,
     },
@@ -220,6 +222,103 @@ impl<T: Copy> TryFrom<&LayerValue<T>> for [T; N_PARAM_LAYERS] {
                 vals.try_into()
                     .map_err(|_| eyre!("Unable to map values into parameters array"))
             }
+        }
+    }
+}
+
+/********************* Load Int4 Deep-ID Vectors *****************/
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "option")]
+pub enum Int4VectorsConfig {
+    /// Generate random Int4Vectors.
+    Random {
+        number: usize,
+        seed: Option<u64>,
+        output_path: Option<PathBuf>,
+    },
+
+    /// Load Int4Vectors from an NDJSON file.
+    NdjsonFile {
+        path: PathBuf,
+        limit: Option<usize>,
+    },
+}
+
+/// Loads Int4 deep-ID vectors based on `Int4VectorsConfig`.
+pub async fn load_int4_vectors(config: Int4VectorsConfig) -> Result<Vec<Int4Vector>> {
+    let vectors = match config {
+        Int4VectorsConfig::Random {
+            number,
+            seed,
+            output_path,
+        } => {
+            tracing::info!("Generating {} random Int4Vectors...", number);
+            let mut rng: Box<dyn RngCore> = if let Some(seed) = seed {
+                Box::new(StdRng::seed_from_u64(seed))
+            } else {
+                Box::new(rand::thread_rng())
+            };
+
+            let vectors: Vec<Int4Vector> =
+                (0..number).map(|_| Int4Vector::random(&mut rng)).collect();
+
+            if let Some(path) = output_path {
+                tracing::info!("Writing generated Int4Vectors to {}", path.display());
+                write_int4_vectors_ndjson(&path, &vectors)?;
+            }
+
+            vectors
+        }
+        Int4VectorsConfig::NdjsonFile { path, limit } => {
+            tracing::info!("Loading Int4Vectors from NDJSON file: {}", path.display());
+            int4_vectors_from_ndjson_iter(&path, limit)?.collect::<Vec<_>>()
+        }
+    };
+
+    Ok(vectors)
+}
+
+#[cfg(test)]
+mod int4_tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn load_random_int4_vectors_with_seed_is_deterministic() {
+        let cfg = Int4VectorsConfig::Random {
+            number: 4,
+            seed: Some(7),
+            output_path: None,
+        };
+        let a = load_int4_vectors(cfg.clone()).await.unwrap();
+        let b = load_int4_vectors(cfg).await.unwrap();
+        assert_eq!(a.len(), 4);
+        for (x, y) in a.iter().zip(b.iter()) {
+            assert_eq!(x.packed, y.packed);
+        }
+    }
+
+    #[tokio::test]
+    async fn load_int4_vectors_random_with_output_path_writes_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("out.ndjson");
+        let cfg = Int4VectorsConfig::Random {
+            number: 3,
+            seed: Some(1),
+            output_path: Some(path.clone()),
+        };
+        let generated = load_int4_vectors(cfg).await.unwrap();
+        assert_eq!(generated.len(), 3);
+
+        let loaded = load_int4_vectors(Int4VectorsConfig::NdjsonFile {
+            path,
+            limit: Some(3),
+        })
+        .await
+        .unwrap();
+        for (g, l) in generated.iter().zip(loaded.iter()) {
+            assert_eq!(g.packed, l.packed);
         }
     }
 }
