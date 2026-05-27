@@ -15,7 +15,7 @@ env:
   - name: FORCE_OVERRIDE_SCHEMA_NAME
     value: "true"
   - name: OVERRIDDEN_SCHEMA_NAME
-    value: "SMPC_rerand_genesis_restored_v2_2"
+    value: "SMPC_rerand_genesis_restored_v2_prod_2"
   - name: EXPORT_S3_BUCKET_NAME
     value: "ampc-hnsw-db-exporter-store-node-2-prod--eun1-az3--x-s3"
   - name: NODE_ID
