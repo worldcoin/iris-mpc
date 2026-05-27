@@ -98,7 +98,7 @@ impl AwsClient {
     }
 
     /// Downloads & assigns encryption keys.
-    pub(crate) async fn set_public_keyset(&mut self) -> Result<(), AwsClientError> {
+    pub async fn set_public_keyset(&mut self) -> Result<(), AwsClientError> {
         self.public_keyset = Some(
             download_public_keyset(self.config.public_key_base_url())
                 .await

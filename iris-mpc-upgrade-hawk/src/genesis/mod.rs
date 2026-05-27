@@ -62,8 +62,7 @@ use tokio::{
 
 pub use graph_checkpoint::{maybe_rollback_iris_db, upload_and_sync_genesis_checkpoint};
 pub use iris_mpc_cpu::graph_checkpoint::{
-    find_common_checkpoint, get_common_checkpoint, get_most_recent_checkpoints,
-    get_others_graph_hashes,
+    get_common_checkpoint, get_most_recent_checkpoints, get_others_graph_hashes,
 };
 
 pub const PERSIST_DELAY: usize = 16;

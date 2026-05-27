@@ -1653,7 +1653,7 @@ impl HawkMutation {
                         .map_err(|e| eyre::eyre!("Failed to serialize graph mutation: {}", e))?;
 
                     graph_tx
-                        .insert_hawk_graph_mutations(modification.id, &serialized)
+                        .upsert_hawk_graph_mutations(modification.id, &serialized)
                         .await?;
                 } else {
                     tracing::warn!(

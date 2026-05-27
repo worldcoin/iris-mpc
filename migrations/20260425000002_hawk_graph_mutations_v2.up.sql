@@ -15,3 +15,12 @@ ALTER TABLE modifications
 
 ALTER TABLE hawk_graph_mutations
     DROP COLUMN IF EXISTS mutation_version;
+
+ALTER TABLE hawk_graph_mutations
+    DROP CONSTRAINT IF EXISTS hawk_graph_mutations_pkey;
+
+ALTER TABLE hawk_graph_mutations
+    DROP COLUMN IF EXISTS id;
+
+ALTER TABLE hawk_graph_mutations
+    ADD PRIMARY KEY (modification_id);
