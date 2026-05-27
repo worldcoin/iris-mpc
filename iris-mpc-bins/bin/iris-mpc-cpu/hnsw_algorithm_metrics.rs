@@ -1,8 +1,9 @@
 use aes_prng::AesRng;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
     hawkers::aby3::aby3_store::FhdOps,
+    hawkers::plaintext_deep_id_store::{Int4Vector, PlaintextDeepIDStore},
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{
         metrics::ops_counter::{
@@ -18,6 +19,12 @@ use tracing::Level;
 use tracing_forest::{tag::NoTag, ForestLayer, PrettyPrinter};
 use tracing_subscriber::{filter::Targets, prelude::*, EnvFilter};
 
+#[derive(Copy, Clone, Debug, ValueEnum, PartialEq, Eq)]
+enum StoreKindArg {
+    Iris,
+    DeepId,
+}
+
 #[derive(Parser)]
 #[allow(non_snake_case)]
 struct Args {
@@ -31,6 +38,8 @@ struct Args {
     database_size: usize,
     #[clap(short('p'))]
     layer_probability: Option<f64>,
+    #[clap(long, value_enum, default_value = "iris")]
+    store_kind: StoreKindArg,
 }
 
 #[tokio::main]
@@ -88,7 +97,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Run HNSW construction
 
     let mut rng = AesRng::seed_from_u64(42_u64);
-    let mut vector = PlaintextStore::<FhdOps>::new();
     let mut graph = GraphMem::new();
     let mut searcher = HnswSearcher::new_standard(ef_constr, ef_search, M);
     if let Some(q) = layer_probability {
@@ -97,24 +105,64 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    for idx in 0..database_size {
-        let raw_query = IrisCode::random_rng(&mut rng);
-        let query = Arc::new(raw_query.clone());
-        let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
-        searcher
-            .insert::<_, SortedNeighborhood<_>>(&mut vector, &mut graph, &query, insertion_layer)
-            .await?;
+    match args.store_kind {
+        StoreKindArg::Iris => {
+            let mut vector = PlaintextStore::<FhdOps>::new();
+            for idx in 0..database_size {
+                let raw_query = IrisCode::random_rng(&mut rng);
+                let query = Arc::new(raw_query.clone());
+                let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
+                searcher
+                    .insert::<_, SortedNeighborhood<_>>(
+                        &mut vector,
+                        &mut graph,
+                        &query,
+                        insertion_layer,
+                    )
+                    .await?;
 
-        if idx % 1000 == 999 {
-            println!(
-                "insertions: {:?}, evaluations: {:?}, comparisons: {:?}, openings: {:?}, \
-                 searches: {:?}",
-                idx + 1,
-                dist_evaluations_counter,
-                dist_comparisons_counter,
-                node_openings_counter,
-                layer_searches_counter,
-            );
+                if idx % 1000 == 999 {
+                    println!(
+                        "insertions: {:?}, evaluations: {:?}, comparisons: {:?}, openings: {:?}, \
+                         searches: {:?}",
+                        idx + 1,
+                        dist_evaluations_counter,
+                        dist_comparisons_counter,
+                        node_openings_counter,
+                        layer_searches_counter,
+                    );
+                }
+            }
+        }
+        StoreKindArg::DeepId => {
+            // Threshold is irrelevant during insertion (is_match is not invoked
+            // by searcher.insert), so any value works. Pick 0 for clarity.
+            let mut vector = PlaintextDeepIDStore::new(0);
+            for idx in 0..database_size {
+                let raw_query = Int4Vector::random(&mut rng);
+                let query = Arc::new(raw_query.clone());
+                let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
+                searcher
+                    .insert::<_, SortedNeighborhood<_>>(
+                        &mut vector,
+                        &mut graph,
+                        &query,
+                        insertion_layer,
+                    )
+                    .await?;
+
+                if idx % 1000 == 999 {
+                    println!(
+                        "insertions: {:?}, evaluations: {:?}, comparisons: {:?}, openings: {:?}, \
+                         searches: {:?}",
+                        idx + 1,
+                        dist_evaluations_counter,
+                        dist_comparisons_counter,
+                        node_openings_counter,
+                        layer_searches_counter,
+                    );
+                }
+            }
         }
     }
 
@@ -125,4 +173,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn default_store_kind_is_iris() {
+        let args = Args::parse_from(["bin"]);
+        assert_eq!(args.store_kind, StoreKindArg::Iris);
+    }
+
+    #[test]
+    fn store_kind_can_be_deep_id() {
+        let args = Args::parse_from(["bin", "--store-kind", "deep-id"]);
+        assert_eq!(args.store_kind, StoreKindArg::DeepId);
+    }
 }
