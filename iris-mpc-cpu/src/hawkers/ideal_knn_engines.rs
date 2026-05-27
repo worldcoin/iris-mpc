@@ -210,7 +210,7 @@ pub enum EngineChoiceInt4 {
 pub struct NaiveKNNInt4 {
     vectors: Vec<Int4Vector>,
     k: usize,
-    pub next_id: IrisSerialId,
+    next_id: IrisSerialId,
     pool: ThreadPool,
 }
 
