@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   db:
-    image: postgres:latest
+    image: postgres:15
     environment:
       POSTGRES_USER: dbuser
       POSTGRES_PASSWORD: password
