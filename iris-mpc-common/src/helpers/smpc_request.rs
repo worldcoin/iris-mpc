@@ -162,6 +162,9 @@ pub enum ReceiveRequestError {
     #[error("Failed to delete request from SQS: {0}")]
     FailedToDeleteFromSQS(#[from] Box<SdkError<DeleteMessageError>>),
 
+    #[error("Failed to mark request as deleted: {0}")]
+    FailedToMarkRequestAsDeleted(Report),
+
     #[error("Failed to persist request modification in the database: {0}")]
     FailedToPersistModification(#[from] Report),
 
