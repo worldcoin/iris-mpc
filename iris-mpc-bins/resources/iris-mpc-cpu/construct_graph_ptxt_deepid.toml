@@ -1,0 +1,19 @@
+hnsw_prf_seed = 42
+threshold = 5000
+
+[vectors]
+option = "NdjsonFile"
+path = "iris-mpc-bins/resources/iris-mpc-cpu/deepid_sample.ndjson"
+limit = 64
+
+[searcher]
+layer_mode = { LinearScan = { max_graph_layer = 1 } }
+
+[searcher.params]
+option = "Standard"
+ef_constr = 32
+ef_search = 32
+M = 16
+
+[output]
+path = "data/graph-deepid.dat"
