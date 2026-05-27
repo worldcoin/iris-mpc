@@ -361,6 +361,100 @@ impl GraphMem<IrisVectorId> {
             once(zero_layer).chain(nonzero_layers).collect::<Vec<_>>(),
         ))
     }
+
+    /// Idealized GraphMem for deep-ID Int4 vectors. Layer 0 is loaded from a
+    /// pre-computed KNN file (same format used by `ideal_from_irises`); higher
+    /// layers are brute-forced by `EngineInt4`.
+    pub fn ideal_from_int4_vectors(
+        vectors: Vec<crate::hawkers::plaintext_deep_id_store::Int4Vector>,
+        filepath: PathBuf,
+        searcher: &HnswSearcher,
+        prf_seed: [u8; 16],
+        echoice: crate::hawkers::ideal_knn_engines::EngineChoiceInt4,
+    ) -> Result<Self> {
+        use crate::hawkers::ideal_knn_engines::read_knn_results_from_file;
+
+        let zero_layer = {
+            let mut results = read_knn_results_from_file(filepath).unwrap();
+            for result in results.iter_mut() {
+                result.truncate(searcher.params.get_M_max(0));
+            }
+            let results = results
+                .into_par_iter()
+                .map(|result| result.map(IrisVectorId::from_serial_id))
+                .collect::<Vec<_>>();
+            Layer::from_knn_results(results, vectors.len())
+        };
+
+        let vectors_with_ids = izip!(
+            zero_layer.links.keys().cloned().sorted(),
+            vectors.into_iter(),
+        )
+        .collect::<Vec<_>>();
+
+        let mut nonzero_layers_map: BTreeMap<
+            usize,
+            Vec<(IrisVectorId, crate::hawkers::plaintext_deep_id_store::Int4Vector)>,
+        > = BTreeMap::new();
+        for (vector_id, v) in vectors_with_ids.iter() {
+            let layer = searcher.gen_layer_prf(&prf_seed, &vector_id)?;
+            for l in 1..=layer {
+                nonzero_layers_map
+                    .entry(l)
+                    .or_default()
+                    .push((*vector_id, v.clone()));
+            }
+        }
+
+        let mut nodes_for_nonzero_layers: Vec<
+            Vec<(IrisVectorId, crate::hawkers::plaintext_deep_id_store::Int4Vector)>,
+        > = nonzero_layers_map.into_values().collect();
+
+        let entry_points = match searcher.layer_mode {
+            LayerMode::Standard { max_graph_layer } => {
+                if let Some(max_layer) = max_graph_layer {
+                    nodes_for_nonzero_layers.truncate(max_layer);
+                }
+
+                once(&vectors_with_ids)
+                    .chain(nodes_for_nonzero_layers.iter())
+                    .last()
+                    .unwrap_or(&vec![])
+                    .first()
+                    .map(|(v, _)| vec![(*v, nodes_for_nonzero_layers.len())])
+                    .unwrap_or_default()
+            }
+            LayerMode::LinearScan { max_graph_layer } => {
+                let entry_points = nodes_for_nonzero_layers
+                    .get(max_graph_layer)
+                    .unwrap_or(&vec![])
+                    .iter()
+                    .map(|(v, _)| (*v, max_graph_layer))
+                    .collect();
+
+                nodes_for_nonzero_layers.truncate(max_graph_layer);
+
+                entry_points
+            }
+        };
+
+        let nonzero_layers =
+            nodes_for_nonzero_layers
+                .into_iter()
+                .enumerate()
+                .map(|(i, layer_data)| {
+                    Layer::ideal_from_int4_vectors(
+                        layer_data,
+                        searcher.params.get_M_max(i + 1),
+                        echoice,
+                    )
+                });
+
+        Ok(GraphMem::from_precomputed(
+            entry_points,
+            once(zero_layer).chain(nonzero_layers).collect::<Vec<_>>(),
+        ))
+    }
 }
 
 #[derive(PartialEq, Eq, Default, Debug, Deserialize)]
@@ -479,6 +573,29 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
             .compute_chunk(n)
             .into_iter()
             // remap from engine 1-based indices to original vector ids
+            .map(|result| result.map(|i| vector_refs[(i - 1) as usize].clone()))
+            .collect::<Vec<_>>();
+
+        Layer::from_knn_results(results, n)
+    }
+
+    /// Layer constructor for deep-ID Int4 vectors: brute-force top-k by
+    /// descending dot product.
+    pub fn ideal_from_int4_vectors(
+        data: Vec<(V, crate::hawkers::plaintext_deep_id_store::Int4Vector)>,
+        k: usize,
+        echoice: crate::hawkers::ideal_knn_engines::EngineChoiceInt4,
+    ) -> Self {
+        use crate::hawkers::ideal_knn_engines::EngineInt4;
+
+        let (vector_refs, vectors): (Vec<V>, Vec<_>) = data.into_iter().unzip();
+        let n = vectors.len();
+        let k = k.min(n - 1);
+
+        let mut engine = EngineInt4::init(echoice, vectors, k, 1);
+        let results = engine
+            .compute_chunk(n)
+            .into_iter()
             .map(|result| result.map(|i| vector_refs[(i - 1) as usize].clone()))
             .collect::<Vec<_>>();
 
@@ -745,5 +862,55 @@ mod tests {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod int4_layer_tests {
+    use super::*;
+    use crate::hawkers::{
+        ideal_knn_engines::EngineChoiceInt4, plaintext_deep_id_store::Int4Vector,
+    };
+    use aes_prng::AesRng;
+    use rand::SeedableRng;
+
+    #[test]
+    fn layer_ideal_from_int4_vectors_matches_brute_force() {
+        let mut rng = AesRng::seed_from_u64(0xC0FFEE);
+        let n = 12_usize;
+        let k = 3_usize;
+        let vectors: Vec<Int4Vector> = (0..n).map(|_| Int4Vector::random(&mut rng)).collect();
+
+        let data: Vec<(IrisVectorId, Int4Vector)> = vectors
+            .iter()
+            .enumerate()
+            .map(|(i, v)| (IrisVectorId::from_serial_id((i + 1) as u32), v.clone()))
+            .collect();
+
+        let layer = Layer::ideal_from_int4_vectors(
+            data,
+            k,
+            EngineChoiceInt4::NaiveInt4Dot,
+        );
+
+        #[allow(
+            clippy::iter_over_hash_type,
+            reason = "Iteration is over a parallel data structure, compared entry by entry."
+        )]
+        for (key, neighbors) in layer.get_links_map() {
+            let me_idx = key.serial_id() as usize - 1;
+            let me = &vectors[me_idx];
+            let mut dists: Vec<(IrisVectorId, i16)> = (0..n)
+                .filter(|j| *j != me_idx)
+                .map(|j| (
+                    IrisVectorId::from_serial_id((j + 1) as u32),
+                    me.dot(&vectors[j]),
+                ))
+                .collect();
+            dists.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.serial_id().cmp(&b.0.serial_id())));
+            let expected: Vec<IrisVectorId> =
+                dists.into_iter().take(k).map(|(j, _)| j).collect();
+            assert_eq!(neighbors, &expected, "key {key}");
+        }
     }
 }
