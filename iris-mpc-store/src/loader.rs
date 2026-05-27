@@ -4,7 +4,7 @@ use crate::{
 };
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use aws_config::Region;
-use eyre::bail;
+use eyre::{bail, Result};
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use iris_mpc_common::config::Config;
@@ -20,8 +20,8 @@ async fn load_db_records_from_aurora<'a>(
     actor: &mut impl InMemoryStore,
     record_counter: &mut i32,
     all_serial_ids: &mut HashSet<i64>,
-    mut stream_db: BoxStream<'a, eyre::Result<DbStoredIris>>,
-) -> eyre::Result<()> {
+    mut stream_db: BoxStream<'a, Result<DbStoredIris>>,
+) -> Result<()> {
     let mut load_summary_ts = Instant::now();
     let mut time_waiting_for_stream = Duration::from_secs(0);
     let mut time_loading_into_memory = Duration::from_secs(0);
@@ -74,7 +74,7 @@ pub async fn load_iris_db(
     s3_max_serial_id_to_load: Option<usize>,
     config: &Config,
     download_shutdown_handler: Arc<ShutdownHandler>,
-) -> eyre::Result<()> {
+) -> Result<()> {
     let total_load_time = Instant::now();
     let now = Instant::now();
 
