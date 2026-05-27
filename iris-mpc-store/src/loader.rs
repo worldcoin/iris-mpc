@@ -3,18 +3,16 @@ use crate::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, S3Store, S3StoredIris, Store,
 };
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
-use async_stream::try_stream;
 use aws_config::Region;
 use eyre::bail;
 use futures::stream::BoxStream;
-use futures::{Stream, StreamExt};
+use futures::StreamExt;
 use iris_mpc_common::config::Config;
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc::{self, Receiver};
-use tokio::task::JoinHandle;
+use tokio::sync::mpsc;
 
 /// Helper function to load Aurora db records from the stream into memory
 #[allow(clippy::needless_lifetimes)]
@@ -114,7 +112,7 @@ pub async fn load_iris_db(
             min_last_modified_at
         );
 
-        let (tx, rx) = mpsc::channel::<S3StoredIris>(config.load_chunks_buffer_size);
+        let (tx, mut rx) = mpsc::channel::<S3StoredIris>(config.load_chunks_buffer_size);
         let import_runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(s3_load_parallelism)
             .thread_name("s3-importer")
@@ -145,54 +143,32 @@ pub async fn load_iris_db(
         }
         let _drop_guard = RuntimeShutdownGuard(Some(import_runtime));
 
-        // Stream that yields S3StoredIris items from the channel while monitoring
-        // fetch_handle for errors.  Once fetch_handle finishes successfully we
-        // switch to draining the channel directly; if it exits with a JoinError
-        // (i.e. a panic inside the spawned task) we surface that as a stream error.
-        fn get_s3_stream(
-            join_handle: JoinHandle<eyre::Result<()>>,
-            mut rx: Receiver<S3StoredIris>,
-        ) -> impl Stream<Item = Result<S3StoredIris, eyre::Report>> {
-            try_stream! {
-                let mut fetch_done = false;
-                let mut task_error: Option<eyre::Report> = None;
-                tokio::pin!(join_handle);
-                loop {
-                    tokio::select! {
-                        result = &mut join_handle, if !fetch_done => {
-                            fetch_done = true;
-                            if  let Err(e) = result {
-                                task_error = Some(eyre::eyre!("S3 fetch task yielded an error: {}", e));
-                            }
-                        }
-
-                        item = rx.recv() => {
-                            match item {
-                                Some(iris) => yield iris,
-                                None if fetch_done => break,
-                                None => {
-                                    if let Err(e) = join_handle.await {
-                                        task_error = Some(eyre::eyre!("S3 fetch task failed: {}", e));
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-                if let Some(e) = task_error.take() {
-                    Err(e)?;
-                }
-            }
-        }
-        let s3_stream = get_s3_stream(fetch_handle, rx);
-        tokio::pin!(s3_stream);
-
+        // Consume parsed irises while watching the fetch task. `biased` polls the
+        // task before the channel, so a fetch failure aborts immediately instead of
+        // draining the backlog (and the in-flight retry-with-backoff subtasks).
         let mut time_waiting_for_stream = Duration::from_secs(0);
         let mut time_loading_into_memory = Duration::from_secs(0);
         let mut load_summary_ts = Instant::now();
-        while let Some(iris) = s3_stream.next().await {
-            let iris = iris?;
+        let mut fetch_done = false;
+        tokio::pin!(fetch_handle);
+        loop {
+            let iris = tokio::select! {
+                biased;
+                res = &mut fetch_handle, if !fetch_done => {
+                    fetch_done = true;
+                    match res {
+                        Ok(Ok(())) => continue,
+                        Ok(Err(e)) => return Err(e),
+                        Err(join_err) => {
+                            return Err(eyre::eyre!("S3 fetch task panicked: {}", join_err))
+                        }
+                    }
+                }
+                item = rx.recv() => match item {
+                    Some(iris) => iris,
+                    None => break,
+                },
+            };
             time_waiting_for_stream += load_summary_ts.elapsed();
             load_summary_ts = Instant::now();
             let serial_id = iris.serial_id();
@@ -246,6 +222,17 @@ pub async fn load_iris_db(
             all_serial_ids.remove(&(serial_id as i64));
             record_counter += 1;
         }
+
+        // Reached only by breaking on a closed channel. If the task's result wasn't
+        // observed in the loop, join it now to surface a late failure.
+        if !fetch_done {
+            match fetch_handle.await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => return Err(e),
+                Err(join_err) => return Err(eyre::eyre!("S3 fetch task failed: {}", join_err)),
+            }
+        }
+
         tracing::info!(
             "S3 Loading summary => Loaded {:?} items. Waited for stream: {:?}, Loaded into \
              memory: {:?}.",
