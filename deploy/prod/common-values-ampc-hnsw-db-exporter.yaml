@@ -1,7 +1,5 @@
 image: "ghcr.io/worldcoin/iris-mpc-database-exporter:v0.31.11@sha256:0dcd552aa455b6af8064529298eab4787bbfa0c539a5bcd01e009b408ec14149"
 
-replicaCount: 0
-
 environment: prod
 
 schedule: "30 14 * * *"
