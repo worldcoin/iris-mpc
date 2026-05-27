@@ -5,9 +5,10 @@ use aws_sdk_s3::config::StalledStreamProtectionConfig;
 use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
 use aws_sdk_s3::{primitives::ByteStream, Client};
 use eyre::{bail, eyre, Result};
+use futures::{stream, StreamExt};
 use iris_mpc_common::{vector_id::VectorId, IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
-use std::{collections::VecDeque, mem, sync::Arc, time::Duration};
-use tokio::{io::AsyncReadExt, sync::mpsc::Sender, task};
+use std::{mem, sync::Arc, time::Duration};
+use tokio::{io::AsyncReadExt, sync::mpsc::Sender};
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
     + MASK_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -305,10 +306,9 @@ pub async fn fetch_and_parse_chunks(
     } else {
         last_snapshot_details.chunk_size as usize
     };
-    let mut handles: VecDeque<task::JoinHandle<Result<(), eyre::Error>>> =
-        VecDeque::with_capacity(concurrency);
 
-    for chunk in (1..=effective_last_serial_id).step_by(range_size) {
+    let chunk_iterator = (1_i64..=effective_last_serial_id).step_by(range_size);
+    let stream = stream::iter(chunk_iterator).map(|chunk| {
         let chunk_id =
             (chunk / last_snapshot_details.chunk_size) * last_snapshot_details.chunk_size + 1;
         let prefix_name = prefix_name.clone();
@@ -316,83 +316,72 @@ pub async fn fetch_and_parse_chunks(
         let remaining_items = (effective_last_serial_id - chunk + 1) as usize;
         let requested_range_size = remaining_items.min(range_size);
 
-        // Wait if we've hit the concurrency limit
-        if handles.len() >= concurrency {
-            let handle = handles.pop_front().expect("No s3 import handles to pop");
-            handle.await??;
-        }
+        let store = Arc::clone(&store);
+        let tx = tx.clone();
+        let shutdown = Arc::clone(&shutdown_handler);
+        let key = format!("{}/{}.bin", prefix_name, chunk_id);
 
-        let shutdown = shutdown_handler.clone();
-        handles.push_back(task::spawn({
-            let store = Arc::clone(&store);
-            let tx = tx.clone();
-            async move {
-                let mut attempt = 0;
-                let mut backoff_ms = initial_backoff_ms;
-                let key = format!("{}/{}.bin", prefix_name, chunk_id);
-                let shutdown_fut = shutdown.wait_for_shutdown();
-                tokio::pin!(shutdown_fut);
-
-                // Retry reading the range with exponential backoff
-                loop {
-                    attempt += 1;
-                    let res = tokio::select! {
-                        r = read_range_in_chunk(
-                            Arc::clone(&store),
-                            &key,
-                            offset_within_chunk,
-                            requested_range_size,
-                            tx.clone(),
-                        ) => r,
-                        _ = &mut shutdown_fut => {
-                            return Err(eyre::eyre!("Shutdown requested"));
-                        },
-                    };
-                    match res {
-                        Ok(_) => {
-                            return Ok(());
-                        }
-                        Err(e) => {
-                            // If we've tried all attempts, bail
-                            if attempt >= max_retries {
-                                return Err(eyre::eyre!(
-                                    "Failed to read {} after {} retries: {:?}",
-                                    key,
-                                    attempt,
-                                    e
-                                ));
-                            }
-
-                            tracing::warn!(
-                                "Error reading {} (attempt {} of {}): {:?}; retrying in {} ms",
-                                key,
-                                attempt,
-                                max_retries,
-                                e,
-                                backoff_ms
-                            );
-
-                            tokio::select! {
-                                _ = tokio::time::sleep(Duration::from_millis(backoff_ms)) => {},
-                                _ = &mut shutdown_fut => {
-                                    return Err(eyre::eyre!("Shutdown requested"));
-                                }
-                            }
-                            backoff_ms *= 2; // exponential backoff
-                        }
-                    }
-                }
+        async move {
+            tokio::select! {
+                res = fetch_single_chunk(store, key, offset_within_chunk, requested_range_size, tx, max_retries, initial_backoff_ms) => res,
+                _ = shutdown.wait_for_shutdown() => Err(eyre::eyre!("Shutdown requested")),
             }
-        }));
+        }
+    });
+
+    let mut results = stream.buffer_unordered(concurrency);
+
+    while let Some(result) = results.next().await {
+        result?;
     }
 
-    tracing::info!("All s3 import tasks are spawned. Waiting for them to finish");
-    // Wait for remaining handles
-    for handle in handles {
-        handle.await??;
-    }
     tracing::info!("All s3 import tasks are finished.");
     Ok(())
+}
+
+async fn fetch_single_chunk(
+    store: Arc<impl ObjectStore>,
+    key: String,
+    offset: usize,
+    size: usize,
+    tx: Sender<S3StoredIris>,
+    max_retries: usize,
+    initial_backoff_ms: u64,
+) -> Result<()> {
+    let mut attempt = 0;
+    let mut backoff_ms = initial_backoff_ms;
+
+    loop {
+        attempt += 1;
+        match read_range_in_chunk(Arc::clone(&store), &key, offset, size, tx.clone()).await {
+            Ok(_) => {
+                return Ok(());
+            }
+            Err(e) => {
+                // If we've tried all attempts, bail
+                if attempt >= max_retries {
+                    return Err(eyre::eyre!(
+                        "Failed to read {} after {} retries: {:?}",
+                        key,
+                        attempt,
+                        e
+                    ));
+                }
+
+                tracing::warn!(
+                    "Error reading {} (attempt {} of {}): {:?}; retrying in {} ms",
+                    key,
+                    attempt,
+                    max_retries,
+                    e,
+                    backoff_ms
+                );
+
+                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                backoff_ms *= 2; // exponential backoff
+            }
+        }
+    }
 }
 
 // Read [offset_within_chunk, offset_within_chunk + range_size) range from the
@@ -734,7 +723,9 @@ mod tests {
     impl ObjectStore for HangingStore {
         async fn get_object(&self, _key: &str, _range: (usize, usize)) -> Result<ByteStream> {
             tokio::time::sleep(Duration::from_secs(3600)).await;
-            Err(eyre::eyre!("HangingStore: should have been cancelled before this"))
+            Err(eyre::eyre!(
+                "HangingStore: should have been cancelled before this"
+            ))
         }
 
         async fn list_objects(&self, _prefix: &str) -> Result<Vec<String>> {
