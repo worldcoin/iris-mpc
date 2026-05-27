@@ -725,4 +725,104 @@ mod tests {
         assert_eq!(count, MOCK_ENTRIES);
         assert!(ids.is_empty(), "All entries should have been received");
     }
+
+    /// A store whose `get_object` hangs indefinitely, simulating a stalled S3 read.
+    #[derive(Clone, Default)]
+    pub struct HangingStore;
+
+    #[async_trait]
+    impl ObjectStore for HangingStore {
+        async fn get_object(&self, _key: &str, _range: (usize, usize)) -> Result<ByteStream> {
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+            Err(eyre::eyre!("HangingStore: should have been cancelled before this"))
+        }
+
+        async fn list_objects(&self, _prefix: &str) -> Result<Vec<String>> {
+            Ok(vec![])
+        }
+    }
+
+    /// Helper: a LastSnapshotDetails covering `n` entries in chunks of `chunk_size`.
+    fn snapshot(n: usize, chunk_size: usize) -> LastSnapshotDetails {
+        LastSnapshotDetails {
+            timestamp: 0,
+            last_serial_id: n as i64,
+            chunk_size: chunk_size as i64,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_fetch_and_parse_chunks_cancels_on_shutdown_during_read() {
+        let store = Arc::new(HangingStore);
+        let (tx, _rx) = mpsc::channel::<S3StoredIris>(1024);
+        let shutdown = Arc::new(ShutdownHandler::new(1));
+
+        // Trigger shutdown after a short delay, well before the 1-hour hang would complete.
+        let shutdown_clone = shutdown.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            shutdown_clone.trigger_manual_shutdown();
+        });
+
+        let now = Instant::now();
+        let result = fetch_and_parse_chunks(
+            store,
+            1,
+            "out".to_string(),
+            snapshot(10, 10),
+            None,
+            tx,
+            3,
+            10_000, // 10s backoff — should never be reached
+            shutdown,
+        )
+        .await;
+
+        assert!(result.is_err(), "Expected Err on shutdown during read");
+        assert!(
+            now.elapsed() < Duration::from_millis(500),
+            "Expected fast cancellation during read, took {:?}",
+            now.elapsed()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fetch_and_parse_chunks_cancels_on_shutdown_during_backoff() {
+        // Build a store whose first read always fails so the task enters a long backoff sleep.
+        let mut mock_store = MockStore::new();
+        mock_store.add_test_data("out/1.bin", (1..=10).map(dummy_entry).collect());
+        // i8::MAX failures ensures the task never succeeds within our retry budget.
+        let store = Arc::new(IntentionalFailureStore::new(mock_store, i8::MAX));
+
+        let (tx, _rx) = mpsc::channel::<S3StoredIris>(1024);
+        let shutdown = Arc::new(ShutdownHandler::new(1));
+
+        // Trigger shutdown after the first read fails but well before the 10s backoff expires.
+        let shutdown_clone = shutdown.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            shutdown_clone.trigger_manual_shutdown();
+        });
+
+        let now = Instant::now();
+        let result = fetch_and_parse_chunks(
+            store,
+            1,
+            "out".to_string(),
+            snapshot(10, 10),
+            None,
+            tx,
+            20,     // plenty of retries — shutdown should interrupt first
+            10_000, // 10s initial backoff
+            shutdown,
+        )
+        .await;
+
+        assert!(result.is_err(), "Expected Err on shutdown during backoff");
+        assert!(
+            now.elapsed() < Duration::from_millis(500),
+            "Expected fast cancellation during backoff sleep, took {:?}",
+            now.elapsed()
+        );
+    }
 }
