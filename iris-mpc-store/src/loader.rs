@@ -65,6 +65,7 @@ async fn load_db_records_from_aurora<'a>(
     Ok(())
 }
 
+/// Main iris loader method into memory. Load from either S3 + Aurora or only Aurora based on the config.
 pub async fn load_iris_db(
     actor: &mut impl InMemoryStore,
     store: &Store,
@@ -91,7 +92,7 @@ pub async fn load_iris_db(
         },
     }
 }
-/// Main iris loader method into memory. Load from either S3 + Aurora or only Aurora based on the config.
+
 async fn load_iris_db_internal(
     actor: &mut impl InMemoryStore,
     store: &Store,

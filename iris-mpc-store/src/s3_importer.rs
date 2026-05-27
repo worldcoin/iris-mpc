@@ -330,6 +330,8 @@ pub async fn fetch_and_parse_chunks(
                 let mut attempt = 0;
                 let mut backoff_ms = initial_backoff_ms;
                 let key = format!("{}/{}.bin", prefix_name, chunk_id);
+                let shutdown_fut = shutdown.wait_for_shutdown();
+                tokio::pin!(shutdown_fut);
 
                 // Retry reading the range with exponential backoff
                 loop {
@@ -342,7 +344,7 @@ pub async fn fetch_and_parse_chunks(
                             requested_range_size,
                             tx.clone(),
                         ) => r,
-                        _ = shutdown.wait_for_shutdown() => {
+                        _ = &mut shutdown_fut => {
                             return Err(eyre::eyre!("Shutdown requested"));
                         },
                     };
