@@ -322,10 +322,14 @@ pub async fn fetch_and_parse_chunks(
         let key = format!("{}/{}.bin", prefix_name, chunk_id);
 
         async move {
-            tokio::select! {
-                res = fetch_single_chunk(store, key, offset_within_chunk, requested_range_size, tx, max_retries, initial_backoff_ms) => res,
-                _ = shutdown.wait_for_shutdown() => Err(eyre::eyre!("Shutdown requested")),
-            }
+            tokio::spawn(async move {
+                tokio::select! {
+                    res = fetch_single_chunk(store, key, offset_within_chunk, requested_range_size, tx, max_retries, initial_backoff_ms) => res,
+                    _ = shutdown.wait_for_shutdown() => Err(eyre::eyre!("Shutdown requested")),
+                }
+            })
+            .await
+            .map_err(|e| eyre::eyre!("Task join error: {e}"))?
         }
     });
 
