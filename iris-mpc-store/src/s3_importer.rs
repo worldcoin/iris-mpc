@@ -815,6 +815,10 @@ mod tests {
         .await
         .expect("cancellation should complete within 500ms of virtual time");
 
-        assert!(result.is_err(), "Expected Err on shutdown during backoff");
+        let err = result.err().expect("result should be err");
+        assert!(
+            format!("{err:#}").contains("Shutdown"),
+            "Expected Err on shutdown during backoff"
+        );
     }
 }
