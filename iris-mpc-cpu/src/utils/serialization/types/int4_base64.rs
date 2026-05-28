@@ -7,6 +7,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::hawkers::plaintext_deep_id_store::{Int4Vector, INT4_PACKED_BYTES};
 
+/// Nibble `0x8` decodes to -8, which is outside the supported `{-7..=7}`
+/// domain and can overflow `Int4Vector::dot`'s i16 accumulator.
+fn nibble_is_valid(n: u8) -> bool {
+    (n & 0x0F) != 0x08
+}
+
 /// On-disk representation: the 256 packed bytes, base64-encoded.
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Base64Int4Vector {
@@ -35,6 +41,15 @@ impl TryFrom<&Base64Int4Vector> for Int4Vector {
         }
         let mut packed = [0u8; INT4_PACKED_BYTES];
         packed.copy_from_slice(&bytes);
+        for (i, byte) in packed.iter().enumerate() {
+            if !nibble_is_valid(*byte) || !nibble_is_valid(*byte >> 4) {
+                return Err(eyre!(
+                    "byte {} contains out-of-domain nibble 0x8 (decodes to -8); \
+                     Int4Vector supports only {{-7..=7}}",
+                    i
+                ));
+            }
+        }
         Ok(Int4Vector { packed })
     }
 }
@@ -75,12 +90,23 @@ mod tests {
         write_to_int4_ndjson(&mut buf, encoded).unwrap();
 
         let decoded: Vec<Int4Vector> = read_from_int4_ndjson(buf.as_slice())
-            .map(|r| Int4Vector::try_from(&r.unwrap()).unwrap())
+            .map(|r| Int4Vector::try_from(&r.expect("ndjson parse")).expect("valid int4"))
             .collect();
 
         assert_eq!(decoded.len(), originals.len());
         for (orig, got) in originals.iter().zip(decoded.iter()) {
             assert_eq!(orig.packed, got.packed);
         }
+    }
+
+    #[test]
+    fn rejects_out_of_domain_nibble() {
+        let mut packed = [0u8; INT4_PACKED_BYTES];
+        packed[0] = 0x08; // low nibble = -8, out of {-7..=7}
+        let encoded = Base64Int4Vector {
+            packed_b64: STANDARD.encode(packed),
+        };
+        let res = Int4Vector::try_from(&encoded);
+        assert!(res.is_err(), "decode must reject -8 nibble");
     }
 }

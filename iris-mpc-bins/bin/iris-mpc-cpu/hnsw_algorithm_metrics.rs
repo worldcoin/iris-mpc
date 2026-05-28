@@ -123,8 +123,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                 if idx % 1000 == 999 {
                     println!(
-                        "insertions: {:?}, evaluations: {:?}, comparisons: {:?}, openings: {:?}, \
-                         searches: {:?}",
+                        "[{:?}] insertions: {:?}, evaluations: {:?}, comparisons: {:?}, \
+                         openings: {:?}, searches: {:?}",
+                        args.store_kind,
                         idx + 1,
                         dist_evaluations_counter,
                         dist_comparisons_counter,
@@ -153,8 +154,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                 if idx % 1000 == 999 {
                     println!(
-                        "insertions: {:?}, evaluations: {:?}, comparisons: {:?}, openings: {:?}, \
-                         searches: {:?}",
+                        "[{:?}] insertions: {:?}, evaluations: {:?}, comparisons: {:?}, \
+                         openings: {:?}, searches: {:?}",
+                        args.store_kind,
                         idx + 1,
                         dist_evaluations_counter,
                         dist_comparisons_counter,

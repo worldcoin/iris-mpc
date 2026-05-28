@@ -1,3 +1,4 @@
+use clap::Parser;
 use eyre::Result;
 use iris_mpc_common::IrisVectorId;
 use iris_mpc_cpu::hawkers::aby3::aby3_store::{DistanceOps, FhdOps, NhdOps};
@@ -7,6 +8,7 @@ use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 use iris_mpc_cpu::hnsw::searcher::LayerMode;
 use iris_mpc_cpu::hnsw::GraphMem;
 use iris_mpc_cpu::hnsw::{HnswSearcher, VectorStore};
+use iris_mpc_cpu::utils::serialization::check_store_kind_unambiguous;
 use iris_mpc_cpu::utils::serialization::graph::write_graph_current;
 use iris_mpc_cpu::utils::serialization::int4_ndjson::int4_vectors_from_ndjson;
 use iris_mpc_cpu::utils::serialization::types::iris_base64::Base64IrisCode;
@@ -15,10 +17,21 @@ use rand::SeedableRng;
 use serde::Deserialize;
 use serde_json::Deserializer;
 use std::cmp::Ordering;
-use std::env;
 use std::path::Path;
 use std::sync::Arc;
 use std::{io::BufReader, path::PathBuf};
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    /// Path to the configuration TOML file.
+    #[clap(long)]
+    job_spec: PathBuf,
+
+    /// Path where the constructed graph will be written.
+    #[clap(long)]
+    output: PathBuf,
+}
 
 #[derive(Debug, Deserialize)]
 struct IdealGraphConfig {
@@ -51,6 +64,7 @@ where
     P: AsRef<Path>,
 {
     let text = std::fs::read_to_string(path)?;
+    check_store_kind_unambiguous(&text)?;
     let de = toml::de::Deserializer::new(&text);
     let t = serde_path_to_error::deserialize(de)?;
     Ok(t)
@@ -64,7 +78,10 @@ async fn run_sanity_check_iris<D: DistanceOps>(
 ) {
     // Check number of neighbors for all nodes
     for (lc, layer) in graph.layers.iter().enumerate() {
-        let expected_nb_size = searcher.params.get_M_max(lc).min(layer.links.len() - 1);
+        let expected_nb_size = searcher
+            .params
+            .get_M_max(lc)
+            .min(layer.links.len().saturating_sub(1));
         for (_, value) in layer.links.iter() {
             assert_eq!(value.len(), expected_nb_size);
         }
@@ -153,7 +170,10 @@ async fn run_sanity_check_deep_id(
     threshold: i16,
 ) {
     for (lc, layer) in graph.layers.iter().enumerate() {
-        let expected_nb_size = searcher.params.get_M_max(lc).min(layer.links.len() - 1);
+        let expected_nb_size = searcher
+            .params
+            .get_M_max(lc)
+            .min(layer.links.len().saturating_sub(1));
         for (_, value) in layer.links.iter() {
             assert_eq!(value.len(), expected_nb_size);
         }
@@ -238,14 +258,9 @@ async fn run_sanity_check_deep_id(
 /// `GraphMem::ideal_from_irises`
 
 #[tokio::main]
-async fn main() {
-    let args: Vec<String> = env::args().collect();
-    assert!(args.len() == 3);
-
-    let config_path = &args[1];
-    let output_path = &args[2];
-
-    let config: IdealGraphConfig = load_toml(config_path).unwrap();
+async fn main() -> Result<()> {
+    let cli = Cli::parse();
+    let config: IdealGraphConfig = load_toml(&cli.job_spec)?;
     let searcher = config.searcher;
 
     let graph = match config.store {
@@ -308,8 +323,9 @@ async fn main() {
         }
     };
 
-    let mut writer = std::fs::File::create(output_path).unwrap();
-    write_graph_current(&mut writer, graph).unwrap();
+    let mut writer = std::fs::File::create(&cli.output)?;
+    write_graph_current(&mut writer, graph)?;
+    Ok(())
 }
 
 #[cfg(test)]

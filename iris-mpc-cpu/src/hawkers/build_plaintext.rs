@@ -103,19 +103,14 @@ pub async fn plaintext_parallel_batch_insert<D: DistanceOps>(
 }
 
 pub async fn deep_id_parallel_batch_insert(
-    graph: Option<GraphMem<IrisVectorId>>,
-    store: Option<SharedPlaintextDeepIDStore>,
+    graph: GraphMem<IrisVectorId>,
+    mut store: SharedPlaintextDeepIDStore,
     vectors: Vec<(IrisVectorId, Int4Vector)>,
     searcher: &HnswSearcher,
     batch_size: usize,
     prf_seed: &[u8; 16],
 ) -> Result<(GraphMem<IrisVectorId>, SharedPlaintextDeepIDStore)> {
-    assert!(graph.is_none() == store.is_none());
-    let mut graph = Arc::new(graph.unwrap_or_default());
-    // SharedPlaintextDeepIDStore needs a threshold for is_match, but graph
-    // insertion only calls eval_distance/less_than. Build an empty store with
-    // threshold 0 if none was provided.
-    let mut store = store.unwrap_or_else(|| SharedPlaintextDeepIDStore::new(0));
+    let mut graph = Arc::new(graph);
 
     let mut inserted_count: usize = 0;
     let mut reported_count: usize = 0;
@@ -325,8 +320,8 @@ mod tests {
             .collect();
 
         let (final_graph, mut final_store) = deep_id_parallel_batch_insert(
-            Some(graph),
-            Some(shared_store),
+            graph,
+            shared_store,
             to_insert_vectors.clone(),
             &searcher,
             batch_size,

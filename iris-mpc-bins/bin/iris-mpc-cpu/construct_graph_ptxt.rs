@@ -16,7 +16,7 @@ use iris_mpc_cpu::{
     hnsw::{vector_store::VectorStoreMut, GraphMem, HnswSearcher},
     utils::{
         cli::{Int4VectorsConfig, IrisesConfig, LoadGraphConfig, SearcherConfig},
-        serialization::{graph::write_graph_to_file, load_toml},
+        serialization::{graph::write_graph_to_file, load_store_kind_toml},
     },
 };
 use tracing_subscriber::{prelude::*, EnvFilter};
@@ -297,15 +297,9 @@ async fn build_deep_id_graph(
         OutputGraphConfig::Simple { path } => {
             tracing::info!("Building deep-ID HNSW graph for ids {first_id} to {last_id}");
             let new_vectors = vectors[start_idx..].to_vec();
-            (graph, _) = deep_id_parallel_batch_insert(
-                Some(graph),
-                Some(store),
-                new_vectors,
-                searcher,
-                1,
-                prf_seed,
-            )
-            .await?;
+            (graph, _) =
+                deep_id_parallel_batch_insert(graph, store, new_vectors, searcher, 1, prf_seed)
+                    .await?;
 
             tracing::info!("Persisting HNSW graph to file");
             write_graph_to_file(path, graph)?;
@@ -340,15 +334,9 @@ async fn build_deep_id_graph(
                     vectors[i_end - 1].0.serial_id(),
                 );
                 let chunk = vectors[i_start..i_end].to_vec();
-                (graph, store) = deep_id_parallel_batch_insert(
-                    Some(graph),
-                    Some(store),
-                    chunk,
-                    searcher,
-                    1,
-                    prf_seed,
-                )
-                .await?;
+                (graph, store) =
+                    deep_id_parallel_batch_insert(graph, store, chunk, searcher, 1, prf_seed)
+                        .await?;
 
                 let filename = format!("{filename_stem}_{i_end}.dat");
                 let output_path = base_directory.join(filename.clone());
@@ -373,7 +361,7 @@ async fn main() -> Result<()> {
     // parse args
     tracing::info!("Loading configuration from file");
     let cli = Args::parse();
-    let config: CliConfig = load_toml(&cli.job_spec)?;
+    let config: CliConfig = load_store_kind_toml(&cli.job_spec)?;
     tracing::info!("Configuration loaded from {}", cli.job_spec.display());
 
     tracing::info!("Initializing searcher");

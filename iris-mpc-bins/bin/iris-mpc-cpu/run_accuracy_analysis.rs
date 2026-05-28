@@ -10,7 +10,7 @@ use iris_mpc_cpu::analysis::accuracy_deep_id::{
 };
 use iris_mpc_cpu::hawkers::aby3::aby3_store::{DistanceOps, FhdOps, NhdOps};
 use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
-use iris_mpc_cpu::utils::serialization::load_toml;
+use iris_mpc_cpu::utils::serialization::load_store_kind_toml;
 use metrics_tracing_context::{MetricsLayer, TracingContextLayer};
 use metrics_util::debugging::{DebuggingRecorder, Snapshotter};
 use metrics_util::layers::Layer;
@@ -52,7 +52,10 @@ async fn run_iris_with_ops<D: DistanceOps>(
     let graph = load_iris_graph(&config.graph, &mut store, rng).await?;
     println!("Graph initialized.");
 
-    let snapshotter: Option<Snapshotter> = init_metrics(&config.analysis.metrics_path);
+    let snapshotter: Option<Snapshotter> = init_metrics(
+        &config.analysis.metrics_path,
+        &["__query_id", "__mutation", "__rotation"],
+    );
 
     println!("Starting analysis...");
     let results = run_iris_analysis(config.analysis.clone(), store, graph, rng).await?;
@@ -84,7 +87,8 @@ async fn run_deep_id(config: accuracy_deep_id::Config, rng: &mut StdRng) -> Resu
     let graph = load_deep_id_graph(&config.graph, &mut store, rng).await?;
     println!("Graph initialized.");
 
-    let snapshotter: Option<Snapshotter> = init_metrics(&config.analysis.metrics_path);
+    let snapshotter: Option<Snapshotter> =
+        init_metrics(&config.analysis.metrics_path, &["__query_id", "__noise"]);
 
     println!("Starting analysis...");
     let results = run_deep_id_analysis(config.analysis.clone(), store, graph, rng).await?;
@@ -104,7 +108,10 @@ async fn run_deep_id(config: accuracy_deep_id::Config, rng: &mut StdRng) -> Resu
     Ok(())
 }
 
-fn init_metrics(metrics_path: &Option<PathBuf>) -> Option<Snapshotter> {
+fn init_metrics(
+    metrics_path: &Option<PathBuf>,
+    allowed_labels: &[&'static str],
+) -> Option<Snapshotter> {
     if metrics_path.is_some() {
         tracing_subscriber::registry()
             .with(MetricsLayer::new())
@@ -113,9 +120,7 @@ fn init_metrics(metrics_path: &Option<PathBuf>) -> Option<Snapshotter> {
         let recorder = DebuggingRecorder::new();
         let snapshotter = recorder.snapshotter();
 
-        let recorder =
-            TracingContextLayer::only_allow(["__query_id", "__mutation", "__rotation", "__noise"])
-                .layer(recorder);
+        let recorder = TracingContextLayer::only_allow(allowed_labels.to_vec()).layer(recorder);
         metrics::set_global_recorder(recorder).expect("failed to install recorder");
 
         Some(snapshotter)
@@ -127,7 +132,7 @@ fn init_metrics(metrics_path: &Option<PathBuf>) -> Option<Snapshotter> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let config: Config = load_toml(&cli.job_spec)?;
+    let config: Config = load_store_kind_toml(&cli.job_spec)?;
 
     println!("Configuration loaded from {}.", cli.job_spec.display());
 

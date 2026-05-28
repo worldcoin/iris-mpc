@@ -269,7 +269,7 @@ pub async fn load_int4_vectors(config: Int4VectorsConfig) -> Result<Vec<Int4Vect
         }
         Int4VectorsConfig::NdjsonFile { path, limit } => {
             tracing::info!("Loading Int4Vectors from NDJSON file: {}", path.display());
-            int4_vectors_from_ndjson_iter(&path, limit)?.collect::<Vec<_>>()
+            int4_vectors_from_ndjson_iter(&path, limit)?.collect::<Result<Vec<_>>>()?
         }
     };
 

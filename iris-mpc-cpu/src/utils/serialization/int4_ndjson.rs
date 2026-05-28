@@ -5,7 +5,6 @@ use std::{
 };
 
 use eyre::{bail, Result};
-use itertools::Itertools;
 
 use crate::{
     hawkers::plaintext_deep_id_store::Int4Vector,
@@ -15,22 +14,26 @@ use crate::{
 };
 
 /// Stream `Int4Vector`s out of an NDJSON file. `limit` truncates the stream.
+///
+/// Each yielded item is a `Result` because per-line failures (malformed JSON,
+/// invalid base64, wrong packed length, out-of-domain nibbles) are recoverable
+/// — callers should surface them rather than panic mid-stream.
 pub fn int4_vectors_from_ndjson_iter(
     path: &Path,
     limit: Option<usize>,
-) -> Result<impl Iterator<Item = Int4Vector>> {
+) -> Result<impl Iterator<Item = Result<Int4Vector>>> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     let stream = read_from_int4_ndjson(reader);
 
     Ok(stream
-        .map(|json_pt| Int4Vector::try_from(&json_pt.unwrap()).unwrap())
+        .map(|json_pt| Int4Vector::try_from(&json_pt?))
         .take(limit.unwrap_or(usize::MAX)))
 }
 
 /// Read `limit` Int4Vectors from the file into a `Vec`, or all if `limit` is None.
 pub fn int4_vectors_from_ndjson(path: &Path, limit: Option<usize>) -> Result<Vec<Int4Vector>> {
-    let vectors = int4_vectors_from_ndjson_iter(path, limit)?.collect_vec();
+    let vectors = int4_vectors_from_ndjson_iter(path, limit)?.collect::<Result<Vec<_>>>()?;
 
     if let Some(num) = limit {
         if vectors.len() != num {

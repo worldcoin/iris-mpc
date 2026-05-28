@@ -10,7 +10,6 @@ use crate::{
     hnsw::{
         graph::neighborhood::{UnsortedNeighborhood, WrappedNeighborhood},
         searcher::{LayerDistribution, LayerMode, NeighborhoodMode, N_PARAM_LAYERS},
-        vector_store::VectorStoreMut,
         GraphMem, HnswParams, HnswSearcher, SortedNeighborhood,
     },
     utils::serialization::{
@@ -72,6 +71,24 @@ pub struct AnalysisConfig {
     pub noise_levels: Vec<f64>,
     pub search_hnsw_config: HnswConfig,
     pub neighborhood_mode: NeighborhoodMode,
+}
+
+impl AnalysisConfig {
+    /// Validate that every entry of `noise_levels` is a finite number in `[0, 1]`.
+    /// The seed derivation and bucket-keying downstream assume this domain;
+    /// out-of-range values would silently collide into the same bucket.
+    pub fn validate(&self) -> Result<()> {
+        for (i, &p) in self.noise_levels.iter().enumerate() {
+            if !p.is_finite() || !(0.0..=1.0).contains(&p) {
+                bail!(
+                    "noise_levels[{}] = {} is not a finite value in [0, 1]",
+                    i,
+                    p
+                );
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -139,13 +156,14 @@ pub async fn load_deep_id_store(
         }
         Int4VectorsInit::NdjsonFile { path, limit } => {
             println!("Loading Int4Vectors from NDJSON file: {}", path.display());
-            int4_vectors_from_ndjson_iter(&path, limit)?.collect::<Vec<_>>()
+            int4_vectors_from_ndjson_iter(&path, limit)?.collect::<Result<Vec<_>>>()?
         }
     };
 
     let mut store = PlaintextDeepIDStore::new(threshold);
-    for v in vectors {
-        VectorStoreMut::insert(&mut store, &Arc::new(v)).await;
+    for (idx, v) in vectors.into_iter().enumerate() {
+        let id = VectorId::from_serial_id((idx + 1) as u32);
+        store.insert_with_id(id, Arc::new(v));
     }
     Ok(store)
 }
@@ -239,6 +257,8 @@ pub async fn run_analysis(
     graph: GraphMem<VectorId>,
     rng: &mut StdRng,
 ) -> Result<Vec<AnalysisResult>> {
+    config.validate()?;
+
     let all_ids: Vec<VectorId> = store
         .storage
         .get_sorted_serial_ids()
@@ -276,8 +296,11 @@ pub async fn run_analysis(
             .ok_or_else(|| eyre!("Sampled ID {} not found in store", target_id))?;
 
         for &noise_level in &config.noise_levels {
+            // f64::to_bits gives a unique u64 per distinct noise_level value,
+            // avoiding collisions when two configured levels round to the same
+            // integer.
             let mut local_rng: StdRng = rand::SeedableRng::seed_from_u64(
-                ((target_id.serial_id() as u64) << 32) ^ ((noise_level * 1_000_000.0) as u64),
+                ((target_id.serial_id() as u64) << 32) ^ noise_level.to_bits(),
             );
             let query_inner = perturb_nibbles(&target_vec, noise_level, &mut local_rng);
             let query_ref = Arc::new(query_inner);

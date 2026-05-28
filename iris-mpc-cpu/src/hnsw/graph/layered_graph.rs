@@ -5,7 +5,9 @@
 
 use crate::{
     execution::hawk_main::state_check::SetHash,
-    hawkers::ideal_knn_engines::{read_knn_results_from_file, Engine, EngineChoice, KNNResult},
+    hawkers::ideal_knn_engines::{
+        read_knn_results_from_file, EngineChoice, IdealKnn, KNNResult, NaiveKNN,
+    },
     hnsw::{
         searcher::{ConnectPlan, LayerMode, UpdateEntryPoint},
         vector_store::Ref,
@@ -275,96 +277,31 @@ impl GraphMem<IrisVectorId> {
         prf_seed: [u8; 16],
         echoice: EngineChoice, // Engine choice for KNN computation on non-zero layer
     ) -> Result<Self> {
-        let zero_layer = {
-            let mut results = read_knn_results_from_file(filepath).unwrap();
-            for result in results.iter_mut() {
-                result.truncate(searcher.params.get_M_max(0));
-            }
-            let results = results
-                .into_par_iter()
-                .map(|result| result.map(IrisVectorId::from_serial_id))
-                .collect::<Vec<_>>();
-            Layer::from_knn_results(results, irises.len())
+        use crate::hawkers::{
+            aby3::aby3_store::{FhdOps, NhdOps},
+            ideal_knn_engines::IrisKnn,
         };
-
-        let irises_with_vector_ids = izip!(
-            zero_layer.links.keys().cloned().sorted(),
-            irises.into_iter(),
-        )
-        .collect::<Vec<_>>();
-
-        // Collect nodes into layers they are inserted into (for layers > 0)
-        let mut nonzero_layers_map: BTreeMap<usize, Vec<(IrisVectorId, IrisCode)>> =
-            BTreeMap::new();
-        for (vector_id, iris) in irises_with_vector_ids.iter() {
-            let layer = searcher.gen_layer_prf(&prf_seed, &vector_id)?;
-            // Insert node into layers 1 to insertion layer (or not if inserted in layer 0)
-            for l in 1..=layer {
-                nonzero_layers_map
-                    .entry(l)
-                    .or_default()
-                    .push((*vector_id, iris.clone()));
-            }
+        match echoice {
+            EngineChoice::NaiveFHD | EngineChoice::NaiveMinFHD => ideal_graph_from_vectors(
+                irises,
+                filepath,
+                searcher,
+                prf_seed,
+                IrisKnn::<FhdOps>::new(echoice.distance_mode()),
+            ),
+            EngineChoice::NaiveNHD | EngineChoice::NaiveMinNHD => ideal_graph_from_vectors(
+                irises,
+                filepath,
+                searcher,
+                prf_seed,
+                IrisKnn::<NhdOps>::new(echoice.distance_mode()),
+            ),
         }
-
-        let mut nodes_for_nonzero_layers: Vec<Vec<(IrisVectorId, IrisCode)>> =
-            nonzero_layers_map.into_values().collect::<Vec<Vec<_>>>();
-
-        // Initialize entry points and truncate layers depending on the layer mode
-        let entry_points = match searcher.layer_mode {
-            LayerMode::Standard { max_graph_layer } => {
-                if let Some(max_layer) = max_graph_layer {
-                    nodes_for_nonzero_layers.truncate(max_layer);
-                }
-
-                // Entry point is the first vector of the highest non-empty layer, or no
-                // entry point if the graph is empty
-                once(&irises_with_vector_ids)
-                    .chain(nodes_for_nonzero_layers.iter())
-                    .last()
-                    .unwrap_or(&vec![])
-                    .first()
-                    .map(|(v, _)| vec![(*v, nodes_for_nonzero_layers.len())])
-                    .unwrap_or_default()
-            }
-            LayerMode::LinearScan { max_graph_layer } => {
-                // Entry points are the nodes inserted at the layer after `max_graph_layer`,
-                // found at index `max_graph_layer` in the list of nonzero layers
-                let entry_points = nodes_for_nonzero_layers
-                    .get(max_graph_layer)
-                    .unwrap_or(&vec![])
-                    .iter()
-                    .map(|(v, _)| (*v, max_graph_layer))
-                    .collect();
-
-                nodes_for_nonzero_layers.truncate(max_graph_layer);
-
-                entry_points
-            }
-        };
-
-        // Finally, run brute force algorithms to connect nodes in each layer
-        let nonzero_layers =
-            nodes_for_nonzero_layers
-                .into_iter()
-                .enumerate()
-                .map(|(i, layer_iris_data)| {
-                    Layer::ideal_from_irises(
-                        layer_iris_data,
-                        searcher.params.get_M_max(i + 1),
-                        echoice,
-                    )
-                });
-
-        Ok(GraphMem::from_precomputed(
-            entry_points,
-            once(zero_layer).chain(nonzero_layers).collect::<Vec<_>>(),
-        ))
     }
 
     /// Idealized GraphMem for deep-ID Int4 vectors. Layer 0 is loaded from a
     /// pre-computed KNN file (same format used by `ideal_from_irises`); higher
-    /// layers are brute-forced by `EngineInt4`.
+    /// layers are brute-forced using inner-product (descending dot = closer).
     pub fn ideal_from_int4_vectors(
         vectors: Vec<crate::hawkers::plaintext_deep_id_store::Int4Vector>,
         filepath: PathBuf,
@@ -372,95 +309,102 @@ impl GraphMem<IrisVectorId> {
         prf_seed: [u8; 16],
         echoice: crate::hawkers::ideal_knn_engines::EngineChoiceInt4,
     ) -> Result<Self> {
-        use crate::hawkers::ideal_knn_engines::read_knn_results_from_file;
-
-        let zero_layer = {
-            let mut results = read_knn_results_from_file(filepath).unwrap();
-            for result in results.iter_mut() {
-                result.truncate(searcher.params.get_M_max(0));
-            }
-            let results = results
-                .into_par_iter()
-                .map(|result| result.map(IrisVectorId::from_serial_id))
-                .collect::<Vec<_>>();
-            Layer::from_knn_results(results, vectors.len())
-        };
-
-        let vectors_with_ids = izip!(
-            zero_layer.links.keys().cloned().sorted(),
-            vectors.into_iter(),
-        )
-        .collect::<Vec<_>>();
-
-        let mut nonzero_layers_map: BTreeMap<
-            usize,
-            Vec<(
-                IrisVectorId,
-                crate::hawkers::plaintext_deep_id_store::Int4Vector,
-            )>,
-        > = BTreeMap::new();
-        for (vector_id, v) in vectors_with_ids.iter() {
-            let layer = searcher.gen_layer_prf(&prf_seed, &vector_id)?;
-            for l in 1..=layer {
-                nonzero_layers_map
-                    .entry(l)
-                    .or_default()
-                    .push((*vector_id, v.clone()));
-            }
+        use crate::hawkers::ideal_knn_engines::{EngineChoiceInt4, Int4DotKnn};
+        match echoice {
+            EngineChoiceInt4::NaiveInt4Dot => ideal_graph_from_vectors::<Int4DotKnn>(
+                vectors, filepath, searcher, prf_seed, Int4DotKnn,
+            ),
         }
-
-        let mut nodes_for_nonzero_layers: Vec<
-            Vec<(
-                IrisVectorId,
-                crate::hawkers::plaintext_deep_id_store::Int4Vector,
-            )>,
-        > = nonzero_layers_map.into_values().collect();
-
-        let entry_points = match searcher.layer_mode {
-            LayerMode::Standard { max_graph_layer } => {
-                if let Some(max_layer) = max_graph_layer {
-                    nodes_for_nonzero_layers.truncate(max_layer);
-                }
-
-                once(&vectors_with_ids)
-                    .chain(nodes_for_nonzero_layers.iter())
-                    .last()
-                    .unwrap_or(&vec![])
-                    .first()
-                    .map(|(v, _)| vec![(*v, nodes_for_nonzero_layers.len())])
-                    .unwrap_or_default()
-            }
-            LayerMode::LinearScan { max_graph_layer } => {
-                let entry_points = nodes_for_nonzero_layers
-                    .get(max_graph_layer)
-                    .unwrap_or(&vec![])
-                    .iter()
-                    .map(|(v, _)| (*v, max_graph_layer))
-                    .collect();
-
-                nodes_for_nonzero_layers.truncate(max_graph_layer);
-
-                entry_points
-            }
-        };
-
-        let nonzero_layers =
-            nodes_for_nonzero_layers
-                .into_iter()
-                .enumerate()
-                .map(|(i, layer_data)| {
-                    Layer::ideal_from_int4_vectors(
-                        layer_data,
-                        searcher.params.get_M_max(i + 1),
-                        echoice,
-                    )
-                });
-
-        Ok(GraphMem::from_precomputed(
-            entry_points,
-            once(zero_layer).chain(nonzero_layers).collect::<Vec<_>>(),
-        ))
     }
+}
+
+/// Shared body for `ideal_from_irises` / `ideal_from_int4_vectors`: builds an
+/// idealized hierarchical graph where layer 0 is loaded from a pre-computed
+/// KNN file and higher layers are brute-forced via `NaiveKNN<K>`.
+fn ideal_graph_from_vectors<K>(
+    vectors: Vec<K::Vector>,
+    filepath: PathBuf,
+    searcher: &HnswSearcher,
+    prf_seed: [u8; 16],
+    knn_proto: K,
+) -> Result<GraphMem<IrisVectorId>>
+where
+    K: IdealKnn,
+    K::Vector: Clone,
+{
+    let zero_layer = {
+        let mut results = read_knn_results_from_file(filepath).unwrap();
+        for result in results.iter_mut() {
+            result.truncate(searcher.params.get_M_max(0));
+        }
+        let results = results
+            .into_par_iter()
+            .map(|result| result.map(IrisVectorId::from_serial_id))
+            .collect::<Vec<_>>();
+        Layer::from_knn_results(results, vectors.len())
+    };
+
+    let vectors_with_ids: Vec<(IrisVectorId, K::Vector)> = izip!(
+        zero_layer.links.keys().cloned().sorted(),
+        vectors.into_iter(),
+    )
+    .collect();
+
+    // Collect nodes into layers they are inserted into (for layers > 0)
+    let mut nonzero_layers_map: BTreeMap<usize, Vec<(IrisVectorId, K::Vector)>> = BTreeMap::new();
+    for (vector_id, v) in vectors_with_ids.iter() {
+        let layer = searcher.gen_layer_prf(&prf_seed, vector_id)?;
+        for l in 1..=layer {
+            nonzero_layers_map
+                .entry(l)
+                .or_default()
+                .push((*vector_id, v.clone()));
+        }
+    }
+
+    let mut nodes_for_nonzero_layers: Vec<Vec<(IrisVectorId, K::Vector)>> =
+        nonzero_layers_map.into_values().collect();
+
+    let entry_points = match searcher.layer_mode {
+        LayerMode::Standard { max_graph_layer } => {
+            if let Some(max_layer) = max_graph_layer {
+                nodes_for_nonzero_layers.truncate(max_layer);
+            }
+            once(&vectors_with_ids)
+                .chain(nodes_for_nonzero_layers.iter())
+                .last()
+                .unwrap_or(&vec![])
+                .first()
+                .map(|(v, _)| vec![(*v, nodes_for_nonzero_layers.len())])
+                .unwrap_or_default()
+        }
+        LayerMode::LinearScan { max_graph_layer } => {
+            let entry_points = nodes_for_nonzero_layers
+                .get(max_graph_layer)
+                .unwrap_or(&vec![])
+                .iter()
+                .map(|(v, _)| (*v, max_graph_layer))
+                .collect();
+            nodes_for_nonzero_layers.truncate(max_graph_layer);
+            entry_points
+        }
+    };
+
+    let nonzero_layers = nodes_for_nonzero_layers
+        .into_iter()
+        .enumerate()
+        .map(|(i, layer_data)| {
+            Layer::ideal_from_data::<K>(
+                layer_data,
+                searcher.params.get_M_max(i + 1),
+                knn_proto.clone(),
+            )
+        });
+
+    Ok(GraphMem::from_precomputed(
+        entry_points,
+        once(zero_layer).chain(nonzero_layers).collect::<Vec<_>>(),
+    ))
 }
 
 #[derive(PartialEq, Eq, Default, Debug, Deserialize)]
@@ -561,20 +505,17 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         ret
     }
 
-    /// Constructs a Layer from pairs of (vectorRef, iris) by computing
-    /// the ideal K-nearest neighbors for each such entry.
-    pub fn ideal_from_irises(
-        iris_data: Vec<(V, IrisCode)>,
-        k: usize,
-        echoice: EngineChoice,
-    ) -> Self {
-        let (vector_refs, irises): (Vec<V>, Vec<IrisCode>) = iris_data.into_iter().unzip();
-        let n = irises.len();
+    /// Constructs a Layer from `(vector_ref, K::Vector)` pairs by brute-force
+    /// top-k KNN using the supplied [`IdealKnn`] implementation.
+    ///
+    /// Used by `GraphMem::ideal_from_irises` / `ideal_from_int4_vectors`; the
+    /// per-store helpers below are thin wrappers around it.
+    pub fn ideal_from_data<K: IdealKnn>(data: Vec<(V, K::Vector)>, k: usize, knn: K) -> Self {
+        let (vector_refs, vectors): (Vec<V>, Vec<K::Vector>) = data.into_iter().unzip();
+        let n = vectors.len();
         let k = k.min(n - 1);
 
-        // Initialize the KNN algorithm;
-        let mut engine = Engine::init(echoice, irises, k, 1);
-        // Run the entire computation
+        let mut engine = NaiveKNN::<K>::init(knn, vectors, k, 1);
         let results = engine
             .compute_chunk(n)
             .into_iter()
@@ -585,27 +526,41 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         Layer::from_knn_results(results, n)
     }
 
-    /// Layer constructor for deep-ID Int4 vectors: brute-force top-k by
-    /// descending dot product.
+    /// Layer constructor for iris codes — kept for backward compatibility;
+    /// delegates to [`Layer::ideal_from_data`].
+    pub fn ideal_from_irises(
+        iris_data: Vec<(V, IrisCode)>,
+        k: usize,
+        echoice: EngineChoice,
+    ) -> Self {
+        use crate::hawkers::{
+            aby3::aby3_store::{FhdOps, NhdOps},
+            ideal_knn_engines::IrisKnn,
+        };
+        let mode = echoice.distance_mode();
+        match echoice {
+            EngineChoice::NaiveFHD | EngineChoice::NaiveMinFHD => {
+                Layer::ideal_from_data::<IrisKnn<FhdOps>>(iris_data, k, IrisKnn::new(mode))
+            }
+            EngineChoice::NaiveNHD | EngineChoice::NaiveMinNHD => {
+                Layer::ideal_from_data::<IrisKnn<NhdOps>>(iris_data, k, IrisKnn::new(mode))
+            }
+        }
+    }
+
+    /// Layer constructor for deep-ID Int4 vectors — kept for backward
+    /// compatibility; delegates to [`Layer::ideal_from_data`].
     pub fn ideal_from_int4_vectors(
         data: Vec<(V, crate::hawkers::plaintext_deep_id_store::Int4Vector)>,
         k: usize,
         echoice: crate::hawkers::ideal_knn_engines::EngineChoiceInt4,
     ) -> Self {
-        use crate::hawkers::ideal_knn_engines::EngineInt4;
-
-        let (vector_refs, vectors): (Vec<V>, Vec<_>) = data.into_iter().unzip();
-        let n = vectors.len();
-        let k = k.min(n - 1);
-
-        let mut engine = EngineInt4::init(echoice, vectors, k, 1);
-        let results = engine
-            .compute_chunk(n)
-            .into_iter()
-            .map(|result| result.map(|i| vector_refs[(i - 1) as usize].clone()))
-            .collect::<Vec<_>>();
-
-        Layer::from_knn_results(results, n)
+        use crate::hawkers::ideal_knn_engines::{EngineChoiceInt4, Int4DotKnn};
+        match echoice {
+            EngineChoiceInt4::NaiveInt4Dot => {
+                Layer::ideal_from_data::<Int4DotKnn>(data, k, Int4DotKnn)
+            }
+        }
     }
 }
 
