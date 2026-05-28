@@ -1,9 +1,11 @@
 mod data;
 mod s3_client;
+mod synchronize;
 
 use ampc_server_utils::{try_get_endpoint_other_nodes, ServerCoordinationConfig};
 pub use data::*;
 pub use s3_client::*;
+pub use synchronize::*;
 
 use eyre::{bail, Result};
 
@@ -28,7 +30,7 @@ pub async fn get_common_checkpoint(
 /// Finds the first checkpoint whose hash appears in all parties'
 /// hash lists (mine + the X `others_hashes`).  Zero hashes are ignored
 /// because they represent empty slots in a [`GraphCheckpointHashes`] array.
-pub fn find_common_checkpoint(
+fn find_common_checkpoint(
     my_checkpoint_hashes: GraphCheckpointHashes,
     my_checkpoints: Vec<GraphCheckpointState>,
     others_hashes: Vec<GraphCheckpointHashes>,
@@ -57,7 +59,18 @@ pub fn find_common_checkpoint(
             return Ok(r);
         }
     }
-    Ok(None)
+
+    if my_checkpoint_hashes.iter().all(|x| x == &default_hash)
+        && others_hashes
+            .iter()
+            .all(|x| x.iter().all(|y| y == &default_hash))
+    {
+        Ok(None)
+    } else {
+        // if at least one party has a checkpoint but no checkpoint is found then
+        // raise an error.
+        bail!("No common checkpoint was found")
+    }
 }
 
 pub async fn get_most_recent_checkpoints(
@@ -161,26 +174,26 @@ mod tests {
     /// Only my party and one other share hash A; the third has a different
     /// hash → no common checkpoint among all three.
     #[test]
-    fn only_two_parties_agree_returns_none() {
+    fn only_two_parties_agree_returns_err() {
         let a = h(0x01);
         let b = h(0x02);
         let my_hashes = hashes(&[a]);
         let my_cps = vec![checkpoint("cp_a")];
         let others = vec![hashes(&[a]), hashes(&[b])];
 
-        let result = find_common_checkpoint(my_hashes, my_cps, others).unwrap();
-        assert!(result.is_none());
+        let result = find_common_checkpoint(my_hashes, my_cps, others);
+        assert!(result.is_err());
     }
 
-    /// All three parties have completely disjoint hashes → None.
+    /// All three parties have completely disjoint hashes → error.
     #[test]
-    fn no_overlap_returns_none() {
+    fn no_overlap_returns_err() {
         let my_hashes = hashes(&[h(0x01)]);
         let my_cps = vec![checkpoint("cp_a")];
         let others = vec![hashes(&[h(0x02)]), hashes(&[h(0x03)])];
 
-        let result = find_common_checkpoint(my_hashes, my_cps, others).unwrap();
-        assert!(result.is_none());
+        let result = find_common_checkpoint(my_hashes, my_cps, others);
+        assert!(result.is_err());
     }
 
     /// Zero hashes are treated as empty slots and must not be counted as a

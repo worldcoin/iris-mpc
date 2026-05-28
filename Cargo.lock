@@ -3177,6 +3177,7 @@ dependencies = [
  "aws-sdk-rds",
  "aws-sdk-s3",
  "axum 0.7.7",
+ "bincode",
  "blake3",
  "chrono",
  "eyre",
@@ -3185,6 +3186,7 @@ dependencies = [
  "iris-mpc-common",
  "iris-mpc-cpu",
  "iris-mpc-store",
+ "iris-mpc-utils",
  "itertools 0.13.0",
  "metrics",
  "rand 0.8.5",
@@ -3197,6 +3199,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

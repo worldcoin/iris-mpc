@@ -124,3 +124,17 @@ impl TestRunEnvironment {
         }
     }
 }
+
+/// Accessors.
+impl TestRunEnvironment {
+    /// Returns the LocalStack base URL appropriate for the execution environment.
+    /// In Docker, `localhost` resolves to the container's own loopback, so we
+    /// use the Docker-network hostname `localstack` instead.
+    #[allow(dead_code)]
+    pub fn public_key_base_url(&self) -> &'static str {
+        match self {
+            TestRunEnvironment::Local => "http://localhost:4566/wf-dev-public-keys",
+            TestRunEnvironment::Docker => "http://localstack:4566/wf-dev-public-keys",
+        }
+    }
+}

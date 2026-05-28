@@ -264,6 +264,7 @@ async fn server_main(config: Config) -> Result<()> {
         modifications: store.last_modifications(max_modification_lookback).await?,
         next_sns_sequence_num: next_sns_seq_number_future.await?,
         common_config: CommonConfig::from(config.clone()),
+        graph_mutation_bytes: vec![],
     };
 
     tracing::info!("Sync state: {:?}", my_state);

@@ -280,7 +280,7 @@ impl<V: VectorStore> GraphPg<V> {
         Ok(())
     }
 
-    pub async fn insert_hawk_graph_mutations(
+    pub async fn upsert_hawk_graph_mutations(
         &self,
         tx: &mut Transaction<'_, Postgres>,
         modification_id: i64,
@@ -290,6 +290,8 @@ impl<V: VectorStore> GraphPg<V> {
             r#"
             INSERT INTO hawk_graph_mutations (modification_id, serialized_mutations)
             VALUES ($1, $2)
+            ON CONFLICT (modification_id) DO UPDATE
+            SET serialized_mutations = EXCLUDED.serialized_mutations
             RETURNING modification_id, serialized_mutations
             "#,
         )
@@ -371,6 +373,37 @@ impl<V: VectorStore> GraphPg<V> {
         .boxed()
     }
 
+    /// Returns every row whose `modification_id >= from_id`, ordered ascending.
+    /// Use this when you know the exact first modification you need (inclusive),
+    /// in contrast to `get_hawk_graph_mutations_after()` which is exclusive.
+    pub async fn get_hawk_graph_mutations_from(
+        &self,
+        from_id: i64,
+    ) -> Result<Vec<GraphMutationRow>> {
+        let rows = sqlx::query_as::<_, GraphMutationRow>(
+            r#"
+            SELECT modification_id, serialized_mutations
+            FROM hawk_graph_mutations
+            WHERE modification_id >= $1
+            ORDER BY modification_id ASC
+            "#,
+        )
+        .bind(from_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| eyre!("Failed to fetch mutations from {from_id}: {e}"))?;
+
+        Ok(rows.into_iter().collect())
+    }
+
+    /// Opens a new database transaction on the underlying pool.
+    pub async fn begin_tx(&self) -> Result<Transaction<'_, Postgres>> {
+        self.pool
+            .begin()
+            .await
+            .map_err(|e| eyre!("Failed to begin graph transaction: {e}"))
+    }
+
     pub async fn delete_hawk_graph_mutations(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -422,7 +455,7 @@ pub struct GraphTx<'a, V> {
 
 impl<'b, V: VectorStore> GraphTx<'b, V> {
     /// Insert a single graph mutation row into hawk_graph_mutations.
-    pub async fn insert_hawk_graph_mutations(
+    pub async fn upsert_hawk_graph_mutations(
         &mut self,
         modification_id: i64,
         serialized_mutations: &[u8],
@@ -431,6 +464,8 @@ impl<'b, V: VectorStore> GraphTx<'b, V> {
             r#"
             INSERT INTO hawk_graph_mutations (modification_id, serialized_mutations)
             VALUES ($1, $2)
+            ON CONFLICT (modification_id) DO UPDATE
+            SET serialized_mutations = EXCLUDED.serialized_mutations
             "#,
         )
         .bind(modification_id)
@@ -595,7 +630,7 @@ mod tests {
 
         let mut graph_tx = store.tx().await?;
         let returned = store
-            .insert_hawk_graph_mutations(&mut graph_tx.tx, modification_id, payload)
+            .upsert_hawk_graph_mutations(&mut graph_tx.tx, modification_id, payload)
             .await?;
         graph_tx.tx.commit().await?;
 
@@ -625,7 +660,7 @@ mod tests {
         for &id in &[10i64, 20, 30] {
             let mut graph_tx = store.tx().await?;
             store
-                .insert_hawk_graph_mutations(&mut graph_tx.tx, id, &id.to_le_bytes())
+                .upsert_hawk_graph_mutations(&mut graph_tx.tx, id, &id.to_le_bytes())
                 .await?;
             graph_tx.tx.commit().await?;
         }
@@ -675,7 +710,7 @@ mod tests {
         // Insert id=5 => max is Some(5)
         let mut graph_tx = store.tx().await?;
         store
-            .insert_hawk_graph_mutations(&mut graph_tx.tx, 5, b"a")
+            .upsert_hawk_graph_mutations(&mut graph_tx.tx, 5, b"a")
             .await?;
         graph_tx.tx.commit().await?;
         assert_eq!(store.get_max_hawk_graph_mutation_id().await?, Some(5));
@@ -683,7 +718,7 @@ mod tests {
         // Insert id=3 (below current max) => max stays Some(5)
         let mut graph_tx = store.tx().await?;
         store
-            .insert_hawk_graph_mutations(&mut graph_tx.tx, 3, b"b")
+            .upsert_hawk_graph_mutations(&mut graph_tx.tx, 3, b"b")
             .await?;
         graph_tx.tx.commit().await?;
         assert_eq!(store.get_max_hawk_graph_mutation_id().await?, Some(5));
@@ -691,7 +726,7 @@ mod tests {
         // Insert id=10 => max becomes Some(10)
         let mut graph_tx = store.tx().await?;
         store
-            .insert_hawk_graph_mutations(&mut graph_tx.tx, 10, b"c")
+            .upsert_hawk_graph_mutations(&mut graph_tx.tx, 10, b"c")
             .await?;
         graph_tx.tx.commit().await?;
         assert_eq!(store.get_max_hawk_graph_mutation_id().await?, Some(10));
@@ -810,7 +845,7 @@ mod tests {
 
         let mut graph_tx = store.tx().await?;
         store
-            .insert_hawk_graph_mutations(&mut graph_tx.tx, 42, &payload)
+            .upsert_hawk_graph_mutations(&mut graph_tx.tx, 42, &payload)
             .await?;
         graph_tx.tx.commit().await?;
 
