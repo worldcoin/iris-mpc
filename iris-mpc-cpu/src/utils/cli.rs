@@ -239,10 +239,7 @@ pub enum Int4VectorsConfig {
     },
 
     /// Load Int4Vectors from an NDJSON file.
-    NdjsonFile {
-        path: PathBuf,
-        limit: Option<usize>,
-    },
+    NdjsonFile { path: PathBuf, limit: Option<usize> },
 }
 
 /// Loads Int4 deep-ID vectors based on `Int4VectorsConfig`.

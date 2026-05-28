@@ -113,13 +113,9 @@ fn init_metrics(metrics_path: &Option<PathBuf>) -> Option<Snapshotter> {
         let recorder = DebuggingRecorder::new();
         let snapshotter = recorder.snapshotter();
 
-        let recorder = TracingContextLayer::only_allow([
-            "__query_id",
-            "__mutation",
-            "__rotation",
-            "__noise",
-        ])
-        .layer(recorder);
+        let recorder =
+            TracingContextLayer::only_allow(["__query_id", "__mutation", "__rotation", "__noise"])
+                .layer(recorder);
         metrics::set_global_recorder(recorder).expect("failed to install recorder");
 
         Some(snapshotter)
@@ -148,8 +144,7 @@ async fn main() -> Result<()> {
             }
         }
         Config::DeepID(deepid_cfg) => {
-            let mut rng =
-                rand::SeedableRng::seed_from_u64(deepid_cfg.analysis.seed.unwrap_or(0));
+            let mut rng = rand::SeedableRng::seed_from_u64(deepid_cfg.analysis.seed.unwrap_or(0));
             run_deep_id(deepid_cfg, &mut rng).await
         }
     }

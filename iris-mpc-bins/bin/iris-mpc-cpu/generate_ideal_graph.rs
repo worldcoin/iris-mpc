@@ -5,11 +5,11 @@ use iris_mpc_cpu::hawkers::ideal_knn_engines::{EngineChoice, EngineChoiceInt4};
 use iris_mpc_cpu::hawkers::plaintext_deep_id_store::{Int4Vector, PlaintextDeepIDStore};
 use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 use iris_mpc_cpu::hnsw::searcher::LayerMode;
+use iris_mpc_cpu::hnsw::GraphMem;
 use iris_mpc_cpu::hnsw::{HnswSearcher, VectorStore};
 use iris_mpc_cpu::utils::serialization::graph::write_graph_current;
 use iris_mpc_cpu::utils::serialization::int4_ndjson::int4_vectors_from_ndjson;
 use iris_mpc_cpu::utils::serialization::types::iris_base64::Base64IrisCode;
-use iris_mpc_cpu::hnsw::GraphMem;
 use rand::seq::IteratorRandom;
 use rand::SeedableRng;
 use serde::Deserialize;
@@ -162,9 +162,7 @@ async fn run_sanity_check_deep_id(
     match searcher.layer_mode {
         LayerMode::Standard { max_graph_layer } => {
             assert!(!graph.entry_points.is_empty() || graph.num_layers() == 0);
-            assert!(
-                graph.num_layers() <= max_graph_layer.map(|val| val + 1).unwrap_or(usize::MAX)
-            );
+            assert!(graph.num_layers() <= max_graph_layer.map(|val| val + 1).unwrap_or(usize::MAX));
         }
         LayerMode::LinearScan { max_graph_layer } => {
             assert!(graph.num_layers() <= max_graph_layer + 1);
@@ -191,10 +189,7 @@ async fn run_sanity_check_deep_id(
 
     let mut store = PlaintextDeepIDStore::new(threshold);
     for (i, v) in vectors.into_iter().enumerate() {
-        store.insert_with_id(
-            IrisVectorId::from_serial_id((i as u32) + 1),
-            Arc::new(v),
-        );
+        store.insert_with_id(IrisVectorId::from_serial_id((i as u32) + 1), Arc::new(v));
     }
 
     let sample_vec = store.storage.get_vector(&sample).cloned().unwrap();
@@ -224,10 +219,7 @@ async fn run_sanity_check_deep_id(
             .iter()
             .filter(|n| {
                 let other = store.storage.get_vector(n).unwrap();
-                matches!(
-                    kth_dot.cmp(&sample_vec.dot(other)),
-                    Ordering::Greater
-                )
+                matches!(kth_dot.cmp(&sample_vec.dot(other)), Ordering::Greater)
             })
             .count();
         assert!(count_closer_outside == 0);
@@ -267,9 +259,7 @@ async fn main() {
             let stream = Deserializer::from_reader(reader)
                 .into_iter::<Base64IrisCode>()
                 .take(n);
-            let irises = stream
-                .map(|e| (&e.unwrap()).into())
-                .collect::<Vec<_>>();
+            let irises = stream.map(|e| (&e.unwrap()).into()).collect::<Vec<_>>();
 
             let graph = GraphMem::ideal_from_irises(
                 irises.clone(),
@@ -283,16 +273,10 @@ async fn main() {
             if config.sanity_check {
                 match echoice {
                     EngineChoice::NaiveFHD | EngineChoice::NaiveMinFHD => {
-                        run_sanity_check_iris::<FhdOps>(
-                            &graph, &searcher, irises, echoice,
-                        )
-                        .await;
+                        run_sanity_check_iris::<FhdOps>(&graph, &searcher, irises, echoice).await;
                     }
                     EngineChoice::NaiveNHD | EngineChoice::NaiveMinNHD => {
-                        run_sanity_check_iris::<NhdOps>(
-                            &graph, &searcher, irises, echoice,
-                        )
-                        .await;
+                        run_sanity_check_iris::<NhdOps>(&graph, &searcher, irises, echoice).await;
                     }
                 }
             }
@@ -355,8 +339,7 @@ ef_constr_search = [320, 320, 320, 320, 320]
 ef_constr_insert = [320, 320, 320, 320, 320]
 ef_search = [320, 320, 320, 320, 320]
 "#;
-        let cfg: IdealGraphConfig =
-            toml::from_str(toml_str).expect("iris config deserializes");
+        let cfg: IdealGraphConfig = toml::from_str(toml_str).expect("iris config deserializes");
         if !matches!(cfg.store, StoreKindConfig::Iris { .. }) {
             panic!("expected Iris variant");
         }
@@ -384,8 +367,7 @@ ef_constr_search = [320, 320, 320, 320, 320]
 ef_constr_insert = [320, 320, 320, 320, 320]
 ef_search = [320, 320, 320, 320, 320]
 "#;
-        let cfg: IdealGraphConfig =
-            toml::from_str(toml_str).expect("deepid config deserializes");
+        let cfg: IdealGraphConfig = toml::from_str(toml_str).expect("deepid config deserializes");
         if !matches!(cfg.store, StoreKindConfig::DeepID { .. }) {
             panic!("expected DeepID variant");
         }

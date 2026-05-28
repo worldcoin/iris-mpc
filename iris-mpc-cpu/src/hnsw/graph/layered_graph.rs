@@ -394,7 +394,10 @@ impl GraphMem<IrisVectorId> {
 
         let mut nonzero_layers_map: BTreeMap<
             usize,
-            Vec<(IrisVectorId, crate::hawkers::plaintext_deep_id_store::Int4Vector)>,
+            Vec<(
+                IrisVectorId,
+                crate::hawkers::plaintext_deep_id_store::Int4Vector,
+            )>,
         > = BTreeMap::new();
         for (vector_id, v) in vectors_with_ids.iter() {
             let layer = searcher.gen_layer_prf(&prf_seed, &vector_id)?;
@@ -407,7 +410,10 @@ impl GraphMem<IrisVectorId> {
         }
 
         let mut nodes_for_nonzero_layers: Vec<
-            Vec<(IrisVectorId, crate::hawkers::plaintext_deep_id_store::Int4Vector)>,
+            Vec<(
+                IrisVectorId,
+                crate::hawkers::plaintext_deep_id_store::Int4Vector,
+            )>,
         > = nonzero_layers_map.into_values().collect();
 
         let entry_points = match searcher.layer_mode {
@@ -887,11 +893,7 @@ mod int4_layer_tests {
             .map(|(i, v)| (IrisVectorId::from_serial_id((i + 1) as u32), v.clone()))
             .collect();
 
-        let layer = Layer::ideal_from_int4_vectors(
-            data,
-            k,
-            EngineChoiceInt4::NaiveInt4Dot,
-        );
+        let layer = Layer::ideal_from_int4_vectors(data, k, EngineChoiceInt4::NaiveInt4Dot);
 
         #[allow(
             clippy::iter_over_hash_type,
@@ -902,14 +904,15 @@ mod int4_layer_tests {
             let me = &vectors[me_idx];
             let mut dists: Vec<(IrisVectorId, i16)> = (0..n)
                 .filter(|j| *j != me_idx)
-                .map(|j| (
-                    IrisVectorId::from_serial_id((j + 1) as u32),
-                    me.dot(&vectors[j]),
-                ))
+                .map(|j| {
+                    (
+                        IrisVectorId::from_serial_id((j + 1) as u32),
+                        me.dot(&vectors[j]),
+                    )
+                })
                 .collect();
             dists.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.serial_id().cmp(&b.0.serial_id())));
-            let expected: Vec<IrisVectorId> =
-                dists.into_iter().take(k).map(|(j, _)| j).collect();
+            let expected: Vec<IrisVectorId> = dists.into_iter().take(k).map(|(j, _)| j).collect();
             assert_eq!(neighbors, &expected, "key {key}");
         }
     }

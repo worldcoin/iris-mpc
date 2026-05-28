@@ -6,6 +6,7 @@ use itertools::Itertools;
 use tokio::task::JoinSet;
 use tracing::info;
 
+use crate::hawkers::plaintext_deep_id_store::{Int4Vector, SharedPlaintextDeepIDStore};
 use crate::{
     execution::hawk_main::insert::{self, InsertPlanV},
     hawkers::{
@@ -14,7 +15,6 @@ use crate::{
     },
     hnsw::{graph::neighborhood::Neighborhood, GraphMem, HnswSearcher, SortedNeighborhood},
 };
-use crate::hawkers::plaintext_deep_id_store::{Int4Vector, SharedPlaintextDeepIDStore};
 
 /// Number of entries to insert before reporting a new info log entry
 const REPORTING_INTERVAL: usize = 1000;
@@ -289,9 +289,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_deep_id_insert_with_batches() -> Result<()> {
-        use crate::hawkers::plaintext_deep_id_store::{
-            Int4Vector, PlaintextDeepIDStore,
-        };
+        use crate::hawkers::plaintext_deep_id_store::{Int4Vector, PlaintextDeepIDStore};
         use crate::hnsw::vector_store::VectorStoreMut;
         use aes_prng::AesRng;
         use rand::SeedableRng;
@@ -320,9 +318,7 @@ mod tests {
         let to_insert_vectors: Vec<(IrisVectorId, Int4Vector)> = (0..to_insert)
             .map(|i| {
                 (
-                    IrisVectorId::from_serial_id(
-                        (i + database_size + 1).try_into().unwrap(),
-                    ),
+                    IrisVectorId::from_serial_id((i + database_size + 1).try_into().unwrap()),
                     Int4Vector::random(&mut rng),
                 )
             })
@@ -349,7 +345,11 @@ mod tests {
             let pairs = results.as_vec_ref();
             assert!(!pairs.is_empty());
             assert_eq!(pairs[0].0, id, "expected top-1 to be self for id {id}");
-            assert!(pairs[0].1 >= 0, "self-dot should be non-negative, got {}", pairs[0].1);
+            assert!(
+                pairs[0].1 >= 0,
+                "self-dot should be non-negative, got {}",
+                pairs[0].1
+            );
         }
 
         Ok(())

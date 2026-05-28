@@ -240,9 +240,7 @@ impl NaiveKNNInt4 {
                         .vectors
                         .iter()
                         .enumerate()
-                        .flat_map(|(j, other)| {
-                            (i != j + 1).then_some((j + 1, current.dot(other)))
-                        })
+                        .flat_map(|(j, other)| (i != j + 1).then_some((j + 1, current.dot(other))))
                         .collect::<Vec<_>>();
 
                     if self.k >= 1 {
@@ -321,8 +319,7 @@ mod int4_engine_tests {
         let k = 3;
         let vectors: Vec<Int4Vector> = (0..n).map(|_| Int4Vector::random(&mut rng)).collect();
 
-        let mut engine =
-            EngineInt4::init(EngineChoiceInt4::NaiveInt4Dot, vectors.clone(), k, 1);
+        let mut engine = EngineInt4::init(EngineChoiceInt4::NaiveInt4Dot, vectors.clone(), k, 1);
         let results = engine.compute_chunk(n);
 
         assert_eq!(results.len(), n);

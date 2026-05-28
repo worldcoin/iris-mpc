@@ -277,8 +277,7 @@ pub async fn run_analysis(
 
         for &noise_level in &config.noise_levels {
             let mut local_rng: StdRng = rand::SeedableRng::seed_from_u64(
-                ((target_id.serial_id() as u64) << 32)
-                    ^ ((noise_level * 1_000_000.0) as u64),
+                ((target_id.serial_id() as u64) << 32) ^ ((noise_level * 1_000_000.0) as u64),
             );
             let query_inner = perturb_nibbles(&target_vec, noise_level, &mut local_rng);
             let query_ref = Arc::new(query_inner);
