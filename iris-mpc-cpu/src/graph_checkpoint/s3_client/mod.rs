@@ -97,7 +97,7 @@ pub async fn upload_graph_checkpoint(
     Ok(checkpoint)
 }
 
-pub async fn download_graph_checkpoint<T: Ref + Display + FromStr + Ord>(
+pub async fn download_graph_checkpoint<T: Ref + Display + FromStr + Ord + 'static>(
     s3_client: &S3Client,
     bucket: &str,
     state: &GraphCheckpointState,
@@ -110,8 +110,11 @@ pub async fn download_graph_checkpoint<T: Ref + Display + FromStr + Ord>(
 
     // todo: deserialize in a way that does not require holding 2 graphs in memory at once.
     // currently binary_graph and graphs make two graphs in RAM at once
-    let mut cursor = Cursor::new(&binary_graph);
-    let graphs: BothEyes<GraphMem<_>> = bincode::deserialize_from(&mut cursor)?;
+    let graphs: BothEyes<GraphMem<_>> = tokio::task::spawn_blocking(move || {
+        let mut cursor = Cursor::new(&binary_graph);
+        bincode::deserialize_from(&mut cursor)
+    })
+    .await??;
     Ok(graphs)
 }
 
