@@ -102,7 +102,7 @@ mod tests {
         let bytes = bincode::serialize(payload)?;
         let mut graph_tx = store.tx().await?;
         store
-            .insert_hawk_graph_mutations(&mut graph_tx.tx, modification_id, &bytes)
+            .upsert_hawk_graph_mutations(&mut graph_tx.tx, modification_id, &bytes)
             .await?;
         graph_tx.tx.commit().await?;
         Ok(())
