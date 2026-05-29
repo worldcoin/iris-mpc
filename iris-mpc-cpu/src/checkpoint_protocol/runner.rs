@@ -19,6 +19,7 @@ use crate::checkpoint_protocol::{
     UploadAndRecord,
 };
 use crate::execution::hawk_main::BothEyes;
+use crate::graph_checkpoint::PruningMode;
 use crate::hnsw::{
     graph::{graph_store::GraphPg, layered_graph::GraphMem},
     VectorStore,
@@ -48,6 +49,8 @@ pub struct SidecarConfig {
     pub checkpoint_window: usize,
     /// Marks the produced row as archival (skipped by pruning).
     pub is_archival: bool,
+    /// Optionally remove old checkoints from S3
+    pub pruning_mode: PruningMode,
 }
 
 /// Daemon loop. Returns `Ok(())` only on graceful shutdown via
@@ -120,6 +123,7 @@ async fn sidecar_cycle<V: VectorStore + Send + Sync>(
         cfg.bucket.clone(),
         cfg.party_id,
         cfg.is_archival,
+        cfg.pruning_mode,
     );
     let hasher = Blake3GraphHasher::new();
 

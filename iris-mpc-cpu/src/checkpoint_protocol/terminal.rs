@@ -8,8 +8,8 @@ use crate::checkpoint_protocol::{
 };
 use crate::execution::hawk_main::{BothEyes, LEFT, RIGHT};
 use crate::graph_checkpoint::{
-    stream_serialize_and_upload_with, BlakeTeeWriter, DEFAULT_STREAMING_PARALLELISM,
-    DEFAULT_STREAMING_PART_SIZE,
+    cleanup_checkpoints, stream_serialize_and_upload_with, BlakeTeeWriter, GraphCheckpointState,
+    PruningMode, DEFAULT_STREAMING_PARALLELISM, DEFAULT_STREAMING_PART_SIZE,
 };
 use crate::hnsw::{
     graph::{graph_store::GraphPg, layered_graph::GraphMem},
@@ -29,6 +29,7 @@ pub struct UploadAndRecord<'a, V: VectorStore> {
     pub bucket: String,
     pub party_id: usize,
     pub is_archival: bool,
+    pub pruning_mode: PruningMode,
 }
 
 impl<'a, V: VectorStore + Send + Sync> UploadAndRecord<'a, V> {
@@ -38,6 +39,7 @@ impl<'a, V: VectorStore + Send + Sync> UploadAndRecord<'a, V> {
         bucket: String,
         party_id: usize,
         is_archival: bool,
+        pruning_mode: PruningMode,
     ) -> Self {
         Self {
             graph_store,
@@ -45,6 +47,7 @@ impl<'a, V: VectorStore + Send + Sync> UploadAndRecord<'a, V> {
             bucket,
             party_id,
             is_archival,
+            pruning_mode,
         }
     }
 }
@@ -126,6 +129,27 @@ impl<V: VectorStore + Send + Sync> TerminalAction for UploadAndRecord<'_, V> {
             .commit()
             .await
             .map_err(|e| CycleError::Transient(format!("commit tx: {e}")))?;
+
+        let graph_checkpoint = GraphCheckpointState {
+            s3_key,
+            last_indexed_iris_id: base.last_indexed_iris_id as _,
+            last_indexed_modification_id: freeze.0,
+            graph_mutation_id: Some(freeze.0),
+            blake3_hash: blake3_hash_hex,
+            graph_version: GraphFormat::Current.version(),
+            is_archival: self.is_archival,
+        };
+        if let Err(e) = cleanup_checkpoints(
+            &self.bucket,
+            self.s3_client,
+            &graph_checkpoint,
+            &self.graph_store,
+            self.pruning_mode,
+        )
+        .await
+        {
+            tracing::warn!("failed to clean up old s3 checkpoints: {e}");
+        }
 
         Ok(())
     }

@@ -15,6 +15,7 @@ use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_cpu::{
     checkpoint_protocol::{sidecar_main, SidecarConfig},
     execution::hawk_main::{build_hawk_network_handle, HawkArgs},
+    graph_checkpoint::PruningMode,
     hnsw::graph::graph_store::GraphPg,
 };
 use tokio::signal::unix::{signal, SignalKind};
@@ -81,6 +82,15 @@ pub struct SidecarArgs {
 
     #[clap(long, default_value = "1")]
     pub request_parallelism: usize,
+
+    /// Pruning mode for old checkpoints after uploading a new checkpoint
+    ///
+    /// Accepted values:
+    ///   - none                 — do not prune any checkpoints
+    ///   - older-non-archival   — prune older non-archival checkpoints (default)
+    ///   - all-older            — prune all older checkpoints
+    #[clap(long("pruning-mode"))]
+    pruning_mode: Option<String>,
 }
 
 impl SidecarArgs {
@@ -122,6 +132,15 @@ async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
 
     let args = SidecarArgs::parse();
+    let pruning_mode = if let Some(mode_str) = args.pruning_mode.as_ref() {
+        mode_str.parse::<PruningMode>().map_err(|e| {
+            eprintln!("Error: --pruning-mode argument invalid: {}", e);
+            e
+        })?
+    } else {
+        PruningMode::OlderNonArchival
+    };
+
     println!(
         "Starting WAL sidecar daemon: party={}, bucket={}",
         args.party_index, args.bucket
@@ -161,6 +180,7 @@ async fn main() -> Result<()> {
         min_mutations_per_cycle: args.min_mutations_per_cycle,
         checkpoint_window: args.checkpoint_window,
         is_archival: args.is_archival,
+        pruning_mode,
     };
 
     match sidecar_main(cfg, &graph_store, &s3_client, &mut networking, shutdown_ct).await {
