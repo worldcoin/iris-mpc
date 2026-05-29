@@ -100,6 +100,9 @@ env:
   - name: SMPC__MIN_2D_JOB_SIZE_MIRROR
     value: "64"
 
+  - name: SMPC__NHD_THRESHOLD_RATIO
+    value: "0.4"
+
   - name: SMPC__POLL_INTERVAL_SECS
     value: "30"
 
