@@ -666,3 +666,129 @@ impl From<GraphMem<IrisVectorId>> for graph_v4::GraphV4 {
         }
     }
 }
+
+/* ----------- Streaming Deserialization (single-copy path) ---------- */
+
+/// Read a pair of [`GraphMem`] structs layer-by-layer into [`GraphMem`]
+/// directly, without ever materialising the full intermediate `GraphVN`
+/// struct alongside the destination graph.
+///
+/// For V4/Current each [`graph_v4::Layer`] (one `HashMap`) is read
+/// entry-by-entry and fed into [`Layer::set_links`] immediately, so peak
+/// transient memory is roughly one layer's worth of link data rather than
+/// one entire graph.  V3 uses the same path — its layer binary layout is
+/// identical to V4 (same field types, no `last_update_seq_no`).
+///
+/// V0/V1/V2/Raw fall back to [`read_graph_pair`]; those are rare migration
+/// paths and the graphs tend to be smaller.
+pub fn read_graph_pair_streaming<R: std::io::Read>(
+    reader: &mut R,
+    format: GraphFormat,
+) -> Result<[GraphMem<IrisVectorId>; 2]> {
+    match format {
+        GraphFormat::Current | GraphFormat::V4 => Ok([
+            read_graph_v4_streaming(reader)?,
+            read_graph_v4_streaming(reader)?,
+        ]),
+        GraphFormat::V3 => Ok([
+            read_graph_v3_streaming(reader)?,
+            read_graph_v3_streaming(reader)?,
+        ]),
+        _ => read_graph_pair(reader, format),
+    }
+}
+
+/// Streaming reader for a single `GraphV4`.
+///
+/// Reads `entry_points`, then deserialises each `Layer` individually via
+/// [`read_hashed_layer_streaming`], then reads `last_update_seq_no`.  Each
+/// layer is converted to [`Layer<IrisVectorId>`] and appended before the
+/// next layer is read, so no two full-graph copies coexist.
+fn read_graph_v4_streaming<R: std::io::Read>(reader: &mut R) -> Result<GraphMem<IrisVectorId>> {
+    let entry_points: Vec<graph_v4::EntryPoint> = bincode::deserialize_from(&mut *reader)
+        .map_err(|e| eyre::eyre!("v4 streaming entry_points: {e}"))?;
+
+    let layer_count: u64 = bincode::deserialize_from(&mut *reader)
+        .map_err(|e| eyre::eyre!("v4 streaming layer_count: {e}"))?;
+    let mut layers = Vec::with_capacity(layer_count as usize);
+    for i in 0..layer_count {
+        layers.push(
+            read_hashed_layer_streaming(reader)
+                .map_err(|e| eyre::eyre!("v4 streaming layer {i}: {e}"))?,
+        );
+    }
+
+    let last_update_seq_no: u64 = bincode::deserialize_from(&mut *reader)
+        .map_err(|e| eyre::eyre!("v4 streaming last_update_seq_no: {e}"))?;
+
+    Ok(GraphMem {
+        entry_points: entry_points.into_iter().map(|e| e.into()).collect(),
+        layers,
+        last_update_seq_no,
+    })
+}
+
+/// Streaming reader for a single `GraphV3`.
+///
+/// V3 differs from V4 only in having `entry_point` (same binary layout) and
+/// no `last_update_seq_no` field.  Layers share the same on-wire layout as
+/// V4 (see [`read_hashed_layer_streaming`]).
+fn read_graph_v3_streaming<R: std::io::Read>(reader: &mut R) -> Result<GraphMem<IrisVectorId>> {
+    // Field name is `entry_point` in GraphV3 vs `entry_points` in GraphV4,
+    // but bincode uses positional encoding so the bytes are identical.
+    let entry_points: Vec<graph_v3::EntryPoint> = bincode::deserialize_from(&mut *reader)
+        .map_err(|e| eyre::eyre!("v3 streaming entry_points: {e}"))?;
+
+    let layer_count: u64 = bincode::deserialize_from(&mut *reader)
+        .map_err(|e| eyre::eyre!("v3 streaming layer_count: {e}"))?;
+    let mut layers = Vec::with_capacity(layer_count as usize);
+    for i in 0..layer_count {
+        layers.push(
+            read_hashed_layer_streaming(reader)
+                .map_err(|e| eyre::eyre!("v3 streaming layer {i}: {e}"))?,
+        );
+    }
+
+    // V3 has no `last_update_seq_no`; default to 0.
+    Ok(GraphMem {
+        entry_points: entry_points.into_iter().map(|e| e.into()).collect(),
+        layers,
+        last_update_seq_no: 0,
+    })
+}
+
+/// Deserialise one layer entry-by-entry into [`Layer<IrisVectorId>`].
+///
+/// Works for both V3 and V4 layers because their on-wire layout is
+/// identical: both store `HashMap<{u32, i16}, Vec<{u32, i16}>>`
+/// (bincode: `u64 count` + N × `(VectorId, EdgeIds)`) followed by a
+/// `u64 set_hash`.  We decode using `graph_v4` types — safe because
+/// `graph_v3::VectorId` and `graph_v4::VectorId` are the same struct.
+///
+/// The serialised `set_hash` is read and discarded; [`Layer::set_links`]
+/// recomputes it incrementally as each edge list is inserted.
+fn read_hashed_layer_streaming<R: std::io::Read>(
+    reader: &mut R,
+) -> Result<Layer<IrisVectorId>> {
+    // HashMap bincode layout: u64 count + count × (key, value)
+    let link_count: u64 = bincode::deserialize_from(&mut *reader)
+        .map_err(|e| eyre::eyre!("link_count: {e}"))?;
+
+    let mut layer = Layer::new();
+    for _ in 0..link_count {
+        let v: graph_v4::VectorId = bincode::deserialize_from(&mut *reader)
+            .map_err(|e| eyre::eyre!("VectorId: {e}"))?;
+        let edges: graph_v4::EdgeIds = bincode::deserialize_from(&mut *reader)
+            .map_err(|e| eyre::eyre!("EdgeIds: {e}"))?;
+        layer.set_links(
+            v.into(),
+            edges.0.into_iter().map(|x: graph_v4::VectorId| x.into()).collect(),
+        );
+    }
+
+    // Discard the stored set_hash; Layer::set_links already recomputed it.
+    let _: u64 = bincode::deserialize_from(&mut *reader)
+        .map_err(|e| eyre::eyre!("set_hash: {e}"))?;
+
+    Ok(layer)
+}
