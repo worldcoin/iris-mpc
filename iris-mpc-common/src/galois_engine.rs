@@ -205,6 +205,25 @@ pub mod degree4 {
             result
         }
 
+        /// Remap new indices to mirrored variant for trimmed shares.
+        ///
+        /// NOTE: Remapping of indices to mirrored indices works unmodified for
+        /// trimmed shares because full resolution `remap_new_to_mirrored_index`
+        /// preserves the `b` component and the trimmed range corresponds to `b == 0`.
+        fn remap_new_to_mirrored_index_trimmed(i: usize) -> usize {
+            GaloisRingIrisCodeShare::remap_new_to_mirrored_index(i)
+        }
+
+        /// Mirror the mask share.
+        pub fn mirrored(&self) -> Self {
+            // mirrored_mask uses flip_imaginary = false, so no imaginary flip needed
+            let mut res = self.clone();
+            for i in 0..MASK_CODE_LENGTH {
+                res.coefs[Self::remap_new_to_mirrored_index_trimmed(i)] = self.coefs[i];
+            }
+            res
+        }
+
         pub fn trick_dot(&self, other: &GaloisRingTrimmedMaskCodeShare) -> u16 {
             trick_dot(&self.coefs, &other.coefs)
         }
@@ -382,7 +401,7 @@ pub mod degree4 {
             iris_code: &[u16; IRIS_CODE_LENGTH],
             rng: &mut R,
         ) -> [GaloisRingIrisCodeShare; 3] {
-            assert!(IRIS_CODE_LENGTH % 4 == 0);
+            assert!(IRIS_CODE_LENGTH.is_multiple_of(4));
             let mut shares = [
                 GaloisRingIrisCodeShare {
                     id: 1,

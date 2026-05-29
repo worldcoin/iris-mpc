@@ -148,17 +148,29 @@ impl<V: VectorStore> SortedNeighborhood<V> {
 
     /// Insert the given unsorted list `vals` of new weighted edges into this
     /// sorted neighborhood using a parallelized quicksort algorithm.
+    ///
+    /// When `truncate_k` is `Some(k)`, the underlying quicksort skips
+    /// recursive subsorts that fall entirely past the truncation index, so
+    /// only the first `k` elements end up in fully sorted order.
     async fn quicksort_insert(
         &mut self,
         store: &mut V,
         vals: &[(V::VectorRef, V::DistanceRef)],
+        truncate_k: Option<usize>,
     ) -> Result<()> {
         let sorted_prefix_size = self.edges.len();
 
         self.edges.extend_from_slice(vals);
         let mut buffer = self.edges.clone();
 
-        apply_quicksort(store, &mut self.edges, &mut buffer, sorted_prefix_size).await
+        apply_quicksort(
+            store,
+            &mut self.edges,
+            &mut buffer,
+            sorted_prefix_size,
+            truncate_k,
+        )
+        .await
     }
 }
 
@@ -202,7 +214,10 @@ impl<V: VectorStore> Neighborhood<V> for SortedNeighborhood<V> {
         // for small batch sizes, as the functionality gracefully degrades to
         // the default individual binary insertion procedure as batch size
         // approaches 1.
-        self.quicksort_insert(store, vals).await?;
+        //
+        // We pass `Some(k)` so the quicksort skips sorting work in the suffix
+        // that the subsequent `truncate(k)` would discard.
+        self.quicksort_insert(store, vals, Some(k)).await?;
         self.edges.truncate(k);
         Ok(())
     }

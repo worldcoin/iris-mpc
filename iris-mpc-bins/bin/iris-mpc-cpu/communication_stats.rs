@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 //! Measures communication cost (bytes and messages) of the hawk_main workflow
 //! on a pre-built HNSW graph.
 //!
@@ -38,7 +39,10 @@ use std::{
     collections::HashMap, error::Error, fmt::Write as _, path::PathBuf, sync::Arc, time::Duration,
 };
 
-use ampc_actor_utils::execution::{player::Identity, session::NetworkSession};
+use ampc_actor_utils::{
+    execution::{player::Identity, session::NetworkSession},
+    network::mpc::handle::control_channel::ControlChannel,
+};
 use async_trait::async_trait;
 use clap::Parser;
 use eyre::Result;
@@ -145,8 +149,8 @@ impl NetworkHandle for CountingNetworkHandle {
         self.inner.make_sessions().await
     }
 
-    async fn sync_peers(&mut self) -> Result<()> {
-        self.inner.sync_peers().await
+    async fn control_channel(&mut self) -> Result<Box<dyn ControlChannel>> {
+        self.inner.control_channel().await
     }
 }
 
@@ -185,7 +189,7 @@ impl NetworkHandle for DummyNetHandle {
     )> {
         unreachable!("DummyNetHandle should never be called")
     }
-    async fn sync_peers(&mut self) -> Result<()> {
+    async fn control_channel(&mut self) -> Result<Box<dyn ControlChannel>> {
         unreachable!("DummyNetHandle should never be called")
     }
 }

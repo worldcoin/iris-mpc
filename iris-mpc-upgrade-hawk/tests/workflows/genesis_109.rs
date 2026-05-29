@@ -5,7 +5,7 @@ use crate::utils::{
     HawkConfigs, TestRun, TestRunContextInfo,
 };
 use eyre::Result;
-use iris_mpc_cpu::genesis::PruningMode;
+use iris_mpc_cpu::graph_checkpoint::PruningMode;
 
 macro_rules! assert_checkpoints {
     ($expected:expr, $configs:expr) => {{

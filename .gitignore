@@ -7,3 +7,5 @@
 
 .DS_Store
 vendor/
+
+iris-mpc-db-exporter/test/test_output

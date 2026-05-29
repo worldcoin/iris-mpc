@@ -19,6 +19,10 @@ use iris_mpc_common::helpers::aws::{
     SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
 };
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
+#[cfg(feature = "explicit-sns-batching")]
+use iris_mpc_common::helpers::smpc_request::{
+    CompactBatchRequest, CompressedBatchPayload, BATCH_MESSAGE_TYPE,
+};
 use iris_mpc_common::helpers::smpc_request::{
     IdentityDeletionRequest, IdentityMatchCheckRequest, IdentityUpdateRequest, ReAuthRequest,
     SQSMessage, UniquenessRequest, IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE,
@@ -422,21 +426,59 @@ impl<'a> BatchProcessor<'a> {
             .string_value()
             .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?;
 
-        self.delete_message(&sqs_message).await?;
+        // SQS delete-after-persist (POP-3781). The message is only
+        // deleted once processing has returned Ok — i.e. the modification
+        // row is durably persisted. If the process crashes (or returns
+        // Err) between receiving and persisting, `?` propagates without
+        // acking, SQS visibility timeout expires, and the message is
+        // redelivered. The previous delete-before-process ordering lost
+        // messages on crashes in that window.
+        //
+        // `DeleteMessage` itself uses strict `?` propagation. If the ack
+        // fails after persistence has succeeded, the Err tears down
+        // receive_batch_stream (batch.rs:116 — any Err from receive_batch
+        // breaks the spawn loop), which causes the node to restart. On
+        // restart, modifications_sync GCs any orphan IN_PROGRESS rows
+        // (no peer has them COMPLETED), and the redelivered SQS message
+        // is re-ingested cleanly. Without strict propagation, the orphan
+        // IN_PROGRESS row would persist (modifications_sync only runs at
+        // startup) and visibility-timeout redelivery would produce a
+        // second COMPLETED row plus a duplicate SNS result. Strict `?`
+        // is the trigger for the cleanup path, not just error escalation.
+        #[cfg(feature = "explicit-sns-batching")]
+        if request_type == BATCH_MESSAGE_TYPE {
+            self.process_batch_message(&message, batch_metadata).await?;
+            self.delete_message(&sqs_message).await?;
+            self.msg_counter += 1;
+            return Ok(());
+        }
 
-        let res = match request_type {
+        self.process_message_(&message, request_type, batch_metadata)
+            .await?;
+        self.delete_message(&sqs_message).await?;
+        self.msg_counter += 1;
+        Ok(())
+    }
+
+    async fn process_message_(
+        &mut self,
+        message: &SQSMessage,
+        request_type: &str,
+        batch_metadata: BatchMetadata,
+    ) -> Result<(), ReceiveRequestError> {
+        match request_type {
             IDENTITY_DELETION_MESSAGE_TYPE => {
-                self.process_identity_deletion(&message, batch_metadata)
+                self.process_identity_deletion(message, batch_metadata)
                     .await
             }
             UNIQUENESS_MESSAGE_TYPE => {
-                self.process_uniqueness_request(&message, batch_metadata)
+                self.process_uniqueness_request(message, batch_metadata)
                     .await
             }
-            REAUTH_MESSAGE_TYPE => self.process_reauth_request(&message, batch_metadata).await,
+            REAUTH_MESSAGE_TYPE => self.process_reauth_request(message, batch_metadata).await,
             RECOVERY_CHECK_MESSAGE_TYPE => {
                 self.process_identity_match_check_request(
-                    &message,
+                    message,
                     batch_metadata,
                     RECOVERY_CHECK_MESSAGE_TYPE,
                     self.config.enable_recovery,
@@ -445,7 +487,7 @@ impl<'a> BatchProcessor<'a> {
             }
             RESET_CHECK_MESSAGE_TYPE => {
                 self.process_identity_match_check_request(
-                    &message,
+                    message,
                     batch_metadata,
                     RESET_CHECK_MESSAGE_TYPE,
                     self.config.enable_reset,
@@ -454,7 +496,7 @@ impl<'a> BatchProcessor<'a> {
             }
             RECOVERY_UPDATE_MESSAGE_TYPE => {
                 self.process_identity_update_request(
-                    &message,
+                    message,
                     batch_metadata,
                     RECOVERY_UPDATE_MESSAGE_TYPE,
                     self.config.enable_recovery,
@@ -463,7 +505,7 @@ impl<'a> BatchProcessor<'a> {
             }
             RESET_UPDATE_MESSAGE_TYPE => {
                 self.process_identity_update_request(
-                    &message,
+                    message,
                     batch_metadata,
                     RESET_UPDATE_MESSAGE_TYPE,
                     self.config.enable_reset,
@@ -474,10 +516,63 @@ impl<'a> BatchProcessor<'a> {
                 tracing::error!("Error: {}", ReceiveRequestError::InvalidMessageType);
                 Ok(())
             }
-        };
+        }
+    }
 
-        self.msg_counter += 1;
-        res
+    #[cfg(feature = "explicit-sns-batching")]
+    async fn process_batch_message(
+        &mut self,
+        message: &SQSMessage,
+        batch_metadata: BatchMetadata,
+    ) -> Result<(), ReceiveRequestError> {
+        let sns_message_id = message.message_id.clone();
+
+        // Parse the compressed payload wrapper
+        let payload: CompressedBatchPayload = serde_json::from_str(&message.message)
+            .map_err(|e| ReceiveRequestError::json_parse_error("Compressed batch payload", e))?;
+
+        // Decompress and parse the batch
+        let batch = CompactBatchRequest::decompress(&payload.data)
+            .map_err(|e| ReceiveRequestError::BatchDecompressionError(e.to_string()))?;
+
+        let _ = message; // don't accidentally use it in the below loop
+
+        let total_messages = batch.items.len();
+        let mut errors: Vec<(String, ReceiveRequestError)> = Vec::new();
+
+        for (idx, item) in batch.items.into_iter().enumerate() {
+            // combine with the SQS message id to ensure unique ids across service client restarts
+            let msg_id = format!("{}:{}", &message.message_id, idx);
+            let request_type = item.message_type();
+
+            // Convert to SQSMessage for compatibility with existing process_message_
+            let msg = match item.into_sqs_message(msg_id.clone()) {
+                Ok(m) => m,
+                Err(e) => {
+                    errors.push((
+                        msg_id,
+                        ReceiveRequestError::json_parse_error("RequestPayload", e),
+                    ));
+                    continue;
+                }
+            };
+
+            if let Err(e) = self
+                .process_message_(&msg, request_type, batch_metadata.clone())
+                .await
+            {
+                errors.push((msg_id, e));
+            }
+        }
+
+        tracing::info!(
+            "Processed batch {}: {}/{} messages successful",
+            sns_message_id,
+            total_messages - errors.len(),
+            total_messages
+        );
+
+        Ok(())
     }
 
     async fn process_identity_deletion(
@@ -1108,10 +1203,16 @@ impl<'a> BatchProcessor<'a> {
         &self,
         sqs_message: &aws_sdk_sqs::types::Message,
     ) -> Result<(), ReceiveRequestError> {
+        let receipt_handle = sqs_message.receipt_handle.as_deref().ok_or_else(|| {
+            ReceiveRequestError::FailedToMarkRequestAsDeleted(eyre::eyre!(
+                "SQS message missing receipt handle: {:?}",
+                sqs_message.message_id
+            ))
+        })?;
         self.client
             .delete_message()
             .queue_url(&self.config.requests_queue_url)
-            .receipt_handle(sqs_message.receipt_handle.as_ref().unwrap())
+            .receipt_handle(receipt_handle)
             .send()
             .await
             .map_err(ReceiveRequestError::from)?;

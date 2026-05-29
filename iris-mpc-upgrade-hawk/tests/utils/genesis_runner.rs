@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use eyre::Result;
 use iris_mpc_common::config::Config;
-use iris_mpc_cpu::genesis::{
-    get_iris_deletions, plaintext::GenesisArgs, BatchSizeConfig, PruningMode,
+use iris_mpc_cpu::{
+    genesis::{get_iris_deletions, plaintext::GenesisArgs, BatchSizeConfig},
+    graph_checkpoint::PruningMode,
 };
 use itertools::izip;
 use rand::{thread_rng, Rng};

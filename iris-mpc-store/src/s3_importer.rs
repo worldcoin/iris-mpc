@@ -1,12 +1,14 @@
+use ampc_server_utils::ShutdownHandler;
 use async_trait::async_trait;
 use aws_config::{retry::RetryConfig, timeout::TimeoutConfig};
 use aws_sdk_s3::config::StalledStreamProtectionConfig;
 use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
 use aws_sdk_s3::{primitives::ByteStream, Client};
 use eyre::{bail, eyre, Result};
+use futures::{stream, StreamExt};
 use iris_mpc_common::{vector_id::VectorId, IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
-use std::{collections::VecDeque, mem, sync::Arc, time::Duration};
-use tokio::{io::AsyncReadExt, sync::mpsc::Sender, task};
+use std::{mem, sync::Arc, time::Duration};
+use tokio::{io::AsyncReadExt, sync::mpsc::Sender};
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
     + MASK_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -277,6 +279,7 @@ pub async fn fetch_and_parse_chunks(
     tx: Sender<S3StoredIris>,
     max_retries: usize,
     initial_backoff_ms: u64,
+    shutdown_handler: Arc<ShutdownHandler>,
 ) -> Result<()> {
     let effective_last_serial_id = max_serial_id_to_load
         .map(|max_serial_id| {
@@ -303,10 +306,9 @@ pub async fn fetch_and_parse_chunks(
     } else {
         last_snapshot_details.chunk_size as usize
     };
-    let mut handles: VecDeque<task::JoinHandle<Result<(), eyre::Error>>> =
-        VecDeque::with_capacity(concurrency);
 
-    for chunk in (1..=effective_last_serial_id).step_by(range_size) {
+    let chunk_iterator = (1_i64..=effective_last_serial_id).step_by(range_size);
+    let stream = stream::iter(chunk_iterator).map(|chunk| {
         let chunk_id =
             (chunk / last_snapshot_details.chunk_size) * last_snapshot_details.chunk_size + 1;
         let prefix_name = prefix_name.clone();
@@ -314,71 +316,75 @@ pub async fn fetch_and_parse_chunks(
         let remaining_items = (effective_last_serial_id - chunk + 1) as usize;
         let requested_range_size = remaining_items.min(range_size);
 
-        // Wait if we've hit the concurrency limit
-        if handles.len() >= concurrency {
-            let handle = handles.pop_front().expect("No s3 import handles to pop");
-            handle.await??;
-        }
+        let store = Arc::clone(&store);
+        let tx = tx.clone();
+        let shutdown = Arc::clone(&shutdown_handler);
+        let key = format!("{}/{}.bin", prefix_name, chunk_id);
 
-        handles.push_back(task::spawn({
-            let store = Arc::clone(&store);
-            let tx = tx.clone();
-            async move {
-                let mut attempt = 0;
-                let mut backoff_ms = initial_backoff_ms;
-                let key = format!("{}/{}.bin", prefix_name, chunk_id);
-
-                // Retry reading the range with exponential backoff
-                loop {
-                    attempt += 1;
-                    match read_range_in_chunk(
-                        Arc::clone(&store),
-                        &key,
-                        offset_within_chunk,
-                        requested_range_size,
-                        tx.clone(),
-                    )
-                    .await
-                    {
-                        Ok(_) => {
-                            return Ok(());
-                        }
-                        Err(e) => {
-                            // If we've tried all attempts, bail
-                            if attempt >= max_retries {
-                                return Err(eyre::eyre!(
-                                    "Failed to read {} after {} retries: {:?}",
-                                    key,
-                                    attempt,
-                                    e
-                                ));
-                            }
-
-                            tracing::warn!(
-                                "Error reading {} (attempt {} of {}): {:?}; retrying in {} ms",
-                                key,
-                                attempt,
-                                max_retries,
-                                e,
-                                backoff_ms
-                            );
-
-                            tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                            backoff_ms *= 2; // exponential backoff
-                        }
-                    }
+        async move {
+            tokio::spawn(async move {
+                tokio::select! {
+                    res = fetch_single_chunk(store, key, offset_within_chunk, requested_range_size, tx, max_retries, initial_backoff_ms) => res,
+                    _ = shutdown.wait_for_shutdown() => Err(eyre::eyre!("Shutdown requested")),
                 }
-            }
-        }));
+            })
+            .await
+            .map_err(|e| eyre::eyre!("Task join error: {e}"))?
+        }
+    });
+
+    let mut results = stream.buffer_unordered(concurrency);
+    while let Some(result) = results.next().await {
+        result?;
     }
 
-    tracing::info!("All s3 import tasks are spawned. Waiting for them to finish");
-    // Wait for remaining handles
-    for handle in handles {
-        handle.await??;
-    }
     tracing::info!("All s3 import tasks are finished.");
     Ok(())
+}
+
+async fn fetch_single_chunk(
+    store: Arc<impl ObjectStore>,
+    key: String,
+    offset: usize,
+    size: usize,
+    tx: Sender<S3StoredIris>,
+    max_retries: usize,
+    initial_backoff_ms: u64,
+) -> Result<()> {
+    let mut attempt = 0;
+    let mut backoff_ms = initial_backoff_ms;
+
+    loop {
+        attempt += 1;
+        match read_range_in_chunk(Arc::clone(&store), &key, offset, size, tx.clone()).await {
+            Ok(_) => {
+                return Ok(());
+            }
+            Err(e) => {
+                // If we've tried all attempts, bail
+                if attempt >= max_retries {
+                    return Err(eyre::eyre!(
+                        "Failed to read {} after {} retries: {:?}",
+                        key,
+                        attempt,
+                        e
+                    ));
+                }
+
+                tracing::warn!(
+                    "Error reading {} (attempt {} of {}): {:?}; retrying in {} ms",
+                    key,
+                    attempt,
+                    max_retries,
+                    e,
+                    backoff_ms
+                );
+
+                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                backoff_ms *= 2; // exponential backoff
+            }
+        }
+    }
 }
 
 // Read [offset_within_chunk, offset_within_chunk + range_size) range from the
@@ -519,6 +525,24 @@ mod tests {
         }
     }
 
+    /// A store whose `get_object` hangs indefinitely, simulating a stalled S3 read.
+    #[derive(Clone, Default)]
+    pub struct HangingStore;
+
+    #[async_trait]
+    impl ObjectStore for HangingStore {
+        async fn get_object(&self, _key: &str, _range: (usize, usize)) -> Result<ByteStream> {
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+            Err(eyre::eyre!(
+                "HangingStore: should have been cancelled before this"
+            ))
+        }
+
+        async fn list_objects(&self, _prefix: &str) -> Result<Vec<String>> {
+            Ok(vec![])
+        }
+    }
+
     fn random_bytes(len: usize) -> Vec<u8> {
         let mut rng = rand::thread_rng();
         let mut v = vec![0u8; len];
@@ -534,6 +558,15 @@ mod tests {
             left_mask: random_bytes(MASK_CODE_LENGTH * mem::size_of::<u16>()),
             right_code: random_bytes(IRIS_CODE_LENGTH * mem::size_of::<u16>()),
             right_mask: random_bytes(MASK_CODE_LENGTH * mem::size_of::<u16>()),
+        }
+    }
+
+    /// Helper: a LastSnapshotDetails covering `n` entries in chunks of `chunk_size`.
+    fn snapshot(n: usize, chunk_size: usize) -> LastSnapshotDetails {
+        LastSnapshotDetails {
+            timestamp: 0,
+            last_serial_id: n as i64,
+            chunk_size: chunk_size as i64,
         }
     }
 
@@ -584,6 +617,7 @@ mod tests {
             tx,
             1,
             0,
+            Arc::new(ShutdownHandler::new(1)),
         )
         .await;
         let mut count = 0;
@@ -629,6 +663,7 @@ mod tests {
             tx,
             1,
             0,
+            Arc::new(ShutdownHandler::new(1)),
         )
         .await;
 
@@ -686,6 +721,7 @@ mod tests {
             tx,
             5,
             100,
+            Arc::new(ShutdownHandler::new(1)),
         )
         .await;
 
@@ -707,5 +743,82 @@ mod tests {
         }
         assert_eq!(count, MOCK_ENTRIES);
         assert!(ids.is_empty(), "All entries should have been received");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_fetch_and_parse_chunks_cancels_on_shutdown_during_read() {
+        let store = Arc::new(HangingStore);
+        let (tx, _rx) = mpsc::channel::<S3StoredIris>(1024);
+        let shutdown = Arc::new(ShutdownHandler::new(1));
+
+        // The HangingStore will never return, ensuring that shutdown triggers while a read is in progress.
+        let shutdown_clone = shutdown.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            shutdown_clone.trigger_manual_shutdown();
+        });
+
+        let result = tokio::time::timeout(
+            Duration::from_millis(500),
+            fetch_and_parse_chunks(
+                store,
+                1,
+                "out".to_string(),
+                snapshot(10, 10),
+                None,
+                tx,
+                3,
+                10_000, // 10s backoff — should never be reached
+                shutdown,
+            ),
+        )
+        .await
+        .expect("cancellation should complete within 500ms of virtual time");
+
+        assert!(result.is_err(), "Expected Err on shutdown during read");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn test_fetch_and_parse_chunks_cancels_on_shutdown_during_backoff() {
+        // Build a store whose first read always fails so the task enters a long backoff sleep.
+        let mut mock_store = MockStore::new();
+        mock_store.add_test_data("out/1.bin", (1..=10).map(dummy_entry).collect());
+        // i8::MAX failures ensures the task never succeeds within our retry budget.
+        let store = Arc::new(IntentionalFailureStore::new(mock_store, i8::MAX));
+
+        let (tx, _rx) = mpsc::channel::<S3StoredIris>(1024);
+        let shutdown = Arc::new(ShutdownHandler::new(1));
+
+        // IntentionalFailureStore returns Err immediately (no timer, no sleep), so by the
+        // time any Tokio timer fires the code is already inside the backoff sleep.
+        // The 50ms shutdown fires well before the 10s backoff expires.
+        let shutdown_clone = shutdown.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            shutdown_clone.trigger_manual_shutdown();
+        });
+
+        let result = tokio::time::timeout(
+            Duration::from_millis(500),
+            fetch_and_parse_chunks(
+                store,
+                1,
+                "out".to_string(),
+                snapshot(10, 10),
+                None,
+                tx,
+                20,     // plenty of retries — shutdown should interrupt first
+                10_000, // 10s initial backoff
+                shutdown,
+            ),
+        )
+        .await
+        .expect("cancellation should complete within 500ms of virtual time");
+
+        let err = result.expect_err("result should be err");
+        assert!(
+            format!("{err:#}").contains("Shutdown"),
+            "Expected Err on shutdown during backoff"
+        );
     }
 }

@@ -146,6 +146,7 @@ impl Step1 {
     fn missing_vector_ids(&self, side: usize) -> VecEdges<VectorId> {
         let other_side = 1 - side;
         let anti_join = &self.anti_join[other_side];
+        // Always add reauth target so is_match is computed even if the search didn't hit it.
         let reauth_id = self.reauth_id().map(|(id, _)| id);
 
         chain!(anti_join, &self.luc_ids, &reauth_id)
@@ -244,6 +245,13 @@ impl Decision {
     }
 }
 
+/// Wide filter: any match in any orientation, including intra-batch peers.
+pub const DECISION_FILTER: Filter = Filter {
+    eyes: OnlyOrBoth::Both,
+    orient: OnlyOrBoth::Both,
+    intra_batch: true,
+};
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BatchStep3(VecRequests<Step3>);
 
@@ -262,11 +270,7 @@ impl BatchStep3 {
         );
         use Decision::*;
 
-        let filter = Filter {
-            eyes: Both,
-            orient: Both,
-            intra_batch: true,
-        };
+        let filter = DECISION_FILTER;
 
         let mut decisions = Vec::<Decision>::with_capacity(self.0.len());
 
@@ -505,13 +509,13 @@ mod tests {
     use ampc_secret_sharing::shares::DistanceShare;
     use ampc_secret_sharing::Share;
 
+    use crate::execution::hawk_main::iris_worker::QueryId;
     use crate::execution::hawk_main::{
         ClassifiedMatches, HawkResult, InsertPlanV, SaturableMatches, VecRotations,
         HAWK_BASE_ROTATIONS_MASK,
     };
     use crate::hawkers::aby3::aby3_store::Aby3Query;
     use crate::hnsw::searcher::UpdateEntryPoint;
-    use crate::protocol::shared_iris::GaloisRingSharedIris;
 
     use super::VectorId;
     use super::*;
@@ -832,7 +836,7 @@ mod tests {
                     },
                 },
                 plan: InsertPlanV {
-                    query: Aby3Query::new_from_raw(GaloisRingSharedIris::dummy_for_party(0)),
+                    query: Aby3Query::new(QueryId::new()),
                     links: links_unstructured,
                     update_ep: UpdateEntryPoint::False,
                 },
