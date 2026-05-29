@@ -28,6 +28,10 @@ use iris_mpc_cpu::{
     utils::serialization::{
         graph::GraphFormat,
         types::graph_v3::{EdgeIds, EntryPoint, GraphV3, Layer as V3Layer, VectorId as V3Vid},
+        types::graph_v4::{
+            EdgeIds as V4EdgeIds, EntryPoint as V4EntryPoint, GraphV4, Layer as V4Layer,
+            VectorId as V4Vid,
+        },
     },
 };
 
@@ -230,14 +234,17 @@ fn make_v3_pair() -> [GraphV3; 2] {
     let make_graph = |base: u32| {
         let vid = |n: u32| V3Vid { id: n, version: 1 };
         GraphV3 {
-            entry_point: vec![EntryPoint { point: vid(base), layer: 1 }],
+            entry_point: vec![EntryPoint {
+                point: vid(base),
+                layer: 1,
+            }],
             layers: vec![
                 // Layer 0 — fully connected triangle
                 V3Layer {
                     links: HashMap::from([
-                        (vid(base),     EdgeIds(vec![vid(base + 1), vid(base + 2)])),
-                        (vid(base + 1), EdgeIds(vec![vid(base),     vid(base + 2)])),
-                        (vid(base + 2), EdgeIds(vec![vid(base),     vid(base + 1)])),
+                        (vid(base), EdgeIds(vec![vid(base + 1), vid(base + 2)])),
+                        (vid(base + 1), EdgeIds(vec![vid(base), vid(base + 2)])),
+                        (vid(base + 2), EdgeIds(vec![vid(base), vid(base + 1)])),
                     ]),
                     set_hash: 0xdead_beef_u64, // discarded on read
                 },
@@ -261,7 +268,7 @@ fn make_v3_pair() -> [GraphV3; 2] {
 ///   the standard `GraphV3 → GraphMem` path.
 /// - `last_update_seq_no` is 0 for both graphs (V3 has no seq_no field).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn v3_graph_pair_streams_to_graphmem_seq_no_zero() -> Result<()> {
+async fn v3_graph_pair_streams_to_graphmem() -> Result<()> {
     let Some(endpoint) = s3_test_endpoint() else {
         eprintln!("S3_TEST_ENDPOINT not set; skipping");
         return Ok(());
@@ -294,11 +301,21 @@ async fn v3_graph_pair_streams_to_graphmem_seq_no_zero() -> Result<()> {
         return Err(e);
     }
 
+    // Compute the expected BLAKE3 hash from the raw serialized bytes — the
+    // same bytes the upload wrote and the download read.
+    let expected_hash = {
+        let bytes = bincode::serialize(&pair).map_err(|e| eyre!("bincode: {e}"))?;
+        *blake3::hash(&bytes).as_bytes()
+    };
+
     // Stream-download V3 bytes → `[GraphMem<IrisVectorId>; 2]`.
     let download =
         stream_download_and_deserialize_graph_pair(&client, &bucket, key, GraphFormat::V3).await;
     cleanup_bucket(&client, &bucket).await;
-    let (graphs, _hash) = download?;
+    let (graphs, hash) = download?;
+
+    // Hash must equal BLAKE3 of the on-wire bytes.
+    assert_eq!(hash, expected_hash, "BLAKE3 hash mismatch");
 
     // Reference: standard `.into()` conversion on the original in-memory pair.
     let expected: [GraphMem<IrisVectorId>; 2] = pair.map(|g| g.into());
@@ -316,6 +333,120 @@ async fn v3_graph_pair_streams_to_graphmem_seq_no_zero() -> Result<()> {
         assert_eq!(
             graphs[i].last_update_seq_no, 0,
             "graph[{i}] last_update_seq_no must be 0 for V3"
+        );
+    }
+
+    Ok(())
+}
+
+/// Build a deterministic, non-trivial `[GraphV4; 2]`.
+///
+/// Mirror of `make_v3_pair` but for V4: same topology, `last_update_seq_no`
+/// set to a non-zero sentinel so the test can verify it survives the round-trip.
+fn make_v4_pair() -> [GraphV4; 2] {
+    let make_graph = |base: u32, seq_no: u64| {
+        let vid = |n: u32| V4Vid { id: n, version: 1 };
+        GraphV4 {
+            entry_points: vec![V4EntryPoint {
+                point: vid(base),
+                layer: 1,
+            }],
+            layers: vec![
+                // Layer 0 — fully connected triangle
+                V4Layer {
+                    links: HashMap::from([
+                        (vid(base), V4EdgeIds(vec![vid(base + 1), vid(base + 2)])),
+                        (vid(base + 1), V4EdgeIds(vec![vid(base), vid(base + 2)])),
+                        (vid(base + 2), V4EdgeIds(vec![vid(base), vid(base + 1)])),
+                    ]),
+                    set_hash: 0xdead_beef_u64, // discarded on read
+                },
+                // Layer 1 — single edge
+                V4Layer {
+                    links: HashMap::from([(vid(base), V4EdgeIds(vec![vid(base + 1)]))]),
+                    set_hash: 0xcafe_babe_u64, // discarded on read
+                },
+            ],
+            last_update_seq_no: seq_no,
+        }
+    };
+    [make_graph(100, 42), make_graph(200, 99)]
+}
+
+/// Upload a `[GraphV4; 2]` to localstack S3, stream-download it via
+/// `stream_download_and_deserialize_graph_pair(…, GraphFormat::V4)`, and
+/// assert the result matches the reference `.into()` conversion.
+///
+/// Specifically verifies:
+/// - `entry_points` and `layers` (including recomputed `set_hash`) match
+///   the standard `GraphV4 → GraphMem` path.
+/// - `last_update_seq_no` is preserved (V4 carries it; non-zero sentinel used).
+/// - The returned BLAKE3 hash equals `blake3::hash(bincode_bytes)`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn v4_graph_pair_streams_to_graphmem_seq_no_preserved() -> Result<()> {
+    let Some(endpoint) = s3_test_endpoint() else {
+        eprintln!("S3_TEST_ENDPOINT not set; skipping");
+        return Ok(());
+    };
+
+    let client = make_test_client(&endpoint);
+    let bucket = format!("streaming-v4-{}", uuid::Uuid::new_v4());
+    let key = "v4-pair.bin";
+
+    create_bucket(&client, &bucket).await?;
+
+    let pair = make_v4_pair();
+
+    // Compute the expected BLAKE3 hash before moving `pair` into the upload.
+    let expected_hash = {
+        let bytes = bincode::serialize(&pair).map_err(|e| eyre!("bincode: {e}"))?;
+        *blake3::hash(&bytes).as_bytes()
+    };
+
+    // Upload as `[GraphV4; 2]` bincode.
+    let pair_for_upload = pair.clone();
+    let upload = stream_serialize_and_upload_with(
+        &client,
+        &bucket,
+        key,
+        move |w| {
+            bincode::serialize_into(w, &pair_for_upload)
+                .map_err(|e| eyre!("bincode serialize: {e}"))
+        },
+        5 * 1024 * 1024,
+        4,
+    )
+    .await;
+    if let Err(e) = upload {
+        cleanup_bucket(&client, &bucket).await;
+        return Err(e);
+    }
+
+    // Stream-download V4 bytes → `[GraphMem<IrisVectorId>; 2]`.
+    let download =
+        stream_download_and_deserialize_graph_pair(&client, &bucket, key, GraphFormat::V4).await;
+    cleanup_bucket(&client, &bucket).await;
+    let (graphs, hash) = download?;
+
+    // Hash must equal BLAKE3 of the on-wire bytes.
+    assert_eq!(hash, expected_hash, "BLAKE3 hash mismatch");
+
+    // Reference: standard `.into()` conversion on the original in-memory pair.
+    let expected: [GraphMem<IrisVectorId>; 2] = pair.map(|g| g.into());
+
+    for i in 0..2 {
+        assert_eq!(
+            graphs[i].entry_points, expected[i].entry_points,
+            "graph[{i}] entry_points mismatch"
+        );
+        assert_eq!(
+            graphs[i].layers, expected[i].layers,
+            "graph[{i}] layers mismatch (links or set_hash diverged)"
+        );
+        // V4 carries last_update_seq_no; it must survive the round-trip.
+        assert_eq!(
+            graphs[i].last_update_seq_no, expected[i].last_update_seq_no,
+            "graph[{i}] last_update_seq_no mismatch"
         );
     }
 
