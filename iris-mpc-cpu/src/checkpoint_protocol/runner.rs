@@ -49,7 +49,7 @@ pub struct SidecarConfig {
     pub checkpoint_window: usize,
     /// Marks the produced row as archival (skipped by pruning).
     pub is_archival: bool,
-    /// Optionally remove old checkoints from S3
+    /// Optionally remove old checkpoints from S3
     pub pruning_mode: PruningMode,
 }
 

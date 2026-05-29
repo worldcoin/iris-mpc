@@ -712,9 +712,11 @@ fn read_graph_v4_streaming<R: std::io::Read + ?Sized>(
     let entry_points: Vec<graph_v4::EntryPoint> = bincode::deserialize_from(&mut *reader)
         .map_err(|e| eyre::eyre!("v4 streaming entry_points: {e}"))?;
 
-    let layer_count: u64 = bincode::deserialize_from(&mut *reader)
+    let layer_count_u64: u64 = bincode::deserialize_from(&mut *reader)
         .map_err(|e| eyre::eyre!("v4 streaming layer_count: {e}"))?;
-    let mut layers = Vec::with_capacity(layer_count as usize);
+    let layer_count = usize::try_from(layer_count_u64)
+        .map_err(|_| eyre::eyre!("v4 streaming layer_count overflows usize: {layer_count_u64}"))?;
+    let mut layers = Vec::with_capacity(layer_count);
     for i in 0..layer_count {
         layers.push(
             read_hashed_layer_streaming(reader)
@@ -745,8 +747,10 @@ fn read_graph_v3_streaming<R: std::io::Read + ?Sized>(
     let entry_points: Vec<graph_v3::EntryPoint> = bincode::deserialize_from(&mut *reader)
         .map_err(|e| eyre::eyre!("v3 streaming entry_points: {e}"))?;
 
-    let layer_count: u64 = bincode::deserialize_from(&mut *reader)
+    let layer_count_u64: u64 = bincode::deserialize_from(&mut *reader)
         .map_err(|e| eyre::eyre!("v3 streaming layer_count: {e}"))?;
+    let layer_count = usize::try_from(layer_count_u64)
+        .map_err(|_| eyre::eyre!("v3 streaming layer_count overflows usize: {layer_count_u64}"))?;
     let mut layers = Vec::with_capacity(layer_count as usize);
     for i in 0..layer_count {
         layers.push(

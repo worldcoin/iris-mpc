@@ -177,6 +177,10 @@ pub async fn stream_download_and_deserialize_graph_pair_with(
         return Err(eyre!("range_size must be > 0"));
     }
 
+    if pipe_capacity == 0 {
+        return Err(eyre!("pipe_capacity must be > 0"));
+    }
+
     let total_size = head_object_size_with_retry(s3_client, bucket, key).await?;
     let stream = Box::pin(range_stream(
         s3_client.clone(),
