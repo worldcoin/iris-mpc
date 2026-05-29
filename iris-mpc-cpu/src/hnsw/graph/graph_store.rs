@@ -342,6 +342,37 @@ impl<V: VectorStore> GraphPg<V> {
         Ok(rows.into_iter().collect())
     }
 
+    /// Streams hawk_graph_mutations rows with `lo_exclusive < modification_id <= hi_inclusive`
+    /// in ascending order. Yields one row at a time so callers can apply mutations
+    /// without buffering the full range — important for WAL replay over long gaps.
+    ///
+    /// **Snapshot caveat**: rows are streamed from the pool's connection,
+    /// not from a `REPEATABLE READ` transaction. Replay determinism relies
+    /// on inserts into `hawk_graph_mutations` being strictly monotone in
+    /// `modification_id` and committed before any future row at a higher
+    /// id becomes visible (true today via the write path). If that ever
+    /// changes — back-fills, gap-filling inserts, late commits — wrap this
+    /// call in a transaction with `SET TRANSACTION ISOLATION LEVEL REPEATABLE READ`.
+    pub fn stream_hawk_graph_mutations_in_range(
+        &self,
+        lo_exclusive: i64,
+        hi_inclusive: i64,
+    ) -> futures::stream::BoxStream<'_, Result<GraphMutationRow, sqlx::Error>> {
+        use futures::StreamExt;
+        sqlx::query_as::<_, GraphMutationRow>(
+            r#"
+            SELECT modification_id, serialized_mutations
+            FROM hawk_graph_mutations
+            WHERE modification_id > $1 AND modification_id <= $2
+            ORDER BY modification_id ASC
+            "#,
+        )
+        .bind(lo_exclusive)
+        .bind(hi_inclusive)
+        .fetch(&self.pool)
+        .boxed()
+    }
+
     /// Returns every row whose `modification_id >= from_id`, ordered ascending.
     /// Use this when you know the exact first modification you need (inclusive),
     /// in contrast to `get_hawk_graph_mutations_after()` which is exclusive.
@@ -699,6 +730,89 @@ mod tests {
             .await?;
         graph_tx.tx.commit().await?;
         assert_eq!(store.get_max_hawk_graph_mutation_id().await?, Some(10));
+
+        Ok(())
+    }
+
+    /// Tests `stream_hawk_graph_mutations_in_range`:
+    ///   - empty table on any range
+    ///   - half-open semantics: `(lo, hi]` excludes lo, includes hi
+    ///   - empty when lo == hi
+    ///   - rows below lo and above hi are excluded
+    ///   - rows are streamed in ascending modification_id order
+    #[tokio::test]
+    async fn test_stream_hawk_graph_mutations_in_range() -> Result<()> {
+        use futures::TryStreamExt;
+
+        let store = TestGraphPg::<PlaintextStore>::new().await?;
+
+        // Empty table => empty stream for any range.
+        let rows: Vec<GraphMutationRow> = store
+            .stream_hawk_graph_mutations_in_range(0, 100)
+            .try_collect()
+            .await?;
+        assert!(rows.is_empty());
+
+        // Seed: ids 1, 5, 7, 10 (insert out of order to confirm ORDER BY ASC).
+        let payloads: &[(i64, &[u8])] = &[(7, b"g"), (1, b"a"), (10, b"j"), (5, b"e")];
+        for (id, p) in payloads {
+            let mut graph_tx = store.tx().await?;
+            store
+                .upsert_hawk_graph_mutations(&mut graph_tx.tx, *id, p)
+                .await?;
+            graph_tx.tx.commit().await?;
+        }
+
+        // (0, 100]: all four, ascending.
+        let rows: Vec<GraphMutationRow> = store
+            .stream_hawk_graph_mutations_in_range(0, 100)
+            .try_collect()
+            .await?;
+        assert_eq!(
+            rows.iter().map(|r| r.modification_id).collect::<Vec<_>>(),
+            vec![1, 5, 7, 10]
+        );
+
+        // (1, 10]: excludes the lo bound, includes the hi bound.
+        let rows: Vec<GraphMutationRow> = store
+            .stream_hawk_graph_mutations_in_range(1, 10)
+            .try_collect()
+            .await?;
+        assert_eq!(
+            rows.iter().map(|r| r.modification_id).collect::<Vec<_>>(),
+            vec![5, 7, 10]
+        );
+
+        // (1, 7]: spans middle, excludes 10.
+        let rows: Vec<GraphMutationRow> = store
+            .stream_hawk_graph_mutations_in_range(1, 7)
+            .try_collect()
+            .await?;
+        assert_eq!(
+            rows.iter().map(|r| r.modification_id).collect::<Vec<_>>(),
+            vec![5, 7]
+        );
+
+        // (5, 5]: empty (degenerate range).
+        let rows: Vec<GraphMutationRow> = store
+            .stream_hawk_graph_mutations_in_range(5, 5)
+            .try_collect()
+            .await?;
+        assert!(rows.is_empty());
+
+        // (50, 100]: empty (above all data).
+        let rows: Vec<GraphMutationRow> = store
+            .stream_hawk_graph_mutations_in_range(50, 100)
+            .try_collect()
+            .await?;
+        assert!(rows.is_empty());
+
+        // Payload is round-tripped.
+        let rows: Vec<GraphMutationRow> = store
+            .stream_hawk_graph_mutations_in_range(0, 1)
+            .try_collect()
+            .await?;
+        assert_eq!(rows[0].serialized_mutations, b"a");
 
         Ok(())
     }

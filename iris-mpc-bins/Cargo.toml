@@ -136,6 +136,10 @@ name = "hawk_main"
 path = "bin/iris-mpc-cpu/hawk_main.rs"
 
 [[bin]]
+name = "wal-sidecar"
+path = "bin/iris-mpc-cpu/sidecar.rs"
+
+[[bin]]
 name = "hnsw_algorithm_metrics"
 path = "bin/iris-mpc-cpu/hnsw_algorithm_metrics.rs"
 
