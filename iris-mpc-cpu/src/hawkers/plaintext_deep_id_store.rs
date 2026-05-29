@@ -1,7 +1,7 @@
 //! Plaintext `VectorStore` over packed int4 vectors with inner-product distance.
 //!
 //! Benchmarking/experimentation harness — not a production path and not an MPC
-//! mirror. Each vector is 512 signed nibbles in the range `{-7..=7}` packed two
+//! mirror. Each vector is 512 signed nibbles in the range `{-8..=7}` packed two
 //! per byte. Distance between two vectors is their integer inner product
 //! (similarity, not Hamming distance). The store fires a match when the inner
 //! product exceeds a configurable threshold.
@@ -29,14 +29,12 @@ pub const INT4_DIM: usize = 512;
 /// Bytes per packed vector (two int4 elements per byte).
 pub const INT4_PACKED_BYTES: usize = INT4_DIM / 2;
 
-/// 512-element vector of signed 4-bit values in `{-7..=7}` packed two per byte
+/// 512-element vector of signed 4-bit values in `{-8..=7}` packed two per byte
 /// using two's-complement nibbles.
 ///
 /// Byte `i` carries element `2*i` in its low nibble and element `2*i+1` in its
-/// high nibble. Valid nibble values are `0x0..=0x7` (positive 0..7) and
-/// `0x9..=0xF` (negative -7..-1). The nibble `0x8` (-8) is outside the
-/// supported domain — `dot`'s i16 bound assumes `{-7..=7}` and is no longer
-/// safe if it appears.
+/// high nibble. All 16 nibble values are valid: `0x0..=0x7` (0..7) and
+/// `0x8..=0xF` (-8..-1).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Int4Vector {
     #[serde(with = "BigArray")]
@@ -57,21 +55,18 @@ pub type Int4SharedVectorsRef = SharedIrisesRef<Int4StoredVector>;
 
 impl Int4Vector {
     /// Generate a random `Int4Vector` with each element drawn i.i.d. uniformly
-    /// from `{-7..=7}`.
+    /// from `{-8..=7}`.
     pub fn random<R: RngCore>(rng: &mut R) -> Self {
         let mut packed = [0u8; INT4_PACKED_BYTES];
         for byte in packed.iter_mut() {
-            let lo = Self::encode_nibble(rng.gen_range(-7..=7));
-            let hi = Self::encode_nibble(rng.gen_range(-7..=7));
+            let lo = Self::encode_nibble(rng.gen_range(-8..=7));
+            let hi = Self::encode_nibble(rng.gen_range(-8..=7));
             *byte = lo | (hi << 4);
         }
         Self { packed }
     }
 
-    /// Decode element at index `i` (0-based).
-    ///
-    /// Returns a value in `{-8..=7}`. Vectors produced by [`Int4Vector::random`]
-    /// only ever yield values in `{-7..=7}`.
+    /// Decode element at index `i` (0-based). Returns a value in `{-8..=7}`.
     pub fn get(&self, i: usize) -> i8 {
         let byte = self.packed[i / 2];
         let nibble = if i.is_multiple_of(2) {
@@ -85,31 +80,31 @@ impl Int4Vector {
     /// Integer inner product of two int4 vectors.
     ///
     /// Decodes nibbles on the fly and accumulates element-wise products in
-    /// `i16`. The tightest bound is `512 * 7 * 7 = 25_088 < i16::MAX = 32_767`,
-    /// which holds for any vector whose nibbles all decode within `{-7..=7}`.
-    /// Vectors containing the out-of-domain nibble `0x8` (-8) can overflow.
-    pub fn dot(&self, other: &Self) -> i16 {
-        let mut acc: i16 = 0;
+    /// `i32`. The tightest bound for the `{-8..=7}` domain is
+    /// `512 * 8 * 8 = 32_768`, which exceeds `i16::MAX = 32_767` but fits
+    /// comfortably in `i32`.
+    pub fn dot(&self, other: &Self) -> i32 {
+        let mut acc: i32 = 0;
         for (a, b) in self.packed.iter().zip(other.packed.iter()) {
-            let a_lo = i16::from(Self::decode_nibble(*a & 0x0F));
-            let a_hi = i16::from(Self::decode_nibble(*a >> 4));
-            let b_lo = i16::from(Self::decode_nibble(*b & 0x0F));
-            let b_hi = i16::from(Self::decode_nibble(*b >> 4));
+            let a_lo = i32::from(Self::decode_nibble(*a & 0x0F));
+            let a_hi = i32::from(Self::decode_nibble(*a >> 4));
+            let b_lo = i32::from(Self::decode_nibble(*b & 0x0F));
+            let b_hi = i32::from(Self::decode_nibble(*b >> 4));
             acc += a_lo * b_lo + a_hi * b_hi;
         }
         acc
     }
 
-    /// Encode a value in `{-7..=7}` as a 4-bit two's-complement nibble.
+    /// Encode a value in `{-8..=7}` as a 4-bit two's-complement nibble.
     ///
-    /// Values outside `{-7..=7}` are masked to a nibble silently in release;
+    /// Values outside `{-8..=7}` are masked to a nibble silently in release;
     /// `+8` aliases to `-8` (both encode to `0x08`). A debug assertion catches
     /// out-of-range inputs to surface misuse early.
     #[inline]
     fn encode_nibble(value: i8) -> u8 {
         debug_assert!(
-            (-7..=7).contains(&value),
-            "Int4Vector value {value} outside supported domain {{-7..=7}}",
+            (-8..=7).contains(&value),
+            "Int4Vector value {value} outside supported domain {{-8..=7}}",
         );
         (value as u8) & 0x0F
     }
@@ -137,16 +132,16 @@ impl Int4Vector {
 #[serde(bound(serialize = "", deserialize = ""))]
 pub struct PlaintextDeepIDStore {
     pub storage: Int4SharedVectors,
-    pub threshold: i16,
+    pub threshold: i32,
 }
 
 impl PlaintextDeepIDStore {
     /// New empty store with the given match threshold.
-    pub fn new(threshold: i16) -> Self {
+    pub fn new(threshold: i32) -> Self {
         Self::with_storage(threshold, Int4SharedVectors::default())
     }
 
-    pub fn with_storage(threshold: i16, storage: Int4SharedVectors) -> Self {
+    pub fn with_storage(threshold: i32, storage: Int4SharedVectors) -> Self {
         Self { storage, threshold }
     }
 
@@ -221,7 +216,7 @@ impl PlaintextDeepIDStore {
 impl VectorStore for PlaintextDeepIDStore {
     type QueryRef = Arc<Int4Vector>;
     type VectorRef = VectorId;
-    type DistanceRef = i16;
+    type DistanceRef = i32;
 
     async fn vectors_as_queries(
         &mut self,
@@ -304,11 +299,11 @@ impl VectorStoreMut for PlaintextDeepIDStore {
 #[derive(Debug, Clone)]
 pub struct SharedPlaintextDeepIDStore {
     pub storage: Int4SharedVectorsRef,
-    pub threshold: i16,
+    pub threshold: i32,
 }
 
 impl SharedPlaintextDeepIDStore {
-    pub fn new(threshold: i16) -> Self {
+    pub fn new(threshold: i32) -> Self {
         Self {
             storage: Int4SharedVectors::default().to_arc(),
             threshold,
@@ -340,7 +335,7 @@ impl From<PlaintextDeepIDStore> for SharedPlaintextDeepIDStore {
 impl VectorStore for SharedPlaintextDeepIDStore {
     type QueryRef = Arc<Int4Vector>;
     type VectorRef = VectorId;
-    type DistanceRef = i16;
+    type DistanceRef = i32;
 
     async fn vectors_as_queries(
         &mut self,
@@ -447,8 +442,8 @@ mod tests {
         for i in 0..INT4_DIM {
             let x = v.get(i);
             assert!(
-                (-7..=7).contains(&x),
-                "element {i} = {x} is outside {{-7..=7}}",
+                (-8..=7).contains(&x),
+                "element {i} = {x} is outside {{-8..=7}}",
             );
         }
 
@@ -506,7 +501,7 @@ mod tests {
     /// Build a store with `n` random vectors and return the store plus the list
     /// of `(id, vector)` pairs that were inserted, in insertion order.
     async fn build_store_with_random_vectors(
-        threshold: i16,
+        threshold: i32,
         n: usize,
         seed: u64,
     ) -> (PlaintextDeepIDStore, Vec<(VectorId, Arc<Int4Vector>)>) {
@@ -521,11 +516,11 @@ mod tests {
         (store, ids)
     }
 
-    /// Flip a single nibble of `v` by adding `delta` (clamped to {-7..=7}).
+    /// Flip a single nibble of `v` by adding `delta` (clamped to {-8..=7}).
     fn perturb(v: &Int4Vector, index: usize, delta: i8) -> Int4Vector {
         let mut out = v.clone();
         let cur = out.get(index);
-        let new = (cur + delta).clamp(-7, 7);
+        let new = (cur + delta).clamp(-8, 7);
         let byte = out.packed[index / 2];
         let n = Int4Vector::encode_nibble(new);
         out.packed[index / 2] = if index.is_multiple_of(2) {
@@ -597,7 +592,7 @@ mod tests {
         let mut rng = AesRng::seed_from_u64(0xFEEDFACE);
 
         // Threshold sits well above the random-pair dot (~0 ± hundreds) and well
-        // below a random vector's self-dot (~512 * 18.67 ≈ 9_560 on average).
+        // below a random vector's self-dot (~512 * 21.5 = 11_008 on average).
         let mut store = PlaintextDeepIDStore::new(/* threshold */ 5_000);
 
         // Insert 64 random vectors and remember one to perturb later.
