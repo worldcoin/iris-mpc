@@ -3,13 +3,8 @@ use crate::services::processors::batch::receive_batch_stream;
 use crate::services::processors::job::process_job_result;
 use aws_sdk_s3::Client;
 use aws_sdk_sns::types::MessageAttributeValue;
-use axum::routing::get;
-use axum::Router;
 use iris_mpc_cpu::checkpoint_protocol::{restart_from_checkpoint, RestartOutcome};
-use iris_mpc_cpu::graph_checkpoint::{
-    get_common_checkpoint, get_most_recent_checkpoints, s3_key_exists, sync_graph_mutations,
-    GraphCheckpointState, GRAPH_CHECKPOINT_ROUTE,
-};
+use iris_mpc_cpu::graph_checkpoint::sync_graph_mutations;
 use iris_mpc_cpu::hnsw::GraphMem;
 
 use crate::services::processors::modifications_sync::{
@@ -105,24 +100,13 @@ pub async fn server_main(config: Config) -> Result<()> {
         server_coord_config.healthcheck_ports
     );
 
-    let (graph_checkpoints, hashes) = get_most_recent_checkpoints(&graph_store).await?;
-
-    // Start coordination server
-    let extra_routes = Router::new().route(
-        GRAPH_CHECKPOINT_ROUTE,
-        get({
-            let hashes_json = serde_json::to_string(&hashes).unwrap();
-            move || async move { hashes_json }
-        }),
-    );
-
     let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server_with_extra_routes(
         &server_coord_config,
         &mut background_tasks,
         &shutdown_handler,
         &my_state,
         Some(batch_sync_shared_state.clone()),
-        Some(extra_routes),
+        None,
     )
     .await;
     tracing::info!("Coordination server started");
@@ -132,36 +116,6 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
-
-    let graph_checkpoint =
-        get_common_checkpoint(&server_coord_config, hashes, graph_checkpoints).await?;
-    tracing::info!("common graph checkpoint: {:?}", graph_checkpoint);
-
-    if let Some(cp) = graph_checkpoint.as_ref() {
-        // Stop if the checkpoint can not be found
-        if !s3_key_exists(
-            &aws_clients.checkpoint_s3_client,
-            &config.graph_checkpoint_bucket_name,
-            &cp.s3_key,
-        )
-        .await?
-        {
-            bail!(
-                "s3 checkpoint not found on AWS: s3://{}/{}",
-                config.graph_checkpoint_bucket_name,
-                cp.s3_key
-            );
-        }
-
-        // Validate checkpoint vs Iris DB consistency
-        let db_count = iris_store.count_irises().await?;
-        if cp.last_indexed_iris_id as usize != db_count {
-            tracing::warn!(
-                "Graph checkpoint last_indexed_iris_id={} differs from iris_db count={}. Shadow mode may produce mismatches.",
-                cp.last_indexed_iris_id, db_count
-            );
-        }
-    }
 
     // Handle modifications sync
     if config.enable_modifications_sync {
@@ -205,7 +159,6 @@ pub async fn server_main(config: Config) -> Result<()> {
         &config.graph_checkpoint_bucket_name,
         &iris_store,
         &graph_store,
-        graph_checkpoint,
         &shutdown_handler,
     )
     .await?;
@@ -554,7 +507,6 @@ async fn init_hawk_actor(
     checkpoint_bucket: &str,
     iris_store: &Store,
     graph_store: &GraphPg<Aby3Store<HawkOps>>,
-    _checkpoint: Option<GraphCheckpointState>,
     shutdown_handler: &Arc<ShutdownHandler>,
 ) -> Result<HawkActor> {
     let (hawk_args, inbound, outbound) = build_hawk_args(config)?;
@@ -625,6 +577,14 @@ async fn init_hawk_actor(
         .await?
         {
             RestartOutcome::Installed { height } => {
+                // Validate checkpoint vs Iris DB consistency
+                let db_count = iris_store.count_irises().await?;
+                if height as usize != db_count {
+                    tracing::warn!(
+                        "Graph checkpoint last_indexed_iris_id={} differs from iris_db count={}. Shadow mode may produce mismatches.",
+                        height, db_count
+                    );
+                }
                 tracing::info!(height, "restart: installed graph from checkpoint");
                 graph_target.map(|arc| {
                     Arc::try_unwrap(arc)
@@ -633,6 +593,12 @@ async fn init_hawk_actor(
                 })
             }
             RestartOutcome::NoCheckpoint => {
+                let db_count = iris_store.count_irises().await?;
+                if db_count != 0 {
+                    return Err(eyre!(
+                        "Graph checkpoint was not found but iris store contains {db_count} entries"
+                    ));
+                }
                 tracing::info!("no checkpoint found, starting with empty graph");
                 [GraphMem::new(), GraphMem::new()]
             }
