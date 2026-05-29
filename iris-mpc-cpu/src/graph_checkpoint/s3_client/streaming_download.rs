@@ -55,7 +55,7 @@ use tokio_util::io::{StreamReader, SyncIoBridge};
 
 use crate::{
     hnsw::graph::layered_graph::GraphMem,
-    utils::serialization::graph::{GraphFormat, read_graph_pair_streaming},
+    utils::serialization::graph::{read_graph_pair_streaming, GraphFormat},
 };
 
 const RANGE_MAX_RETRIES: u32 = 3;
@@ -308,10 +308,7 @@ async fn fetch_range(s3_client: &S3Client, bucket: &str, key: &str, range: &str)
 ///
 /// Delegates to [`deserialize_and_hash_from_fn`] with the standard bincode
 /// deserializer closure.
-async fn deserialize_and_hash_from<R, T>(
-    reader: R,
-    pipe_capacity: usize,
-) -> Result<(T, [u8; 32])>
+async fn deserialize_and_hash_from<R, T>(reader: R, pipe_capacity: usize) -> Result<(T, [u8; 32])>
 where
     R: AsyncRead + Unpin + Send + 'static,
     T: DeserializeOwned + Send + 'static,
