@@ -751,7 +751,7 @@ fn read_graph_v3_streaming<R: std::io::Read + ?Sized>(
         .map_err(|e| eyre::eyre!("v3 streaming layer_count: {e}"))?;
     let layer_count = usize::try_from(layer_count_u64)
         .map_err(|_| eyre::eyre!("v3 streaming layer_count overflows usize: {layer_count_u64}"))?;
-    let mut layers = Vec::with_capacity(layer_count as usize);
+    let mut layers = Vec::with_capacity(layer_count);
     for i in 0..layer_count {
         layers.push(
             read_hashed_layer_streaming(reader)

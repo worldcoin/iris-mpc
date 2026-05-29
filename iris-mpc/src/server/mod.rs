@@ -61,6 +61,8 @@ use tokio::time::timeout;
 const RNG_SEED_INIT_DB: u64 = 42;
 pub const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
 pub const MAX_CONCURRENT_REQUESTS: usize = 32;
+const PEER_ROUND_TIMEOUT: Duration = Duration::from_secs(10);
+const CHECKPOINT_WINDOW: usize = 10;
 
 /// Main logic for initialization and execution of AMPC iris uniqueness server
 /// nodes.
@@ -554,8 +556,6 @@ async fn init_hawk_actor(
     let now = Instant::now();
     let ct = shutdown_handler.get_network_cancellation_token();
     let mut networking = build_hawk_network_handle(&hawk_args, ct).await?;
-    const PEER_ROUND_TIMEOUT: Duration = Duration::from_secs(10);
-    const CHECKPOINT_WINDOW: usize = 10;
 
     let graph_load_future = async move {
         // Install the graph via the WAL-based consensus checkpoint protocol.
