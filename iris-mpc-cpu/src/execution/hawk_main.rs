@@ -123,7 +123,7 @@ use itertools::{izip, Itertools};
 use matching::{
     Decision, Filter, MatchId,
     OnlyOrBoth::{Both, Only},
-    RequestType, UniquenessRequest,
+    RequestType, UniquenessRequest, DECISION_FILTER,
 };
 use rand::{thread_rng, Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -136,7 +136,6 @@ use std::{
     collections::{BTreeMap, HashMap},
     future::Future,
     hash::{Hash, Hasher},
-    ops::Not,
     sync::Arc,
     time::Instant,
     vec,
@@ -708,7 +707,7 @@ impl HawkActor {
     }
 
     pub async fn sync_peers(&mut self) -> Result<()> {
-        self.networking.sync_peers().await
+        self.networking.control_channel().await?.sync().await
     }
 
     fn create_session(
@@ -1398,11 +1397,7 @@ impl HawkResult {
     /// Otherwise, return the index of some match.
     /// In cases with neither insertions nor matches, return the special u32::MAX.
     fn merged_results(&self) -> Vec<u32> {
-        let match_indices = self.select_indices(Filter {
-            eyes: Both,
-            orient: Both,
-            intra_batch: true,
-        });
+        let match_indices = self.select_indices(DECISION_FILTER);
 
         match_indices
             .into_iter()
@@ -1465,16 +1460,14 @@ impl HawkResult {
         };
 
         self.match_results
-            .select(Filter {
-                eyes: Both,
-                orient: Both,
-                intra_batch: true,
-            })
+            .select(DECISION_FILTER)
             .iter()
             .map(|matches| matches.iter().filter_map(per_match).collect_vec())
             .collect_vec()
     }
 
+    /// Narrow filter for serial-id match lists: intra-batch peers have no serial id and are
+    /// reported via `matched_batch_request_ids` instead.
     const MATCH_IDS_FILTER: Filter = Filter {
         eyes: Both,
         orient: Only(Orientation::Normal),
@@ -1488,14 +1481,16 @@ impl HawkResult {
 
         let decisions = self.match_results.decisions();
 
-        let matches = decisions
+        // Positive names here; polarity flipped at struct construction — `ServerJobResult.matches`
+        // and `matches_with_skip_persistence` store the negation (see their doc comments).
+        let unique_insert = decisions
             .iter()
-            .map(|&d| matches!(d, UniqueInsert).not())
+            .map(|&d| matches!(d, UniqueInsert))
             .collect_vec();
 
-        let matches_with_skip_persistence = decisions
+        let unique_no_match = decisions
             .iter()
-            .map(|&d| matches!(d, UniqueInsert | UniqueInsertSkipped).not())
+            .map(|&d| matches!(d, UniqueInsert | UniqueInsertSkipped))
             .collect_vec();
 
         let match_ids = self.select_indices(Self::MATCH_IDS_FILTER);
@@ -1534,7 +1529,20 @@ impl HawkResult {
             intra_batch: false,
         });
 
-        let full_face_mirror_attack_detected = izip!(&match_ids, &full_face_mirror_match_ids)
+        // Wide filter (intra_batch=true) so an in-batch mirror peer raises the flag — matches
+        // GPU semantics. Cannot derive from `match_ids` / `full_face_mirror_match_ids`: those
+        // carry only DB serial ids.
+        let any_match_normal = self.match_results.select(Filter {
+            eyes: Both,
+            orient: Only(Normal),
+            intra_batch: true,
+        });
+        let any_match_mirror = self.match_results.select(Filter {
+            eyes: Both,
+            orient: Only(Mirror),
+            intra_batch: true,
+        });
+        let full_face_mirror_attack_detected = izip!(&any_match_normal, &any_match_mirror)
             .map(|(normal, mirror)| normal.is_empty() && !mirror.is_empty())
             .collect_vec();
 
@@ -1549,10 +1557,10 @@ impl HawkResult {
             .collect_vec();
 
         tracing::info!(
-            "Reauths: {:?}, Matches: {:?}, Matches w/ skip persistence: {:?}",
+            "Reauths: {:?}, Unique insert: {:?}, Unique no-match (incl. skip): {:?}",
             successful_reauths,
-            matches,
-            matches_with_skip_persistence
+            unique_insert,
+            unique_no_match
         );
 
         let batch = self.batch;
@@ -1563,8 +1571,9 @@ impl HawkResult {
             request_ids: batch.request_ids,
             request_types: batch.request_types,
             metadata: batch.metadata,
-            matches_with_skip_persistence,
-            matches,
+            // Negated — see job.rs.
+            matches: unique_insert.iter().map(|b| !b).collect_vec(),
+            matches_with_skip_persistence: unique_no_match.iter().map(|b| !b).collect_vec(),
             skip_persistence: batch.skip_persistence,
             match_ids,
 
@@ -1572,6 +1581,7 @@ impl HawkResult {
             partial_match_counters_left,
             partial_match_ids_right,
             partial_match_counters_right,
+            // HNSW does min-over-rotations, so partial matches don't carry a specific rotation.
             partial_match_rotation_indices_left: vec![vec![]; batch_size],
             partial_match_rotation_indices_right: vec![vec![]; batch_size],
 

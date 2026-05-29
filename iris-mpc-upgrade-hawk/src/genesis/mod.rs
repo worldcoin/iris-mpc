@@ -416,7 +416,7 @@ async fn exec_setup(
     // Networking only: sync_peers + rollback must run before the iris
     // load decides `max_serial_id`.
     let (hawk_args, mut hawk_networking) = build_hawk_networking(config, &shutdown_handler).await?;
-    hawk_networking.sync_peers().await?;
+    hawk_networking.control_channel().await?.sync().await?;
 
     if let Some(cp) = graph_checkpoint.as_ref() {
         maybe_rollback_iris_db(

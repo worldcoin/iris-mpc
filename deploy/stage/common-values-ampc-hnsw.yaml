@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-cpu:c1a65e9b8636ee35c60b63cf64a578c4b98e6aa5-arm64"
+image: "ghcr.io/worldcoin/iris-mpc-cpu:v0.31.10@sha256:cf2f715c66748171940b448163f6b0e0ce7dedae783282b43b135fc2589f4f29"
 
 environment: stage
 replicaCount: 1
@@ -62,6 +62,7 @@ nodeSelector:
   kubernetes.io/arch: arm64
   karpenter.sh/capacity-type: on-demand
   node.kubernetes.io/instance-type: "x8g.2xlarge"
+  topology.k8s.aws/zone-id: "euc1-az1"
 
 podSecurityContext:
   runAsUser: 65534
