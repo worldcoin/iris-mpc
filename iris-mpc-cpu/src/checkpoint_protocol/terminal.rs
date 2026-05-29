@@ -143,7 +143,7 @@ impl<V: VectorStore + Send + Sync> TerminalAction for UploadAndRecord<'_, V> {
             &self.bucket,
             self.s3_client,
             &graph_checkpoint,
-            &self.graph_store,
+            self.graph_store,
             self.pruning_mode,
         )
         .await
