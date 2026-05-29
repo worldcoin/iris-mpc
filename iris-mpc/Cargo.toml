@@ -21,6 +21,7 @@ eyre.workspace = true
 clap.workspace = true
 bytemuck.workspace = true
 rand.workspace = true
+reqwest.workspace = true
 base64.workspace = true
 uuid.workspace = true
 sodiumoxide.workspace = true
@@ -39,3 +40,6 @@ ampc-server-utils.workspace = true
 
 [features]
 default = []
+# enable the BatchMessage sqs_request type. used by the client to circumvent
+# batching logic by uploading the desired batches directly.
+explicit-sns-batching = ["iris-mpc-common/explicit-sns-batching"]
