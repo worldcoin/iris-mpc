@@ -346,6 +346,16 @@ pub enum RequestIndex {
     IdentityUpdate(usize),
 }
 
+/// Per-batch result. Vector-length groups (see `RequestIndex`):
+/// - `UniqueReauthResetCheck` rows: `request_ids`, `request_types`, `metadata`, `matches`,
+///   `matches_with_skip_persistence`, `skip_persistence`, `match_ids`, `partial_match_*`,
+///   `full_face_mirror_*`, `merged_results`, `matched_batch_request_ids`, `successful_reauths`,
+///   `{left,right}_iris_requests`.
+/// - `Deletion` rows: `deleted_ids`.
+/// - `IdentityUpdate` rows: `identity_update_*`.
+///
+/// `reauth_*` maps are keyed by reauth `request_id`. `modifications` is keyed by
+/// `ModificationKey` across all persistable mutations. `actor_data` shape is implementation-defined.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ServerJobResult<A = ()> {
     pub merged_results: Vec<u32>,
@@ -355,10 +365,13 @@ pub struct ServerJobResult<A = ()> {
     pub request_types: Vec<String>,
     // As defined in the BatchQuery
     pub metadata: Vec<BatchMetadata>,
-    // Boolean array to indicate if the query was unique or not
+    /// Misleadingly named: stores `!UniqueInsert` (i.e. `false` only for a fresh uniqueness
+    /// insertion). Reauth rows are `true` even though they overwrite the target iris.
+    /// Only meaningful as "did the query match" when filtered to uniqueness rows.
     pub matches: Vec<bool>,
-    // Boolean array to indicate if the query was unique which includes the matches that were not
-    // entered into the DB
+    /// Misleadingly named: stores `!(UniqueInsert | UniqueInsertSkipped)`, i.e. `false` for both
+    /// persisted and skipped uniqueness inserts. Populates `UniquenessResult::is_match`.
+    /// Only meaningful filtered to uniqueness rows.
     pub matches_with_skip_persistence: Vec<bool>,
     // Per-request skip persistence flag from the batch.
     pub skip_persistence: Vec<bool>,
