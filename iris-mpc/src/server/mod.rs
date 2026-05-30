@@ -595,9 +595,9 @@ async fn init_hawk_actor(
             RestartOutcome::NoCheckpoint => {
                 let db_count = iris_store.count_irises().await?;
                 if db_count != 0 {
-                    return Err(eyre!(
+                    tracing::warn!(
                         "Graph checkpoint was not found but iris store contains {db_count} entries"
-                    ));
+                    );
                 }
                 tracing::info!("no checkpoint found, starting with empty graph");
                 [GraphMem::new(), GraphMem::new()]
