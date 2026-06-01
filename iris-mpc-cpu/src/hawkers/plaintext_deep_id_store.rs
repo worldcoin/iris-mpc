@@ -187,10 +187,6 @@ impl PlaintextDeepIDStore {
         self.storage.db_size() == 0
     }
 
-    pub fn prepare_query(&self, v: Int4Vector) -> Arc<Int4Vector> {
-        Arc::new(v)
-    }
-
     pub fn insert_with_id(&mut self, id: VectorId, v: Arc<Int4Vector>) -> VectorId {
         self.storage.insert(id, v)
     }
@@ -363,10 +359,6 @@ impl SharedPlaintextDeepIDStore {
 
     pub async fn is_empty(&self) -> bool {
         self.len().await == 0
-    }
-
-    pub fn prepare_query(&self, v: Int4Vector) -> Arc<Int4Vector> {
-        Arc::new(v)
     }
 }
 
@@ -635,7 +627,7 @@ mod tests {
 
         // eval_distance(self, self) should equal vector.dot(vector)
         for (id, v) in &ids {
-            let q = store.prepare_query((**v).clone());
+            let q = Arc::clone(v);
             let d = store.eval_distance(&q, id).await.unwrap();
             assert_eq!(d, v.dot(v));
         }
@@ -645,7 +637,7 @@ mod tests {
     async fn test_less_than_antisymmetric() {
         let (mut store, ids) = build_store_with_random_vectors(12_000, 8, 0xCAFEBABE);
 
-        let q0 = store.prepare_query((*ids[0].1).clone());
+        let q0 = Arc::clone(&ids[0].1);
         let d_self = store.eval_distance(&q0, &ids[0].0).await.unwrap();
         let d_other = store.eval_distance(&q0, &ids[1].0).await.unwrap();
         if d_self != d_other {
@@ -665,7 +657,7 @@ mod tests {
         // is_match: identity dot of a high-magnitude vector exceeds the threshold
         let high = Arc::new(make_vec_with(7));
         let id_high = VectorStoreMut::insert(&mut store, &high).await;
-        let q_high = store.prepare_query((*high).clone());
+        let q_high = Arc::clone(&high);
         let d_high = store.eval_distance(&q_high, &id_high).await.unwrap();
         assert!(
             store.is_match(&d_high).await.unwrap(),
@@ -680,7 +672,7 @@ mod tests {
         // is_match: zero vector against itself does NOT match
         let zero = Arc::new(Int4Vector::default());
         let id_zero = VectorStoreMut::insert(&mut store, &zero).await;
-        let q_zero = store.prepare_query((*zero).clone());
+        let q_zero = Arc::clone(&zero);
         let d_zero = store.eval_distance(&q_zero, &id_zero).await.unwrap();
         assert!(!store.is_match(&d_zero).await.unwrap());
     }
@@ -709,7 +701,7 @@ mod tests {
             .expect("graph generation succeeds");
 
         // Query = anchor with one element perturbed by 1.
-        let query = store.prepare_query(perturb(&anchor_vec, 17, 1));
+        let query = Arc::new(perturb(&anchor_vec, 17, 1));
         let results: SortedNeighborhood<_> = searcher
             .search(&mut store, &graph, &query, /* k */ 5)
             .await
