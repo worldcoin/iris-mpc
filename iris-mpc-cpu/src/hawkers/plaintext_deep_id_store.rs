@@ -192,11 +192,7 @@ impl PlaintextDeepIDStore {
     }
 
     /// Generate a store of `store_size` random vectors with the given match
-    /// threshold, keyed by sequential 0-indexed [`VectorId`]s.
-    ///
-    /// Mirrors [`PlaintextStore::new_random`].
-    ///
-    /// [`PlaintextStore::new_random`]: super::plaintext_store::PlaintextStore::new_random
+    /// threshold, keyed by sequential 0-indexed `VectorId`s.
     pub fn new_random<R: RngCore>(rng: &mut R, store_size: usize, threshold: i32) -> Self {
         let mut store = Self::new(threshold);
         for idx in 0..store_size {
@@ -731,7 +727,7 @@ mod tests {
         let mut store = PlaintextDeepIDStore::new_random(&mut rng, /* store_size */ 32, 0);
 
         // Keep the first 8 inserted vectors as candidate queries.
-        let originals: Vec<(VectorId, Arc<Int4Vector>)> = (0..8)
+        let originals: Vec<(VectorId, Arc<Int4Vector>)> = (0..32)
             .map(|i| {
                 let id = VectorId::from_0_index(i);
                 let v = store
@@ -755,7 +751,7 @@ mod tests {
         let graph = Arc::new(graph);
 
         let mut join_set = JoinSet::new();
-        for (expected_id, vec) in originals {
+        for (expected_id, vec) in originals.into_iter().take(8) {
             let mut shared = shared.clone();
             let searcher = Arc::clone(&searcher);
             let graph = Arc::clone(&graph);
