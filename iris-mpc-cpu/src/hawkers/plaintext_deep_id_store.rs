@@ -136,6 +136,25 @@ impl Int4Vector {
     }
 }
 
+/// Whether a distance counts as a match: the inner product (a similarity, not
+/// a Hamming distance) must strictly exceed `threshold`.
+///
+/// Shared by [`PlaintextDeepIDStore`] and [`SharedPlaintextDeepIDStore`] so the
+/// match rule lives in exactly one place.
+#[inline]
+fn dot_is_match(distance: i32, threshold: i32) -> bool {
+    distance > threshold
+}
+
+/// Whether `d1` is closer than `d2` under similarity ordering: a larger dot
+/// means "closer", so this holds iff `d1 > d2`.
+///
+/// Shared by both stores so the ordering rule lives in exactly one place.
+#[inline]
+fn dot_is_closer(d1: i32, d2: i32) -> bool {
+    d1 > d2
+}
+
 /// Single-threaded plaintext store over packed int4 vectors.
 ///
 /// Distance is the integer inner product; a pair is a "match" iff the dot
@@ -264,14 +283,12 @@ impl VectorStore for PlaintextDeepIDStore {
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
-        // dot > threshold means "similar enough" (similarity, not distance).
-        Ok(*distance > self.threshold)
+        Ok(dot_is_match(*distance, self.threshold))
     }
 
     async fn less_than(&mut self, d1: &Self::DistanceRef, d2: &Self::DistanceRef) -> Result<bool> {
         debug!(event_type = CompareDistance.id());
-        // Larger dot = closer, so "d1 closer than d2" iff dot1 > dot2.
-        Ok(d1 > d2)
+        Ok(dot_is_closer(*d1, *d2))
     }
 
     // Default implementation + metrics, mirroring PlaintextStore.
@@ -400,12 +417,12 @@ impl VectorStore for SharedPlaintextDeepIDStore {
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {
-        Ok(*distance > self.threshold)
+        Ok(dot_is_match(*distance, self.threshold))
     }
 
     async fn less_than(&mut self, d1: &Self::DistanceRef, d2: &Self::DistanceRef) -> Result<bool> {
         debug!(event_type = CompareDistance.id());
-        Ok(d1 > d2)
+        Ok(dot_is_closer(*d1, *d2))
     }
 
     // Default implementation + metrics, mirroring SharedPlaintextStore.
