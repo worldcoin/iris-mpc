@@ -161,6 +161,7 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                 };
                 // Iris load (full rows) and id+version scan (index-only)
                 // run in parallel against the same PG.
+                tracing::info!("Starting try_join: load_iris_db + build_registry_from_db");
                 let (_, template) = try_join!(
                     async {
                         load_iris_db(
@@ -176,12 +177,15 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                     },
                     build_registry_from_db(&store, max_serial_id),
                 )?;
+                tracing::info!("try_join complete, starting worker channel drain");
                 // Drain the channels so every fire-and-forget `Insert`
                 // lands in the store before we read `set_hash`.
+                tracing::info!("Starting worker channel wait_completion...");
                 try_join!(
                     workers_handle[LEFT].wait_completion(),
                     workers_handle[RIGHT].wait_completion(),
                 )?;
+                tracing::info!("Worker channels drained, db_size={}", adapter.db_size);
                 db_size = adapter.db_size;
                 [template.clone().to_arc(), template.to_arc()]
             }

@@ -26,6 +26,11 @@ async fn load_db_records_from_aurora<'a>(
     let mut time_waiting_for_stream = Duration::from_secs(0);
     let mut time_loading_into_memory = Duration::from_secs(0);
     let n_loaded_via_s3 = *record_counter;
+    let aurora_start_count = *record_counter;
+    tracing::info!(
+        "Aurora load starting, expecting records, already loaded via S3: {}",
+        n_loaded_via_s3
+    );
     while let Some(iris) = stream_db.next().await {
         // Update time waiting for the stream
         time_waiting_for_stream += load_summary_ts.elapsed();
@@ -52,6 +57,17 @@ async fn load_db_records_from_aurora<'a>(
         // Update time spent loading into memory
         time_loading_into_memory += load_summary_ts.elapsed();
         load_summary_ts = Instant::now();
+
+        // Log progress every 250k records
+        if (*record_counter - aurora_start_count) % 250_000 == 0
+            && *record_counter > aurora_start_count
+        {
+            tracing::info!(
+                "Aurora phase progress: {} records processed in this phase (total: {})",
+                *record_counter - aurora_start_count,
+                *record_counter
+            );
+        }
     }
 
     tracing::info!(
@@ -60,6 +76,10 @@ async fn load_db_records_from_aurora<'a>(
         *record_counter - n_loaded_via_s3,
         time_waiting_for_stream,
         time_loading_into_memory,
+    );
+    tracing::info!(
+        "Aurora phase complete, total records loaded: {}",
+        *record_counter
     );
 
     Ok(())
@@ -139,7 +159,15 @@ async fn load_iris_db_internal(
             min_last_modified_at
         );
 
+        tracing::info!(
+            "S3 phase: creating channel with buffer_size={}",
+            config.load_chunks_buffer_size
+        );
         let (tx, mut rx) = mpsc::channel::<S3StoredIris>(config.load_chunks_buffer_size);
+        tracing::info!(
+            "S3 phase: channel created, spawning fetch task with {} worker threads",
+            s3_load_parallelism
+        );
         let import_runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(s3_load_parallelism)
             .thread_name("s3-importer")
@@ -177,6 +205,7 @@ async fn load_iris_db_internal(
         // Consume parsed irises while watching the fetch task. `biased` polls the
         // task before the channel, so a fetch failure aborts immediately instead of
         // draining the backlog (and the in-flight retry-with-backoff subtasks).
+        tracing::info!("S3 phase: fetch task spawned, entering recv loop");
         let mut time_waiting_for_stream = Duration::from_secs(0);
         let mut time_loading_into_memory = Duration::from_secs(0);
         let mut load_summary_ts = Instant::now();
@@ -268,6 +297,7 @@ async fn load_iris_db_internal(
             time_loading_into_memory,
         );
 
+        tracing::info!("S3 phase complete, starting Aurora phase");
         let stream_db = store
             .stream_irises_par(
                 Some(min_last_modified_at),
@@ -276,6 +306,9 @@ async fn load_iris_db_internal(
             )
             .await
             .boxed();
+        tracing::info!(
+            "Aurora phase: stream_irises_par created, calling load_db_records_from_aurora"
+        );
         load_db_records_from_aurora(actor, &mut record_counter, &mut all_serial_ids, stream_db)
             .await?;
     } else {
@@ -284,6 +317,9 @@ async fn load_iris_db_internal(
             .stream_irises_par(None, store_load_parallelism, Some(max_serial_id_to_load))
             .await
             .boxed();
+        tracing::info!(
+            "Aurora phase: stream_irises_par created, calling load_db_records_from_aurora"
+        );
         load_db_records_from_aurora(actor, &mut record_counter, &mut all_serial_ids, stream_db)
             .await?;
     }
