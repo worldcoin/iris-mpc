@@ -120,12 +120,12 @@ pub struct Int4DotKnn;
 
 impl IdealKnn for Int4DotKnn {
     type Vector = Int4Vector;
-    type Distance = i16;
+    type Distance = i32;
 
-    fn distance(&self, a: &Int4Vector, b: &Int4Vector) -> i16 {
+    fn distance(&self, a: &Int4Vector, b: &Int4Vector) -> i32 {
         a.dot(b)
     }
-    fn order(a: &i16, b: &i16) -> Ordering {
+    fn order(a: &i32, b: &i32) -> Ordering {
         b.cmp(a)
     }
 }
@@ -334,7 +334,7 @@ mod int4_engine_tests {
         for KNNResult { node, neighbors } in results {
             // Brute-force expected top-k by descending dot (excluding self).
             let me = &vectors[node as usize - 1];
-            let mut dists: Vec<(IrisSerialId, i16)> = (1..=n as IrisSerialId)
+            let mut dists: Vec<(IrisSerialId, i32)> = (1..=n as IrisSerialId)
                 .filter(|j| *j != node)
                 .map(|j| (j, me.dot(&vectors[j as usize - 1])))
                 .collect();

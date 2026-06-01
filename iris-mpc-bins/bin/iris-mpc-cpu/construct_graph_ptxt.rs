@@ -77,7 +77,7 @@ enum StoreKindConfig {
 
         /// Inner-product match threshold (used to construct the store; not
         /// directly consulted during graph build).
-        threshold: i16,
+        threshold: i32,
     },
 }
 
@@ -264,7 +264,7 @@ async fn build_iris_graph<D: DistanceOps>(
 
 async fn build_deep_id_graph(
     vectors: Vec<(IrisVectorId, Int4Vector)>,
-    threshold: i16,
+    threshold: i32,
     graph_spec: Option<LoadGraphConfig>,
     searcher: &HnswSearcher,
     prf_seed: &[u8; 16],

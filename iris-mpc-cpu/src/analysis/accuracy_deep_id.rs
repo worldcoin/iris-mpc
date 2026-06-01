@@ -1,7 +1,8 @@
 //! Accuracy analysis for `PlaintextDeepIDStore`, parallel to `analysis::accuracy`.
 //!
 //! No rotations / mutations: deep-ID vectors are perturbed by adding ±1 to
-//! each nibble independently with probability `noise_level`, saturating at ±7.
+//! each nibble independently with probability `noise_level`, clamping to the
+//! supported `{-8..=7}` domain.
 
 use crate::{
     hawkers::plaintext_deep_id_store::{
@@ -37,7 +38,7 @@ pub struct Config {
     pub vectors: Int4VectorsInit,
     pub graph: GraphInit,
     pub analysis: AnalysisConfig,
-    pub threshold: i16,
+    pub threshold: i32,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -144,7 +145,7 @@ impl From<&HnswConfig> for HnswSearcher {
 
 pub async fn load_deep_id_store(
     config: Int4VectorsInit,
-    threshold: i16,
+    threshold: i32,
     rng: &mut StdRng,
 ) -> Result<PlaintextDeepIDStore> {
     let vectors = match config {
@@ -199,13 +200,13 @@ pub async fn load_graph(
 /* ----------------------------- Perturbation ----------------------------- */
 
 /// Perturb each nibble of `v` independently: with probability `p`, add a
-/// uniformly chosen ±1, saturating at ±7.
+/// uniformly chosen ±1, clamping to the supported `{-8..=7}` domain.
 pub fn perturb_nibbles<R: Rng>(v: &Int4Vector, p: f64, rng: &mut R) -> Int4Vector {
     let mut out = v.clone();
     for i in 0..INT4_DIM {
         if rng.gen::<f64>() < p {
             let delta: i8 = if rng.gen::<bool>() { 1 } else { -1 };
-            let new = (out.get(i) + delta).clamp(-7, 7);
+            let new = (out.get(i) + delta).clamp(-8, 7);
             set_nibble(&mut out, i, new);
         }
     }
@@ -224,7 +225,7 @@ fn set_nibble(v: &mut Int4Vector, i: usize, new: i8) {
 
 #[inline]
 fn encode_nibble(value: i8) -> u8 {
-    debug_assert!((-7..=7).contains(&value));
+    debug_assert!((-8..=7).contains(&value));
     (value as u8) & 0x0F
 }
 

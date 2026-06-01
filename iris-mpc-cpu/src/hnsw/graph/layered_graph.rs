@@ -857,7 +857,7 @@ mod int4_layer_tests {
         for (key, neighbors) in layer.get_links_map() {
             let me_idx = key.serial_id() as usize - 1;
             let me = &vectors[me_idx];
-            let mut dists: Vec<(IrisVectorId, i16)> = (0..n)
+            let mut dists: Vec<(IrisVectorId, i32)> = (0..n)
                 .filter(|j| *j != me_idx)
                 .map(|j| {
                     (

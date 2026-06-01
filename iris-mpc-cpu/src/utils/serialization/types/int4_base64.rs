@@ -7,12 +7,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::hawkers::plaintext_deep_id_store::{Int4Vector, INT4_PACKED_BYTES};
 
-/// Nibble `0x8` decodes to -8, which is outside the supported `{-7..=7}`
-/// domain and can overflow `Int4Vector::dot`'s i16 accumulator.
-fn nibble_is_valid(n: u8) -> bool {
-    (n & 0x0F) != 0x08
-}
-
 /// On-disk representation: the 256 packed bytes, base64-encoded.
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Base64Int4Vector {
@@ -41,15 +35,6 @@ impl TryFrom<&Base64Int4Vector> for Int4Vector {
         }
         let mut packed = [0u8; INT4_PACKED_BYTES];
         packed.copy_from_slice(&bytes);
-        for (i, byte) in packed.iter().enumerate() {
-            if !nibble_is_valid(*byte) || !nibble_is_valid(*byte >> 4) {
-                return Err(eyre!(
-                    "byte {} contains out-of-domain nibble 0x8 (decodes to -8); \
-                     Int4Vector supports only {{-7..=7}}",
-                    i
-                ));
-            }
-        }
         Ok(Int4Vector { packed })
     }
 }
@@ -100,13 +85,17 @@ mod tests {
     }
 
     #[test]
-    fn rejects_out_of_domain_nibble() {
+    fn accepts_full_int4_domain() {
+        // Every nibble value in {0x0..=0xF} encodes to a value in {-8..=7}.
         let mut packed = [0u8; INT4_PACKED_BYTES];
-        packed[0] = 0x08; // low nibble = -8, out of {-7..=7}
+        packed[0] = 0x08; // low nibble = -8
+        packed[1] = 0xF7; // low nibble = +7, high nibble = -1
         let encoded = Base64Int4Vector {
             packed_b64: STANDARD.encode(packed),
         };
-        let res = Int4Vector::try_from(&encoded);
-        assert!(res.is_err(), "decode must reject -8 nibble");
+        let decoded = Int4Vector::try_from(&encoded).expect("all nibbles valid in {-8..=7}");
+        assert_eq!(decoded.get(0), -8);
+        assert_eq!(decoded.get(2), 7);
+        assert_eq!(decoded.get(3), -1);
     }
 }

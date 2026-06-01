@@ -54,7 +54,7 @@ enum StoreKindConfig {
     DeepID {
         vectors_path: PathBuf,
         echoice: EngineChoiceInt4,
-        threshold: i16,
+        threshold: i32,
     },
 }
 
@@ -167,7 +167,7 @@ async fn run_sanity_check_deep_id(
     graph: &GraphMem<IrisVectorId>,
     searcher: &HnswSearcher,
     vectors: Vec<Int4Vector>,
-    threshold: i16,
+    threshold: i32,
 ) {
     for (lc, layer) in graph.layers.iter().enumerate() {
         let expected_nb_size = searcher
@@ -219,7 +219,7 @@ async fn run_sanity_check_deep_id(
             .get_links(&sample)
             .unwrap_or_else(|| panic!("{}", lc));
 
-        let mut dists: Vec<(IrisVectorId, i16)> = Vec::new();
+        let mut dists: Vec<(IrisVectorId, i32)> = Vec::new();
         for k in graph.layers[lc].links.keys() {
             if *k != sample {
                 let other = store.storage.get_vector(k).unwrap();
