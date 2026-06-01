@@ -77,6 +77,21 @@ impl Int4Vector {
         Self::decode_nibble(nibble)
     }
 
+    /// Set element at index `i` (0-based) to `value`, which must lie in
+    /// `{-8..=7}`.
+    ///
+    /// Out-of-range values follow the same masking behavior as
+    /// [`Self::encode_nibble`]: silently masked in release, debug-asserted.
+    pub fn set(&mut self, i: usize, value: i8) {
+        let byte = &mut self.packed[i / 2];
+        let nibble = Self::encode_nibble(value);
+        if i.is_multiple_of(2) {
+            *byte = (*byte & 0xF0) | nibble;
+        } else {
+            *byte = (*byte & 0x0F) | (nibble << 4);
+        }
+    }
+
     /// Integer inner product of two int4 vectors.
     ///
     /// Decodes nibbles on the fly and accumulates element-wise products in
@@ -460,14 +475,54 @@ mod tests {
         }
     }
 
-    fn make_vec_with(value: i8) -> Int4Vector {
-        let mut packed = [0u8; INT4_PACKED_BYTES];
-        let n = Int4Vector::encode_nibble(value);
-        let byte = n | (n << 4);
-        for b in packed.iter_mut() {
-            *b = byte;
+    #[test]
+    fn test_int4_set_roundtrip() {
+        // Set every element individually, then read it back via get().
+        let mut v = Int4Vector::default();
+        for i in 0..INT4_DIM {
+            // Sweep the full domain {-8..=7} across indices.
+            let value = ((i % 16) as i8) - 8;
+            v.set(i, value);
         }
-        Int4Vector { packed }
+        for i in 0..INT4_DIM {
+            let expected = ((i % 16) as i8) - 8;
+            assert_eq!(v.get(i), expected, "mismatch at element {i}");
+        }
+    }
+
+    #[test]
+    fn test_int4_set_overwrites_without_disturbing_neighbor() {
+        // Writing the low nibble must not clobber the high nibble and vice versa.
+        let mut v = Int4Vector::default();
+        v.set(0, 7); // low nibble of byte 0
+        v.set(1, -8); // high nibble of byte 0
+        assert_eq!(v.get(0), 7);
+        assert_eq!(v.get(1), -8);
+
+        // Overwrite each independently.
+        v.set(0, -1);
+        assert_eq!(v.get(0), -1);
+        assert_eq!(
+            v.get(1),
+            -8,
+            "neighbor nibble disturbed by low-nibble write"
+        );
+
+        v.set(1, 3);
+        assert_eq!(v.get(1), 3);
+        assert_eq!(
+            v.get(0),
+            -1,
+            "neighbor nibble disturbed by high-nibble write"
+        );
+    }
+
+    fn make_vec_with(value: i8) -> Int4Vector {
+        let mut v = Int4Vector::default();
+        for i in 0..INT4_DIM {
+            v.set(i, value);
+        }
+        v
     }
 
     #[test]
@@ -485,15 +540,10 @@ mod tests {
 
         // Half +7, half -7 in one vector; dotted against all +7 → 0
         let mut split = Int4Vector::default();
-        for i in 0..INT4_PACKED_BYTES {
-            // first 128 bytes: both nibbles +7; next 128 bytes: both nibbles -7
-            let v = if i < INT4_PACKED_BYTES / 2 {
-                7_i8
-            } else {
-                -7_i8
-            };
-            let n = Int4Vector::encode_nibble(v);
-            split.packed[i] = n | (n << 4);
+        for i in 0..INT4_DIM {
+            // first half of elements: +7; second half: -7
+            let v = if i < INT4_DIM / 2 { 7_i8 } else { -7_i8 };
+            split.set(i, v);
         }
         assert_eq!(split.dot(&all_plus_7), 0);
     }
@@ -519,15 +569,8 @@ mod tests {
     /// Flip a single nibble of `v` by adding `delta` (clamped to {-8..=7}).
     fn perturb(v: &Int4Vector, index: usize, delta: i8) -> Int4Vector {
         let mut out = v.clone();
-        let cur = out.get(index);
-        let new = (cur + delta).clamp(-8, 7);
-        let byte = out.packed[index / 2];
-        let n = Int4Vector::encode_nibble(new);
-        out.packed[index / 2] = if index.is_multiple_of(2) {
-            (byte & 0xF0) | n
-        } else {
-            (byte & 0x0F) | (n << 4)
-        };
+        let new = (out.get(index) + delta).clamp(-8, 7);
+        out.set(index, new);
         out
     }
 
