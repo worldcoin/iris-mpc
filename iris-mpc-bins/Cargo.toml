@@ -15,6 +15,7 @@ helpers = [
   "dep:reqwest",
 ]
 phase_trace = ["iris-mpc-cpu/phase_trace"]
+explicit-sns-batching = ["iris-mpc/explicit-sns-batching", "iris-mpc-common/explicit-sns-batching", "iris-mpc-utils/explicit-sns-batching"]
 networking_metrics = ["iris-mpc-cpu/networking_metrics"]
 
 [dependencies]
@@ -84,7 +85,6 @@ iris-mpc-utils = { path = "../iris-mpc-utils" }
 blake3.workspace = true
 aws-smithy-types = "1.2.9"
 clap_builder = "4.5.51"
-
 
 # ---------------------
 # binaries for iris-mpc

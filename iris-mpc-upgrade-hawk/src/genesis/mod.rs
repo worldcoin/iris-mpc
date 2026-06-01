@@ -1,3 +1,5 @@
+mod graph_checkpoint;
+
 use ampc_server_utils::{
     get_others_sync_state, init_heartbeat_task, set_node_ready, shutdown_handler::ShutdownHandler,
     start_coordination_server_with_extra_routes, wait_for_others_ready, wait_for_others_unready,
@@ -7,7 +9,6 @@ use aws_config::retry::RetryConfig;
 use aws_sdk_rds::Client as RDSClient;
 use aws_sdk_s3::{
     config::{Builder as S3ConfigBuilder, Region},
-    primitives::ByteStream,
     Client as S3Client,
 };
 use axum::{routing::get, Router};
@@ -20,14 +21,17 @@ use iris_mpc_common::{
     postgres::{AccessMode, PostgresClient},
     IrisSerialId,
 };
-pub use iris_mpc_cpu::genesis::{BatchSizeConfig, PruningMode};
+pub use iris_mpc_cpu::genesis::BatchSizeConfig;
 use iris_mpc_cpu::{
     execution::hawk_main::{
-        iris_worker::LocalIrisWorkerPool, BothEyes, GraphRef, GraphStore, HawkActor, HawkArgs,
-        HawkOps, StoreId, LEFT, RIGHT,
+        build_hawk_network_handle,
+        iris_worker::IrisWorkerPool,
+        worker_pool_initializer::{
+            DbLoadParams, LocalWorkerPoolInitializer, WorkerPoolInitializer,
+        },
+        BothEyes, GraphRef, GraphStore, HawkActor, HawkArgs, HawkOps, StoreId, LEFT, RIGHT,
     },
     genesis::{
-        genesis_checkpoint::*,
         state_accessor::{
             get_iris_deletions, get_iris_modifications, get_last_indexed_iris_id,
             get_last_indexed_modification_id, set_last_indexed_iris_id,
@@ -39,10 +43,11 @@ use iris_mpc_cpu::{
         BatchGenerator, BatchIterator, Handle as GenesisHawkHandle, IndexationError, JobRequest,
         JobResult,
     },
-    hawkers::aby3::aby3_store::{Aby3SharedIrisesRef, Aby3Store, VectorIdRegistryRef},
+    graph_checkpoint::*,
+    hawkers::aby3::aby3_store::{Aby3Store, VectorIdRegistryRef},
     hnsw::graph::graph_store::GraphPg,
 };
-use iris_mpc_store::{loader::load_iris_db, Store as IrisStore, StoredIrisRef};
+use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -55,20 +60,14 @@ use tokio::{
     time::timeout,
 };
 
-mod graph_checkpoint;
-pub use graph_checkpoint::{
+pub use graph_checkpoint::{maybe_rollback_iris_db, upload_and_sync_genesis_checkpoint};
+pub use iris_mpc_cpu::graph_checkpoint::{
     find_common_checkpoint, get_common_checkpoint, get_most_recent_checkpoints,
-    get_others_graph_hashes, maybe_rollback_iris_db, upload_and_sync_genesis_checkpoint,
+    get_others_graph_hashes,
 };
 
 pub const PERSIST_DELAY: usize = 16;
 const DEFAULT_REGION: &str = "eu-north-1";
-
-// types for the graph checkpoint sync
-pub type Blake3Hash = [u8; 32];
-pub type GraphCheckpointHashes = [Blake3Hash; 10];
-const GRAPH_CHECKPOINT_ROUTE: &str = "/graph-checkpoint";
-const GRAPH_CHECKPOINT_ENDPOINT: &str = "graph-checkpoint";
 
 /// Process input arguments typically passed from command line.
 #[derive(Debug, Clone)]
@@ -174,7 +173,6 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         mut task_monitor_bg,
         checkpoint_s3_client,
         aws_rds_client,
-        _imem_iris_stores,
         registries,
         worker_pools,
         imem_graph_stores,
@@ -267,9 +265,8 @@ async fn exec_setup(
     TaskMonitor,
     S3Client,
     RDSClient,
-    Arc<BothEyes<Aby3SharedIrisesRef>>,
     BothEyes<VectorIdRegistryRef>,
-    BothEyes<LocalIrisWorkerPool>,
+    BothEyes<Arc<dyn IrisWorkerPool>>,
     Arc<BothEyes<GraphRef>>,
     GenesisHawkHandle,
     Sender<JobResult>,
@@ -395,7 +392,8 @@ async fn exec_setup(
         bail!("Shutdown")
     }
 
-    let graph_checkpoint = get_common_checkpoint(config, hashes, graph_checkpoints).await?;
+    let graph_checkpoint =
+        get_common_checkpoint(server_coord_config, hashes, graph_checkpoints).await?;
     tracing::info!("common graph checkpoint: {:?}", graph_checkpoint);
 
     // don't roll anything back if the checkpoint can not be found
@@ -415,8 +413,10 @@ async fn exec_setup(
         }
     }
 
-    let mut hawk_actor = get_hawk_actor(config, &shutdown_handler).await?;
-    hawk_actor.sync_peers().await?;
+    // Networking only: sync_peers + rollback must run before the iris
+    // load decides `max_serial_id`.
+    let (hawk_args, mut hawk_networking) = build_hawk_networking(config, &shutdown_handler).await?;
+    hawk_networking.control_channel().await?.sync().await?;
 
     if let Some(cp) = graph_checkpoint.as_ref() {
         maybe_rollback_iris_db(
@@ -447,21 +447,20 @@ async fn exec_setup(
     .await?;
     tracing::info!("Store consistency checks OK");
 
-    // Initialise HNSW graph from previously indexed.
-    init_graph_from_stores(
+    // Iris and graph load in parallel, then assemble the actor.
+    let hawk_actor = init_graph_from_stores(
         config,
         &config.graph_checkpoint_bucket_name,
         &iris_store,
         graph_store_arc.clone(),
-        &mut hawk_actor,
+        hawk_args,
+        hawk_networking,
         &checkpoint_s3_client,
         Arc::clone(&shutdown_handler),
         args.max_indexation_id as usize,
         graph_checkpoint.clone(),
     )
     .await?;
-    // Refresh HawkActor's internal registries now that iris_store is populated.
-    hawk_actor.refresh_registries().await;
     task_monitor_bg.check_tasks();
     tracing::info!("HNSW graph initialised from store");
 
@@ -499,13 +498,6 @@ async fn exec_setup(
         // return Ok(());
     }
 
-    // Set in memory Iris stores (still needed for DB persistence thread).
-    let imem_iris_stores = Arc::new([
-        hawk_actor.iris_store(StoreId::Left),
-        hawk_actor.iris_store(StoreId::Right),
-    ]);
-
-    // Registries were already refreshed above; extract them for exec_indexation.
     let registries = hawk_actor.registries();
     let worker_pools = [
         hawk_actor.worker_pool(StoreId::Left),
@@ -524,7 +516,7 @@ async fn exec_setup(
 
     // Set thread for persisting indexing results to DB.
     let tx_results = get_results_thread(
-        Arc::clone(&imem_iris_stores),
+        worker_pools.clone(),
         hnsw_iris_store.clone(),
         graph_store_arc.clone(),
         &mut task_monitor_bg,
@@ -547,7 +539,6 @@ async fn exec_setup(
         task_monitor_bg,
         checkpoint_s3_client,
         aws_rds_client,
-        imem_iris_stores,
         registries,
         worker_pools,
         imem_graph_stores,
@@ -646,7 +637,7 @@ async fn exec_delta(
             let is_sync_batch = idx % (PERSIST_DELAY - 1) == 0 || idx == end;
             if is_sync_batch {
                 let wait_start = Instant::now();
-                hawk_handle.sync_peers(false, Some(done_rx)).await?;
+                hawk_handle.sync_state(false, Some(done_rx)).await?;
                 metrics::histogram!("genesis_persist_wait_duration")
                     .record(wait_start.elapsed().as_secs_f64());
             }
@@ -731,7 +722,7 @@ async fn exec_indexation(
     ctx: &ExecutionContextInfo,
     s3_client: &S3Client,
     registries: &BothEyes<VectorIdRegistryRef>,
-    worker_pools: &BothEyes<LocalIrisWorkerPool>,
+    worker_pools: &BothEyes<Arc<dyn IrisWorkerPool>>,
     imem_graph_stores: &Arc<BothEyes<GraphRef>>,
     mut hawk_handle: GenesisHawkHandle,
     tx_results: &Sender<JobResult>,
@@ -799,7 +790,7 @@ async fn exec_indexation(
         {
             // Coordinator: escape on shutdown.
             let shutdown = shutdown_handler.is_shutting_down();
-            let mismatch = hawk_handle.sync_peers(shutdown, None).await?;
+            let mismatch = hawk_handle.sync_state(shutdown, None).await?;
             if shutdown || mismatch {
                 tracing::warn!("Shutting down has been triggered");
                 break;
@@ -830,7 +821,7 @@ async fn exec_indexation(
                 if let Some(prev_done_rx) = persist_ch.take() {
                     let wait_start = Instant::now();
                     // Wait for other nodes to finish equivalent persistence.
-                    hawk_handle.sync_peers(false, Some(prev_done_rx)).await?;
+                    hawk_handle.sync_state(false, Some(prev_done_rx)).await?;
                     metrics::histogram!("genesis_persist_wait_duration")
                         .record(wait_start.elapsed().as_secs_f64());
                 }
@@ -905,11 +896,12 @@ async fn exec_indexation(
                     last_indexed_id
                 );
             } else if let Some(rx) = persist_ch.take() {
-                hawk_handle.sync_peers(false, Some(rx)).await?;
+                hawk_handle.sync_state(false, Some(rx)).await?;
             }
             metrics::histogram!("genesis_persist_wait_duration")
                 .record(wait_start.elapsed().as_secs_f64());
 
+            hawk_handle.sync_peers().await?;
             tracing::info!("All batches have been processed, shutting down...");
 
             Ok(())
@@ -1114,16 +1106,12 @@ pub async fn exec_use_backup_as_source(
     Ok(())
 }
 
-/// Factory function to return a configured Hawk actor that manages HNSW graph construction & search.
-///
-/// # Arguments
-///
-/// * `config` - Application configuration instance.
-///
-async fn get_hawk_actor(
+/// Build `HawkArgs` and the MPC network handle. `init_graph_from_stores`
+/// uses them to assemble a fully-loaded `HawkActor`.
+async fn build_hawk_networking(
     config: &Config,
     shutdown_handler: &Arc<ShutdownHandler>,
-) -> Result<HawkActor> {
+) -> Result<(HawkArgs, Box<dyn iris_mpc_cpu::network::mpc::NetworkHandle>)> {
     let server_coord_config = config
         .server_coordination
         .as_ref()
@@ -1156,96 +1144,17 @@ async fn get_hawk_actor(
     };
 
     tracing::info!(
-        "Initializing HawkActor with args: party_index: {}, addresses: {:?}",
+        "Initializing Hawk networking (party_index: {}, addresses: {:?})",
         hawk_args.party_index,
         node_addresses
     );
 
-    HawkActor::from_cli(
+    let networking = build_hawk_network_handle(
         &hawk_args,
         shutdown_handler.get_network_cancellation_token(),
     )
-    .await
-}
-
-/// Verifies that the S3 client has read, write, and delete access to the
-/// checkpoint bucket. Uploads a small sentinel object, reads it back, and
-/// deletes it. This catches misconfigured buckets/regions/IAM before any
-/// mutations occur.
-async fn verify_s3_checkpoint_access(
-    s3_client: &S3Client,
-    bucket: &str,
-    party_id: usize,
-) -> Result<()> {
-    let key = format!("genesis/{party_id}/_access_check");
-    let body = b"access_check";
-
-    // Write
-    s3_client
-        .put_object()
-        .bucket(bucket)
-        .key(&key)
-        .body(ByteStream::from_static(body))
-        .send()
-        .await
-        .map_err(|e| eyre!("S3 checkpoint bucket write check failed: {e}"))?;
-
-    // Read
-    let resp = s3_client
-        .get_object()
-        .bucket(bucket)
-        .key(&key)
-        .send()
-        .await
-        .map_err(|e| eyre!("S3 checkpoint bucket read check failed: {e}"))?;
-    let data = resp
-        .body
-        .collect()
-        .await
-        .map_err(|e| eyre!("S3 checkpoint bucket read check failed to collect body: {e}"))?;
-    if data.into_bytes().as_ref() != body {
-        bail!("S3 checkpoint bucket read check returned unexpected content");
-    }
-
-    // Delete
-    if let Err(e) = s3_client
-        .delete_object()
-        .bucket(bucket)
-        .key(&key)
-        .send()
-        .await
-    {
-        tracing::warn!("S3 checkpoint bucket delete check failed: {e}");
-    }
-
-    Ok(())
-}
-
-/// Checks whether a given key exists in an S3 bucket using a `HeadObject`
-/// request. Returns `true` if the key is present, `false` if it does not
-/// exist (HTTP 404 / `NoSuchKey`), or an error for any other failure.
-///
-/// # Arguments
-///
-/// * `s3_client` - Authenticated S3 client.
-/// * `bucket`    - Name of the S3 bucket to query.
-/// * `key`       - Object key to check for existence.
-async fn s3_key_exists(s3_client: &S3Client, bucket: &str, key: &str) -> Result<bool> {
-    match s3_client.head_object().bucket(bucket).key(key).send().await {
-        Ok(_) => Ok(true),
-        Err(e) => {
-            // `head_object` returns a 404 when the key does not exist.
-            // The SDK surfaces this as a `NotFound` service error.
-            if e.as_service_error()
-                .map(|se| se.is_not_found())
-                .unwrap_or(false)
-            {
-                Ok(false)
-            } else {
-                Err(eyre!("S3 head_object failed for s3://{bucket}/{key}: {e}"))
-            }
-        }
-    }
+    .await?;
+    Ok((hawk_args, networking))
 }
 
 /// Returns service clients used downstream.
@@ -1312,18 +1221,15 @@ async fn get_service_clients(
         // S3 client for graph checkpoint operations (may be in a different region)
         let checkpoint_region_name = config.graph_checkpoint_bucket_region.clone();
         let checkpoint_region = Region::new(checkpoint_region_name.clone());
-        let checkpoint_sdk_config = aws_config::from_env()
-            .region(checkpoint_region)
-            .load()
-            .await;
 
         tracing::info!(
             "Checkpoint S3 client: region={}, endpoint={:?}",
             checkpoint_region_name,
-            checkpoint_sdk_config.endpoint_url(),
+            sdk_config.endpoint_url(),
         );
 
-        let checkpoint_s3_config = S3ConfigBuilder::from(&checkpoint_sdk_config)
+        let checkpoint_s3_config = S3ConfigBuilder::from(&sdk_config)
+            .region(checkpoint_region)
             .force_path_style(force_path_style)
             .retry_config(retry_config.clone())
             .build();
@@ -1410,7 +1316,7 @@ async fn get_service_clients(
 /// * `shutdown_handler` - Handler coordinating process shutdown.
 ///
 async fn get_results_thread(
-    imem_iris_stores: Arc<BothEyes<Aby3SharedIrisesRef>>,
+    worker_pools: BothEyes<Arc<dyn IrisWorkerPool>>,
     hnsw_iris_store: IrisStore,
     graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
     task_monitor: &mut TaskMonitor,
@@ -1418,7 +1324,6 @@ async fn get_results_thread(
 ) -> Result<Sender<JobResult>> {
     let (tx, mut rx) = mpsc::channel::<JobResult>(PERSIST_DELAY);
     let shutdown_handler_bg = Arc::clone(shutdown_handler);
-    let imem_iris_stores_bg = Arc::clone(&imem_iris_stores);
     let graph_store_bg = Arc::clone(&graph_store);
     let _result_sender_abort = task_monitor.spawn(async move {
         while let Some(result) = rx.recv().await {
@@ -1433,16 +1338,12 @@ async fn get_results_thread(
                     ..
                 } => {
                     tracing::info!("Job Results :: Received: batch-id={batch_id}");
-                    // get iris shares to persist
                     let start = Instant::now();
-                    let left_store = &imem_iris_stores_bg[LEFT];
-                    let right_store = &imem_iris_stores_bg[RIGHT];
 
-                    // Parallelize fetching left and right iris data using tokio::join!
-                    let (left_data, right_data) = tokio::join!(
-                        left_store.get_vectors_or_empty(vector_ids_to_persist.iter()),
-                        right_store.get_vectors_or_empty(vector_ids_to_persist.iter())
-                    );
+                    let (left_data, right_data) = tokio::try_join!(
+                        worker_pools[LEFT].fetch_irises(vector_ids_to_persist.clone()),
+                        worker_pools[RIGHT].fetch_irises(vector_ids_to_persist.clone()),
+                    )?;
 
                     let codes_and_masks: Vec<StoredIrisRef> = vector_ids_to_persist
                             .iter()
@@ -1494,16 +1395,12 @@ async fn get_results_thread(
                         "Job Results :: Received: modification-id={modification_id} for serial-id={}",
                         vector_id_to_persist.serial_id()
                     );
-                    // get iris shares to persist
-                    let left_store = &imem_iris_stores_bg[LEFT];
-                    let right_store = &imem_iris_stores_bg[RIGHT];
-
-                    let left_iris = left_store
-                        .get_vector_or_empty(&vector_id_to_persist)
-                        .await;
-                    let right_iris = right_store
-                        .get_vector_or_empty(&vector_id_to_persist)
-                        .await;
+                    let (left_irises, right_irises) = tokio::try_join!(
+                        worker_pools[LEFT].fetch_irises(vec![vector_id_to_persist]),
+                        worker_pools[RIGHT].fetch_irises(vec![vector_id_to_persist]),
+                    )?;
+                    let left_iris = &left_irises[0];
+                    let right_iris = &right_irises[0];
 
                     let mut graph_tx = graph_store_bg.tx().await?;
                     let iris_data =StoredIrisRef {
@@ -1540,7 +1437,7 @@ async fn get_results_thread(
                     save_checkpoint_state(graph_tx, &checkpoint_state).await?;
                     let _ = done_tx.send(());
                 },
-                JobResult::Sync { .. } => unreachable!(),
+                JobResult::SyncState { .. } | JobResult::SyncPeers => unreachable!(),
             }
         }
 
@@ -1594,36 +1491,23 @@ async fn get_sync_result(
     Ok(result)
 }
 
-/// Initializes HNSW graph from data previously persisted to a store.
-/// First attempts to load from S3 checkpoint if available, falls back to PostgreSQL.
-///
-/// # Arguments
-///
-/// * `config` - Application configuration instance.
-/// * `checkpoint_bucket` - S3 bucket name for graph checkpoints.
-/// * `iris_store` - Iris PostgreSQL store provider.
-/// * `graph_store` - Graph PostgreSQL store provider.
-/// * `hawk_actor` - Hawk actor managing graph access & indexation.
-/// * `s3_client` - AWS S3 client for checkpoint loading.
-/// * `shutdown_handler` - Handler coordinating function termination/process shutdown.
-/// * `max_indexation_id` - Maximum index to load (inclusive).
-/// * `checkpoint` - Optional checkpoint state to load from S3 instead of PostgreSQL.
-///
+/// Load iris data and the graph (from S3 checkpoint if present, else
+/// PG) in parallel, then assemble a fully-loaded `HawkActor`.
+/// `max_indexation_id` is the inclusive upper bound for the iris load.
 #[allow(clippy::too_many_arguments)]
 async fn init_graph_from_stores(
     config: &Config,
     checkpoint_bucket: &str,
     iris_store: &IrisStore,
     graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
-    hawk_actor: &mut HawkActor,
+    hawk_args: HawkArgs,
+    hawk_networking: Box<dyn iris_mpc_cpu::network::mpc::NetworkHandle>,
     s3_client: &S3Client,
     shutdown_handler: Arc<ShutdownHandler>,
     max_indexation_id: usize,
-    checkpoint: Option<GenesisCheckpointState>,
-) -> Result<()> {
+    checkpoint: Option<GraphCheckpointState>,
+) -> Result<HawkActor> {
     tracing::info!("⚓️ ANCHOR: Load the database");
-
-    let (mut iris_loader, graph_loader) = hawk_actor.as_iris_loader().await;
 
     let iris_db_parallelism = config
         .database
@@ -1645,40 +1529,49 @@ async fn init_graph_from_stores(
         graph_db_parallelism
     );
 
-    // -------------------------------------------------------------------
-    // Get total number of irises and apply max_index limit if specified
-    // -------------------------------------------------------------------
     let store_len = iris_store.count_irises().await?;
     let max_index = std::cmp::min(max_indexation_id, store_len);
 
-    // Load iris data from database
-    load_iris_db(
-        &mut iris_loader,
-        iris_store,
-        max_index,
-        iris_db_parallelism,
-        Some(max_index),
-        config,
-        shutdown_handler,
-    )
-    .await
-    .expect("Failed to load DB");
+    let initializer: Box<dyn WorkerPoolInitializer> =
+        Box::new(LocalWorkerPoolInitializer::new_load_from_db(
+            config.party_id,
+            iris_mpc_cpu::execution::hawk_main::HAWK_DISTANCE_MODE,
+            config.hawk_numa,
+            DbLoadParams {
+                store: iris_store.clone(),
+                config: Arc::new(config.clone()),
+                max_serial_id: max_index,
+                parallelism: iris_db_parallelism,
+                s3_max_serial_id: Some(max_index),
+                shutdown_handler,
+            },
+        ));
 
-    iris_loader.wait_completion().await?;
+    let graph_load_future = async {
+        if let Some(state) = checkpoint {
+            tracing::info!(
+                "Loading graph from S3 checkpoint, hash: {}",
+                state.blake3_hash
+            );
+            download_graph_checkpoint(s3_client, checkpoint_bucket, &state).await
+        } else {
+            tracing::info!("No S3 checkpoint found, loading graph from PostgreSQL");
+            iris_mpc_cpu::execution::hawk_main::load_graphs_from_pg(
+                &graph_store,
+                graph_db_parallelism,
+            )
+            .await
+        }
+    };
 
-    // Try to load graph from S3 checkpoint first
-    if let Some(state) = checkpoint {
-        let both_eyes = download_genesis_checkpoint(s3_client, checkpoint_bucket, &state).await?;
-        graph_loader.load_graphs_from_checkpoint(both_eyes);
-        return Ok(());
-    }
-    tracing::info!("No S3 checkpoint found, loading from PostgreSQL");
+    let (initialized, graph) = tokio::try_join!(initializer.initialize(), graph_load_future)?;
 
-    graph_loader
-        .load_graph_store(&graph_store, graph_db_parallelism)
-        .await?;
-
-    Ok(())
+    Ok(HawkActor::new(
+        hawk_args,
+        hawk_networking,
+        initialized,
+        graph,
+    ))
 }
 
 /// Initializes shutdown handler, which waits for shutdown signals or function

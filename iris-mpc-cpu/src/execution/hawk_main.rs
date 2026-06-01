@@ -71,7 +71,7 @@ use crate::{
     execution::{
         hawk_main::{
             insert::InsertPlanV,
-            iris_worker::{IrisPoolHandle, IrisWorkerPool},
+            iris_worker::IrisWorkerPool,
             rot::{VecRotationSupport, ALL_ROTATIONS_MASK, CENTER_AND_10_MASK, CENTER_ONLY_MASK},
             search::SearchIds,
         },
@@ -79,8 +79,8 @@ use crate::{
     },
     hawkers::{
         aby3::aby3_store::{
-            Aby3DistanceRef, Aby3Query, Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store,
-            Aby3VectorRef, DistanceMode, DistanceOps, FhdOps, VectorIdRegistryRef,
+            Aby3DistanceRef, Aby3Query, Aby3SharedIrises, Aby3Store, Aby3VectorRef, DistanceMode,
+            DistanceOps, FhdOps, VectorIdRegistryRef,
         },
         shared_irises::SharedIrises,
     },
@@ -108,11 +108,6 @@ use identity_update::{
 };
 use intra_batch::intra_batch_is_match;
 use iris_mpc_common::{
-    helpers::inmemory_store::InMemoryStore,
-    job::{BatchQuery, JobSubmissionHandle},
-    ROTATIONS,
-};
-use iris_mpc_common::{
     helpers::smpc_request::{
         REAUTH_MESSAGE_TYPE, RECOVERY_CHECK_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
         UNIQUENESS_MESSAGE_TYPE,
@@ -120,11 +115,15 @@ use iris_mpc_common::{
     vector_id::VectorId,
 };
 use iris_mpc_common::{helpers::sync::ModificationKey, job::RequestIndex};
+use iris_mpc_common::{
+    job::{BatchQuery, JobSubmissionHandle},
+    ROTATIONS,
+};
 use itertools::{izip, Itertools};
 use matching::{
     Decision, Filter, MatchId,
     OnlyOrBoth::{Both, Only},
-    RequestType, UniquenessRequest,
+    RequestType, UniquenessRequest, DECISION_FILTER,
 };
 use rand::{thread_rng, Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -137,7 +136,6 @@ use std::{
     collections::{BTreeMap, HashMap},
     future::Future,
     hash::{Hash, Hasher},
-    ops::Not,
     sync::Arc,
     time::Instant,
     vec,
@@ -147,6 +145,7 @@ use tokio::{
     sync::{mpsc, oneshot, RwLock, RwLockWriteGuard},
 };
 use tokio_util::sync::CancellationToken;
+use tracing::{Instrument, Span};
 
 /// Distance type used by the HawkActor. Change to `NhdOps` for Normalized Hamming Distance.
 pub type HawkOps = FhdOps;
@@ -176,6 +175,7 @@ pub(crate) mod scheduler;
 pub(crate) mod search;
 mod session_groups;
 pub mod state_check;
+pub mod worker_pool_initializer;
 use is_match_batch::is_match_batch;
 
 /// Distance mode used by the HawkActor
@@ -291,8 +291,9 @@ pub struct HawkArgs {
 /// the entire state of the MPC node.
 ///
 /// # Responsibilities
-/// - **State Management:** Holds in-memory HNSW graphs (`graph_store`) and the underlying
-///   shared iris data (`iris_store`).
+/// - **State Management:** Holds in-memory HNSW graphs (`graph_store`) and the
+///   metadata-only `VectorId` registries. Iris data lives in the worker pool
+///   and is accessed through the [`IrisWorkerPool`] trait.
 /// - **Session Management:** Creates and manages `HawkSession`s, which provide the
 ///   cryptographic context for MPC operations.
 /// - **Request Handling:** Processes `HawkRequest` batches.
@@ -312,21 +313,16 @@ pub struct HawkActor {
     /// See `get_or_init_prf_key`.
     prf_key: Option<Arc<[u8; 16]>>,
     // ---- Core State ----
-    /// A size used by the start-up loader.
-    loader_db_size: usize,
-    /// In-memory storage for the secret-shared iris codes for both left and right eyes.
-    /// Used by workers for distance computation and by external mutation paths (deletions).
-    iris_store: BothEyes<Aby3SharedIrisesRef>,
-    /// Metadata-only VectorId registries (one per eye).
-    /// Tracks presence, versions, and checksums without iris data.
-    /// Passed to `Aby3Store` sessions; kept in sync with `iris_store`.
+    /// Metadata-only VectorId registries (one per eye): presence,
+    /// versions, checksums; no iris data. Updated inline with the
+    /// worker pool on every insert/delete (see `Aby3Store::insert` /
+    /// `apply_deletions`).
     registry: BothEyes<VectorIdRegistryRef>,
     /// In-memory HNSW graphs for both left and right eyes.
     graph_store: BothEyes<GraphRef>,
-    /// Shared worker pools with query caches (one per eye). Cloned into each
-    /// `HawkSession` so all sessions for the same eye share the same cache.
-    /// Use `.inner()` to access the underlying `IrisPoolHandle`.
-    pub(crate) worker_pools: BothEyes<iris_worker::LocalIrisWorkerPool>,
+    /// Per-eye worker pools with query caches. Cloned into each
+    /// `HawkSession` so all sessions for one eye share a cache.
+    pub(crate) worker_pools: BothEyes<Arc<dyn IrisWorkerPool>>,
 
     /// Store for persisting detailed anonymized statistics.
     anon_stats_store: Option<AnonStatsStore>,
@@ -417,7 +413,7 @@ pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3VectorRef>>;
 /// (which manages secret-shared data and cryptographic primitives) and the HNSW graph.
 /// Multiple sessions can be created to parallelize operations across a batch of requests.
 ///
-/// All sessions operate on the same shared `graph_store` and `iris_store` held by the `HawkActor`.
+/// All sessions share the `HawkActor`'s `graph_store` and `worker_pools`.
 /// All sessions keep a copy of the HNSW PRF key (mostly used for generating insertion layers).
 #[derive(Clone)]
 pub struct HawkSession {
@@ -474,23 +470,39 @@ pub struct HawkInsertPlan {
 /// new one. It is the definitive set of changes that will be applied to the graph storage.
 pub type ConnectPlan = ConnectPlanV<Aby3Store<HawkOps>>;
 
-impl HawkActor {
-    pub async fn from_cli(args: &HawkArgs, shutdown_ct: CancellationToken) -> Result<Self> {
-        Self::from_cli_with_graph_and_store(
-            args,
-            shutdown_ct,
-            [(); 2].map(|_| GraphMem::new()),
-            [(); 2].map(|_| Aby3Store::<HawkOps>::new_storage(None)),
-        )
-        .await
-    }
+/// Build the MPC network handle. Cheap — just TCP listener setup.
+/// Callers that need peer sync before iris load (genesis) call
+/// `networking.sync_peers()` on the returned handle before passing
+/// it to `HawkActor::new`.
+pub async fn build_hawk_network_handle(
+    args: &HawkArgs,
+    shutdown_ct: CancellationToken,
+) -> Result<Box<dyn NetworkHandle>> {
+    let network_args = NetworkHandleArgs {
+        party_index: args.party_index,
+        addresses: args.addresses.clone(),
+        outbound_addresses: args.outbound_addrs.clone(),
+        connection_parallelism: args.connection_parallelism,
+        request_parallelism: args.request_parallelism,
+        sessions_per_request: SessionGroups::N_SESSIONS_PER_REQUEST,
+        tls: args.tls.clone(),
+    };
+    build_network_handle(network_args, shutdown_ct).await
+}
 
-    pub async fn from_cli_with_graph_and_store(
-        args: &HawkArgs,
-        shutdown_ct: CancellationToken,
+impl HawkActor {
+    /// Assemble a fully-loaded actor. No I/O happens here — `networking`,
+    /// `initialized`, and `graph` must already be ready. Production paths
+    /// build the network handle, run any pre-load peer sync, load iris
+    /// data and graph in parallel, then call this.
+    pub fn new(
+        args: HawkArgs,
+        networking: Box<dyn NetworkHandle>,
+        initialized: worker_pool_initializer::InitializedWorkers,
         graph: BothEyes<GraphMem<Aby3VectorRef>>,
-        iris_store: BothEyes<Aby3SharedIrises>,
-    ) -> Result<Self> {
+    ) -> Self {
+        let party_id = args.party_index;
+
         let searcher = {
             let mut searcher_ = HnswSearcher::new_linear_scan(
                 args.hnsw_param_ef_constr,
@@ -511,47 +523,70 @@ impl HawkActor {
             Arc::new(searcher_)
         };
 
-        let network_args = NetworkHandleArgs {
-            party_index: args.party_index,
-            addresses: args.addresses.clone(),
-            outbound_addresses: args.outbound_addrs.clone(),
-            connection_parallelism: args.connection_parallelism,
-            request_parallelism: args.request_parallelism,
-            sessions_per_request: SessionGroups::N_SESSIONS_PER_REQUEST,
-            tls: args.tls.clone(),
-        };
-        let networking = build_network_handle(network_args, shutdown_ct).await?;
-        let graph_store = graph.map(GraphMem::to_arc);
-        let iris_store = iris_store.map(SharedIrises::to_arc);
-        let registry = [
-            iris_store[LEFT].read().await.to_registry().to_arc(),
-            iris_store[RIGHT].read().await.to_registry().to_arc(),
-        ];
-        let workers_handle = [LEFT, RIGHT]
-            .map(|side| iris_worker::init_workers(side, iris_store[side].clone(), args.numa));
-        let worker_pools = [LEFT, RIGHT].map(|side| {
-            iris_worker::LocalIrisWorkerPool::new(
-                workers_handle[side].clone(),
-                iris_store[side].clone(),
-                HAWK_DISTANCE_MODE,
-                args.party_index,
-            )
-        });
+        let worker_pool_initializer::InitializedWorkers { pools, registries } = initialized;
 
-        Ok(HawkActor {
-            args: args.clone(),
+        let graph_store = graph.map(GraphMem::to_arc);
+
+        HawkActor {
+            args,
             searcher,
             prf_key: None,
-            loader_db_size: 0,
-            iris_store,
-            registry,
+            registry: registries,
             graph_store,
             anon_stats_store: None,
             networking,
-            party_id: args.party_index,
+            party_id,
             error_ct: CancellationToken::new(),
-            worker_pools,
-        })
+            worker_pools: pools,
+        }
+    }
+
+    /// Empty-store, empty-graph constructor. Test convenience.
+    pub async fn from_cli(args: &HawkArgs, shutdown_ct: CancellationToken) -> Result<Self> {
+        let initializer = Box::new(
+            worker_pool_initializer::LocalWorkerPoolInitializer::new_empty(
+                args.party_index,
+                HAWK_DISTANCE_MODE,
+                args.numa,
+            ),
+        );
+        Self::from_cli_with_initializer(args, shutdown_ct, initializer).await
+    }
+
+    /// Test convenience: build the actor from caller-provided iris
+    /// stores and graph (no DB or fake-db plumbing).
+    pub async fn from_cli_with_graph_and_store(
+        args: &HawkArgs,
+        shutdown_ct: CancellationToken,
+        graph: BothEyes<GraphMem<Aby3VectorRef>>,
+        iris_store: BothEyes<Aby3SharedIrises>,
+    ) -> Result<Self> {
+        use worker_pool_initializer::WorkerPoolInitializer;
+        let initializer = Box::new(
+            worker_pool_initializer::LocalWorkerPoolInitializer::new_seeded(
+                args.party_index,
+                HAWK_DISTANCE_MODE,
+                args.numa,
+                iris_store,
+            ),
+        );
+        let networking = build_hawk_network_handle(args, shutdown_ct).await?;
+        let initialized = initializer.initialize().await?;
+        Ok(HawkActor::new(args.clone(), networking, initialized, graph))
+    }
+
+    /// Run an initializer, then build the actor with an empty graph.
+    /// Test/dev path; production builds the network handle, initializer,
+    /// and graph in parallel via `HawkActor::new` directly.
+    pub async fn from_cli_with_initializer(
+        args: &HawkArgs,
+        shutdown_ct: CancellationToken,
+        initializer: Box<dyn worker_pool_initializer::WorkerPoolInitializer>,
+    ) -> Result<Self> {
+        let networking = build_hawk_network_handle(args, shutdown_ct).await?;
+        let initialized = initializer.initialize().await?;
+        let graph = [(); 2].map(|_| GraphMem::new());
+        Ok(HawkActor::new(args.clone(), networking, initialized, graph))
     }
 
     pub fn set_anon_stats_store(&mut self, store: Option<AnonStatsStore>) {
@@ -574,10 +609,6 @@ impl HawkActor {
         self.searcher.clone()
     }
 
-    pub fn iris_store(&self, store_id: StoreId) -> Aby3SharedIrisesRef {
-        self.iris_store[store_id as usize].clone()
-    }
-
     pub fn registry(&self, store_id: StoreId) -> VectorIdRegistryRef {
         self.registry[store_id as usize].clone()
     }
@@ -586,16 +617,7 @@ impl HawkActor {
         self.registry.clone()
     }
 
-    /// Re-derive registries from iris_store. Call after external data
-    /// loading (e.g. genesis) that populates iris_store directly.
-    pub async fn refresh_registries(&mut self) {
-        self.registry = [
-            self.iris_store[LEFT].read().await.to_registry().to_arc(),
-            self.iris_store[RIGHT].read().await.to_registry().to_arc(),
-        ];
-    }
-
-    pub fn worker_pool(&self, store_id: StoreId) -> iris_worker::LocalIrisWorkerPool {
+    pub fn worker_pool(&self, store_id: StoreId) -> Arc<dyn IrisWorkerPool> {
         self.worker_pools[store_id as usize].clone()
     }
 
@@ -685,7 +707,7 @@ impl HawkActor {
     }
 
     pub async fn sync_peers(&mut self) -> Result<()> {
-        self.networking.sync_peers().await
+        self.networking.control_channel().await?.sync().await
     }
 
     fn create_session(
@@ -1001,22 +1023,13 @@ impl HawkActor {
         Ok(())
     }
 
-    /// Borrow the in-memory iris and graph stores to modify them.
-    pub async fn as_iris_loader(&mut self) -> (IrisLoader<'_>, GraphLoader<'_>) {
-        (
-            IrisLoader {
-                party_id: self.party_id,
-                db_size: &mut self.loader_db_size,
-                iris_pools: [
-                    self.worker_pools[LEFT].inner().clone(),
-                    self.worker_pools[RIGHT].inner().clone(),
-                ],
-            },
-            GraphLoader([
-                self.graph_store[0].write().await,
-                self.graph_store[1].write().await,
-            ]),
-        )
+    /// Borrow the in-memory graph stores for population from PG or an S3
+    /// checkpoint.
+    pub async fn as_graph_loader(&mut self) -> GraphLoader<'_> {
+        GraphLoader([
+            self.graph_store[0].write().await,
+            self.graph_store[1].write().await,
+        ])
     }
 }
 
@@ -1029,75 +1042,40 @@ pub fn session_seeded_rng(base_seed: u64, store_id: StoreId, session_id: Session
 
 pub type Aby3SharedIrisesMut<'a> = RwLockWriteGuard<'a, Aby3SharedIrises>;
 
-/// Extra space to reserve in the iris store to avoid reallocations during insertion.
-const IRIS_STORE_RESERVE_EXTRA: f64 = 0.2;
-
-pub struct IrisLoader<'a> {
-    party_id: usize,
-    db_size: &'a mut usize,
-    iris_pools: BothEyes<IrisPoolHandle>,
-}
-
-impl IrisLoader<'_> {
-    pub async fn wait_completion(self) -> Result<()> {
-        try_join!(
-            self.iris_pools[LEFT].wait_completion(),
-            self.iris_pools[RIGHT].wait_completion(),
-        )?;
-        Ok(())
-    }
-}
-
-#[allow(clippy::needless_lifetimes)]
-impl<'a> InMemoryStore for IrisLoader<'a> {
-    fn load_single_record_from_db(
-        &mut self,
-        _index: usize, // TODO: Map.
-        vector_id: VectorId,
-        left_code: &[u16],
-        left_mask: &[u16],
-        right_code: &[u16],
-        right_mask: &[u16],
-    ) {
-        for (pool, code, mask) in izip!(
-            &self.iris_pools,
-            [left_code, right_code],
-            [left_mask, right_mask]
-        ) {
-            let iris = GaloisRingSharedIris::try_from_buffers(self.party_id, code, mask)
-                .expect("Wrong code or mask size");
-            pool.insert(vector_id, iris).unwrap();
-        }
-    }
-
-    fn increment_db_size(&mut self, _index: usize) {
-        *self.db_size += 1;
-    }
-
-    fn reserve(&mut self, additional: usize) {
-        let additional = additional + (additional as f64 * IRIS_STORE_RESERVE_EXTRA) as usize;
-        for side in &self.iris_pools {
-            side.reserve(additional).unwrap();
-        }
-    }
-
-    fn current_db_sizes(&self) -> impl std::fmt::Debug {
-        *self.db_size
-    }
-
-    fn fake_db(&mut self, size: usize) {
-        *self.db_size = size;
-        let iris = Arc::new(GaloisRingSharedIris::default_for_party(self.party_id));
-        for side in &self.iris_pools {
-            for i in 0..size {
-                side.insert(VectorId::from_serial_id(i as u32), iris.clone())
-                    .unwrap();
-            }
-        }
-    }
-}
-
 pub struct GraphLoader<'a>(BothEyes<GraphMut<'a>>);
+
+/// Load both eyes' graphs from PG in parallel. Returns the in-memory
+/// graphs so callers can overlap this with the iris load before
+/// constructing a `HawkActor`.
+pub async fn load_graphs_from_pg(
+    graph_store: &GraphStore,
+    parallelism: usize,
+) -> Result<BothEyes<GraphMem<VectorId>>> {
+    let now = Instant::now();
+    let (graph_left, graph_right) = join!(
+        async {
+            let mut graph_tx = graph_store.tx().await?;
+            graph_tx
+                .with_graph(StoreId::Left)
+                .load_to_mem(graph_store.pool(), parallelism)
+                .await
+        },
+        async {
+            let mut graph_tx = graph_store.tx().await?;
+            graph_tx
+                .with_graph(StoreId::Right)
+                .load_to_mem(graph_store.pool(), parallelism)
+                .await
+        }
+    );
+    let graph_left = graph_left?;
+    let graph_right = graph_right?;
+    tracing::info!(
+        "GraphLoader: Loaded left and right graphs in {:?}",
+        now.elapsed()
+    );
+    Ok([graph_left, graph_right])
+}
 
 #[allow(clippy::needless_lifetimes)]
 impl<'a> GraphLoader<'a> {
@@ -1106,43 +1084,11 @@ impl<'a> GraphLoader<'a> {
         graph_store: &GraphStore,
         parallelism: usize,
     ) -> Result<()> {
-        let now = Instant::now();
-
-        // Spawn two independent transactions and load each graph in parallel.
-        let (graph_left, graph_right) = join!(
-            async {
-                let mut graph_tx = graph_store.tx().await?;
-                graph_tx
-                    .with_graph(StoreId::Left)
-                    .load_to_mem(graph_store.pool(), parallelism)
-                    .await
-            },
-            async {
-                let mut graph_tx = graph_store.tx().await?;
-                graph_tx
-                    .with_graph(StoreId::Right)
-                    .load_to_mem(graph_store.pool(), parallelism)
-                    .await
-            }
-        );
-        let graph_left = graph_left.expect("Could not load left graph");
-        let graph_right = graph_right.expect("Could not load right graph");
-
+        let [graph_left, graph_right] = load_graphs_from_pg(graph_store, parallelism).await?;
         let GraphLoader(mut graphs) = self;
         *graphs[LEFT] = graph_left;
         *graphs[RIGHT] = graph_right;
-        tracing::info!(
-            "GraphLoader: Loaded left and right graphs in {:?}",
-            now.elapsed()
-        );
         Ok(())
-    }
-
-    pub fn load_graphs_from_checkpoint(self, graphs: BothEyes<GraphMem<VectorId>>) {
-        let [left, right] = graphs;
-        let GraphLoader(mut dest_graphs) = self;
-        *dest_graphs[LEFT] = left;
-        *dest_graphs[RIGHT] = right;
     }
 }
 
@@ -1329,10 +1275,7 @@ impl HawkRequest {
     ///
     /// Each physical iris is cached once (deduplicated by QueryId).
     /// Cache all queries from this request into the given worker pools.
-    pub async fn cache_into(
-        &self,
-        worker_pools: &BothEyes<iris_worker::LocalIrisWorkerPool>,
-    ) -> Result<()> {
+    pub async fn cache_into<W: IrisWorkerPool>(&self, worker_pools: &BothEyes<W>) -> Result<()> {
         let to_cache = self.all_queries_for_cache();
         // Cache all irises in both worker pools (mirror queries cross eyes).
         futures::try_join!(
@@ -1454,11 +1397,7 @@ impl HawkResult {
     /// Otherwise, return the index of some match.
     /// In cases with neither insertions nor matches, return the special u32::MAX.
     fn merged_results(&self) -> Vec<u32> {
-        let match_indices = self.select_indices(Filter {
-            eyes: Both,
-            orient: Both,
-            intra_batch: true,
-        });
+        let match_indices = self.select_indices(DECISION_FILTER);
 
         match_indices
             .into_iter()
@@ -1521,16 +1460,14 @@ impl HawkResult {
         };
 
         self.match_results
-            .select(Filter {
-                eyes: Both,
-                orient: Both,
-                intra_batch: true,
-            })
+            .select(DECISION_FILTER)
             .iter()
             .map(|matches| matches.iter().filter_map(per_match).collect_vec())
             .collect_vec()
     }
 
+    /// Narrow filter for serial-id match lists: intra-batch peers have no serial id and are
+    /// reported via `matched_batch_request_ids` instead.
     const MATCH_IDS_FILTER: Filter = Filter {
         eyes: Both,
         orient: Only(Orientation::Normal),
@@ -1544,14 +1481,16 @@ impl HawkResult {
 
         let decisions = self.match_results.decisions();
 
-        let matches = decisions
+        // Positive names here; polarity flipped at struct construction — `ServerJobResult.matches`
+        // and `matches_with_skip_persistence` store the negation (see their doc comments).
+        let unique_insert = decisions
             .iter()
-            .map(|&d| matches!(d, UniqueInsert).not())
+            .map(|&d| matches!(d, UniqueInsert))
             .collect_vec();
 
-        let matches_with_skip_persistence = decisions
+        let unique_no_match = decisions
             .iter()
-            .map(|&d| matches!(d, UniqueInsert | UniqueInsertSkipped).not())
+            .map(|&d| matches!(d, UniqueInsert | UniqueInsertSkipped))
             .collect_vec();
 
         let match_ids = self.select_indices(Self::MATCH_IDS_FILTER);
@@ -1590,7 +1529,20 @@ impl HawkResult {
             intra_batch: false,
         });
 
-        let full_face_mirror_attack_detected = izip!(&match_ids, &full_face_mirror_match_ids)
+        // Wide filter (intra_batch=true) so an in-batch mirror peer raises the flag — matches
+        // GPU semantics. Cannot derive from `match_ids` / `full_face_mirror_match_ids`: those
+        // carry only DB serial ids.
+        let any_match_normal = self.match_results.select(Filter {
+            eyes: Both,
+            orient: Only(Normal),
+            intra_batch: true,
+        });
+        let any_match_mirror = self.match_results.select(Filter {
+            eyes: Both,
+            orient: Only(Mirror),
+            intra_batch: true,
+        });
+        let full_face_mirror_attack_detected = izip!(&any_match_normal, &any_match_mirror)
             .map(|(normal, mirror)| normal.is_empty() && !mirror.is_empty())
             .collect_vec();
 
@@ -1605,10 +1557,10 @@ impl HawkResult {
             .collect_vec();
 
         tracing::info!(
-            "Reauths: {:?}, Matches: {:?}, Matches w/ skip persistence: {:?}",
+            "Reauths: {:?}, Unique insert: {:?}, Unique no-match (incl. skip): {:?}",
             successful_reauths,
-            matches,
-            matches_with_skip_persistence
+            unique_insert,
+            unique_no_match
         );
 
         let batch = self.batch;
@@ -1619,8 +1571,9 @@ impl HawkResult {
             request_ids: batch.request_ids,
             request_types: batch.request_types,
             metadata: batch.metadata,
-            matches_with_skip_persistence,
-            matches,
+            // Negated — see job.rs.
+            matches: unique_insert.iter().map(|b| !b).collect_vec(),
+            matches_with_skip_persistence: unique_no_match.iter().map(|b| !b).collect_vec(),
             skip_persistence: batch.skip_persistence,
             match_ids,
 
@@ -1628,6 +1581,7 @@ impl HawkResult {
             partial_match_counters_left,
             partial_match_ids_right,
             partial_match_counters_right,
+            // HNSW does min-over-rotations, so partial matches don't carry a specific rotation.
             partial_match_rotation_indices_left: vec![vec![]; batch_size],
             partial_match_rotation_indices_right: vec![vec![]; batch_size],
 
@@ -1776,17 +1730,22 @@ impl JobSubmissionHandle for HawkHandle {
         // Wait for the job to be sent for backpressure.
         let sent = self.job_queue.send(job).await;
 
+        let span = Span::current();
         async move {
             // In a second Future, wait for the result.
             sent?;
             let result = rx.await??;
             Ok(result.job_result())
         }
+        .instrument(span)
     }
 }
 
 impl HawkHandle {
     pub async fn new(mut hawk_actor: HawkActor) -> Result<Self> {
+        let request_handler_span = Span::current();
+        let job_handler_span = request_handler_span.clone();
+
         let mut sessions = hawk_actor.new_session_groups().await?;
 
         #[cfg(feature = "phase_trace")]
@@ -1804,8 +1763,9 @@ impl HawkHandle {
                 batch_count += 1;
                 // check if there was a networking error
                 let error_ct = hawk_actor.error_ct.clone();
+                let span = job_handler_span.clone();
                 let job_result = tokio::select! {
-                    r = Self::handle_job(&mut hawk_actor, &mut sessions, job.request, batch_count) => r,
+                    r = Self::handle_job(&mut hawk_actor, &mut sessions, job.request, batch_count).instrument(span)=> r,
                     _ = error_ct.cancelled() => Err(eyre!("networking error")),
                 };
 
@@ -1825,7 +1785,7 @@ impl HawkHandle {
             while let Some(job) = rx.recv().await {
                 let _ = job.return_channel.send(Err(eyre::eyre!("stopping")));
             }
-        });
+        }.instrument(request_handler_span));
 
         Ok(Self { job_queue: tx })
     }
@@ -1868,8 +1828,8 @@ impl HawkHandle {
                 // The "b" (raw) operand always uses Normal queries to get the
                 // same-eye iris, even when comparing in Mirror orientation.
                 let raw_queries = request.queries(Orientation::Normal);
-                tokio::spawn(async move {
-                    intra_batch_is_match(&sessions_intra, &search_queries, &raw_queries).await
+                scheduler::spawn_with_span(async move {
+                    Ok(intra_batch_is_match(&sessions_intra, &search_queries, &raw_queries).await)
                 })
             };
 
@@ -1906,18 +1866,19 @@ impl HawkHandle {
                     is_match_batch(search_queries, step1.missing_vector_ids(), sessions_search)
                         .await?;
 
-                step1.step2(&missing_is_match, intra_results.await??)
+                step1.step2(&missing_is_match, intra_results.await???)
             };
 
             Ok((search_results, match_result))
         };
 
         // Search for both orientations
+        let span = Span::current();
         let (search_normal, search_mirror, match_result) = {
             let start = Instant::now();
             let ((search_normal, matches_normal), (search_mirror, matches_mirror)) = try_join!(
-                do_search(Orientation::Normal),
-                do_search(Orientation::Mirror),
+                do_search(Orientation::Normal).instrument(span.clone()),
+                do_search(Orientation::Mirror).instrument(span.clone()),
             )?;
             metrics::histogram!("all_search_duration").record(start.elapsed().as_secs_f64());
 
@@ -1963,6 +1924,7 @@ impl HawkHandle {
             identity_updates,
             &request,
         )
+        .instrument(span)
         .await?;
 
         // Evict cached queries now that the batch is fully processed.
@@ -2110,10 +2072,18 @@ impl HawkHandle {
                             let request_id = &request.batch.request_ids[i];
                             Some(ModificationKey::RequestId(request_id.clone()))
                         }
-                        ReauthUpdate(vector_id) => {
+                        ReauthUpdate(vector_id)
+                            if !request
+                                .batch
+                                .skip_persistence
+                                .get(i)
+                                .copied()
+                                .unwrap_or(false) =>
+                        {
                             Some(ModificationKey::RequestSerialId(vector_id.serial_id()))
                         }
                         UniqueInsertSkipped | NoMutation => None,
+                        ReauthUpdate(_) => None,
                     }
                 }
                 RequestIndex::IdentityUpdate(i) => {
@@ -2182,7 +2152,86 @@ mod tests {
     use rand::SeedableRng;
     use std::{ops::Not, time::Duration};
     use tokio::time::sleep;
+    use tracing::{info_span, Instrument};
     use tracing_test::traced_test;
+
+    /// `Seeded` initializer: the post-construction registry contains
+    /// every seeded `VectorId`, with `next_id = max(serial) + 1`.
+    #[tokio::test]
+    async fn test_seeded_initializer_populates_registry() -> Result<()> {
+        use crate::hawkers::aby3::aby3_store::Aby3Store;
+        use crate::protocol::shared_iris::GaloisRingSharedIris;
+        use std::collections::HashMap;
+
+        let addresses = vec![
+            "0.0.0.0:21340".to_string(),
+            "0.0.0.0:21341".to_string(),
+            "0.0.0.0:21342".to_string(),
+        ];
+        let args = HawkArgs {
+            party_index: 0,
+            addresses: addresses.clone(),
+            outbound_addrs: addresses,
+            request_parallelism: 4,
+            connection_parallelism: 2,
+            hnsw_param_ef_constr: 320,
+            hnsw_param_m: 256,
+            hnsw_param_ef_search: 256,
+            hnsw_param_ef_supermatch: 4000,
+            hnsw_param_ef_saturation_margin: 0,
+            hnsw_layer_density: None,
+            hnsw_fixed_layer_search_batch_size: None,
+            hnsw_prf_key: None,
+            numa: false,
+            disable_persistence: true,
+            hnsw_disable_memory_persistence: false,
+            tls: None,
+        };
+
+        let serial_ids = [0u32, 1, 2, 5];
+        let dummy = Arc::new(GaloisRingSharedIris::default_for_party(args.party_index));
+        let make_store = || {
+            let mut points = HashMap::new();
+            for sid in serial_ids {
+                points.insert(VectorId::from_serial_id(sid), dummy.clone());
+            }
+            Aby3Store::<HawkOps>::new_storage(Some(points))
+        };
+        let iris_store = [make_store(), make_store()];
+        let graph = [(); 2].map(|_| GraphMem::new());
+
+        let hawk_actor = HawkActor::from_cli_with_graph_and_store(
+            &args,
+            CancellationToken::new(),
+            graph,
+            iris_store,
+        )
+        .await?;
+
+        for sid in serial_ids {
+            assert!(
+                hawk_actor.registry[LEFT]
+                    .read()
+                    .await
+                    .contains(&VectorId::from_serial_id(sid)),
+                "left registry must contain seeded VectorId {sid} after construction"
+            );
+            assert!(
+                hawk_actor.registry[RIGHT]
+                    .read()
+                    .await
+                    .contains(&VectorId::from_serial_id(sid)),
+                "right registry must contain seeded VectorId {sid} after construction"
+            );
+        }
+        assert_eq!(
+            hawk_actor.registry[LEFT].read().await.next_id,
+            *serial_ids.last().unwrap() + 1,
+            "registry next_id must reflect (max seeded serial_id + 1)"
+        );
+
+        Ok(())
+    }
 
     #[tokio::test]
     #[traced_test]
@@ -2213,8 +2262,11 @@ mod tests {
         let addresses = get_free_local_addresses(N_PARTIES).await?;
 
         let handles = (0..N_PARTIES)
-            .map(|i| go(addresses.clone(), i))
-            .map(tokio::spawn)
+            .map(|i| {
+                let span = info_span!("mpc_node", idx = i);
+                let future = go(addresses.clone(), i);
+                tokio::spawn(future.instrument(span))
+            })
             .collect::<JoinAll<_>>()
             .await
             .into_iter()
@@ -2267,12 +2319,20 @@ mod tests {
             );
         }
 
-        let all_results =
-            parallelize(izip!(&irises, handles.clone()).map(|(shares, mut handle)| {
+        let all_results = parallelize(izip!(0..handles.len(), &irises, handles.clone()).map(
+            |(idx, shares, mut handle)| {
+                let span = info_span!("mpc_node", idx = idx);
                 let batch = batch_of_party(&batch_0, shares);
-                async move { handle.submit_batch_query(batch).await.await }
-            }))
-            .await?;
+                async move {
+                    handle
+                        .submit_batch_query(batch)
+                        .instrument(span)
+                        .await
+                        .await
+                }
+            },
+        ))
+        .await?;
 
         let result = assert_all_equal(all_results);
 
@@ -2501,7 +2561,7 @@ mod tests_db {
             tls: None,
         };
         let mut hawk_actor = HawkActor::from_cli(&args, CancellationToken::new()).await?;
-        let (_, graph_loader) = hawk_actor.as_iris_loader().await;
+        let graph_loader = hawk_actor.as_graph_loader().await;
         graph_loader.load_graph_store(&graph_store, 2).await?;
 
         // Check the loaded graph.

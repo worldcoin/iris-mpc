@@ -1,5 +1,5 @@
 use crate::execution::hawk_main::{
-    iris_worker::{IrisWorkerPool, QueryId, QuerySpec},
+    iris_worker::{QueryId, QuerySpec},
     HAWK_MIN_DIST_ROTATIONS,
 };
 use crate::phase_trace;
@@ -42,9 +42,9 @@ use DistanceMode::{MinRotation, Simple};
 impl DistanceFn {
     /// Compute pairwise distances between pairs of cached queries using the
     /// worker pool's `compute_pairwise_distances` method.
-    pub async fn eval_pairwise_distances<D: DistanceOps, W: IrisWorkerPool>(
+    pub async fn eval_pairwise_distances<D: DistanceOps>(
         self,
-        store: &mut Aby3Store<D, W>,
+        store: &mut Aby3Store<D>,
         pairs: Vec<Option<(QuerySpec, QueryId)>>,
     ) -> Result<Vec<DistanceShare<D::Ring>>>
     where
@@ -63,9 +63,9 @@ impl DistanceFn {
         }
     }
 
-    pub async fn eval_distance_pairs<D: DistanceOps, W: IrisWorkerPool>(
+    pub async fn eval_distance_pairs<D: DistanceOps>(
         self,
-        store: &mut Aby3Store<D, W>,
+        store: &mut Aby3Store<D>,
         pairs: &[(Aby3Query, VectorId)],
     ) -> Result<Vec<DistanceShare<D::Ring>>>
     where
@@ -86,9 +86,9 @@ impl DistanceFn {
         }
     }
 
-    pub async fn eval_distance_batch<D: DistanceOps, W: IrisWorkerPool>(
+    pub async fn eval_distance_batch<D: DistanceOps>(
         self,
-        store: &mut Aby3Store<D, W>,
+        store: &mut Aby3Store<D>,
         query: &Aby3Query,
         vectors: &[VectorId],
     ) -> Result<Vec<DistanceShare<D::Ring>>>
@@ -130,9 +130,9 @@ impl DistanceFn {
     /// Evaluates distances for multiple (query, vectors) batches.
     ///
     /// For MinRotation, this enables prerotation buffer reuse within each batch.
-    pub async fn eval_distance_multibatch<D: DistanceOps, W: IrisWorkerPool>(
+    pub async fn eval_distance_multibatch<D: DistanceOps>(
         self,
-        store: &mut Aby3Store<D, W>,
+        store: &mut Aby3Store<D>,
         batches: Vec<(Aby3Query, Vec<VectorId>)>,
     ) -> Result<Vec<Vec<DistanceShare<D::Ring>>>>
     where

@@ -1,7 +1,16 @@
 use crate::services::aws::clients::AwsClients;
 use crate::services::processors::batch::receive_batch_stream;
 use crate::services::processors::job::process_job_result;
+use aws_sdk_s3::Client;
 use aws_sdk_sns::types::MessageAttributeValue;
+use axum::routing::get;
+use axum::Router;
+use iris_mpc_cpu::graph_checkpoint::download_graph_checkpoint;
+use iris_mpc_cpu::graph_checkpoint::get_common_checkpoint;
+use iris_mpc_cpu::graph_checkpoint::get_most_recent_checkpoints;
+use iris_mpc_cpu::graph_checkpoint::s3_key_exists;
+use iris_mpc_cpu::graph_checkpoint::GraphCheckpointState;
+use iris_mpc_cpu::graph_checkpoint::GRAPH_CHECKPOINT_ROUTE;
 
 use crate::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,
@@ -13,13 +22,13 @@ use ampc_server_utils::batch_sync::{CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRI
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use ampc_server_utils::{
     delete_messages_until_sequence_num, get_next_sns_seq_num, get_others_sync_state,
-    init_heartbeat_task, set_node_ready, start_coordination_server, wait_for_others_ready,
-    wait_for_others_unready, BatchSyncSharedState, TaskMonitor,
+    init_heartbeat_task, set_node_ready, start_coordination_server_with_extra_routes,
+    try_get_endpoint_other_nodes, wait_for_others_ready, wait_for_others_unready,
+    BatchSyncSharedState, ReadyProbeResponse, ServerCoordinationConfig, TaskMonitor,
 };
 use chrono::Utc;
-use eyre::{bail, eyre, Report, Result};
+use eyre::{bail, eyre, Report, Result, WrapErr};
 use iris_mpc_common::config::{CommonConfig, Config};
-use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::sha256::sha256_bytes;
 use iris_mpc_common::helpers::smpc_request::{
@@ -32,17 +41,20 @@ use iris_mpc_common::helpers::sqs_s3_helper::upload_file_to_s3;
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::job::JobSubmissionHandle;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_cpu::execution::hawk_main::worker_pool_initializer::{
+    DbLoadParams, LocalWorkerPoolInitializer, WorkerPoolInitializer,
+};
 use iris_mpc_cpu::execution::hawk_main::{
-    GraphStore, HawkActor, HawkArgs, HawkHandle, HawkOps, ServerJobResult,
+    build_hawk_network_handle, load_graphs_from_pg, GraphStore, HawkActor, HawkArgs, HawkHandle,
+    HawkOps, ServerJobResult, HAWK_DISTANCE_MODE,
 };
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
-use iris_mpc_store::loader::load_iris_db;
 use iris_mpc_store::Store;
 use pprof::protos::Message;
 use pprof::ProfilerGuardBuilder;
 use sodiumoxide::hex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::exit;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -93,22 +105,65 @@ pub async fn server_main(config: Config) -> Result<()> {
         server_coord_config.healthcheck_ports
     );
 
+    let (graph_checkpoints, hashes) = get_most_recent_checkpoints(&graph_store).await?;
+
     // Start coordination server
-    let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server(
+    let extra_routes = Router::new().route(
+        GRAPH_CHECKPOINT_ROUTE,
+        get({
+            let hashes_json = serde_json::to_string(&hashes).unwrap();
+            move || async move { hashes_json }
+        }),
+    );
+
+    let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server_with_extra_routes(
         &server_coord_config,
         &mut background_tasks,
         &shutdown_handler,
         &my_state,
         Some(batch_sync_shared_state.clone()),
+        Some(extra_routes),
     )
     .await;
     tracing::info!("Coordination server started");
 
     // Wait for other servers to be un-ready (syncing on startup)
     wait_for_others_unready(&server_coord_config, &verified_peers, &my_uuid).await?;
+    wait_until_startup_visibility_is_complete(&server_coord_config, &verified_peers, &my_uuid)
+        .await?;
 
     let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
+
+    let graph_checkpoint =
+        get_common_checkpoint(&server_coord_config, hashes, graph_checkpoints).await?;
+    tracing::info!("common graph checkpoint: {:?}", graph_checkpoint);
+
+    if let Some(cp) = graph_checkpoint.as_ref() {
+        // Stop if the checkpoint can not be found
+        if !s3_key_exists(
+            &aws_clients.checkpoint_s3_client,
+            &config.graph_checkpoint_bucket_name,
+            &cp.s3_key,
+        )
+        .await?
+        {
+            bail!(
+                "s3 checkpoint not found on AWS: s3://{}/{}",
+                config.graph_checkpoint_bucket_name,
+                cp.s3_key
+            );
+        }
+
+        // Validate checkpoint vs Iris DB consistency
+        let db_count = iris_store.count_irises().await?;
+        if cp.last_indexed_iris_id as usize != db_count {
+            tracing::warn!(
+                "Graph checkpoint last_indexed_iris_id={} differs from iris_db count={}. Shadow mode may produce mismatches.",
+                cp.last_indexed_iris_id, db_count
+            );
+        }
+    }
 
     // Handle modifications sync
     if config.enable_modifications_sync {
@@ -144,7 +199,16 @@ pub async fn server_main(config: Config) -> Result<()> {
         return Ok(());
     }
 
-    let mut hawk_actor = init_hawk_actor(&config, &shutdown_handler).await?;
+    let mut hawk_actor = init_hawk_actor(
+        &config,
+        &aws_clients.checkpoint_s3_client,
+        &config.graph_checkpoint_bucket_name,
+        &iris_store,
+        &graph_store,
+        graph_checkpoint,
+        &shutdown_handler,
+    )
+    .await?;
 
     if let Some(url) = config.get_anon_stats_db_url() {
         let schema = config.get_anon_stats_db_schema();
@@ -157,15 +221,6 @@ pub async fn server_main(config: Config) -> Result<()> {
                 "Anon stats persistence enabled but no anon stats database configured; skipping DB writes"
             );
     }
-
-    load_database(
-        &config,
-        &iris_store,
-        &graph_store,
-        &shutdown_handler,
-        &mut hawk_actor,
-    )
-    .await?;
 
     background_tasks.check_tasks();
 
@@ -229,6 +284,121 @@ fn process_config(config: &Config) {
     }
     // Load batch_size config
     tracing::info!("Set max batch size to {}", config.max_batch_size);
+}
+
+/// Waits until every node has observed every other node during startup.
+///
+/// `wait_for_others_unready` proves that this node saw its peers, but not that
+/// all peers have also observed each other. HNSW startup does heavy loading
+/// immediately after the startup checks, so hold here until cluster visibility
+/// is complete.
+async fn wait_until_startup_visibility_is_complete(
+    config: &ServerCoordinationConfig,
+    verified_peers: &Arc<tokio::sync::Mutex<HashSet<String>>>,
+    my_uuid: &str,
+) -> Result<()> {
+    tracing::info!("Waiting for full peer visibility during startup");
+
+    let started = Instant::now();
+    let startup_timeout = Duration::from_secs(config.startup_sync_timeout_secs);
+    let retry_duration = Duration::from_millis(config.http_query_retry_delay_ms);
+    loop {
+        let connected_health_resps = match try_get_endpoint_other_nodes(config, "health").await {
+            Ok(resps) => resps,
+            Err(err) if started.elapsed() < startup_timeout => {
+                tracing::warn!(
+                    "Failed to query peer health while waiting for full startup visibility: {:?}",
+                    err
+                );
+                tokio::time::sleep(retry_duration).await;
+                continue;
+            }
+            Err(err) => {
+                return Err(
+                    err.wrap_err("timed out waiting for full peer visibility during startup")
+                );
+            }
+        };
+
+        let mut peer_responses = Vec::with_capacity(connected_health_resps.len());
+        for (_status, body) in connected_health_resps {
+            let probe_response: ReadyProbeResponse = serde_json::from_slice(&body)
+                .wrap_err("Failed to deserialize ReadyProbeResponse")?;
+            peer_responses.push(probe_response);
+        }
+
+        {
+            let mut verified = verified_peers.lock().await;
+            for probe_response in &peer_responses {
+                verified.insert(probe_response.uuid.clone());
+            }
+        }
+
+        let expected_uuids = current_startup_uuid_set(my_uuid, &peer_responses);
+
+        let mut incomplete_visibility = Vec::new();
+        for probe_response in peer_responses {
+            let missing_uuids = missing_startup_visibility(
+                &expected_uuids,
+                &probe_response.uuid,
+                &probe_response.verified_peers,
+            );
+
+            if !missing_uuids.is_empty() {
+                incomplete_visibility.push((
+                    probe_response.uuid,
+                    probe_response.verified_peers,
+                    missing_uuids,
+                ));
+            }
+        }
+
+        if incomplete_visibility.is_empty() {
+            tracing::info!("All nodes have full peer visibility during startup");
+            return Ok(());
+        }
+
+        if started.elapsed() >= startup_timeout {
+            bail!(
+                "Timed out waiting for full peer visibility during startup: {:?}",
+                incomplete_visibility
+            );
+        }
+
+        tracing::debug!(
+            "Waiting for full peer visibility during startup: {:?}",
+            incomplete_visibility
+        );
+        tokio::time::sleep(retry_duration).await;
+    }
+}
+
+fn current_startup_uuid_set(
+    my_uuid: &str,
+    peer_responses: &[ReadyProbeResponse],
+) -> HashSet<String> {
+    let mut expected_uuids = HashSet::from([my_uuid.to_owned()]);
+    expected_uuids.extend(
+        peer_responses
+            .iter()
+            .map(|probe_response| probe_response.uuid.clone()),
+    );
+    expected_uuids
+}
+
+fn missing_startup_visibility(
+    expected_uuids: &HashSet<String>,
+    peer_uuid: &str,
+    peer_verified_peers: &HashSet<String>,
+) -> Vec<String> {
+    let mut missing_uuids = expected_uuids
+        .iter()
+        .filter(|uuid| uuid.as_str() != peer_uuid)
+        .filter(|uuid| !peer_verified_peers.contains(*uuid))
+        .cloned()
+        .collect::<Vec<_>>();
+    missing_uuids.sort();
+    missing_uuids
 }
 
 /// Returns initialized PostgreSQL clients for interacting
@@ -428,12 +598,8 @@ async fn sync_sqs_queues(
     Ok(())
 }
 
-/// Initialize main Hawk actor process for handling query batches using HNSW
-/// approximate k-nearest neighbors graph search.
-async fn init_hawk_actor(
-    config: &Config,
-    shutdown_handler: &Arc<ShutdownHandler>,
-) -> Result<HawkActor> {
+/// Build `HawkArgs` from server config.
+fn build_hawk_args(config: &Config) -> Result<(HawkArgs, Vec<String>, Vec<String>)> {
     let server_coord_config = config.server_coordination.clone().unwrap();
 
     let node_inbound_addresses: Vec<String> = server_coord_config
@@ -470,84 +636,99 @@ async fn init_hawk_actor(
         numa: config.hawk_numa,
     };
 
-    tracing::info!(
-       "Initializing HawkActor with args: party_index: {}, inbound addresses: {:?}, outbound addresses: {:?}",
-        hawk_args.party_index,
-        node_inbound_addresses,
-        node_outbound_addresses
-    );
-
-    HawkActor::from_cli(
-        &hawk_args,
-        shutdown_handler.get_network_cancellation_token(),
-    )
-    .await
+    Ok((hawk_args, node_inbound_addresses, node_outbound_addresses))
 }
 
-/// Loads iris code shares & HNSW graph from Postgres and/or S3.
-async fn load_database(
+/// Build the iris-loading initializer per config, run the iris and
+/// graph loads in parallel (graph from S3 checkpoint when present,
+/// else from PG), then assemble a fully-loaded `HawkActor`.
+#[allow(clippy::too_many_arguments)]
+async fn init_hawk_actor(
     config: &Config,
+    s3_client: &Client,
+    checkpoint_bucket: &str,
     iris_store: &Store,
     graph_store: &GraphPg<Aby3Store<HawkOps>>,
+    checkpoint: Option<GraphCheckpointState>,
     shutdown_handler: &Arc<ShutdownHandler>,
-    hawk_actor: &mut HawkActor,
-) -> Result<()> {
-    // ANCHOR: Load the database
-    tracing::info!("⚓️ ANCHOR: Load the database");
-    let (mut iris_loader, graph_loader) = hawk_actor.as_iris_loader().await;
+) -> Result<HawkActor> {
+    let (hawk_args, inbound, outbound) = build_hawk_args(config)?;
 
-    // TODO: not needed?
+    tracing::info!(
+        "Initializing HawkActor with args: party_index: {}, inbound addresses: {:?}, outbound addresses: {:?}",
+        hawk_args.party_index,
+        inbound,
+        outbound,
+    );
+    tracing::info!("⚓️ ANCHOR: Load the database");
+
     if config.fake_db_size > 0 {
-        iris_loader.fake_db(config.fake_db_size);
-        iris_loader.wait_completion().await?;
-        return Ok(());
+        bail!(
+            "fake_db_size is no longer supported in Hawk main; \
+             set SMPC__FAKE_DB_SIZE=0"
+        );
     }
 
     let parallelism = config
         .cpu_database
         .as_ref()
-        .ok_or(eyre!("Missing database config"))?
+        .ok_or_else(|| eyre!("Missing database config"))?
         .load_parallelism;
-
+    let store_len = iris_store.count_irises().await?;
     tracing::info!(
         "Initialize iris db: Loading from DB (parallelism: {})",
-        parallelism
+        parallelism,
     );
-    let download_shutdown_handler = Arc::clone(shutdown_handler);
-
-    let store_len = iris_store.count_irises().await?;
+    let initializer: Box<dyn WorkerPoolInitializer> =
+        Box::new(LocalWorkerPoolInitializer::new_load_from_db(
+            hawk_args.party_index,
+            HAWK_DISTANCE_MODE,
+            hawk_args.numa,
+            DbLoadParams {
+                store: iris_store.clone(),
+                config: Arc::new(config.clone()),
+                max_serial_id: store_len,
+                parallelism,
+                s3_max_serial_id: None,
+                shutdown_handler: Arc::clone(shutdown_handler),
+            },
+        ));
 
     let now = Instant::now();
+    let ct = shutdown_handler.get_network_cancellation_token();
 
-    let iris_load_future = async move {
-        load_iris_db(
-            &mut iris_loader,
-            iris_store,
-            store_len,
-            parallelism,
-            None,
-            config,
-            download_shutdown_handler,
-        )
-        .await?;
-        iris_loader.wait_completion().await?;
-        eyre::Result::<()>::Ok(())
+    // Network handle built up-front; iris and graph load in parallel.
+    let networking = build_hawk_network_handle(&hawk_args, ct).await?;
+
+    let graph_parallelism = config
+        .cpu_database
+        .as_ref()
+        .ok_or_else(|| eyre!("Missing database config"))?
+        .load_parallelism;
+
+    // Try to load graph from S3 checkpoint first, then fall back to
+    // Postgres graph representation for temporary legacy compatibility.
+    // TODO simplify this logic once graph DB tables are removed.
+    let graph_load_future = async move {
+        if let Some(state) = checkpoint {
+            tracing::info!(
+                "Loading graph from common S3 checkpoint, hash: {}",
+                state.blake3_hash
+            );
+            download_graph_checkpoint(s3_client, checkpoint_bucket, &state).await
+        } else {
+            tracing::info!("No S3 checkpoint found, loading from PostgreSQL");
+            load_graphs_from_pg(graph_store, graph_parallelism).await
+        }
     };
 
-    let graph_load_future = graph_loader.load_graph_store(
-        graph_store,
-        config.cpu_database.as_ref().unwrap().load_parallelism,
-    );
-
-    let (iris_result, graph_result) = tokio::join!(iris_load_future, graph_load_future);
-    iris_result.expect("Failed to load iris DB");
-    graph_result.expect("Failed to load graph DB");
+    let (initialized, graph) = tokio::try_join!(initializer.initialize(), graph_load_future)?;
     tracing::info!(
         "Loaded both iris and graph DBs into memory in {:?}",
         now.elapsed()
     );
 
-    Ok(())
+    Ok(HawkActor::new(hawk_args, networking, initialized, graph))
 }
 
 /// Spawns thread responsible for communicating back results from batch query processing.
@@ -877,4 +1058,32 @@ async fn run_main_server_loop(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn set(values: &[&str]) -> HashSet<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn missing_startup_visibility_ignores_peer_own_uuid() {
+        let expected = set(&["node-0", "node-1", "node-2"]);
+        let verified = set(&["node-0"]);
+
+        assert_eq!(
+            missing_startup_visibility(&expected, "node-1", &verified),
+            vec!["node-2".to_string()]
+        );
+    }
+
+    #[test]
+    fn missing_startup_visibility_accepts_full_peer_visibility() {
+        let expected = set(&["node-0", "node-1", "node-2"]);
+        let verified = set(&["node-0", "node-2", "stale-node-2"]);
+
+        assert!(missing_startup_visibility(&expected, "node-1", &verified).is_empty());
+    }
 }

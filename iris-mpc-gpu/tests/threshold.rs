@@ -93,7 +93,7 @@ mod threshold_test {
     }
 
     fn pack_with_device_padding(bits: Vec<bool>) -> Vec<u64> {
-        assert!(bits.len() % INPUTS_PER_GPU_SIZE == 0);
+        assert!(bits.len().is_multiple_of(INPUTS_PER_GPU_SIZE));
         let mut res = vec![];
         for devices in bits.chunks_exact(INPUTS_PER_GPU_SIZE) {
             for bits in devices.chunks(64) {
@@ -248,7 +248,7 @@ mod threshold_test {
         let chacha_seeds2 = ([2u32; 8], [1u32; 8]);
 
         const_assert!(
-            INPUTS_PER_GPU_SIZE % (2048) == 0,
+            INPUTS_PER_GPU_SIZE.is_multiple_of(2048),
             // Mod 16 for randomness, mod 64 for chunk size
         );
 

@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use eyre::{bail, eyre, Result};
 use serial_test::serial;
 use std::sync::atomic::{AtomicBool, Ordering};

@@ -1,11 +1,9 @@
 use super::hawk_job::{Job, JobRequest, JobResult, SYNC_DONE, SYNC_ERROR, SYNC_RUNNING};
 use crate::{
     execution::hawk_main::{
-        insert::insert,
-        iris_worker::{IrisWorkerPool, QueryId},
-        scheduler::parallelize,
-        search::search_single_query_no_match_count,
-        BothEyes, HawkActor, HawkSession, LEFT, RIGHT, STORE_IDS,
+        insert::insert, iris_worker::QueryId, scheduler::parallelize,
+        search::search_single_query_no_match_count, BothEyes, HawkActor, HawkSession, LEFT, RIGHT,
+        STORE_IDS,
     },
     hawkers::aby3::aby3_store::Aby3Query,
 };
@@ -72,7 +70,16 @@ impl Handle {
             }) = rx.recv().await
             {
                 let job_result = Self::handle_job(&mut actor, &sessions, request).await;
-                let health = do_health_check(&mut actor, &mut sessions, job_result.is_err()).await;
+                // SyncPeers and SyncState do not modify the inner state. As long as they didn't fail
+                // it is safe to skip the health check
+                let health = if matches!(
+                    job_result,
+                    Ok((_, JobResult::SyncPeers)) | Ok((_, JobResult::SyncState { .. }))
+                ) {
+                    Ok(())
+                } else {
+                    do_health_check(&mut actor, &mut sessions, job_result.is_err()).await
+                };
                 let stop = health.is_err();
                 let _ = return_channel.send(health.and(job_result));
                 if stop {
@@ -353,18 +360,25 @@ impl Handle {
                     JobResult::new_modification_result(modification.id, left_vector, done_tx),
                 ))
             }
-            JobRequest::Sync {
+            JobRequest::SyncState {
                 shutdown,
                 sync_status,
             } => {
                 let _ = done_tx;
                 let mismatched = tokio::time::timeout(
                     SYNC_PEERS_TIMEOUT,
-                    HawkSession::sync_peers(shutdown, sync_status, sessions),
+                    HawkSession::sync_state(shutdown, sync_status, sessions),
                 )
                 .await
-                .map_err(|_| eyre!("sync_peers timed out after {SYNC_PEERS_TIMEOUT:?}"))??;
-                Ok((done_rx, JobResult::Sync { mismatched }))
+                .map_err(|_| eyre!("sync_state timed out after {SYNC_PEERS_TIMEOUT:?}"))??;
+                Ok((done_rx, JobResult::SyncState { mismatched }))
+            }
+            JobRequest::SyncPeers => {
+                let _ = done_tx;
+                tokio::time::timeout(SYNC_PEERS_TIMEOUT, actor.sync_peers())
+                    .await
+                    .map_err(|_| eyre!("sync_peers timeout after {SYNC_PEERS_TIMEOUT:?}"))??;
+                Ok((done_rx, JobResult::SyncPeers))
             }
         }
     }
@@ -414,7 +428,7 @@ impl Handle {
     ///
     /// Used to periodically synchronize db persistence threads of MPC nodes in
     /// genesis protocol.
-    pub async fn sync_peers(
+    pub async fn sync_state(
         &mut self,
         shutdown: bool,
         sync_done: Option<oneshot::Receiver<()>>,
@@ -433,14 +447,23 @@ impl Handle {
         }
 
         let r = self
-            .submit_request(JobRequest::Sync {
+            .submit_request(JobRequest::SyncState {
                 shutdown,
                 sync_status: status,
             })
             .await;
         let (_, r) = r.await?;
         match r {
-            JobResult::Sync { mismatched } => Ok(mismatched),
+            JobResult::SyncState { mismatched } => Ok(mismatched),
+            _ => bail!("invalid job result"),
+        }
+    }
+
+    pub async fn sync_peers(&mut self) -> Result<()> {
+        let r = self.submit_request(JobRequest::SyncPeers).await;
+        let (_, r) = r.await?;
+        match r {
+            JobResult::SyncPeers => Ok(()),
             _ => bail!("invalid job result"),
         }
     }

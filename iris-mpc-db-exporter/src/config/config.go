@@ -18,6 +18,8 @@ type Config struct {
 	NodeId                     int
 	Environment                string
 	SmpcSchemaName             string
+	ForceOverrideSchemaName    bool
+	OverriddenSchemaName       string
 	MaxItemsPerUploadPart      int
 	SingleCodeSize             int
 	SingleMaskSize             int
@@ -38,6 +40,8 @@ func Load() Config {
 		NodeId:                     loadIntVar("NODE_ID", 0),
 		Environment:                loadStringVar("ENV", "local"),
 		SmpcSchemaName:             loadStringVar("SMPC_SCHEMA_NAME", "SMPC"),
+		ForceOverrideSchemaName:    loadBoolVar("FORCE_OVERRIDE_SCHEMA_NAME", false),
+		OverriddenSchemaName:       loadStringVar("OVERRIDDEN_SCHEMA_NAME", ""),
 		MaxItemsPerUploadPart:      loadIntVar("MAX_ITEMS_PER_UPLOAD_PART", 200), // defines the number of items to be uploaded in a single part of the multipart upload
 		SingleCodeSize:             loadIntVar("SINGLE_CODE_SIZE", 25600),
 		SingleMaskSize:             loadIntVar("SINGLE_MASK_SIZE", 12800),

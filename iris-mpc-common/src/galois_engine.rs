@@ -401,7 +401,7 @@ pub mod degree4 {
             iris_code: &[u16; IRIS_CODE_LENGTH],
             rng: &mut R,
         ) -> [GaloisRingIrisCodeShare; 3] {
-            assert!(IRIS_CODE_LENGTH % 4 == 0);
+            assert!(IRIS_CODE_LENGTH.is_multiple_of(4));
             let mut shares = [
                 GaloisRingIrisCodeShare {
                     id: 1,
