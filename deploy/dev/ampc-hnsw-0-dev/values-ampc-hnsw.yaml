@@ -157,7 +157,7 @@ env:
     value: "hnsw_even_odd_with_version_id_output_16k"
 
   - name: SMPC__LOAD_CHUNKS_PARALLELISM
-    value: "64"
+    value: "16"
 
   - name: SMPC__LOAD_CHUNKS_BUFFER_SIZE
     value: "1024"
