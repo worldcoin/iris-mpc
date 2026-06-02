@@ -304,8 +304,8 @@ pub async fn cleanup_checkpoints<V: VectorStore>(
             PruningMode::None => unreachable!(),
         })
     {
-        delete_graph(s3_client, bucket, &checkpoint.s3_key).await?;
         graph_store.delete_genesis_checkpoint(checkpoint.id).await?;
+        delete_graph(s3_client, bucket, &checkpoint.s3_key).await?;
     }
     Ok(())
 }
