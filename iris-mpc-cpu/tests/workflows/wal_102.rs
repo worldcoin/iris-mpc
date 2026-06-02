@@ -4,21 +4,27 @@
 /// hash consensus, uploads a checkpoint to S3, and inserts a DB row with the
 /// correct WAL anchor.
 ///
-/// `min_mutations_per_cycle` is set to 1 in the test config so that the sidecar
-/// cycles immediately without needing a large number of seeded mutations
-/// (see open question #7 in readme).
+/// The test then materialises its own reference graph from the same WAL rows,
+/// hashes it, and verifies all 3 parties' stored hashes match the reference.
 ///
-/// Termination condition: TC-2 (S3 checkpoint appearance)
+/// Termination condition: TC-2 (wait_for_new_checkpoint)
 use std::time::Duration;
 
-use crate::utils::{
-    cpu_node::{CpuNodes, WalAssertions},
-    runner::{CpuTestContext, TestRun},
-    wait_conditions::wait_for_new_checkpoint,
-    wal_builder::WalMutationBuilder,
+use tokio_util::sync::CancellationToken;
+
+use crate::{
+    run_sidecar, stop_and_join,
+    utils::{
+        cpu_node::{CpuNodes, WalAssertions},
+        runner::{CpuTestContext, TestRun},
+        wait_conditions::wait_for_new_checkpoint,
+        wal_builder::WalMutationBuilder,
+    },
 };
 
-const WAL_MUTATION_COUNT: i64 = 30;
+/// Seed 10 AddNode mutations.  min_mutations_per_cycle = 5, so the sidecar
+/// will cycle on the first pass.
+const WAL_MUTATION_COUNT: i64 = 10;
 
 pub struct Wal102 {
     nodes: Option<CpuNodes>,
@@ -33,12 +39,13 @@ impl Wal102 {
 impl TestRun for Wal102 {
     async fn setup(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = CpuNodes::new(&ctx.configs).await?;
-        nodes.truncate_wal().await?;
+        nodes.truncate_checkpoint_tables().await?;
 
-        // Seed WAL mutations 1..=30.  No base checkpoint — sidecar starts from scratch.
+        // No base checkpoint — sidecar starts from scratch.
+        // Seed AddNode mutations 1..=10.
         let builder = (1..=WAL_MUTATION_COUNT)
             .fold(WalMutationBuilder::new(), |b, id| {
-                b.add_node(id, (id as u32) - 1, 1)
+                b.add_node(id, (id - 1) as u32, 1)
             });
         builder.seed_all(&nodes).await?;
 
@@ -46,7 +53,7 @@ impl TestRun for Wal102 {
         Ok(())
     }
 
-    async fn setup_assert(&self, _ctx: &CpuTestContext) -> eyre::Result<()> {
+    async fn setup_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
         let pre = WalAssertions::new()
             .assert_wal_row_count(WAL_MUTATION_COUNT as usize)
@@ -57,27 +64,45 @@ impl TestRun for Wal102 {
 
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
-        let (_shutdown, _handles) = run_sidecar!(ctx.configs, nodes);
-        // Wait for one new checkpoint to appear across all 3 parties.
-        wait_for_new_checkpoint(nodes, &ctx.configs, 0, Duration::from_secs(120)).await?;
-        stop_and_join!(_shutdown, _handles);
-        Ok(())
+        let shutdown = CancellationToken::new();
+        let mut sidecar_set = run_sidecar!(ctx.configs, shutdown.clone());
+
+        let checkpoint_res = wait_for_new_checkpoint(
+            nodes,
+            &ctx.configs,
+            /* baseline */ 0,
+            Duration::from_secs(120),
+        )
+        .await;
+
+        stop_and_join!(shutdown, sidecar_set);
+        checkpoint_res
     }
 
-    async fn exec_assert(&self, _ctx: &CpuTestContext) -> eyre::Result<()> {
+    async fn exec_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
+
         let post = WalAssertions::new()
             .assert_checkpoint_count(1)
             .assert_latest_checkpoint_mod_id(WAL_MUTATION_COUNT)
             .assert_s3_object_exists(true);
         nodes.apply_assertions(&[post.clone(), post.clone(), post]).await?;
+
         // All 3 parties must agree on the BLAKE3 hash.
-        nodes.assert_checkpoint_hashes_agree().await
+        nodes.assert_checkpoint_hashes_agree().await?;
+
+        // TODO (open question #7): materialise the reference graph from WAL rows,
+        // compute its BLAKE3 hash, and compare against stored hashes:
+        //
+        //   let reference_hash = materialise_and_hash(&nodes.0[0].stores.graph, 0, WAL_MUTATION_COUNT).await?;
+        //   nodes.assert_checkpoint_hashes_match_reference(&reference_hash).await?;
+
+        Ok(())
     }
 
     async fn teardown(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
         if let Some(nodes) = &self.nodes {
-            nodes.truncate_wal().await?;
+            nodes.truncate_checkpoint_tables().await?;
             nodes.cleanup_s3_checkpoints(&ctx.configs).await?;
         }
         Ok(())

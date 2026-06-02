@@ -3,40 +3,64 @@ use super::CpuConfigs;
 /// Lifecycle trait implemented by each `wal_NNN` test struct.
 ///
 /// Mirrors the `TestRun` trait from iris-mpc-upgrade-hawk/tests/utils/runner.rs.
-/// All methods are async and return `eyre::Result<()>`.
 ///
-/// Execution order:
-///   setup → setup_assert → exec → exec_assert → teardown
+/// `run()` calls all phases in order; only `exec` and `exec_assert` are required —
+/// the rest default to `Ok(())`.
 #[allow(async_fn_in_trait)]
 pub trait TestRun {
-    /// Prepare DB state: seed WAL mutations, seed base checkpoint, etc.
-    async fn setup(&mut self, ctx: &CpuTestContext) -> eyre::Result<()>;
+    /// Orchestrates all lifecycle phases in order.
+    /// Propagates the first error encountered; teardown runs even on exec failure.
+    async fn run(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
+        self.setup(ctx).await?;
+        self.setup_assert(ctx).await?;
+        let exec_res = self.exec(ctx).await;
+        // Always attempt teardown regardless of exec outcome.
+        let teardown_res = self.teardown(ctx).await;
+        exec_res?;
+        teardown_res?;
+        self.exec_assert(ctx).await?;
+        self.teardown_assert(ctx).await
+    }
+
+    /// Prepare DB state: truncate tables, seed WAL mutations, seed checkpoint.
+    async fn setup(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
+        Ok(())
+    }
 
     /// Verify preconditions before running services (e.g. WAL row count = N).
-    async fn setup_assert(&self, ctx: &CpuTestContext) -> eyre::Result<()>;
+    async fn setup_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
+        Ok(())
+    }
 
-    /// Spawn services (hawk_main / sidecar_main) and wait for the appropriate
-    /// termination condition (TC-1 ready endpoint or TC-2 S3 checkpoint).
+    /// REQUIRED — Spawn services, wait for termination condition (TC-1 or TC-2).
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()>;
 
-    /// Verify post-conditions: checkpoint rows, S3 objects, WAL high-water mark.
-    async fn exec_assert(&self, ctx: &CpuTestContext) -> eyre::Result<()>;
+    /// REQUIRED — Verify post-conditions: checkpoint rows, S3 objects, WAL HWM.
+    async fn exec_assert(&mut self, ctx: &CpuTestContext) -> eyre::Result<()>;
 
-    /// Cancel services, delete S3 checkpoint objects, truncate WAL table.
-    async fn teardown(&mut self, ctx: &CpuTestContext) -> eyre::Result<()>;
+    /// Cancel services, truncate tables, clean up S3 objects.
+    async fn teardown(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
+        Ok(())
+    }
+
+    /// Optional final invariant check (runs after teardown).
+    async fn teardown_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
+        Ok(())
+    }
 }
 
 /// Context passed to every lifecycle method.
 pub struct CpuTestContext {
     pub configs: CpuConfigs,
     pub env: TestEnvironment,
-    /// Test number (100, 101, ...) for log tagging.
+    /// Test number (100–104) for log tagging and config selection.
     pub kind: usize,
+    /// Test run index (usually 1) for multi-run scenarios.
+    pub idx: usize,
 }
 
 impl CpuTestContext {
-    /// Detect environment from the presence of `/.dockerenv`.
-    pub fn from_env(kind: usize) -> Self {
+    pub fn new(kind: usize, idx: usize) -> Self {
         let env = if std::path::Path::new("/.dockerenv").exists() {
             TestEnvironment::Docker
         } else {
@@ -46,11 +70,13 @@ impl CpuTestContext {
             configs: Self::load_configs(&env),
             env,
             kind,
+            idx,
         }
     }
 
     fn load_configs(env: &TestEnvironment) -> CpuConfigs {
-        // TODO: load from tests/resources/node-config/{local,docker}/ TOML files,
+        // TODO (open question #1): load per-party CpuNodeConfig from TOML files at
+        //   tests/resources/node-config/{local,docker}/
         // mirroring the genesis test config-loading pattern.
         let _ = env;
         todo!("load per-party CpuNodeConfig from TOML files")

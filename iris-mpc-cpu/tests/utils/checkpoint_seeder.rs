@@ -1,58 +1,80 @@
 use super::{cpu_node::CpuNodes, CpuConfigs};
 
-// TODO: replace with real imports once open question #4 is resolved
-// (PlaintextStore vs Aby3Store serialization compatibility).
+// TODO (open question #3): confirm insert method name and signature.
 // use iris_mpc_cpu::hnsw::graph::graph_store::{GraphPg, GraphCheckpointRow};
 // use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 
+// Types needed for checkpoint construction — confirmed store-agnostic:
+// use iris_mpc_cpu::hnsw::graph::GraphMem;
+// use iris_mpc_cpu::utils::serialization::types::graph_v4::GraphV4;
+// use iris_mpc_cpu::graph_checkpoint::s3_client::streaming_upload::stream_serialize_and_upload_with;
+
 /// Pre-seeds a base checkpoint into both the DB and S3 for a single party.
 ///
-/// This establishes a starting point so that WAL roll-forward tests have a
-/// realistic `(checkpoint, WAL delta)` state: after seeding, callers then use
-/// `WalMutationBuilder` to add mutations with `modification_id > last_modification_id`.
+/// The checkpoint format is `GraphV4` serialized via bincode — confirmed store-agnostic.
+/// The same blob is accepted by `hawk_main` on startup regardless of whether it was
+/// produced by a `PlaintextStore`-backed test or the real `Aby3Store`-backed service.
 ///
-/// # Open question #4
+/// After seeding, the caller uses `WalMutationBuilder` to add WAL mutations with
+/// `modification_id > last_modification_id` — those will be rolled forward on startup.
 ///
-/// The serialized graph blob must be readable by `hawk_main` at startup, which uses
-/// `GraphPg<Aby3Store>`.  If the checkpoint format is store-agnostic (raw HNSW
-/// adjacency), a minimal empty-graph blob works.  If it embeds store-specific vector
-/// data, this seeder needs to produce an Aby3-compatible blob.
+/// ## Pipeline per party
+///
+/// 1. Create empty `GraphMem<IrisVectorId>` (no nodes, zero entry point)
+/// 2. Convert to `GraphV4` via `From<GraphMem<IrisVectorId>>`
+/// 3. Serialize with `bincode::serialize`
+/// 4. Compute BLAKE3 hash of the bytes
+/// 5. Upload bytes to S3 at key `"{party_id}/checkpoints/seed_{last_mod_id}"`
+/// 6. Insert `genesis_graph_checkpoint` DB row
 pub struct CheckpointSeeder {
-    /// Value to store as `last_indexed_iris_id` in the checkpoint row.
+    /// Value stored as `last_indexed_iris_id` in the checkpoint row.
     pub last_iris_id: i64,
-    /// WAL anchor: `hawk_main` will replay all mutations with
-    /// `modification_id > last_modification_id` on startup.
+    /// WAL anchor: `hawk_main` replays mutations with `modification_id > last_modification_id`.
     pub last_modification_id: i64,
 }
 
 impl CheckpointSeeder {
     pub fn new(last_iris_id: i64, last_modification_id: i64) -> Self {
-        Self {
-            last_iris_id,
-            last_modification_id,
-        }
+        Self { last_iris_id, last_modification_id }
     }
 
-    /// Seed a checkpoint for one party: build minimal graph blob, upload to S3,
-    /// insert `hawk_graph_checkpoints` row.
-    ///
-    /// Returns the inserted `GraphCheckpointRow` (placeholder type for now).
+    /// Seed a checkpoint for one party.
     pub async fn seed_party(
         &self,
-        _graph: &(),     // TODO: &GraphPg<PlaintextStore>
-        _s3: &(),        // TODO: &S3Client
+        _graph: &(),  // TODO: &GraphPg<PlaintextStore>
         _bucket: &str,
         _party_id: usize,
     ) -> eyre::Result<()> /* TODO: -> GraphCheckpointRow */ {
-        // TODO:
-        //   1. build a minimal serialized Graph (empty node set, zero entry point)
-        //      — must be compatible with what hawk_main deserializes on startup
-        //   2. compute BLAKE3 hash of the serialized bytes
-        //   3. upload bytes to S3 at key "{bucket}/{party_id}/checkpoints/seed"
-        //   4. call graph.insert_genesis_graph_checkpoint(
-        //          last_iris_id, last_modification_id, s3_key, blake3_hash, ...)
-        //   5. return the inserted row
-        todo!("seed checkpoint for one party")
+        // Step 1: Build an empty GraphMem.
+        // TODO: let graph_mem = GraphMem::<IrisVectorId>::new();
+
+        // Step 2: Convert to GraphV4.
+        // TODO: let graph_v4 = GraphV4::from(graph_mem);
+
+        // Step 3: Serialize with bincode.
+        // TODO: let bytes = bincode::serialize(&graph_v4)?;
+
+        // Step 4: Compute BLAKE3 hash.
+        // TODO: let hash = blake3::hash(&bytes);
+        // TODO: let hash_hex = hex::encode(hash.as_bytes());
+
+        // Step 5: Upload to S3.
+        // TODO: let s3_key = format!("{party_id}/checkpoints/seed_{}", self.last_modification_id);
+        // TODO: upload bytes to S3 at s3_key using stream_serialize_and_upload_with or put_object.
+
+        // Step 6: Insert DB row.
+        // TODO (open question #3): call graph.insert_genesis_graph_checkpoint(
+        //     self.last_iris_id,
+        //     self.last_modification_id,
+        //     &s3_key,
+        //     &hash_hex,
+        //     /* graph_version */ 4,
+        //     /* is_archival */ false,
+        // ).await
+
+        todo!(
+            "build empty GraphMem → GraphV4 → bincode → BLAKE3 → S3 upload → DB row insert"
+        )
     }
 
     /// Seed the same checkpoint for all 3 parties.
@@ -60,8 +82,9 @@ impl CheckpointSeeder {
         &self,
         _nodes: &CpuNodes,
         _configs: &CpuConfigs,
-    ) -> eyre::Result<[(); 3]> /* TODO: -> [GraphCheckpointRow; 3] */ {
-        // TODO: call seed_party for each party with their respective S3 clients
-        todo!("seed checkpoint for all parties")
+    ) -> eyre::Result<()> /* TODO: -> [GraphCheckpointRow; 3] */ {
+        // TODO: call seed_party for each party with their respective graph store and bucket.
+        // Can be parallelized with tokio::try_join!.
+        todo!("seed checkpoint for all 3 parties")
     }
 }

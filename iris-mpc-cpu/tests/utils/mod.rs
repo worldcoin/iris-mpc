@@ -8,40 +8,81 @@ pub mod wal_builder;
 pub const COUNT_OF_PARTIES: usize = 3;
 
 /// Per-party configuration array.
-// TODO: replace with the real Config type from iris_mpc_common once the config
-// structure for cpu-side tests is settled (open question #3 in readme).
 pub type CpuConfigs = [CpuNodeConfig; COUNT_OF_PARTIES];
 
-/// Placeholder config type — to be replaced with the real per-party config.
-// TODO: derive from iris_mpc_common::config::Config or a dedicated test config struct.
+/// Hardcoded loopback ports for hawk_main's MPC network.
+/// These must not conflict with SIDECAR_ADDRS or the coordination ports.
+pub const HAWK_ADDRS: [&str; COUNT_OF_PARTIES] = [
+    "127.0.0.1:16000",
+    "127.0.0.1:16100",
+    "127.0.0.1:16200",
+];
+
+/// Hardcoded loopback ports for sidecar_main's MPC network.
+/// Different from HAWK_ADDRS so both can run in the same test process (wal_103).
+pub const SIDECAR_ADDRS: [&str; COUNT_OF_PARTIES] = [
+    "127.0.0.1:16010",
+    "127.0.0.1:16110",
+    "127.0.0.1:16210",
+];
+
+/// Per-party test configuration.
+///
+/// This is a test-local struct rather than the production `iris_mpc_common::Config`
+/// to keep test setup minimal and explicit.
 #[derive(Debug, Clone)]
 pub struct CpuNodeConfig {
     /// PostgreSQL connection URL for this party's CPU database.
     pub db_url: String,
-    /// Schema name for this party (e.g. "party_0", "party_1", "party_2").
+    /// Schema name for this party (e.g. "cpu_party_0").
     pub db_schema: String,
     /// S3 bucket name for graph checkpoints.
     pub checkpoint_bucket: String,
     /// Party index (0, 1, 2).
     pub party_id: usize,
-    /// Address this party's coordination server listens on.
-    // TODO: confirm port/path convention for the ready endpoint (open question #1).
-    pub coordination_addr: String,
-    /// Sidecar-specific settings.
+    /// Port that this party's coordination server listens on.
+    /// Used by TC-1 (wait_for_all_ready) to construct a ServerCoordinationConfig.
+    /// See open question #5 and #6 in readme.
+    pub coordination_port: u16,
+    /// Sidecar-specific settings — can be overridden per test.
     pub sidecar: SidecarTestConfig,
 }
 
-/// Sidecar settings used in tests — kept separate so they can be overridden easily.
+/// Sidecar settings kept separate so individual tests can override them.
 #[derive(Debug, Clone)]
 pub struct SidecarTestConfig {
     pub cycle_interval_secs: u64,
     pub retry_interval_secs: u64,
     pub peer_round_timeout_secs: u64,
-    /// Override to 1 in most tests to avoid needing many seeded WAL rows
-    /// (see open question #7 in readme).
+    /// Guard: sidecar will not checkpoint if fewer than this many new WAL rows exist.
+    /// Set to 5 by default; tests must seed at least this many mutations.
     pub min_mutations_per_cycle: u64,
     pub checkpoint_window: usize,
     pub is_archival: bool,
-    // TODO: map to the real PruningMode enum from checkpoint_protocol
-    pub pruning_mode: Option<String>,
+    // TODO (open question in readme): map to the real PruningMode enum once the
+    // exact import path for iris_mpc_cpu::checkpoint_protocol::PruningMode is known.
+    pub pruning_mode: PruningModeConfig,
+}
+
+impl Default for SidecarTestConfig {
+    fn default() -> Self {
+        Self {
+            cycle_interval_secs: 1,
+            retry_interval_secs: 1,
+            peer_round_timeout_secs: 30,
+            min_mutations_per_cycle: 5,
+            checkpoint_window: 10,
+            is_archival: false,
+            pruning_mode: PruningModeConfig::None,
+        }
+    }
+}
+
+/// Local mirror of `iris_mpc_cpu::checkpoint_protocol::PruningMode`.
+/// TODO: replace with direct use of the real enum once the import path is confirmed.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PruningModeConfig {
+    None,
+    OlderNonArchival,
+    AllOlder,
 }

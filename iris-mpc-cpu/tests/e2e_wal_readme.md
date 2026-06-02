@@ -15,45 +15,56 @@ production, or simply unverified in plaintext test mode), so assertions are made
 exclusively against:
 
 - The `hawk_graph_mutations` WAL table (row counts, modification IDs)
-- The `hawk_graph_checkpoints` table (new rows, WAL anchor, BLAKE3 hash)
+- The `genesis_graph_checkpoint` table (new rows, WAL anchor, BLAKE3 hash)
 - S3 objects (existence of uploaded checkpoint blobs, hash agreement across parties)
 
 The two services under test:
 
 | Service | Entry point | Role in WAL pipeline |
 |---|---|---|
-| `hawk_main` | `hawk_main::exec(HawkArgs)` | On startup: load latest checkpoint from S3, replay WAL mutations since that checkpoint, signal ready |
+| `hawk_main` | `hawk_main::exec(HawkArgs, CancellationToken)` | On startup: load latest checkpoint from S3, replay WAL mutations since that checkpoint, signal ready |
 | `sidecar_main` | `checkpoint_protocol::sidecar_main(cfg, graph, s3, networking, shutdown)` | Daemon: freeze WAL height → 3-party hash consensus → upload checkpoint to S3 → insert checkpoint row in DB |
 
 ---
 
 ## Termination Conditions
 
-### TC-1 — Ready endpoint (roll-forward / startup)
+### TC-1 — Ready signal (roll-forward / startup)
 
 Used for tests that exercise `hawk_main` startup and WAL replay.
 
-`hawk_main` finishes startup when all three parties have loaded their checkpoint,
-applied the WAL delta, and signalled readiness through the coordination server.  The
-test polls the coordination server's ready endpoint (one per party) with a timeout.
+`hawk_main` signals readiness via the coordination server after all three parties have
+loaded their checkpoint, applied the WAL delta, and exchanged ready signals.  The test
+calls `wait_for_others_ready(&server_coord_config)` (from `ampc_server_utils`) for each
+party, combined with `try_join_all`, inside a `tokio::select!` that also monitors the
+`JoinSet` for unexpected early exit.
 
-```
-for each party:
-    GET http://localhost:{coordination_port}/ready  →  200 OK
+```rust
+let ready_futures = configs.iter().map(|config| {
+    async move { wait_for_others_ready(&config.server_coord_config).await }
+});
+tokio::select! {
+    res = timeout(dur, try_join_all(ready_futures)) => { res?? }
+    Some(exit) = join_set.join_next() => bail!("unexpected task exit: {:?}", exit)
+}
 ```
 
 Signal: "the graph has been materialized from checkpoint + WAL delta and the service
 is accepting work."
 
-### TC-2 — S3 checkpoint appearance (sidecar cycle)
+**hawk_main always requires the full 3-party MPC network to be up**, even for pure
+roll-forward startup.  TC-1 tests therefore need the same loopback network setup as
+TC-2 sidecar tests.
+
+### TC-2 — DB checkpoint appearance (sidecar cycle)
 
 Used for tests that exercise the sidecar's full checkpoint cycle.
 
-After the sidecar completes a cycle it inserts a new row into `hawk_graph_checkpoints`
+After the sidecar completes a cycle it inserts a new row into `genesis_graph_checkpoint`
 (only after the S3 upload succeeds and peer hashes have been agreed upon).  The test
 records a baseline checkpoint count before starting the sidecar, then polls
-`GraphPg::recent_checkpoints()` until the count increases.  The S3 object is then
-verified to exist.
+`GraphPg::get_latest_genesis_graph_checkpoint()` until the count advances past the
+baseline.  The S3 object is then verified to exist.
 
 ```
 baseline = count_checkpoints(db)
@@ -71,21 +82,21 @@ stored the checkpoint."
 
 ```
 iris-mpc-cpu/tests/
-├── e2e_wal.rs                   # Test binary: registers all wal_NNN test cases
+├── e2e_wal.rs                   # Test binary: #[test]+#[serial] functions, run_test! macro
 ├── e2e_wal_readme.md            # This file
 ├── workflows/
-│   ├── mod.rs                   # TestRun trait re-export + run_hawk!, run_sidecar!, stop_and_join! macros
+│   ├── mod.rs                   # run_hawk!, run_sidecar!, stop_and_join! macros
 │   ├── wal_100.rs               # Startup: empty WAL → ready (baseline smoke test)
 │   ├── wal_101.rs               # Startup: checkpoint at M, WAL M+1..N → roll-forward
 │   ├── wal_102.rs               # Sidecar: WAL present → checkpoint uploaded to S3
 │   ├── wal_103.rs               # Combined: hawk startup roll-forward + sidecar cycle
 │   └── wal_104.rs               # Sidecar pruning modes
 └── utils/
-    ├── mod.rs                   # Type aliases, sub-module declarations
-    ├── runner.rs                # TestRun trait + CpuTestContext
+    ├── mod.rs                   # Type aliases, port constants, CpuNodeConfig
+    ├── runner.rs                # TestRun trait (with run() orchestrator) + CpuTestContext
     ├── cpu_node.rs              # CpuNode, CpuNodes, DbStores, WalAssertions
-    ├── wal_builder.rs           # Synthetic WAL mutation factory (no real iris data needed)
-    ├── checkpoint_seeder.rs     # Pre-seed a checkpoint into DB + S3
+    ├── wal_builder.rs           # Synthetic WAL mutation factory (AddNode only)
+    ├── checkpoint_seeder.rs     # Pre-seed a checkpoint into DB + S3 via GraphMem → GraphV4
     └── wait_conditions.rs       # wait_for_all_ready() [TC-1], wait_for_new_checkpoint() [TC-2]
 ```
 
@@ -93,21 +104,69 @@ iris-mpc-cpu/tests/
 
 ## Components
 
+### `e2e_wal.rs` — Test binary
+
+Follows the `e2e_genesis.rs` pattern exactly:
+
+- `TEST_FAILED: LazyLock<AtomicBool>` — once any test fails, subsequent tests bail early
+- `run_test!(kind, idx, constructor)` macro — creates a `tokio::Runtime`, instantiates the test
+  struct, calls `test.run(&ctx)` inside a `tokio::select!` with `ctrl_c()` for interruption
+- Individual `#[test]` + `#[serial]` functions, one per `wal_NNN` scenario
+
+```rust
+#[test]
+#[serial]
+fn test_wal_100() -> eyre::Result<()> {
+    run_test!(100, 1, Wal100::new())
+}
+```
+
+---
+
 ### `utils/runner.rs` — `TestRun` trait
 
-Lifecycle hook trait implemented by each `wal_NNN` struct.  Mirrors the genesis test
-pattern.
+Lifecycle hook trait implemented by each `wal_NNN` struct.  The `run()` method
+orchestrates all phases in order; implementing types only need to override the phases
+they care about.
 
 ```
-setup()          prepare DB state, seed WAL mutations, seed checkpoint
-setup_assert()   verify preconditions (e.g. WAL row count = N before exec)
-exec()           spawn services, wait for termination condition
-exec_assert()    verify post-conditions (checkpoint row, S3 object, WAL state)
-teardown()       cancel services, clean S3, truncate WAL table
+run()              orchestrator — calls all phases, propagates first error
+setup()            prepare DB state: seed WAL mutations, seed checkpoint
+setup_assert()     verify preconditions (e.g. WAL row count = N before exec)
+exec()             REQUIRED — spawn services, wait for termination condition
+exec_assert()      REQUIRED — verify post-conditions (checkpoint row, S3, WAL HWM)
+teardown()         cancel services, truncate tables, clean S3
+teardown_assert()  optional final invariant check
 ```
 
-`CpuTestContext` carries: `party_configs: [CpuNodeConfig; 3]`, `env: TestEnvironment`
-(local vs docker), `kind: usize` (test number).
+`CpuTestContext` carries: `configs: [CpuNodeConfig; 3]`, `env: TestEnvironment`
+(local vs docker), `kind: usize` (test number, 100–104).
+
+---
+
+### `utils/mod.rs` — Config types and port constants
+
+`CpuNodeConfig` is a test-local struct (not the production `iris_mpc_common::Config`)
+that carries just what each test needs.  Key fields:
+
+- `db_url`, `db_schema` — PostgreSQL connection
+- `checkpoint_bucket` — S3 bucket for checkpoint objects
+- `party_id` — 0, 1, or 2
+- `coordination_port` — port for the `ampc_server_utils` coordination server
+- `sidecar: SidecarTestConfig` — overridable sidecar settings
+
+Hardcoded loopback port arrays (must not conflict with each other):
+
+```rust
+// hawk_main MPC network
+pub const HAWK_ADDRS: [&str; 3] = ["127.0.0.1:16000", "127.0.0.1:16100", "127.0.0.1:16200"];
+
+// sidecar_main MPC network (different ports)
+pub const SIDECAR_ADDRS: [&str; 3] = ["127.0.0.1:16010", "127.0.0.1:16110", "127.0.0.1:16210"];
+```
+
+`SidecarTestConfig::min_mutations_per_cycle` defaults to **5** — tests seed at least
+that many WAL rows before starting the sidecar.
 
 ---
 
@@ -122,36 +181,24 @@ pub struct DbStores {
 }
 ```
 
-**`CpuNode`** — one party's handles:
-
-```rust
-pub struct CpuNode {
-    pub stores: DbStores,
-}
-```
+The checkpoint format (`GraphV4` / bincode) is store-agnostic — the same blob is
+readable by `hawk_main` regardless of whether it uses `PlaintextStore` or `Aby3Store`.
 
 **`CpuNodes`** — array of 3, mirrors `MpcNodes` from genesis tests:
 
 ```rust
 impl CpuNodes {
     pub async fn new(configs: &[CpuNodeConfig; 3]) -> Result<Self>;
-
-    // Run WalAssertions against each party
     pub async fn apply_assertions(&self, assertions: &[WalAssertions; 3]) -> Result<()>;
-
-    // Verify each party has expected checkpoint count (DB rows)
     pub async fn assert_checkpoint_count(&self, expected: usize) -> Result<()>;
-
-    // Verify all 3 parties' latest checkpoint BLAKE3 hashes agree
     pub async fn assert_checkpoint_hashes_agree(&self) -> Result<()>;
-
-    // Delete all checkpoint S3 objects + DB rows (teardown)
     pub async fn cleanup_s3_checkpoints(&self, configs: &[CpuNodeConfig; 3]) -> Result<()>;
-
-    // Truncate hawk_graph_mutations for clean state
-    pub async fn truncate_wal(&self) -> Result<()>;
+    pub async fn truncate_checkpoint_tables(&self) -> Result<()>;
 }
 ```
+
+`truncate_checkpoint_tables()` truncates three tables per party:
+`hawk_graph_mutations`, `genesis_graph_checkpoint`, and the persistent state table.
 
 **`WalAssertions`** — builder for per-party post-conditions:
 
@@ -159,7 +206,7 @@ impl CpuNodes {
 pub struct WalAssertions {
     pub wal_row_count: Option<usize>,           // rows in hawk_graph_mutations
     pub max_modification_id: Option<i64>,       // WAL high-water mark
-    pub checkpoint_count: Option<usize>,        // rows in hawk_graph_checkpoints
+    pub checkpoint_count: Option<usize>,        // rows in genesis_graph_checkpoint
     pub latest_checkpoint_mod_id: Option<i64>,  // WAL anchor of newest checkpoint
     pub s3_object_exists: Option<bool>,         // whether newest checkpoint is in S3
 }
@@ -173,91 +220,89 @@ Constructs and inserts synthetic `hawk_graph_mutations` rows without requiring a
 MPC request pipeline or real iris data.  Each row is a bincode-serialized
 `BothEyes<Vec<GraphMutation<IrisVectorId>>>`.
 
-```rust
-pub struct WalMutationBuilder { ... }
+**Only `AddNode` / `Uniqueness` mutations** are safe for an empty starting graph.
+Reset-update, recovery-update, and other modification types assume a node already exists
+in the graph and will fail during WAL replay if the graph is empty.
 
+```rust
 impl WalMutationBuilder {
     pub fn new() -> Self;
+    // Add an AddNode mutation for both eyes at the given modification_id.
+    // Use sequential node_ids (0, 1, 2, ...) to build a coherent graph.
     pub fn add_node(self, mod_id: i64, node_id: u32, height: usize) -> Self;
-    pub fn add_edges(self, mod_id: i64, base: u32, neighbors: Vec<u32>, layer: usize) -> Self;
-    // Persist all mutations to one party's graph store
     pub async fn seed(&self, graph: &GraphPg<PlaintextStore>) -> Result<()>;
-    // Convenience: seed same mutations to all 3 parties
     pub async fn seed_all(&self, nodes: &CpuNodes) -> Result<()>;
 }
 ```
+
+Each `add_node` call creates a `GraphMutation { seq_no, ops: [MutationOp::AddNode { id, height, update_ep: UpdateEntryPoint::False }] }` for **both** eyes (identical synthetic data), bincode-serializes the `BothEyes<Vec<GraphMutation>>`, and stores it alongside the `modification_id`.
 
 ---
 
 ### `utils/checkpoint_seeder.rs` — `CheckpointSeeder`
 
-Builds a minimal serialized graph blob, uploads it to S3, and inserts the corresponding
-`hawk_graph_checkpoints` DB row.  This establishes a base checkpoint so that WAL
-roll-forward tests have a realistic starting state.
+Builds a minimal serialized graph blob and uploads it to S3, establishing a base
+checkpoint so that WAL roll-forward tests have a realistic `(checkpoint, delta)` state.
 
-```rust
-pub struct CheckpointSeeder {
-    pub last_iris_id: i64,
-    pub last_modification_id: i64,  // WAL anchor: mutations after this will be rolled forward
-}
+The checkpoint format is `GraphV4` serialized via bincode — store-agnostic, so the same
+blob is accepted by both `PlaintextStore`-backed tests and the real `Aby3Store`-backed
+`hawk_main`.
 
-impl CheckpointSeeder {
-    pub async fn seed_party(
-        &self,
-        graph: &GraphPg<PlaintextStore>,
-        s3: &S3Client,
-        bucket: &str,
-        party_id: usize,
-    ) -> Result<GraphCheckpointRow>;
-
-    pub async fn seed_all(
-        &self,
-        nodes: &CpuNodes,
-        configs: &[CpuNodeConfig; 3],
-    ) -> Result<[GraphCheckpointRow; 3]>;
-}
-```
+Pipeline per party:
+1. Create empty `GraphMem<IrisVectorId>` (no nodes, zero entry point)
+2. Convert to `GraphV4` via `From<GraphMem<IrisVectorId>>`
+3. Serialize with `bincode::serialize`
+4. Compute BLAKE3 hash of the bytes
+5. Upload to S3 at key `"{party_id}/checkpoints/seed_{last_mod_id}"`
+6. Insert `genesis_graph_checkpoint` DB row via `GraphPg::insert_genesis_graph_checkpoint`
 
 ---
 
 ### `utils/wait_conditions.rs` — TC-1 and TC-2
 
 ```rust
-/// TC-1: Poll each party's coordination server ready endpoint until all 3 respond 200.
-/// Returns Err if timeout is exceeded.
+/// TC-1: Call wait_for_others_ready for all 3 parties in parallel via try_join_all.
+/// Also monitors the JoinSet for unexpected task exit (early error detection).
 pub async fn wait_for_all_ready(
     configs: &[CpuNodeConfig; 3],
+    join_set: &mut JoinSet<eyre::Result<()>>,
     timeout: Duration,
-) -> Result<()>;
+) -> eyre::Result<()>;
 
-/// TC-2: Poll the DB checkpoint table until the row count exceeds `baseline_count`,
-/// then verify the S3 object at each party's latest checkpoint key exists.
-/// Returns the new checkpoint rows for each party.
+/// TC-2: Poll genesis_graph_checkpoint table until each party exceeds baseline_count,
+/// then verify S3 objects. Returns the new checkpoint rows.
 pub async fn wait_for_new_checkpoint(
     nodes: &CpuNodes,
     configs: &[CpuNodeConfig; 3],
     baseline_count: usize,
     timeout: Duration,
-) -> Result<[GraphCheckpointRow; 3]>;
+) -> eyre::Result<[GraphCheckpointRow; 3]>;
 ```
 
 ---
 
 ### `workflows/mod.rs` — Macros
 
-Unlike genesis tests (which run to completion), both `hawk_main` and `sidecar_main` are
-daemon loops.  Tests start them, wait for a termination condition, then cancel them.
+Both services are daemon loops; tests start them, wait for a termination condition, then
+cancel via a shared `CancellationToken`.
+
+Services can be called inline (no subprocess needed).  No global side-effects prevent
+this.  A `JoinSet` is used rather than bare `tokio::spawn` so task exits can be
+monitored.
 
 ```rust
-/// Spawn hawk_main for all 3 parties concurrently.
-/// Returns a CancellationToken (shared) and Vec<JoinHandle>.
-macro_rules! run_hawk { ($configs:expr) => { ... } }
+/// Spawn hawk_main for all 3 parties. Returns a JoinSet.
+/// All parties share the provided CancellationToken.
+/// Each party gets its own loopback network handle from HAWK_ADDRS.
+run_hawk!(configs, shutdown_ct)  ->  JoinSet<eyre::Result<()>>
 
-/// Spawn sidecar_main for all 3 parties concurrently.
-macro_rules! run_sidecar { ($configs:expr, $nodes:expr) => { ... } }
+/// Spawn sidecar_main for all 3 parties. Returns a JoinSet.
+/// Each party gets its own loopback network handle from SIDECAR_ADDRS
+/// (different ports from HAWK_ADDRS to avoid bind conflicts when both run).
+run_sidecar!(configs, shutdown_ct)  ->  JoinSet<eyre::Result<()>>
 
-/// Cancel the shared token and await all handles.
-macro_rules! stop_and_join { ($token:expr, $handles:expr) => { ... } }
+/// Cancel the token, drain the JoinSet, propagate any errors.
+stop_and_join!(shutdown_ct, join_set)
 ```
 
 ---
@@ -274,33 +319,36 @@ macro_rules! stop_and_join { ($token:expr, $handles:expr) => { ... } }
 ### `wal_101` — Roll-forward: checkpoint at M, WAL mutations M+1..N
 
 - **Setup:** `CheckpointSeeder::seed_all(last_mod_id=50)`, then
-  `WalMutationBuilder` seeds mutations 51..100
+  `WalMutationBuilder` seeds 50 `add_node` mutations (mod_ids 51..=100)
 - **Exec (TC-1):** `run_hawk!` → `wait_for_all_ready()`
-- **Assert:** WAL rows still present (not consumed/deleted by roll-forward), service ready;
-  confirms the startup path loaded the checkpoint and applied the 50-mutation delta
+- **Assert:** WAL rows unchanged (roll-forward does not consume them); checkpoint count = 1;
+  confirms startup loaded the checkpoint and applied the 50-mutation delta
 
 ### `wal_102` — Sidecar: WAL present → checkpoint uploaded
 
-- **Setup:** `WalMutationBuilder` seeds mutations 1..30; `min_mutations_per_cycle=10`
+- **Setup:** `WalMutationBuilder` seeds 10 `add_node` mutations (mod_ids 1..=10);
+  `min_mutations_per_cycle = 5`
 - **Exec (TC-2):** `run_sidecar!` → `wait_for_new_checkpoint(baseline=0)`
-- **Assert:** 1 new checkpoint row per party, `latest_checkpoint_mod_id = 30`,
-  S3 object present, all 3 BLAKE3 hashes agree
+- **Assert:** 1 new checkpoint row per party, `latest_checkpoint_mod_id = 10`, S3 object
+  present; test materializes its own graph from the seeded WAL, hashes it, and verifies
+  all 3 parties' stored BLAKE3 hashes match
 
 ### `wal_103` — Combined: startup roll-forward then sidecar cycle
 
-- **Setup:** `CheckpointSeeder::seed_all(last_mod_id=50)`, WAL mutations 51..100
+- **Setup:** `CheckpointSeeder::seed_all(last_mod_id=50)`, WAL mutations 51..=100
 - **Phase 1 (TC-1):** `run_hawk!` → `wait_for_all_ready()` → `stop_and_join!`
-  (confirms roll-forward applied)
 - **Phase 2 (TC-2):** `run_sidecar!` → `wait_for_new_checkpoint(baseline=1)`
-  (sidecar snapshots the rolled-forward state)
-- **Assert:** new checkpoint anchored at `mod_id = 100`, hashes agree
+- **Assert:** new checkpoint anchored at `mod_id = 100`; BLAKE3 hashes agree across
+  parties and match the test's own materialization
 
 ### `wal_104` — Sidecar pruning modes
 
-- **Setup:** pre-existing checkpoint, WAL mutations
-- **Exec:** multiple sidecar cycles with varying `pruning_mode`
-  (`None`, `OlderNonArchival`, `AllOlder`)
-- **Assert:** `hawk_graph_checkpoints` row count matches expected post-pruning state per mode
+- **Setup:** seed a base checkpoint and 10 WAL mutations
+- **Run 1:** `pruning_mode = None` — checkpoint rows accumulate
+- **Run 2:** `pruning_mode = OlderNonArchival` — non-archival rows older than latest deleted
+- **Run 3:** `pruning_mode = AllOlder` — all but latest deleted
+- **Assert per run:** `genesis_graph_checkpoint` row count matches expected post-pruning state;
+  pruned S3 objects no longer exist (head_object returns 404)
 
 ---
 
@@ -309,73 +357,64 @@ macro_rules! stop_and_join { ($token:expr, $handles:expr) => { ... } }
 - **PostgreSQL** running locally (via docker-compose) with a separate schema per party
 - **LocalStack** at `http://localhost:4566` for S3; Docker variant at
   `http://localstack:4566`
-- **No GPU required** — `PlaintextStore` used for all DB setup and WAL seeding
-- **MPC network required for sidecar tests** — the 3-party hash consensus step requires
-  a TCP network among the three sidecar processes; the loopback network setup already
-  used in `tests/e2e.rs` can be reused
-- **hawk_main tests (TC-1) may not need a live MPC network** if roll-forward is
-  performed locally per-party (open question — see below)
+- **No GPU required** — `PlaintextStore` / plaintext graph format used for all DB setup
+  and WAL seeding; the checkpoint blob is store-agnostic (`GraphV4` / bincode)
+- **MPC network required for all tests** — both hawk_main and sidecar_main require the
+  3-party loopback TCP network; loopback handles are built inline using hardcoded
+  localhost ports (`HAWK_ADDRS`, `SIDECAR_ADDRS`)
+- **Both services are called inline** — no subprocess spawning; both accept a
+  `CancellationToken` and can be driven from a `JoinSet`
 - Config files per party at `tests/resources/node-config/{local,docker}/`
 
 ---
 
 ## Open Questions
 
-1. **Ready endpoint URL/path:** The coordination server's ready signal is managed via
-   `start_coordination_server_with_extra_routes()` / `set_node_ready()` /
-   `wait_for_others_ready()`.  What HTTP path does the ready endpoint expose, and on
-   which port relative to the party config?  Can we poll it from the test process, or
-   do we need to use the coordination client type directly?
+1. **`hawk_main` callable signature:** The binary entry at `iris-mpc-bins/bin/iris-mpc-cpu/hawk_main.rs`
+   calls `hawk_main(HawkArgs::parse())`.  For test use we need a variant that accepts a
+   `CancellationToken` for clean shutdown.  Is there an internal `exec(args, shutdown_ct)`
+   function in `src/execution/hawk_main.rs`, or does the binary-level `hawk_main` already
+   accept one?  What is the exact path and signature?
 
-2. **hawk_main networking for TC-1 tests:** Does `hawk_main` require the full 3-party
-   MPC TCP network to be up before it will signal ready, even if it is only doing
-   startup roll-forward?  If so, the TC-1 tests need the same network setup as TC-2.
-   If not, each party can be started independently and polled separately.
+2. **`build_hawk_network_handle` or equivalent for tests:** The sidecar binary calls
+   `build_hawk_network_handle(party_index, addresses, outbound_addrs, ..., &shutdown_ct)`.
+   What is the exact import path and full signature for this function?  Is there a simpler
+   test-only builder (like the one used in `tests/e2e.rs`) that wraps it?  The same
+   question applies to the network handle used by `hawk_main`.
 
-3. **Calling hawk_main/sidecar_main inline vs subprocess:** The genesis tests call
-   `genesis::exec()` as an inline async function.  Can `hawk_main` and `sidecar_main`
-   be called the same way from test code, or do they have global side-effects
-   (signal handlers, process-level tracing) that require spawning subprocesses?
+3. **`GraphPg::insert_genesis_graph_checkpoint` signature:** `CheckpointSeeder` needs to
+   insert a checkpoint row after uploading to S3.  What is the exact method name and
+   signature on `GraphPg` for inserting a new `genesis_graph_checkpoint` row?  Does it
+   take the `blake3_hash` as a `String` or `[u8; 32]`?  Does it return the inserted row?
 
-4. **PlaintextStore vs Aby3Store for checkpoint seeding:** `CheckpointSeeder` needs to
-   serialize a graph blob that `hawk_main` (which uses `GraphPg<Aby3Store>`) will accept
-   on startup.  Is the serialized format store-agnostic (i.e. is it the raw HNSW
-   adjacency structure, independent of the vector store type), or does the checkpoint
-   blob embed store-specific vector data that would make a `PlaintextStore`-generated
-   blob unreadable by `Aby3Store`-backed startup?
+4. **Persistent state table name for truncation:** `truncate_checkpoint_tables()` needs to
+   clear `hawk_graph_mutations`, `genesis_graph_checkpoint`, and the persistent state table.
+   What is the exact table name for the persistent state (used to store
+   `last_indexed_iris_id`, `last_indexed_modification_id`, etc.)?
 
-5. **Sidecar networking setup:** `sidecar_main` takes a `networking` handle built by
-   `build_hawk_network_handle()`.  How should the test set up 3 loopback network handles
-   that can talk to each other?  Is the pattern from `tests/e2e.rs` directly reusable,
-   or does the sidecar use a different transport layer?
+5. **`ampc_server_utils` as a test dependency:** `wait_for_all_ready` (TC-1) calls
+   `wait_for_others_ready(&ServerCoordinationConfig)` from `ampc_server_utils`.  Is this
+   crate already available as a `[dev-dependency]` in `iris-mpc-cpu/Cargo.toml`, or does
+   it need to be added?  What is the exact crate name and import path for
+   `wait_for_others_ready` and `ServerCoordinationConfig`?
 
-6. **WAL seeding for TC-1 vs real service writes:** For `wal_101` (roll-forward test),
-   the WAL mutations are seeded synthetically.  The `hawk_main` startup path reads these
-   mutations and applies them to the in-memory graph, but never validates that the
-   mutations form a coherent graph — only that the WAL replay mechanism works.  Is this
-   sufficient, or do we need the mutations to form a valid HNSW graph for startup to
-   succeed?
+6. **Constructing `ServerCoordinationConfig` from test config:** `wait_for_others_ready`
+   takes a `&ServerCoordinationConfig`.  Given a `CpuNodeConfig` with a `coordination_port`,
+   how is a `ServerCoordinationConfig` built for that party?  What fields does it require
+   (e.g., all parties' ports, TLS config, own party ID)?
 
-7. **Minimum mutation threshold for sidecar:** `sidecar_main` has a
-   `min_mutations_per_cycle` guard — it will not produce a checkpoint if fewer than N
-   new mutations exist since the last checkpoint.  For TC-2 tests, we need to seed at
-   least that many WAL rows.  Should `min_mutations_per_cycle` be overridden to 1 in
-   the test config to simplify seeding?
+7. **WAL materialization API for hash comparison (wal_102/103 exec_assert):** The user
+   confirmed that `exec_assert` should materialize a graph from the seeded WAL, hash it,
+   and compare against the 3 parties' stored BLAKE3 hashes.  What is the function to apply
+   WAL mutations to a `GraphMem`?  Is it `GraphMem::insert_apply_all(mutations)`, or is
+   there a higher-level materializer path in `checkpoint_protocol::materializer`?
+   What exact types does the WAL stream return (`GraphMutation<IrisVectorId>` or a row
+   type)?
 
-8. **Deterministic BLAKE3 hashes:** `wal_102` and `wal_103` assert that all 3 parties'
-   checkpoint hashes agree, but do not assert a specific hash value (since the graph
-   blob is not deterministically ordered for synthetically seeded WAL mutations).  If
-   deterministic hashing is needed for stronger assertions, the WAL seeding approach
-   would need to produce a fully-ordered, reproducible graph.
+8. **`BothEyes` type path:** `WalMutationBuilder` needs to construct
+   `BothEyes<Vec<GraphMutation<IrisVectorId>>>`.  What is the exact import path for
+   `BothEyes`?  Is it in `iris_mpc_cpu::hnsw` or `iris_mpc_common`?
 
-9. **Test isolation / schema cleanup:** Each test should run against a fresh DB schema.
-   What is the right cleanup strategy — drop/recreate schema per test, or truncate all
-   relevant tables?  The genesis tests truncate tables in teardown; the same approach
-   should work here but needs to cover `hawk_graph_mutations`,
-   `hawk_graph_checkpoints`, and the persistent state table.
-
-10. **`e2e_wal.rs` test runner pattern:** The genesis tests use a serial runner with a
-    global `tokio::test` that iterates over test cases.  Should `e2e_wal.rs` follow the
-    same pattern (one `#[tokio::test]` that runs all `wal_NNN` cases in sequence), or
-    use separate `#[tokio::test]` functions per scenario to get independent test
-    reporting?
+9. **`IrisVectorId` type path:** The graph mutation and checkpoint types use `IrisVectorId`
+   as the node ID type.  What is the exact import path?  Is it
+   `iris_mpc_common::iris_db::iris::IrisVectorId`, or is it defined elsewhere?

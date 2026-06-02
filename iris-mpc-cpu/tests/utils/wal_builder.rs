@@ -1,10 +1,12 @@
 use super::cpu_node::CpuNodes;
 
-// TODO: replace with real imports once paths are confirmed.
+// TODO (open question #8): confirm BothEyes import path.
+// use iris_mpc_cpu::hnsw::graph::BothEyes;   OR   iris_mpc_common::...
+
+// TODO (open question #7/8): confirm GraphMutation / MutationOp / IrisVectorId paths.
 // use iris_mpc_cpu::hnsw::graph::mutation::{GraphMutation, MutationOp, UpdateEntryPoint};
 // use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
 // use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
-// use iris_mpc_common::iris_db::iris::IrisVectorId;
 
 /// Builds and inserts synthetic `hawk_graph_mutations` rows without requiring a live
 /// MPC request pipeline or real iris data.
@@ -12,75 +14,94 @@ use super::cpu_node::CpuNodes;
 /// Each inserted row corresponds to one `modification_id` and contains a
 /// bincode-serialized `BothEyes<Vec<GraphMutation<IrisVectorId>>>`.
 ///
-/// # Usage
+/// ## Constraint: only `AddNode` mutations
+///
+/// Only `MutationOp::AddNode` (Uniqueness) mutations are safe on an empty starting
+/// graph.  Reset-update, recovery-update, and other modification types assume a node
+/// already exists and will panic or corrupt state if replayed against an empty graph.
+///
+/// Use sequential `node_id` values (0, 1, 2, …) to build a coherent graph.
+///
+/// ## Usage
 ///
 /// ```rust
 /// WalMutationBuilder::new()
-///     .add_node(1, 0, 3)
-///     .add_node(2, 1, 2)
-///     .add_edges(3, 0, vec![1], 0)
+///     .add_node(1, 0, 3)   // mod_id=1, node_id=0, height=3
+///     .add_node(2, 1, 2)   // mod_id=2, node_id=1, height=2
 ///     .seed_all(&nodes)
 ///     .await?;
 /// ```
 pub struct WalMutationBuilder {
-    // Each element: (modification_id, left_mutations, right_mutations)
-    // TODO: replace Vec<u8> placeholders with real GraphMutation types
     entries: Vec<WalEntry>,
 }
 
+/// Internal representation of one WAL row to be seeded.
 struct WalEntry {
     modification_id: i64,
-    // Placeholder: will become BothEyes<Vec<GraphMutation<IrisVectorId>>>
-    // TODO: use real types (open question #6 in readme — do mutations need to form
-    // a valid HNSW graph or can they be arbitrary for WAL replay tests?)
-    description: String,
+    node_id: u32,
+    height: usize,
+    /// Sequence number within the mutation (mirrors seq_no in GraphMutation).
+    /// For synthetic mutations, this equals modification_id.
+    seq_no: u64,
 }
 
 impl WalMutationBuilder {
     pub fn new() -> Self {
-        Self {
-            entries: Vec::new(),
-        }
+        Self { entries: Vec::new() }
     }
 
     /// Add an `AddNode` mutation for both eyes at the given `modification_id`.
+    ///
+    /// `node_id` is the HNSW node identifier (use sequential values starting from 0).
+    /// `height` is the HNSW layer height for this node.
     pub fn add_node(mut self, modification_id: i64, node_id: u32, height: usize) -> Self {
         self.entries.push(WalEntry {
             modification_id,
-            description: format!("AddNode(id={node_id}, height={height})"),
-        });
-        self
-    }
-
-    /// Add an `AddEdges` mutation for both eyes at the given `modification_id`.
-    pub fn add_edges(
-        mut self,
-        modification_id: i64,
-        base: u32,
-        neighbors: Vec<u32>,
-        layer: usize,
-    ) -> Self {
-        self.entries.push(WalEntry {
-            modification_id,
-            description: format!("AddEdges(base={base}, neighbors={neighbors:?}, layer={layer})"),
+            node_id,
+            height,
+            seq_no: modification_id as u64,
         });
         self
     }
 
     /// Persist all mutations to one party's graph store.
-    pub async fn seed(&self, _graph: &()) -> eyre::Result<()> {
-        // TODO:
-        //   for each entry:
-        //     1. construct BothEyes<Vec<GraphMutation<IrisVectorId>>> from the entry
-        //     2. bincode::serialize it
-        //     3. call graph.upsert_hawk_graph_mutations(tx, entry.modification_id, bytes)
-        todo!("serialize and insert WAL mutations into graph store")
+    ///
+    /// For each entry, constructs:
+    ///   `BothEyes { left: vec![GraphMutation { seq_no, ops: [AddNode { id, height, update_ep: False }] }],
+    ///               right: <same> }`
+    /// serializes with bincode, and calls `graph.upsert_hawk_graph_mutations(tx, mod_id, bytes)`.
+    pub async fn seed(&self, _graph: &()) /* TODO: &GraphPg<PlaintextStore> */ -> eyre::Result<()> {
+        for entry in &self.entries {
+            // TODO (open questions #7, #8, #9):
+            //
+            //   let mutation = GraphMutation {
+            //       seq_no: entry.seq_no,
+            //       ops: vec![MutationOp::AddNode {
+            //           id: IrisVectorId::from(entry.node_id),
+            //           height: entry.height,
+            //           update_ep: UpdateEntryPoint::False,
+            //       }],
+            //   };
+            //   let both_eyes = BothEyes { left: vec![mutation.clone()], right: vec![mutation] };
+            //   let bytes = bincode::serialize(&both_eyes)?;
+            //   let mut tx = graph.pool.begin().await?;
+            //   graph.upsert_hawk_graph_mutations(&mut tx, entry.modification_id, bytes).await?;
+            //   tx.commit().await?;
+
+            let _ = entry;
+            todo!("serialize GraphMutation and upsert into hawk_graph_mutations")
+        }
+        Ok(())
     }
 
     /// Convenience: seed the same mutations into all 3 parties' stores.
-    pub async fn seed_all(&self, _nodes: &CpuNodes) -> eyre::Result<()> {
-        // TODO: call self.seed(&node.stores.graph) for each party
-        todo!("seed WAL mutations into all 3 parties")
+    pub async fn seed_all(&self, nodes: &CpuNodes) -> eyre::Result<()> {
+        for node in &nodes.0 {
+            // TODO: self.seed(&node.stores.graph).await?;
+            let _ = node;
+            todo!("seed WAL mutations into all 3 parties")
+        }
+        Ok(())
     }
 
     /// Number of WAL entries that will be seeded.

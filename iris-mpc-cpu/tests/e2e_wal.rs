@@ -7,24 +7,92 @@
 //
 // Requires:
 //   - PostgreSQL running (via docker-compose) with per-party schemas
-//   - LocalStack at http://localhost:4566
+//   - LocalStack at http://localhost:4566 for S3
 
 mod utils;
 mod workflows;
 
-// TODO: wire up a single serial runner (see open question #10 in readme —
-// decide between one #[tokio::test] iterating all cases vs separate functions).
-//
-// The genesis test pattern uses a single test function that calls each workflow
-// in sequence so that DB state is deterministically ordered.  Example:
-//
-// #[tokio::test]
-// async fn e2e_wal_tests() -> eyre::Result<()> {
-//     let ctx = utils::runner::CpuTestContext::from_env();
-//     workflows::run_wal_100(&ctx).await?;
-//     workflows::run_wal_101(&ctx).await?;
-//     workflows::run_wal_102(&ctx).await?;
-//     workflows::run_wal_103(&ctx).await?;
-//     workflows::run_wal_104(&ctx).await?;
-//     Ok(())
-// }
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    LazyLock,
+};
+
+use eyre::bail;
+use serial_test::serial;
+
+use workflows::{
+    wal_100::Wal100, wal_101::Wal101, wal_102::Wal102, wal_103::Wal103, wal_104::Wal104,
+};
+
+const RUST_LOG: &str = "info";
+
+/// Prevents later tests from running once any single test has failed.
+/// Mirrors the pattern in e2e_genesis.rs.
+static TEST_FAILED: LazyLock<AtomicBool> = LazyLock::new(|| AtomicBool::new(false));
+
+/// Instantiate a test, build a tokio runtime, run all lifecycle phases.
+/// Ctrl+C aborts cleanly.  On failure, sets TEST_FAILED so remaining tests skip.
+macro_rules! run_test {
+    ($kind:expr, $idx:expr, $test:expr) => {{
+        tracing_subscriber::fmt()
+            .with_env_filter(format!(
+                "iris_mpc_cpu={RUST_LOG},iris_mpc_common={RUST_LOG},warn"
+            ))
+            .try_init()
+            .ok();
+
+        if TEST_FAILED.load(Ordering::SeqCst) {
+            bail!("A previous test has failed, aborting further tests.");
+        }
+
+        let rt = tokio::runtime::Runtime::new()?;
+        rt.block_on(async {
+            let ctx = utils::runner::CpuTestContext::new($kind, $idx);
+            let mut test = $test;
+
+            let r = tokio::select! {
+                res = test.run(&ctx) => res,
+                _ = tokio::signal::ctrl_c() => Err(eyre::eyre!("Test aborted by Ctrl+C")),
+            };
+
+            if r.is_err() {
+                TEST_FAILED.store(true, Ordering::SeqCst);
+            }
+            r
+        })
+    }};
+}
+
+// ---------------------------------------------------------------------------
+// Test functions — one per scenario, run serially to avoid port/DB conflicts.
+// ---------------------------------------------------------------------------
+
+#[test]
+#[serial]
+fn test_wal_100() -> eyre::Result<()> {
+    run_test!(100, 1, Wal100::new())
+}
+
+#[test]
+#[serial]
+fn test_wal_101() -> eyre::Result<()> {
+    run_test!(101, 1, Wal101::new())
+}
+
+#[test]
+#[serial]
+fn test_wal_102() -> eyre::Result<()> {
+    run_test!(102, 1, Wal102::new())
+}
+
+#[test]
+#[serial]
+fn test_wal_103() -> eyre::Result<()> {
+    run_test!(103, 1, Wal103::new())
+}
+
+#[test]
+#[serial]
+fn test_wal_104() -> eyre::Result<()> {
+    run_test!(104, 1, Wal104::new())
+}
