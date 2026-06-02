@@ -198,15 +198,9 @@ async fn build_iris_graph<D: DistanceOps>(
         OutputGraphConfig::Simple { path } => {
             tracing::info!("Building HNSW graph for ids {first_id} to {last_id}");
             let new_irises = irises[(graph_max_id as usize)..].to_vec();
-            (graph, _) = plaintext_parallel_batch_insert(
-                Some(graph),
-                Some(store),
-                new_irises,
-                searcher,
-                1,
-                prf_seed,
-            )
-            .await?;
+            (graph, _) =
+                plaintext_parallel_batch_insert(graph, store, new_irises, searcher, 1, prf_seed)
+                    .await?;
 
             tracing::info!("Persisting HNSW graph to file");
             write_graph_to_file(path, graph)?;
@@ -241,8 +235,8 @@ async fn build_iris_graph<D: DistanceOps>(
                 );
                 let i_new_irises = irises[i_start..i_end].to_vec();
                 (graph, store) = plaintext_parallel_batch_insert(
-                    Some(graph),
-                    Some(store),
+                    graph,
+                    store,
                     i_new_irises,
                     searcher,
                     1,

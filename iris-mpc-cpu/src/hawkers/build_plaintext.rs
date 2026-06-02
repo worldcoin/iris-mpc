@@ -1,3 +1,31 @@
+//! Parallel HNSW batch insertion for in-memory plaintext vector stores.
+//!
+//! This module deliberately carries two near-identical routines:
+//! [`plaintext_parallel_batch_insert`] (iris codes over [`SharedPlaintextStore`])
+//! and [`deep_id_parallel_batch_insert`] (int4 vectors over
+//! [`SharedPlaintextDeepIDStore`]). Both run the same algorithm — search each
+//! query's neighbors in parallel within a batch, then apply the resulting insert
+//! plans sequentially — and differ only in the concrete store, the query type,
+//! and the progress-log label. They are kept structurally line-for-line parallel
+//! on purpose, so the duplication is easy to diff and verify by eye.
+//!
+//! The reason that these are not represented as a single generic
+//! `parallel_batch_insert<V: VectorStoreMut>` is because the per-query search
+//! is spawned onto a multi-threaded [`JoinSet`], which requires the spawned
+//! future to be `Send`. The `VectorStore`/`VectorStoreMut` operations (and the
+//! `DistanceOps`/`Neighborhood` methods they call) are `async fn`s in traits,
+//! which carry no `Send` bound. For a *concrete* store the compiler still
+//! proves each future `Send` by auto-trait leakage, so each function below
+//! compiles; for a *generic* `V` that guarantee is unavailable and the spawn is
+//! rejected.
+//!
+//! Plausible upgrade path: add `+ Send` to those trait methods (desugaring the
+//! `async fn`s to `-> impl Future<..> + Send`, which cascades through
+//! `VectorStore`/`VectorStoreMut` into `DistanceOps` and `Neighborhood`), or
+//! push the spawned work behind a higher-order closure whose concrete future is
+//! `Send` at each call site. Either then collapses these two routines into one
+//! generic `parallel_batch_insert<V>`.
+
 use std::sync::Arc;
 
 use eyre::Result;
@@ -20,16 +48,14 @@ use crate::{
 const REPORTING_INTERVAL: usize = 1000;
 
 pub async fn plaintext_parallel_batch_insert<D: DistanceOps>(
-    graph: Option<GraphMem<PlaintextVectorRef>>,
-    store: Option<SharedPlaintextStore<D>>,
+    graph: GraphMem<PlaintextVectorRef>,
+    mut store: SharedPlaintextStore<D>,
     irises: Vec<(IrisVectorId, IrisCode)>,
     searcher: &HnswSearcher,
     batch_size: usize,
     prf_seed: &[u8; 16],
 ) -> Result<(GraphMem<PlaintextVectorRef>, SharedPlaintextStore<D>)> {
-    assert!(graph.is_none() == store.is_none());
-    let mut graph = Arc::new(graph.unwrap_or_default());
-    let mut store = store.unwrap_or_default();
+    let mut graph = Arc::new(graph);
 
     let mut inserted_count: usize = 0;
     let mut reported_count: usize = 0;
@@ -138,6 +164,7 @@ pub async fn deep_id_parallel_batch_insert(
                     )
                     .await?;
 
+                // Trim and extract unstructured vector lists
                 let mut links_unstructured = Vec::new();
                 for (lc, mut l) in links.into_iter().enumerate() {
                     let m = searcher.params.get_M(lc);
@@ -161,12 +188,14 @@ pub async fn deep_id_parallel_batch_insert(
             .await
             .into_iter()
             .collect::<Result<_, _>>()?;
+
         results.sort_by_key(|(vector_id, _)| vector_id.serial_id());
 
         let (ids, plans): (Vec<_>, Vec<_>) = results.into_iter().unzip();
         let ids = ids.into_iter().map(Some).collect_vec();
         let plans = plans.into_iter().map(Some).collect_vec();
 
+        // Unwrap Arc while inserting, then wrap again for the next batch
         let mut graph_temp = Arc::try_unwrap(graph).unwrap();
         insert::insert(&mut store, &mut graph_temp, searcher, plans, &ids).await?;
         graph = Arc::new(graph_temp);
@@ -263,8 +292,8 @@ mod tests {
             setup_test_data(database_size, to_insert).await?;
 
         let (final_graph, final_store) = plaintext_parallel_batch_insert(
-            Some(graph),
-            Some(store),
+            graph,
+            store,
             irises.clone(),
             &searcher,
             batch_size,
