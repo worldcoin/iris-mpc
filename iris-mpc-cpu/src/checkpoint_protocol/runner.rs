@@ -31,7 +31,7 @@ use iris_mpc_common::vector_id::VectorId;
 
 // ── In-process Sidecar  ───────────────────────────────────────────────────────
 
-// the sidecar daemeon gets these passed in via the CLI but for in-process these need to be
+// the sidecar daemon gets these passed in via the CLI but for in-process these need to be
 // environment variables.
 //
 // The sidecar process will not be run if the config field is None.
