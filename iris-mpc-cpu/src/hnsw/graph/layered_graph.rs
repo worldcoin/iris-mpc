@@ -301,7 +301,7 @@ impl GraphMem<IrisVectorId> {
 
     /// Idealized GraphMem for deep-ID Int4 vectors. Layer 0 is loaded from a
     /// pre-computed KNN file (same format used by `ideal_from_irises`); higher
-    /// layers are brute-forced using inner-product (descending dot = closer).
+    /// layers are brute-forced using inner-product (greater dot = closer).
     pub fn ideal_from_int4_vectors(
         vectors: Vec<crate::hawkers::plaintext_deep_id_store::Int4Vector>,
         filepath: PathBuf,
@@ -507,9 +507,6 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
 
     /// Constructs a Layer from `(vector_ref, K::Vector)` pairs by brute-force
     /// top-k KNN using the supplied [`IdealKnn`] implementation.
-    ///
-    /// Used by `GraphMem::ideal_from_irises` / `ideal_from_int4_vectors`; the
-    /// per-store helpers below are thin wrappers around it.
     pub fn ideal_from_data<K: IdealKnn>(data: Vec<(V, K::Vector)>, k: usize, knn: K) -> Self {
         let (vector_refs, vectors): (Vec<V>, Vec<K::Vector>) = data.into_iter().unzip();
         let n = vectors.len();

@@ -126,6 +126,7 @@ impl IdealKnn for Int4DotKnn {
         a.dot(b)
     }
     fn order(a: &i32, b: &i32) -> Ordering {
+        // larger dot is "more similar", so e.g. a > b translates to Ordering::Less
         b.cmp(a)
     }
 }
