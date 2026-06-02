@@ -10,7 +10,7 @@ use super::{
 };
 use crate::hnsw::{
     graph::{
-        mutation::{EdgeType, GraphMutation},
+        mutation::{EdgeType, GraphMutation, UnstampedMutation},
         neighborhood::Neighborhood,
         MutationOp, UpdateEntryPoint,
     },
@@ -1685,24 +1685,17 @@ impl HnswSearcher {
                 edge_type: EdgeType::All,
             });
         }
-        let plan = GraphMutation {
-            seq_no: graph.next_sequence_number(),
-            ops,
-        };
+        let plan = UnstampedMutation { ops };
         let updated: BTreeSet<_> = plan.updated_neighborhoods().into_iter().collect();
         let expanded: BTreeSet<_> = plan.expanded_neighborhoods().into_iter().collect();
-        graph.insert_apply(&plan)?;
+        graph.apply_new(plan)?;
 
         // Per-slot invalid-link prune (single-slot here). To be removed once
         // neighborhood-versioning makes this implicit.
         if !updated.is_empty() {
             let ops = self.prune_invalid_links(store, graph, &updated).await?;
             if !ops.is_empty() {
-                let m = GraphMutation {
-                    seq_no: graph.next_sequence_number(),
-                    ops,
-                };
-                graph.insert_apply(&m)?;
+                graph.apply_new(UnstampedMutation { ops })?;
             }
         }
 
@@ -1710,11 +1703,7 @@ impl HnswSearcher {
         if !expanded.is_empty() {
             let ops = self.compact_batch(store, graph, &expanded).await?;
             if !ops.is_empty() {
-                let m = GraphMutation {
-                    seq_no: graph.next_sequence_number(),
-                    ops,
-                };
-                graph.insert_apply(&m)?;
+                graph.apply_new(UnstampedMutation { ops })?;
             }
         }
 

@@ -6,6 +6,19 @@ pub struct GraphMutation<V: Ord> {
     pub ops: Vec<MutationOp<V>>,
 }
 
+/// A graph mutation that has not yet been assigned a sequence number.
+///
+/// Holds the ops describing *what* to change without committing to *where* in
+/// the mutation sequence the change lands. The only way to turn one into a
+/// stamped [`GraphMutation`] is [`crate::hnsw::GraphMem::apply_new`], which
+/// assigns the sequence number and applies it in a single step — so a sequence
+/// number can never be minted in-process without immediately advancing the
+/// graph.
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
+pub struct UnstampedMutation<V: Ord> {
+    pub ops: Vec<MutationOp<V>>,
+}
+
 // NOTE: if a new version of any mutation is needed (ex: InsertNodeV2) such that
 // the new variant would behave differently than before and it is desired to
 // still process old variants apppropriately, simply add the new variant to the
@@ -81,7 +94,7 @@ impl<V: std::fmt::Debug + Ord> std::fmt::Debug for MutationOp<V> {
     }
 }
 
-impl<V: Clone + Ord> GraphMutation<V> {
+impl<V: Clone + Ord> UnstampedMutation<V> {
     /// Subset of `updated_neighborhoods` restricted to neighborhoods that
     /// may have *grown* — i.e. those affected by `AddEdges` ops in this
     /// mutation. Used as the candidate set for batch compaction. The
@@ -329,7 +342,7 @@ mod tests {
 
     // ── expanded_neighborhoods ────────────────────────────────────────────────
 
-    use super::{EdgeType, GraphMutation, MutationOp, UpdateEntryPoint};
+    use super::{EdgeType, MutationOp, UnstampedMutation, UpdateEntryPoint};
 
     fn mk_add_edges(
         base: i32,
@@ -347,8 +360,7 @@ mod tests {
 
     #[test]
     fn expanded_neighborhoods_addedges_all_yields_base_and_neighbors() {
-        let mutation = GraphMutation {
-            seq_no: 1,
+        let mutation = UnstampedMutation {
             ops: vec![mk_add_edges(1, vec![2, 3], 0, EdgeType::All)],
         };
         let mut got = mutation.expanded_neighborhoods();
@@ -358,8 +370,7 @@ mod tests {
 
     #[test]
     fn expanded_neighborhoods_addedges_base_yields_only_base() {
-        let mutation = GraphMutation {
-            seq_no: 1,
+        let mutation = UnstampedMutation {
             ops: vec![mk_add_edges(1, vec![2, 3], 1, EdgeType::Base)],
         };
         assert_eq!(mutation.expanded_neighborhoods(), vec![(1, 1)]);
@@ -367,8 +378,7 @@ mod tests {
 
     #[test]
     fn expanded_neighborhoods_addedges_neighbors_yields_only_neighbors() {
-        let mutation = GraphMutation {
-            seq_no: 1,
+        let mutation = UnstampedMutation {
             ops: vec![mk_add_edges(1, vec![2, 3], 2, EdgeType::Neighbors)],
         };
         let mut got = mutation.expanded_neighborhoods();
@@ -378,8 +388,7 @@ mod tests {
 
     #[test]
     fn expanded_neighborhoods_ignores_non_addedges_ops() {
-        let mutation = GraphMutation {
-            seq_no: 1,
+        let mutation = UnstampedMutation {
             ops: vec![
                 MutationOp::AddNode {
                     id: 1,
@@ -405,8 +414,7 @@ mod tests {
 
     #[test]
     fn updated_neighborhoods_includes_removeedges() {
-        let mutation = GraphMutation {
-            seq_no: 1,
+        let mutation = UnstampedMutation {
             ops: vec![
                 MutationOp::RemoveEdges {
                     base: 1,
@@ -429,8 +437,7 @@ mod tests {
 
     #[test]
     fn updated_neighborhoods_removeedges_respects_edge_type() {
-        let mutation = GraphMutation {
-            seq_no: 1,
+        let mutation = UnstampedMutation {
             ops: vec![
                 MutationOp::RemoveEdges {
                     base: 1,
@@ -453,8 +460,7 @@ mod tests {
 
     #[test]
     fn updated_neighborhoods_ignores_addnode_removenode() {
-        let mutation = GraphMutation {
-            seq_no: 1,
+        let mutation = UnstampedMutation {
             ops: vec![
                 MutationOp::AddNode {
                     id: 1,
