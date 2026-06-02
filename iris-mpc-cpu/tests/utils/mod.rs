@@ -1,4 +1,3 @@
-pub mod checkpoint_seeder;
 pub mod cpu_node;
 pub mod runner;
 pub mod wait_conditions;

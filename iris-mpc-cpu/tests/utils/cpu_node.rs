@@ -1,9 +1,13 @@
 use super::CpuConfigs;
 
 use eyre::eyre;
-use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_common::{postgres::{AccessMode, PostgresClient}, IrisVectorId};
+use iris_mpc_cpu::graph_checkpoint::stream_serialize_and_upload_with;
 use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 use iris_mpc_cpu::hnsw::graph::graph_store::{GraphCheckpointRow, GraphPg};
+use iris_mpc_cpu::hnsw::GraphMem;
+use iris_mpc_cpu::utils::serialization::types::graph_v4::GraphV4;
+use std::io::Write;
 
 /// Per-party database handles for test setup and post-condition assertions.
 ///
@@ -93,6 +97,57 @@ impl CpuNode {
             .map_err(|e| eyre!("S3 object {} missing: {}", row.s3_key, e))?;
         Ok(())
     }
+
+    /// Seed a genesis checkpoint for this party.
+    ///
+    /// 1. Build an empty `GraphMem<IrisVectorId>`, convert to `GraphV4`, serialize with bincode.
+    /// 2. Compute BLAKE3 hash of the bytes.
+    /// 3. Upload bytes to S3 at key `"{party_id}/checkpoints/seed_{last_modification_id}"`.
+    /// 4. Insert `genesis_graph_checkpoint` DB row inside a transaction.
+    /// 5. Return the newly inserted `GraphCheckpointRow`.
+    pub async fn seed_party(
+        &self,
+        last_iris_id: i64,
+        last_modification_id: i64,
+        bucket: &str,
+        party_id: usize,
+    ) -> eyre::Result<GraphCheckpointRow> {
+        let graph_mem = GraphMem::<IrisVectorId>::new();
+        let graph_v4 = GraphV4::from(graph_mem);
+        let bytes = bincode::serialize(&graph_v4)?;
+        let hash_hex = hex::encode(blake3::hash(&bytes).as_bytes());
+        let s3_key = format!("{party_id}/checkpoints/seed_{last_modification_id}");
+
+        stream_serialize_and_upload_with(
+            &self.s3,
+            bucket,
+            &s3_key,
+            move |w| w.write_all(&bytes).map_err(|e| eyre::eyre!(e)),
+            8 * 1024 * 1024,
+            4,
+        )
+        .await?;
+
+        let mut tx = self.stores.graph.begin_tx().await?;
+        GraphPg::<PlaintextStore>::insert_genesis_graph_checkpoint(
+            &mut tx,
+            &s3_key,
+            last_iris_id,
+            last_modification_id,
+            None,
+            &hash_hex,
+            false,
+            4,
+        )
+        .await?;
+        tx.commit().await?;
+
+        self.stores
+            .graph
+            .get_latest_genesis_graph_checkpoint()
+            .await?
+            .ok_or_else(|| eyre!("no checkpoint row found after insert"))
+    }
 }
 
 /// All three parties' nodes.  Mirrors `MpcNodes` from the genesis tests.
@@ -176,6 +231,21 @@ impl CpuNodes {
             node.stores.truncate_checkpoint_tables().await?;
         }
         Ok(())
+    }
+
+    /// Seed a genesis checkpoint for all 3 parties concurrently.
+    pub async fn seed_all(
+        &self,
+        configs: &CpuConfigs,
+        last_iris_id: i64,
+        last_modification_id: i64,
+    ) -> eyre::Result<[GraphCheckpointRow; 3]> {
+        let (r0, r1, r2) = tokio::try_join!(
+            self.0[0].seed_party(last_iris_id, last_modification_id, &configs[0].checkpoint_bucket, configs[0].party_id),
+            self.0[1].seed_party(last_iris_id, last_modification_id, &configs[1].checkpoint_bucket, configs[1].party_id),
+            self.0[2].seed_party(last_iris_id, last_modification_id, &configs[2].checkpoint_bucket, configs[2].party_id),
+        )?;
+        Ok([r0, r1, r2])
     }
 }
 
