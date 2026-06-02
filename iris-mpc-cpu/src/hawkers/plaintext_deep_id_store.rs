@@ -91,6 +91,7 @@ impl Int4Vector {
             *byte = (*byte & 0x0F) | (nibble << 4);
         }
     }
+
     /// Integer inner product of two int4 vectors.
     ///
     /// Decodes nibbles on the fly and accumulates element-wise products in
