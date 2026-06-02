@@ -1,12 +1,14 @@
+use iris_mpc_common::IrisVectorId;
+use iris_mpc_cpu::{
+    execution::hawk_main::BothEyes,
+    hnsw::graph::{
+        graph_store::GraphPg,
+        mutation::{EdgeType, GraphMutation, MutationOp, UpdateEntryPoint},
+    },
+    hawkers::plaintext_store::PlaintextStore,
+};
+
 use super::cpu_node::CpuNodes;
-
-// TODO (open question #8): confirm BothEyes import path.
-// use iris_mpc_cpu::hnsw::graph::BothEyes;   OR   iris_mpc_common::...
-
-// TODO (open question #7/8): confirm GraphMutation / MutationOp / IrisVectorId paths.
-// use iris_mpc_cpu::hnsw::graph::mutation::{GraphMutation, MutationOp, UpdateEntryPoint};
-// use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
-// use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 
 /// Builds and inserts synthetic `hawk_graph_mutations` rows without requiring a live
 /// MPC request pipeline or real iris data.
@@ -33,35 +35,7 @@ use super::cpu_node::CpuNodes;
 ///     .await?;
 /// ```
 pub struct WalMutationBuilder {
-    entries: Vec<WalEntry>,
-}
-
-/// Internal representation of one WAL row to be seeded.
-enum WalEntry {
-    AddNode {
-        modification_id: i64,
-        /// Sequence number within the mutation; equals modification_id for synthetic rows.
-        seq_no: u64,
-        node_id: u32,
-        height: usize,
-    },
-    AddEdges {
-        modification_id: i64,
-        seq_no: u64,
-        base: u32,
-        /// Neighbor node IDs.  Keep under 100 to stay within realistic HNSW degree bounds.
-        neighbors: Vec<u32>,
-        layer: usize,
-    },
-}
-
-impl WalEntry {
-    fn modification_id(&self) -> i64 {
-        match self {
-            Self::AddNode { modification_id, .. } => *modification_id,
-            Self::AddEdges { modification_id, .. } => *modification_id,
-        }
-    }
+    entries: Vec<(i64, GraphMutation<IrisVectorId>)>,
 }
 
 impl WalMutationBuilder {
@@ -74,12 +48,15 @@ impl WalMutationBuilder {
     /// `node_id` is the HNSW node identifier (use sequential values starting from 0).
     /// `height` is the HNSW layer height for this node.
     pub fn add_node(mut self, modification_id: i64, node_id: u32, height: usize) -> Self {
-        self.entries.push(WalEntry::AddNode {
-            modification_id,
+        let mutation = GraphMutation {
             seq_no: modification_id as u64,
-            node_id,
-            height,
-        });
+            ops: vec![MutationOp::AddNode {
+                id: IrisVectorId::from_serial_id(node_id),
+                height,
+                update_ep: UpdateEntryPoint::False,
+            }],
+        };
+        self.entries.push((modification_id, mutation));
         self
     }
 
@@ -99,52 +76,31 @@ impl WalMutationBuilder {
             "neighbors.len() = {} exceeds the 100-edge limit per add_edges call",
             neighbors.len()
         );
-        self.entries.push(WalEntry::AddEdges {
-            modification_id,
+        let mutation = GraphMutation {
             seq_no: modification_id as u64,
-            base,
-            neighbors,
-            layer,
-        });
+            ops: vec![MutationOp::AddEdges {
+                base: IrisVectorId::from_serial_id(base),
+                neighbors: neighbors.iter().map(|&n| IrisVectorId::from_serial_id(n)).collect(),
+                layer,
+                edge_type: EdgeType::All,
+            }],
+        };
+        self.entries.push((modification_id, mutation));
         self
     }
 
     /// Persist all mutations to one party's graph store.
     ///
-    /// For each entry constructs a `BothEyes<Vec<GraphMutation<IrisVectorId>>>`,
-    /// serializes it with bincode, and calls
-    /// `graph.upsert_hawk_graph_mutations(tx, mod_id, bytes)`.
-    pub async fn seed(&self, _graph: &()) /* TODO: &GraphPg<PlaintextStore> */ -> eyre::Result<()> {
-        for entry in &self.entries {
-            // TODO (open questions #7, #8, #9): replace placeholders with real types.
-            //
-            // let op = match entry {
-            //     WalEntry::AddNode { node_id, height, seq_no, .. } => GraphMutation {
-            //         seq_no: *seq_no,
-            //         ops: vec![MutationOp::AddNode {
-            //             id: IrisVectorId::from(*node_id),
-            //             height: *height,
-            //             update_ep: UpdateEntryPoint::False,
-            //         }],
-            //     },
-            //     WalEntry::AddEdges { base, neighbors, layer, seq_no, .. } => GraphMutation {
-            //         seq_no: *seq_no,
-            //         ops: vec![MutationOp::AddEdges {
-            //             base: IrisVectorId::from(*base),
-            //             neighbors: neighbors.iter().map(|&n| IrisVectorId::from(n)).collect(),
-            //             layer: *layer,
-            //             edge_type: EdgeType::All,
-            //         }],
-            //     },
-            // };
-            // let both_eyes = BothEyes { left: vec![op.clone()], right: vec![op] };
-            // let bytes = bincode::serialize(&both_eyes)?;
-            // let mut tx = graph.pool.begin().await?;
-            // graph.upsert_hawk_graph_mutations(&mut tx, entry.modification_id(), bytes).await?;
-            // tx.commit().await?;
-
-            let _ = entry;
-            todo!("serialize GraphMutation and upsert into hawk_graph_mutations")
+    /// For each entry serializes `BothEyes<Vec<GraphMutation<IrisVectorId>>>` with
+    /// bincode and calls `graph.upsert_hawk_graph_mutations(tx, mod_id, bytes)`.
+    pub async fn seed(&self, graph: &GraphPg<PlaintextStore>) -> eyre::Result<()> {
+        for (modification_id, mutation) in &self.entries {
+            let both_eyes: BothEyes<Vec<GraphMutation<IrisVectorId>>> =
+                [vec![mutation.clone()], vec![mutation.clone()]];
+            let bytes = bincode::serialize(&both_eyes)?;
+            let mut tx = graph.pool.begin().await?;
+            graph.upsert_hawk_graph_mutations(&mut tx, *modification_id, &bytes).await?;
+            tx.commit().await?;
         }
         Ok(())
     }

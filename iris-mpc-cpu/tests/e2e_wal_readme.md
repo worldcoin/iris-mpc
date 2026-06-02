@@ -415,13 +415,20 @@ stop_and_join!(shutdown_ct, join_set)
    and compare against the 3 parties' stored BLAKE3 hashes.  What is the function to apply
    WAL mutations to a `GraphMem`?  Is it `GraphMem::insert_apply_all(mutations)`, or is
    there a higher-level materializer path in `checkpoint_protocol::materializer`?
-   What exact types does the WAL stream return (`GraphMutation<IrisVectorId>` or a row
-   type)?
+   ~~What exact types does the WAL stream return (`GraphMutation<IrisVectorId>` or a row
+   type)?~~ **Resolved:** the WAL stream type is `GraphMutation<IrisVectorId>`, with ops
+   defined in `iris_mpc_cpu::hnsw::graph::mutation::{GraphMutation, MutationOp,
+   UpdateEntryPoint, EdgeType}`.  The materialization function itself remains open.
 
-8. **`BothEyes` type path:** `WalMutationBuilder` needs to construct
+8. ~~**`BothEyes` type path:** `WalMutationBuilder` needs to construct
    `BothEyes<Vec<GraphMutation<IrisVectorId>>>`.  What is the exact import path for
-   `BothEyes`?  Is it in `iris_mpc_cpu::hnsw` or `iris_mpc_common`?
+   `BothEyes`?  Is it in `iris_mpc_cpu::hnsw` or `iris_mpc_common`?~~
+   **Resolved:** `use iris_mpc_cpu::execution::hawk_main::BothEyes` — it is
+   `pub type BothEyes<T> = [T; 2]`, so construction is `[vec![m.clone()], vec![m]]`.
 
-9. **`IrisVectorId` type path:** The graph mutation and checkpoint types use `IrisVectorId`
+9. ~~**`IrisVectorId` type path:** The graph mutation and checkpoint types use `IrisVectorId`
    as the node ID type.  What is the exact import path?  Is it
-   `iris_mpc_common::iris_db::iris::IrisVectorId`, or is it defined elsewhere?
+   `iris_mpc_common::iris_db::iris::IrisVectorId`, or is it defined elsewhere?~~
+   **Resolved:** `use iris_mpc_common::IrisVectorId` (re-export of
+   `iris_mpc_common::vector_id::VectorId`).  Construct from a `u32` serial ID via
+   `IrisVectorId::from_serial_id(u32)`.
