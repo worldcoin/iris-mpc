@@ -47,10 +47,16 @@ use aws_sdk_s3::Client as S3Client;
 use bytes::Bytes;
 use eyre::{eyre, Result};
 use futures::stream::{self, Stream};
+use iris_mpc_common::IrisVectorId;
 use serde::de::DeserializeOwned;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::time::sleep;
 use tokio_util::io::{StreamReader, SyncIoBridge};
+
+use crate::{
+    hnsw::graph::layered_graph::GraphMem,
+    utils::serialization::graph::{read_graph_pair_streaming, GraphFormat},
+};
 
 const RANGE_MAX_RETRIES: u32 = 3;
 const RANGE_RETRY_DELAY: Duration = Duration::from_secs(2);
@@ -123,6 +129,71 @@ where
     ));
     let reader = StreamReader::new(stream);
     deserialize_and_hash_from(reader, pipe_capacity).await
+}
+
+/// Stream the object at `s3://{bucket}/{key}` through BLAKE3 and directly
+/// into a `[GraphMem<IrisVectorId>; 2]` using a format-aware layer-by-layer
+/// reader that converts each layer immediately upon arrival.
+///
+/// Unlike `stream_download_and_deserialize::<[GraphVN; 2]>` followed by
+/// `.into()`, this never holds a full intermediate `GraphVN` alongside the
+/// destination `GraphMem` — it reads one set of links at a time and calls
+/// [`Layer::set_links`] immediately.  For `Current`/V4 and V3 the peak
+/// transient allocation above the final `GraphMem` is roughly one layer's
+/// link data; older formats fall back to the standard path.
+pub async fn stream_download_and_deserialize_graph_pair(
+    s3_client: &S3Client,
+    bucket: &str,
+    key: &str,
+    format: GraphFormat,
+) -> Result<([GraphMem<IrisVectorId>; 2], [u8; 32])> {
+    stream_download_and_deserialize_graph_pair_with(
+        s3_client,
+        bucket,
+        key,
+        format,
+        DEFAULT_DOWNLOAD_PIPE_CAPACITY,
+        DEFAULT_DOWNLOAD_RANGE_SIZE,
+    )
+    .await
+}
+
+/// Like [`stream_download_and_deserialize_graph_pair`] but with explicit
+/// `pipe_capacity` and `range_size` knobs.
+pub async fn stream_download_and_deserialize_graph_pair_with(
+    s3_client: &S3Client,
+    bucket: &str,
+    key: &str,
+    format: GraphFormat,
+    pipe_capacity: usize,
+    range_size: usize,
+) -> Result<([GraphMem<IrisVectorId>; 2], [u8; 32])> {
+    tracing::info!(
+        "Streaming download + deserialize graph pair: bucket={bucket}, key={key}, \
+         format={format}, pipe_capacity={pipe_capacity}, range_size={range_size}"
+    );
+
+    if range_size == 0 {
+        return Err(eyre!("range_size must be > 0"));
+    }
+
+    if pipe_capacity == 0 {
+        return Err(eyre!("pipe_capacity must be > 0"));
+    }
+
+    let total_size = head_object_size_with_retry(s3_client, bucket, key).await?;
+    let stream = Box::pin(range_stream(
+        s3_client.clone(),
+        bucket.to_string(),
+        key.to_string(),
+        total_size,
+        range_size as u64,
+    ));
+    let reader = StreamReader::new(stream);
+    deserialize_and_hash_from_fn(reader, pipe_capacity, move |r| {
+        read_graph_pair_streaming(r, format)
+    })
+    .await
 }
 
 /// `HeadObject` for `content_length`, retried per [`RANGE_MAX_RETRIES`].
@@ -237,14 +308,39 @@ async fn fetch_range(s3_client: &S3Client, bucket: &str, key: &str, range: &str)
 }
 
 /// Core: tee an `AsyncRead` through BLAKE3 into a pipe; deserialize from
-/// the pipe on a blocking thread.
-async fn deserialize_and_hash_from<R, T>(
-    mut reader: R,
-    pipe_capacity: usize,
-) -> Result<(T, [u8; 32])>
+/// the pipe on a blocking thread using `bincode::deserialize_from`.
+///
+/// Delegates to [`deserialize_and_hash_from_fn`] with the standard bincode
+/// deserializer closure.
+async fn deserialize_and_hash_from<R, T>(reader: R, pipe_capacity: usize) -> Result<(T, [u8; 32])>
 where
     R: AsyncRead + Unpin + Send + 'static,
     T: DeserializeOwned + Send + 'static,
+{
+    deserialize_and_hash_from_fn(reader, pipe_capacity, |r| {
+        bincode::deserialize_from(r).map_err(|e| eyre!("bincode deserialize: {e}"))
+    })
+    .await
+}
+
+/// Core: tee an `AsyncRead` through BLAKE3 into a pipe; call `deser_fn` on
+/// the pipe from a blocking thread.
+///
+/// `deser_fn` receives a `&mut dyn Read` over the pipe and must consume
+/// **exactly** the bytes that represent the serialised value — the same
+/// contract as [`deserialize_and_hash_from`].  Any unread bytes after
+/// `deser_fn` returns will cause the tee task to see `BrokenPipe` and
+/// surface an error.  Any attempt to read past EOF will be surfaced as an
+/// IO error from `deser_fn`.
+async fn deserialize_and_hash_from_fn<R, T, F>(
+    mut reader: R,
+    pipe_capacity: usize,
+    deser_fn: F,
+) -> Result<(T, [u8; 32])>
+where
+    R: AsyncRead + Unpin + Send + 'static,
+    T: Send + 'static,
+    F: FnOnce(&mut dyn std::io::Read) -> Result<T> + Send + 'static,
 {
     let (mut pipe_writer, pipe_reader) = tokio::io::duplex(pipe_capacity);
 
@@ -273,11 +369,11 @@ where
         Ok::<[u8; 32], eyre::Report>(*hasher.finalize().as_bytes())
     });
 
-    // Blocking task: bincode reads synchronously from the pipe through
+    // Blocking task: `deser_fn` reads synchronously from the pipe through
     // SyncIoBridge. Runs concurrently with the tee task.
     let de_handle = tokio::task::spawn_blocking(move || -> Result<T> {
-        let bridge = SyncIoBridge::new(pipe_reader);
-        bincode::deserialize_from(bridge).map_err(|e| eyre!("bincode deserialize: {e}"))
+        let mut bridge = SyncIoBridge::new(pipe_reader);
+        deser_fn(&mut bridge)
     });
 
     // Surface the deserialize error first if both fail — usually more

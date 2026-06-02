@@ -18,7 +18,7 @@ use crate::{
         },
         VectorStore,
     },
-    utils::serialization::graph::{read_graph_pair, GraphFormat},
+    utils::serialization::graph::GraphFormat,
 };
 
 use crate::graph_checkpoint::data::*;
@@ -178,12 +178,23 @@ pub async fn download_graph_checkpoint(
     if format == GraphFormat::Raw {
         bail!("Unexpected graph checkpoint format: Raw");
     }
-    let binary_graph = download_and_hash(s3_client, bucket, state).await?;
+    let start = Instant::now();
+    let (graphs, hash_bytes) =
+        stream_download_and_deserialize_graph_pair(s3_client, bucket, &state.s3_key, format)
+            .await?;
+    metrics::histogram!("genesis_checkpoint_download_duration")
+        .record(start.elapsed().as_secs_f64());
 
-    // todo: deserialize in a way that does not require holding 2 graphs in memory at once.
-    // currently binary_graph and graphs make two graphs in RAM at once
-    let mut cursor = Cursor::new(&binary_graph);
-    let graphs = read_graph_pair(&mut cursor, format)?;
+    // Verify BLAKE3 hash after download
+    let computed_hash = blake3::Hash::from_bytes(hash_bytes).to_hex().to_string();
+    if computed_hash != state.blake3_hash {
+        return Err(eyre!(
+            "BLAKE3 hash mismatch: expected {}, got {}",
+            state.blake3_hash,
+            computed_hash
+        ));
+    }
+    tracing::info!("BLAKE3 hash verified successfully: {}", computed_hash);
     Ok(graphs)
 }
 
@@ -293,8 +304,8 @@ pub async fn cleanup_checkpoints<V: VectorStore>(
             PruningMode::None => unreachable!(),
         })
     {
-        delete_graph(s3_client, bucket, &checkpoint.s3_key).await?;
         graph_store.delete_genesis_checkpoint(checkpoint.id).await?;
+        delete_graph(s3_client, bucket, &checkpoint.s3_key).await?;
     }
     Ok(())
 }
