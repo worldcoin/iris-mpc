@@ -220,22 +220,27 @@ Constructs and inserts synthetic `hawk_graph_mutations` rows without requiring a
 MPC request pipeline or real iris data.  Each row is a bincode-serialized
 `BothEyes<Vec<GraphMutation<IrisVectorId>>>`.
 
-**Only `AddNode` / `Uniqueness` mutations** are safe for an empty starting graph.
-Reset-update, recovery-update, and other modification types assume a node already exists
-in the graph and will fail during WAL replay if the graph is empty.
+Both `AddNode` and `AddEdges` mutations are supported — both are required to form a
+real graph.  Reset-update, recovery-update, and other modification types are not
+supported here as they assume a node already exists.  Keep neighbor lists under 100
+entries per `add_edges` call (enforced by an assertion).
 
 ```rust
 impl WalMutationBuilder {
     pub fn new() -> Self;
-    // Add an AddNode mutation for both eyes at the given modification_id.
-    // Use sequential node_ids (0, 1, 2, ...) to build a coherent graph.
+    // AddNode: use sequential node_ids (0, 1, 2, ...) starting from 0.
     pub fn add_node(self, mod_id: i64, node_id: u32, height: usize) -> Self;
+    // AddEdges: neighbors.len() must be ≤ 100.
+    pub fn add_edges(self, mod_id: i64, base: u32, neighbors: Vec<u32>, layer: usize) -> Self;
     pub async fn seed(&self, graph: &GraphPg<PlaintextStore>) -> Result<()>;
     pub async fn seed_all(&self, nodes: &CpuNodes) -> Result<()>;
 }
 ```
 
-Each `add_node` call creates a `GraphMutation { seq_no, ops: [MutationOp::AddNode { id, height, update_ep: UpdateEntryPoint::False }] }` for **both** eyes (identical synthetic data), bincode-serializes the `BothEyes<Vec<GraphMutation>>`, and stores it alongside the `modification_id`.
+Each call appends a `WalEntry` enum variant.  `seed()` converts each entry to a
+`GraphMutation { seq_no, ops: [AddNode{…} | AddEdges{…}] }` for **both** eyes,
+bincode-serializes the `BothEyes<Vec<GraphMutation>>`, and upserts it at the
+given `modification_id`.
 
 ---
 
@@ -319,14 +324,16 @@ stop_and_join!(shutdown_ct, join_set)
 ### `wal_101` — Roll-forward: checkpoint at M, WAL mutations M+1..N
 
 - **Setup:** `CheckpointSeeder::seed_all(last_mod_id=50)`, then
-  `WalMutationBuilder` seeds 50 `add_node` mutations (mod_ids 51..=100)
+  `WalMutationBuilder` seeds 50 mutations (mod_ids 51..=100): `add_node` for each new
+  node plus `add_edges` to wire up neighbors
 - **Exec (TC-1):** `run_hawk!` → `wait_for_all_ready()`
 - **Assert:** WAL rows unchanged (roll-forward does not consume them); checkpoint count = 1;
   confirms startup loaded the checkpoint and applied the 50-mutation delta
 
 ### `wal_102` — Sidecar: WAL present → checkpoint uploaded
 
-- **Setup:** `WalMutationBuilder` seeds 10 `add_node` mutations (mod_ids 1..=10);
+- **Setup:** `WalMutationBuilder` seeds mutations (mod_ids 1..=10): `add_node` for each
+  node and `add_edges` for neighbors;
   `min_mutations_per_cycle = 5`
 - **Exec (TC-2):** `run_sidecar!` → `wait_for_new_checkpoint(baseline=0)`
 - **Assert:** 1 new checkpoint row per party, `latest_checkpoint_mod_id = 10`, S3 object
