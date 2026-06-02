@@ -1,5 +1,8 @@
 use crate::hnsw::{
-    graph::{mutation::EdgeType, GraphMutation, MutationOp, UpdateEntryPoint},
+    graph::{
+        mutation::{EdgeType, UnstampedMutation},
+        MutationOp, UpdateEntryPoint,
+    },
     searcher::{ConnectPlanV, LayerMode},
     vector_store::VectorStoreMut,
     GraphMem, HnswSearcher, VectorStore,
@@ -42,26 +45,6 @@ impl<V: VectorStore> Clone for InsertPlanV<V> {
             links: self.links.clone(),
             update_ep: self.update_ep.clone(),
         }
-    }
-}
-
-/// Mints sequential `u64` sequence numbers for `GraphMutation` groups built
-/// during a single `insert` call. Seeded from `GraphMem::next_sequence_number()`;
-/// never touches the graph itself. The graph's `last_update_seq_no` only
-/// advances when each stamped group is later applied via `GraphMem::insert_apply`.
-struct UpdateSeqNoAllocator {
-    next: u64,
-}
-
-impl UpdateSeqNoAllocator {
-    fn new(start: u64) -> Self {
-        Self { next: start }
-    }
-
-    fn mint(&mut self) -> u64 {
-        let seq_no = self.next;
-        self.next += 1;
-        seq_no
     }
 }
 
@@ -112,7 +95,6 @@ pub async fn insert<V: VectorStoreMut>(
     let insert_plans = join_plans(plans, &searcher.layer_mode);
     validate_ep_updates(&insert_plans, &searcher.layer_mode)?;
 
-    let mut seq_no_allocator = UpdateSeqNoAllocator::new(graph.next_sequence_number());
     let mut intra_batch_inserted = vec![];
     let m = searcher.params.get_M(0);
 
@@ -127,11 +109,9 @@ pub async fn insert<V: VectorStoreMut>(
 
         // (a) Delete first: own GraphMutation with the lower seq_no.
         if let Some(rid) = replace_id {
-            let mutation = GraphMutation {
-                seq_no: seq_no_allocator.mint(),
+            let mutation = graph.apply_new(UnstampedMutation {
                 ops: vec![MutationOp::RemoveNode { id: rid.clone() }],
-            };
-            graph.insert_apply(&mutation)?;
+            })?;
             slot_outputs[idx].push(mutation);
         }
 
@@ -171,17 +151,14 @@ pub async fn insert<V: VectorStoreMut>(
                     edge_type: EdgeType::All,
                 });
             }
-            let mutation = GraphMutation {
-                seq_no: seq_no_allocator.mint(),
-                ops,
-            };
-            for pair in mutation.updated_neighborhoods() {
+            let unstamped = UnstampedMutation { ops };
+            for pair in unstamped.updated_neighborhoods() {
                 slot_updated.insert(pair);
             }
-            for pair in mutation.expanded_neighborhoods() {
+            for pair in unstamped.expanded_neighborhoods() {
                 batch_expanded.insert(pair);
             }
-            graph.insert_apply(&mutation)?;
+            let mutation = graph.apply_new(unstamped)?;
             slot_outputs[idx].push(mutation);
         }
 
@@ -197,11 +174,7 @@ pub async fn insert<V: VectorStoreMut>(
                 .prune_invalid_links(store, graph, &slot_updated)
                 .await?;
             if !ops.is_empty() {
-                let mutation = GraphMutation {
-                    seq_no: seq_no_allocator.mint(),
-                    ops,
-                };
-                graph.insert_apply(&mutation)?;
+                let mutation = graph.apply_new(UnstampedMutation { ops })?;
                 slot_outputs[idx].push(mutation);
             }
         }
@@ -214,11 +187,7 @@ pub async fn insert<V: VectorStoreMut>(
             .compact_batch(store, graph, &batch_expanded)
             .await?;
         if !ops.is_empty() {
-            let mutation = GraphMutation {
-                seq_no: seq_no_allocator.mint(),
-                ops,
-            };
-            graph.insert_apply(&mutation)?;
+            let mutation = graph.apply_new(UnstampedMutation { ops })?;
             let last_idx = slot_outputs
                 .iter()
                 .rposition(|v| !v.is_empty())
@@ -337,6 +306,7 @@ fn validate_ep_updates<V: VectorStore>(
 #[cfg(test)]
 mod tests {
     use crate::hawkers::plaintext_store::PlaintextStore;
+    use crate::hnsw::graph::GraphMutation;
     use iris_mpc_common::iris_db::iris::IrisCode;
     use itertools::Itertools;
     use std::sync::Arc;

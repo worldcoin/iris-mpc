@@ -7,7 +7,10 @@ use crate::{
     execution::hawk_main::state_check::SetHash,
     hawkers::ideal_knn_engines::{read_knn_results_from_file, Engine, EngineChoice, KNNResult},
     hnsw::{
-        graph::{mutation::EdgeType, GraphMutation, MutationOp, UpdateEntryPoint},
+        graph::{
+            mutation::{EdgeType, UnstampedMutation},
+            GraphMutation, MutationOp, UpdateEntryPoint,
+        },
         searcher::LayerMode,
         vector_store::Ref,
         HnswSearcher,
@@ -369,6 +372,25 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
 
         self.last_update_seq_no = mutation.seq_no;
         Ok(())
+    }
+
+    /// Stamp a locally-built [`UnstampedMutation`] with the next sequence
+    /// number, apply it, and return the resulting [`GraphMutation`].
+    ///
+    /// This is the sole minter of sequence numbers for in-process mutations:
+    /// the number is assigned from `next_sequence_number()` and consumed by the
+    /// apply in one step, so `last_update_seq_no` can never lag behind the
+    /// highest minted id and two mutations can never share a number. Mutations
+    /// that already carry a sequence number (replayed from a WAL or checkpoint)
+    /// go through `insert_apply`/`insert_apply_all` instead, where the strict
+    /// monotonicity check guards the externally-supplied `seq_no`.
+    pub fn apply_new(&mut self, mutation: UnstampedMutation<V>) -> Result<GraphMutation<V>> {
+        let stamped = GraphMutation {
+            seq_no: self.next_sequence_number(),
+            ops: mutation.ops,
+        };
+        self.insert_apply(&stamped)?;
+        Ok(stamped)
     }
 
     pub fn insert_apply_all(&mut self, mutations: &[GraphMutation<V>]) -> Result<()> {
