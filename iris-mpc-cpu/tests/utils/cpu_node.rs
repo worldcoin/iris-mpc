@@ -1,5 +1,6 @@
 use super::CpuConfigs;
 
+use eyre::eyre;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 use iris_mpc_cpu::hnsw::graph::graph_store::{GraphCheckpointRow, GraphPg};
@@ -38,22 +39,6 @@ impl DbStores {
         self.graph.get_latest_genesis_graph_checkpoint().await
     }
 
-    /// Head-check the latest checkpoint's S3 key to confirm the object exists.
-    pub async fn verify_latest_checkpoint_s3_object(&self, bucket: &str) -> eyre::Result<()> {
-        let row = self
-            .latest_checkpoint()
-            .await?
-            .ok_or_else(|| eyre!("no checkpoint row"))?;
-        let s3 = build_s3_client(bucket).await?;
-        s3.head_object()
-            .bucket(bucket)
-            .key(&row.s3_key)
-            .send()
-            .await
-            .map_err(|e| eyre!("S3 object {} missing: {}", row.s3_key, e))?;
-        Ok(())
-    }
-
     /// Truncate all WAL and checkpoint tables for this party.
     /// Covers: hawk_graph_mutations, genesis_graph_checkpoint, and the persistent state table.
     pub async fn truncate_checkpoint_tables(&self) -> eyre::Result<()> {
@@ -81,12 +66,32 @@ impl DbStores {
 /// Handles for a single MPC party.
 pub struct CpuNode {
     pub stores: DbStores,
+    pub s3: aws_sdk_s3::Client,
 }
 
 impl CpuNode {
     pub async fn new(config: &super::CpuNodeConfig) -> eyre::Result<Self> {
         let stores = DbStores::new(config).await?;
-        Ok(Self { stores })
+        let aws_config = aws_config::load_from_env().await;
+        let s3 = aws_sdk_s3::Client::new(&aws_config);
+        Ok(Self { stores, s3 })
+    }
+
+    /// Head-check the latest checkpoint's S3 key to confirm the object exists.
+    pub async fn verify_latest_checkpoint_s3_object(&self, bucket: &str) -> eyre::Result<()> {
+        let row = self
+            .stores
+            .latest_checkpoint()
+            .await?
+            .ok_or_else(|| eyre!("no checkpoint row"))?;
+        self.s3
+            .head_object()
+            .bucket(bucket)
+            .key(&row.s3_key)
+            .send()
+            .await
+            .map_err(|e| eyre!("S3 object {} missing: {}", row.s3_key, e))?;
+        Ok(())
     }
 }
 
