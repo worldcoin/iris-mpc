@@ -1,13 +1,15 @@
 use super::CpuConfigs;
 
 use eyre::eyre;
-use iris_mpc_common::{postgres::{AccessMode, PostgresClient}, IrisVectorId};
+use iris_mpc_common::{
+    postgres::{AccessMode, PostgresClient},
+    IrisVectorId,
+};
 use iris_mpc_cpu::graph_checkpoint::stream_serialize_and_upload_with;
 use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 use iris_mpc_cpu::hnsw::graph::graph_store::{GraphCheckpointRow, GraphPg};
 use iris_mpc_cpu::hnsw::GraphMem;
 use iris_mpc_cpu::utils::serialization::types::graph_v4::GraphV4;
-use std::io::Write;
 
 /// Per-party database handles for test setup and post-condition assertions.
 ///
@@ -241,9 +243,24 @@ impl CpuNodes {
         last_modification_id: i64,
     ) -> eyre::Result<[GraphCheckpointRow; 3]> {
         let (r0, r1, r2) = tokio::try_join!(
-            self.0[0].seed_party(last_iris_id, last_modification_id, &configs[0].checkpoint_bucket, configs[0].party_id),
-            self.0[1].seed_party(last_iris_id, last_modification_id, &configs[1].checkpoint_bucket, configs[1].party_id),
-            self.0[2].seed_party(last_iris_id, last_modification_id, &configs[2].checkpoint_bucket, configs[2].party_id),
+            self.0[0].seed_party(
+                last_iris_id,
+                last_modification_id,
+                &configs[0].checkpoint_bucket,
+                configs[0].party_id
+            ),
+            self.0[1].seed_party(
+                last_iris_id,
+                last_modification_id,
+                &configs[1].checkpoint_bucket,
+                configs[1].party_id
+            ),
+            self.0[2].seed_party(
+                last_iris_id,
+                last_modification_id,
+                &configs[2].checkpoint_bucket,
+                configs[2].party_id
+            ),
         )?;
         Ok([r0, r1, r2])
     }

@@ -1,11 +1,11 @@
 use iris_mpc_common::IrisVectorId;
 use iris_mpc_cpu::{
     execution::hawk_main::BothEyes,
+    hawkers::plaintext_store::PlaintextStore,
     hnsw::graph::{
         graph_store::GraphPg,
         mutation::{EdgeType, GraphMutation, MutationOp, UpdateEntryPoint},
     },
-    hawkers::plaintext_store::PlaintextStore,
 };
 
 use super::cpu_node::CpuNodes;
@@ -40,7 +40,9 @@ pub struct WalMutationBuilder {
 
 impl WalMutationBuilder {
     pub fn new() -> Self {
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+        }
     }
 
     /// Add an `AddNode` mutation for both eyes at the given `modification_id`.
@@ -80,7 +82,10 @@ impl WalMutationBuilder {
             seq_no: modification_id as u64,
             ops: vec![MutationOp::AddEdges {
                 base: IrisVectorId::from_serial_id(base),
-                neighbors: neighbors.iter().map(|&n| IrisVectorId::from_serial_id(n)).collect(),
+                neighbors: neighbors
+                    .iter()
+                    .map(|&n| IrisVectorId::from_serial_id(n))
+                    .collect(),
                 layer,
                 edge_type: EdgeType::All,
             }],
@@ -98,8 +103,10 @@ impl WalMutationBuilder {
             let both_eyes: BothEyes<Vec<GraphMutation<IrisVectorId>>> =
                 [vec![mutation.clone()], vec![mutation.clone()]];
             let bytes = bincode::serialize(&both_eyes)?;
-            let mut tx = graph.pool.begin().await?;
-            graph.upsert_hawk_graph_mutations(&mut tx, *modification_id, &bytes).await?;
+            let mut tx = graph.pool().begin().await?;
+            graph
+                .upsert_hawk_graph_mutations(&mut tx, *modification_id, &bytes)
+                .await?;
             tx.commit().await?;
         }
         Ok(())

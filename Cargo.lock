@@ -3077,6 +3077,7 @@ dependencies = [
  "ampc-server-utils",
  "async-channel",
  "async-trait",
+ "aws-config",
  "aws-sdk-s3",
  "backon",
  "base64",
