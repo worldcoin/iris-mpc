@@ -586,15 +586,18 @@ mod tests {
         }
     }
 
-    /// Build a store with `n` random vectors and return the store plus the list
-    /// of `(id, vector)` pairs that were inserted, in 0-indexed id order.
-    fn build_store_with_random_vectors(
-        threshold: i32,
+    /// Build a store of `n` random vectors with the given match threshold,
+    /// returning the store plus the `(id, vector)` pairs in 0-indexed id order.
+    ///
+    /// Advances `rng` exactly as [`PlaintextDeepIDStore::new_random`] does, so
+    /// callers can keep using it afterward (e.g. to build a graph) and still get
+    /// deterministic results.
+    fn build_store_with_random_vectors<R: RngCore>(
+        rng: &mut R,
         n: usize,
-        seed: u64,
+        threshold: i32,
     ) -> (PlaintextDeepIDStore, Vec<(VectorId, Arc<Int4Vector>)>) {
-        let mut rng = AesRng::seed_from_u64(seed);
-        let store = PlaintextDeepIDStore::new_random(&mut rng, n, threshold);
+        let store = PlaintextDeepIDStore::new_random(rng, n, threshold);
         let ids = (0..n)
             .map(|i| {
                 let id = VectorId::from_0_index(i as u32);
@@ -619,7 +622,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_eval_distance_self_matches_dot() {
-        let (mut store, ids) = build_store_with_random_vectors(12_000, 8, 0xCAFEBABE);
+        let mut rng = AesRng::seed_from_u64(0xCAFEBABE);
+        let (mut store, ids) = build_store_with_random_vectors(&mut rng, 8, 12_000);
 
         // eval_distance(self, self) should equal vector.dot(vector)
         for (id, v) in &ids {
@@ -631,7 +635,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_less_than_antisymmetric() {
-        let (mut store, ids) = build_store_with_random_vectors(12_000, 8, 0xCAFEBABE);
+        let mut rng = AesRng::seed_from_u64(0xCAFEBABE);
+        let (mut store, ids) = build_store_with_random_vectors(&mut rng, 8, 12_000);
 
         let q0 = Arc::clone(&ids[0].1);
         let d_self = store.eval_distance(&q0, &ids[0].0).await.unwrap();
@@ -679,27 +684,22 @@ mod tests {
 
         // Threshold sits well above the random-pair dot (~0 ± hundreds) and well
         // below a random vector's self-dot (~512 * 21.5 = 11_008 on average).
-        let mut store = PlaintextDeepIDStore::new_random(&mut rng, /* store_size */ 64, 5_000);
+        let (mut store, ids) = build_store_with_random_vectors(&mut rng, 64, 5_000);
 
         // Remember one inserted vector to perturb into a query later.
-        let anchor_id = VectorId::from_0_index(7);
-        let anchor_vec = store
-            .storage
-            .get_vector(&anchor_id)
-            .expect("anchor present")
-            .clone();
+        let (anchor_id, anchor_vec) = ids[7].clone();
 
         // Build the HNSW graph.
         let searcher = HnswSearcher::new_with_test_parameters();
         let graph = store
-            .generate_graph(&mut rng, /* graph_size */ 64, &searcher)
+            .generate_graph(&mut rng, 64, &searcher)
             .await
             .expect("graph generation succeeds");
 
         // Query = anchor with one element perturbed by 1.
         let query = Arc::new(perturb(&anchor_vec, 17, 1));
         let results: SortedNeighborhood<_> = searcher
-            .search(&mut store, &graph, &query, /* k */ 5)
+            .search(&mut store, &graph, &query, 5)
             .await
             .expect("search succeeds");
         let results = results.as_vec_ref();
@@ -724,20 +724,7 @@ mod tests {
     #[tokio::test]
     async fn test_parallel_plaintext_int4_hnsw_matcher() {
         let mut rng = AesRng::seed_from_u64(0x5EED5EED);
-        let mut store = PlaintextDeepIDStore::new_random(&mut rng, /* store_size */ 32, 0);
-
-        // Keep the first 8 inserted vectors as candidate queries.
-        let originals: Vec<(VectorId, Arc<Int4Vector>)> = (0..32)
-            .map(|i| {
-                let id = VectorId::from_0_index(i);
-                let v = store
-                    .storage
-                    .get_vector(&id)
-                    .expect("vector present")
-                    .clone();
-                (id, v)
-            })
-            .collect();
+        let (mut store, originals) = build_store_with_random_vectors(&mut rng, 32, 0);
 
         let searcher = HnswSearcher::new_with_test_parameters();
         let graph = store
@@ -758,7 +745,7 @@ mod tests {
             join_set.spawn(async move {
                 let query = Arc::new((*vec).clone());
                 let results: SortedNeighborhood<_> = searcher
-                    .search(&mut shared, &graph, &query, /* k */ 1)
+                    .search(&mut shared, &graph, &query, 1)
                     .await
                     .expect("search succeeds");
                 let pairs = results.as_vec_ref();
