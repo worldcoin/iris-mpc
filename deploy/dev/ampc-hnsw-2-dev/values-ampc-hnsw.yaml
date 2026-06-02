@@ -145,6 +145,9 @@ env:
   - name: SMPC__SERVER_COORDINATION__IMAGE_NAME
     value: $(IMAGE_NAME)
 
+  - name: SMPC__SERVER_COORDINATION__STARTUP_SYNC_TIMEOUT_SECS
+    value: "900"
+
   - name: SMPC__SHARES_BUCKET_NAME
     value: "wf-smpcv2-dev-sns-requests-v2"
 
