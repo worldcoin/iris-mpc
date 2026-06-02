@@ -1,9 +1,8 @@
 use super::CpuConfigs;
 
-// TODO (open question #9): confirm exact import paths.
-// use iris_mpc_cpu::hnsw::graph::graph_store::{GraphPg, GraphCheckpointRow};
-// use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
-// use iris_mpc_common::postgres::PostgresClient;
+use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
+use iris_mpc_cpu::hnsw::graph::graph_store::{GraphCheckpointRow, GraphPg};
 
 /// Per-party database handles for test setup and post-condition assertions.
 ///
@@ -14,44 +13,45 @@ use super::CpuConfigs;
 /// The checkpoint format (GraphV4 / bincode) is store-agnostic, so `PlaintextStore`
 /// is safe to use here even though `hawk_main` uses `Aby3Store` at runtime.
 pub struct DbStores {
-    // pub graph: GraphPg<PlaintextStore>,
-    //
-    // TODO (open question #9 + #1): uncomment once import paths and PostgresClient
-    // construction are confirmed.  The graph store is initialized via:
-    //   PostgresClient::new(&config.db_url, &config.db_schema)
-    //   GraphPg::new(&postgres_client)  // runs migrations
+    pub graph: GraphPg<PlaintextStore>,
 }
 
 impl DbStores {
-    pub async fn new(_config: &super::CpuNodeConfig) -> eyre::Result<Self> {
-        // TODO:
-        //   let pg = PostgresClient::new(&config.db_url, &config.db_schema).await?;
-        //   pg.migrate().await?;
-        //   let graph = GraphPg::new(&pg);
-        //   Ok(Self { graph })
-        todo!("connect PostgresClient and initialize GraphPg<PlaintextStore>")
+    pub async fn new(config: &super::CpuNodeConfig) -> eyre::Result<Self> {
+        let pg =
+            PostgresClient::new(&config.db_url, &config.db_schema, AccessMode::ReadWrite).await?;
+        pg.migrate().await;
+        let graph = GraphPg::new(&pg).await?;
+        Ok(Self { graph })
     }
 
     /// Count rows in `genesis_graph_checkpoint`.
     pub async fn count_checkpoints(&self) -> eyre::Result<usize> {
-        // TODO: self.graph.recent_checkpoints(usize::MAX).await.map(|r| r.len())
-        todo!("count genesis_graph_checkpoint rows")
+        self.graph
+            .get_genesis_graph_checkpoints()
+            .await
+            .map(|r| r.len())
     }
 
     /// Get the latest checkpoint row, returning None if none exists.
-    pub async fn latest_checkpoint(&self) -> eyre::Result<Option<()>> /* TODO: Option<GraphCheckpointRow> */ {
-        // TODO: self.graph.get_latest_genesis_graph_checkpoint().await
-        todo!("fetch latest genesis_graph_checkpoint row")
+    pub async fn latest_checkpoint(&self) -> eyre::Result<Option<GraphCheckpointRow>> {
+        self.graph.get_latest_genesis_graph_checkpoint().await
     }
 
     /// Head-check the latest checkpoint's S3 key to confirm the object exists.
-    pub async fn verify_latest_checkpoint_s3_object(&self, _bucket: &str) -> eyre::Result<()> {
-        // TODO:
-        //   let row = self.latest_checkpoint().await?.ok_or_else(|| eyre!("no checkpoint row"))?;
-        //   let s3 = build_s3_client(bucket).await?;
-        //   s3.head_object().bucket(bucket).key(&row.s3_key).send().await
-        //     .map_err(|e| eyre!("S3 object {} missing: {}", row.s3_key, e))?;
-        todo!("verify S3 object exists for latest checkpoint")
+    pub async fn verify_latest_checkpoint_s3_object(&self, bucket: &str) -> eyre::Result<()> {
+        let row = self
+            .latest_checkpoint()
+            .await?
+            .ok_or_else(|| eyre!("no checkpoint row"))?;
+        let s3 = build_s3_client(bucket).await?;
+        s3.head_object()
+            .bucket(bucket)
+            .key(&row.s3_key)
+            .send()
+            .await
+            .map_err(|e| eyre!("S3 object {} missing: {}", row.s3_key, e))?;
+        Ok(())
     }
 
     /// Truncate all WAL and checkpoint tables for this party.
@@ -105,10 +105,7 @@ impl CpuNodes {
     }
 
     /// Run `WalAssertions` against each party in sequence.
-    pub async fn apply_assertions(
-        &self,
-        assertions: &[WalAssertions; 3],
-    ) -> eyre::Result<()> {
+    pub async fn apply_assertions(&self, assertions: &[WalAssertions; 3]) -> eyre::Result<()> {
         for (node, assertion) in self.0.iter().zip(assertions.iter()) {
             assertion.assert(&node.stores).await?;
         }
