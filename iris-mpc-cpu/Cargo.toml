@@ -19,6 +19,7 @@ bytes = "1.7"
 bytemuck.workspace = true
 cached = "0.56.0"
 clap.workspace = true
+config.workspace = true
 core_affinity.workspace = true
 crossbeam = "0.8.4"
 csv = "*"
@@ -37,6 +38,7 @@ rayon.workspace = true
 rstest = "0.23.0"
 serde.workspace = true
 serde_json.workspace = true
+serde_with.workspace = true
 serde_path_to_error = "*"
 siphasher = "1"
 socket2 = { version = "0.6.0", features = ["all"] }

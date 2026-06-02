@@ -3,9 +3,10 @@ use crate::services::processors::batch::receive_batch_stream;
 use crate::services::processors::job::process_job_result;
 use aws_sdk_s3::Client;
 use aws_sdk_sns::types::MessageAttributeValue;
-use iris_mpc_cpu::checkpoint_protocol::{restart_from_checkpoint, RestartOutcome};
+use iris_mpc_cpu::checkpoint_protocol::{restart_from_checkpoint, sidecar_main, RestartOutcome};
 use iris_mpc_cpu::graph_checkpoint::sync_graph_mutations;
 use iris_mpc_cpu::hnsw::GraphMem;
+use iris_mpc_cpu::network::mpc::{build_network_handle, NetworkHandleArgs};
 
 use crate::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,
@@ -35,6 +36,7 @@ use iris_mpc_common::helpers::sqs_s3_helper::upload_file_to_s3;
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::job::JobSubmissionHandle;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_cpu::checkpoint_protocol::runner::SidecarConfigWrapper;
 use iris_mpc_cpu::execution::hawk_main::worker_pool_initializer::{
     DbLoadParams, LocalWorkerPoolInitializer, WorkerPoolInitializer,
 };
@@ -203,7 +205,7 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     background_tasks.check_tasks();
 
-    run_main_server_loop(
+    let main_future = run_main_server_loop(
         &config,
         &iris_store,
         &aws_clients,
@@ -214,9 +216,53 @@ pub async fn server_main(config: Config) -> Result<()> {
         tx_results,
         current_batch_id_atomic.clone(),
         batch_sync_shared_state,
-    )
-    .await?;
+    );
 
+    // Extract what the sidecar needs from config/aws_clients before the async
+    // move block, since main_future already holds &config and &aws_clients.
+    let sidecar_party_id = config.party_id;
+    let sidecar_tls = config.tls.clone();
+    let sidecar_s3 = aws_clients.checkpoint_s3_client.clone();
+    let shutdown_ct = shutdown_handler.get_network_cancellation_token();
+    // the sidecar needs its own graph store and this function transforms config to the appropriate
+    // schema name when creating the pg client
+    let (_iris_store, graph_store) = prepare_stores(&config).await?;
+
+    let sidecar_future = async move {
+        let sidecar_config = match SidecarConfigWrapper::load_config("SIDECAR") {
+            Ok(r) => r,
+            Err(e) => {
+                // don't block server_main if this fails
+                tracing::warn!("failed to parse sidecar config: {e}");
+                return Ok(());
+            }
+        };
+
+        let Some(sc_config) = sidecar_config.config else {
+            return Ok(());
+        };
+
+        let network_args = NetworkHandleArgs {
+            party_index: sidecar_party_id,
+            addresses: sidecar_config.addresses.clone(),
+            outbound_addresses: sidecar_config.addresses,
+            connection_parallelism: sidecar_config.connection_parallelism,
+            request_parallelism: sidecar_config.request_parallelism,
+            sessions_per_request: 1, // these aren't used by the sidecar anyway
+            tls: sidecar_tls,
+        };
+        let mut network_handle = build_network_handle(network_args, shutdown_ct.clone()).await?;
+        sidecar_main(
+            sc_config.clone(),
+            &graph_store,
+            &sidecar_s3,
+            &mut network_handle,
+            shutdown_ct.clone(),
+        )
+        .await
+    };
+
+    tokio::try_join!(main_future, sidecar_future)?;
     Ok(())
 }
 

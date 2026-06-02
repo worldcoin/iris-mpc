@@ -8,8 +8,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ampc_actor_utils::network::mpc::NetworkHandle;
+use ampc_actor_utils::network::tcp::config::deserialize_yaml_json_string;
 use aws_sdk_s3::Client as S3Client;
 use eyre::{eyre, Result};
+use serde::Deserialize;
+use serde_with::{serde_as, DurationSeconds};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
@@ -26,21 +29,64 @@ use crate::hnsw::{
 };
 use iris_mpc_common::vector_id::VectorId;
 
+// ── In-process Sidecar  ───────────────────────────────────────────────────────
+
+// the sidecar daemeon gets these passed in via the CLI but for in-process these need to be
+// environment variables.
+//
+// The sidecar process will not be run if the config field is None.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SidecarConfigWrapper {
+    /// listen addresses per party for the networking handle.
+    /// corresponds to both inbound addrs and outbound addrs
+    #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
+    pub addresses: Vec<String>,
+    #[serde(default = "default_sidecar_parallelism")]
+    pub request_parallelism: usize,
+    #[serde(default = "default_sidecar_parallelism")]
+    pub connection_parallelism: usize,
+    #[serde(default)]
+    pub config: Option<SidecarConfig>,
+}
+
+fn default_sidecar_parallelism() -> usize {
+    1
+}
+
+impl SidecarConfigWrapper {
+    pub fn load_config(prefix: &str) -> Result<Self> {
+        let settings = config::Config::builder();
+        let settings = settings
+            .add_source(
+                config::Environment::with_prefix(prefix)
+                    .separator("__")
+                    .try_parsing(true),
+            )
+            .build()?;
+        let config: Self = settings.try_deserialize::<Self>()?;
+        Ok(config)
+    }
+}
+
 // ── Sidecar daemon ───────────────────────────────────────────────────────
 
 /// Sidecar daemon configuration. Construct from the binary's CLI args /
 /// environment.
-#[derive(Debug, Clone)]
+#[serde_as]
+#[derive(Debug, Clone, Deserialize)]
 pub struct SidecarConfig {
     /// Bucket containing the checkpoint S3 objects.
     pub bucket: String,
     /// Party index (0, 1, 2). Drives S3 key prefix and metric labels.
     pub party_id: usize,
     /// Sleep between successful (or skipped) cycles.
+    #[serde_as(as = "DurationSeconds<u64>")]
     pub cycle_interval: Duration,
     /// Sleep after a transient cycle error before retrying.
+    #[serde_as(as = "DurationSeconds<u64>")]
     pub retry_interval: Duration,
     /// Per-peer-round timeout passed into the protocol's `CycleConfig`.
+    #[serde_as(as = "DurationSeconds<u64>")]
     pub peer_round_timeout: Duration,
     /// Lower-bound for cycle work; below this the cycle is skipped (no
     /// upload / no DB write) to avoid hammering S3 with near-empty deltas.
