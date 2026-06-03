@@ -21,7 +21,11 @@ pub fn hardcoded_configs(env: &TestEnvironment) -> CpuConfigs {
         TestEnvironment::Local => "localhost",
         TestEnvironment::Docker => "dev_db",
     };
-    [party(0, db_host), party(1, db_host), party(2, db_host)]
+    [
+        make_config(0, db_host),
+        make_config(1, db_host),
+        make_config(2, db_host),
+    ]
 }
 
 // ---------------------------------------------------------------------------
@@ -40,8 +44,6 @@ pub fn hardcoded_configs(env: &TestEnvironment) -> CpuConfigs {
 pub fn make_hawk_config(
     cpu_cfg: &CpuNodeConfig,
     all_configs: &CpuConfigs,
-    service_ports: Vec<String>,
-    service_outbound_ports: Vec<String>,
     env: &TestEnvironment,
 ) -> iris_mpc_common::config::Config {
     use ampc_server_utils::{AwsConfig, ServerCoordinationConfig};
@@ -53,8 +55,17 @@ pub fn make_hawk_config(
         create: true,
         load_parallelism: 8,
     };
-    let healthcheck_ports: Vec<String> =
-        all_configs.iter().map(|c| c.healthcheck_port.to_string()).collect();
+    let healthcheck_ports: Vec<String> = all_configs
+        .iter()
+        .map(|c| c.healthcheck_port.to_string())
+        .collect();
+
+    let service_ports: Vec<String> = all_configs
+        .iter()
+        .map(|c| c.service_port.to_string())
+        .collect();
+
+    let service_outbound_ports = service_ports.clone();
 
     Config {
         party_id: cpu_cfg.party_id,
@@ -135,7 +146,7 @@ pub fn make_hawk_config(
 // Per-party builder
 // ---------------------------------------------------------------------------
 
-fn party(party_id: usize, db_host: &str) -> CpuNodeConfig {
+fn make_config(party_id: usize, db_host: &str) -> CpuNodeConfig {
     CpuNodeConfig {
         // All three parties share the same Postgres instance; schemas provide
         // isolation.  The `postgres` database always exists in the hawk-db
@@ -150,14 +161,13 @@ fn party(party_id: usize, db_host: &str) -> CpuNodeConfig {
 
         party_id,
 
-        // Coordination port: reserved for hawk_main's ServerCoordinationConfig
-        // once Q10/Q11 are resolved.  Must not overlap with HAWK_ADDRS or
-        // SIDECAR_ADDRS (which use the 16 000 range).
-        coordination_port: 17000 + party_id as u16,
-
         // Healthcheck port: used by TC-1 (`wait_for_all_ready`) and the
         // ServerCoordinationConfig built in `CpuNodes::new`.
         healthcheck_port: 18000 + party_id as u16,
+
+        service_port: 19000 + party_id as u16,
+
+        sidecar_port: 20000 + party_id as u16,
 
         sidecar: SidecarTestConfig::default(),
     }

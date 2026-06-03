@@ -60,23 +60,6 @@ macro_rules! run_hawk {
 
         let mut join_set: tokio::task::JoinSet<eyre::Result<()>> = tokio::task::JoinSet::new();
 
-        // Allocate service ports and outbound ports dynamically to avoid
-        // bind conflicts with HAWK_ADDRS, SIDECAR_ADDRS, and healthcheck ports.
-        let alloc_ports = |n: usize| -> Vec<String> {
-            (0..n)
-                .map(|_| {
-                    let l = std::net::TcpListener::bind("127.0.0.1:0")
-                        .expect("failed to bind free port");
-                    let port = l.local_addr().unwrap().port().to_string();
-                    drop(l); // release so server_main can bind it
-                    port
-                })
-                .collect()
-        };
-        let n = ($configs).len();
-        let service_ports = alloc_ports(n);
-        let service_outbound_ports = alloc_ports(n);
-
         // Shared notify: OS threads select on this instead of CancellationToken
         // (CancellationToken is not Send-across-runtimes friendly).
         let notify = Arc::new(Notify::new());
@@ -97,13 +80,7 @@ macro_rules! run_hawk {
         }
 
         for cpu_cfg in ($configs).iter() {
-            let config = crate::utils::configs::make_hawk_config(
-                cpu_cfg,
-                &$configs,
-                service_ports.clone(),
-                service_outbound_ports.clone(),
-                &$ctx.env,
-            );
+            let config = crate::utils::configs::make_hawk_config(cpu_cfg, &$configs, &$ctx.env);
             let notify = notify.clone();
 
             // spawn_blocking: the closure is Send (captures only Config and
