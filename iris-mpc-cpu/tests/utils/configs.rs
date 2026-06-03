@@ -66,13 +66,16 @@ pub fn make_hawk_config(
         database: Some(db.clone()),
         cpu_database: Some(db),
 
-        // Schema names.  get_cpu_db_schema() = schema_name + hnsw_schema_name_suffix.
-        // Use an empty schema_name so the suffix alone equals cpu_cfg.db_schema
-        // ("cpu_party_{N}"), making server_main connect to the same tables as
-        // the test's DbStores.
-        schema_name: String::new(),
-        hnsw_schema_name_suffix: cpu_cfg.db_schema.clone(),
-        gpu_schema_name_suffix: cpu_cfg.db_schema.clone(),
+        // Schema names.  prepare_stores() builds the DB schema as:
+        //   format!("{}{}_{}_{}", schema_name, hnsw_schema_name_suffix, environment, party_id)
+        // hnsw_schema_name_suffix and gpu_schema_name_suffix must be identical
+        // across all parties because they flow into CommonConfig and are
+        // compared in the cross-party consistency check.  We use empty suffixes
+        // and embed the common prefix in schema_name so the formula produces
+        // "cpu_party_dev_{N}", which matches CpuNodeConfig::db_schema.
+        schema_name: "cpu_party".to_string(),
+        hnsw_schema_name_suffix: String::new(),
+        gpu_schema_name_suffix: String::new(),
 
         // Checkpoint bucket (already created by init-localstack.sh).
         graph_checkpoint_bucket_name: cpu_cfg.checkpoint_bucket.clone(),
@@ -138,7 +141,9 @@ fn party(party_id: usize, db_host: &str) -> CpuNodeConfig {
         // isolation.  The `postgres` database always exists in the hawk-db
         // compose (`docker-compose.hawk-db.yaml`).
         db_url: format!("postgres://postgres:postgres@{db_host}:5432/postgres"),
-        db_schema: format!("cpu_party_{party_id}"),
+        // Must match prepare_stores() formula: schema_name + suffix + "_" + env + "_" + party_id
+        // = "cpu_party" + "" + "_dev_" + N  →  "cpu_party_dev_N"
+        db_schema: format!("cpu_party_dev_{party_id}"),
 
         // S3 bucket created by `scripts/tools/init-localstack.sh`.
         checkpoint_bucket: "wf-smpcv2-dev-hnsw-checkpoint".to_string(),

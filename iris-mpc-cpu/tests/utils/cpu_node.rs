@@ -178,7 +178,7 @@ impl CpuNode {
             &s3_key,
             last_iris_id,
             last_modification_id,
-            None,
+            Some(last_modification_id),
             &hash_hex,
             false,
             4,
