@@ -11,7 +11,8 @@ pub const GRAPH_CHECKPOINT_ROUTE: &str = "/graph-checkpoint";
 pub const GRAPH_CHECKPOINT_ENDPOINT: &str = "graph-checkpoint";
 
 /// Controls which older checkpoints are deleted during cleanup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum PruningMode {
     /// Do not prune any checkpoints.
     None,

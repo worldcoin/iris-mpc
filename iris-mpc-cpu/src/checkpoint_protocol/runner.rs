@@ -8,8 +8,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ampc_actor_utils::network::mpc::NetworkHandle;
+use ampc_actor_utils::network::tcp::config::deserialize_yaml_json_string;
 use aws_sdk_s3::Client as S3Client;
 use eyre::{eyre, Result};
+use serde::Deserialize;
+use serde_with::{serde_as, DurationSeconds};
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
@@ -26,21 +29,64 @@ use crate::hnsw::{
 };
 use iris_mpc_common::vector_id::VectorId;
 
+// ── In-process Sidecar  ───────────────────────────────────────────────────────
+
+// the sidecar daemon gets these passed in via the CLI but for in-process these need to be
+// environment variables.
+//
+// The sidecar process will not be run if the config field is None.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SidecarConfigWrapper {
+    /// listen addresses per party for the networking handle.
+    /// corresponds to both inbound addrs and outbound addrs
+    #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
+    pub addresses: Vec<String>,
+    #[serde(default = "default_sidecar_parallelism")]
+    pub request_parallelism: usize,
+    #[serde(default = "default_sidecar_parallelism")]
+    pub connection_parallelism: usize,
+    #[serde(default)]
+    pub config: Option<SidecarConfig>,
+}
+
+fn default_sidecar_parallelism() -> usize {
+    1
+}
+
+impl SidecarConfigWrapper {
+    pub fn load_config(prefix: &str) -> Result<Self> {
+        let settings = config::Config::builder();
+        let settings = settings
+            .add_source(
+                config::Environment::with_prefix(prefix)
+                    .separator("__")
+                    .try_parsing(true),
+            )
+            .build()?;
+        let config: Self = settings.try_deserialize::<Self>()?;
+        Ok(config)
+    }
+}
+
 // ── Sidecar daemon ───────────────────────────────────────────────────────
 
 /// Sidecar daemon configuration. Construct from the binary's CLI args /
 /// environment.
-#[derive(Debug, Clone)]
+#[serde_as]
+#[derive(Debug, Clone, Deserialize)]
 pub struct SidecarConfig {
     /// Bucket containing the checkpoint S3 objects.
     pub bucket: String,
     /// Party index (0, 1, 2). Drives S3 key prefix and metric labels.
     pub party_id: usize,
     /// Sleep between successful (or skipped) cycles.
+    #[serde_as(as = "DurationSeconds<u64>")]
     pub cycle_interval: Duration,
     /// Sleep after a transient cycle error before retrying.
+    #[serde_as(as = "DurationSeconds<u64>")]
     pub retry_interval: Duration,
     /// Per-peer-round timeout passed into the protocol's `CycleConfig`.
+    #[serde_as(as = "DurationSeconds<u64>")]
     pub peer_round_timeout: Duration,
     /// Lower-bound for cycle work; below this the cycle is skipped (no
     /// upload / no DB write) to avoid hammering S3 with near-empty deltas.
@@ -274,5 +320,72 @@ pub async fn restart_from_checkpoint<V: VectorStore + Send + Sync>(
         Outcome::Skipped(SkipReason::NotEnoughMutations { .. }) => Err(eyre!(
             "restart unexpectedly skipped on NotEnoughMutations despite min=0"
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph_checkpoint::PruningMode;
+
+    // Unique prefix per test: env is process-global and tests run in parallel.
+    #[test]
+    fn load_config_round_trips_env() {
+        let vars = [
+            (
+                "WRAPPERTEST__ADDRESSES",
+                r#"["10.0.0.1:7000","10.0.0.2:7000","10.0.0.3:7000"]"#,
+            ),
+            ("WRAPPERTEST__REQUEST_PARALLELISM", "4"),
+            ("WRAPPERTEST__CONNECTION_PARALLELISM", "2"),
+            ("WRAPPERTEST__CONFIG__BUCKET", "my-bucket"),
+            ("WRAPPERTEST__CONFIG__PARTY_ID", "1"),
+            ("WRAPPERTEST__CONFIG__CYCLE_INTERVAL", "30"),
+            ("WRAPPERTEST__CONFIG__RETRY_INTERVAL", "5"),
+            ("WRAPPERTEST__CONFIG__PEER_ROUND_TIMEOUT", "10"),
+            ("WRAPPERTEST__CONFIG__MIN_MUTATIONS_PER_CYCLE", "100"),
+            ("WRAPPERTEST__CONFIG__CHECKPOINT_WINDOW", "8"),
+            ("WRAPPERTEST__CONFIG__IS_ARCHIVAL", "false"),
+            ("WRAPPERTEST__CONFIG__PRUNING_MODE", "older-non-archival"),
+            ("WRAPPERTEST__CONFIG__ONE_SHOT", "false"),
+        ];
+        for (k, v) in vars {
+            std::env::set_var(k, v);
+        }
+
+        let wrapper =
+            SidecarConfigWrapper::load_config("WRAPPERTEST").expect("env should deserialize");
+
+        assert_eq!(
+            wrapper.addresses,
+            vec!["10.0.0.1:7000", "10.0.0.2:7000", "10.0.0.3:7000"]
+        );
+        assert_eq!(wrapper.request_parallelism, 4);
+        assert_eq!(wrapper.connection_parallelism, 2);
+
+        let cfg = wrapper.config.expect("config section should be present");
+        assert_eq!(cfg.bucket, "my-bucket");
+        assert_eq!(cfg.party_id, 1);
+        assert_eq!(cfg.cycle_interval, Duration::from_secs(30));
+        assert_eq!(cfg.retry_interval, Duration::from_secs(5));
+        assert_eq!(cfg.peer_round_timeout, Duration::from_secs(10));
+        assert_eq!(cfg.min_mutations_per_cycle, 100);
+        assert_eq!(cfg.checkpoint_window, 8);
+        assert!(!cfg.is_archival);
+        assert_eq!(cfg.pruning_mode, PruningMode::OlderNonArchival);
+
+        for (k, _) in vars {
+            std::env::remove_var(k);
+        }
+    }
+
+    #[test]
+    fn missing_config_section_disables_sidecar() {
+        // No env set: wrapper parses via defaults, config=None disables the sidecar.
+        let wrapper = SidecarConfigWrapper::load_config("WRAPPERTESTNONE")
+            .expect("empty env should still deserialize");
+        assert!(wrapper.config.is_none());
+        assert!(wrapper.addresses.is_empty());
+        assert_eq!(wrapper.request_parallelism, 1);
     }
 }
