@@ -1,3 +1,5 @@
+use crate::utils::CpuNodeConfig;
+
 use super::CpuConfigs;
 
 use eyre::eyre;
@@ -10,6 +12,7 @@ use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 use iris_mpc_cpu::hnsw::graph::graph_store::{GraphCheckpointRow, GraphPg};
 use iris_mpc_cpu::hnsw::GraphMem;
 use iris_mpc_cpu::utils::serialization::types::graph_v4::GraphV4;
+use itertools::izip;
 
 /// Per-party database handles for test setup and post-condition assertions.
 ///
@@ -24,7 +27,7 @@ pub struct DbStores {
 }
 
 impl DbStores {
-    pub async fn new(config: &super::CpuNodeConfig) -> eyre::Result<Self> {
+    pub async fn new(config: &CpuNodeConfig) -> eyre::Result<Self> {
         let pg =
             PostgresClient::new(&config.db_url, &config.db_schema, AccessMode::ReadWrite).await?;
         pg.migrate().await;
@@ -80,22 +83,27 @@ impl DbStores {
 
 /// Handles for a single MPC party.
 pub struct CpuNode {
-    pub stores: DbStores,
+    pub store: DbStores,
+    pub config: CpuNodeConfig,
     pub s3: aws_sdk_s3::Client,
 }
 
 impl CpuNode {
-    pub async fn new(config: &super::CpuNodeConfig) -> eyre::Result<Self> {
-        let stores = DbStores::new(config).await?;
+    pub async fn new(config: CpuNodeConfig) -> eyre::Result<Self> {
+        let stores = DbStores::new(&config).await?;
         let aws_config = aws_config::load_from_env().await;
         let s3 = aws_sdk_s3::Client::new(&aws_config);
-        Ok(Self { stores, s3 })
+        Ok(Self {
+            store: stores,
+            s3,
+            config,
+        })
     }
 
     /// Head-check the latest checkpoint's S3 key to confirm the object exists.
     pub async fn verify_latest_checkpoint_s3_object(&self, bucket: &str) -> eyre::Result<()> {
         let row = self
-            .stores
+            .store
             .latest_checkpoint()
             .await?
             .ok_or_else(|| eyre!("no checkpoint row"))?;
@@ -139,7 +147,7 @@ impl CpuNode {
         )
         .await?;
 
-        let mut tx = self.stores.graph.begin_tx().await?;
+        let mut tx = self.store.graph.begin_tx().await?;
         GraphPg::<PlaintextStore>::insert_genesis_graph_checkpoint(
             &mut tx,
             &s3_key,
@@ -153,7 +161,7 @@ impl CpuNode {
         .await?;
         tx.commit().await?;
 
-        self.stores
+        self.store
             .graph
             .get_latest_genesis_graph_checkpoint()
             .await?
@@ -168,9 +176,9 @@ impl CpuNodes {
     pub async fn new(configs: &CpuConfigs) -> eyre::Result<Self> {
         // Construct all 3 concurrently.
         let (n0, n1, n2) = tokio::try_join!(
-            CpuNode::new(&configs[0]),
-            CpuNode::new(&configs[1]),
-            CpuNode::new(&configs[2]),
+            CpuNode::new(configs[0].clone()),
+            CpuNode::new(configs[1].clone()),
+            CpuNode::new(configs[2].clone()),
         )?;
         Ok(Self([n0, n1, n2]))
     }
@@ -178,7 +186,7 @@ impl CpuNodes {
     /// Run `WalAssertions` against each party in sequence.
     pub async fn apply_assertions(&self, assertions: &[WalAssertions; 3]) -> eyre::Result<()> {
         for (node, assertion) in self.0.iter().zip(assertions.iter()) {
-            assertion.assert(&node.stores).await?;
+            assertion.assert(node).await?;
         }
         Ok(())
     }
@@ -186,7 +194,7 @@ impl CpuNodes {
     /// Assert that every party has exactly `expected` rows in `genesis_graph_checkpoint`.
     pub async fn assert_checkpoint_count(&self, expected: usize) -> eyre::Result<()> {
         for (i, node) in self.0.iter().enumerate() {
-            let count = node.stores.count_checkpoints().await?;
+            let count = node.store.count_checkpoints().await?;
             eyre::ensure!(
                 count == expected,
                 "party {i}: expected {expected} checkpoint rows, got {count}"
@@ -200,7 +208,7 @@ impl CpuNodes {
         let mut hashes: Vec<String> = Vec::with_capacity(3);
         for (i, node) in self.0.iter().enumerate() {
             let row = node
-                .stores
+                .store
                 .latest_checkpoint()
                 .await?
                 .ok_or_else(|| eyre!("party {i}: no checkpoint row found"))?;
@@ -231,16 +239,16 @@ impl CpuNodes {
     /// Return the checkpoint row count for each party.
     /// Used by wait_for_new_checkpoint to poll for TC-2 progress.
     pub async fn checkpoint_counts(&self) -> eyre::Result<[usize; 3]> {
-        let c0 = self.0[0].stores.count_checkpoints().await?;
-        let c1 = self.0[1].stores.count_checkpoints().await?;
-        let c2 = self.0[2].stores.count_checkpoints().await?;
+        let c0 = self.0[0].store.count_checkpoints().await?;
+        let c1 = self.0[1].store.count_checkpoints().await?;
+        let c2 = self.0[2].store.count_checkpoints().await?;
         Ok([c0, c1, c2])
     }
 
     /// Delete all checkpoint S3 objects and DB rows.  Called in teardown.
     pub async fn cleanup_s3_checkpoints(&self, configs: &CpuConfigs) -> eyre::Result<()> {
         for (node, config) in self.0.iter().zip(configs.iter()) {
-            let rows = node.stores.graph.get_genesis_graph_checkpoints().await?;
+            let rows = node.store.graph.get_genesis_graph_checkpoints().await?;
             for row in &rows {
                 // Ignore errors — the object may already be gone.
                 let _ = node
@@ -251,7 +259,7 @@ impl CpuNodes {
                     .send()
                     .await;
             }
-            node.stores.truncate_checkpoint_tables().await?;
+            node.store.truncate_checkpoint_tables().await?;
         }
         Ok(())
     }
@@ -259,7 +267,7 @@ impl CpuNodes {
     /// Truncate WAL and checkpoint tables for all parties.
     pub async fn truncate_checkpoint_tables(&self) -> eyre::Result<()> {
         for node in &self.0 {
-            node.stores.truncate_checkpoint_tables().await?;
+            node.store.truncate_checkpoint_tables().await?;
         }
         Ok(())
     }
@@ -347,9 +355,10 @@ impl WalAssertions {
     }
 
     /// Run all set assertions against `stores`.
-    pub async fn assert(&self, stores: &DbStores) -> eyre::Result<()> {
+    pub async fn assert(&self, node: &CpuNode) -> eyre::Result<()> {
+        let store = &node.store;
         if let Some(expected) = self.wal_row_count {
-            let actual = stores.wal_row_count().await?;
+            let actual = store.wal_row_count().await?;
             eyre::ensure!(
                 actual == expected,
                 "WAL row count: expected {expected}, got {actual}"
@@ -357,7 +366,7 @@ impl WalAssertions {
         }
 
         if let Some(expected) = self.max_modification_id {
-            let actual = stores.max_modification_id().await?;
+            let actual = store.max_modification_id().await?;
             eyre::ensure!(
                 actual == Some(expected),
                 "max modification_id: expected Some({expected}), got {actual:?}"
@@ -365,7 +374,7 @@ impl WalAssertions {
         }
 
         if let Some(expected) = self.checkpoint_count {
-            let actual = stores.count_checkpoints().await?;
+            let actual = store.count_checkpoints().await?;
             eyre::ensure!(
                 actual == expected,
                 "checkpoint count: expected {expected}, got {actual}"
@@ -373,7 +382,7 @@ impl WalAssertions {
         }
 
         if let Some(expected_mod_id) = self.latest_checkpoint_mod_id {
-            let row = stores
+            let row = store
                 .latest_checkpoint()
                 .await?
                 .ok_or_else(|| eyre!("no checkpoint row found"))?;
@@ -385,9 +394,8 @@ impl WalAssertions {
         }
 
         if let Some(true) = self.s3_object_exists {
-            // TODO: stores.verify_latest_checkpoint_s3_object(bucket).await?
-            // (bucket must be threaded through or stored on DbStores)
-            todo!("assert S3 object exists for latest checkpoint")
+            node.verify_latest_checkpoint_s3_object(&node.config.checkpoint_bucket)
+                .await?;
         }
 
         Ok(())

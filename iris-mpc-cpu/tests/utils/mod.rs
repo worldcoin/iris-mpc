@@ -1,3 +1,5 @@
+use iris_mpc_cpu::graph_checkpoint::PruningMode;
+
 pub mod cpu_node;
 pub mod runner;
 pub mod wait_conditions;
@@ -11,19 +13,13 @@ pub type CpuConfigs = [CpuNodeConfig; COUNT_OF_PARTIES];
 
 /// Hardcoded loopback ports for hawk_main's MPC network.
 /// These must not conflict with SIDECAR_ADDRS or the coordination ports.
-pub const HAWK_ADDRS: [&str; COUNT_OF_PARTIES] = [
-    "127.0.0.1:16000",
-    "127.0.0.1:16100",
-    "127.0.0.1:16200",
-];
+pub const HAWK_ADDRS: [&str; COUNT_OF_PARTIES] =
+    ["127.0.0.1:16000", "127.0.0.1:16100", "127.0.0.1:16200"];
 
 /// Hardcoded loopback ports for sidecar_main's MPC network.
 /// Different from HAWK_ADDRS so both can run in the same test process (wal_103).
-pub const SIDECAR_ADDRS: [&str; COUNT_OF_PARTIES] = [
-    "127.0.0.1:16010",
-    "127.0.0.1:16110",
-    "127.0.0.1:16210",
-];
+pub const SIDECAR_ADDRS: [&str; COUNT_OF_PARTIES] =
+    ["127.0.0.1:16010", "127.0.0.1:16110", "127.0.0.1:16210"];
 
 /// Per-party test configuration.
 ///
@@ -58,9 +54,7 @@ pub struct SidecarTestConfig {
     pub min_mutations_per_cycle: u64,
     pub checkpoint_window: usize,
     pub is_archival: bool,
-    // TODO (open question in readme): map to the real PruningMode enum once the
-    // exact import path for iris_mpc_cpu::checkpoint_protocol::PruningMode is known.
-    pub pruning_mode: PruningModeConfig,
+    pub pruning_mode: PruningMode,
 }
 
 impl Default for SidecarTestConfig {
@@ -72,16 +66,7 @@ impl Default for SidecarTestConfig {
             min_mutations_per_cycle: 5,
             checkpoint_window: 10,
             is_archival: false,
-            pruning_mode: PruningModeConfig::None,
+            pruning_mode: PruningMode::None,
         }
     }
-}
-
-/// Local mirror of `iris_mpc_cpu::checkpoint_protocol::PruningMode`.
-/// TODO: replace with direct use of the real enum once the import path is confirmed.
-#[derive(Debug, Clone, PartialEq)]
-pub enum PruningModeConfig {
-    None,
-    OlderNonArchival,
-    AllOlder,
 }

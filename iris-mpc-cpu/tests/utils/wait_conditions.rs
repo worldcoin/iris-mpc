@@ -92,7 +92,7 @@ pub async fn wait_for_new_checkpoint(
 
     // Verify S3 objects exist for each party's latest checkpoint.
     for (node, config) in nodes.0.iter().zip(configs.iter()) {
-        node.stores
+        node.store
             .verify_latest_checkpoint_s3_object(&config.checkpoint_bucket)
             .await?;
     }
@@ -103,5 +103,5 @@ pub async fn wait_for_new_checkpoint(
 
 /// Count checkpoint rows for one party.  Used to establish a TC-2 baseline.
 pub async fn count_checkpoints_for(node: &super::cpu_node::CpuNode) -> eyre::Result<usize> {
-    node.stores.count_checkpoints().await
+    node.store.count_checkpoints().await
 }
