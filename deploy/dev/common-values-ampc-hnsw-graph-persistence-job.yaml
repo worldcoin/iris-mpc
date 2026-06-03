@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-cpu:latest-arm64"
+image: "ghcr.io/worldcoin/iris-mpc-cpu:f6d63d5de0aa9799ef122f0388239ec3e9d3dff6-arm64"
 
 environment: dev
 
