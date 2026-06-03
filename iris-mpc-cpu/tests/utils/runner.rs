@@ -75,11 +75,7 @@ impl CpuTestContext {
     }
 
     fn load_configs(env: &TestEnvironment) -> CpuConfigs {
-        // TODO (open question #1): load per-party CpuNodeConfig from TOML files at
-        //   tests/resources/node-config/{local,docker}/
-        // mirroring the genesis test config-loading pattern.
-        let _ = env;
-        todo!("load per-party CpuNodeConfig from TOML files")
+        crate::utils::configs::hardcoded_configs(env)
     }
 }
 

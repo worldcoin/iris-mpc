@@ -1,6 +1,8 @@
 use iris_mpc_cpu::graph_checkpoint::PruningMode;
 
+pub mod configs;
 pub mod cpu_node;
+pub mod key_rotation;
 pub mod runner;
 pub mod wait_conditions;
 pub mod wal_builder;
