@@ -442,33 +442,252 @@ stop_and_join!(shutdown_ct, join_set)
    (re-export of `iris_mpc_common::vector_id::VectorId`).  Construct via
    `IrisVectorId::from_serial_id(u32)`.
 
-10. **`server_main` AWS service requirements for TC-1:** `iris_mpc::server::server_main`
-    calls `init_aws_services` (SQS, SNS, S3), `get_shares_encryption_key_pair` (Secrets
-    Manager), and `prepare_stores` (GPU DB + CPU DB) before starting the coordination
-    server and performing the WAL roll-forward.  **Questions:**
-    - Does LocalStack need SQS queues, SNS topics, and Secrets Manager keys to be
-      pre-provisioned before the test runs, or does `server_main` tolerate missing
-      resources (skipping unused paths)?
-    - Is there a lighter entry point (e.g. just `restart_from_checkpoint` +
-      `start_coordination_server_with_extra_routes` + `set_node_ready`) that avoids
-      SQS/SNS/KMS entirely for WAL-only tests?
-    - The `iris-mpc-upgrade-hawk` e2e_hawk tests are marked `#[ignore = "requires external
-      setup"]` partly due to KMS key rotation.  Should wal_100/101/103 also be `#[ignore]`,
-      or is there a way to run them without KMS?
+10. ~~**`server_main` AWS service requirements for TC-1**~~ **Resolved.**
+    All required AWS resources are provisioned by `init-localstack.sh` (SQS queues,
+    SNS topics, S3 buckets, Secrets Manager secrets, KMS keys) and ECDH keys are
+    rotated by `global_setup` before any test runs.  `server_main` can reach all
+    resources it needs via LocalStack.  See implementation plan below.
 
-11. **TOML config files and `CpuTestContext::load_configs()`:** TC-1 tests need per-party
-    `Config` TOML files at `tests/resources/node-config/local/` and `docker/`.  The
-    files must contain:
-    - `[cpu_database]` with `url` pointing to the test PostgreSQL instance
-    - `schema_name`, `hnsw_schema_name_suffix`, `environment`, `party_id` set so that
-      `config.get_cpu_db_schema()` matches `CpuNodeConfig.db_schema`
-    - `graph_checkpoint_bucket_name` matching `CpuNodeConfig.checkpoint_bucket`
-    - `[server_coordination]` with `healthcheck_ports` matching
-      `CpuNodeConfig.healthcheck_port` for each party (e.g. `["3100", "3101", "3102"]`)
-    - `[aws]` endpoint pointing to LocalStack
-    - `[service]`, `kms_key_arns`, `requests_queue_url`, `results_topic_arn` as needed
-      by `server_main` (even if WAL tests don't use them, the struct fields may be
-      required)
-    `CpuTestContext::load_configs()` should load these files and derive `CpuNodeConfig`
-    from the parsed `Config` (using `config.get_cpu_db_url()`, `config.get_cpu_db_schema()`,
-    `config.graph_checkpoint_bucket_name`, `config.server_coordination.healthcheck_ports`, etc.).
+11. ~~**TOML config files and `CpuTestContext::load_configs()`**~~ **Resolved.**
+    `utils/configs.rs` provides `hardcoded_configs(env)` which builds all three
+    `CpuNodeConfig` values inline.  No TOML files are needed.  For TC-1, a parallel
+    `make_hawk_config` function builds the full `iris_mpc_common::config::Config`
+    from the same hardcoded values.  See implementation plan below.
+
+---
+
+## Implementation Plan — `run_hawk!` (TC-1)
+
+All open questions are resolved.  This section describes exactly what to build.
+
+### Step 1 — Add `iris-mpc` as a dev-dependency
+
+```toml
+# iris-mpc-cpu/Cargo.toml [dev-dependencies]
+iris-mpc = { path = "../iris-mpc" }
+```
+
+### Step 2 — Add `make_hawk_config` to `utils/configs.rs`
+
+`server_main` takes `iris_mpc_common::config::Config`.  Build it directly from
+`CpuNodeConfig` — no TOML files, no env-var loading.
+
+```rust
+pub fn make_hawk_config(
+    cpu_cfg: &CpuNodeConfig,
+    all_configs: &CpuConfigs,
+    service_ports: Vec<String>,
+    service_outbound_ports: Vec<String>,
+    env: &TestEnvironment,
+) -> iris_mpc_common::config::Config {
+    use iris_mpc_common::config::{Config, DbConfig};
+    use ampc_server_utils::{AwsConfig, ServerCoordinationConfig};
+
+    let db = DbConfig {
+        url: cpu_cfg.db_url.clone(),
+        migrate: true,
+        create: true,
+        load_parallelism: 8,
+    };
+    let healthcheck_ports: Vec<String> =
+        all_configs.iter().map(|c| c.healthcheck_port.to_string()).collect();
+
+    Config {
+        party_id: cpu_cfg.party_id,
+        environment: "dev".to_string(),
+
+        // CPU database; assign to `database` as well so server_main's
+        // iris_store (GPU) and cpu_store share the same schema — same
+        // pattern as e2e_hawk.rs (`config.database = config.cpu_database.clone()`).
+        database: Some(db.clone()),
+        cpu_database: Some(db),
+
+        // Schema names.  hnsw_schema_name_suffix drives get_cpu_db_schema().
+        // gpu_schema_name_suffix must match so the iris_store hits the same schema.
+        schema_name: "SMPC".to_string(),
+        hnsw_schema_name_suffix: format!("_hnsw_dev_{}", cpu_cfg.party_id),
+        gpu_schema_name_suffix:  format!("_hnsw_dev_{}", cpu_cfg.party_id),
+
+        // Checkpoint bucket (already created by init-localstack.sh).
+        graph_checkpoint_bucket_name: cpu_cfg.checkpoint_bucket.clone(),
+
+        // Coordination server — healthcheck ports drive TC-1 wait.
+        // service_ports and service_outbound_ports are allocated dynamically
+        // by the caller to avoid bind conflicts.
+        server_coordination: Some(ServerCoordinationConfig {
+            party_id: cpu_cfg.party_id,
+            node_hostnames: vec!["127.0.0.1".to_string(); 3],
+            healthcheck_ports,
+            image_name: String::new(),
+            heartbeat_interval_secs: 2,
+            heartbeat_initial_retries: 10,
+            http_query_retry_delay_ms: 1000,
+            startup_sync_timeout_secs: 300,
+        }),
+        service_ports,
+        service_outbound_ports,
+
+        // AWS — LocalStack endpoint + resources from init-localstack.sh.
+        aws: Some(AwsConfig {
+            endpoint: env.s3_endpoint().to_string(),
+            region: "us-east-1".to_string(),
+        }),
+        requests_queue_url: format!(
+            "http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/smpcv2-{}-dev.fifo",
+            cpu_cfg.party_id
+        ),
+        results_topic_arn:
+            "arn:aws:sns:us-east-1:000000000000:iris-mpc-results.fifo".to_string(),
+        shares_bucket_name: "wf-smpcv2-dev-sns-requests".to_string(),
+        kms_key_arns: serde_json::from_str(
+            r#"["arn:aws:kms:us-east-1:000000000000:key/00000000-0000-0000-0000-000000000000",
+                "arn:aws:kms:us-east-1:000000000000:key/00000000-0000-0000-0000-000000000001",
+                "arn:aws:kms:us-east-1:000000000000:key/00000000-0000-0000-0000-000000000002"]"#
+        ).unwrap(),
+
+        // WAL sync must be enabled so server_main calls sync_graph_mutations.
+        enable_modifications_sync: true,
+        enable_modifications_replay: false,
+
+        // Minimal HNSW / execution settings for a WAL-only test run.
+        disable_persistence: true,
+        hnsw_disable_memory_persistence: true,
+        hawk_numa: false,
+        hnsw_param_ef_constr: 320,
+        hnsw_param_m: 256,
+        hnsw_param_ef_search: 256,
+        hnsw_param_ef_supermatch: 4000,
+
+        // Everything else: serde defaults (empty queues, disabled features, etc.)
+        ..serde_json::from_str("{}").expect("Config serde defaults")
+    }
+}
+```
+
+> **Note on `schema_name` / `hnsw_schema_name_suffix`:** `Config::get_cpu_db_schema()`
+> returns `format!("{}{}", schema_name, hnsw_schema_name_suffix)`.  The value must
+> equal `CpuNodeConfig.db_schema` (`"cpu_party_{N}"`) so both the test's `DbStores`
+> and `server_main`'s store connect to the same tables.  Adjust the suffix accordingly
+> once the exact `get_cpu_db_schema` formula is confirmed.
+
+### Step 3 — Rewrite `run_hawk!` in `workflows/mod.rs`
+
+**Key constraint from `e2e_hawk.rs`:** `server_main` holds `!Send` pprof state, so it
+cannot run inside a `tokio::spawn` task.  It must run on a dedicated OS thread with its
+own multi-thread runtime.
+
+**Solution:** wrap each OS thread in `tokio::task::spawn_blocking`.  The blocking
+closure is `Send` (it captures only `Config` and `Arc<Notify>`, both `Send`); the
+`server_main` future is created and consumed entirely within `rt.block_on` on the
+blocking thread, so it never needs to be `Send`.  This keeps the `JoinSet` return type
+and makes `stop_and_join!` work unchanged.
+
+A watcher task in the JoinSet bridges the `CancellationToken` to `Arc<Notify>` so the
+existing `stop_and_join!(token, join_set)` call sites don't need to change.
+
+```rust
+#[macro_export]
+macro_rules! run_hawk {
+    ($configs:expr, $shutdown:expr, $ctx:expr) => {{
+        use std::sync::Arc;
+        use tokio::sync::Notify;
+        use iris_mpc::server::server_main;
+
+        let mut join_set: tokio::task::JoinSet<eyre::Result<()>> =
+            tokio::task::JoinSet::new();
+
+        // Allocate service ports and outbound ports dynamically to avoid
+        // bind conflicts with HAWK_ADDRS, SIDECAR_ADDRS, and healthcheck ports.
+        let alloc_ports = |n: usize| -> Vec<String> {
+            (0..n)
+                .map(|_| {
+                    let l = std::net::TcpListener::bind("127.0.0.1:0")
+                        .expect("failed to bind free port");
+                    let port = l.local_addr().unwrap().port().to_string();
+                    drop(l); // release so server can bind it
+                    port
+                })
+                .collect()
+        };
+        let n = ($configs).len();
+        let service_ports = alloc_ports(n);
+        let service_outbound_ports = alloc_ports(n);
+
+        // Shared notify: OS threads select on this instead of CancellationToken.
+        let notify = Arc::new(Notify::new());
+
+        // Bridge: when the CancellationToken fires, wake all server threads.
+        {
+            let notify = notify.clone();
+            let shutdown = $shutdown.clone();
+            join_set.spawn(async move {
+                shutdown.cancelled().await;
+                notify.notify_waiters();
+                Ok(())
+            });
+        }
+
+        for cpu_cfg in ($configs).iter() {
+            let config = crate::utils::configs::make_hawk_config(
+                cpu_cfg,
+                &$configs,
+                service_ports.clone(),
+                service_outbound_ports.clone(),
+                &$ctx.env,
+            );
+            let notify = notify.clone();
+
+            // spawn_blocking: closure is Send; server_main future is created
+            // inside block_on on the blocking thread, so !Send is not an issue.
+            join_set.spawn(tokio::task::spawn_blocking(move || {
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to build server runtime");
+                rt.block_on(async move {
+                    tokio::select! {
+                        res = server_main(config) => res,
+                        _ = notify.notified() => Ok(()),
+                    }
+                })
+            }).map(|r| r.map_err(|e| eyre::eyre!("server task panicked: {e}")).and_then(|r| r)));
+        }
+
+        join_set
+    }};
+}
+```
+
+Call sites (`wal_100`, `wal_101`, `wal_103`) change from:
+
+```rust
+let mut hawk_set = run_hawk!(configs, shutdown.clone());
+```
+
+to:
+
+```rust
+let mut hawk_set = run_hawk!(configs, shutdown.clone(), ctx);
+```
+
+The `ctx` argument supplies `env` for `make_hawk_config`.
+
+### Step 4 — Mark TC-1 tests `#[ignore = "requires external setup"]`
+
+Like `e2e_hawk.rs`, tests that run `server_main` (`wal_100`, `wal_101`, `wal_103`)
+should carry `#[ignore = "requires external setup"]` so they are skipped in normal
+`cargo test` runs and must be opted in explicitly:
+
+```
+cargo test --test e2e_wal test_wal_100 -- --ignored
+```
+
+TC-2 tests (`wal_102`, `wal_104`) only run `sidecar_main` and can remain always-on.
+
+### Step 5 — Verify schema name alignment
+
+After wiring up `make_hawk_config`, run `wal_100` (empty WAL, no mutations) first.
+If `server_main` fails with a schema-not-found or table-not-found error, adjust
+`hnsw_schema_name_suffix` in `make_hawk_config` so that `Config::get_cpu_db_schema()`
+returns the same string as `CpuNodeConfig.db_schema`.  The formula in
+`iris_mpc_common::config::Config::get_cpu_db_schema()` must be checked at that point.
