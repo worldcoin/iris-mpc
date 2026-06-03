@@ -7,6 +7,7 @@ use iris_mpc_cpu::checkpoint_protocol::{restart_from_checkpoint, sidecar_main, R
 use iris_mpc_cpu::graph_checkpoint::sync_graph_mutations;
 use iris_mpc_cpu::hnsw::GraphMem;
 use iris_mpc_cpu::network::mpc::{build_network_handle, NetworkHandleArgs};
+use tokio_util::sync::CancellationToken;
 
 use crate::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,
@@ -205,30 +206,32 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     background_tasks.check_tasks();
 
-    let main_future = run_main_server_loop(
-        &config,
-        &iris_store,
-        &aws_clients,
-        shares_encryption_key_pair,
-        background_tasks,
-        &shutdown_handler,
-        hawk_actor,
-        tx_results,
-        current_batch_id_atomic.clone(),
-        batch_sync_shared_state,
-    );
+    // ensure sidecar doesn't outlive main
+    let sidecar_ct = CancellationToken::new();
+    let main_finished = sidecar_ct.clone();
+    let config = Arc::new(RwLock::new(config));
+    let config2 = config.clone();
 
-    // Extract what the sidecar needs from config/aws_clients before the async
-    // move block, since main_future already holds &config and &aws_clients.
-    let sidecar_party_id = config.party_id;
-    let sidecar_tls = config.tls.clone();
-    let sidecar_s3 = aws_clients.checkpoint_s3_client.clone();
-    let shutdown_ct = shutdown_handler.get_network_cancellation_token();
-    // the sidecar needs its own graph store and this function transforms config to the appropriate
-    // schema name when creating the pg client
-    let (_iris_store, graph_store) = prepare_stores(&config).await?;
+    let main_future = async move {
+        let config = config2.read().await;
+        let r = run_main_server_loop(
+            &config,
+            &iris_store,
+            &aws_clients,
+            shares_encryption_key_pair,
+            background_tasks,
+            &shutdown_handler,
+            hawk_actor,
+            tx_results,
+            current_batch_id_atomic.clone(),
+            batch_sync_shared_state,
+        )
+        .await;
+        main_finished.cancel();
+        r
+    };
 
-    let sidecar_future = async move {
+    let sidecar_future = {
         let sidecar_config = match SidecarConfigWrapper::load_config("SIDECAR") {
             Ok(r) => r,
             Err(e) => {
@@ -242,24 +245,32 @@ pub async fn server_main(config: Config) -> Result<()> {
             return Ok(());
         };
 
-        let network_args = NetworkHandleArgs {
-            party_index: sidecar_party_id,
-            addresses: sidecar_config.addresses.clone(),
-            outbound_addresses: sidecar_config.addresses,
-            connection_parallelism: sidecar_config.connection_parallelism,
-            request_parallelism: sidecar_config.request_parallelism,
-            sessions_per_request: 1, // these aren't used by the sidecar anyway
-            tls: sidecar_tls,
-        };
-        let mut network_handle = build_network_handle(network_args, shutdown_ct.clone()).await?;
-        sidecar_main(
-            sc_config.clone(),
-            &graph_store,
-            &sidecar_s3,
-            &mut network_handle,
-            shutdown_ct.clone(),
-        )
-        .await
+        let config = config.read().await;
+        let aws_clients = AwsClients::new(&config).await?;
+        // the sidecar needs its own graph store and this function transforms config to the appropriate
+        // schema name when creating the pg client
+        let (_iris_store, graph_store) = prepare_stores(&config).await?;
+
+        async move {
+            let network_args = NetworkHandleArgs {
+                party_index: config.party_id,
+                addresses: sidecar_config.addresses.clone(),
+                outbound_addresses: sidecar_config.addresses,
+                connection_parallelism: sidecar_config.connection_parallelism,
+                request_parallelism: sidecar_config.request_parallelism,
+                sessions_per_request: 1, // these aren't used by the sidecar
+                tls: config.tls.clone(),
+            };
+            let mut network_handle = build_network_handle(network_args, sidecar_ct.clone()).await?;
+            sidecar_main(
+                sc_config.clone(),
+                &graph_store,
+                &aws_clients.checkpoint_s3_client,
+                &mut network_handle,
+                sidecar_ct,
+            )
+            .await
+        }
     };
 
     tokio::try_join!(main_future, sidecar_future)?;
