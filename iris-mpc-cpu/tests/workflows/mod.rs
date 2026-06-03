@@ -3,6 +3,10 @@ pub mod wal_101;
 pub mod wal_102;
 pub mod wal_103;
 pub mod wal_104;
+pub mod wal_105;
+pub mod wal_106;
+pub mod wal_107;
+pub mod wal_108;
 
 // ---------------------------------------------------------------------------
 // Service runner macros

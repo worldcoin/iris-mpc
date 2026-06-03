@@ -74,6 +74,18 @@ impl TestRun for Wal104 {
         let builder = (1i64..=10).fold(WalMutationBuilder::new(), |b, id| {
             b.add_node(id, (id - 1) as u32, 1)
         });
+
+        // Add edges: each node connects to the next two neighbors (wrapping).
+        const NUM_NODES: u32 = 10;
+        const EDGES_START_MOD_ID: i64 = 11;
+        let builder = (0..10i64)
+            .fold(builder, |b, idx| {
+                let base = idx as u32;
+                let neighbor1 = (base + 1) % NUM_NODES;
+                let neighbor2 = (base + 2) % NUM_NODES;
+                b.add_edges(EDGES_START_MOD_ID + idx, base, vec![neighbor1, neighbor2], 0)
+            });
+
         builder.seed_all(&nodes).await?;
 
         self.nodes = Some(nodes);
@@ -84,7 +96,7 @@ impl TestRun for Wal104 {
         let nodes = self.nodes.as_ref().unwrap();
         let pre = WalAssertions::new()
             .assert_checkpoint_count(1)
-            .assert_wal_row_count(10);
+            .assert_wal_row_count(20); // 10 nodes + 10 edges
         nodes
             .apply_assertions(&[pre.clone(), pre.clone(), pre])
             .await

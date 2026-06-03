@@ -22,7 +22,15 @@ use crate::utils::runner::TestRun;
 use eyre::bail;
 use serial_test::serial;
 use workflows::{
-    wal_100::Wal100, wal_101::Wal101, wal_102::Wal102, wal_103::Wal103, wal_104::Wal104,
+    wal_100::Wal100,
+    wal_101::Wal101,
+    wal_102::Wal102,
+    wal_103::Wal103,
+    wal_104::Wal104,
+    wal_105::Wal105,
+    wal_106::Wal106,
+    wal_107::Wal107,
+    wal_108::Wal108,
 };
 
 const RUST_LOG: &str = "info";
@@ -136,4 +144,45 @@ fn test_wal_103() -> eyre::Result<()> {
 #[serial]
 fn test_wal_104() -> eyre::Result<()> {
     run_test!(104, 1, Wal104::new())
+}
+
+// ---------------------------------------------------------------------------
+// wal_105 – wal_107: extended scenarios (hawk + sidecar, require external
+// setup identical to wal_103).
+// ---------------------------------------------------------------------------
+
+/// V4 graph load: hawk_main selects the sidecar checkpoint as its base and
+/// rolls forward only the mutations that arrived after the checkpoint.
+#[test]
+#[serial]
+#[ignore = "requires external setup"]
+fn test_wal_105() -> eyre::Result<()> {
+    run_test!(105, 1, Wal105::new())
+}
+
+/// Checkpoint desync: sidecar completes a cycle and reaches BLAKE3 consensus
+/// even when one party's checkpoint table has fallen behind the others.
+#[test]
+#[serial]
+fn test_wal_106() -> eyre::Result<()> {
+    run_test!(106, 1, Wal106::new())
+}
+
+/// Nontrivial modification sync: hawk_main reconciles a WAL divergence between
+/// parties on startup; the subsequent sidecar checkpoint proves the graphs
+/// are identical across parties.
+#[test]
+#[serial]
+#[ignore = "requires external setup"]
+fn test_wal_107() -> eyre::Result<()> {
+    run_test!(107, 1, Wal107::new())
+}
+
+/// V3 graph load with pre-seeded WAL, no prior checkpoint: hawk_main starts
+/// from an empty graph, applies all WAL mutations, and signals ready.
+#[test]
+#[serial]
+#[ignore = "requires external setup"]
+fn test_wal_108() -> eyre::Result<()> {
+    run_test!(108, 1, Wal108::new())
 }

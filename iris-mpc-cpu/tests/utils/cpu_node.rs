@@ -69,6 +69,23 @@ impl DbStores {
         Ok(count as usize)
     }
 
+    /// Delete the single most-recently inserted `genesis_graph_checkpoint` row.
+    ///
+    /// Uses `MAX(id)` as the tiebreaker so it always removes exactly the row
+    /// that `latest_checkpoint()` would return.  A no-op when the table is empty.
+    ///
+    /// Intended for checkpoint-desync tests that need to artificially regress one
+    /// party's checkpoint state.
+    pub async fn delete_latest_checkpoint(&self) -> eyre::Result<()> {
+        sqlx::query(
+            "DELETE FROM genesis_graph_checkpoint \
+             WHERE id = (SELECT MAX(id) FROM genesis_graph_checkpoint)",
+        )
+        .execute(self.graph.pool())
+        .await?;
+        Ok(())
+    }
+
     /// Get MAX(modification_id) from `hawk_graph_mutations`, returns None if empty.
     pub async fn max_modification_id(&self) -> eyre::Result<Option<i64>> {
         let max: Option<i64> =

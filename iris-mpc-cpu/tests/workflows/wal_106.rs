@@ -1,0 +1,232 @@
+/// wal_106 — Checkpoint desync: sidecar recovers when one party's checkpoint
+/// table is behind the others'.
+///
+/// After a first sidecar cycle creates a checkpoint at mod_id=10 for all three
+/// parties, party 0's newest checkpoint row is manually deleted so that its
+/// `genesis_graph_checkpoint` only holds the seeded row (mod_id=0).  Ten more
+/// WAL mutations (11..=20) are then seeded for every party.
+///
+/// A second sidecar cycle must still reach 3-party BLAKE3 consensus and produce
+/// a new checkpoint row for every party — even though party 0's "latest
+/// checkpoint" (mod_id=0) differs from parties 1 and 2 (mod_id=10).
+///
+/// Protocol:
+///   Phase 1: `sidecar_main` → checkpoint at mod_id=10 (TC-2, baseline=1).
+///   Desync: delete party 0's mod_id=10 checkpoint row.
+///   Seed WAL 11..=20 for all parties.
+///   Phase 2: `sidecar_main` → checkpoint at mod_id=20 (inline per-party TC-2).
+///
+/// Termination conditions: TC-2 (phase 1), inline per-party poll (phase 2).
+use std::time::Duration;
+
+use tokio::time::{sleep, timeout};
+use tokio_util::sync::CancellationToken;
+
+use crate::{
+    run_sidecar, stop_and_join,
+    utils::{
+        cpu_node::{CpuNodes, WalAssertions},
+        runner::{CpuTestContext, TestRun},
+        wait_conditions::wait_for_new_checkpoint,
+        wal_builder::WalMutationBuilder,
+    },
+};
+
+/// genesis checkpoint anchor.
+const SEED_MOD_ID: i64 = 0;
+/// WAL batch consumed by phase-1 sidecar.
+const FIRST_BATCH_UP_TO: i64 = 10;
+/// WAL batch seeded before phase-2 sidecar.
+const SECOND_BATCH_UP_TO: i64 = 20;
+
+const FIRST_BATCH_NODES: usize = (FIRST_BATCH_UP_TO - SEED_MOD_ID) as usize; // 10
+const FIRST_BATCH_EDGES_START: i64 = FIRST_BATCH_UP_TO + 1; // 11
+const SECOND_BATCH_NODES: usize = (SECOND_BATCH_UP_TO - FIRST_BATCH_UP_TO) as usize; // 10
+const SECOND_BATCH_EDGES_START: i64 = SECOND_BATCH_UP_TO + FIRST_BATCH_NODES as i64 + 1; // 31
+
+const FIRST_BATCH_SIZE: usize = FIRST_BATCH_NODES + FIRST_BATCH_NODES; // nodes + edges (10 + 10)
+const SECOND_BATCH_SIZE: usize = SECOND_BATCH_NODES + SECOND_BATCH_NODES; // nodes + edges (10 + 10)
+const TOTAL_WAL: usize = FIRST_BATCH_SIZE + SECOND_BATCH_SIZE; // 40
+
+pub struct Wal106 {
+    nodes: Option<CpuNodes>,
+}
+
+impl Wal106 {
+    pub fn new() -> Self {
+        Self { nodes: None }
+    }
+}
+
+impl TestRun for Wal106 {
+    async fn setup(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
+        let nodes = CpuNodes::new(&ctx.configs).await?;
+        nodes.truncate_checkpoint_tables().await?;
+
+        // Seed genesis checkpoint anchored at mod_id = 0.
+        nodes.seed_all(SEED_MOD_ID, SEED_MOD_ID).await?;
+
+        // Seed WAL mutations 1..=10.
+        let builder = (1i64..=FIRST_BATCH_UP_TO).fold(WalMutationBuilder::new(), |b, id| {
+            b.add_node(id, (id - 1) as u32, 1)
+        });
+
+        // Add edges for first batch: each node connects to the next two neighbors (wrapping).
+        let builder = (0..FIRST_BATCH_NODES as i64)
+            .fold(builder, |b, idx| {
+                let base = idx as u32;
+                let num_nodes = FIRST_BATCH_NODES as u32;
+                let neighbor1 = (base + 1) % num_nodes;
+                let neighbor2 = (base + 2) % num_nodes;
+                b.add_edges(FIRST_BATCH_EDGES_START + idx, base, vec![neighbor1, neighbor2], 0)
+            });
+
+        builder.seed_all(&nodes).await?;
+
+        self.nodes = Some(nodes);
+        Ok(())
+    }
+
+    async fn setup_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
+        let nodes = self.nodes.as_ref().unwrap();
+        let pre = WalAssertions::new()
+            .assert_wal_row_count(FIRST_BATCH_SIZE)
+            .assert_max_modification_id(FIRST_BATCH_EDGES_START + FIRST_BATCH_NODES as i64 - 1)
+            .assert_checkpoint_count(1)
+            .assert_latest_checkpoint_mod_id(SEED_MOD_ID);
+        nodes
+            .apply_assertions(&[pre.clone(), pre.clone(), pre])
+            .await
+    }
+
+    async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
+        let nodes = self.nodes.as_ref().unwrap();
+
+        // Phase 1: sidecar checkpoints WAL 1..=10 → checkpoint at mod_id=10.
+        // All three parties now have 2 rows: seeded (mod_id=0) + new (mod_id=10).
+        {
+            let shutdown = CancellationToken::new();
+            let mut sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
+            let res = wait_for_new_checkpoint(
+                nodes,
+                &ctx.configs,
+                /* baseline */ 1,
+                Duration::from_secs(120),
+            )
+            .await;
+            stop_and_join!(shutdown, sidecar_set);
+            res?;
+        }
+
+        // Introduce a checkpoint desync: delete party 0's most recent checkpoint row
+        // (mod_id=10).  Party 0 is left with only the seeded row (mod_id=0) while
+        // parties 1 and 2 retain both rows.
+        nodes.0[0].store.delete_latest_checkpoint().await?;
+
+        // Sanity-check: party 0 now has 1 checkpoint; parties 1 and 2 still have 2.
+        {
+            let counts = nodes.checkpoint_counts().await?;
+            eyre::ensure!(
+                counts == [1, 2, 2],
+                "unexpected checkpoint counts after desync: expected [1, 2, 2], got {counts:?}"
+            );
+        }
+
+        // Seed additional WAL mutations 11..=20 for all parties.
+        let builder =
+            (FIRST_BATCH_UP_TO + 1..=SECOND_BATCH_UP_TO).fold(WalMutationBuilder::new(), |b, id| {
+                b.add_node(id, (id - 1) as u32, 1)
+            });
+
+        // Add edges for second batch: each node connects to the next two neighbors (wrapping).
+        let builder = (0..SECOND_BATCH_NODES as i64)
+            .fold(builder, |b, idx| {
+                let base = (FIRST_BATCH_NODES as u32) + (idx as u32);
+                let num_nodes = (FIRST_BATCH_NODES + SECOND_BATCH_NODES) as u32;
+                let neighbor1 = (base + 1) % num_nodes;
+                let neighbor2 = (base + 2) % num_nodes;
+                b.add_edges(SECOND_BATCH_EDGES_START + idx, base, vec![neighbor1, neighbor2], 0)
+            });
+
+        builder.seed_all(nodes).await?;
+
+        // Phase 2: sidecar runs again.  Despite the desync, every party must reach
+        // 3-party BLAKE3 consensus and insert a new checkpoint row anchored at mod_id=20.
+        //
+        // Per-party baselines before this run: [1, 2, 2].
+        // We wait until each party's count strictly exceeds its individual baseline.
+        {
+            let baselines = nodes.checkpoint_counts().await?; // [1, 2, 2]
+
+            let shutdown = CancellationToken::new();
+            let mut sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
+
+            let wait_res = timeout(Duration::from_secs(120), async {
+                loop {
+                    let counts = nodes.checkpoint_counts().await?;
+                    let all_advanced = counts
+                        .iter()
+                        .zip(baselines.iter())
+                        .all(|(current, base)| current > base);
+                    if all_advanced {
+                        break;
+                    }
+                    sleep(Duration::from_millis(500)).await;
+                }
+                Ok::<(), eyre::Error>(())
+            })
+            .await
+            .map_err(|_| {
+                eyre::eyre!(
+                    "TC-2 timeout: sidecar did not produce new checkpoints for all parties \
+                     within 120 s (baselines: {baselines:?})"
+                )
+            });
+
+            stop_and_join!(shutdown, sidecar_set);
+            wait_res??;
+        }
+
+        Ok(())
+    }
+
+    async fn exec_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
+        let nodes = self.nodes.as_ref().unwrap();
+
+        // Party 0: seeded (mod_id=0) + phase-2 new = 2 rows.
+        // Parties 1&2: seeded + phase-1 + phase-2 = 3 rows.
+        let max_mod_id = SECOND_BATCH_EDGES_START + SECOND_BATCH_NODES as i64 - 1;
+        let p0_post = WalAssertions::new()
+            .assert_wal_row_count(TOTAL_WAL)
+            .assert_max_modification_id(max_mod_id)
+            .assert_checkpoint_count(2)
+            .assert_latest_checkpoint_mod_id(max_mod_id)
+            .assert_s3_object_exists(true);
+        let p12_post = WalAssertions::new()
+            .assert_wal_row_count(TOTAL_WAL)
+            .assert_max_modification_id(max_mod_id)
+            .assert_checkpoint_count(3)
+            .assert_latest_checkpoint_mod_id(max_mod_id)
+            .assert_s3_object_exists(true);
+        nodes
+            .apply_assertions(&[p0_post, p12_post.clone(), p12_post])
+            .await?;
+
+        // All parties must agree on the BLAKE3 hash of the phase-2 checkpoint.
+        nodes.assert_checkpoint_hashes_agree().await?;
+
+        // Verify against the reference hash computed from the full WAL (1..=20).
+        let reference_hash = nodes.0[0].store.compute_reference_hash().await?;
+        nodes
+            .assert_checkpoint_hashes_match_reference(&reference_hash)
+            .await
+    }
+
+    async fn teardown(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
+        if let Some(nodes) = &self.nodes {
+            nodes.truncate_checkpoint_tables().await?;
+            nodes.cleanup_s3_checkpoints(&ctx.configs).await?;
+        }
+        Ok(())
+    }
+}

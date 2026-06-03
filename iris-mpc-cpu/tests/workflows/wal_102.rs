@@ -25,6 +25,8 @@ use crate::{
 /// Seed 10 AddNode mutations.  min_mutations_per_cycle = 5, so the sidecar
 /// will cycle on the first pass.
 const WAL_MUTATION_COUNT: i64 = 10;
+const EDGES_START_MOD_ID: i64 = WAL_MUTATION_COUNT + 1;
+const TOTAL_MUTATIONS: usize = (WAL_MUTATION_COUNT as usize) * 2; // nodes + edges
 
 pub struct Wal102 {
     nodes: Option<CpuNodes>,
@@ -46,6 +48,17 @@ impl TestRun for Wal102 {
         let builder = (1..=WAL_MUTATION_COUNT).fold(WalMutationBuilder::new(), |b, id| {
             b.add_node(id, (id - 1) as u32, 1)
         });
+
+        // Add edges: each node connects to the next two neighbors (wrapping).
+        let num_nodes = WAL_MUTATION_COUNT as u32;
+        let builder = (0..WAL_MUTATION_COUNT)
+            .fold(builder, |b, idx| {
+                let base = idx as u32;
+                let neighbor1 = (base + 1) % num_nodes;
+                let neighbor2 = (base + 2) % num_nodes;
+                b.add_edges(EDGES_START_MOD_ID + idx, base, vec![neighbor1, neighbor2], 0)
+            });
+
         builder.seed_all(&nodes).await?;
 
         self.nodes = Some(nodes);
@@ -55,8 +68,8 @@ impl TestRun for Wal102 {
     async fn setup_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
         let pre = WalAssertions::new()
-            .assert_wal_row_count(WAL_MUTATION_COUNT as usize)
-            .assert_max_modification_id(WAL_MUTATION_COUNT)
+            .assert_wal_row_count(TOTAL_MUTATIONS)
+            .assert_max_modification_id(EDGES_START_MOD_ID + WAL_MUTATION_COUNT - 1)
             .assert_checkpoint_count(0);
         nodes
             .apply_assertions(&[pre.clone(), pre.clone(), pre])
@@ -85,7 +98,7 @@ impl TestRun for Wal102 {
 
         let post = WalAssertions::new()
             .assert_checkpoint_count(1)
-            .assert_latest_checkpoint_mod_id(WAL_MUTATION_COUNT)
+            .assert_latest_checkpoint_mod_id(EDGES_START_MOD_ID + WAL_MUTATION_COUNT - 1)
             .assert_s3_object_exists(true);
         nodes
             .apply_assertions(&[post.clone(), post.clone(), post])

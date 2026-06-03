@@ -23,7 +23,9 @@ use crate::{
 
 const CHECKPOINT_AT_MOD_ID: i64 = 50;
 const WAL_UP_TO_MOD_ID: i64 = 100;
-const DELTA_SIZE: usize = (WAL_UP_TO_MOD_ID - CHECKPOINT_AT_MOD_ID) as usize;
+const NODES_COUNT: usize = (WAL_UP_TO_MOD_ID - CHECKPOINT_AT_MOD_ID) as usize; // 50
+const EDGES_START_MOD_ID: i64 = WAL_UP_TO_MOD_ID + 1;
+const DELTA_SIZE: usize = NODES_COUNT + NODES_COUNT; // nodes + edges
 
 pub struct Wal103 {
     nodes: Option<CpuNodes>,
@@ -50,6 +52,17 @@ impl TestRun for Wal103 {
             .fold(WalMutationBuilder::new(), |b, id| {
                 b.add_node(id, (id - CHECKPOINT_AT_MOD_ID - 1) as u32, 1)
             });
+
+        // Add edges: each node connects to the next two neighbors (wrapping).
+        let builder = (0..NODES_COUNT as i64)
+            .fold(builder, |b, idx| {
+                let base = idx as u32;
+                let num_nodes = NODES_COUNT as u32;
+                let neighbor1 = (base + 1) % num_nodes;
+                let neighbor2 = (base + 2) % num_nodes;
+                b.add_edges(EDGES_START_MOD_ID + idx, base, vec![neighbor1, neighbor2], 0)
+            });
+
         builder.seed_all(&nodes).await?;
 
         self.nodes = Some(nodes);
@@ -60,6 +73,7 @@ impl TestRun for Wal103 {
         let nodes = self.nodes.as_ref().unwrap();
         let pre = WalAssertions::new()
             .assert_wal_row_count(DELTA_SIZE)
+            .assert_max_modification_id(EDGES_START_MOD_ID + NODES_COUNT as i64 - 1)
             .assert_checkpoint_count(1)
             .assert_latest_checkpoint_mod_id(CHECKPOINT_AT_MOD_ID);
         nodes
@@ -104,10 +118,10 @@ impl TestRun for Wal103 {
     async fn exec_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
 
-        // After the sidecar cycle, the new checkpoint should be anchored at mod_id=100.
+        // After the sidecar cycle, the new checkpoint should be anchored at the last edge mod_id.
         let post = WalAssertions::new()
             .assert_checkpoint_count(2)
-            .assert_latest_checkpoint_mod_id(WAL_UP_TO_MOD_ID)
+            .assert_latest_checkpoint_mod_id(EDGES_START_MOD_ID + NODES_COUNT as i64 - 1)
             .assert_s3_object_exists(true);
         nodes
             .apply_assertions(&[post.clone(), post.clone(), post])
