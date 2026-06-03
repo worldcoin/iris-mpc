@@ -1,28 +1,35 @@
-/// wal_105 — V4 graph load: hawk_main after a sidecar checkpoint.
+/// wal_105 — V4 graph load: sidecar checkpoint as base for a second sidecar cycle.
 ///
-/// After the sidecar materialises WAL mutations 51..=100 and writes a
-/// checkpoint at mod_id=100, ten more mutations (101..=110) are seeded.
-/// hawk_main must select the sidecar checkpoint (the "V4 path") as the base,
-/// apply only the 10-entry delta, and signal ready.
+/// After the sidecar materialises WAL mutations 51..=100 and writes a checkpoint
+/// at mod_id=100, ten more mutations are seeded (nodes 101..=110 + edges).
+/// A second sidecar cycle must select the mod_id=100 checkpoint (the "V4 path")
+/// as its base, apply only the new delta, and write a new checkpoint anchored at
+/// the last mutation.
+///
+/// Using `run_hawk!` (TC-1) for Phase 2 would only confirm the server started;
+/// it would not verify that the correct checkpoint was loaded or that the delta was
+/// correctly applied.  The second sidecar cycle produces a checkpoint whose hash
+/// is compared against a reference materialised from the full WAL (51..=170),
+/// making both the base selection and the roll-forward correctness observable.
 ///
 /// Protocol:
 ///   Phase 1: `sidecar_main` cycles over WAL 51..=100 → checkpoint at
 ///            mod_id=100 (TC-2, baseline=1).
-///   Seed WAL 101..=110.
-///   Phase 2: `hawk_main` loads the mod_id=100 checkpoint and rolls forward
-///            mutations 101..=110 → signals ready (TC-1).
+///   Seed WAL 101..=170 (10 nodes + 10 edges).
+///   Phase 2: `sidecar_main` loads the mod_id=100 checkpoint, applies the new
+///            delta, and writes a checkpoint at mod_id=170 (TC-2, baseline=2).
 ///
-/// Termination conditions: TC-2 then TC-1.
+/// Termination conditions: TC-2 (phase 1) then TC-2 (phase 2).
 use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    run_hawk, run_sidecar, stop_and_join,
+    run_sidecar, stop_and_join,
     utils::{
         cpu_node::{CpuNodes, WalAssertions},
         runner::{CpuTestContext, TestRun},
-        wait_conditions::{wait_for_all_ready, wait_for_new_checkpoint},
+        wait_conditions::wait_for_new_checkpoint,
         wal_builder::WalMutationBuilder,
     },
 };
@@ -140,15 +147,21 @@ impl TestRun for Wal105 {
         builder.seed_all(nodes).await?;
         builder.seed_modifications_all(nodes).await?;
 
-        // Phase 2: hawk_main starts.  It should discover the sidecar's checkpoint at
-        // mod_id=100 as the latest base ("V4 path") and roll forward only mutations
-        // 101..=110 — not the full WAL from mod_id=50.
+        // Phase 2: sidecar starts.  It must discover the Phase 1 checkpoint at
+        // mod_id=100 as the latest base ("V4 path") and materialise only the new
+        // delta (mutations 101..=170), then write a new checkpoint.
+        // baseline = 2 (seeded + phase-1 checkpoint); wait for a third row.
         {
             let shutdown = CancellationToken::new();
-            let mut hawk_set = run_hawk!(ctx.configs, shutdown.clone(), ctx);
-            let res =
-                wait_for_all_ready(&ctx.configs, &mut hawk_set, Duration::from_secs(60)).await;
-            stop_and_join!(shutdown, hawk_set);
+            let mut sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
+            let res = wait_for_new_checkpoint(
+                nodes,
+                &ctx.configs,
+                /* baseline */ 2,
+                Duration::from_secs(120),
+            )
+            .await;
+            stop_and_join!(shutdown, sidecar_set);
             res?;
         }
 
@@ -158,20 +171,30 @@ impl TestRun for Wal105 {
     async fn exec_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
 
-        // hawk_main does not create checkpoint rows; still 2 (seeded + sidecar).
-        // WAL is intact: 120 rows total (60 nodes + 60 edges), max_modification_id = HAWK_EDGES_START + HAWK_NODES - 1.
+        // After both sidecar cycles: seeded + phase-1 + phase-2 = 3 checkpoints.
+        // WAL is intact: 120 rows total.  Phase-2 checkpoint anchored at the last
+        // mutation of the hawk delta batch.
+        let last_mod_id = HAWK_EDGES_START + HAWK_NODES as i64 - 1;
         let post = WalAssertions::new()
             .assert_wal_row_count(TOTAL_WAL)
-            .assert_max_modification_id(HAWK_EDGES_START + HAWK_NODES as i64 - 1)
-            .assert_checkpoint_count(2)
-            .assert_latest_checkpoint_mod_id(SIDECAR_CHECKPOINT_MOD_ID)
+            .assert_max_modification_id(last_mod_id)
+            .assert_checkpoint_count(3) // seeded + phase-1 sidecar + phase-2 sidecar
+            .assert_latest_checkpoint_mod_id(last_mod_id)
             .assert_s3_object_exists(true);
         nodes
             .apply_assertions(&[post.clone(), post.clone(), post])
             .await?;
 
-        // The sidecar checkpoint hashes must still agree across parties.
-        nodes.assert_checkpoint_hashes_agree().await
+        // All 3 parties must agree on the phase-2 checkpoint BLAKE3 hash.
+        nodes.assert_checkpoint_hashes_agree().await?;
+
+        // Cross-check against the reference hash computed from the full WAL
+        // (initial 51..=150 + hawk delta 101..=170).  This proves the phase-2
+        // sidecar loaded the phase-1 checkpoint as its base, not the genesis one.
+        let reference_hash = nodes.0[0].store.compute_reference_hash().await?;
+        nodes
+            .assert_checkpoint_hashes_match_reference(&reference_hash)
+            .await
     }
 
     async fn teardown(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
