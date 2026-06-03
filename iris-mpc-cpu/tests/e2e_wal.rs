@@ -47,7 +47,8 @@ macro_rules! run_test {
     ($kind:expr, $idx:expr, $test:expr) => {{
         tracing_subscriber::fmt()
             .with_env_filter(format!(
-                "iris_mpc_cpu={RUST_LOG},iris_mpc_common={RUST_LOG},warn"
+                "iris_mpc={RUST_LOG},iris_mpc_cpu={RUST_LOG},iris_mpc_common={RUST_LOG},ampc_actor_utils={RUST_LOG},ampc_server_utils={RUST_LOG},{}={RUST_LOG}",
+                env!("CARGO_CRATE_NAME")
             ))
             .try_init()
             .ok();
