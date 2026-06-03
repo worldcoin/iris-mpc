@@ -312,8 +312,7 @@ async fn main() -> Result<()> {
                 &searcher,
                 config.prf_seed,
                 echoice,
-            )
-            .unwrap();
+            )?;
 
             if config.sanity_check {
                 run_sanity_check_deep_id(&graph, &searcher, vectors, threshold).await;

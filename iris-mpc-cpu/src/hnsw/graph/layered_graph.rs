@@ -333,7 +333,7 @@ where
     K::Vector: Clone,
 {
     let zero_layer = {
-        let mut results = read_knn_results_from_file(filepath).unwrap();
+        let mut results = read_knn_results_from_file(filepath)?;
         for result in results.iter_mut() {
             result.truncate(searcher.params.get_M_max(0));
         }

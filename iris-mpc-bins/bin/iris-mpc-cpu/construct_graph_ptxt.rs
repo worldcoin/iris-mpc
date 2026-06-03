@@ -10,7 +10,7 @@ use iris_mpc_cpu::{
     hawkers::{
         aby3::aby3_store::{DistanceMode, DistanceOps, FhdOps, NhdOps},
         build_plaintext::{deep_id_parallel_batch_insert, plaintext_parallel_batch_insert},
-        plaintext_deep_id_store::{Int4Vector, SharedPlaintextDeepIDStore},
+        plaintext_deep_id_store::{Int4Vector, PlaintextDeepIDStore, SharedPlaintextDeepIDStore},
         plaintext_store::SharedPlaintextStore,
     },
     hnsw::{vector_store::VectorStoreMut, GraphMem, HnswSearcher},
@@ -280,12 +280,11 @@ async fn build_deep_id_graph(
     let last_id = vectors[end_idx - 1].0.serial_id();
 
     tracing::info!("Initializing deep-ID vector store");
-    let mut single_store =
-        iris_mpc_cpu::hawkers::plaintext_deep_id_store::PlaintextDeepIDStore::new(threshold);
+    let mut store_ = PlaintextDeepIDStore::new(threshold);
     for (id, v) in vectors[0..start_idx].iter() {
-        single_store.insert_with_id(*id, Arc::new(v.clone()));
+        store_.insert_with_id(*id, Arc::new(v.clone()));
     }
-    let mut store: SharedPlaintextDeepIDStore = single_store.into();
+    let mut store: SharedPlaintextDeepIDStore = store_.into();
 
     match output {
         OutputGraphConfig::Simple { path } => {
