@@ -29,7 +29,7 @@ pub fn hardcoded_configs(env: &TestEnvironment) -> CpuConfigs {
 }
 
 // ---------------------------------------------------------------------------
-// hawk_main config builder (TC-1)
+// hawk_main config builder
 // ---------------------------------------------------------------------------
 
 /// Build an [`iris_mpc_common::config::Config`] for `server_main` from a
@@ -92,7 +92,7 @@ pub fn make_hawk_config(
         graph_checkpoint_bucket_name: cpu_cfg.checkpoint_bucket.clone(),
         graph_checkpoint_bucket_region: "us-east-1".to_string(),
 
-        // Coordination server — healthcheck ports drive TC-1 wait.
+        // Coordination server — healthcheck ports drive wait_for_all_ready.
         server_coordination: Some(ServerCoordinationConfig {
             party_id: cpu_cfg.party_id,
             node_hostnames: vec!["127.0.0.1".to_string(); 3],
@@ -162,7 +162,7 @@ fn make_config(party_id: usize, db_host: &str) -> CpuNodeConfig {
 
         party_id,
 
-        // Healthcheck port: used by TC-1 (`wait_for_all_ready`) and the
+        // Healthcheck port: used by `wait_for_all_ready` and the
         // ServerCoordinationConfig built in `CpuNodes::new`.
         healthcheck_port: 18000 + party_id as u16,
 

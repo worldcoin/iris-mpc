@@ -80,7 +80,7 @@ pub trait TestRun {
         Ok(())
     }
 
-    /// REQUIRED — Spawn services, wait for termination condition (TC-1 or TC-2).
+    /// REQUIRED — Spawn services and wait for the termination condition.
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()>;
 
     /// REQUIRED — Verify post-conditions: checkpoint rows, S3 objects, WAL HWM.

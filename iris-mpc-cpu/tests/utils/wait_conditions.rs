@@ -8,7 +8,7 @@ use tokio::time::{sleep, timeout};
 
 use super::{cpu_node::CpuNodes, CpuConfigs, COUNT_OF_PARTIES};
 
-/// TC-1 — Wait for all 3 parties' coordination servers to signal ready.
+/// Wait for all 3 parties' coordination servers to signal ready.
 ///
 /// Calls `wait_for_others_ready(&server_coord_config)` for each party in parallel
 /// (via `try_join_all`), wrapped in a `tokio::select!` that also monitors the
@@ -46,7 +46,7 @@ pub async fn wait_for_all_ready(
 
     tokio::select! {
         res = timeout(dur, ready_all) => {
-            res.map_err(|_| eyre::eyre!("TC-1 timeout: parties did not signal ready within {:?}", dur))??;
+            res.map_err(|_| eyre::eyre!("parties did not signal ready within {:?}", dur))??;
             Ok(())
         }
         Some(task_res) = join_set.join_next() => {
@@ -58,7 +58,7 @@ pub async fn wait_for_all_ready(
     }
 }
 
-/// TC-2 — Poll the `genesis_graph_checkpoint` table until each party's row count
+/// Poll the `genesis_graph_checkpoint` table until each party's row count
 /// exceeds `baseline_count`, then verify each party's latest checkpoint S3 object exists.
 ///
 /// Polls every 500ms.
@@ -81,7 +81,7 @@ pub async fn wait_for_new_checkpoint(
     .await
     .map_err(|_| {
         eyre::eyre!(
-            "TC-2 timeout: sidecar did not produce a new checkpoint within {:?}",
+            "sidecar did not produce a new checkpoint within {:?}",
             dur
         )
     })??;
@@ -95,7 +95,7 @@ pub async fn wait_for_new_checkpoint(
     Ok(())
 }
 
-/// TC-E — Wait for the first hawk_main task to exit with an error.
+/// Wait for the first hawk_main task to exit with an error.
 ///
 /// Returns the formatted error string (`format!("{err:#}")`) so the caller can
 /// assert on the message without inspecting the raw `eyre::Report`.
@@ -130,7 +130,7 @@ pub async fn wait_for_hawk_failure(
     .await
     .map_err(|_| {
         eyre::eyre!(
-            "TC-E timeout: hawk_main did not produce an error within {:?}",
+            "hawk_main did not produce an error within {:?}",
             dur
         )
     })?

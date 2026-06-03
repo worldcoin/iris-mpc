@@ -380,7 +380,7 @@ impl CpuNodes {
     }
 
     /// Return the checkpoint row count for each party.
-    /// Used by wait_for_new_checkpoint to poll for TC-2 progress.
+    /// Used by wait_for_new_checkpoint to poll checkpoint progress.
     pub async fn checkpoint_counts(&self) -> eyre::Result<[usize; 3]> {
         let c0 = self.0[0].store.count_checkpoints().await?;
         let c1 = self.0[1].store.count_checkpoints().await?;

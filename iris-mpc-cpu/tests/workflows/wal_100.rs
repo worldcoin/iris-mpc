@@ -67,8 +67,6 @@ impl TestRun for Wal100 {
     }
 
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
-        let nodes = self.nodes.as_ref().unwrap();
-
         // Phase 1: hawk_main signals ready on an empty WAL.
         {
             let shutdown = CancellationToken::new();
@@ -84,13 +82,8 @@ impl TestRun for Wal100 {
         {
             let shutdown = CancellationToken::new();
             let mut sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
-            let res = wait_for_new_checkpoint(
-                nodes,
-                &ctx.configs,
-                /* baseline */ 0,
-                Duration::from_secs(120),
-            )
-            .await;
+            let res =
+                wait_for_all_ready(&ctx.configs, &mut sidecar_set, Duration::from_secs(120)).await;
             stop_and_join!(shutdown, sidecar_set);
             res?;
         }
