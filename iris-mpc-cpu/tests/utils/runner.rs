@@ -11,16 +11,63 @@ use tokio_util::sync::CancellationToken;
 pub trait TestRun {
     /// Orchestrates all lifecycle phases in order.
     /// Propagates the first error encountered; teardown runs even on exec failure.
+    /// All errors are logged for visibility.
     async fn run(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
-        self.setup(ctx).await?;
-        self.setup_assert(ctx).await?;
-        let exec_res = self.exec(ctx).await;
-        exec_res?;
-        self.exec_assert(ctx).await?;
-        // Always attempt teardown regardless of exec outcome.
+        let test_id = format!("{}:{}", ctx.kind, ctx.idx);
+
+        // Capture the first failure from setup → exec → exec_assert without
+        // short-circuiting out of `run`, so teardown always gets a chance to run.
+        let phase_res = async {
+            tracing::info!("[{}] Starting phase: setup", test_id);
+            self.setup(ctx).await?;
+            tracing::info!("[{}] Starting phase: setup_assert", test_id);
+            self.setup_assert(ctx).await?;
+            tracing::info!("[{}] Starting phase: exec", test_id);
+            self.exec(ctx).await?;
+            tracing::info!("[{}] Starting phase: exec_assert", test_id);
+            self.exec_assert(ctx).await
+        }
+        .await;
+
+        if let Err(ref e) = phase_res {
+            tracing::error!("[{}] Phase error: {}", test_id, e);
+        }
+
+        // Teardown always runs, even if an earlier phase failed.
+        tracing::info!(
+            "[{}] Starting phase: teardown (phase_failed={})",
+            test_id,
+            phase_res.is_err()
+        );
         let teardown_res = self.teardown(ctx).await;
+        if let Err(ref e) = teardown_res {
+            tracing::error!(
+                "[{}] Teardown error (after phase failure={}): {}",
+                test_id,
+                phase_res.is_err(),
+                e
+            );
+        }
+
+        tracing::info!(
+            "[{}] Starting phase: teardown_assert (phase_failed={})",
+            test_id,
+            phase_res.is_err()
+        );
+        let teardown_assert_res = self.teardown_assert(ctx).await;
+        if let Err(ref e) = teardown_assert_res {
+            tracing::error!(
+                "[{}] Teardown assert error (after phase failure={}): {}",
+                test_id,
+                phase_res.is_err(),
+                e
+            );
+        }
+
+        // Surface errors in phase order: setup/exec first, then teardown.
+        phase_res?;
         teardown_res?;
-        self.teardown_assert(ctx).await
+        teardown_assert_res
     }
 
     /// Prepare DB state: truncate tables, seed WAL mutations, seed checkpoint.
