@@ -1,0 +1,49 @@
+image: "ghcr.io/worldcoin/iris-mpc-cpu:latest-arm64"
+
+environment: dev
+
+schedule: "0 */4 * * *"
+
+backoffLimit: 0
+concurrencyPolicy: Forbid
+activeDeadlineSeconds: 1800
+ttlSecondsAfterFinished: 3600
+restartPolicy: Never
+
+command: ["/bin/wal-sidecar"]
+
+imagePullSecrets:
+  - name: github-secret
+
+ports:
+  - containerPort: 5000
+    name: tcp-5000
+    protocol: TCP
+  - containerPort: 5001
+    name: tcp-5001
+    protocol: TCP
+  - containerPort: 5002
+    name: tcp-5002
+    protocol: TCP
+
+resources:
+  limits:
+    cpu: 15
+    memory: 245Gi
+  requests:
+    cpu: 12
+    memory: 220Gi
+
+podAnnotations:
+  karpenter.sh/do-not-disrupt: "true"
+
+nodeSelector:
+  kubernetes.io/arch: arm64
+  karpenter.sh/capacity-type: on-demand
+  node.kubernetes.io/instance-type: "x8g.4xlarge"
+
+podSecurityContext:
+  runAsUser: 65534
+  runAsGroup: 65534
+
+terminationGracePeriodSeconds: 120

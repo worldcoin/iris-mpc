@@ -1,0 +1,70 @@
+args:
+  - "--party-index=0"
+  - "--addresses=sidecar.0.dev.hnsw.worldcoin.dev:5000,sidecar.1.dev.hnsw.worldcoin.dev:5001,sidecar.2.dev.hnsw.worldcoin.dev:5002"
+  - "--outbound-addrs=sidecar.0.dev.hnsw.worldcoin.dev:5000,sidecar.1.dev.hnsw.worldcoin.dev:5001,sidecar.2.dev.hnsw.worldcoin.dev:5002"
+  - "--peer-round-timeout-secs=30"
+  - "--min-mutations-per-cycle=10000"
+  - "--one-shot"
+
+env:
+  - name: ENV
+    value: dev
+  - name: AWS_REGION
+    value: eu-central-1
+  - name: RUST_LOG
+    value: info
+  - name: RUST_BACKTRACE
+    value: full
+  - name: SMPC__CPU_DATABASE__URL
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_READER_URL
+        name: application
+  - name: SMPC__CPU_DATABASE__SCHEMA
+    value: "SMPC_dev_0_minfhd"
+  - name: SMPC__GRAPH_CHECKPOINT_BUCKET_NAME
+    value: "ampc-hnsw-graph-store-node-0-prod-eu-central-1"
+
+initContainer:
+  enabled: true
+  image: "amazon/aws-cli:2.17.62"
+  name: "wal-sidecar-dns-records-updater"
+  env:
+    - name: PARTY_ID
+      value: "0"
+    - name: POD_IP
+      valueFrom:
+        fieldRef:
+          fieldPath: status.podIP
+  configMap:
+    init.sh: |
+      #!/usr/bin/env bash
+
+      HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name dev.hnsw.worldcoin.dev --query "HostedZones[0].Id" --output text)
+
+      BATCH_JSON=$(cat <<EOF
+      {
+        "Comment": "Upsert the A record for WAL sidecar pod",
+        "Changes": [
+          {
+            "Action": "UPSERT",
+            "ResourceRecordSet": {
+              "Name": "sidecar.$PARTY_ID.dev.hnsw.worldcoin.dev",
+              "TTL": 5,
+              "Type": "A",
+              "ResourceRecords": [{
+                "Value": "$POD_IP"
+              }]
+            }
+          }
+        ]
+      }
+      EOF
+      )
+
+      aws route53 change-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --change-batch "$BATCH_JSON"
+
+attachSecurityGroupPolicy:
+  enabled: true
+  groupIds:
+    - TODO_INFRA_SG_SIDECAR_0

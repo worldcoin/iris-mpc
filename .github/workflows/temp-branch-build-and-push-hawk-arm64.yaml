@@ -6,6 +6,7 @@ on:
       - "dev"
       - "feat/recovery-update"
       - "pop-3712-reauth-skip-persistence-alias"
+      - "feat/wal_feature_branch2"
 
     paths-ignore:
       - "deploy/**"
