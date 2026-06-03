@@ -1,7 +1,6 @@
 use crate::utils::CpuNodeConfig;
 
 use super::{CpuConfigs, COUNT_OF_PARTIES};
-use ampc_server_utils::ServerCoordinationConfig;
 
 use eyre::eyre;
 use iris_mpc_common::{
@@ -103,14 +102,10 @@ pub struct CpuNode {
     pub store: DbStores,
     pub config: CpuNodeConfig,
     pub s3: aws_sdk_s3::Client,
-    pub server_coordination: ServerCoordinationConfig,
 }
 
 impl CpuNode {
-    pub async fn new(
-        config: CpuNodeConfig,
-        server_coordination: ServerCoordinationConfig,
-    ) -> eyre::Result<Self> {
+    pub async fn new(config: CpuNodeConfig) -> eyre::Result<Self> {
         let stores = DbStores::new(&config).await?;
         let aws_config = aws_config::load_from_env().await;
         let s3 = aws_sdk_s3::Client::new(&aws_config);
@@ -118,7 +113,6 @@ impl CpuNode {
             store: stores,
             s3,
             config,
-            server_coordination,
         })
     }
 
@@ -246,31 +240,11 @@ pub struct CpuNodes(pub [CpuNode; 3]);
 
 impl CpuNodes {
     pub async fn new(configs: &CpuConfigs) -> eyre::Result<Self> {
-        // Build shared vectors from all 3 configs.
-        let healthcheck_ports: Vec<String> = configs
-            .iter()
-            .map(|c| c.healthcheck_port.to_string())
-            .collect();
-        let node_hostnames = vec!["127.0.0.1".to_string(); COUNT_OF_PARTIES];
-
-        // Build one ServerCoordinationConfig per party; rest of the fields use
-        // the same defaults as the serde defaults on the struct.
-        let make_coord = |party_id: usize| ServerCoordinationConfig {
-            party_id,
-            node_hostnames: node_hostnames.clone(),
-            healthcheck_ports: healthcheck_ports.clone(),
-            image_name: String::new(),
-            heartbeat_interval_secs: 2,
-            heartbeat_initial_retries: 10,
-            http_query_retry_delay_ms: 1000,
-            startup_sync_timeout_secs: 300,
-        };
-
         // Construct all 3 concurrently.
         let (n0, n1, n2) = tokio::try_join!(
-            CpuNode::new(configs[0].clone(), make_coord(configs[0].party_id)),
-            CpuNode::new(configs[1].clone(), make_coord(configs[1].party_id)),
-            CpuNode::new(configs[2].clone(), make_coord(configs[2].party_id)),
+            CpuNode::new(configs[0].clone()),
+            CpuNode::new(configs[1].clone()),
+            CpuNode::new(configs[2].clone()),
         )?;
         Ok(Self([n0, n1, n2]))
     }
