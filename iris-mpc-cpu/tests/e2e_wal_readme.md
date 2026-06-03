@@ -383,16 +383,22 @@ stop_and_join!(shutdown_ct, join_set)
    function in `src/execution/hawk_main.rs`, or does the binary-level `hawk_main` already
    accept one?  What is the exact path and signature?
 
+  you will be calling server_main(). you will need the iris-mpc-common/config/mod.rs Config struct. e2e_hawk.rs does this, using the genesis function to get node configs. you can overwrite the genesis configs with the data from the CpuNodeConfig.....
+
 2. **`build_hawk_network_handle` or equivalent for tests:** The sidecar binary calls
    `build_hawk_network_handle(party_index, addresses, outbound_addrs, ..., &shutdown_ct)`.
    What is the exact import path and full signature for this function?  Is there a simpler
    test-only builder (like the one used in `tests/e2e.rs`) that wraps it?  The same
    question applies to the network handle used by `hawk_main`.
 
+  check the sidecar binary for the import path. there is not an easier way. 
+
 3. **`GraphPg::insert_genesis_graph_checkpoint` signature:** `CheckpointSeeder` needs to
    insert a checkpoint row after uploading to S3.  What is the exact method name and
    signature on `GraphPg` for inserting a new `genesis_graph_checkpoint` row?  Does it
    take the `blake3_hash` as a `String` or `[u8; 32]`?  Does it return the inserted row?
+
+  this is handled already.
 
 4. ~**Persistent state table name for truncation:** `truncate_checkpoint_tables()` needs to
    clear `hawk_graph_mutations`, `genesis_graph_checkpoint`, and the persistent state table.
