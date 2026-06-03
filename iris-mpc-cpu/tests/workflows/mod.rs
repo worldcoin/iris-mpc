@@ -6,11 +6,6 @@ pub mod wal_104;
 
 pub use crate::utils::runner::TestRun;
 
-use tokio::task::JoinSet;
-use tokio_util::sync::CancellationToken;
-
-use crate::utils::{CpuConfigs, HAWK_ADDRS, SIDECAR_ADDRS};
-
 // ---------------------------------------------------------------------------
 // Service runner macros
 // ---------------------------------------------------------------------------
@@ -28,58 +23,105 @@ use crate::utils::{CpuConfigs, HAWK_ADDRS, SIDECAR_ADDRS};
 // same process during wal_103 without bind conflicts.
 //
 // run_sidecar! is fully implemented (see below).
-// run_hawk! is still blocked:
-//   Q1 resolved: call iris_mpc::server::server_main(config: Config) wrapped in
-//     tokio::select! { res = server_main(config) => res, _ = shutdown.cancelled() => Ok(()) }
-//   Q2 resolved: build_hawk_network_handle is in iris_mpc_cpu::execution::hawk_main
-//   Still blocked on Q10 (server_main AWS requirements) and Q11 (TOML config files)
+// run_hawk! is fully implemented — all open questions resolved (see readme).
 // ---------------------------------------------------------------------------
 
-/// Spawn `hawk_main` for all 3 parties concurrently.
+/// Spawn `server_main` (hawk_main) for all 3 parties concurrently.
 ///
-/// Each party gets its own loopback network handle built from `HAWK_ADDRS`.
-/// All parties share the provided `CancellationToken` for clean shutdown.
+/// Because `server_main` holds `!Send` pprof state, it cannot run inside a
+/// `tokio::spawn` task directly.  Instead each party gets its own OS thread
+/// (via `spawn_blocking`) with a dedicated multi-thread runtime.  The
+/// `!Send` future is created and consumed entirely inside `rt.block_on` on
+/// the blocking thread, so it never needs to cross await points as `Send`.
 ///
-/// Returns a `JoinSet<eyre::Result<()>>` that can be polled in TC-1 to detect
-/// unexpected early exit.
+/// A watcher task bridges the `CancellationToken` to an `Arc<Notify>` so
+/// that `stop_and_join!` call sites remain unchanged.
+///
+/// Service ports and outbound ports are allocated dynamically (ephemeral
+/// OS ports) to avoid conflicts with `HAWK_ADDRS`, `SIDECAR_ADDRS`, and
+/// the hardcoded healthcheck ports (18000–18002).
+///
+/// Returns a `JoinSet<eyre::Result<()>>` that can be polled in TC-1 to
+/// detect unexpected early exit.
 ///
 /// Usage:
 /// ```rust
 /// let shutdown = CancellationToken::new();
-/// let mut hawk_set = run_hawk!(configs, shutdown.clone());
-/// wait_for_all_ready(&configs, &mut hawk_set, Duration::from_secs(60)).await?;
+/// let mut hawk_set = run_hawk!(ctx.configs, shutdown.clone(), ctx);
+/// wait_for_all_ready(&ctx.configs, &mut hawk_set, Duration::from_secs(60)).await?;
 /// stop_and_join!(shutdown, hawk_set);
 /// ```
 #[macro_export]
 macro_rules! run_hawk {
-    ($configs:expr, $shutdown:expr) => {{
-        let mut join_set: tokio::task::JoinSet<eyre::Result<()>> = tokio::task::JoinSet::new();
-        let hawk_addresses: Vec<String> = crate::utils::HAWK_ADDRS
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+    ($configs:expr, $shutdown:expr, $ctx:expr) => {{
+        use std::sync::Arc;
+        use tokio::sync::Notify;
+        use iris_mpc::server::server_main;
 
-        for config in ($configs).iter() {
-            let config = config.clone();
+        let mut join_set: tokio::task::JoinSet<eyre::Result<()>> =
+            tokio::task::JoinSet::new();
+
+        // Allocate service ports and outbound ports dynamically to avoid
+        // bind conflicts with HAWK_ADDRS, SIDECAR_ADDRS, and healthcheck ports.
+        let alloc_ports = |n: usize| -> Vec<String> {
+            (0..n)
+                .map(|_| {
+                    let l = std::net::TcpListener::bind("127.0.0.1:0")
+                        .expect("failed to bind free port");
+                    let port = l.local_addr().unwrap().port().to_string();
+                    drop(l); // release so server_main can bind it
+                    port
+                })
+                .collect()
+        };
+        let n = ($configs).len();
+        let service_ports = alloc_ports(n);
+        let service_outbound_ports = alloc_ports(n);
+
+        // Shared notify: OS threads select on this instead of CancellationToken
+        // (CancellationToken is not Send-across-runtimes friendly).
+        let notify = Arc::new(Notify::new());
+
+        // Bridge task: when the CancellationToken fires, wake all server threads.
+        {
+            let notify = notify.clone();
             let shutdown = $shutdown.clone();
-            let addresses = hawk_addresses.clone();
-
             join_set.spawn(async move {
-                // Blocked on Q10 (server_main AWS requirements) and Q11 (TOML config files).
-                //
-                // Once unblocked, the body will be:
-                //
-                //   use iris_mpc::server::server_main;
-                //   use iris_mpc_common::config::Config;
-                //
-                //   let config = <load Config from TOML, override with cpu config fields>;
-                //   tokio::select! {
-                //       res = server_main(config) => res,
-                //       _ = shutdown.cancelled() => Ok(()),
-                //   }
+                shutdown.cancelled().await;
+                notify.notify_waiters();
+                Ok(())
+            });
+        }
 
-                let _ = (config, addresses, shutdown);
-                todo!("spawn hawk_main — blocked on Q10 and Q11 (see readme)")
+        for cpu_cfg in ($configs).iter() {
+            let config = crate::utils::configs::make_hawk_config(
+                cpu_cfg,
+                &$configs,
+                service_ports.clone(),
+                service_outbound_ports.clone(),
+                &$ctx.env,
+            );
+            let notify = notify.clone();
+
+            // spawn_blocking: the closure is Send (captures only Config and
+            // Arc<Notify>); server_main is created and consumed entirely
+            // inside rt.block_on on the blocking thread, so !Send is fine.
+            join_set.spawn(async move {
+                tokio::task::spawn_blocking(move || {
+                    let rt = tokio::runtime::Builder::new_multi_thread()
+                        .enable_all()
+                        .build()
+                        .expect("failed to build server runtime");
+                    rt.block_on(async move {
+                        tokio::select! {
+                            res = server_main(config) => res,
+                            _ = notify.notified() => Ok(()),
+                        }
+                    })
+                })
+                .await
+                .map_err(|e| eyre::eyre!("server task panicked: {e}"))
+                .and_then(|r| r)
             });
         }
 

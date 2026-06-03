@@ -90,17 +90,24 @@ macro_rules! run_test {
 // Test functions — one per scenario, run serially to avoid port/DB conflicts.
 // ---------------------------------------------------------------------------
 
+// TC-1 tests: run server_main (hawk_main), require LocalStack + Postgres.
+// Opt in with: cargo test --test e2e_wal test_wal_100 -- --ignored
+
 #[test]
 #[serial]
+#[ignore = "requires external setup"]
 fn test_wal_100() -> eyre::Result<()> {
     run_test!(100, 1, Wal100::new())
 }
 
 #[test]
 #[serial]
+#[ignore = "requires external setup"]
 fn test_wal_101() -> eyre::Result<()> {
     run_test!(101, 1, Wal101::new())
 }
+
+// TC-2 tests: run sidecar_main only, always-on.
 
 #[test]
 #[serial]
@@ -110,6 +117,7 @@ fn test_wal_102() -> eyre::Result<()> {
 
 #[test]
 #[serial]
+#[ignore = "requires external setup"]
 fn test_wal_103() -> eyre::Result<()> {
     run_test!(103, 1, Wal103::new())
 }

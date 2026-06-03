@@ -75,7 +75,7 @@ impl TestRun for Wal103 {
         // but they are run sequentially here (not simultaneously) to isolate phases.
         {
             let shutdown = CancellationToken::new();
-            let mut hawk_set = run_hawk!(ctx.configs, shutdown.clone());
+            let mut hawk_set = run_hawk!(ctx.configs, shutdown.clone(), ctx);
             let res =
                 wait_for_all_ready(&ctx.configs, &mut hawk_set, Duration::from_secs(60)).await;
             stop_and_join!(shutdown, hawk_set);

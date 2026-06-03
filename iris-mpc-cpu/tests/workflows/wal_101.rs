@@ -68,7 +68,7 @@ impl TestRun for Wal101 {
 
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
         let shutdown = CancellationToken::new();
-        let mut hawk_set = run_hawk!(ctx.configs, shutdown.clone());
+        let mut hawk_set = run_hawk!(ctx.configs, shutdown.clone(), ctx);
         let ready_res =
             wait_for_all_ready(&ctx.configs, &mut hawk_set, Duration::from_secs(60)).await;
         stop_and_join!(shutdown, hawk_set);

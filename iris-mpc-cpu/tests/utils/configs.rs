@@ -25,6 +25,110 @@ pub fn hardcoded_configs(env: &TestEnvironment) -> CpuConfigs {
 }
 
 // ---------------------------------------------------------------------------
+// hawk_main config builder (TC-1)
+// ---------------------------------------------------------------------------
+
+/// Build an [`iris_mpc_common::config::Config`] for `server_main` from a
+/// `CpuNodeConfig`.  All values are hardcoded inline — no TOML files, no
+/// env-var loading.  AWS endpoints point at LocalStack.
+///
+/// `service_ports` and `service_outbound_ports` should be pre-allocated free
+/// ports (see `run_hawk!`).  The schema values are chosen so that
+/// `Config::get_cpu_db_schema()` returns the same string as
+/// `cpu_cfg.db_schema`, ensuring `server_main` and the test's `DbStores`
+/// share the same Postgres schema.
+pub fn make_hawk_config(
+    cpu_cfg: &CpuNodeConfig,
+    all_configs: &CpuConfigs,
+    service_ports: Vec<String>,
+    service_outbound_ports: Vec<String>,
+    env: &TestEnvironment,
+) -> iris_mpc_common::config::Config {
+    use ampc_server_utils::{AwsConfig, ServerCoordinationConfig};
+    use iris_mpc_common::config::{Config, DbConfig};
+
+    let db = DbConfig {
+        url: cpu_cfg.db_url.clone(),
+        migrate: true,
+        create: true,
+        load_parallelism: 8,
+    };
+    let healthcheck_ports: Vec<String> =
+        all_configs.iter().map(|c| c.healthcheck_port.to_string()).collect();
+
+    Config {
+        party_id: cpu_cfg.party_id,
+        environment: "dev".to_string(),
+
+        // CPU database; assign to `database` as well so server_main's
+        // iris_store (GPU) and cpu_store share the same schema — same
+        // pattern as e2e_hawk.rs (`config.database = config.cpu_database.clone()`).
+        database: Some(db.clone()),
+        cpu_database: Some(db),
+
+        // Schema names.  get_cpu_db_schema() = schema_name + hnsw_schema_name_suffix.
+        // Use an empty schema_name so the suffix alone equals cpu_cfg.db_schema
+        // ("cpu_party_{N}"), making server_main connect to the same tables as
+        // the test's DbStores.
+        schema_name: String::new(),
+        hnsw_schema_name_suffix: cpu_cfg.db_schema.clone(),
+        gpu_schema_name_suffix: cpu_cfg.db_schema.clone(),
+
+        // Checkpoint bucket (already created by init-localstack.sh).
+        graph_checkpoint_bucket_name: cpu_cfg.checkpoint_bucket.clone(),
+
+        // Coordination server — healthcheck ports drive TC-1 wait.
+        server_coordination: Some(ServerCoordinationConfig {
+            party_id: cpu_cfg.party_id,
+            node_hostnames: vec!["127.0.0.1".to_string(); 3],
+            healthcheck_ports,
+            image_name: String::new(),
+            heartbeat_interval_secs: 2,
+            heartbeat_initial_retries: 10,
+            http_query_retry_delay_ms: 1000,
+            startup_sync_timeout_secs: 300,
+        }),
+        service_ports,
+        service_outbound_ports,
+
+        // AWS — LocalStack endpoint + resources from init-localstack.sh.
+        aws: Some(AwsConfig {
+            endpoint: Some(env.s3_endpoint().to_string()),
+            region: Some("us-east-1".to_string()),
+        }),
+        requests_queue_url: format!(
+            "http://sqs.us-east-1.localhost.localstack.cloud:4566/000000000000/smpcv2-{}-dev.fifo",
+            cpu_cfg.party_id
+        ),
+        results_topic_arn: "arn:aws:sns:us-east-1:000000000000:iris-mpc-results.fifo".to_string(),
+        shares_bucket_name: "wf-smpcv2-dev-sns-requests".to_string(),
+        kms_key_arns: concat!(
+            r#"["arn:aws:kms:us-east-1:000000000000:key/00000000-0000-0000-0000-000000000000","#,
+            r#""arn:aws:kms:us-east-1:000000000000:key/00000000-0000-0000-0000-000000000001","#,
+            r#""arn:aws:kms:us-east-1:000000000000:key/00000000-0000-0000-0000-000000000002"]"#
+        )
+        .parse()
+        .expect("kms_key_arns parse"),
+
+        // WAL sync must be enabled so server_main calls sync_graph_mutations.
+        enable_modifications_sync: true,
+        enable_modifications_replay: false,
+
+        // Minimal settings for a WAL-only test run.
+        disable_persistence: true,
+        hnsw_disable_memory_persistence: true,
+        hawk_numa: false,
+        hnsw_param_ef_constr: 320,
+        hnsw_param_m: 256,
+        hnsw_param_ef_search: 256,
+        hnsw_param_ef_supermatch: 4000,
+
+        // Everything else: serde defaults (empty queues, disabled features, etc.)
+        ..serde_json::from_str("{}").expect("Config serde defaults")
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Per-party builder
 // ---------------------------------------------------------------------------
 
