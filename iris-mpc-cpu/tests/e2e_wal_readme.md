@@ -155,15 +155,14 @@ that carries just what each test needs.  Key fields:
 - `coordination_port` — port for the `ampc_server_utils` coordination server
 - `sidecar: SidecarTestConfig` — overridable sidecar settings
 
-Hardcoded loopback port arrays (must not conflict with each other):
+Loopback addresses are derived from `CpuNodeConfig` fields at runtime — no
+hardcoded address constants:
 
-```rust
-// hawk_main MPC network
-pub const HAWK_ADDRS: [&str; 3] = ["127.0.0.1:16000", "127.0.0.1:16100", "127.0.0.1:16200"];
+- **hawk_main** MPC network: `127.0.0.1:{service_port}` (19000–19002)
+- **sidecar_main** MPC network: `127.0.0.1:{sidecar_port}` (20000–20002)
 
-// sidecar_main MPC network (different ports)
-pub const SIDECAR_ADDRS: [&str; 3] = ["127.0.0.1:16010", "127.0.0.1:16110", "127.0.0.1:16210"];
-```
+The two port ranges must not overlap, and neither must conflict with the
+healthcheck ports (18000–18002) or the coordination ports (17000–17002).
 
 `SidecarTestConfig::min_mutations_per_cycle` defaults to **5** — tests seed at least
 that many WAL rows before starting the sidecar.
@@ -299,12 +298,12 @@ monitored.
 ```rust
 /// Spawn hawk_main for all 3 parties. Returns a JoinSet.
 /// All parties share the provided CancellationToken.
-/// Each party gets its own loopback network handle from HAWK_ADDRS.
+/// Each party's MPC address is 127.0.0.1:{CpuNodeConfig::service_port}.
 run_hawk!(configs, shutdown_ct)  ->  JoinSet<eyre::Result<()>>
 
 /// Spawn sidecar_main for all 3 parties. Returns a JoinSet.
-/// Each party gets its own loopback network handle from SIDECAR_ADDRS
-/// (different ports from HAWK_ADDRS to avoid bind conflicts when both run).
+/// Each party's MPC address is 127.0.0.1:{CpuNodeConfig::sidecar_port}
+/// (different ports from service_port to avoid bind conflicts when both run).
 run_sidecar!(configs, shutdown_ct)  ->  JoinSet<eyre::Result<()>>
 
 /// Cancel the token, drain the JoinSet, propagate any errors.
@@ -369,8 +368,8 @@ stop_and_join!(shutdown_ct, join_set)
 - **No GPU required** — `PlaintextStore` / plaintext graph format used for all DB setup
   and WAL seeding; the checkpoint blob format is `bincode([GraphMem; 2])`, store-agnostic
 - **MPC network required for all tests** — both hawk_main and sidecar_main require the
-  3-party loopback TCP network; loopback handles are built inline using hardcoded
-  localhost ports (`HAWK_ADDRS`, `SIDECAR_ADDRS`)
+  3-party loopback TCP network; loopback addresses are derived from
+  `CpuNodeConfig.service_port` (hawk) and `CpuNodeConfig.sidecar_port` (sidecar)
 - **Both services are called inline** — no subprocess spawning; both accept a
   `CancellationToken` and can be driven from a `JoinSet`
 - **TC-2 (sidecar) tests are fully implemented** — `run_sidecar!` is live; wal_102, 103, 104

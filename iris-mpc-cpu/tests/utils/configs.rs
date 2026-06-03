@@ -4,7 +4,7 @@
 //! defined here inline.  The only variable is the DB host, which differs
 //! between the `Local` (laptop) and `Docker` (CI) [`TestEnvironment`].
 //!
-//! # Port allocations (these must not conflict with HAWK_ADDRS / SIDECAR_ADDRS)
+//! # Port allocations (must not conflict with service_port 19000–19002 or sidecar_port 20000–20002)
 //!
 //! | Party | coordination_port | healthcheck_port |
 //! |-------|------------------|-----------------|

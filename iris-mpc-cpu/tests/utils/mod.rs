@@ -13,16 +13,6 @@ pub const COUNT_OF_PARTIES: usize = 3;
 /// Per-party configuration array.
 pub type CpuConfigs = [CpuNodeConfig; COUNT_OF_PARTIES];
 
-/// Hardcoded loopback ports for hawk_main's MPC network.
-/// These must not conflict with SIDECAR_ADDRS or the coordination ports.
-pub const HAWK_ADDRS: [&str; COUNT_OF_PARTIES] =
-    ["127.0.0.1:16000", "127.0.0.1:16100", "127.0.0.1:16200"];
-
-/// Hardcoded loopback ports for sidecar_main's MPC network.
-/// Different from HAWK_ADDRS so both can run in the same test process (wal_103).
-pub const SIDECAR_ADDRS: [&str; COUNT_OF_PARTIES] =
-    ["127.0.0.1:16010", "127.0.0.1:16110", "127.0.0.1:16210"];
-
 /// Per-party test configuration.
 ///
 /// This is a test-local struct rather than the production `iris_mpc_common::Config`

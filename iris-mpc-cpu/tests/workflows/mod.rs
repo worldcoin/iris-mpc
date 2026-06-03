@@ -19,8 +19,9 @@ pub use crate::utils::runner::TestRun;
 // can monitor for unexpected early task exit.
 //
 // hawk_main and sidecar_main each require a loopback MPC network.  They use
-// different port sets (HAWK_ADDRS vs SIDECAR_ADDRS) so both can run in the
-// same process during wal_103 without bind conflicts.
+// different ports (hawk uses CpuNodeConfig.service_port, sidecar uses
+// CpuNodeConfig.sidecar_port) so both can run in the same process during
+// wal_103 without bind conflicts.
 //
 // run_sidecar! is fully implemented (see below).
 // run_hawk! is fully implemented — all open questions resolved (see readme).
@@ -37,9 +38,9 @@ pub use crate::utils::runner::TestRun;
 /// A watcher task bridges the `CancellationToken` to an `Arc<Notify>` so
 /// that `stop_and_join!` call sites remain unchanged.
 ///
-/// Service ports and outbound ports are allocated dynamically (ephemeral
-/// OS ports) to avoid conflicts with `HAWK_ADDRS`, `SIDECAR_ADDRS`, and
-/// the hardcoded healthcheck ports (18000–18002).
+/// Service ports are taken from `CpuNodeConfig.service_port` (19000–19002)
+/// and must not conflict with the sidecar ports (20000–20002) or the
+/// hardcoded healthcheck ports (18000–18002).
 ///
 /// Returns a `JoinSet<eyre::Result<()>>` that can be polled in TC-1 to
 /// detect unexpected early exit.
@@ -111,8 +112,9 @@ macro_rules! run_hawk {
 
 /// Spawn `sidecar_main` for all 3 parties concurrently.
 ///
-/// Uses `SIDECAR_ADDRS` (different ports from `HAWK_ADDRS`) so hawk_main and
-/// sidecar_main can co-exist in the same test process during wal_103.
+/// Uses `CpuNodeConfig.sidecar_port` (127.0.0.1 + that port) so hawk_main and
+/// sidecar_main can co-exist in the same test process during wal_103 without
+/// bind conflicts.
 ///
 /// The sidecar's `GraphPg<Aby3Store>` connects to the same DB tables as the
 /// test's `GraphPg<PlaintextStore>` — the `VectorStore` type parameter is
@@ -131,9 +133,9 @@ macro_rules! run_hawk {
 macro_rules! run_sidecar {
     ($configs:expr, $shutdown:expr, $ctx:expr) => {{
         let mut join_set: tokio::task::JoinSet<eyre::Result<()>> = tokio::task::JoinSet::new();
-        let sidecar_addresses: Vec<String> = crate::utils::SIDECAR_ADDRS
+        let sidecar_addresses: Vec<String> = ($configs)
             .iter()
-            .map(|s| s.to_string())
+            .map(|c| format!("127.0.0.1:{}", c.sidecar_port))
             .collect();
 
         for config in ($configs).iter() {
