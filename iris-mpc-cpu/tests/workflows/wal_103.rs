@@ -68,6 +68,7 @@ impl TestRun for Wal103 {
         });
 
         builder.seed_all(&nodes).await?;
+        builder.seed_modifications_all(&nodes).await?;
 
         self.nodes = Some(nodes);
         Ok(())

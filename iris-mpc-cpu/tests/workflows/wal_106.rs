@@ -86,6 +86,7 @@ impl TestRun for Wal106 {
         });
 
         builder.seed_all(&nodes).await?;
+        builder.seed_modifications_all(&nodes).await?;
 
         self.nodes = Some(nodes);
         Ok(())
@@ -157,6 +158,7 @@ impl TestRun for Wal106 {
         });
 
         builder.seed_all(nodes).await?;
+        builder.seed_modifications_all(nodes).await?;
 
         // Phase 2: sidecar runs again.  Despite the desync, every party must reach
         // 3-party BLAKE3 consensus and insert a new checkpoint row anchored at mod_id=20.

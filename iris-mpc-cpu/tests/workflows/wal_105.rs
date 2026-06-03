@@ -84,6 +84,7 @@ impl TestRun for Wal105 {
         });
 
         builder.seed_all(&nodes).await?;
+        builder.seed_modifications_all(&nodes).await?;
 
         self.nodes = Some(nodes);
         Ok(())
@@ -137,6 +138,7 @@ impl TestRun for Wal105 {
         });
 
         builder.seed_all(nodes).await?;
+        builder.seed_modifications_all(nodes).await?;
 
         // Phase 2: hawk_main starts.  It should discover the sidecar's checkpoint at
         // mod_id=100 as the latest base ("V4 path") and roll forward only mutations
