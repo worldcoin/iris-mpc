@@ -23,7 +23,7 @@ env:
   - name: SMPC__CPU_DATABASE__SCHEMA
     value: "SMPC_graph_persistence_test_0"
   - name: SMPC__GRAPH_CHECKPOINT_BUCKET_NAME
-    value: "ampc-hnsw-graph-store-node-0-prod-eu-central-1"
+    value: "ampc-hnsw-graph-store-node-0-dev-eu-central-1"
 
 initContainer:
   enabled: true
