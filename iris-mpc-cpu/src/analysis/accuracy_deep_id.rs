@@ -207,26 +207,10 @@ pub fn perturb_nibbles<R: Rng>(v: &Int4Vector, p: f64, rng: &mut R) -> Int4Vecto
         if rng.gen::<f64>() < p {
             let delta: i8 = if rng.gen::<bool>() { 1 } else { -1 };
             let new = (out.get(i) + delta).clamp(-8, 7);
-            set_nibble(&mut out, i, new);
+            out.set(i, new);
         }
     }
     out
-}
-
-fn set_nibble(v: &mut Int4Vector, i: usize, new: i8) {
-    let byte = v.packed[i / 2];
-    let n = encode_nibble(new);
-    v.packed[i / 2] = if i.is_multiple_of(2) {
-        (byte & 0xF0) | n
-    } else {
-        (byte & 0x0F) | (n << 4)
-    };
-}
-
-#[inline]
-fn encode_nibble(value: i8) -> u8 {
-    debug_assert!((-8..=7).contains(&value));
-    (value as u8) & 0x0F
 }
 
 /* ----------------------------- Analysis ----------------------------- */
