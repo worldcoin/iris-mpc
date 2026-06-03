@@ -22,8 +22,10 @@ pub async fn wait_for_all_ready(
 ) -> eyre::Result<()> {
     // Build per-party ServerCoordinationConfig using the shared healthcheck ports
     // from all configs (they form the cross-party view each service needs).
-    let healthcheck_ports: Vec<String> =
-        configs.iter().map(|c| c.healthcheck_port.to_string()).collect();
+    let healthcheck_ports: Vec<String> = configs
+        .iter()
+        .map(|c| c.healthcheck_port.to_string())
+        .collect();
     let node_hostnames = vec!["127.0.0.1".to_string(); COUNT_OF_PARTIES];
 
     let ready_futures = configs.iter().map(|config| {

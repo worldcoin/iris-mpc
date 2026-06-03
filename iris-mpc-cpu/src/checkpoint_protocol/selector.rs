@@ -41,7 +41,7 @@ impl BaseSelector for StrictLatest {
         let mine = my_recent.first()?;
         for peer in peer_lists {
             let theirs = peer.first()?;
-            if theirs != mine {
+            if !theirs.same_checkpoint(mine) {
                 return None;
             }
         }
@@ -66,7 +66,11 @@ impl BaseSelector for MostRecentCommon {
     ) -> Option<CheckpointMeta> {
         my_recent
             .iter()
-            .find(|cp| peer_lists.iter().all(|peer| peer.iter().any(|p| p == *cp)))
+            .find(|cp| {
+                peer_lists
+                    .iter()
+                    .all(|peer| peer.iter().any(|p| p.same_checkpoint(cp)))
+            })
             .cloned()
     }
 }
@@ -173,5 +177,74 @@ mod tests {
         let peers = vec![vec![cp(5)], vec![cp(4)]];
         // cp(5): peer 1 lacks → skip. cp(4): peer 0 lacks → skip. None.
         assert_eq!(MostRecentCommon.pick(&mine, &peers), None);
+    }
+
+    /// Cross-party checkpoint_id divergence: each party's DB assigns a
+    /// different auto-increment id for the same logical checkpoint.
+    /// The selector must still find agreement via blake3_hash.
+    #[test]
+    fn common_cross_party_checkpoint_id_differs() {
+        // All three parties have the same checkpoint but with different DB ids.
+        let mine = vec![CheckpointMeta {
+            checkpoint_id: 1,
+            s3_key: "cp/5".into(),
+            last_indexed_iris_id: 0,
+            last_indexed_modification_id: 50,
+            graph_mutation_id: Some(500),
+            blake3_hash: "hash_5".into(),
+            graph_version: 1,
+        }];
+        let peer0 = vec![CheckpointMeta {
+            checkpoint_id: 3, // different DB id
+            s3_key: "cp/5".into(),
+            last_indexed_iris_id: 0,
+            last_indexed_modification_id: 50,
+            graph_mutation_id: Some(500),
+            blake3_hash: "hash_5".into(),
+            graph_version: 1,
+        }];
+        let peer1 = vec![CheckpointMeta {
+            checkpoint_id: 7, // different DB id
+            s3_key: "cp/5".into(),
+            last_indexed_iris_id: 0,
+            last_indexed_modification_id: 50,
+            graph_mutation_id: Some(500),
+            blake3_hash: "hash_5".into(),
+            graph_version: 1,
+        }];
+        let result = MostRecentCommon.pick(&mine, &vec![peer0, peer1]);
+        assert!(
+            result.is_some(),
+            "should find common checkpoint despite differing checkpoint_ids"
+        );
+        assert_eq!(result.unwrap().blake3_hash, "hash_5");
+    }
+
+    /// Same cross-party divergence test for StrictLatest.
+    #[test]
+    fn strict_cross_party_checkpoint_id_differs() {
+        let mine = vec![CheckpointMeta {
+            checkpoint_id: 1,
+            s3_key: "cp/5".into(),
+            last_indexed_iris_id: 0,
+            last_indexed_modification_id: 50,
+            graph_mutation_id: Some(500),
+            blake3_hash: "hash_5".into(),
+            graph_version: 1,
+        }];
+        let peer0 = vec![CheckpointMeta {
+            checkpoint_id: 3,
+            s3_key: "cp/5".into(),
+            last_indexed_iris_id: 0,
+            last_indexed_modification_id: 50,
+            graph_mutation_id: Some(500),
+            blake3_hash: "hash_5".into(),
+            graph_version: 1,
+        }];
+        let result = StrictLatest.pick(&mine, &vec![peer0]);
+        assert!(
+            result.is_some(),
+            "should agree despite differing checkpoint_ids"
+        );
     }
 }

@@ -247,8 +247,10 @@ pub struct CpuNodes(pub [CpuNode; 3]);
 impl CpuNodes {
     pub async fn new(configs: &CpuConfigs) -> eyre::Result<Self> {
         // Build shared vectors from all 3 configs.
-        let healthcheck_ports: Vec<String> =
-            configs.iter().map(|c| c.healthcheck_port.to_string()).collect();
+        let healthcheck_ports: Vec<String> = configs
+            .iter()
+            .map(|c| c.healthcheck_port.to_string())
+            .collect();
         let node_hostnames = vec!["127.0.0.1".to_string(); COUNT_OF_PARTIES];
 
         // Build one ServerCoordinationConfig per party; rest of the fields use

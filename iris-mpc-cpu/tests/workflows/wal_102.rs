@@ -97,7 +97,9 @@ impl TestRun for Wal102 {
         // Materialise the same WAL rows in the test process, hash the result,
         // and verify it matches every party's stored BLAKE3.
         let reference_hash = nodes.0[0].store.compute_reference_hash().await?;
-        nodes.assert_checkpoint_hashes_match_reference(&reference_hash).await?;
+        nodes
+            .assert_checkpoint_hashes_match_reference(&reference_hash)
+            .await?;
 
         Ok(())
     }

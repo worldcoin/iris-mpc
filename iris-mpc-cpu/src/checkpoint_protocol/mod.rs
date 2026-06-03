@@ -58,6 +58,26 @@ pub struct CheckpointMeta {
     pub graph_version: i32,
 }
 
+impl CheckpointMeta {
+    /// Returns `true` if `self` and `other` represent the same logical
+    /// checkpoint — i.e. identical content.
+    ///
+    /// **Do not use `PartialEq` for cross-party comparisons.**
+    /// `checkpoint_id` is a DB-local auto-increment primary key; each party's
+    /// database independently assigns its own value for the same checkpoint, so
+    /// two `CheckpointMeta` objects that refer to the same snapshot will have
+    /// different `checkpoint_id` values and would incorrectly compare unequal.
+    ///
+    /// `blake3_hash` is the cryptographic content hash — it is always identical
+    /// across parties for the same checkpoint.  `last_indexed_modification_id`
+    /// and `graph_version` are included as a cheap sanity cross-check.
+    pub fn same_checkpoint(&self, other: &Self) -> bool {
+        self.blake3_hash == other.blake3_hash
+            && self.last_indexed_modification_id == other.last_indexed_modification_id
+            && self.graph_version == other.graph_version
+    }
+}
+
 /// Inclusive upper bound on `graph_mutation_id` to apply during materialization.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FreezeHeight(pub GraphMutationId);

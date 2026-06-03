@@ -119,7 +119,9 @@ impl TestRun for Wal103 {
         // Materialise the full WAL (mutations 51..=100) in the test process
         // and verify the hash matches the sidecar's stored checkpoint hash.
         let reference_hash = nodes.0[0].store.compute_reference_hash().await?;
-        nodes.assert_checkpoint_hashes_match_reference(&reference_hash).await?;
+        nodes
+            .assert_checkpoint_hashes_match_reference(&reference_hash)
+            .await?;
 
         Ok(())
     }

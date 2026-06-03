@@ -91,16 +91,10 @@ async fn wait_for_localstack(endpoint_url: &str) -> Result<()> {
     let sm = SecretsManagerClient::from_conf(sm_config);
 
     let secret_id = format!("{PRIVATE_KEY_SECRET_PREFIX}-0");
-    let deadline =
-        std::time::Instant::now() + std::time::Duration::from_secs(LOCALSTACK_WAIT_SECS);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(LOCALSTACK_WAIT_SECS);
 
     loop {
-        match sm
-            .get_secret_value()
-            .secret_id(&secret_id)
-            .send()
-            .await
-        {
+        match sm.get_secret_value().secret_id(&secret_id).send().await {
             Ok(_) => {
                 tracing::info!(%endpoint_url, "LocalStack ready (secrets initialised)");
                 return Ok(());
@@ -135,14 +129,12 @@ pub async fn rotate_keys(
     public_key_bucket_name: Option<String>,
     endpoint_url: Option<String>,
 ) -> Result<()> {
-    let bucket_name =
-        public_key_bucket_name.unwrap_or_else(|| PUBLIC_KEY_BUCKET.to_string());
+    let bucket_name = public_key_bucket_name.unwrap_or_else(|| PUBLIC_KEY_BUCKET.to_string());
 
     // Generate a fresh key pair from a random seed.
     let mut seedbuf = [0u8; 32];
     thread_rng().fill(&mut seedbuf);
-    let (public_key, private_key) =
-        curve25519xsalsa20poly1305::keypair_from_seed(&Seed(seedbuf));
+    let (public_key, private_key) = curve25519xsalsa20poly1305::keypair_from_seed(&Seed(seedbuf));
 
     let pub_key_str = STANDARD.encode(public_key);
     let priv_key_str = STANDARD.encode(private_key);
