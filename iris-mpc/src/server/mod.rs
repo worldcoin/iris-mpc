@@ -233,14 +233,16 @@ pub async fn server_main(config: Config) -> Result<()> {
             Ok(r) => r,
             Err(e) => {
                 // don't block server_main if this fails
-                tracing::warn!("failed to parse sidecar config: {e}");
+                tracing::error!("failed to parse sidecar config: {e}");
                 return Ok(());
             }
         };
 
-        let Some(sc_config) = sidecar_config.config else {
+        let Some(mut sc_config) = sidecar_config.config else {
             return Ok(());
         };
+        // Keep S3 prefix / metric labels aligned with the network identity.
+        sc_config.party_id = sidecar_party_id;
 
         let network_args = NetworkHandleArgs {
             party_index: sidecar_party_id,
@@ -253,7 +255,7 @@ pub async fn server_main(config: Config) -> Result<()> {
         };
         let mut network_handle = build_network_handle(network_args, shutdown_ct.clone()).await?;
         sidecar_main(
-            sc_config.clone(),
+            sc_config,
             &graph_store,
             &sidecar_s3,
             &mut network_handle,
