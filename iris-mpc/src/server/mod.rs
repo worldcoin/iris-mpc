@@ -237,7 +237,7 @@ pub async fn server_main(config: Config) -> Result<()> {
         let sidecar_config = match SidecarConfigWrapper::load_config("SIDECAR") {
             Ok(r) => r,
             Err(e) => {
-                tracing::warn!("failed to parse sidecar config: {e}");
+                tracing::error!("failed to parse sidecar config: {e}");
                 return Ok(());
             }
         };
