@@ -67,4 +67,4 @@ initContainer:
 attachSecurityGroupPolicy:
   enabled: true
   groupIds:
-    - TODO_INFRA_SG_SIDECAR_1
+    - sg-050230526f2afc0eb
