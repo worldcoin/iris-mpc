@@ -241,11 +241,13 @@ pub async fn server_main(config: Config) -> Result<()> {
                 return Ok(());
             }
         };
-        let Some(sc_config) = sidecar_config.config else {
+        let Some(mut sc_config) = sidecar_config.config else {
             return Ok(());
         };
 
         let config = config.read().await;
+        // Keep S3 prefix / metric labels aligned with the network identity.
+        sc_config.party_id = config.party_id;
         async move {
             let result: Result<()> = async {
                 let aws_clients = AwsClients::new(&config)
@@ -269,7 +271,7 @@ pub async fn server_main(config: Config) -> Result<()> {
                     .await
                     .wrap_err("failed to build network handle")?;
                 sidecar_main(
-                    sc_config.clone(),
+                    sc_config,
                     &graph_store,
                     &aws_clients.checkpoint_s3_client,
                     &mut network_handle,
