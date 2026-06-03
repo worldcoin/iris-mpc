@@ -231,7 +231,8 @@ pub async fn server_main(config: Config) -> Result<()> {
         r
     };
 
-    let sidecar_future = {
+    let sidecar_future = async move {
+        let config = config.read().await;
         // ensure the sidecar specific setup code only runs if sidecar is enabled in the config
         // if sidecar returns an error, log it and return Ok so that it doesn't interfere with server_main()
         let sidecar_config = match SidecarConfigWrapper::load_config("SIDECAR") {
@@ -245,48 +246,46 @@ pub async fn server_main(config: Config) -> Result<()> {
             return Ok(());
         };
 
-        let config = config.read().await;
         // Keep S3 prefix / metric labels aligned with the network identity.
         sc_config.party_id = config.party_id;
-        async move {
-            let result: Result<()> = async {
-                let aws_clients = AwsClients::new(&config)
-                    .await
-                    .wrap_err("failed to create AWS clients")?;
-                // the sidecar needs its own graph store and this function transforms config to the
-                // appropriate schema name when creating the pg client
-                let (_iris_store, graph_store) = prepare_stores(&config)
-                    .await
-                    .wrap_err("failed to prepare stores")?;
-                let network_args = NetworkHandleArgs {
-                    party_index: config.party_id,
-                    addresses: sidecar_config.addresses.clone(),
-                    outbound_addresses: sidecar_config.addresses,
-                    connection_parallelism: sidecar_config.connection_parallelism,
-                    request_parallelism: sidecar_config.request_parallelism,
-                    sessions_per_request: 1, // these aren't used by the sidecar
-                    tls: config.tls.clone(),
-                };
-                let mut network_handle = build_network_handle(network_args, sidecar_ct.clone())
-                    .await
-                    .wrap_err("failed to build network handle")?;
-                sidecar_main(
-                    sc_config,
-                    &graph_store,
-                    &aws_clients.checkpoint_s3_client,
-                    &mut network_handle,
-                    sidecar_ct,
-                )
+
+        let result: Result<()> = async {
+            let aws_clients = AwsClients::new(&config)
                 .await
-                .wrap_err("sidecar_main exited with error")?;
-                Ok(())
-            }
-            .await;
-            if let Err(e) = result {
-                tracing::error!("sidecar: {e:#}");
-            }
+                .wrap_err("failed to create AWS clients")?;
+            // the sidecar needs its own graph store and this function transforms config to the
+            // appropriate schema name when creating the pg client
+            let (_iris_store, graph_store) = prepare_stores(&config)
+                .await
+                .wrap_err("failed to prepare stores")?;
+            let network_args = NetworkHandleArgs {
+                party_index: config.party_id,
+                addresses: sidecar_config.addresses.clone(),
+                outbound_addresses: sidecar_config.addresses,
+                connection_parallelism: sidecar_config.connection_parallelism,
+                request_parallelism: sidecar_config.request_parallelism,
+                sessions_per_request: 1, // these aren't used by the sidecar
+                tls: config.tls.clone(),
+            };
+            let mut network_handle = build_network_handle(network_args, sidecar_ct.clone())
+                .await
+                .wrap_err("failed to build network handle")?;
+            sidecar_main(
+                sc_config,
+                &graph_store,
+                &aws_clients.checkpoint_s3_client,
+                &mut network_handle,
+                sidecar_ct,
+            )
+            .await
+            .wrap_err("sidecar_main exited with error")?;
             Ok(())
         }
+        .await;
+        if let Err(e) = result {
+            tracing::error!("sidecar: {e:#}");
+        }
+        Ok(())
     };
 
     tokio::try_join!(main_future, sidecar_future)?;
