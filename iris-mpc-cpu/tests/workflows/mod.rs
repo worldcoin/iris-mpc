@@ -50,10 +50,11 @@ use crate::utils::{CpuConfigs, HAWK_ADDRS, SIDECAR_ADDRS};
 #[macro_export]
 macro_rules! run_hawk {
     ($configs:expr, $shutdown:expr) => {{
-        let mut join_set: tokio::task::JoinSet<eyre::Result<()>> =
-            tokio::task::JoinSet::new();
-        let hawk_addresses: Vec<String> =
-            crate::utils::HAWK_ADDRS.iter().map(|s| s.to_string()).collect();
+        let mut join_set: tokio::task::JoinSet<eyre::Result<()>> = tokio::task::JoinSet::new();
+        let hawk_addresses: Vec<String> = crate::utils::HAWK_ADDRS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
 
         for config in ($configs).iter() {
             let config = config.clone();

@@ -14,7 +14,6 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     run_hawk, run_sidecar, stop_and_join,
     utils::{
-        checkpoint_seeder::CheckpointSeeder,
         cpu_node::{CpuNodes, WalAssertions},
         runner::{CpuTestContext, TestRun},
         wait_conditions::{wait_for_all_ready, wait_for_new_checkpoint},
@@ -42,15 +41,15 @@ impl TestRun for Wal103 {
         nodes.truncate_checkpoint_tables().await?;
 
         // Base checkpoint at modification_id = 50.
-        CheckpointSeeder::new(50, CHECKPOINT_AT_MOD_ID)
-            .seed_all(&nodes, &ctx.configs)
+        nodes
+            .seed_all(CHECKPOINT_AT_MOD_ID, CHECKPOINT_AT_MOD_ID)
             .await?;
 
         // WAL delta 51..=100.
-        let builder = (CHECKPOINT_AT_MOD_ID + 1..=WAL_UP_TO_MOD_ID).fold(
-            WalMutationBuilder::new(),
-            |b, id| b.add_node(id, (id - CHECKPOINT_AT_MOD_ID - 1) as u32, 1),
-        );
+        let builder = (CHECKPOINT_AT_MOD_ID + 1..=WAL_UP_TO_MOD_ID)
+            .fold(WalMutationBuilder::new(), |b, id| {
+                b.add_node(id, (id - CHECKPOINT_AT_MOD_ID - 1) as u32, 1)
+            });
         builder.seed_all(&nodes).await?;
 
         self.nodes = Some(nodes);
@@ -63,7 +62,9 @@ impl TestRun for Wal103 {
             .assert_wal_row_count(DELTA_SIZE)
             .assert_checkpoint_count(1)
             .assert_latest_checkpoint_mod_id(CHECKPOINT_AT_MOD_ID);
-        nodes.apply_assertions(&[pre.clone(), pre.clone(), pre]).await
+        nodes
+            .apply_assertions(&[pre.clone(), pre.clone(), pre])
+            .await
     }
 
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
@@ -75,12 +76,8 @@ impl TestRun for Wal103 {
         {
             let shutdown = CancellationToken::new();
             let mut hawk_set = run_hawk!(ctx.configs, shutdown.clone());
-            let res = wait_for_all_ready(
-                &ctx.configs,
-                &mut hawk_set,
-                Duration::from_secs(60),
-            )
-            .await;
+            let res =
+                wait_for_all_ready(&ctx.configs, &mut hawk_set, Duration::from_secs(60)).await;
             stop_and_join!(shutdown, hawk_set);
             res?;
         }
@@ -112,7 +109,9 @@ impl TestRun for Wal103 {
             .assert_checkpoint_count(2)
             .assert_latest_checkpoint_mod_id(WAL_UP_TO_MOD_ID)
             .assert_s3_object_exists(true);
-        nodes.apply_assertions(&[post.clone(), post.clone(), post]).await?;
+        nodes
+            .apply_assertions(&[post.clone(), post.clone(), post])
+            .await?;
 
         // All 3 parties must agree on the BLAKE3 hash.
         nodes.assert_checkpoint_hashes_agree().await?;

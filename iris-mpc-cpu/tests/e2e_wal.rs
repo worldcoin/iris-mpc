@@ -17,9 +17,9 @@ use std::sync::{
     LazyLock,
 };
 
+use crate::utils::runner::TestRun;
 use eyre::bail;
 use serial_test::serial;
-
 use workflows::{
     wal_100::Wal100, wal_101::Wal101, wal_102::Wal102, wal_103::Wal103, wal_104::Wal104,
 };

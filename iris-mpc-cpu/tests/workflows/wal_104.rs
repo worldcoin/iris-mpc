@@ -15,17 +15,16 @@
 /// Termination condition: TC-2 (wait_for_new_checkpoint) per run.
 use std::time::Duration;
 
+use iris_mpc_cpu::graph_checkpoint::PruningMode;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     run_sidecar, stop_and_join,
     utils::{
-        checkpoint_seeder::CheckpointSeeder,
         cpu_node::{CpuNodes, WalAssertions},
         runner::{CpuTestContext, TestRun},
         wait_conditions::wait_for_new_checkpoint,
         wal_builder::WalMutationBuilder,
-        PruningModeConfig,
     },
 };
 
@@ -44,7 +43,7 @@ impl Wal104 {
     async fn run_cycle(
         &self,
         ctx: &CpuTestContext,
-        pruning_mode: PruningModeConfig,
+        pruning_mode: PruningMode,
         baseline: usize,
     ) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
@@ -57,13 +56,8 @@ impl Wal104 {
 
         let shutdown = CancellationToken::new();
         let mut sidecar_set = run_sidecar!(configs, shutdown.clone());
-        let res = wait_for_new_checkpoint(
-            nodes,
-            &ctx.configs,
-            baseline,
-            Duration::from_secs(120),
-        )
-        .await;
+        let res =
+            wait_for_new_checkpoint(nodes, &ctx.configs, baseline, Duration::from_secs(120)).await;
         stop_and_join!(shutdown, sidecar_set);
         res
     }
@@ -75,7 +69,7 @@ impl TestRun for Wal104 {
         nodes.truncate_checkpoint_tables().await?;
 
         // Seed a base checkpoint (anchor = 0) and 10 WAL mutations.
-        CheckpointSeeder::new(0, 0).seed_all(&nodes, &ctx.configs).await?;
+        nodes.seed_all(0, 0).await?;
 
         let builder = (1i64..=10).fold(WalMutationBuilder::new(), |b, id| {
             b.add_node(id, (id - 1) as u32, 1)
@@ -91,19 +85,22 @@ impl TestRun for Wal104 {
         let pre = WalAssertions::new()
             .assert_checkpoint_count(1)
             .assert_wal_row_count(10);
-        nodes.apply_assertions(&[pre.clone(), pre.clone(), pre]).await
+        nodes
+            .apply_assertions(&[pre.clone(), pre.clone(), pre])
+            .await
     }
 
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
         // Run 1: no pruning — both the seeded checkpoint and the new one remain.
-        self.run_cycle(ctx, PruningModeConfig::None, 1).await?;
+        self.run_cycle(ctx, PruningMode::None, 1).await?;
 
         // Run 2: prune non-archival older checkpoints — seeded + run-1 checkpoints deleted.
         // The new checkpoint (from run 2) becomes the only one after pruning.
-        self.run_cycle(ctx, PruningModeConfig::OlderNonArchival, 2).await?;
+        self.run_cycle(ctx, PruningMode::OlderNonArchival, 2)
+            .await?;
 
         // Run 3: prune all older — only the latest checkpoint remains.
-        self.run_cycle(ctx, PruningModeConfig::AllOlder, 2).await?;
+        self.run_cycle(ctx, PruningMode::AllOlder, 2).await?;
 
         Ok(())
     }
@@ -115,7 +112,9 @@ impl TestRun for Wal104 {
         let post = WalAssertions::new()
             .assert_checkpoint_count(1)
             .assert_s3_object_exists(true);
-        nodes.apply_assertions(&[post.clone(), post.clone(), post]).await?;
+        nodes
+            .apply_assertions(&[post.clone(), post.clone(), post])
+            .await?;
 
         nodes.assert_checkpoint_hashes_agree().await?;
 

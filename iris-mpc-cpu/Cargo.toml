@@ -79,6 +79,7 @@ criterion = { version = "0.5.1", features = ["async_tokio"] }
 rayon.workspace = true
 num_cpus = "1.16.0"
 aws-config.workspace = true
+serial_test.workspace = true
 
 [features]
 db_dependent = []

@@ -13,7 +13,6 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     run_hawk, stop_and_join,
     utils::{
-        checkpoint_seeder::CheckpointSeeder,
         cpu_node::{CpuNodes, WalAssertions},
         runner::{CpuTestContext, TestRun},
         wait_conditions::wait_for_all_ready,
@@ -39,17 +38,16 @@ impl TestRun for Wal101 {
     async fn setup(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = CpuNodes::new(&ctx.configs).await?;
         nodes.truncate_checkpoint_tables().await?;
-
         // Seed base checkpoint anchored at modification_id = 50.
-        CheckpointSeeder::new(50, CHECKPOINT_AT_MOD_ID)
-            .seed_all(&nodes, &ctx.configs)
+        nodes
+            .seed_all(CHECKPOINT_AT_MOD_ID, CHECKPOINT_AT_MOD_ID)
             .await?;
 
         // Seed WAL mutations 51..=100 — the delta hawk_main will roll forward.
-        let builder = (CHECKPOINT_AT_MOD_ID + 1..=WAL_UP_TO_MOD_ID).fold(
-            WalMutationBuilder::new(),
-            |b, id| b.add_node(id, (id - CHECKPOINT_AT_MOD_ID - 1) as u32, 1),
-        );
+        let builder = (CHECKPOINT_AT_MOD_ID + 1..=WAL_UP_TO_MOD_ID)
+            .fold(WalMutationBuilder::new(), |b, id| {
+                b.add_node(id, (id - CHECKPOINT_AT_MOD_ID - 1) as u32, 1)
+            });
         builder.seed_all(&nodes).await?;
 
         self.nodes = Some(nodes);
@@ -63,18 +61,16 @@ impl TestRun for Wal101 {
             .assert_max_modification_id(WAL_UP_TO_MOD_ID)
             .assert_checkpoint_count(1)
             .assert_latest_checkpoint_mod_id(CHECKPOINT_AT_MOD_ID);
-        nodes.apply_assertions(&[pre.clone(), pre.clone(), pre]).await
+        nodes
+            .apply_assertions(&[pre.clone(), pre.clone(), pre])
+            .await
     }
 
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
         let shutdown = CancellationToken::new();
         let mut hawk_set = run_hawk!(ctx.configs, shutdown.clone());
-        let ready_res = wait_for_all_ready(
-            &ctx.configs,
-            &mut hawk_set,
-            Duration::from_secs(60),
-        )
-        .await;
+        let ready_res =
+            wait_for_all_ready(&ctx.configs, &mut hawk_set, Duration::from_secs(60)).await;
         stop_and_join!(shutdown, hawk_set);
         ready_res
     }
@@ -87,7 +83,9 @@ impl TestRun for Wal101 {
             .assert_max_modification_id(WAL_UP_TO_MOD_ID)
             .assert_checkpoint_count(1)
             .assert_latest_checkpoint_mod_id(CHECKPOINT_AT_MOD_ID);
-        nodes.apply_assertions(&[post.clone(), post.clone(), post]).await
+        nodes
+            .apply_assertions(&[post.clone(), post.clone(), post])
+            .await
     }
 
     async fn teardown(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {

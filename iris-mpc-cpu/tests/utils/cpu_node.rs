@@ -12,7 +12,6 @@ use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 use iris_mpc_cpu::hnsw::graph::graph_store::{GraphCheckpointRow, GraphPg};
 use iris_mpc_cpu::hnsw::GraphMem;
 use iris_mpc_cpu::utils::serialization::types::graph_v4::GraphV4;
-use itertools::izip;
 
 /// Per-party database handles for test setup and post-condition assertions.
 ///
@@ -128,9 +127,9 @@ impl CpuNode {
         &self,
         last_iris_id: i64,
         last_modification_id: i64,
-        bucket: &str,
-        party_id: usize,
     ) -> eyre::Result<GraphCheckpointRow> {
+        let bucket = &self.config.checkpoint_bucket;
+        let party_id = self.config.party_id;
         let graph_mem = GraphMem::<IrisVectorId>::new();
         let graph_v4 = GraphV4::from(graph_mem);
         let bytes = bincode::serialize(&graph_v4)?;
@@ -320,31 +319,18 @@ impl CpuNodes {
     }
 
     /// Seed a genesis checkpoint for all 3 parties concurrently.
+    ///
+    /// Each node pulls its own `checkpoint_bucket` and `party_id` from its
+    /// internal config — callers do not need to pass a `CpuConfigs`.
     pub async fn seed_all(
         &self,
-        configs: &CpuConfigs,
         last_iris_id: i64,
         last_modification_id: i64,
     ) -> eyre::Result<[GraphCheckpointRow; 3]> {
         let (r0, r1, r2) = tokio::try_join!(
-            self.0[0].seed_party(
-                last_iris_id,
-                last_modification_id,
-                &configs[0].checkpoint_bucket,
-                configs[0].party_id
-            ),
-            self.0[1].seed_party(
-                last_iris_id,
-                last_modification_id,
-                &configs[1].checkpoint_bucket,
-                configs[1].party_id
-            ),
-            self.0[2].seed_party(
-                last_iris_id,
-                last_modification_id,
-                &configs[2].checkpoint_bucket,
-                configs[2].party_id
-            ),
+            self.0[0].seed_party(last_iris_id, last_modification_id),
+            self.0[1].seed_party(last_iris_id, last_modification_id),
+            self.0[2].seed_party(last_iris_id, last_modification_id),
         )?;
         Ok([r0, r1, r2])
     }
@@ -400,5 +386,4 @@ impl WalAssertions {
         self.s3_object_exists = Some(exists);
         self
     }
-
 }

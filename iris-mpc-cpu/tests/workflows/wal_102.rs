@@ -43,10 +43,9 @@ impl TestRun for Wal102 {
 
         // No base checkpoint — sidecar starts from scratch.
         // Seed AddNode mutations 1..=10.
-        let builder = (1..=WAL_MUTATION_COUNT)
-            .fold(WalMutationBuilder::new(), |b, id| {
-                b.add_node(id, (id - 1) as u32, 1)
-            });
+        let builder = (1..=WAL_MUTATION_COUNT).fold(WalMutationBuilder::new(), |b, id| {
+            b.add_node(id, (id - 1) as u32, 1)
+        });
         builder.seed_all(&nodes).await?;
 
         self.nodes = Some(nodes);
@@ -59,7 +58,9 @@ impl TestRun for Wal102 {
             .assert_wal_row_count(WAL_MUTATION_COUNT as usize)
             .assert_max_modification_id(WAL_MUTATION_COUNT)
             .assert_checkpoint_count(0);
-        nodes.apply_assertions(&[pre.clone(), pre.clone(), pre]).await
+        nodes
+            .apply_assertions(&[pre.clone(), pre.clone(), pre])
+            .await
     }
 
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
@@ -86,7 +87,9 @@ impl TestRun for Wal102 {
             .assert_checkpoint_count(1)
             .assert_latest_checkpoint_mod_id(WAL_MUTATION_COUNT)
             .assert_s3_object_exists(true);
-        nodes.apply_assertions(&[post.clone(), post.clone(), post]).await?;
+        nodes
+            .apply_assertions(&[post.clone(), post.clone(), post])
+            .await?;
 
         // All 3 parties must agree on the BLAKE3 hash.
         nodes.assert_checkpoint_hashes_agree().await?;

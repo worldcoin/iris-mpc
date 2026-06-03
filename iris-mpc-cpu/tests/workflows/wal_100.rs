@@ -40,18 +40,16 @@ impl TestRun for Wal100 {
         let zero = WalAssertions::new()
             .assert_wal_row_count(0)
             .assert_checkpoint_count(0);
-        nodes.apply_assertions(&[zero.clone(), zero.clone(), zero]).await
+        nodes
+            .apply_assertions(&[zero.clone(), zero.clone(), zero])
+            .await
     }
 
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
         let shutdown = CancellationToken::new();
         let mut hawk_set = run_hawk!(ctx.configs, shutdown.clone());
-        let ready_res = wait_for_all_ready(
-            &ctx.configs,
-            &mut hawk_set,
-            Duration::from_secs(60),
-        )
-        .await;
+        let ready_res =
+            wait_for_all_ready(&ctx.configs, &mut hawk_set, Duration::from_secs(60)).await;
         stop_and_join!(shutdown, hawk_set);
         ready_res
     }
@@ -61,7 +59,9 @@ impl TestRun for Wal100 {
         let expected = WalAssertions::new()
             .assert_wal_row_count(0)
             .assert_checkpoint_count(0);
-        nodes.apply_assertions(&[expected.clone(), expected.clone(), expected]).await
+        nodes
+            .apply_assertions(&[expected.clone(), expected.clone(), expected])
+            .await
     }
 
     async fn teardown(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
