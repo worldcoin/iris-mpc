@@ -98,7 +98,7 @@ impl WalMutationBuilder {
     ///
     /// For each entry serializes `BothEyes<Vec<GraphMutation<IrisVectorId>>>` with
     /// bincode and calls `graph.upsert_hawk_graph_mutations(tx, mod_id, bytes)`.
-    pub async fn seed(&self, graph: &GraphPg<PlaintextStore>) -> eyre::Result<()> {
+    pub async fn insert_mutations(&self, graph: &GraphPg<PlaintextStore>) -> eyre::Result<()> {
         for (modification_id, mutation) in &self.entries {
             let both_eyes: BothEyes<Vec<GraphMutation<IrisVectorId>>> =
                 [vec![mutation.clone()], vec![mutation.clone()]];
@@ -113,9 +113,9 @@ impl WalMutationBuilder {
     }
 
     /// Convenience: seed the same mutations into all 3 parties' stores.
-    pub async fn seed_all(&self, nodes: &CpuNodes) -> eyre::Result<()> {
+    pub async fn insert_mutations_all(&self, nodes: &CpuNodes) -> eyre::Result<()> {
         for node in &nodes.0 {
-            self.seed(&node.store.graph).await?;
+            self.insert_mutations(&node.store.graph).await?;
         }
         Ok(())
     }

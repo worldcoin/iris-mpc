@@ -61,9 +61,6 @@ impl TestRun for Wal106 {
         let nodes = CpuNodes::new(&ctx.configs).await?;
         nodes.truncate_checkpoint_tables().await?;
 
-        // Seed genesis checkpoint anchored at mod_id = 0.
-        nodes.seed_all(SEED_MOD_ID, SEED_MOD_ID).await?;
-
         // Seed WAL mutations 1..=10.
         let builder = (1i64..=FIRST_BATCH_UP_TO).fold(WalMutationBuilder::new(), |b, id| {
             b.add_node(id, (id - 1) as u32, 1)
@@ -83,8 +80,12 @@ impl TestRun for Wal106 {
             )
         });
 
-        builder.seed_all(&nodes).await?;
+        builder.insert_mutations_all(&nodes).await?;
         builder.seed_modifications_all(&nodes).await?;
+
+        // Build checkpoint from WAL up to mod_id = 0 (no mutations at or before 0 →
+        // empty graph, matching the genesis state before any mutations were applied).
+        nodes.make_checkpoints(SEED_MOD_ID, SEED_MOD_ID).await?;
 
         self.nodes = Some(nodes);
         Ok(())
@@ -155,7 +156,7 @@ impl TestRun for Wal106 {
             )
         });
 
-        builder.seed_all(nodes).await?;
+        builder.insert_mutations_all(nodes).await?;
         builder.seed_modifications_all(nodes).await?;
 
         // Phase 2: sidecar runs again.  Despite the desync, every party must reach

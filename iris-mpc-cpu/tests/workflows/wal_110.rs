@@ -66,8 +66,8 @@ impl TestRun for Wal110 {
         //   party 0 — no entry (modification not yet persisted)
         //   party 1 — bytes_a
         //   party 2 — bytes_b  ← conflicts with party 1
-        builder_a.seed(&nodes.0[1].store.graph).await?;
-        builder_b.seed(&nodes.0[2].store.graph).await?;
+        builder_a.insert_mutations(&nodes.0[1].store.graph).await?;
+        builder_b.insert_mutations(&nodes.0[2].store.graph).await?;
 
         // Modification seeding:
         //   party 0 — persisted = FALSE (will try to roll forward)

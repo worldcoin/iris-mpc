@@ -72,14 +72,6 @@ impl TestRun for Wal104 {
         let nodes = CpuNodes::new(&ctx.configs).await?;
         nodes.truncate_checkpoint_tables().await?;
 
-        // Seed three checkpoints in order: archival first (oldest DB row id), then
-        // two regular checkpoints at later modification ids.  The sidecar will see
-        // WAL mutations after modification_id=10 (the latest seeded checkpoint) and
-        // build its first real checkpoint from mutations 11–20.
-        nodes.seed_all_archival(0, 0).await?; // archival, last_mod_id=0  (oldest)
-        nodes.seed_all(0, 5).await?; // regular,  last_mod_id=5
-        nodes.seed_all(0, 10).await?; // regular,  last_mod_id=10 (latest)
-
         // 10 AddNode mutations (modification_ids 1–10).
         let builder = (1i64..=10).fold(WalMutationBuilder::new(), |b, id| {
             b.add_node(id, (id - 1) as u32, 1)
@@ -101,8 +93,17 @@ impl TestRun for Wal104 {
             )
         });
 
-        builder.seed_all(&nodes).await?;
+        builder.insert_mutations_all(&nodes).await?;
         builder.seed_modifications_all(&nodes).await?;
+
+        // Build checkpoints from WAL after mutations are seeded, so each snapshot
+        // reflects the correct graph state.  Order preserved: archival oldest, then
+        // two regular checkpoints at later modification ids.  The sidecar will see
+        // WAL mutations after modification_id=10 (the latest checkpoint) and build
+        // its first real checkpoint from mutations 11–20.
+        nodes.seed_all_archival(0, 0).await?; // archival, last_mod_id=0  (oldest)
+        nodes.make_checkpoints(0, 5).await?; // regular,  last_mod_id=5
+        nodes.make_checkpoints(0, 10).await?; // regular,  last_mod_id=10 (latest)
 
         self.nodes = Some(nodes);
         Ok(())

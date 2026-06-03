@@ -82,8 +82,8 @@ impl TestRun for Wal109 {
         //   party 0 — 0 entries (starts with empty WAL; sync will fill it in)
         //   party 1 — 5 entries (mods 1–5)
         //   party 2 — 10 entries (mods 1–10)
-        builder5.seed(&nodes.0[1].store.graph).await?;
-        builder10.seed(&nodes.0[2].store.graph).await?;
+        builder5.insert_mutations(&nodes.0[1].store.graph).await?;
+        builder10.insert_mutations(&nodes.0[2].store.graph).await?;
 
         // Modification seeding — ALL parties receive ALL 10 modification rows,
         // but with staggered `persisted` counts mirroring the genesis test:

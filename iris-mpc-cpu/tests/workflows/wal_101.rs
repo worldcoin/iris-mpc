@@ -43,11 +43,6 @@ impl TestRun for Wal101 {
     async fn setup(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = CpuNodes::new(&ctx.configs).await?;
         nodes.truncate_checkpoint_tables().await?;
-        // Seed base checkpoint anchored at modification_id = 50.
-        nodes
-            .seed_all(CHECKPOINT_AT_MOD_ID, CHECKPOINT_AT_MOD_ID)
-            .await?;
-
         // Seed WAL mutations 51..=100 — the delta the sidecar will roll forward.
         let builder = (CHECKPOINT_AT_MOD_ID + 1..=WAL_UP_TO_MOD_ID)
             .fold(WalMutationBuilder::new(), |b, id| {
@@ -68,10 +63,15 @@ impl TestRun for Wal101 {
             )
         });
 
-        builder.seed_all(&nodes).await?;
+        builder.insert_mutations_all(&nodes).await?;
         // Seed a `modifications` row for every WAL entry so that hawk_main's
         // modification sync operates on a realistic, non-empty modifications table.
         builder.seed_modifications_all(&nodes).await?;
+
+        // Build checkpoint from WAL up to modification_id = 50.
+        nodes
+            .make_checkpoints(CHECKPOINT_AT_MOD_ID, CHECKPOINT_AT_MOD_ID)
+            .await?;
 
         self.nodes = Some(nodes);
         Ok(())

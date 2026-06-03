@@ -63,11 +63,6 @@ impl TestRun for Wal105 {
         let nodes = CpuNodes::new(&ctx.configs).await?;
         nodes.truncate_checkpoint_tables().await?;
 
-        // Seed genesis checkpoint at modification_id = 50.
-        nodes
-            .seed_all(CHECKPOINT_AT_MOD_ID, CHECKPOINT_AT_MOD_ID)
-            .await?;
-
         // Seed WAL mutations 51..=100 for the sidecar to consume in phase 1.
         let builder = (CHECKPOINT_AT_MOD_ID + 1..=SIDECAR_CHECKPOINT_MOD_ID)
             .fold(WalMutationBuilder::new(), |b, id| {
@@ -88,8 +83,13 @@ impl TestRun for Wal105 {
             )
         });
 
-        builder.seed_all(&nodes).await?;
+        builder.insert_mutations_all(&nodes).await?;
         builder.seed_modifications_all(&nodes).await?;
+
+        // Build checkpoint from WAL up to modification_id = 50.
+        nodes
+            .make_checkpoints(CHECKPOINT_AT_MOD_ID, CHECKPOINT_AT_MOD_ID)
+            .await?;
 
         self.nodes = Some(nodes);
         Ok(())
@@ -142,7 +142,7 @@ impl TestRun for Wal105 {
             b.add_edges(HAWK_EDGES_START + idx, base, vec![neighbor1, neighbor2], 0)
         });
 
-        builder.seed_all(nodes).await?;
+        builder.insert_mutations_all(nodes).await?;
         builder.seed_modifications_all(nodes).await?;
 
         // Phase 2: sidecar starts.  It must discover the Phase 1 checkpoint at

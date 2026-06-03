@@ -42,11 +42,6 @@ impl TestRun for Wal103 {
         let nodes = CpuNodes::new(&ctx.configs).await?;
         nodes.truncate_checkpoint_tables().await?;
 
-        // Base checkpoint at modification_id = 50.
-        nodes
-            .seed_all(CHECKPOINT_AT_MOD_ID, CHECKPOINT_AT_MOD_ID)
-            .await?;
-
         // WAL delta 51..=100.
         let builder = (CHECKPOINT_AT_MOD_ID + 1..=WAL_UP_TO_MOD_ID)
             .fold(WalMutationBuilder::new(), |b, id| {
@@ -67,8 +62,13 @@ impl TestRun for Wal103 {
             )
         });
 
-        builder.seed_all(&nodes).await?;
+        builder.insert_mutations_all(&nodes).await?;
         builder.seed_modifications_all(&nodes).await?;
+
+        // Build checkpoint from WAL up to modification_id = 50.
+        nodes
+            .make_checkpoints(CHECKPOINT_AT_MOD_ID, CHECKPOINT_AT_MOD_ID)
+            .await?;
 
         self.nodes = Some(nodes);
         Ok(())
