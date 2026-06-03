@@ -167,6 +167,53 @@ impl CpuNode {
             .await?
             .ok_or_else(|| eyre!("no checkpoint row found after insert"))
     }
+
+    /// Run all set assertions in `assertions` against this node.
+    pub async fn assert(&self, assertions: &WalAssertions) -> eyre::Result<()> {
+        let store = &self.store;
+        if let Some(expected) = assertions.wal_row_count {
+            let actual = store.wal_row_count().await?;
+            eyre::ensure!(
+                actual == expected,
+                "WAL row count: expected {expected}, got {actual}"
+            );
+        }
+
+        if let Some(expected) = assertions.max_modification_id {
+            let actual = store.max_modification_id().await?;
+            eyre::ensure!(
+                actual == Some(expected),
+                "max modification_id: expected Some({expected}), got {actual:?}"
+            );
+        }
+
+        if let Some(expected) = assertions.checkpoint_count {
+            let actual = store.count_checkpoints().await?;
+            eyre::ensure!(
+                actual == expected,
+                "checkpoint count: expected {expected}, got {actual}"
+            );
+        }
+
+        if let Some(expected_mod_id) = assertions.latest_checkpoint_mod_id {
+            let row = store
+                .latest_checkpoint()
+                .await?
+                .ok_or_else(|| eyre!("no checkpoint row found"))?;
+            eyre::ensure!(
+                row.graph_mutation_id == Some(expected_mod_id),
+                "latest checkpoint graph_mutation_id: expected Some({expected_mod_id}), got {:?}",
+                row.graph_mutation_id
+            );
+        }
+
+        if let Some(true) = assertions.s3_object_exists {
+            self.verify_latest_checkpoint_s3_object(&self.config.checkpoint_bucket)
+                .await?;
+        }
+
+        Ok(())
+    }
 }
 
 /// All three parties' nodes.  Mirrors `MpcNodes` from the genesis tests.
@@ -186,7 +233,7 @@ impl CpuNodes {
     /// Run `WalAssertions` against each party in sequence.
     pub async fn apply_assertions(&self, assertions: &[WalAssertions; 3]) -> eyre::Result<()> {
         for (node, assertion) in self.0.iter().zip(assertions.iter()) {
-            assertion.assert(node).await?;
+            node.assert(assertion).await?;
         }
         Ok(())
     }
@@ -354,50 +401,4 @@ impl WalAssertions {
         self
     }
 
-    /// Run all set assertions against `stores`.
-    pub async fn assert(&self, node: &CpuNode) -> eyre::Result<()> {
-        let store = &node.store;
-        if let Some(expected) = self.wal_row_count {
-            let actual = store.wal_row_count().await?;
-            eyre::ensure!(
-                actual == expected,
-                "WAL row count: expected {expected}, got {actual}"
-            );
-        }
-
-        if let Some(expected) = self.max_modification_id {
-            let actual = store.max_modification_id().await?;
-            eyre::ensure!(
-                actual == Some(expected),
-                "max modification_id: expected Some({expected}), got {actual:?}"
-            );
-        }
-
-        if let Some(expected) = self.checkpoint_count {
-            let actual = store.count_checkpoints().await?;
-            eyre::ensure!(
-                actual == expected,
-                "checkpoint count: expected {expected}, got {actual}"
-            );
-        }
-
-        if let Some(expected_mod_id) = self.latest_checkpoint_mod_id {
-            let row = store
-                .latest_checkpoint()
-                .await?
-                .ok_or_else(|| eyre!("no checkpoint row found"))?;
-            eyre::ensure!(
-                row.graph_mutation_id == Some(expected_mod_id),
-                "latest checkpoint graph_mutation_id: expected Some({expected_mod_id}), got {:?}",
-                row.graph_mutation_id
-            );
-        }
-
-        if let Some(true) = self.s3_object_exists {
-            node.verify_latest_checkpoint_s3_object(&node.config.checkpoint_bucket)
-                .await?;
-        }
-
-        Ok(())
-    }
 }
