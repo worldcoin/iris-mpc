@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 // Integration tests for the iris-mpc-cpu WAL pipeline.
 //
 // See tests/e2e_wal_readme.md for full design documentation.

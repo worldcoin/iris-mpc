@@ -3316,6 +3316,7 @@ dependencies = [
  "eyre",
  "futures",
  "hex",
+ "iris-mpc",
  "iris-mpc-common",
  "iris-mpc-store",
  "itertools 0.13.0",

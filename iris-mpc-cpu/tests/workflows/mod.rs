@@ -54,12 +54,11 @@ pub use crate::utils::runner::TestRun;
 #[macro_export]
 macro_rules! run_hawk {
     ($configs:expr, $shutdown:expr, $ctx:expr) => {{
+        use iris_mpc::server::server_main;
         use std::sync::Arc;
         use tokio::sync::Notify;
-        use iris_mpc::server::server_main;
 
-        let mut join_set: tokio::task::JoinSet<eyre::Result<()>> =
-            tokio::task::JoinSet::new();
+        let mut join_set: tokio::task::JoinSet<eyre::Result<()>> = tokio::task::JoinSet::new();
 
         // Allocate service ports and outbound ports dynamically to avoid
         // bind conflicts with HAWK_ADDRS, SIDECAR_ADDRS, and healthcheck ports.
@@ -150,10 +149,11 @@ macro_rules! run_hawk {
 #[macro_export]
 macro_rules! run_sidecar {
     ($configs:expr, $shutdown:expr) => {{
-        let mut join_set: tokio::task::JoinSet<eyre::Result<()>> =
-            tokio::task::JoinSet::new();
-        let sidecar_addresses: Vec<String> =
-            crate::utils::SIDECAR_ADDRS.iter().map(|s| s.to_string()).collect();
+        let mut join_set: tokio::task::JoinSet<eyre::Result<()>> = tokio::task::JoinSet::new();
+        let sidecar_addresses: Vec<String> = crate::utils::SIDECAR_ADDRS
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
 
         for config in ($configs).iter() {
             let config = config.clone();
@@ -196,12 +196,9 @@ macro_rules! run_sidecar {
                 let mut networking =
                     build_hawk_network_handle(&hawk_args, shutdown.clone()).await?;
 
-                let postgres = PostgresClient::new(
-                    &config.db_url,
-                    &config.db_schema,
-                    AccessMode::ReadWrite,
-                )
-                .await?;
+                let postgres =
+                    PostgresClient::new(&config.db_url, &config.db_schema, AccessMode::ReadWrite)
+                        .await?;
                 // Aby3Store is the production VectorStore; the type parameter is
                 // phantom for WAL/checkpoint table operations so PlaintextStore-seeded
                 // data is fully compatible.
@@ -215,13 +212,12 @@ macro_rules! run_sidecar {
                     party_id: config.party_id,
                     cycle_interval: Duration::from_secs(config.sidecar.cycle_interval_secs),
                     retry_interval: Duration::from_secs(config.sidecar.retry_interval_secs),
-                    peer_round_timeout: Duration::from_secs(
-                        config.sidecar.peer_round_timeout_secs,
-                    ),
+                    peer_round_timeout: Duration::from_secs(config.sidecar.peer_round_timeout_secs),
                     min_mutations_per_cycle: config.sidecar.min_mutations_per_cycle,
                     checkpoint_window: config.sidecar.checkpoint_window,
                     is_archival: config.sidecar.is_archival,
                     pruning_mode: config.sidecar.pruning_mode,
+                    one_shot: true,
                 };
 
                 sidecar_main(cfg, &graph_store, &s3_client, &mut networking, shutdown).await
