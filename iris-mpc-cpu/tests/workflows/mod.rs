@@ -81,12 +81,16 @@ macro_rules! run_hawk {
         // (CancellationToken is not Send-across-runtimes friendly).
         let notify = Arc::new(Notify::new());
 
-        // Bridge task: when the CancellationToken fires, wake all server threads.
+        // Bridge task: when the CancellationToken OR ctx.abort fires, wake all server threads.
         {
             let notify = notify.clone();
             let shutdown = $shutdown.clone();
+            let abort = $ctx.abort.clone();
             join_set.spawn(async move {
-                shutdown.cancelled().await;
+                tokio::select! {
+                    _ = shutdown.cancelled() => {},
+                    _ = abort.cancelled() => {},
+                }
                 notify.notify_waiters();
                 Ok(())
             });
@@ -148,7 +152,7 @@ macro_rules! run_hawk {
 /// ```
 #[macro_export]
 macro_rules! run_sidecar {
-    ($configs:expr, $shutdown:expr) => {{
+    ($configs:expr, $shutdown:expr, $ctx:expr) => {{
         let mut join_set: tokio::task::JoinSet<eyre::Result<()>> = tokio::task::JoinSet::new();
         let sidecar_addresses: Vec<String> = crate::utils::SIDECAR_ADDRS
             .iter()
@@ -158,6 +162,7 @@ macro_rules! run_sidecar {
         for config in ($configs).iter() {
             let config = config.clone();
             let shutdown = $shutdown.clone();
+            let abort = $ctx.abort.clone();
             let addresses = sidecar_addresses.clone();
 
             join_set.spawn(async move {
@@ -220,7 +225,10 @@ macro_rules! run_sidecar {
                     one_shot: true,
                 };
 
-                sidecar_main(cfg, &graph_store, &s3_client, &mut networking, shutdown).await
+                tokio::select! {
+                    res = sidecar_main(cfg, &graph_store, &s3_client, &mut networking, shutdown) => res,
+                    _ = abort.cancelled() => Ok(()),
+                }
             });
         }
 

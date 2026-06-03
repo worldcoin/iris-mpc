@@ -72,14 +72,22 @@ macro_rules! run_test {
                 }
             }
 
+            // Cancel ctx.abort on Ctrl+C so that run_hawk!/run_sidecar! can
+            // shut down their services cleanly rather than being dropped mid-flight.
+            {
+                let abort = ctx.abort.clone();
+                tokio::spawn(async move {
+                    if tokio::signal::ctrl_c().await.is_ok() {
+                        tracing::warn!("Ctrl+C received — aborting test");
+                        abort.cancel();
+                    }
+                });
+            }
+
             let mut test = $test;
+            let r = test.run(&ctx).await;
 
-            let r = tokio::select! {
-                res = test.run(&ctx) => res,
-                _ = tokio::signal::ctrl_c() => Err(eyre::eyre!("Test aborted by Ctrl+C")),
-            };
-
-            if r.is_err() {
+            if r.is_err() && !ctx.abort.is_cancelled() {
                 TEST_FAILED.store(true, Ordering::SeqCst);
             }
             r

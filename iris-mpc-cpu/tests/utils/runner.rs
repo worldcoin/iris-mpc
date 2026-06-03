@@ -1,4 +1,5 @@
 use super::CpuConfigs;
+use tokio_util::sync::CancellationToken;
 
 /// Lifecycle trait implemented by each `wal_NNN` test struct.
 ///
@@ -57,6 +58,8 @@ pub struct CpuTestContext {
     pub kind: usize,
     /// Test run index (usually 1) for multi-run scenarios.
     pub idx: usize,
+    /// Cancelled when Ctrl+C is received; services observe this to shut down cleanly.
+    pub abort: CancellationToken,
 }
 
 impl CpuTestContext {
@@ -71,6 +74,7 @@ impl CpuTestContext {
             env,
             kind,
             idx,
+            abort: CancellationToken::new(),
         }
     }
 

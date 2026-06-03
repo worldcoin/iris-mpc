@@ -86,7 +86,7 @@ impl TestRun for Wal103 {
         // baseline = 1 (the seeded checkpoint); wait for a second row.
         {
             let shutdown = CancellationToken::new();
-            let mut sidecar_set = run_sidecar!(ctx.configs, shutdown.clone());
+            let mut sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
             let res = wait_for_new_checkpoint(
                 nodes,
                 &ctx.configs,

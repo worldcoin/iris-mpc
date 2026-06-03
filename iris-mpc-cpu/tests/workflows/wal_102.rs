@@ -66,7 +66,7 @@ impl TestRun for Wal102 {
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
         let shutdown = CancellationToken::new();
-        let mut sidecar_set = run_sidecar!(ctx.configs, shutdown.clone());
+        let mut sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
 
         let checkpoint_res = wait_for_new_checkpoint(
             nodes,
