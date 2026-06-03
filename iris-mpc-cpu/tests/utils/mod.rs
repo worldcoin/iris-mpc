@@ -39,6 +39,9 @@ pub struct CpuNodeConfig {
     /// Used by TC-1 (wait_for_all_ready) to construct a ServerCoordinationConfig.
     /// See open question #5 and #6 in readme.
     pub coordination_port: u16,
+    /// Healthcheck port for this party's HTTP health endpoint.
+    /// Used to populate `ServerCoordinationConfig::healthcheck_ports`.
+    pub healthcheck_port: u16,
     /// Sidecar-specific settings — can be overridden per test.
     pub sidecar: SidecarTestConfig,
 }

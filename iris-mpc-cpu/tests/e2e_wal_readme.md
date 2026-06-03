@@ -405,10 +405,14 @@ stop_and_join!(shutdown_ct, join_set)
    it need to be added?  What is the exact crate name and import path for
    `wait_for_others_ready` and `ServerCoordinationConfig`?
 
+  ServerCoordinationConfig has been added to CpuNode
+
 6. **Constructing `ServerCoordinationConfig` from test config:** `wait_for_others_ready`
    takes a `&ServerCoordinationConfig`.  Given a `CpuNodeConfig` with a `coordination_port`,
    how is a `ServerCoordinationConfig` built for that party?  What fields does it require
    (e.g., all parties' ports, TLS config, own party ID)?
+
+    ServerCoordinationConfig has been added to CpuNode
 
 7. **WAL materialization API for hash comparison (wal_102/103 exec_assert):** The user
    confirmed that `exec_assert` should materialize a graph from the seeded WAL, hash it,
@@ -419,6 +423,8 @@ stop_and_join!(shutdown_ct, join_set)
    type)?~~ **Resolved:** the WAL stream type is `GraphMutation<IrisVectorId>`, with ops
    defined in `iris_mpc_cpu::hnsw::graph::mutation::{GraphMutation, MutationOp,
    UpdateEntryPoint, EdgeType}`.  The materialization function itself remains open.
+
+  it's insert_apply_all() 
 
 8. ~~**`BothEyes` type path:** `WalMutationBuilder` needs to construct
    `BothEyes<Vec<GraphMutation<IrisVectorId>>>`.  What is the exact import path for
