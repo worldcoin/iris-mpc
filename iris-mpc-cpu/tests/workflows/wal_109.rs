@@ -1,4 +1,5 @@
-/// wal_109 — Modification-driven sync: roll-forward from staggered per-party state.
+/// wal_109 — Modification-driven sync: roll-forward from staggered per-party state,
+///           followed by a sidecar checkpoint cycle.
 ///
 /// Mirrors `test_hawk_init` from `iris-mpc-upgrade-hawk/tests/e2e_hawk.rs`.
 ///
@@ -14,8 +15,8 @@
 /// |   1   |     5    |       5        |
 /// |   2   |    10    |      10        |
 ///
-/// Exec
-/// ----
+/// Exec — Phase 1 (TC-1)
+/// ----------------------
 /// `hawk_main` calls `sync_graph_mutations`, which transfers the missing mutation
 /// bytes from parties that already have them to the parties that do not:
 ///
@@ -25,21 +26,28 @@
 ///
 /// All 3 parties signal ready once their in-memory graphs converge (TC-1).
 ///
+/// Exec — Phase 2 (TC-2)
+/// ----------------------
+/// `sidecar_main` checkpoints the fully-synced WAL state, writing one checkpoint
+/// row per party (anchored at `mod_id = TOTAL_MODS`) and uploading the
+/// corresponding S3 object.
+///
 /// Post-conditions
 /// ---------------
-/// Every party has 10 rows in `hawk_graph_mutations`.
+/// Every party has 10 rows in `hawk_graph_mutations`, 1 checkpoint row anchored
+/// at mod_id 10, a matching S3 object, and all parties agree on the BLAKE3 hash.
 ///
-/// Termination condition: TC-1 (wait_for_all_ready)
+/// Termination condition: TC-2 (wait_for_new_checkpoint)
 use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    run_hawk, stop_and_join,
+    run_hawk, run_sidecar, stop_and_join,
     utils::{
         cpu_node::{CpuNodes, WalAssertions},
         runner::{CpuTestContext, TestRun},
-        wait_conditions::wait_for_all_ready,
+        wait_conditions::{wait_for_all_ready, wait_for_new_checkpoint},
         wal_builder::WalMutationBuilder,
     },
 };
@@ -118,21 +126,54 @@ impl TestRun for Wal109 {
     }
 
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
-        let shutdown = CancellationToken::new();
-        let mut hawk_set = run_hawk!(ctx.configs, shutdown.clone(), ctx);
-        let ready_res =
-            wait_for_all_ready(&ctx.configs, &mut hawk_set, Duration::from_secs(60)).await;
-        stop_and_join!(shutdown, hawk_set);
-        ready_res
+        let nodes = self.nodes.as_ref().unwrap();
+
+        // Phase 1: hawk_main rolls forward the WAL, syncing all parties to 10
+        // mutations (TC-1).
+        {
+            let shutdown = CancellationToken::new();
+            let mut hawk_set = run_hawk!(ctx.configs, shutdown.clone(), ctx);
+            let res =
+                wait_for_all_ready(&ctx.configs, &mut hawk_set, Duration::from_secs(60)).await;
+            stop_and_join!(shutdown, hawk_set);
+            res?;
+        }
+
+        // Phase 2: sidecar_main checkpoints the fully-synced WAL state (TC-2).
+        // baseline = 0 because no checkpoint exists before this phase.
+        {
+            let shutdown = CancellationToken::new();
+            let mut sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
+            let res = wait_for_new_checkpoint(
+                nodes,
+                &ctx.configs,
+                /* baseline */ 0,
+                Duration::from_secs(120),
+            )
+            .await;
+            stop_and_join!(shutdown, sidecar_set);
+            res?;
+        }
+
+        Ok(())
     }
 
     async fn exec_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
-        // After modification sync all parties hold all 10 mutation rows.
-        let all_synced = WalAssertions::new().assert_wal_row_count(TOTAL_MODS as usize);
+
+        // All parties hold all 10 mutation rows, 1 checkpoint anchored at the
+        // last modification, and a corresponding S3 object.
+        let post = WalAssertions::new()
+            .assert_wal_row_count(TOTAL_MODS as usize)
+            .assert_checkpoint_count(1)
+            .assert_latest_checkpoint_mod_id(TOTAL_MODS)
+            .assert_s3_object_exists(true);
         nodes
-            .apply_assertions(&[all_synced.clone(), all_synced.clone(), all_synced])
-            .await
+            .apply_assertions(&[post.clone(), post.clone(), post])
+            .await?;
+
+        // All 3 parties must agree on the BLAKE3 hash of the checkpoint.
+        nodes.assert_checkpoint_hashes_agree().await
     }
 
     async fn teardown(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {

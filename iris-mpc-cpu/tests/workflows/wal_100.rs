@@ -1,19 +1,42 @@
-/// wal_100 — Baseline startup, empty WAL.
+/// wal_100 — Baseline startup, empty WAL; idempotent sidecar checkpoint.
 ///
-/// Verifies that `hawk_main` starts cleanly and all 3 parties signal ready when
-/// the DB has no checkpoint and no WAL mutations.
+/// Verifies that `hawk_main` starts cleanly on an empty DB, that `sidecar_main`
+/// produces exactly one checkpoint even when run twice against the same (unchanged)
+/// WAL state, and that the resulting S3 objects agree across all 3 parties.
 ///
-/// Termination condition: TC-1 (wait_for_all_ready)
+/// Exec — Phase 1 (TC-1)
+/// ----------------------
+/// `hawk_main` starts with no WAL mutations and no prior checkpoint.  All 3
+/// parties signal ready (TC-1).
+///
+/// Exec — Phase 2a (TC-2)
+/// -----------------------
+/// `sidecar_main` (first run) checkpoints the empty graph state, writing one
+/// checkpoint row per party and uploading the corresponding S3 object.
+///
+/// Exec — Phase 2b (idempotency)
+/// ------------------------------
+/// `sidecar_main` (second run) sees the checkpoint already covers the current
+/// WAL high-water mark and must NOT write a second checkpoint row.  The test
+/// lets the sidecar run briefly, then stops it and confirms the count is still 1.
+///
+/// Post-conditions
+/// ---------------
+/// Every party has 0 WAL rows, exactly 1 checkpoint, a matching S3 object, and
+/// all parties agree on the BLAKE3 hash.
+///
+/// Termination condition: TC-2 (wait_for_new_checkpoint)
 use std::time::Duration;
 
+use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    run_hawk, stop_and_join,
+    run_hawk, run_sidecar, stop_and_join,
     utils::{
         cpu_node::{CpuNodes, WalAssertions},
         runner::{CpuTestContext, TestRun},
-        wait_conditions::wait_for_all_ready,
+        wait_conditions::{wait_for_all_ready, wait_for_new_checkpoint},
     },
 };
 
@@ -46,22 +69,61 @@ impl TestRun for Wal100 {
     }
 
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
-        let shutdown = CancellationToken::new();
-        let mut hawk_set = run_hawk!(ctx.configs, shutdown.clone(), ctx);
-        let ready_res =
-            wait_for_all_ready(&ctx.configs, &mut hawk_set, Duration::from_secs(60)).await;
-        stop_and_join!(shutdown, hawk_set);
-        ready_res
+        let nodes = self.nodes.as_ref().unwrap();
+
+        // Phase 1: hawk_main signals ready on an empty WAL (TC-1).
+        {
+            let shutdown = CancellationToken::new();
+            let mut hawk_set = run_hawk!(ctx.configs, shutdown.clone(), ctx);
+            let res =
+                wait_for_all_ready(&ctx.configs, &mut hawk_set, Duration::from_secs(60)).await;
+            stop_and_join!(shutdown, hawk_set);
+            res?;
+        }
+
+        // Phase 2a: first sidecar run — checkpoints the (empty) graph state (TC-2).
+        // baseline = 0: no prior checkpoint exists.
+        {
+            let shutdown = CancellationToken::new();
+            let mut sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
+            let res = wait_for_new_checkpoint(
+                nodes,
+                &ctx.configs,
+                /* baseline */ 0,
+                Duration::from_secs(120),
+            )
+            .await;
+            stop_and_join!(shutdown, sidecar_set);
+            res?;
+        }
+
+        // Phase 2b: second sidecar run — exercises idempotency.
+        // The WAL state has not advanced; the sidecar must not write a second
+        // checkpoint row.  Give it enough time to complete at least one loop.
+        {
+            let shutdown = CancellationToken::new();
+            let mut sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
+            sleep(Duration::from_secs(10)).await;
+            stop_and_join!(shutdown, sidecar_set);
+        }
+
+        Ok(())
     }
 
     async fn exec_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
+
+        // Exactly 1 checkpoint despite two sidecar runs — the sidecar is idempotent.
         let expected = WalAssertions::new()
             .assert_wal_row_count(0)
-            .assert_checkpoint_count(0);
+            .assert_checkpoint_count(1)
+            .assert_s3_object_exists(true);
         nodes
             .apply_assertions(&[expected.clone(), expected.clone(), expected])
-            .await
+            .await?;
+
+        // All 3 parties must agree on the BLAKE3 hash of the checkpoint.
+        nodes.assert_checkpoint_hashes_agree().await
     }
 
     async fn teardown(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
