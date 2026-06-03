@@ -58,6 +58,7 @@ macro_rules! run_hawk {
         use iris_mpc::server::server_main;
         use std::sync::Arc;
         use tokio::sync::Notify;
+        use tracing::{info_span, Instrument};
 
         let mut join_set: tokio::task::JoinSet<eyre::Result<()>> = tokio::task::JoinSet::new();
 
@@ -80,7 +81,7 @@ macro_rules! run_hawk {
             });
         }
 
-        for cpu_cfg in ($configs).iter() {
+        for (party_idx, cpu_cfg) in ($configs).iter().enumerate() {
             let config = crate::utils::configs::make_hawk_config(cpu_cfg, &$configs, &$ctx.env);
             let notify = notify.clone();
 
@@ -93,9 +94,10 @@ macro_rules! run_hawk {
                         .enable_all()
                         .build()
                         .expect("failed to build server runtime");
+                    let span = info_span!("mpc_node", idx = party_idx);
                     rt.block_on(async move {
                         tokio::select! {
-                            res = server_main(config) => res,
+                            res = server_main(config).instrument(span) => res,
                             _ = notify.notified() => Ok(()),
                         }
                     })
@@ -138,7 +140,7 @@ macro_rules! run_sidecar {
             .map(|c| format!("127.0.0.1:{}", c.sidecar_port))
             .collect();
 
-        for config in ($configs).iter() {
+        for (party_idx, config) in ($configs).iter().enumerate() {
             let config = config.clone();
             let shutdown = $shutdown.clone();
             let abort = $ctx.abort.clone();
@@ -154,6 +156,7 @@ macro_rules! run_sidecar {
                     hnsw::graph::graph_store::GraphPg,
                 };
                 use std::time::Duration;
+                use tracing::{info_span, Instrument};
 
                 // Build HawkArgs with only the networking fields populated.
                 // HNSW and persistence fields are irrelevant to the sidecar.
@@ -204,8 +207,9 @@ macro_rules! run_sidecar {
                     one_shot: true,
                 };
 
+                let span = info_span!("mpc_node", idx = party_idx);
                 tokio::select! {
-                    res = sidecar_main(cfg, &graph_store, &s3_client, &mut networking, shutdown) => res,
+                    res = sidecar_main(cfg, &graph_store, &s3_client, &mut networking, shutdown).instrument(span) => res,
                     _ = abort.cancelled() => Ok(()),
                 }
             });

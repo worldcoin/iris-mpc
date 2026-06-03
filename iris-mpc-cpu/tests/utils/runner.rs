@@ -15,11 +15,11 @@ pub trait TestRun {
         self.setup(ctx).await?;
         self.setup_assert(ctx).await?;
         let exec_res = self.exec(ctx).await;
+        exec_res?;
+        self.exec_assert(ctx).await?;
         // Always attempt teardown regardless of exec outcome.
         let teardown_res = self.teardown(ctx).await;
-        exec_res?;
         teardown_res?;
-        self.exec_assert(ctx).await?;
         self.teardown_assert(ctx).await
     }
 
