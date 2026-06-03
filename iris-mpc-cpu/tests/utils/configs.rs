@@ -90,6 +90,7 @@ pub fn make_hawk_config(
 
         // Checkpoint bucket (already created by init-localstack.sh).
         graph_checkpoint_bucket_name: cpu_cfg.checkpoint_bucket.clone(),
+        graph_checkpoint_bucket_region: "us-east-1".to_string(),
 
         // Coordination server — healthcheck ports drive TC-1 wait.
         server_coordination: Some(ServerCoordinationConfig {
