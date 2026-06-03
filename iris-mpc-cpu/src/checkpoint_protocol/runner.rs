@@ -5,7 +5,7 @@
 //! cycle boundaries, so per-cycle failures stay isolated.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ampc_actor_utils::network::mpc::NetworkHandle;
 use aws_sdk_s3::Client as S3Client;
@@ -51,6 +51,11 @@ pub struct SidecarConfig {
     pub is_archival: bool,
     /// Optionally remove old checkpoints from S3
     pub pruning_mode: PruningMode,
+    /// Run exactly one cycle and exit instead of looping. Used when deployed
+    /// as a CronJob: a transient/fatal cycle error returns `Err` (the next
+    /// scheduled fire is the retry), so no party retries independently and
+    /// desyncs the ring.
+    pub one_shot: bool,
 }
 
 /// Daemon loop. Returns `Ok(())` only on graceful shutdown via
@@ -75,7 +80,45 @@ pub async fn sidecar_main<V: VectorStore + Send + Sync>(
             return Ok(());
         }
 
-        let sleep_after = match sidecar_cycle(&cfg, graph_store, s3_client, networking).await {
+        let cycle_start = Instant::now();
+        let outcome = sidecar_cycle(&cfg, graph_store, s3_client, networking).await;
+
+        if cfg.one_shot {
+            // Single completion line per outcome; a fire that never logs this
+            // (e.g. wedged dialling an absent peer until activeDeadlineSeconds)
+            // is itself the signal. Derive a log-based metric off `outcome`.
+            let duration_secs = cycle_start.elapsed().as_secs_f64();
+            return match outcome {
+                Ok(Outcome::Finalized { height, .. }) => {
+                    tracing::info!(
+                        outcome = "finalized",
+                        duration_secs,
+                        height,
+                        "sidecar one-shot complete"
+                    );
+                    Ok(())
+                }
+                Ok(Outcome::Skipped(reason)) => {
+                    tracing::info!(
+                        outcome = "skipped",
+                        duration_secs,
+                        ?reason,
+                        "sidecar one-shot complete"
+                    );
+                    Ok(())
+                }
+                Err(CycleError::Transient(msg)) => {
+                    tracing::warn!(outcome = "transient", duration_secs, error = %msg, "sidecar one-shot complete");
+                    Err(eyre!("sidecar one-shot transient error: {msg}"))
+                }
+                Err(CycleError::Fatal(msg)) => {
+                    tracing::error!(outcome = "fatal", duration_secs, error = %msg, "sidecar one-shot complete");
+                    Err(eyre!("sidecar fatal: {msg}"))
+                }
+            };
+        }
+
+        let sleep_after = match outcome {
             Ok(Outcome::Finalized { height, .. }) => {
                 tracing::info!(height, "sidecar cycle finalized");
                 cfg.cycle_interval

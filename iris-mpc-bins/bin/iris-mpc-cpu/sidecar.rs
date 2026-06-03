@@ -12,6 +12,7 @@ use std::time::Duration;
 
 use ampc_actor_utils::network::tcp::TlsConfig;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_common::tracing::initialize_tracing;
 use iris_mpc_cpu::{
     checkpoint_protocol::{sidecar_main, SidecarConfig},
     execution::hawk_main::{build_hawk_network_handle, HawkArgs},
@@ -77,6 +78,11 @@ pub struct SidecarArgs {
     #[clap(long, default_value_t = false)]
     pub is_archival: bool,
 
+    /// Run a single cycle and exit, rather than looping at `cycle_interval`.
+    /// Required when deployed as a CronJob (one fire = one cycle).
+    #[clap(long, default_value_t = false)]
+    pub one_shot: bool,
+
     #[clap(long, default_value = "1")]
     pub connection_parallelism: usize,
 
@@ -131,6 +137,10 @@ fn hawk_args_from(args: &SidecarArgs) -> HawkArgs {
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
 
+    // Logs go to stdout (captured by the k8s log pipeline); no StatsD recorder.
+    // Holds the handle for the process lifetime so the subscriber stays live.
+    let _tracing = initialize_tracing(None)?;
+
     let args = SidecarArgs::parse();
     let pruning_mode = if let Some(mode_str) = args.pruning_mode.as_ref() {
         mode_str.parse::<PruningMode>().map_err(|e| {
@@ -181,6 +191,7 @@ async fn main() -> Result<()> {
         checkpoint_window: args.checkpoint_window,
         is_archival: args.is_archival,
         pruning_mode,
+        one_shot: args.one_shot,
     };
 
     match sidecar_main(cfg, &graph_store, &s3_client, &mut networking, shutdown_ct).await {
