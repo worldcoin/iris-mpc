@@ -27,6 +27,12 @@ jobs:
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
+      localstack:
+        image: public.ecr.aws/localstack/localstack:4.9
+        ports:
+          - 4566:4566
+        env:
+          SERVICES: s3
 
     steps:
       - name: Checkout code
@@ -86,5 +92,13 @@ jobs:
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: cargo test --release -p iris-mpc-cpu -- e2e --test-threads=1 --include-ignored
         env:
+          RUST_LOG: info
+          RUST_BACKTRACE: 1
+
+      - name: Run S3 integration tests
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        run: cargo test --release -p iris-mpc-cpu --test streaming_s3_integration -- --test-threads=1
+        env:
+          S3_TEST_ENDPOINT: http://localhost:4566
           RUST_LOG: info
           RUST_BACKTRACE: 1
