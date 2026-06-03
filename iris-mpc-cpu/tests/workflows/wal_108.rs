@@ -4,7 +4,7 @@
 /// state (no checkpoint row, no prior S3 object) by streaming all WAL mutations,
 /// reaching 3-party BLAKE3 hash consensus, and writing the first checkpoint.
 ///
-/// Using `run_hawk!` (TC-1) would only confirm the server started without
+/// Using `run_hawk!` would only confirm the server started without
 /// crashing; it would not verify that the WAL was correctly applied.  The sidecar
 /// produces a checkpoint whose hash is compared against a reference materialised
 /// in the test process, making the correctness of the WAL roll-forward observable.
@@ -12,8 +12,6 @@
 /// This is distinct from:
 ///   wal_100 — empty WAL *and* no checkpoint (pure cold start)
 ///   wal_101 — WAL delta applied on top of an existing checkpoint
-///
-/// Termination condition: TC-2 (wait_for_new_checkpoint)
 use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;

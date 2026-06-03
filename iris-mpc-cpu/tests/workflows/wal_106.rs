@@ -11,12 +11,10 @@
 /// checkpoint" (mod_id=0) differs from parties 1 and 2 (mod_id=10).
 ///
 /// Protocol:
-///   Phase 1: `sidecar_main` → checkpoint at mod_id=10 (TC-2, baseline=1).
+///   Phase 1: `sidecar_main` → checkpoint at mod_id=10 (baseline=1).
 ///   Desync: delete party 0's mod_id=10 checkpoint row.
 ///   Seed WAL 11..=20 for all parties.
-///   Phase 2: `sidecar_main` → checkpoint at mod_id=20 (inline per-party TC-2).
-///
-/// Termination conditions: TC-2 (phase 1), inline per-party poll (phase 2).
+///   Phase 2: `sidecar_main` → checkpoint at mod_id=20 (inline per-party poll).
 use std::time::Duration;
 
 use tokio::time::{sleep, timeout};
@@ -188,7 +186,7 @@ impl TestRun for Wal106 {
             .await
             .map_err(|_| {
                 eyre::eyre!(
-                    "TC-2 timeout: sidecar did not produce new checkpoints for all parties \
+                    "timeout: sidecar did not produce new checkpoints for all parties \
                      within 120 s (baselines: {baselines:?})"
                 )
             });

@@ -17,8 +17,6 @@
 /// Run 3: `PruningMode::AllOlder`
 ///   → all checkpoints except the latest are deleted; only 1 row remains and the
 ///     S3 bucket shrinks from the 3 objects seeded in setup to 1
-///
-/// Termination condition: TC-2 (wait_for_new_checkpoint) per run.
 use std::time::Duration;
 
 use iris_mpc_cpu::graph_checkpoint::PruningMode;
@@ -43,7 +41,7 @@ impl Wal104 {
         Self { nodes: None }
     }
 
-    /// Run one sidecar cycle and wait for TC-2, with the given pruning mode.
+    /// Run one sidecar cycle and wait for a new checkpoint, with the given pruning mode.
     ///
     /// `baseline` is the number of checkpoint rows before this cycle starts.
     async fn run_cycle(

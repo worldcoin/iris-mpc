@@ -19,14 +19,12 @@
 ///
 ///   "graph mutation mismatch between parties. modification id: 1"
 ///
-/// The first hawk_main task to exit is expected to carry this error (TC-E).
+/// The first hawk_main task to exit is expected to carry this error.
 ///
 /// Post-conditions
 /// ---------------
 /// The mismatch is detected and reported in `exec`.
 /// DB state is unchanged from setup: party 0 still has 0 WAL rows.
-///
-/// Termination condition: TC-E (wait_for_hawk_failure)
 use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
@@ -108,7 +106,7 @@ impl TestRun for Wal110 {
         let shutdown = CancellationToken::new();
         let mut hawk_set = run_hawk!(ctx.configs, shutdown.clone(), ctx);
 
-        // Wait for the first hawk_main task to exit with an error (TC-E).
+        // Wait for the first hawk_main task to exit with an error.
         let failure = wait_for_hawk_failure(&mut hawk_set, Duration::from_secs(30)).await;
 
         // Cancel remaining tasks (watcher + any still-running servers).

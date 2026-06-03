@@ -6,8 +6,6 @@
 ///
 /// The test then materialises its own reference graph from the same WAL rows,
 /// hashes it, and verifies all 3 parties' stored hashes match the reference.
-///
-/// Termination condition: TC-2 (wait_for_new_checkpoint)
 use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;

@@ -15,12 +15,12 @@ pub mod wal_110;
 // ---------------------------------------------------------------------------
 //
 // Both hawk_main and sidecar_main are daemon loops.  Tests start them, wait
-// for a termination condition (TC-1 or TC-2), then cancel via a shared
-// CancellationToken.
+// for a termination condition (e.g., all servers ready or new checkpoint), then
+// cancel via a shared CancellationToken.
 //
 // Both services can be called inline (no subprocess needed; no global
-// side-effects).  A JoinSet is used so the wait_for_all_ready (TC-1) helper
-// can monitor for unexpected early task exit.
+// side-effects).  A JoinSet is used so the wait_for_all_ready helper can
+// monitor for unexpected early task exit.
 //
 // hawk_main and sidecar_main each require a loopback MPC network.  They use
 // different ports (hawk uses CpuNodeConfig.service_port, sidecar uses
@@ -46,7 +46,7 @@ pub mod wal_110;
 /// and must not conflict with the sidecar ports (20000–20002) or the
 /// hardcoded healthcheck ports (18000–18002).
 ///
-/// Returns a `JoinSet<eyre::Result<()>>` that can be polled in TC-1 to
+/// Returns a `JoinSet<eyre::Result<()>>` that can be polled by the test to
 /// detect unexpected early exit.
 ///
 /// Usage:

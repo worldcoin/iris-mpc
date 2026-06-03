@@ -1,10 +1,10 @@
 /// wal_103 — Combined: startup roll-forward then sidecar cycle.
 ///
 /// Phase 1: `hawk_main` starts with a base checkpoint at mod_id=50 and WAL
-/// mutations 51..=100, applies the delta, and signals ready (TC-1).
+/// mutations 51..=100, applies the delta, and signals ready.
 ///
 /// Phase 2: `sidecar_main` cycles over the full WAL (anchoring at mod_id=100),
-/// uploads a new checkpoint to S3, and inserts a DB row (TC-2).
+/// uploads a new checkpoint to S3, and inserts a DB row.
 ///
 /// This is the most representative end-to-end scenario.
 use std::time::Duration;

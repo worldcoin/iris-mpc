@@ -6,7 +6,7 @@
 /// as its base, apply only the new delta, and write a new checkpoint anchored at
 /// the last mutation.
 ///
-/// Using `run_hawk!` (TC-1) for Phase 2 would only confirm the server started;
+/// Using `run_hawk!` for Phase 2 would only confirm the server started;
 /// it would not verify that the correct checkpoint was loaded or that the delta was
 /// correctly applied.  The second sidecar cycle produces a checkpoint whose hash
 /// is compared against a reference materialised from the full WAL (51..=170),
@@ -14,12 +14,10 @@
 ///
 /// Protocol:
 ///   Phase 1: `sidecar_main` cycles over WAL 51..=100 → checkpoint at
-///            mod_id=100 (TC-2, baseline=1).
+///            mod_id=100 (baseline=1).
 ///   Seed WAL 101..=170 (10 nodes + 10 edges).
 ///   Phase 2: `sidecar_main` loads the mod_id=100 checkpoint, applies the new
-///            delta, and writes a checkpoint at mod_id=170 (TC-2, baseline=2).
-///
-/// Termination conditions: TC-2 (phase 1) then TC-2 (phase 2).
+///            delta, and writes a checkpoint at mod_id=170 (baseline=2).
 use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;

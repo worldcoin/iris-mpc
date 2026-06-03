@@ -8,7 +8,7 @@
 /// hawk_main's modification sync protocol must:
 ///   1. Detect the mismatch (party 0 max_modification_id = 15; others = 10).
 ///   2. Transfer mutations 11..=15 from party 0 to parties 1 and 2.
-///   3. Allow all three parties to signal ready (TC-1).
+///   3. Allow all three parties to signal ready.
 ///
 /// A subsequent sidecar cycle then materialises each party's WAL independently
 /// and reaches 3-party BLAKE3 consensus.  If modification sync resulted in
@@ -18,10 +18,8 @@
 ///
 /// Protocol:
 ///   Setup: seed WAL 1..=10 for all parties; seed WAL 11..=15 for party 0 only.
-///   Phase 1: `hawk_main` → modification sync → signals ready (TC-1).
-///   Phase 2: `sidecar_main` → checkpoint (TC-2).
-///
-/// Termination conditions: TC-1 then TC-2.
+///   Phase 1: `hawk_main` → modification sync → signals ready.
+///   Phase 2: `sidecar_main` → checkpoint.
 use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;

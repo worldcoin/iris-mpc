@@ -4,13 +4,11 @@
 /// the WAL mutations in range (M, N], reaches 3-party BLAKE3 hash consensus, and
 /// writes a new checkpoint to S3 anchored at the last WAL mutation.
 ///
-/// Using `run_hawk!` (TC-1) here would only confirm the server did not crash;
+/// Using `run_hawk!` here would only confirm the server did not crash;
 /// it would not verify that the WAL delta was correctly applied.  The sidecar
 /// writes a concrete checkpoint whose hash can be compared against a reference
 /// materialised in the test process, making the roll-forward correctness
 /// observable.
-///
-/// Termination condition: TC-2 (wait_for_new_checkpoint)
 use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;

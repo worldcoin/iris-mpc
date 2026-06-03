@@ -15,7 +15,7 @@
 /// |   1   |     5    |       5        |
 /// |   2   |    10    |      10        |
 ///
-/// Exec — Phase 1 (TC-1)
+/// Exec — Phase 1
 /// ----------------------
 /// `hawk_main` calls `sync_graph_mutations`, which transfers the missing mutation
 /// bytes from parties that already have them to the parties that do not:
@@ -24,9 +24,9 @@
 /// - Party 1 obtains mutations 6–10 from party 2.
 /// - Party 2 already has all 10 — no change.
 ///
-/// All 3 parties signal ready once their in-memory graphs converge (TC-1).
+/// All 3 parties signal ready once their in-memory graphs converge.
 ///
-/// Exec — Phase 2 (TC-2)
+/// Exec — Phase 2
 /// ----------------------
 /// `sidecar_main` checkpoints the fully-synced WAL state, writing one checkpoint
 /// row per party (anchored at `mod_id = TOTAL_MODS`) and uploading the
@@ -36,8 +36,6 @@
 /// ---------------
 /// Every party has 10 rows in `hawk_graph_mutations`, 1 checkpoint row anchored
 /// at mod_id 10, a matching S3 object, and all parties agree on the BLAKE3 hash.
-///
-/// Termination condition: TC-2 (wait_for_new_checkpoint)
 use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
@@ -129,7 +127,7 @@ impl TestRun for Wal109 {
         let nodes = self.nodes.as_ref().unwrap();
 
         // Phase 1: hawk_main rolls forward the WAL, syncing all parties to 10
-        // mutations (TC-1).
+        // mutations.
         {
             let shutdown = CancellationToken::new();
             let mut hawk_set = run_hawk!(ctx.configs, shutdown.clone(), ctx);
@@ -139,7 +137,7 @@ impl TestRun for Wal109 {
             res?;
         }
 
-        // Phase 2: sidecar_main checkpoints the fully-synced WAL state (TC-2).
+        // Phase 2: sidecar_main checkpoints the fully-synced WAL state.
         // baseline = 0 because no checkpoint exists before this phase.
         {
             let shutdown = CancellationToken::new();

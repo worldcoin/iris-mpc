@@ -4,12 +4,12 @@
 /// produces exactly one checkpoint even when run twice against the same (unchanged)
 /// WAL state, and that the resulting S3 objects agree across all 3 parties.
 ///
-/// Exec — Phase 1 (TC-1)
+/// Exec — Phase 1
 /// ----------------------
 /// `hawk_main` starts with no WAL mutations and no prior checkpoint.  All 3
-/// parties signal ready (TC-1).
+/// parties signal ready.
 ///
-/// Exec — Phase 2a (TC-2)
+/// Exec — Phase 2a
 /// -----------------------
 /// `sidecar_main` (first run) checkpoints the empty graph state, writing one
 /// checkpoint row per party and uploading the corresponding S3 object.
@@ -24,8 +24,6 @@
 /// ---------------
 /// Every party has 0 WAL rows, exactly 1 checkpoint, a matching S3 object, and
 /// all parties agree on the BLAKE3 hash.
-///
-/// Termination condition: TC-2 (wait_for_new_checkpoint)
 use std::time::Duration;
 
 use tokio::time::sleep;
@@ -71,7 +69,7 @@ impl TestRun for Wal100 {
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
 
-        // Phase 1: hawk_main signals ready on an empty WAL (TC-1).
+        // Phase 1: hawk_main signals ready on an empty WAL.
         {
             let shutdown = CancellationToken::new();
             let mut hawk_set = run_hawk!(ctx.configs, shutdown.clone(), ctx);
@@ -81,7 +79,7 @@ impl TestRun for Wal100 {
             res?;
         }
 
-        // Phase 2a: first sidecar run — checkpoints the (empty) graph state (TC-2).
+        // Phase 2a: first sidecar run — checkpoints the (empty) graph state.
         // baseline = 0: no prior checkpoint exists.
         {
             let shutdown = CancellationToken::new();
