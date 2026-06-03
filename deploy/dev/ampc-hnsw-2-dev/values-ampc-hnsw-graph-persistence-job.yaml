@@ -21,7 +21,7 @@ env:
         key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
         name: application
   - name: SMPC__CPU_DATABASE__SCHEMA
-    value: "SMPC_dev_2_minfhd"
+    value: "SMPC_graph_persistence_test_2"
   - name: SMPC__GRAPH_CHECKPOINT_BUCKET_NAME
     value: "ampc-hnsw-graph-store-node-2-prod-eu-central-1"
 
