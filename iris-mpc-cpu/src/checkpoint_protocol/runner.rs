@@ -347,6 +347,7 @@ mod tests {
             ("WRAPPERTEST__CONFIG__CHECKPOINT_WINDOW", "8"),
             ("WRAPPERTEST__CONFIG__IS_ARCHIVAL", "false"),
             ("WRAPPERTEST__CONFIG__PRUNING_MODE", "older-non-archival"),
+            ("WRAPPERTEST__CONFIG__ONE_SHOT", "false"),
         ];
         for (k, v) in vars {
             std::env::set_var(k, v);
