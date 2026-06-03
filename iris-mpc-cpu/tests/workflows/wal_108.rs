@@ -53,13 +53,17 @@ impl TestRun for Wal108 {
 
         // Add edges: each node connects to the next two neighbors (wrapping).
         let num_nodes = WAL_MUTATION_COUNT as u32;
-        let builder = (0..WAL_MUTATION_COUNT)
-            .fold(builder, |b, idx| {
-                let base = idx as u32;
-                let neighbor1 = (base + 1) % num_nodes;
-                let neighbor2 = (base + 2) % num_nodes;
-                b.add_edges(EDGES_START_MOD_ID + idx, base, vec![neighbor1, neighbor2], 0)
-            });
+        let builder = (0..WAL_MUTATION_COUNT).fold(builder, |b, idx| {
+            let base = idx as u32;
+            let neighbor1 = (base + 1) % num_nodes;
+            let neighbor2 = (base + 2) % num_nodes;
+            b.add_edges(
+                EDGES_START_MOD_ID + idx,
+                base,
+                vec![neighbor1, neighbor2],
+                0,
+            )
+        });
 
         builder.seed_all(&nodes).await?;
 

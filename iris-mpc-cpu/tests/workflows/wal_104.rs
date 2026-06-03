@@ -3,14 +3,20 @@
 /// Three sequential sidecar cycles exercise the three `PruningMode` variants.
 /// Each cycle starts from the DB state left by the previous one.
 ///
+/// Setup seeds three checkpoints: one archival (oldest) and two regular, plus 20
+/// WAL mutations (10 nodes + 10 edges).  The archival checkpoint is inserted first
+/// so it receives the lowest DB row id and is therefore "oldest".
+///
 /// Run 1: `PruningMode::None`
-///   → checkpoint rows accumulate; S3 objects for all prior checkpoints still exist
+///   → all 3 seeded checkpoints + 1 new = 4 checkpoints; S3 objects accumulate
 ///
 /// Run 2: `PruningMode::OlderNonArchival`
-///   → non-archival checkpoints older than the latest are deleted from S3 and DB
+///   → the 2 regular seeded checkpoints and the run-1 checkpoint are deleted;
+///     the archival and the run-2 checkpoint survive → 2 checkpoints remain
 ///
 /// Run 3: `PruningMode::AllOlder`
-///   → all checkpoints except the latest are deleted; only 1 row remains
+///   → all checkpoints except the latest are deleted; only 1 row remains and the
+///     S3 bucket shrinks from the 3 objects seeded in setup to 1
 ///
 /// Termination condition: TC-2 (wait_for_new_checkpoint) per run.
 use std::time::Duration;
@@ -68,23 +74,34 @@ impl TestRun for Wal104 {
         let nodes = CpuNodes::new(&ctx.configs).await?;
         nodes.truncate_checkpoint_tables().await?;
 
-        // Seed a base checkpoint (anchor = 0) and 10 WAL mutations.
-        nodes.seed_all(0, 0).await?;
+        // Seed three checkpoints in order: archival first (oldest DB row id), then
+        // two regular checkpoints at later modification ids.  The sidecar will see
+        // WAL mutations after modification_id=10 (the latest seeded checkpoint) and
+        // build its first real checkpoint from mutations 11–20.
+        nodes.seed_all_archival(0, 0).await?; // archival, last_mod_id=0  (oldest)
+        nodes.seed_all(0, 5).await?; // regular,  last_mod_id=5
+        nodes.seed_all(0, 10).await?; // regular,  last_mod_id=10 (latest)
 
+        // 10 AddNode mutations (modification_ids 1–10).
         let builder = (1i64..=10).fold(WalMutationBuilder::new(), |b, id| {
             b.add_node(id, (id - 1) as u32, 1)
         });
 
-        // Add edges: each node connects to the next two neighbors (wrapping).
+        // 10 AddEdges mutations (modification_ids 11–20): each node connects to the
+        // next two neighbors (wrapping).
         const NUM_NODES: u32 = 10;
         const EDGES_START_MOD_ID: i64 = 11;
-        let builder = (0..10i64)
-            .fold(builder, |b, idx| {
-                let base = idx as u32;
-                let neighbor1 = (base + 1) % NUM_NODES;
-                let neighbor2 = (base + 2) % NUM_NODES;
-                b.add_edges(EDGES_START_MOD_ID + idx, base, vec![neighbor1, neighbor2], 0)
-            });
+        let builder = (0..10i64).fold(builder, |b, idx| {
+            let base = idx as u32;
+            let neighbor1 = (base + 1) % NUM_NODES;
+            let neighbor2 = (base + 2) % NUM_NODES;
+            b.add_edges(
+                EDGES_START_MOD_ID + idx,
+                base,
+                vec![neighbor1, neighbor2],
+                0,
+            )
+        });
 
         builder.seed_all(&nodes).await?;
 
@@ -94,22 +111,28 @@ impl TestRun for Wal104 {
 
     async fn setup_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
+        // 1 archival + 2 regular seeded checkpoints; 10 nodes + 10 edges in the WAL.
         let pre = WalAssertions::new()
-            .assert_checkpoint_count(1)
-            .assert_wal_row_count(20); // 10 nodes + 10 edges
+            .assert_checkpoint_count(3)
+            .assert_wal_row_count(20);
         nodes
             .apply_assertions(&[pre.clone(), pre.clone(), pre])
             .await
     }
 
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
-        // Run 1: no pruning — both the seeded checkpoint and the new one remain.
-        self.run_cycle(ctx, PruningMode::None, 1).await?;
+        let nodes = self.nodes.as_ref().unwrap();
 
-        // Run 2: prune non-archival older checkpoints — seeded + run-1 checkpoints deleted.
-        // The new checkpoint (from run 2) becomes the only one after pruning.
-        self.run_cycle(ctx, PruningMode::OlderNonArchival, 2)
+        // Run 1: no pruning — all 3 seeded checkpoints + 1 new = 4 checkpoints.
+        self.run_cycle(ctx, PruningMode::None, 3).await?;
+        nodes.assert_checkpoint_count(4).await?;
+
+        // Run 2: prune non-archival older checkpoints.
+        // The 2 regular seeded checkpoints and the run-1 checkpoint are deleted.
+        // The archival checkpoint (oldest) and the run-2 checkpoint survive → 2 remain.
+        self.run_cycle(ctx, PruningMode::OlderNonArchival, 4)
             .await?;
+        nodes.assert_checkpoint_count(2).await?;
 
         // Run 3: prune all older — only the latest checkpoint remains.
         self.run_cycle(ctx, PruningMode::AllOlder, 2).await?;
@@ -117,7 +140,7 @@ impl TestRun for Wal104 {
         Ok(())
     }
 
-    async fn exec_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
+    async fn exec_assert(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
 
         // After AllOlder pruning, exactly 1 checkpoint row remains per party.
@@ -130,9 +153,24 @@ impl TestRun for Wal104 {
 
         nodes.assert_checkpoint_hashes_agree().await?;
 
-        // TODO: assert that the S3 objects for the two pruned checkpoints (from
-        // run 1 and run 2) no longer exist — requires storing their s3_keys before
-        // they are pruned.
+        // List S3 keys for each party's bucket and verify that the count decreased
+        // from the 3 objects seeded in setup to exactly 1 after AllOlder pruning.
+        for (node, config) in nodes.0.iter().zip(ctx.configs.iter()) {
+            let keys = node.list_s3_keys(&config.checkpoint_bucket).await?;
+            tracing::info!(
+                party_id = node.config.party_id,
+                bucket = %config.checkpoint_bucket,
+                ?keys,
+                "S3 keys after AllOlder pruning"
+            );
+            eyre::ensure!(
+                keys.len() == 1,
+                "party {}: expected 1 S3 object after AllOlder pruning, got {} — keys: {:?}",
+                node.config.party_id,
+                keys.len(),
+                keys,
+            );
+        }
 
         Ok(())
     }

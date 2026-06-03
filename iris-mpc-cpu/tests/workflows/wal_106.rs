@@ -72,14 +72,18 @@ impl TestRun for Wal106 {
         });
 
         // Add edges for first batch: each node connects to the next two neighbors (wrapping).
-        let builder = (0..FIRST_BATCH_NODES as i64)
-            .fold(builder, |b, idx| {
-                let base = idx as u32;
-                let num_nodes = FIRST_BATCH_NODES as u32;
-                let neighbor1 = (base + 1) % num_nodes;
-                let neighbor2 = (base + 2) % num_nodes;
-                b.add_edges(FIRST_BATCH_EDGES_START + idx, base, vec![neighbor1, neighbor2], 0)
-            });
+        let builder = (0..FIRST_BATCH_NODES as i64).fold(builder, |b, idx| {
+            let base = idx as u32;
+            let num_nodes = FIRST_BATCH_NODES as u32;
+            let neighbor1 = (base + 1) % num_nodes;
+            let neighbor2 = (base + 2) % num_nodes;
+            b.add_edges(
+                FIRST_BATCH_EDGES_START + idx,
+                base,
+                vec![neighbor1, neighbor2],
+                0,
+            )
+        });
 
         builder.seed_all(&nodes).await?;
 
@@ -133,20 +137,24 @@ impl TestRun for Wal106 {
         }
 
         // Seed additional WAL mutations 11..=20 for all parties.
-        let builder =
-            (FIRST_BATCH_UP_TO + 1..=SECOND_BATCH_UP_TO).fold(WalMutationBuilder::new(), |b, id| {
+        let builder = (FIRST_BATCH_UP_TO + 1..=SECOND_BATCH_UP_TO)
+            .fold(WalMutationBuilder::new(), |b, id| {
                 b.add_node(id, (id - 1) as u32, 1)
             });
 
         // Add edges for second batch: each node connects to the next two neighbors (wrapping).
-        let builder = (0..SECOND_BATCH_NODES as i64)
-            .fold(builder, |b, idx| {
-                let base = (FIRST_BATCH_NODES as u32) + (idx as u32);
-                let num_nodes = (FIRST_BATCH_NODES + SECOND_BATCH_NODES) as u32;
-                let neighbor1 = (base + 1) % num_nodes;
-                let neighbor2 = (base + 2) % num_nodes;
-                b.add_edges(SECOND_BATCH_EDGES_START + idx, base, vec![neighbor1, neighbor2], 0)
-            });
+        let builder = (0..SECOND_BATCH_NODES as i64).fold(builder, |b, idx| {
+            let base = (FIRST_BATCH_NODES as u32) + (idx as u32);
+            let num_nodes = (FIRST_BATCH_NODES + SECOND_BATCH_NODES) as u32;
+            let neighbor1 = (base + 1) % num_nodes;
+            let neighbor2 = (base + 2) % num_nodes;
+            b.add_edges(
+                SECOND_BATCH_EDGES_START + idx,
+                base,
+                vec![neighbor1, neighbor2],
+                0,
+            )
+        });
 
         builder.seed_all(nodes).await?;
 

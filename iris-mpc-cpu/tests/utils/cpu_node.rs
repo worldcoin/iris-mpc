@@ -47,7 +47,7 @@ impl DbStores {
     }
 
     /// Truncate all WAL and checkpoint tables for this party.
-    /// Covers: hawk_graph_mutations, genesis_graph_checkpoint, and the persistent state table.
+    /// Covers: hawk_graph_mutations, genesis_graph_checkpoint, persistent_state, and modifications.
     pub async fn truncate_checkpoint_tables(&self) -> eyre::Result<()> {
         sqlx::query("TRUNCATE hawk_graph_mutations")
             .execute(self.graph.pool())
@@ -56,6 +56,9 @@ impl DbStores {
             .execute(self.graph.pool())
             .await?;
         sqlx::query("TRUNCATE persistent_state")
+            .execute(self.graph.pool())
+            .await?;
+        sqlx::query("TRUNCATE modifications")
             .execute(self.graph.pool())
             .await?;
         Ok(())
@@ -150,18 +153,62 @@ impl CpuNode {
         Ok(())
     }
 
+    /// List all S3 object keys in the given bucket (all pages, no prefix filter).
+    ///
+    /// Returns an empty vec when the bucket is empty.  Intended for exec_assert
+    /// checks that verify the pruning pass reduced the number of stored checkpoints.
+    pub async fn list_s3_keys(&self, bucket: &str) -> eyre::Result<Vec<String>> {
+        let mut keys = Vec::new();
+        let mut continuation_token: Option<String> = None;
+        loop {
+            let mut req = self.s3.list_objects_v2().bucket(bucket);
+            if let Some(ref token) = continuation_token {
+                req = req.continuation_token(token);
+            }
+            let resp = req
+                .send()
+                .await
+                .map_err(|e| eyre!("failed to list S3 objects in bucket {bucket}: {e}"))?;
+            for obj in resp.contents() {
+                if let Some(key) = obj.key() {
+                    keys.push(key.to_string());
+                }
+            }
+            if resp.is_truncated().unwrap_or(false) {
+                continuation_token = resp.next_continuation_token().map(|s| s.to_string());
+            } else {
+                break;
+            }
+        }
+        Ok(keys)
+    }
+
     /// Seed a genesis checkpoint for this party.
     ///
-    /// 1. Build empty `[GraphMem<IrisVectorId>; 2]` (both eyes, no nodes).
-    /// 2. Serialize with `bincode::serialize` — same wire format as the sidecar.
-    /// 3. Compute BLAKE3 hash of the bytes.
-    /// 4. Upload to S3 at key `"{party_id}/checkpoints/seed_{last_modification_id}"`.
-    /// 5. Insert `genesis_graph_checkpoint` DB row inside a transaction.
-    /// 6. Return the newly inserted `GraphCheckpointRow`.
+    /// Delegates to [`seed_party_with_options`] with `is_archival = false`.
     pub async fn seed_party(
         &self,
         last_iris_id: i64,
         last_modification_id: i64,
+    ) -> eyre::Result<GraphCheckpointRow> {
+        self.seed_party_with_options(last_iris_id, last_modification_id, false)
+            .await
+    }
+
+    /// Seed a genesis checkpoint for this party with a configurable archival flag.
+    ///
+    /// 1. Build empty `[GraphMem<IrisVectorId>; 2]` (both eyes, no nodes).
+    /// 2. Serialize with `bincode::serialize` — same wire format as the sidecar.
+    /// 3. Compute BLAKE3 hash of the bytes.
+    /// 4. Upload to S3 at key `"{party_id}/checkpoints/{label}_{last_modification_id}"`,
+    ///    where `label` is `"archival"` when `is_archival` is true, otherwise `"seed"`.
+    /// 5. Insert `genesis_graph_checkpoint` DB row inside a transaction.
+    /// 6. Return the newly inserted `GraphCheckpointRow`.
+    pub async fn seed_party_with_options(
+        &self,
+        last_iris_id: i64,
+        last_modification_id: i64,
+        is_archival: bool,
     ) -> eyre::Result<GraphCheckpointRow> {
         let bucket = &self.config.checkpoint_bucket;
         let party_id = self.config.party_id;
@@ -171,7 +218,8 @@ impl CpuNode {
         let graph_pair: [GraphMem<IrisVectorId>; 2] = [GraphMem::new(), GraphMem::new()];
         let bytes = bincode::serialize(&graph_pair)?;
         let hash_hex = hex::encode(blake3::hash(&bytes).as_bytes());
-        let s3_key = format!("{party_id}/checkpoints/seed_{last_modification_id}");
+        let label = if is_archival { "archival" } else { "seed" };
+        let s3_key = format!("{party_id}/checkpoints/{label}_{last_modification_id}");
 
         stream_serialize_and_upload_with(
             &self.s3,
@@ -191,7 +239,7 @@ impl CpuNode {
             last_modification_id,
             Some(last_modification_id),
             &hash_hex,
-            false,
+            is_archival,
             4,
         )
         .await?;
@@ -380,6 +428,24 @@ impl CpuNodes {
             self.0[0].seed_party(last_iris_id, last_modification_id),
             self.0[1].seed_party(last_iris_id, last_modification_id),
             self.0[2].seed_party(last_iris_id, last_modification_id),
+        )?;
+        Ok([r0, r1, r2])
+    }
+
+    /// Seed an archival genesis checkpoint for all 3 parties concurrently.
+    ///
+    /// Identical to [`seed_all`] but marks the inserted row as archival (`is_archival = true`).
+    /// Archival checkpoints are preserved by [`PruningMode::OlderNonArchival`] and are only
+    /// removed by [`PruningMode::AllOlder`].
+    pub async fn seed_all_archival(
+        &self,
+        last_iris_id: i64,
+        last_modification_id: i64,
+    ) -> eyre::Result<[GraphCheckpointRow; 3]> {
+        let (r0, r1, r2) = tokio::try_join!(
+            self.0[0].seed_party_with_options(last_iris_id, last_modification_id, true),
+            self.0[1].seed_party_with_options(last_iris_id, last_modification_id, true),
+            self.0[2].seed_party_with_options(last_iris_id, last_modification_id, true),
         )?;
         Ok([r0, r1, r2])
     }

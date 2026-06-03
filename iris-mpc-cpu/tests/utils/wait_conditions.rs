@@ -99,3 +99,44 @@ pub async fn wait_for_new_checkpoint(
 pub async fn count_checkpoints_for(node: &super::cpu_node::CpuNode) -> eyre::Result<usize> {
     node.store.count_checkpoints().await
 }
+
+/// TC-E — Wait for the first hawk_main task to exit with an error.
+///
+/// Returns the formatted error string (`format!("{err:#}")`) so the caller can
+/// assert on the message without inspecting the raw `eyre::Report`.
+///
+/// Does **not** cancel the remaining tasks — the caller is responsible for
+/// calling `stop_and_join!` afterwards.  Tasks that exit cleanly with `Ok(())`
+/// (e.g. the bridge watcher task) are skipped; the loop continues until the
+/// first erroring task is found.
+///
+/// Returns `Err` if the timeout fires before any task fails, or if a task
+/// panics (i.e. `JoinError`).
+pub async fn wait_for_hawk_failure(
+    join_set: &mut JoinSet<eyre::Result<()>>,
+    dur: Duration,
+) -> eyre::Result<String> {
+    timeout(dur, async {
+        while let Some(result) = join_set.join_next().await {
+            match result {
+                // Watcher bridge task (or any server that happens to succeed before the
+                // failing one) — skip and keep waiting.
+                Ok(Ok(())) => {}
+                // First task error — return its formatted message.
+                Ok(Err(e)) => return Ok(format!("{e:#}")),
+                // Task panicked.
+                Err(e) => return Err(eyre::eyre!("hawk_main task panicked: {e}")),
+            }
+        }
+        Err(eyre::eyre!(
+            "all hawk_main tasks exited without an error (expected a failure)"
+        ))
+    })
+    .await
+    .map_err(|_| {
+        eyre::eyre!(
+            "TC-E timeout: hawk_main did not produce an error within {:?}",
+            dur
+        )
+    })?
+}

@@ -22,15 +22,9 @@ use crate::utils::runner::TestRun;
 use eyre::bail;
 use serial_test::serial;
 use workflows::{
-    wal_100::Wal100,
-    wal_101::Wal101,
-    wal_102::Wal102,
-    wal_103::Wal103,
-    wal_104::Wal104,
-    wal_105::Wal105,
-    wal_106::Wal106,
-    wal_107::Wal107,
-    wal_108::Wal108,
+    wal_100::Wal100, wal_101::Wal101, wal_102::Wal102, wal_103::Wal103, wal_104::Wal104,
+    wal_105::Wal105, wal_106::Wal106, wal_107::Wal107, wal_108::Wal108, wal_109::Wal109,
+    wal_110::Wal110,
 };
 
 const RUST_LOG: &str = "info";
@@ -185,4 +179,24 @@ fn test_wal_107() -> eyre::Result<()> {
 #[ignore = "requires external setup"]
 fn test_wal_108() -> eyre::Result<()> {
     run_test!(108, 1, Wal108::new())
+}
+
+/// Modification-driven sync roll-forward: parties start with staggered
+/// `persisted` states and WAL row counts; hawk_main syncs all parties to 10 rows.
+/// Mirrors `test_hawk_init` from iris-mpc-upgrade-hawk/tests/e2e_hawk.rs.
+#[test]
+#[serial]
+#[ignore = "requires external setup"]
+fn test_wal_109() -> eyre::Result<()> {
+    run_test!(109, 1, Wal109::new())
+}
+
+/// Modification sync conflict: parties 1 and 2 hold different bytes for the
+/// same modification_id; hawk_main must bail with the mismatch error.
+/// Mirrors `test_hawk_sync_mutation_mismatch` from iris-mpc-upgrade-hawk/tests/e2e_hawk.rs.
+#[test]
+#[serial]
+#[ignore = "requires external setup"]
+fn test_wal_110() -> eyre::Result<()> {
+    run_test!(110, 1, Wal110::new())
 }

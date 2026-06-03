@@ -120,6 +120,111 @@ impl WalMutationBuilder {
         Ok(())
     }
 
+    /// Insert a `modifications` row for each WAL entry into one party's database.
+    ///
+    /// Each row is seeded as completed and persisted, reflecting the state of a
+    /// fully-processed modification.  The `serial_id` is derived from the mutation
+    /// op: `AddNode → node id`, `AddEdges → base node id`.
+    ///
+    /// `s3_url` is set to a deterministic UUID derived from the `modification_id`
+    /// (no actual S3 upload is required — all rows are pre-persisted, so
+    /// `hawk_main` will never attempt to fetch their iris shares).
+    ///
+    /// `result_message_body` mirrors the genesis pipeline format:
+    /// `{"node_id": <party_id>}`.
+    ///
+    /// This mirrors what the genesis test pipeline writes via `db_ops::write_modification`,
+    /// making workflow test state realistic enough for `hawk_main`'s modification sync
+    /// to operate on a non-empty `modifications` table.
+    pub async fn seed_modifications(
+        &self,
+        graph: &GraphPg<PlaintextStore>,
+        party_id: usize,
+    ) -> eyre::Result<()> {
+        let result_message_body = format!(r#"{{"node_id":{party_id}}}"#);
+        for (modification_id, mutation) in &self.entries {
+            let serial_id: i64 = match mutation.ops.first() {
+                Some(MutationOp::AddNode { id, .. }) => id.serial_id() as i64,
+                Some(MutationOp::AddEdges { base, .. }) => base.serial_id() as i64,
+                _ => 0,
+            };
+            // Deterministic UUID: no upload needed since all rows are persisted=TRUE.
+            let s3_url = uuid::Uuid::from_u128(*modification_id as u128).to_string();
+            sqlx::query(
+                r#"
+                INSERT INTO modifications
+                    (id, serial_id, request_type, s3_url, status, persisted, result_message_body)
+                VALUES ($1, $2, 'Uniqueness', $3, 'COMPLETED', TRUE, $4)
+                ON CONFLICT (id) DO NOTHING
+                "#,
+            )
+            .bind(modification_id)
+            .bind(serial_id)
+            .bind(&s3_url)
+            .bind(&result_message_body)
+            .execute(graph.pool())
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Convenience: seed modifications into all 3 parties' stores.
+    ///
+    /// Each party receives its own `result_message_body` with the correct `node_id`.
+    /// All entries are seeded as `persisted = TRUE`.
+    pub async fn seed_modifications_all(&self, nodes: &CpuNodes) -> eyre::Result<()> {
+        for node in &nodes.0 {
+            self.seed_modifications(&node.store.graph, node.config.party_id)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Insert a `modifications` row for each WAL entry with a per-party persisted count.
+    ///
+    /// The first `persisted_count` entries (by insertion order) are seeded as
+    /// `persisted = TRUE`; the remainder as `persisted = FALSE`.  This mirrors
+    /// the staggered state across parties in the genesis modification-sync test:
+    ///
+    /// ```text
+    /// party 0: persisted_count = 0  → all FALSE
+    /// party 1: persisted_count = 5  → first 5 TRUE, rest FALSE
+    /// party 2: persisted_count = 10 → all TRUE
+    /// ```
+    pub async fn seed_modifications_partial(
+        &self,
+        graph: &GraphPg<PlaintextStore>,
+        party_id: usize,
+        persisted_count: usize,
+    ) -> eyre::Result<()> {
+        let result_message_body = format!(r#"{{"node_id":{party_id}}}"#);
+        for (idx, (modification_id, mutation)) in self.entries.iter().enumerate() {
+            let serial_id: i64 = match mutation.ops.first() {
+                Some(MutationOp::AddNode { id, .. }) => id.serial_id() as i64,
+                Some(MutationOp::AddEdges { base, .. }) => base.serial_id() as i64,
+                _ => 0,
+            };
+            let s3_url = uuid::Uuid::from_u128(*modification_id as u128).to_string();
+            let persisted = idx < persisted_count;
+            sqlx::query(
+                r#"
+                INSERT INTO modifications
+                    (id, serial_id, request_type, s3_url, status, persisted, result_message_body)
+                VALUES ($1, $2, 'Uniqueness', $3, 'COMPLETED', $4, $5)
+                ON CONFLICT (id) DO NOTHING
+                "#,
+            )
+            .bind(modification_id)
+            .bind(serial_id)
+            .bind(&s3_url)
+            .bind(persisted)
+            .bind(&result_message_body)
+            .execute(graph.pool())
+            .await?;
+        }
+        Ok(())
+    }
+
     /// Number of WAL entries that will be seeded.
     pub fn len(&self) -> usize {
         self.entries.len()

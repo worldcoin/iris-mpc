@@ -70,14 +70,18 @@ impl TestRun for Wal105 {
             });
 
         // Add edges for first batch: each node connects to the next two neighbors (wrapping).
-        let builder = (0..INITIAL_NODES as i64)
-            .fold(builder, |b, idx| {
-                let base = idx as u32;
-                let num_nodes = INITIAL_NODES as u32;
-                let neighbor1 = (base + 1) % num_nodes;
-                let neighbor2 = (base + 2) % num_nodes;
-                b.add_edges(INITIAL_EDGES_START + idx, base, vec![neighbor1, neighbor2], 0)
-            });
+        let builder = (0..INITIAL_NODES as i64).fold(builder, |b, idx| {
+            let base = idx as u32;
+            let num_nodes = INITIAL_NODES as u32;
+            let neighbor1 = (base + 1) % num_nodes;
+            let neighbor2 = (base + 2) % num_nodes;
+            b.add_edges(
+                INITIAL_EDGES_START + idx,
+                base,
+                vec![neighbor1, neighbor2],
+                0,
+            )
+        });
 
         builder.seed_all(&nodes).await?;
 
@@ -124,14 +128,13 @@ impl TestRun for Wal105 {
             });
 
         // Add edges for second batch: each node connects to the next two neighbors (wrapping).
-        let builder = (0..HAWK_NODES as i64)
-            .fold(builder, |b, idx| {
-                let base = (INITIAL_NODES as u32) + (idx as u32);
-                let num_nodes = (INITIAL_NODES + HAWK_NODES) as u32;
-                let neighbor1 = (base + 1) % num_nodes;
-                let neighbor2 = (base + 2) % num_nodes;
-                b.add_edges(HAWK_EDGES_START + idx, base, vec![neighbor1, neighbor2], 0)
-            });
+        let builder = (0..HAWK_NODES as i64).fold(builder, |b, idx| {
+            let base = (INITIAL_NODES as u32) + (idx as u32);
+            let num_nodes = (INITIAL_NODES + HAWK_NODES) as u32;
+            let neighbor1 = (base + 1) % num_nodes;
+            let neighbor2 = (base + 2) % num_nodes;
+            b.add_edges(HAWK_EDGES_START + idx, base, vec![neighbor1, neighbor2], 0)
+        });
 
         builder.seed_all(nodes).await?;
 
