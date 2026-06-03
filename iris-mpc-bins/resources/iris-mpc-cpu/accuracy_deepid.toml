@@ -1,0 +1,31 @@
+threshold = 5000
+
+[vectors]
+option = "NdjsonFile"
+path = "iris-mpc-bins/resources/iris-mpc-cpu/deepid_sample.ndjson"
+limit = 64
+
+[graph]
+option = "GenerateDynamic"
+size = 64
+
+[graph.gen_hnsw_config]
+ef_construction = 64
+ef_search = 64
+M = 32
+layer_mode = { LinearScan = { max_graph_layer = 1 } }
+
+[analysis]
+sample_size = 8
+seed = 0
+k_neighbors = 1
+output_format = "rate"
+output_path = "data/accuracy_deepid_results.csv"
+noise_levels = [0.0, 0.05, 0.1, 0.2]
+neighborhood_mode = "Sorted"
+
+[analysis.search_hnsw_config]
+ef_construction = 64
+ef_search = 64
+M = 32
+layer_mode = { LinearScan = { max_graph_layer = 1 } }
