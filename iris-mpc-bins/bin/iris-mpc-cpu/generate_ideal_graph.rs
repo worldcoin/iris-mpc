@@ -212,7 +212,7 @@ async fn run_sanity_check_deep_id(
         store.insert_with_id(IrisVectorId::from_serial_id((i as u32) + 1), Arc::new(v));
     }
 
-    let sample_vec = store.storage.get_vector(&sample).cloned().unwrap();
+    let sample_vec = Arc::new(store.storage.get_vector(&sample).cloned().unwrap());
 
     for lc in 0..graph.layers.len() {
         let neighbors = graph.layers[lc]
@@ -222,8 +222,8 @@ async fn run_sanity_check_deep_id(
         let mut dists: Vec<(IrisVectorId, i32)> = Vec::new();
         for k in graph.layers[lc].links.keys() {
             if *k != sample {
-                let other = store.storage.get_vector(k).unwrap();
-                dists.push((*k, sample_vec.dot(other)));
+                let dist = store.eval_distance(&sample_vec, k).await.unwrap();
+                dists.push((*k, dist));
             }
         }
         if dists.is_empty() {
