@@ -23,7 +23,7 @@ use ampc_server_utils::{
     wait_for_others_ready, wait_for_others_unready, BatchSyncSharedState, TaskMonitor,
 };
 use chrono::Utc;
-use eyre::{bail, eyre, Report, Result};
+use eyre::{bail, eyre, Report, Result, WrapErr};
 use iris_mpc_common::config::{CommonConfig, Config};
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::sha256::sha256_bytes;
@@ -232,44 +232,58 @@ pub async fn server_main(config: Config) -> Result<()> {
     };
 
     let sidecar_future = {
+        // ensure the sidecar specific setup code only runs if sidecar is enabled in the config
+        // if sidecar returns an error, log it and return Ok so that it doesn't interfere with server_main()
         let sidecar_config = match SidecarConfigWrapper::load_config("SIDECAR") {
             Ok(r) => r,
             Err(e) => {
-                // don't block server_main if this fails
                 tracing::warn!("failed to parse sidecar config: {e}");
                 return Ok(());
             }
         };
-
         let Some(sc_config) = sidecar_config.config else {
             return Ok(());
         };
 
         let config = config.read().await;
-        let aws_clients = AwsClients::new(&config).await?;
-        // the sidecar needs its own graph store and this function transforms config to the appropriate
-        // schema name when creating the pg client
-        let (_iris_store, graph_store) = prepare_stores(&config).await?;
-
         async move {
-            let network_args = NetworkHandleArgs {
-                party_index: config.party_id,
-                addresses: sidecar_config.addresses.clone(),
-                outbound_addresses: sidecar_config.addresses,
-                connection_parallelism: sidecar_config.connection_parallelism,
-                request_parallelism: sidecar_config.request_parallelism,
-                sessions_per_request: 1, // these aren't used by the sidecar
-                tls: config.tls.clone(),
-            };
-            let mut network_handle = build_network_handle(network_args, sidecar_ct.clone()).await?;
-            sidecar_main(
-                sc_config.clone(),
-                &graph_store,
-                &aws_clients.checkpoint_s3_client,
-                &mut network_handle,
-                sidecar_ct,
-            )
-            .await
+            let result: Result<()> = async {
+                let aws_clients = AwsClients::new(&config)
+                    .await
+                    .wrap_err("failed to create AWS clients")?;
+                // the sidecar needs its own graph store and this function transforms config to the
+                // appropriate schema name when creating the pg client
+                let (_iris_store, graph_store) = prepare_stores(&config)
+                    .await
+                    .wrap_err("failed to prepare stores")?;
+                let network_args = NetworkHandleArgs {
+                    party_index: config.party_id,
+                    addresses: sidecar_config.addresses.clone(),
+                    outbound_addresses: sidecar_config.addresses,
+                    connection_parallelism: sidecar_config.connection_parallelism,
+                    request_parallelism: sidecar_config.request_parallelism,
+                    sessions_per_request: 1, // these aren't used by the sidecar
+                    tls: config.tls.clone(),
+                };
+                let mut network_handle = build_network_handle(network_args, sidecar_ct.clone())
+                    .await
+                    .wrap_err("failed to build network handle")?;
+                sidecar_main(
+                    sc_config.clone(),
+                    &graph_store,
+                    &aws_clients.checkpoint_s3_client,
+                    &mut network_handle,
+                    sidecar_ct,
+                )
+                .await
+                .wrap_err("sidecar_main exited with error")?;
+                Ok(())
+            }
+            .await;
+            if let Err(e) = result {
+                tracing::error!("sidecar: {e:#}");
+            }
+            Ok(())
         }
     };
 
