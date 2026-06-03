@@ -1,6 +1,6 @@
 use crate::utils::CpuNodeConfig;
 
-use super::{CpuConfigs, COUNT_OF_PARTIES};
+use super::CpuConfigs;
 
 use eyre::eyre;
 use iris_mpc_common::{

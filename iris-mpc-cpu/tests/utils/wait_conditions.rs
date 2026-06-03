@@ -95,11 +95,6 @@ pub async fn wait_for_new_checkpoint(
     Ok(())
 }
 
-/// Count checkpoint rows for one party.  Used to establish a TC-2 baseline.
-pub async fn count_checkpoints_for(node: &super::cpu_node::CpuNode) -> eyre::Result<usize> {
-    node.store.count_checkpoints().await
-}
-
 /// TC-E — Wait for the first hawk_main task to exit with an error.
 ///
 /// Returns the formatted error string (`format!("{err:#}")`) so the caller can

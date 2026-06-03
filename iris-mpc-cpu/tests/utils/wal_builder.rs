@@ -224,15 +224,6 @@ impl WalMutationBuilder {
         }
         Ok(())
     }
-
-    /// Number of WAL entries that will be seeded.
-    pub fn len(&self) -> usize {
-        self.entries.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
 }
 
 impl Default for WalMutationBuilder {
