@@ -48,24 +48,33 @@ impl DbStores {
     /// Truncate all WAL and checkpoint tables for this party.
     /// Covers: hawk_graph_mutations, genesis_graph_checkpoint, and the persistent state table.
     pub async fn truncate_checkpoint_tables(&self) -> eyre::Result<()> {
-        // TODO (open question #4): confirm persistent state table name.
-        // Execute for each table:
-        //   sqlx::query("TRUNCATE {schema}.hawk_graph_mutations").execute(&pool).await?;
-        //   sqlx::query("TRUNCATE {schema}.genesis_graph_checkpoint").execute(&pool).await?;
-        //   sqlx::query("TRUNCATE {schema}.{persistent_state_table}").execute(&pool).await?;
-        todo!("truncate hawk_graph_mutations, genesis_graph_checkpoint, persistent state")
+        sqlx::query("TRUNCATE hawk_graph_mutations")
+            .execute(self.graph.pool())
+            .await?;
+        sqlx::query("TRUNCATE genesis_graph_checkpoint")
+            .execute(self.graph.pool())
+            .await?;
+        sqlx::query("TRUNCATE persistent_state")
+            .execute(self.graph.pool())
+            .await?;
+        Ok(())
     }
 
     /// Count rows in `hawk_graph_mutations`.
     pub async fn wal_row_count(&self) -> eyre::Result<usize> {
-        // TODO: SELECT COUNT(*) FROM {schema}.hawk_graph_mutations
-        todo!("count hawk_graph_mutations rows")
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM hawk_graph_mutations")
+            .fetch_one(self.graph.pool())
+            .await?;
+        Ok(count as usize)
     }
 
     /// Get MAX(modification_id) from `hawk_graph_mutations`, returns None if empty.
     pub async fn max_modification_id(&self) -> eyre::Result<Option<i64>> {
-        // TODO: SELECT MAX(modification_id) FROM {schema}.hawk_graph_mutations
-        todo!("get max modification_id from hawk_graph_mutations")
+        let max: Option<i64> =
+            sqlx::query_scalar("SELECT MAX(modification_id) FROM hawk_graph_mutations")
+                .fetch_one(self.graph.pool())
+                .await?;
+        Ok(max)
     }
 }
 
@@ -188,12 +197,22 @@ impl CpuNodes {
 
     /// Assert that all 3 parties' latest checkpoint BLAKE3 hashes are equal.
     pub async fn assert_checkpoint_hashes_agree(&self) -> eyre::Result<()> {
-        // TODO (open question #3): once GraphCheckpointRow is available, fetch
-        // latest row per party and compare blake3_hash fields.
-        //
-        // let hashes: Vec<String> = ...
-        // ensure all are equal
-        todo!("compare blake3_hash across all 3 parties' latest checkpoint rows")
+        let mut hashes: Vec<String> = Vec::with_capacity(3);
+        for (i, node) in self.0.iter().enumerate() {
+            let row = node
+                .stores
+                .latest_checkpoint()
+                .await?
+                .ok_or_else(|| eyre!("party {i}: no checkpoint row found"))?;
+            hashes.push(row.blake3_hash);
+        }
+        let first = &hashes[0];
+        eyre::ensure!(
+            hashes.iter().all(|h| h == first),
+            "checkpoint blake3_hash mismatch across parties: {:?}",
+            hashes
+        );
+        Ok(())
     }
 
     /// Assert that all 3 parties' latest checkpoint BLAKE3 hashes match a
@@ -219,12 +238,22 @@ impl CpuNodes {
     }
 
     /// Delete all checkpoint S3 objects and DB rows.  Called in teardown.
-    pub async fn cleanup_s3_checkpoints(&self, _configs: &CpuConfigs) -> eyre::Result<()> {
-        // TODO: for each party:
-        //   1. fetch all rows via self.graph.recent_checkpoints(usize::MAX)
-        //   2. delete each S3 object at row.s3_key
-        //   3. delete DB rows (or truncate genesis_graph_checkpoint)
-        todo!("delete S3 checkpoint objects and truncate genesis_graph_checkpoint for all parties")
+    pub async fn cleanup_s3_checkpoints(&self, configs: &CpuConfigs) -> eyre::Result<()> {
+        for (node, config) in self.0.iter().zip(configs.iter()) {
+            let rows = node.stores.graph.get_genesis_graph_checkpoints().await?;
+            for row in &rows {
+                // Ignore errors — the object may already be gone.
+                let _ = node
+                    .s3
+                    .delete_object()
+                    .bucket(&config.checkpoint_bucket)
+                    .key(&row.s3_key)
+                    .send()
+                    .await;
+            }
+            node.stores.truncate_checkpoint_tables().await?;
+        }
+        Ok(())
     }
 
     /// Truncate WAL and checkpoint tables for all parties.
@@ -344,11 +373,15 @@ impl WalAssertions {
         }
 
         if let Some(expected_mod_id) = self.latest_checkpoint_mod_id {
-            // TODO (open question #3): once GraphCheckpointRow is available:
-            //   let row = stores.latest_checkpoint().await?.ok_or_else(|| eyre!("no checkpoint row"))?;
-            //   ensure!(row.graph_mutation_id == Some(expected_mod_id), ...);
-            let _ = expected_mod_id;
-            todo!("assert latest_checkpoint.graph_mutation_id == expected_mod_id")
+            let row = stores
+                .latest_checkpoint()
+                .await?
+                .ok_or_else(|| eyre!("no checkpoint row found"))?;
+            eyre::ensure!(
+                row.graph_mutation_id == Some(expected_mod_id),
+                "latest checkpoint graph_mutation_id: expected Some({expected_mod_id}), got {:?}",
+                row.graph_mutation_id
+            );
         }
 
         if let Some(true) = self.s3_object_exists {

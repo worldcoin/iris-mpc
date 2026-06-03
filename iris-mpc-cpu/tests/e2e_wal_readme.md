@@ -394,10 +394,10 @@ stop_and_join!(shutdown_ct, join_set)
    signature on `GraphPg` for inserting a new `genesis_graph_checkpoint` row?  Does it
    take the `blake3_hash` as a `String` or `[u8; 32]`?  Does it return the inserted row?
 
-4. **Persistent state table name for truncation:** `truncate_checkpoint_tables()` needs to
+4. ~**Persistent state table name for truncation:** `truncate_checkpoint_tables()` needs to
    clear `hawk_graph_mutations`, `genesis_graph_checkpoint`, and the persistent state table.
    What is the exact table name for the persistent state (used to store
-   `last_indexed_iris_id`, `last_indexed_modification_id`, etc.)?
+   `last_indexed_iris_id`, `last_indexed_modification_id`, etc.)?~
 
 5. **`ampc_server_utils` as a test dependency:** `wait_for_all_ready` (TC-1) calls
    `wait_for_others_ready(&ServerCoordinationConfig)` from `ampc_server_utils`.  Is this
