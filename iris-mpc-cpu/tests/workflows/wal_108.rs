@@ -67,8 +67,7 @@ impl TestRun for Wal108 {
             )
         });
 
-        builder.insert_mutations_all(&nodes).await?;
-        builder.seed_modifications_all(&nodes).await?;
+        builder.build(&nodes).await?;
 
         self.nodes = Some(nodes);
         Ok(())

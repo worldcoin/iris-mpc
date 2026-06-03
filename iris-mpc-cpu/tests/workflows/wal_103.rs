@@ -62,8 +62,7 @@ impl TestRun for Wal103 {
             )
         });
 
-        builder.insert_mutations_all(&nodes).await?;
-        builder.seed_modifications_all(&nodes).await?;
+        builder.build(&nodes).await?;
 
         // Build checkpoint from WAL up to modification_id = 50.
         nodes

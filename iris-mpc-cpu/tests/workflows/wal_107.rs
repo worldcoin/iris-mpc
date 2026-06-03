@@ -82,8 +82,7 @@ impl TestRun for Wal107 {
             )
         });
 
-        shared_builder.insert_mutations_all(&nodes).await?;
-        shared_builder.seed_modifications_all(&nodes).await?;
+        shared_builder.build(&nodes).await?;
 
         // Seed WAL mutations 11..=15 into party 0 ONLY, simulating a party that
         // committed additional work before the others diverged.

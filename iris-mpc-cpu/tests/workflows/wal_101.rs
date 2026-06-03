@@ -63,10 +63,9 @@ impl TestRun for Wal101 {
             )
         });
 
-        builder.insert_mutations_all(&nodes).await?;
-        // Seed a `modifications` row for every WAL entry so that hawk_main's
-        // modification sync operates on a realistic, non-empty modifications table.
-        builder.seed_modifications_all(&nodes).await?;
+        // Insert mutations and seed a `modifications` row for every WAL entry so that
+        // hawk_main's modification sync operates on a realistic, non-empty modifications table.
+        builder.build(&nodes).await?;
 
         // Build checkpoint from WAL up to modification_id = 50.
         nodes

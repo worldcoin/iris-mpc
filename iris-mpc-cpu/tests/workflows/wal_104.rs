@@ -93,8 +93,7 @@ impl TestRun for Wal104 {
             )
         });
 
-        builder.insert_mutations_all(&nodes).await?;
-        builder.seed_modifications_all(&nodes).await?;
+        builder.build(&nodes).await?;
 
         // Build checkpoints from WAL after mutations are seeded, so each snapshot
         // reflects the correct graph state.  Order preserved: archival oldest, then

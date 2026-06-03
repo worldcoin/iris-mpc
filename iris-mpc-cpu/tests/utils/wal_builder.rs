@@ -31,7 +31,7 @@ use super::cpu_node::CpuNodes;
 ///     .add_node(1, 0, 3)                     // mod_id=1, node_id=0, height=3
 ///     .add_node(2, 1, 2)                     // mod_id=2, node_id=1, height=2
 ///     .add_edges(3, 0, vec![1], 0)           // mod_id=3, base=0, neighbors=[1], layer=0
-///     .seed_all(&nodes)
+///     .build(&nodes)
 ///     .await?;
 /// ```
 pub struct WalMutationBuilder {
@@ -177,6 +177,15 @@ impl WalMutationBuilder {
             self.seed_modifications(&node.store.graph, node.config.party_id)
                 .await?;
         }
+        Ok(())
+    }
+
+    /// Convenience: insert mutations and seed modifications into all 3 parties' stores.
+    ///
+    /// Equivalent to calling `insert_mutations_all` followed by `seed_modifications_all`.
+    pub async fn build(&self, nodes: &CpuNodes) -> eyre::Result<()> {
+        self.insert_mutations_all(nodes).await?;
+        self.seed_modifications_all(nodes).await?;
         Ok(())
     }
 

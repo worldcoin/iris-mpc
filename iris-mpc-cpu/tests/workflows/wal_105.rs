@@ -83,8 +83,7 @@ impl TestRun for Wal105 {
             )
         });
 
-        builder.insert_mutations_all(&nodes).await?;
-        builder.seed_modifications_all(&nodes).await?;
+        builder.build(&nodes).await?;
 
         // Build checkpoint from WAL up to modification_id = 50.
         nodes
@@ -142,8 +141,7 @@ impl TestRun for Wal105 {
             b.add_edges(HAWK_EDGES_START + idx, base, vec![neighbor1, neighbor2], 0)
         });
 
-        builder.insert_mutations_all(nodes).await?;
-        builder.seed_modifications_all(nodes).await?;
+        builder.build(nodes).await?;
 
         // Phase 2: sidecar starts.  It must discover the Phase 1 checkpoint at
         // mod_id=100 as the latest base ("V4 path") and materialise only the new

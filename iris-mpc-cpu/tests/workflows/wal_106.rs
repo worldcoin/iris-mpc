@@ -80,8 +80,7 @@ impl TestRun for Wal106 {
             )
         });
 
-        builder.insert_mutations_all(&nodes).await?;
-        builder.seed_modifications_all(&nodes).await?;
+        builder.build(&nodes).await?;
 
         // Build checkpoint from WAL up to mod_id = 0 (no mutations at or before 0 →
         // empty graph, matching the genesis state before any mutations were applied).
@@ -156,8 +155,7 @@ impl TestRun for Wal106 {
             )
         });
 
-        builder.insert_mutations_all(nodes).await?;
-        builder.seed_modifications_all(nodes).await?;
+        builder.build(nodes).await?;
 
         // Phase 2: sidecar runs again.  Despite the desync, every party must reach
         // 3-party BLAKE3 consensus and insert a new checkpoint row anchored at mod_id=20.
