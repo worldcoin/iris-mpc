@@ -1,3 +1,11 @@
+use crate::{
+    run_hawk, run_sidecar, stop_and_join,
+    utils::{
+        cpu_node::{CpuNodes, WalAssertions},
+        runner::{CpuTestContext, TestRun},
+        wait_conditions::wait_for_all_ready,
+    },
+};
 /// wal_100 — Baseline startup, empty WAL; idempotent sidecar checkpoint.
 ///
 /// Verifies that `hawk_main` starts cleanly on an empty DB, that `sidecar_main`
@@ -25,18 +33,7 @@
 /// Every party has 0 WAL rows, exactly 1 checkpoint, a matching S3 object, and
 /// all parties agree on the BLAKE3 hash.
 use std::time::Duration;
-
-use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
-
-use crate::{
-    run_hawk, run_sidecar, stop_and_join,
-    utils::{
-        cpu_node::{CpuNodes, WalAssertions},
-        runner::{CpuTestContext, TestRun},
-        wait_conditions::{wait_for_all_ready, wait_for_new_checkpoint},
-    },
-};
 
 pub struct Wal100 {
     nodes: Option<CpuNodes>,
@@ -82,8 +79,7 @@ impl TestRun for Wal100 {
         {
             let shutdown = CancellationToken::new();
             let mut sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
-            let res =
-                wait_for_all_ready(&ctx.configs, &mut sidecar_set, Duration::from_secs(120)).await;
+            let res = tokio::time::timeout(Duration::from_secs(10), sidecar_set.join_next()).await;
             stop_and_join!(shutdown, sidecar_set);
             res?;
         }
@@ -94,8 +90,9 @@ impl TestRun for Wal100 {
         {
             let shutdown = CancellationToken::new();
             let mut sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
-            sleep(Duration::from_secs(10)).await;
+            let res = tokio::time::timeout(Duration::from_secs(10), sidecar_set.join_next()).await;
             stop_and_join!(shutdown, sidecar_set);
+            res?;
         }
 
         Ok(())
