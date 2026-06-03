@@ -18,7 +18,7 @@ env:
   - name: SMPC__CPU_DATABASE__URL
     valueFrom:
       secretKeyRef:
-        key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_READER_URL
+        key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
         name: application
   - name: SMPC__CPU_DATABASE__SCHEMA
     value: "SMPC_dev_1_minfhd"
