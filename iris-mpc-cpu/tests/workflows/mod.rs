@@ -27,9 +27,12 @@ use crate::utils::{CpuConfigs, HAWK_ADDRS, SIDECAR_ADDRS};
 // different port sets (HAWK_ADDRS vs SIDECAR_ADDRS) so both can run in the
 // same process during wal_103 without bind conflicts.
 //
-// Open questions still blocking full macro bodies:
-//   #1: hawk_main callable signature (function accepting CancellationToken)
-//   #2: build_hawk_network_handle exact import path and signature
+// run_sidecar! is fully implemented (see below).
+// run_hawk! is still blocked:
+//   Q1 resolved: call iris_mpc::server::server_main(config: Config) wrapped in
+//     tokio::select! { res = server_main(config) => res, _ = shutdown.cancelled() => Ok(()) }
+//   Q2 resolved: build_hawk_network_handle is in iris_mpc_cpu::execution::hawk_main
+//   Still blocked on Q10 (server_main AWS requirements) and Q11 (TOML config files)
 // ---------------------------------------------------------------------------
 
 /// Spawn `hawk_main` for all 3 parties concurrently.
@@ -62,27 +65,21 @@ macro_rules! run_hawk {
             let addresses = hawk_addresses.clone();
 
             join_set.spawn(async move {
-                // TODO (open question #2): build network handle.
-                // let networking = build_hawk_network_handle(
-                //     config.party_id,
-                //     &addresses,
-                //     &addresses,   // outbound_addrs same as inbound for loopback
-                //     /* connection_parallelism */ 2,
-                //     /* request_parallelism */ 2,
-                //     &shutdown,
-                // ).await?;
-
-                // TODO (open question #1): call hawk_main with shutdown token.
-                // let args = HawkArgs {
-                //     party_index: config.party_id,
-                //     addresses: addresses.clone(),
-                //     outbound_addrs: addresses,
-                //     ..HawkArgs::default_for_test()
-                // };
-                // iris_mpc_cpu::execution::hawk_main::exec(args, networking, shutdown).await
+                // Blocked on Q10 (server_main AWS requirements) and Q11 (TOML config files).
+                //
+                // Once unblocked, the body will be:
+                //
+                //   use iris_mpc::server::server_main;
+                //   use iris_mpc_common::config::Config;
+                //
+                //   let config = <load Config from TOML, override with cpu config fields>;
+                //   tokio::select! {
+                //       res = server_main(config) => res,
+                //       _ = shutdown.cancelled() => Ok(()),
+                //   }
 
                 let _ = (config, addresses, shutdown);
-                todo!("spawn hawk_main for party — pending open questions #1 and #2")
+                todo!("spawn hawk_main — blocked on Q10 and Q11 (see readme)")
             });
         }
 
@@ -93,7 +90,11 @@ macro_rules! run_hawk {
 /// Spawn `sidecar_main` for all 3 parties concurrently.
 ///
 /// Uses `SIDECAR_ADDRS` (different ports from `HAWK_ADDRS`) so hawk_main and
-/// sidecar_main can co-exist in the same test process.
+/// sidecar_main can co-exist in the same test process during wal_103.
+///
+/// The sidecar's `GraphPg<Aby3Store>` connects to the same DB tables as the
+/// test's `GraphPg<PlaintextStore>` — the `VectorStore` type parameter is
+/// phantom and doesn't affect the WAL or checkpoint table queries.
 ///
 /// Returns a `JoinSet<eyre::Result<()>>`.
 ///
@@ -118,35 +119,70 @@ macro_rules! run_sidecar {
             let addresses = sidecar_addresses.clone();
 
             join_set.spawn(async move {
-                // TODO (open question #2): build network handle with SIDECAR_ADDRS.
-                // let mut networking = build_hawk_network_handle(
-                //     config.party_id, &addresses, &addresses, 2, 2, &shutdown,
-                // ).await?;
+                use ampc_actor_utils::network::tcp::TlsConfig;
+                use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+                use iris_mpc_cpu::{
+                    checkpoint_protocol::{sidecar_main, SidecarConfig},
+                    execution::hawk_main::{build_hawk_network_handle, HawkArgs},
+                    hawkers::aby3::aby3_store::Aby3Store,
+                    hnsw::graph::graph_store::GraphPg,
+                };
+                use std::time::Duration;
 
-                // TODO: construct GraphPg<Aby3Store> for the live service (not PlaintextStore).
-                // The sidecar operates on the real graph store, not the test setup store.
+                // Build HawkArgs with only the networking fields populated.
+                // HNSW and persistence fields are irrelevant to the sidecar.
+                let hawk_args = HawkArgs {
+                    party_index: config.party_id,
+                    addresses: addresses.clone(),
+                    outbound_addrs: addresses.clone(),
+                    request_parallelism: 1,
+                    connection_parallelism: 1,
+                    hnsw_param_ef_constr: 0,
+                    hnsw_param_m: 0,
+                    hnsw_param_ef_search: 0,
+                    hnsw_param_ef_supermatch: 0,
+                    hnsw_param_ef_saturation_margin: 0,
+                    hnsw_layer_density: None,
+                    hnsw_fixed_layer_search_batch_size: None,
+                    hnsw_prf_key: None,
+                    disable_persistence: true,
+                    hnsw_disable_memory_persistence: true,
+                    tls: None::<TlsConfig>,
+                    numa: false,
+                };
 
-                // Build SidecarConfig from test config.
-                // let cfg = SidecarConfig {
-                //     bucket: config.checkpoint_bucket.clone(),
-                //     party_id: config.party_id,
-                //     cycle_interval: Duration::from_secs(config.sidecar.cycle_interval_secs),
-                //     retry_interval: Duration::from_secs(config.sidecar.retry_interval_secs),
-                //     peer_round_timeout: Duration::from_secs(config.sidecar.peer_round_timeout_secs),
-                //     min_mutations_per_cycle: config.sidecar.min_mutations_per_cycle,
-                //     checkpoint_window: config.sidecar.checkpoint_window,
-                //     is_archival: config.sidecar.is_archival,
-                //     pruning_mode: config.sidecar.pruning_mode.into(),
-                // };
+                let mut networking =
+                    build_hawk_network_handle(&hawk_args, shutdown.clone()).await?;
 
-                // TODO: build s3_client from config.checkpoint_bucket / env endpoint.
+                let postgres = PostgresClient::new(
+                    &config.db_url,
+                    &config.db_schema,
+                    AccessMode::ReadWrite,
+                )
+                .await?;
+                // Aby3Store is the production VectorStore; the type parameter is
+                // phantom for WAL/checkpoint table operations so PlaintextStore-seeded
+                // data is fully compatible.
+                let graph_store: GraphPg<Aby3Store> = GraphPg::new(&postgres).await?;
 
-                // iris_mpc_cpu::checkpoint_protocol::runner::sidecar_main(
-                //     cfg, &graph_store, &s3_client, &mut networking, shutdown,
-                // ).await
+                let aws_config = aws_config::load_from_env().await;
+                let s3_client = aws_sdk_s3::Client::new(&aws_config);
 
-                let _ = (config, addresses, shutdown);
-                todo!("spawn sidecar_main for party — pending open questions #1 and #2")
+                let cfg = SidecarConfig {
+                    bucket: config.checkpoint_bucket.clone(),
+                    party_id: config.party_id,
+                    cycle_interval: Duration::from_secs(config.sidecar.cycle_interval_secs),
+                    retry_interval: Duration::from_secs(config.sidecar.retry_interval_secs),
+                    peer_round_timeout: Duration::from_secs(
+                        config.sidecar.peer_round_timeout_secs,
+                    ),
+                    min_mutations_per_cycle: config.sidecar.min_mutations_per_cycle,
+                    checkpoint_window: config.sidecar.checkpoint_window,
+                    is_archival: config.sidecar.is_archival,
+                    pruning_mode: config.sidecar.pruning_mode,
+                };
+
+                sidecar_main(cfg, &graph_store, &s3_client, &mut networking, shutdown).await
             });
         }
 

@@ -115,9 +115,7 @@ impl WalMutationBuilder {
     /// Convenience: seed the same mutations into all 3 parties' stores.
     pub async fn seed_all(&self, nodes: &CpuNodes) -> eyre::Result<()> {
         for node in &nodes.0 {
-            // TODO: self.seed(&node.stores.graph).await?;
-            let _ = node;
-            todo!("seed WAL mutations into all 3 parties")
+            self.seed(&node.store.graph).await?;
         }
         Ok(())
     }

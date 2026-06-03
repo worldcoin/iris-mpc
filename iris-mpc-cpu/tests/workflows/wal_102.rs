@@ -94,11 +94,10 @@ impl TestRun for Wal102 {
         // All 3 parties must agree on the BLAKE3 hash.
         nodes.assert_checkpoint_hashes_agree().await?;
 
-        // TODO (open question #7): materialise the reference graph from WAL rows,
-        // compute its BLAKE3 hash, and compare against stored hashes:
-        //
-        //   let reference_hash = materialise_and_hash(&nodes.0[0].stores.graph, 0, WAL_MUTATION_COUNT).await?;
-        //   nodes.assert_checkpoint_hashes_match_reference(&reference_hash).await?;
+        // Materialise the same WAL rows in the test process, hash the result,
+        // and verify it matches every party's stored BLAKE3.
+        let reference_hash = nodes.0[0].store.compute_reference_hash().await?;
+        nodes.assert_checkpoint_hashes_match_reference(&reference_hash).await?;
 
         Ok(())
     }

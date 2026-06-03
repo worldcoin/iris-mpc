@@ -116,8 +116,10 @@ impl TestRun for Wal103 {
         // All 3 parties must agree on the BLAKE3 hash.
         nodes.assert_checkpoint_hashes_agree().await?;
 
-        // TODO (open question #7): materialise reference graph from WAL 1..=100,
-        // compute BLAKE3 hash, compare against all 3 parties' stored hashes.
+        // Materialise the full WAL (mutations 51..=100) in the test process
+        // and verify the hash matches the sidecar's stored checkpoint hash.
+        let reference_hash = nodes.0[0].store.compute_reference_hash().await?;
+        nodes.assert_checkpoint_hashes_match_reference(&reference_hash).await?;
 
         Ok(())
     }

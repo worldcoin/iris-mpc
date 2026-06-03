@@ -249,17 +249,18 @@ given `modification_id`.
 Builds a minimal serialized graph blob and uploads it to S3, establishing a base
 checkpoint so that WAL roll-forward tests have a realistic `(checkpoint, delta)` state.
 
-The checkpoint format is `GraphV4` serialized via bincode — store-agnostic, so the same
-blob is accepted by both `PlaintextStore`-backed tests and the real `Aby3Store`-backed
-`hawk_main`.
+The checkpoint format is `bincode([GraphMem<IrisVectorId>; 2])` — a **pair** of empty
+graphs (left + right eye), matching exactly what `sidecar_main` (`terminal.rs`) writes
+and `RebuildFromCheckpoint` (`materializer.rs`) reads.  (An earlier draft used a single
+`GraphV4` blob, which was the wrong format — the materializer deserializes to
+`BothEyes<GraphMem<VectorId>>`, not a single-eye `GraphV4`.)
 
 Pipeline per party:
-1. Create empty `GraphMem<IrisVectorId>` (no nodes, zero entry point)
-2. Convert to `GraphV4` via `From<GraphMem<IrisVectorId>>`
-3. Serialize with `bincode::serialize`
-4. Compute BLAKE3 hash of the bytes
-5. Upload to S3 at key `"{party_id}/checkpoints/seed_{last_mod_id}"`
-6. Insert `genesis_graph_checkpoint` DB row via `GraphPg::insert_genesis_graph_checkpoint`
+1. Create empty `[GraphMem<IrisVectorId>; 2]` (no nodes, zero entry point, both eyes)
+2. Serialize with `bincode::serialize`
+3. Compute BLAKE3 hash of the bytes
+4. Upload to S3 at key `"{party_id}/checkpoints/seed_{last_mod_id}"`
+5. Insert `genesis_graph_checkpoint` DB row via `GraphPg::insert_genesis_graph_checkpoint`
 
 ---
 
@@ -362,85 +363,112 @@ stop_and_join!(shutdown_ct, join_set)
 ## Infrastructure Assumptions
 
 - **PostgreSQL** running locally (via docker-compose) with a separate schema per party
-- **LocalStack** at `http://localhost:4566` for S3; Docker variant at
+- **LocalStack** at `http://localhost:4566` for S3 (and potentially SQS/SNS/SecretsManager
+  depending on what `server_main` requires — see Q10); Docker variant at
   `http://localstack:4566`
 - **No GPU required** — `PlaintextStore` / plaintext graph format used for all DB setup
-  and WAL seeding; the checkpoint blob is store-agnostic (`GraphV4` / bincode)
+  and WAL seeding; the checkpoint blob format is `bincode([GraphMem; 2])`, store-agnostic
 - **MPC network required for all tests** — both hawk_main and sidecar_main require the
   3-party loopback TCP network; loopback handles are built inline using hardcoded
   localhost ports (`HAWK_ADDRS`, `SIDECAR_ADDRS`)
 - **Both services are called inline** — no subprocess spawning; both accept a
   `CancellationToken` and can be driven from a `JoinSet`
+- **TC-2 (sidecar) tests are fully implemented** — `run_sidecar!` is live; wal_102, 103, 104
+  can run as soon as config loading is unblocked
+- **TC-1 (hawk_main) tests need `server_main` wiring** — blocked on Q10/Q11
 - Config files per party at `tests/resources/node-config/{local,docker}/`
 
 ---
 
 ## Open Questions
 
-1. **`hawk_main` callable signature:** The binary entry at `iris-mpc-bins/bin/iris-mpc-cpu/hawk_main.rs`
-   calls `hawk_main(HawkArgs::parse())`.  For test use we need a variant that accepts a
-   `CancellationToken` for clean shutdown.  Is there an internal `exec(args, shutdown_ct)`
-   function in `src/execution/hawk_main.rs`, or does the binary-level `hawk_main` already
-   accept one?  What is the exact path and signature?
+1. ~~**`hawk_main` callable signature**~~ **Partially resolved:** TC-1 tests call
+   `iris_mpc::server::server_main(config: Config) -> Result<()>` (from
+   `iris-mpc/src/server/mod.rs`).  The `iris-mpc` crate must be added as a
+   `[dev-dependency]` in `iris-mpc-cpu/Cargo.toml`.  The `Config` struct is
+   `iris_mpc_common::config::Config` (loaded from TOML).  In `run_hawk!`, wrap
+   the call in `tokio::select!` to honour the `CancellationToken`:
+   ```rust
+   tokio::select! {
+       res = server_main(config) => res,
+       _ = shutdown.cancelled() => Ok(()),
+   }
+   ```
+   **Still blocked on Q10 and Q11.**
 
-  you will be calling server_main(). you will need the iris-mpc-common/config/mod.rs Config struct. e2e_hawk.rs does this, using the genesis function to get node configs. you can overwrite the genesis configs with the data from the CpuNodeConfig.....
+2. ~~**`build_hawk_network_handle` signature**~~ **Resolved:**
+   `iris_mpc_cpu::execution::hawk_main::build_hawk_network_handle`.  Full signature:
+   ```rust
+   pub async fn build_hawk_network_handle(
+       args: &HawkArgs,
+       shutdown_ct: CancellationToken,
+   ) -> Result<Box<dyn NetworkHandle>>
+   ```
+   For test use, construct `HawkArgs` with only the networking fields populated and set
+   `disable_persistence = true` / `hnsw_disable_memory_persistence = true` (all HNSW
+   fields can be zero).  `run_sidecar!` is fully implemented using this pattern.
 
-2. **`build_hawk_network_handle` or equivalent for tests:** The sidecar binary calls
-   `build_hawk_network_handle(party_index, addresses, outbound_addrs, ..., &shutdown_ct)`.
-   What is the exact import path and full signature for this function?  Is there a simpler
-   test-only builder (like the one used in `tests/e2e.rs`) that wraps it?  The same
-   question applies to the network handle used by `hawk_main`.
+3. ~~**`GraphPg::insert_genesis_graph_checkpoint` signature**~~ **Resolved:** already
+   implemented in `CpuNode::seed_party`.
 
-  check the sidecar binary for the import path. there is not an easier way. 
+4. ~~**Persistent state table name**~~ **Resolved:** table is `persistent_state`;
+   `DbStores::truncate_checkpoint_tables` truncates all three tables.
 
-3. **`GraphPg::insert_genesis_graph_checkpoint` signature:** `CheckpointSeeder` needs to
-   insert a checkpoint row after uploading to S3.  What is the exact method name and
-   signature on `GraphPg` for inserting a new `genesis_graph_checkpoint` row?  Does it
-   take the `blake3_hash` as a `String` or `[u8; 32]`?  Does it return the inserted row?
+5. ~~**`ampc_server_utils` as a test dependency**~~ **Resolved:** `ampc-server-utils` is
+   already a main dependency in `iris-mpc-cpu/Cargo.toml`.
+   `use ampc_server_utils::{wait_for_others_ready, ServerCoordinationConfig}` is now
+   imported directly in `wait_conditions.rs`.
 
-  this is handled already.
+6. ~~**Constructing `ServerCoordinationConfig` from test config**~~ **Resolved:**
+   `wait_for_all_ready` builds a per-party `ServerCoordinationConfig` inline using
+   `configs.iter().map(|c| c.healthcheck_port)` for `healthcheck_ports` and
+   `"127.0.0.1"` for `node_hostnames`.  The `coordination_port` field on `CpuNodeConfig`
+   is effectively the same as `healthcheck_port` — the coordination server HTTP endpoint
+   IS the healthcheck port.
 
-4. ~**Persistent state table name for truncation:** `truncate_checkpoint_tables()` needs to
-   clear `hawk_graph_mutations`, `genesis_graph_checkpoint`, and the persistent state table.
-   What is the exact table name for the persistent state (used to store
-   `last_indexed_iris_id`, `last_indexed_modification_id`, etc.)?~
+7. ~~**WAL materialization API**~~ **Resolved:**
+   `GraphMem::insert_apply_all(&[GraphMutation<V>]) -> Result<()>` (on
+   `iris_mpc_cpu::hnsw::graph::layered_graph::GraphMem`).  The checkpoint format is
+   `bincode([GraphMem<VectorId>; 2])` — a raw bincode of both-eyes `GraphMem` pair, NOT
+   a `GraphV4`.  `DbStores::compute_reference_hash()` now implements the full pipeline:
+   fetch WAL rows → apply `insert_apply_all` to `[GraphMem; 2]` → `bincode::serialize` →
+   `blake3::hash`.  `CpuNodes::assert_checkpoint_hashes_match_reference` compares the
+   result against each party's stored `blake3_hash`.
 
-5. **`ampc_server_utils` as a test dependency:** `wait_for_all_ready` (TC-1) calls
-   `wait_for_others_ready(&ServerCoordinationConfig)` from `ampc_server_utils`.  Is this
-   crate already available as a `[dev-dependency]` in `iris-mpc-cpu/Cargo.toml`, or does
-   it need to be added?  What is the exact crate name and import path for
-   `wait_for_others_ready` and `ServerCoordinationConfig`?
+8. ~~**`BothEyes` type path**~~ **Resolved:** `use iris_mpc_cpu::execution::hawk_main::BothEyes`
+   — `pub type BothEyes<T> = [T; 2]`.
 
-  ServerCoordinationConfig has been added to CpuNode
-
-6. **Constructing `ServerCoordinationConfig` from test config:** `wait_for_others_ready`
-   takes a `&ServerCoordinationConfig`.  Given a `CpuNodeConfig` with a `coordination_port`,
-   how is a `ServerCoordinationConfig` built for that party?  What fields does it require
-   (e.g., all parties' ports, TLS config, own party ID)?
-
-    ServerCoordinationConfig has been added to CpuNode
-
-7. **WAL materialization API for hash comparison (wal_102/103 exec_assert):** The user
-   confirmed that `exec_assert` should materialize a graph from the seeded WAL, hash it,
-   and compare against the 3 parties' stored BLAKE3 hashes.  What is the function to apply
-   WAL mutations to a `GraphMem`?  Is it `GraphMem::insert_apply_all(mutations)`, or is
-   there a higher-level materializer path in `checkpoint_protocol::materializer`?
-   ~~What exact types does the WAL stream return (`GraphMutation<IrisVectorId>` or a row
-   type)?~~ **Resolved:** the WAL stream type is `GraphMutation<IrisVectorId>`, with ops
-   defined in `iris_mpc_cpu::hnsw::graph::mutation::{GraphMutation, MutationOp,
-   UpdateEntryPoint, EdgeType}`.  The materialization function itself remains open.
-
-  it's insert_apply_all() 
-
-8. ~~**`BothEyes` type path:** `WalMutationBuilder` needs to construct
-   `BothEyes<Vec<GraphMutation<IrisVectorId>>>`.  What is the exact import path for
-   `BothEyes`?  Is it in `iris_mpc_cpu::hnsw` or `iris_mpc_common`?~~
-   **Resolved:** `use iris_mpc_cpu::execution::hawk_main::BothEyes` — it is
-   `pub type BothEyes<T> = [T; 2]`, so construction is `[vec![m.clone()], vec![m]]`.
-
-9. ~~**`IrisVectorId` type path:** The graph mutation and checkpoint types use `IrisVectorId`
-   as the node ID type.  What is the exact import path?  Is it
-   `iris_mpc_common::iris_db::iris::IrisVectorId`, or is it defined elsewhere?~~
-   **Resolved:** `use iris_mpc_common::IrisVectorId` (re-export of
-   `iris_mpc_common::vector_id::VectorId`).  Construct from a `u32` serial ID via
+9. ~~**`IrisVectorId` type path**~~ **Resolved:** `use iris_mpc_common::IrisVectorId`
+   (re-export of `iris_mpc_common::vector_id::VectorId`).  Construct via
    `IrisVectorId::from_serial_id(u32)`.
+
+10. **`server_main` AWS service requirements for TC-1:** `iris_mpc::server::server_main`
+    calls `init_aws_services` (SQS, SNS, S3), `get_shares_encryption_key_pair` (Secrets
+    Manager), and `prepare_stores` (GPU DB + CPU DB) before starting the coordination
+    server and performing the WAL roll-forward.  **Questions:**
+    - Does LocalStack need SQS queues, SNS topics, and Secrets Manager keys to be
+      pre-provisioned before the test runs, or does `server_main` tolerate missing
+      resources (skipping unused paths)?
+    - Is there a lighter entry point (e.g. just `restart_from_checkpoint` +
+      `start_coordination_server_with_extra_routes` + `set_node_ready`) that avoids
+      SQS/SNS/KMS entirely for WAL-only tests?
+    - The `iris-mpc-upgrade-hawk` e2e_hawk tests are marked `#[ignore = "requires external
+      setup"]` partly due to KMS key rotation.  Should wal_100/101/103 also be `#[ignore]`,
+      or is there a way to run them without KMS?
+
+11. **TOML config files and `CpuTestContext::load_configs()`:** TC-1 tests need per-party
+    `Config` TOML files at `tests/resources/node-config/local/` and `docker/`.  The
+    files must contain:
+    - `[cpu_database]` with `url` pointing to the test PostgreSQL instance
+    - `schema_name`, `hnsw_schema_name_suffix`, `environment`, `party_id` set so that
+      `config.get_cpu_db_schema()` matches `CpuNodeConfig.db_schema`
+    - `graph_checkpoint_bucket_name` matching `CpuNodeConfig.checkpoint_bucket`
+    - `[server_coordination]` with `healthcheck_ports` matching
+      `CpuNodeConfig.healthcheck_port` for each party (e.g. `["3100", "3101", "3102"]`)
+    - `[aws]` endpoint pointing to LocalStack
+    - `[service]`, `kms_key_arns`, `requests_queue_url`, `results_topic_arn` as needed
+      by `server_main` (even if WAL tests don't use them, the struct fields may be
+      required)
+    `CpuTestContext::load_configs()` should load these files and derive `CpuNodeConfig`
+    from the parsed `Config` (using `config.get_cpu_db_url()`, `config.get_cpu_db_schema()`,
+    `config.graph_checkpoint_bucket_name`, `config.server_coordination.healthcheck_ports`, etc.).

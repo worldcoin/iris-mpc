@@ -1,18 +1,12 @@
 use std::time::Duration;
 
+use ampc_server_utils::{wait_for_others_ready, ServerCoordinationConfig};
 use eyre::bail;
 use futures::future::try_join_all;
 use tokio::task::JoinSet;
 use tokio::time::{sleep, timeout};
 
-use super::{cpu_node::CpuNodes, CpuConfigs};
-
-// TODO (open question #5): confirm ampc_server_utils is a dev-dependency and that
-// these imports are correct.
-// use ampc_server_utils::{wait_for_others_ready, ServerCoordinationConfig};
-
-// TODO (open question #9): confirm GraphCheckpointRow import path.
-// use iris_mpc_cpu::hnsw::graph::graph_store::GraphCheckpointRow;
+use super::{cpu_node::CpuNodes, CpuConfigs, COUNT_OF_PARTIES};
 
 /// TC-1 — Wait for all 3 parties' coordination servers to signal ready.
 ///
@@ -21,26 +15,29 @@ use super::{cpu_node::CpuNodes, CpuConfigs};
 /// `JoinSet` for any unexpected early task exit.
 ///
 /// Pattern taken from `iris-mpc-upgrade-hawk/tests/e2e_hawk.rs`.
-///
-/// # Open questions
-/// - #5: ampc_server_utils availability as dev-dependency
-/// - #6: how to build a ServerCoordinationConfig from CpuNodeConfig.coordination_port
 pub async fn wait_for_all_ready(
     configs: &CpuConfigs,
     join_set: &mut JoinSet<eyre::Result<()>>,
     dur: Duration,
 ) -> eyre::Result<()> {
+    // Build per-party ServerCoordinationConfig using the shared healthcheck ports
+    // from all configs (they form the cross-party view each service needs).
+    let healthcheck_ports: Vec<String> =
+        configs.iter().map(|c| c.healthcheck_port.to_string()).collect();
+    let node_hostnames = vec!["127.0.0.1".to_string(); COUNT_OF_PARTIES];
+
     let ready_futures = configs.iter().map(|config| {
-        let _port = config.coordination_port;
-        async move {
-            // TODO (open question #5 and #6): construct ServerCoordinationConfig from
-            // config.coordination_port and all parties' coordination_ports, then call:
-            //   wait_for_others_ready(&server_coord_config).await
-            //
-            // Placeholder — replace once open questions #5/#6 are resolved:
-            let _ = _port;
-            Ok::<(), eyre::Error>(())
-        }
+        let coord = ServerCoordinationConfig {
+            party_id: config.party_id,
+            node_hostnames: node_hostnames.clone(),
+            healthcheck_ports: healthcheck_ports.clone(),
+            image_name: String::new(),
+            heartbeat_interval_secs: 2,
+            heartbeat_initial_retries: 10,
+            http_query_retry_delay_ms: 1000,
+            startup_sync_timeout_secs: 300,
+        };
+        async move { wait_for_others_ready(&coord).await }
     });
 
     let ready_all = try_join_all(ready_futures);
@@ -62,16 +59,13 @@ pub async fn wait_for_all_ready(
 /// TC-2 — Poll the `genesis_graph_checkpoint` table until each party's row count
 /// exceeds `baseline_count`, then verify each party's latest checkpoint S3 object exists.
 ///
-/// Polls every 500ms.  Returns the new `GraphCheckpointRow` for each party.
-///
-/// # Open question #9
-/// The return type uses a placeholder `()` until `GraphCheckpointRow` import is confirmed.
+/// Polls every 500ms.
 pub async fn wait_for_new_checkpoint(
     nodes: &CpuNodes,
     configs: &CpuConfigs,
     baseline_count: usize,
     dur: Duration,
-) -> eyre::Result<()> /* TODO: -> [GraphCheckpointRow; 3] */ {
+) -> eyre::Result<()> {
     timeout(dur, async {
         loop {
             let counts = nodes.checkpoint_counts().await?;
@@ -96,7 +90,6 @@ pub async fn wait_for_new_checkpoint(
             .await?;
     }
 
-    // TODO: return [GraphCheckpointRow; 3] once type import is resolved
     Ok(())
 }
 

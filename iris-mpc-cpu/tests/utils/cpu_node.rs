@@ -12,7 +12,6 @@ use iris_mpc_cpu::graph_checkpoint::stream_serialize_and_upload_with;
 use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 use iris_mpc_cpu::hnsw::graph::graph_store::{GraphCheckpointRow, GraphPg};
 use iris_mpc_cpu::hnsw::GraphMem;
-use iris_mpc_cpu::utils::serialization::types::graph_v4::GraphV4;
 
 /// Per-party database handles for test setup and post-condition assertions.
 ///
@@ -20,7 +19,7 @@ use iris_mpc_cpu::utils::serialization::types::graph_v4::GraphV4;
 /// the graph store's tables.  There is no iris store because WAL mutations are seeded
 /// synthetically.
 ///
-/// The checkpoint format (GraphV4 / bincode) is store-agnostic, so `PlaintextStore`
+/// The checkpoint format (`bincode([GraphMem; 2])`) is store-agnostic, so `PlaintextStore`
 /// is safe to use here even though `hawk_main` uses `Aby3Store` at runtime.
 pub struct DbStores {
     pub graph: GraphPg<PlaintextStore>,
@@ -79,6 +78,24 @@ impl DbStores {
                 .await?;
         Ok(max)
     }
+
+    /// Materialise all WAL rows into a fresh `[GraphMem; 2]` and return the BLAKE3
+    /// digest of its bincode serialisation.
+    ///
+    /// This mirrors exactly what the sidecar does in `terminal.rs`:
+    /// `bincode::serialize_into(writer, &graph)` where `graph: BothEyes<GraphMem<VectorId>>`.
+    /// Use this to build a reference hash for `CpuNodes::assert_checkpoint_hashes_match_reference`.
+    pub async fn compute_reference_hash(&self) -> eyre::Result<[u8; 32]> {
+        let rows = self.graph.get_hawk_graph_mutations_after(None).await?;
+        let mut graph_pair: [GraphMem<IrisVectorId>; 2] = [GraphMem::new(), GraphMem::new()];
+        for row in &rows {
+            let [left_muts, right_muts] = row.deserialize_mutations()?;
+            graph_pair[0].insert_apply_all(&left_muts)?;
+            graph_pair[1].insert_apply_all(&right_muts)?;
+        }
+        let bytes = bincode::serialize(&graph_pair)?;
+        Ok(*blake3::hash(&bytes).as_bytes())
+    }
 }
 
 /// Handles for a single MPC party.
@@ -124,11 +141,12 @@ impl CpuNode {
 
     /// Seed a genesis checkpoint for this party.
     ///
-    /// 1. Build an empty `GraphMem<IrisVectorId>`, convert to `GraphV4`, serialize with bincode.
-    /// 2. Compute BLAKE3 hash of the bytes.
-    /// 3. Upload bytes to S3 at key `"{party_id}/checkpoints/seed_{last_modification_id}"`.
-    /// 4. Insert `genesis_graph_checkpoint` DB row inside a transaction.
-    /// 5. Return the newly inserted `GraphCheckpointRow`.
+    /// 1. Build empty `[GraphMem<IrisVectorId>; 2]` (both eyes, no nodes).
+    /// 2. Serialize with `bincode::serialize` — same wire format as the sidecar.
+    /// 3. Compute BLAKE3 hash of the bytes.
+    /// 4. Upload to S3 at key `"{party_id}/checkpoints/seed_{last_modification_id}"`.
+    /// 5. Insert `genesis_graph_checkpoint` DB row inside a transaction.
+    /// 6. Return the newly inserted `GraphCheckpointRow`.
     pub async fn seed_party(
         &self,
         last_iris_id: i64,
@@ -136,9 +154,11 @@ impl CpuNode {
     ) -> eyre::Result<GraphCheckpointRow> {
         let bucket = &self.config.checkpoint_bucket;
         let party_id = self.config.party_id;
-        let graph_mem = GraphMem::<IrisVectorId>::new();
-        let graph_v4 = GraphV4::from(graph_mem);
-        let bytes = bincode::serialize(&graph_v4)?;
+        // The checkpoint format is a bincode-serialised pair of GraphMem (left + right eye),
+        // matching what the sidecar writes in terminal.rs and the materializer reads.
+        // A single GraphV4 would be the wrong format — the reader expects BothEyes<GraphMem>.
+        let graph_pair: [GraphMem<IrisVectorId>; 2] = [GraphMem::new(), GraphMem::new()];
+        let bytes = bincode::serialize(&graph_pair)?;
         let hash_hex = hex::encode(blake3::hash(&bytes).as_bytes());
         let s3_key = format!("{party_id}/checkpoints/seed_{last_modification_id}");
 
@@ -296,14 +316,26 @@ impl CpuNodes {
     /// Assert that all 3 parties' latest checkpoint BLAKE3 hashes match a
     /// reference hash computed by the test itself.
     ///
-    /// See open question #7 in readme for the WAL materialization API needed here.
+    /// Build the reference with `DbStores::compute_reference_hash()` on any
+    /// one party (all three have the same WAL content after seeding).
     pub async fn assert_checkpoint_hashes_match_reference(
         &self,
-        _reference_hash: &[u8; 32],
+        reference_hash: &[u8; 32],
     ) -> eyre::Result<()> {
-        // TODO (open question #7): materialize graph from WAL in test process,
-        // compute blake3 hash, then compare against each party's stored blake3_hash.
-        todo!("compare stored hashes against test-computed reference hash")
+        let hash_hex = hex::encode(reference_hash);
+        for (i, node) in self.0.iter().enumerate() {
+            let row = node
+                .store
+                .latest_checkpoint()
+                .await?
+                .ok_or_else(|| eyre!("party {i}: no checkpoint row found"))?;
+            eyre::ensure!(
+                row.blake3_hash == hash_hex,
+                "party {i}: checkpoint hash mismatch: expected {hash_hex}, got {}",
+                row.blake3_hash
+            );
+        }
+        Ok(())
     }
 
     /// Return the checkpoint row count for each party.
