@@ -155,6 +155,45 @@ pub enum EngineChoiceInt4 {
     NaiveInt4Dot,
 }
 
+/// Unified CLI-facing engine selector spanning both the iris-code engines and
+/// the deep-ID Int4 engine. Used by binaries that accept either store kind via
+/// a single `--engine-choice` flag; the concrete sub-enum is recovered with
+/// [`EngineKind::as_iris`] / [`EngineKind::as_int4`].
+#[derive(Clone, Debug, ValueEnum, Copy, Serialize, Deserialize, PartialEq)]
+pub enum EngineKind {
+    NaiveFHD,
+    NaiveMinFHD,
+    NaiveNHD,
+    NaiveMinNHD,
+    NaiveInt4Dot,
+}
+
+impl EngineKind {
+    /// Whether this selects the deep-ID Int4 engine (vs an iris-code engine).
+    pub fn is_int4(&self) -> bool {
+        matches!(self, EngineKind::NaiveInt4Dot)
+    }
+
+    /// The iris-code [`EngineChoice`], or `None` for the Int4 variant.
+    pub fn as_iris(&self) -> Option<EngineChoice> {
+        match self {
+            EngineKind::NaiveFHD => Some(EngineChoice::NaiveFHD),
+            EngineKind::NaiveMinFHD => Some(EngineChoice::NaiveMinFHD),
+            EngineKind::NaiveNHD => Some(EngineChoice::NaiveNHD),
+            EngineKind::NaiveMinNHD => Some(EngineChoice::NaiveMinNHD),
+            EngineKind::NaiveInt4Dot => None,
+        }
+    }
+
+    /// The deep-ID [`EngineChoiceInt4`], or `None` for an iris variant.
+    pub fn as_int4(&self) -> Option<EngineChoiceInt4> {
+        match self {
+            EngineKind::NaiveInt4Dot => Some(EngineChoiceInt4::NaiveInt4Dot),
+            _ => None,
+        }
+    }
+}
+
 /* -------------------------- Generic naive engine ------------------------ */
 
 pub struct NaiveKNN<K: IdealKnn> {
@@ -312,6 +351,45 @@ impl EngineInt4 {
         match self {
             Self::Int4Dot(engine) => engine.next_id(),
         }
+    }
+}
+
+#[cfg(test)]
+mod engine_kind_tests {
+    use super::*;
+
+    #[test]
+    fn is_int4_only_for_int4_variant() {
+        assert!(!EngineKind::NaiveFHD.is_int4());
+        assert!(!EngineKind::NaiveMinFHD.is_int4());
+        assert!(!EngineKind::NaiveNHD.is_int4());
+        assert!(!EngineKind::NaiveMinNHD.is_int4());
+        assert!(EngineKind::NaiveInt4Dot.is_int4());
+    }
+
+    #[test]
+    fn as_iris_maps_the_four_iris_variants() {
+        assert_eq!(EngineKind::NaiveFHD.as_iris(), Some(EngineChoice::NaiveFHD));
+        assert_eq!(
+            EngineKind::NaiveMinFHD.as_iris(),
+            Some(EngineChoice::NaiveMinFHD)
+        );
+        assert_eq!(EngineKind::NaiveNHD.as_iris(), Some(EngineChoice::NaiveNHD));
+        assert_eq!(
+            EngineKind::NaiveMinNHD.as_iris(),
+            Some(EngineChoice::NaiveMinNHD)
+        );
+        assert_eq!(EngineKind::NaiveInt4Dot.as_iris(), None);
+    }
+
+    #[test]
+    fn as_int4_maps_only_the_int4_variant() {
+        assert_eq!(
+            EngineKind::NaiveInt4Dot.as_int4(),
+            Some(EngineChoiceInt4::NaiveInt4Dot)
+        );
+        assert_eq!(EngineKind::NaiveFHD.as_int4(), None);
+        assert_eq!(EngineKind::NaiveNHD.as_int4(), None);
     }
 }
 
