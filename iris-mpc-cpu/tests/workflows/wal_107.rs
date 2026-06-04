@@ -1,13 +1,19 @@
 /// wal_107 — Nontrivial modification sync: hawk_main reconciles a WAL mismatch
 /// between parties on startup.
 ///
-/// Party 0 is given mutations 1..=15 while parties 1 and 2 only have 1..=10,
-/// simulating a scenario where one party processed additional work before an
-/// unclean shutdown while the others did not.
+/// Party 0 is given 5 extra node+edge mutations beyond what parties 1 and 2
+/// have, simulating a scenario where one party processed additional work before
+/// an unclean shutdown while the others did not.
+///
+/// WAL modification ID layout:
+///   1–10:   shared node mutations (all parties)
+///   11–20:  shared edge mutations (all parties)
+///   21–25:  extra node mutations (party 0 only)
+///   26–30:  extra edge mutations (party 0 only)
 ///
 /// hawk_main's modification sync protocol must:
-///   1. Detect the mismatch (party 0 max_modification_id = 15; others = 10).
-///   2. Transfer mutations 11..=15 from party 0 to parties 1 and 2.
+///   1. Detect the mismatch (party 0 max_modification_id = 30; others = 20).
+///   2. Transfer mutations 21..=30 from party 0 to parties 1 and 2.
 ///   3. Allow all three parties to signal ready.
 ///
 /// A subsequent sidecar cycle then materialises each party's WAL independently
@@ -17,7 +23,7 @@
 /// left parties in an inconsistent state.
 ///
 /// Protocol:
-///   Setup: seed WAL 1..=10 for all parties; seed WAL 11..=15 for party 0 only.
+///   Setup: seed WAL mods 1..=20 for all parties; seed WAL mods 21..=30 for party 0 only.
 ///   Phase 1: `hawk_main` → modification sync → signals ready.
 ///   Phase 2: `sidecar_main` → checkpoint.
 use std::time::Duration;
@@ -34,15 +40,14 @@ use crate::{
     },
 };
 
-/// WAL entries present on all three parties before the divergence.
-const SHARED_UP_TO_MOD_ID: i64 = 10;
-/// Additional WAL entries present only on party 0.
-const PARTY0_UP_TO_MOD_ID: i64 = 15;
-
-const SHARED_NODES: usize = SHARED_UP_TO_MOD_ID as usize; // 10
-const SHARED_EDGES_START: i64 = SHARED_UP_TO_MOD_ID + 1; // 11
-const PARTY0_EXTRA_NODES: usize = (PARTY0_UP_TO_MOD_ID - SHARED_UP_TO_MOD_ID) as usize; // 5
-const PARTY0_EDGES_START: i64 = PARTY0_UP_TO_MOD_ID + SHARED_NODES as i64 + 1; // 26
+/// Number of node+edge WAL mutations shared by all three parties.
+const SHARED_NODES: usize = 10;
+const SHARED_EDGES_START: i64 = SHARED_NODES as i64 + 1; // 11
+/// Party 0's extra nodes start immediately after the shared edges (21..=25).
+const PARTY0_EXTRA_NODES: usize = 5;
+const PARTY0_NODES_START: i64 = SHARED_EDGES_START + SHARED_NODES as i64; // 21
+/// Party 0's extra edges start immediately after its extra nodes (26..=30).
+const PARTY0_EDGES_START: i64 = PARTY0_NODES_START + PARTY0_EXTRA_NODES as i64; // 26
 
 const SHARED_COUNT: usize = SHARED_NODES + SHARED_NODES; // nodes + edges (10 + 10)
 const PARTY0_EXTRA: usize = PARTY0_EXTRA_NODES + PARTY0_EXTRA_NODES; // nodes + edges (5 + 5)
@@ -63,7 +68,7 @@ impl TestRun for Wal107 {
         nodes.truncate_checkpoint_tables().await?;
 
         // Seed WAL mutations 1..=10 into all three parties.
-        let shared_builder = (1i64..=SHARED_UP_TO_MOD_ID)
+        let shared_builder = (1i64..=SHARED_NODES as i64)
             .fold(WalMutationBuilder::new(), |b, id| {
                 b.add_node(id, (id - 1) as u32, 1)
             });
@@ -84,11 +89,17 @@ impl TestRun for Wal107 {
 
         shared_builder.build(&nodes).await?;
 
-        // Seed WAL mutations 11..=15 into party 0 ONLY, simulating a party that
-        // committed additional work before the others diverged.
-        let party0_builder = (SHARED_UP_TO_MOD_ID + 1..=PARTY0_UP_TO_MOD_ID)
-            .fold(WalMutationBuilder::new(), |b, id| {
-                b.add_node(id, (id - 1) as u32, 1)
+        // Seed WAL mutations 21..=25 (extra nodes) into party 0 ONLY, simulating a party
+        // that committed additional work before the others diverged.
+        // IDs start at PARTY0_NODES_START (21) to avoid colliding with shared edge
+        // modification IDs 11..=20.
+        let party0_builder =
+            (0..PARTY0_EXTRA_NODES as i64).fold(WalMutationBuilder::new(), |b, idx| {
+                b.add_node(
+                    PARTY0_NODES_START + idx,
+                    (SHARED_NODES as u32 + idx as u32),
+                    1,
+                )
             });
 
         // Add edges for party 0's extra batch: each node connects to the next two neighbors (wrapping).
