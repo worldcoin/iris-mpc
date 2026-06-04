@@ -1,14 +1,19 @@
 #![recursion_limit = "256"]
 
 use clap::Parser;
-use eyre::Result;
+use eyre::{eyre, Result};
 use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId, IrisVectorId};
 use iris_mpc_cpu::{
-    execution::hawk_main::{StoreId, STORE_IDS},
+    execution::hawk_main::{
+        insert::{self, InsertPlanV},
+        StoreId, STORE_IDS,
+    },
     hawkers::aby3::aby3_store::FhdOps,
-    hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
+    hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef, SharedPlaintextStore},
     hnsw::{
-        graph::test_utils::DbContext, searcher::LayerDistribution, vector_store::VectorStoreMut,
+        graph::{neighborhood::Neighborhood, test_utils::DbContext},
+        searcher::LayerDistribution,
+        vector_store::VectorStoreMut,
         GraphMem, HnswSearcher, SortedNeighborhood,
     },
     protocol::shared_iris::{GaloisRingSharedIris, GaloisRingSharedIrisPair},
@@ -142,6 +147,13 @@ struct Args {
     /// `LINEAR_SCAN_MAX_GRAPH_LAYER`. Ignored unless `--linear-scan` is set.
     #[clap(long, default_value = "1")]
     max_graph_layer: usize,
+
+    /// Number of irises searched in parallel per insertion batch during graph
+    /// construction. Larger batches increase search parallelism but reduce
+    /// graph quality (same-batch nodes can't link to each other), matching
+    /// Hawk Main's batch behavior.
+    #[clap(long, default_value = "64")]
+    build_batch_size: usize,
 
     /// PRF key for HNSW insertion, used to select the layer at which new
     /// elements are inserted into the hierarchical graph structure.
@@ -378,8 +390,12 @@ async fn main() -> Result<()> {
         }
     });
 
-    tracing::info!("Initializing jobs to process plaintext iris codes");
-    for (side, mut rx, mut vector_store, mut graph) in izip!(
+    tracing::info!(
+        "Initializing per-eye jobs (parallel search, batch size {})",
+        args.build_batch_size
+    );
+    let searcher = Arc::new(searcher);
+    for (side, mut rx, vector_store, graph) in izip!(
         STORE_IDS,
         receivers.into_iter(),
         vectors.into_iter(),
@@ -388,51 +404,108 @@ async fn main() -> Result<()> {
         let searcher = searcher.clone();
         let prf_seed = (args.hnsw_prf_key as u128).to_le_bytes();
         let skip_serial_ids = args.skip_insert_serial_ids.clone();
+        let batch_size = args.build_batch_size;
 
         jobs.spawn(async move {
+            // Arc/RwLock-backed store so each parallel search gets a cheap,
+            // shared-read handle (mirrors Hawk Main's per-session store).
+            let mut store: SharedPlaintextStore<FhdOps> = vector_store.into();
+            let mut graph = graph;
             let mut counter = 0usize;
+            let mut closed = false;
 
-            while let Some(raw_query) = rx.recv().await {
-                let serial_id = raw_query.serial_id;
-                if skip_serial_ids.contains(&serial_id) {
-                    tracing::info!(
-                        "Skipping insertion of serial id {} for {} side",
-                        serial_id,
-                        side
-                    );
-                    continue;
+            while !closed {
+                // 1. Collect a batch from the channel, assigning insertion
+                //    layers up front (deterministic PRF, as in Hawk Main).
+                let mut batch: Vec<(IrisVectorId, Arc<IrisCode>, usize)> =
+                    Vec::with_capacity(batch_size);
+                while batch.len() < batch_size {
+                    match rx.recv().await {
+                        Some(raw_query) => {
+                            let serial_id = raw_query.serial_id;
+                            if skip_serial_ids.contains(&serial_id) {
+                                tracing::info!(
+                                    "Skipping insertion of serial id {} for {} side",
+                                    serial_id,
+                                    side
+                                );
+                                continue;
+                            }
+                            let inserted_id = IrisVectorId::from_serial_id(serial_id);
+                            let query = Arc::new(raw_query.iris_code);
+                            let insertion_layer =
+                                searcher.gen_layer_prf(&prf_seed, &(inserted_id, side))?;
+                            batch.push((inserted_id, query, insertion_layer));
+                        }
+                        None => {
+                            closed = true;
+                            break;
+                        }
+                    }
                 }
-                let query = Arc::new(raw_query.iris_code);
-
-                let inserted_id = IrisVectorId::from_serial_id(serial_id);
-                vector_store.insert_with_id(inserted_id, query.clone());
-
-                let insertion_layer = searcher.gen_layer_prf(&prf_seed, &(inserted_id, side))?;
-                let (neighbors, update_ep) = searcher
-                    .search_to_insert::<_, SortedNeighborhood<_>>(
-                        &mut vector_store,
-                        &graph,
-                        &query,
-                        insertion_layer,
-                    )
-                    .await?;
-                searcher
-                    .insert_from_search_results(
-                        &mut vector_store,
-                        &mut graph,
-                        inserted_id,
-                        neighbors,
-                        update_ep,
-                    )
-                    .await?;
-
-                counter += 1;
-                if counter.is_multiple_of(1000) {
-                    tracing::info!("Processed {} plaintext entries for {} side", counter, side);
+                if batch.is_empty() {
+                    break;
                 }
+
+                // 2. Searches run in parallel against the pre-batch graph
+                //    snapshot; same-batch nodes are invisible to each other,
+                //    matching Hawk Main's batch semantics.
+                let graph_arc = Arc::new(graph);
+                let mut handles = Vec::with_capacity(batch.len());
+                for (_, query, insertion_layer) in &batch {
+                    let mut search_store = store.clone();
+                    let graph_arc = graph_arc.clone();
+                    let searcher = searcher.clone();
+                    let query = query.clone();
+                    let insertion_layer = *insertion_layer;
+                    handles.push(tokio::spawn(async move {
+                        let (links, update_ep) = searcher
+                            .search_to_insert::<_, SortedNeighborhood<_>>(
+                                &mut search_store,
+                                &graph_arc,
+                                &query,
+                                insertion_layer,
+                            )
+                            .await?;
+
+                        // Trim each layer's neighborhood to M and extract ids.
+                        let mut links_unstructured = Vec::with_capacity(links.len());
+                        for (lc, mut l) in links.into_iter().enumerate() {
+                            let m = searcher.params.get_M(lc);
+                            l.trim(&mut search_store, m).await?;
+                            links_unstructured.push(l.edge_ids());
+                        }
+
+                        Ok::<_, eyre::Report>(InsertPlanV::<SharedPlaintextStore> {
+                            query,
+                            links: links_unstructured,
+                            update_ep,
+                        })
+                    }));
+                }
+
+                let mut plans = Vec::with_capacity(handles.len());
+                for handle in handles {
+                    plans.push(Some(handle.await??));
+                }
+
+                // Reclaim sole ownership of the graph for the insert phase.
+                graph = Arc::try_unwrap(graph_arc)
+                    .map_err(|_| eyre!("graph Arc still shared after search tasks"))?;
+
+                // 3. Apply the batch sequentially via Hawk Main's insert logic.
+                //    Vectors are inserted into the store here; join_plans
+                //    reconciles batch entry-point updates (a no-op in
+                //    linear-scan mode, where multiple appends are all valid).
+                let ids: Vec<Option<IrisVectorId>> =
+                    batch.iter().map(|(id, _, _)| Some(*id)).collect();
+                insert::insert(&mut store, &mut graph, &searcher, plans, &ids).await?;
+
+                counter += batch.len();
+                tracing::info!("Processed {} plaintext entries for {} side", counter, side);
             }
 
-            Ok((side, vector_store, graph))
+            Ok((side, graph))
         });
     }
 
@@ -449,7 +522,7 @@ async fn main() -> Result<()> {
 
     tracing::info!(
         "Finished building HNSW graphs with {} nodes",
-        results[0].1.len()
+        get_max_serial_id(&results[0].1).unwrap_or(0)
     );
 
     let [(.., graph_l), (.., graph_r)] = results.try_into().unwrap();
