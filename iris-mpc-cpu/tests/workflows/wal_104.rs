@@ -69,29 +69,16 @@ impl Wal104 {
 
 impl TestRun for Wal104 {
     async fn setup(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
-        let nodes = CpuNodes::new(&ctx.configs).await?;
-        nodes.truncate_checkpoint_tables().await?;
+        let nodes = CpuNodes::new_clean(&ctx.configs).await?;
 
         // 10 AddNode mutations (modification_ids 1–10).
-        let builder = (1i64..=10).fold(WalMutationBuilder::new(), |b, id| {
-            b.add_node(id, (id - 1) as u32, 1)
-        });
-
         // 10 AddEdges mutations (modification_ids 11–20): each node connects to the
         // next two neighbors (wrapping).
         const NUM_NODES: u32 = 10;
         const EDGES_START_MOD_ID: i64 = 11;
-        let builder = (0..10i64).fold(builder, |b, idx| {
-            let base = idx as u32;
-            let neighbor1 = (base + 1) % NUM_NODES;
-            let neighbor2 = (base + 2) % NUM_NODES;
-            b.add_edges(
-                EDGES_START_MOD_ID + idx,
-                base,
-                vec![neighbor1, neighbor2],
-                0,
-            )
-        });
+        let builder = WalMutationBuilder::new()
+            .add_nodes_sequential(10, 1)
+            .add_edges_wrapping(10, EDGES_START_MOD_ID, 0);
 
         builder.build(&nodes).await?;
 
@@ -115,7 +102,7 @@ impl TestRun for Wal104 {
             .assert_checkpoint_count(3)
             .assert_wal_row_count(20);
         nodes
-            .apply_assertions(&[pre.clone(), pre.clone(), pre])
+            .apply_uniform_assertions(&pre)
             .await
     }
 
@@ -147,7 +134,7 @@ impl TestRun for Wal104 {
             .assert_checkpoint_count(1)
             .assert_s3_object_exists(true);
         nodes
-            .apply_assertions(&[post.clone(), post.clone(), post])
+            .apply_uniform_assertions(&post)
             .await?;
 
         nodes.assert_checkpoint_hashes_agree().await?;

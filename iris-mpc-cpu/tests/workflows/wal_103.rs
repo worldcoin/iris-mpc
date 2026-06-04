@@ -39,28 +39,12 @@ impl Wal103 {
 
 impl TestRun for Wal103 {
     async fn setup(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
-        let nodes = CpuNodes::new(&ctx.configs).await?;
-        nodes.truncate_checkpoint_tables().await?;
+        let nodes = CpuNodes::new_clean(&ctx.configs).await?;
 
         // WAL delta 51..=100.
-        let builder = (CHECKPOINT_AT_MOD_ID + 1..=WAL_UP_TO_MOD_ID)
-            .fold(WalMutationBuilder::new(), |b, id| {
-                b.add_node(id, (id - CHECKPOINT_AT_MOD_ID - 1) as u32, 1)
-            });
-
-        // Add edges: each node connects to the next two neighbors (wrapping).
-        let builder = (0..NODES_COUNT as i64).fold(builder, |b, idx| {
-            let base = idx as u32;
-            let num_nodes = NODES_COUNT as u32;
-            let neighbor1 = (base + 1) % num_nodes;
-            let neighbor2 = (base + 2) % num_nodes;
-            b.add_edges(
-                EDGES_START_MOD_ID + idx,
-                base,
-                vec![neighbor1, neighbor2],
-                0,
-            )
-        });
+        let builder = WalMutationBuilder::new()
+            .add_nodes_sequential_from(CHECKPOINT_AT_MOD_ID + 1, NODES_COUNT, 1)
+            .add_edges_wrapping(NODES_COUNT, EDGES_START_MOD_ID, 0);
 
         builder.build(&nodes).await?;
 
@@ -80,9 +64,7 @@ impl TestRun for Wal103 {
             .assert_max_modification_id(EDGES_START_MOD_ID + NODES_COUNT as i64 - 1)
             .assert_checkpoint_count(1)
             .assert_latest_checkpoint_mod_id(CHECKPOINT_AT_MOD_ID);
-        nodes
-            .apply_assertions(&[pre.clone(), pre.clone(), pre])
-            .await
+        nodes.apply_uniform_assertions(&pre).await
     }
 
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
@@ -127,19 +109,11 @@ impl TestRun for Wal103 {
             .assert_checkpoint_count(2)
             .assert_latest_checkpoint_mod_id(EDGES_START_MOD_ID + NODES_COUNT as i64 - 1)
             .assert_s3_object_exists(true);
-        nodes
-            .apply_assertions(&[post.clone(), post.clone(), post])
-            .await?;
-
-        // All 3 parties must agree on the BLAKE3 hash.
-        nodes.assert_checkpoint_hashes_agree().await?;
+        nodes.apply_uniform_assertions(&post).await?;
 
         // Materialise the full WAL (mutations 51..=100) in the test process
         // and verify the hash matches the sidecar's stored checkpoint hash.
-        let reference_hash = nodes.0[0].store.compute_reference_hash().await?;
-        nodes
-            .assert_checkpoint_hashes_match_reference(&reference_hash)
-            .await?;
+        nodes.assert_consensus_and_reference().await?;
 
         Ok(())
     }

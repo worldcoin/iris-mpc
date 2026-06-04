@@ -465,6 +465,50 @@ impl CpuNodes {
         )?;
         Ok([r0, r1, r2])
     }
+
+    /// Create nodes and immediately truncate checkpoint tables — the standard
+    /// starting state for every workflow test.
+    pub async fn new_clean(configs: &CpuConfigs) -> eyre::Result<Self> {
+        let nodes = Self::new(configs).await?;
+        nodes.truncate_checkpoint_tables().await?;
+        Ok(nodes)
+    }
+
+    /// Assert all parties produced the same checkpoint hash and that it matches
+    /// the WAL-materialized reference graph from party 0.
+    pub async fn assert_consensus_and_reference(&self) -> eyre::Result<()> {
+        self.assert_checkpoint_hashes_agree().await?;
+        let reference_hash = self.0[0].store.compute_reference_hash().await?;
+        self.assert_checkpoint_hashes_match_reference(&reference_hash).await
+    }
+
+    /// Apply the same assertions to all three parties.
+    pub async fn apply_uniform_assertions(
+        &self,
+        assertions: &WalAssertions,
+    ) -> eyre::Result<()> {
+        self.apply_assertions(&[
+            assertions.clone(),
+            assertions.clone(),
+            assertions.clone(),
+        ])
+        .await
+    }
+
+    /// Apply one assertion to party 0 and a different one to parties 1 and 2.
+    /// Useful for tests that desync or stagger party 0.
+    pub async fn apply_split_assertions(
+        &self,
+        party0: &WalAssertions,
+        parties_12: &WalAssertions,
+    ) -> eyre::Result<()> {
+        self.apply_assertions(&[
+            party0.clone(),
+            parties_12.clone(),
+            parties_12.clone(),
+        ])
+        .await
+    }
 }
 
 // ---------------------------------------------------------------------------

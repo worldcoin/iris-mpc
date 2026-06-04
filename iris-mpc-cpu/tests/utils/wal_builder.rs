@@ -96,6 +96,37 @@ impl WalMutationBuilder {
         self
     }
 
+    /// Add `count` sequential AddNode mutations. Node serial IDs are 0..count,
+    /// mod IDs are 1..=count (i.e. mod_id = serial_id + 1).
+    pub fn add_nodes_sequential(self, count: usize, height: u32) -> Self {
+        self.add_nodes_sequential_from(1, count, height)
+    }
+
+    /// Add `count` sequential AddNode mutations starting at `start_mod_id`.
+    /// Serial IDs start at 0 (relative to this batch): serial = idx, mod_id = start_mod_id + idx.
+    /// Use this for WAL batches whose mod_ids are offset from 1 (e.g. 51..=100).
+    pub fn add_nodes_sequential_from(self, start_mod_id: i64, count: usize, height: u32) -> Self {
+        (0..count as i64).fold(self, |b, idx| {
+            b.add_node(start_mod_id + idx, idx as u32, height as usize)
+        })
+    }
+
+    /// Add wrapping AddEdges mutations for `count` nodes. Each node i gets edges
+    /// to (i+1)%count and (i+2)%count. `edges_start_mod_id` is the mod_id for
+    /// the first edge entry.
+    pub fn add_edges_wrapping(self, count: usize, edges_start_mod_id: i64, layer: u32) -> Self {
+        (0..count as i64).fold(self, |b, idx| {
+            let base = idx as u32;
+            let n = count as u32;
+            b.add_edges(
+                edges_start_mod_id + idx,
+                base,
+                vec![(base + 1) % n, (base + 2) % n],
+                layer as usize,
+            )
+        })
+    }
+
     /// Persist all mutations to one party's graph store.
     ///
     /// For each entry serializes `BothEyes<Vec<GraphMutation<IrisVectorId>>>` with

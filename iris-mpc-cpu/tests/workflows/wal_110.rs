@@ -55,8 +55,7 @@ impl Wal110 {
 
 impl TestRun for Wal110 {
     async fn setup(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
-        let nodes = CpuNodes::new(&ctx.configs).await?;
-        nodes.truncate_checkpoint_tables().await?;
+        let nodes = CpuNodes::new_clean(&ctx.configs).await?;
 
         // Two builders for the same modification_id but different node serial_ids.
         // Different serial_ids produce different bincode bytes, triggering the mismatch.

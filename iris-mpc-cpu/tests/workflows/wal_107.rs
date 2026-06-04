@@ -64,28 +64,12 @@ impl Wal107 {
 
 impl TestRun for Wal107 {
     async fn setup(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
-        let nodes = CpuNodes::new(&ctx.configs).await?;
-        nodes.truncate_checkpoint_tables().await?;
+        let nodes = CpuNodes::new_clean(&ctx.configs).await?;
 
         // Seed WAL mutations 1..=10 into all three parties.
-        let shared_builder = (1i64..=SHARED_NODES as i64)
-            .fold(WalMutationBuilder::new(), |b, id| {
-                b.add_node(id, (id - 1) as u32, 1)
-            });
-
-        // Add edges for shared batch: each node connects to the next two neighbors (wrapping).
-        let shared_builder = (0..SHARED_NODES as i64).fold(shared_builder, |b, idx| {
-            let base = idx as u32;
-            let num_nodes = SHARED_NODES as u32;
-            let neighbor1 = (base + 1) % num_nodes;
-            let neighbor2 = (base + 2) % num_nodes;
-            b.add_edges(
-                SHARED_EDGES_START + idx,
-                base,
-                vec![neighbor1, neighbor2],
-                0,
-            )
-        });
+        let shared_builder = WalMutationBuilder::new()
+            .add_nodes_sequential(SHARED_NODES, 1)
+            .add_edges_wrapping(SHARED_NODES, SHARED_EDGES_START, 0);
 
         shared_builder.build(&nodes).await?;
 
@@ -97,7 +81,7 @@ impl TestRun for Wal107 {
             (0..PARTY0_EXTRA_NODES as i64).fold(WalMutationBuilder::new(), |b, idx| {
                 b.add_node(
                     PARTY0_NODES_START + idx,
-                    (SHARED_NODES as u32 + idx as u32),
+                    SHARED_NODES as u32 + idx as u32,
                     1,
                 )
             });
@@ -140,9 +124,7 @@ impl TestRun for Wal107 {
             .assert_wal_row_count(SHARED_COUNT)
             .assert_max_modification_id(SHARED_EDGES_START + SHARED_NODES as i64 - 1)
             .assert_checkpoint_count(0);
-        nodes
-            .apply_assertions(&[p0_pre, p12_pre.clone(), p12_pre])
-            .await
+        nodes.apply_split_assertions(&p0_pre, &p12_pre).await
     }
 
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
@@ -191,21 +173,13 @@ impl TestRun for Wal107 {
             .assert_checkpoint_count(1)
             .assert_latest_checkpoint_mod_id(PARTY0_EDGES_START + PARTY0_EXTRA_NODES as i64 - 1)
             .assert_s3_object_exists(true);
-        nodes
-            .apply_assertions(&[post.clone(), post.clone(), post])
-            .await?;
+        nodes.apply_uniform_assertions(&post).await?;
 
         // All three parties must agree on the checkpoint BLAKE3 hash.
         // This is the key assertion: agreement proves modification sync
-        // produced identical graphs across parties.
-        nodes.assert_checkpoint_hashes_agree().await?;
-
-        // Cross-check against the reference materialised from party 0's WAL,
-        // which is the ground truth (party 0 had the complete mutation set).
-        let reference_hash = nodes.0[0].store.compute_reference_hash().await?;
-        nodes
-            .assert_checkpoint_hashes_match_reference(&reference_hash)
-            .await
+        // produced identical graphs across parties. Cross-check against the
+        // reference materialised from party 0's WAL.
+        nodes.assert_consensus_and_reference().await
     }
 
     async fn teardown(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {

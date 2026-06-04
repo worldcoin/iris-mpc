@@ -65,8 +65,7 @@ impl Wal109 {
 
 impl TestRun for Wal109 {
     async fn setup(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
-        let nodes = CpuNodes::new(&ctx.configs).await?;
-        nodes.truncate_checkpoint_tables().await?;
+        let nodes = CpuNodes::new_clean(&ctx.configs).await?;
 
         // One AddNode mutation per modification_id, serial_id = mod_id - 1 (0-indexed).
         let builder10 = (1i64..=TOTAL_MODS).fold(WalMutationBuilder::new(), |b, id| {
@@ -167,7 +166,7 @@ impl TestRun for Wal109 {
             .assert_latest_checkpoint_mod_id(TOTAL_MODS)
             .assert_s3_object_exists(true);
         nodes
-            .apply_assertions(&[post.clone(), post.clone(), post])
+            .apply_uniform_assertions(&post)
             .await?;
 
         // All 3 parties must agree on the BLAKE3 hash of the checkpoint.

@@ -47,8 +47,7 @@ impl Wal100 {
 
 impl TestRun for Wal100 {
     async fn setup(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
-        let nodes = CpuNodes::new(&ctx.configs).await?;
-        nodes.truncate_checkpoint_tables().await?;
+        let nodes = CpuNodes::new_clean(&ctx.configs).await?;
         self.nodes = Some(nodes);
         Ok(())
     }
@@ -58,9 +57,7 @@ impl TestRun for Wal100 {
         let zero = WalAssertions::new()
             .assert_wal_row_count(0)
             .assert_checkpoint_count(0);
-        nodes
-            .apply_assertions(&[zero.clone(), zero.clone(), zero])
-            .await
+        nodes.apply_uniform_assertions(&zero).await
     }
 
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
@@ -106,9 +103,7 @@ impl TestRun for Wal100 {
             .assert_wal_row_count(0)
             .assert_checkpoint_count(0)
             .assert_s3_object_exists(false);
-        nodes
-            .apply_assertions(&[expected.clone(), expected.clone(), expected])
-            .await
+        nodes.apply_uniform_assertions(&expected).await
     }
 
     async fn teardown(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {

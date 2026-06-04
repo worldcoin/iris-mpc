@@ -60,28 +60,12 @@ impl Wal105 {
 
 impl TestRun for Wal105 {
     async fn setup(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
-        let nodes = CpuNodes::new(&ctx.configs).await?;
-        nodes.truncate_checkpoint_tables().await?;
+        let nodes = CpuNodes::new_clean(&ctx.configs).await?;
 
         // Seed WAL mutations 51..=100 for the sidecar to consume in phase 1.
-        let builder = (CHECKPOINT_AT_MOD_ID + 1..=SIDECAR_CHECKPOINT_MOD_ID)
-            .fold(WalMutationBuilder::new(), |b, id| {
-                b.add_node(id, (id - CHECKPOINT_AT_MOD_ID - 1) as u32, 1)
-            });
-
-        // Add edges for first batch: each node connects to the next two neighbors (wrapping).
-        let builder = (0..INITIAL_NODES as i64).fold(builder, |b, idx| {
-            let base = idx as u32;
-            let num_nodes = INITIAL_NODES as u32;
-            let neighbor1 = (base + 1) % num_nodes;
-            let neighbor2 = (base + 2) % num_nodes;
-            b.add_edges(
-                INITIAL_EDGES_START + idx,
-                base,
-                vec![neighbor1, neighbor2],
-                0,
-            )
-        });
+        let builder = WalMutationBuilder::new()
+            .add_nodes_sequential_from(CHECKPOINT_AT_MOD_ID + 1, INITIAL_NODES, 1)
+            .add_edges_wrapping(INITIAL_NODES, INITIAL_EDGES_START, 0);
 
         builder.build(&nodes).await?;
 
@@ -102,7 +86,7 @@ impl TestRun for Wal105 {
             .assert_checkpoint_count(1)
             .assert_latest_checkpoint_mod_id(CHECKPOINT_AT_MOD_ID);
         nodes
-            .apply_assertions(&[pre.clone(), pre.clone(), pre])
+            .apply_uniform_assertions(&pre)
             .await
     }
 
@@ -127,12 +111,14 @@ impl TestRun for Wal105 {
 
         // Seed additional WAL mutations 101..=110.
         // These represent work that arrived after the sidecar checkpoint was written.
+        // Second batch: node serial IDs continue from the first batch, and edges
+        // wrap within the full combined graph — too complex for the simple helpers.
         let builder = (SIDECAR_CHECKPOINT_MOD_ID + 1..=HAWK_DELTA_UP_TO_MOD_ID)
             .fold(WalMutationBuilder::new(), |b, id| {
                 b.add_node(id, (id - CHECKPOINT_AT_MOD_ID - 1) as u32, 1)
             });
-
-        // Add edges for second batch: each node connects to the next two neighbors (wrapping).
+        // Add edges for second batch: each node connects to the next two neighbors
+        // (wrapping within the full combined graph, not just this batch).
         let builder = (0..HAWK_NODES as i64).fold(builder, |b, idx| {
             let base = (INITIAL_NODES as u32) + (idx as u32);
             let num_nodes = (INITIAL_NODES + HAWK_NODES) as u32;
@@ -178,19 +164,13 @@ impl TestRun for Wal105 {
             .assert_latest_checkpoint_mod_id(last_mod_id)
             .assert_s3_object_exists(true);
         nodes
-            .apply_assertions(&[post.clone(), post.clone(), post])
+            .apply_uniform_assertions(&post)
             .await?;
 
-        // All 3 parties must agree on the phase-2 checkpoint BLAKE3 hash.
-        nodes.assert_checkpoint_hashes_agree().await?;
-
-        // Cross-check against the reference hash computed from the full WAL
-        // (initial 51..=150 + hawk delta 101..=170).  This proves the phase-2
-        // sidecar loaded the phase-1 checkpoint as its base, not the genesis one.
-        let reference_hash = nodes.0[0].store.compute_reference_hash().await?;
-        nodes
-            .assert_checkpoint_hashes_match_reference(&reference_hash)
-            .await
+        // All 3 parties must agree on the phase-2 checkpoint BLAKE3 hash and cross-check
+        // against the reference hash computed from the full WAL (initial 51..=150 + hawk delta 101..=170).
+        // This proves the phase-2 sidecar loaded the phase-1 checkpoint as its base, not the genesis one.
+        nodes.assert_consensus_and_reference().await
     }
 
     async fn teardown(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {

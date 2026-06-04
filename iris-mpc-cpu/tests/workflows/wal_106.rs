@@ -58,27 +58,12 @@ impl Wal106 {
 
 impl TestRun for Wal106 {
     async fn setup(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
-        let nodes = CpuNodes::new(&ctx.configs).await?;
-        nodes.truncate_checkpoint_tables().await?;
+        let nodes = CpuNodes::new_clean(&ctx.configs).await?;
 
         // Seed WAL mutations 1..=10.
-        let builder = (1i64..=FIRST_BATCH_UP_TO).fold(WalMutationBuilder::new(), |b, id| {
-            b.add_node(id, (id - 1) as u32, 1)
-        });
-
-        // Add edges for first batch: each node connects to the next two neighbors (wrapping).
-        let builder = (0..FIRST_BATCH_NODES as i64).fold(builder, |b, idx| {
-            let base = idx as u32;
-            let num_nodes = FIRST_BATCH_NODES as u32;
-            let neighbor1 = (base + 1) % num_nodes;
-            let neighbor2 = (base + 2) % num_nodes;
-            b.add_edges(
-                FIRST_BATCH_EDGES_START + idx,
-                base,
-                vec![neighbor1, neighbor2],
-                0,
-            )
-        });
+        let builder = WalMutationBuilder::new()
+            .add_nodes_sequential(FIRST_BATCH_NODES, 1)
+            .add_edges_wrapping(FIRST_BATCH_NODES, FIRST_BATCH_EDGES_START, 0);
 
         builder.build(&nodes).await?;
 
@@ -98,7 +83,7 @@ impl TestRun for Wal106 {
             .assert_checkpoint_count(1)
             .assert_latest_checkpoint_mod_id(SEED_MOD_ID);
         nodes
-            .apply_assertions(&[pre.clone(), pre.clone(), pre])
+            .apply_uniform_assertions(&pre)
             .await
     }
 
@@ -136,23 +121,20 @@ impl TestRun for Wal106 {
         }
 
         // Seed additional WAL mutations 11..=20 for all parties.
+        // Second batch: serial IDs continue from the first batch, and edges wrap
+        // within the full combined graph — too complex for the simple helpers.
         let builder = (FIRST_BATCH_UP_TO + 1..=SECOND_BATCH_UP_TO)
             .fold(WalMutationBuilder::new(), |b, id| {
                 b.add_node(id, (id - 1) as u32, 1)
             });
-
-        // Add edges for second batch: each node connects to the next two neighbors (wrapping).
+        // Add edges for second batch: each node connects to the next two neighbors
+        // (wrapping within the full combined graph, not just this batch).
         let builder = (0..SECOND_BATCH_NODES as i64).fold(builder, |b, idx| {
             let base = (FIRST_BATCH_NODES as u32) + (idx as u32);
             let num_nodes = (FIRST_BATCH_NODES + SECOND_BATCH_NODES) as u32;
             let neighbor1 = (base + 1) % num_nodes;
             let neighbor2 = (base + 2) % num_nodes;
-            b.add_edges(
-                SECOND_BATCH_EDGES_START + idx,
-                base,
-                vec![neighbor1, neighbor2],
-                0,
-            )
+            b.add_edges(SECOND_BATCH_EDGES_START + idx, base, vec![neighbor1, neighbor2], 0)
         });
 
         builder.build(nodes).await?;
@@ -216,17 +198,12 @@ impl TestRun for Wal106 {
             .assert_latest_checkpoint_mod_id(max_mod_id)
             .assert_s3_object_exists(true);
         nodes
-            .apply_assertions(&[p0_post, p12_post.clone(), p12_post])
+            .apply_split_assertions(&p0_post, &p12_post)
             .await?;
 
-        // All parties must agree on the BLAKE3 hash of the phase-2 checkpoint.
-        nodes.assert_checkpoint_hashes_agree().await?;
-
-        // Verify against the reference hash computed from the full WAL (1..=20).
-        let reference_hash = nodes.0[0].store.compute_reference_hash().await?;
-        nodes
-            .assert_checkpoint_hashes_match_reference(&reference_hash)
-            .await
+        // All parties must agree on the BLAKE3 hash of the phase-2 checkpoint and
+        // verify against the reference hash computed from the full WAL (1..=20).
+        nodes.assert_consensus_and_reference().await
     }
 
     async fn teardown(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {

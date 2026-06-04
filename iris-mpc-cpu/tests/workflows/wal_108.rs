@@ -44,28 +44,13 @@ impl Wal108 {
 
 impl TestRun for Wal108 {
     async fn setup(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
-        let nodes = CpuNodes::new(&ctx.configs).await?;
-        nodes.truncate_checkpoint_tables().await?;
+        let nodes = CpuNodes::new_clean(&ctx.configs).await?;
 
         // No checkpoint — sidecar will start from an empty graph.
         // Seed WAL mutations 1..=20 for all three parties.
-        let builder = (1i64..=WAL_MUTATION_COUNT).fold(WalMutationBuilder::new(), |b, id| {
-            b.add_node(id, (id - 1) as u32, 1)
-        });
-
-        // Add edges: each node connects to the next two neighbors (wrapping).
-        let num_nodes = WAL_MUTATION_COUNT as u32;
-        let builder = (0..WAL_MUTATION_COUNT).fold(builder, |b, idx| {
-            let base = idx as u32;
-            let neighbor1 = (base + 1) % num_nodes;
-            let neighbor2 = (base + 2) % num_nodes;
-            b.add_edges(
-                EDGES_START_MOD_ID + idx,
-                base,
-                vec![neighbor1, neighbor2],
-                0,
-            )
-        });
+        let builder = WalMutationBuilder::new()
+            .add_nodes_sequential(WAL_MUTATION_COUNT as usize, 1)
+            .add_edges_wrapping(WAL_MUTATION_COUNT as usize, EDGES_START_MOD_ID, 0);
 
         builder.build(&nodes).await?;
 
@@ -80,7 +65,7 @@ impl TestRun for Wal108 {
             .assert_max_modification_id(EDGES_START_MOD_ID + WAL_MUTATION_COUNT - 1)
             .assert_checkpoint_count(0);
         nodes
-            .apply_assertions(&[pre.clone(), pre.clone(), pre])
+            .apply_uniform_assertions(&pre)
             .await
     }
 
@@ -112,20 +97,13 @@ impl TestRun for Wal108 {
             .assert_latest_checkpoint_mod_id(last_mod_id)
             .assert_s3_object_exists(true);
         nodes
-            .apply_assertions(&[post.clone(), post.clone(), post])
+            .apply_uniform_assertions(&post)
             .await?;
 
-        // All 3 parties must agree on the BLAKE3 hash.
-        nodes.assert_checkpoint_hashes_agree().await?;
-
-        // Cross-check against the reference hash computed from the full WAL in the
-        // test process — proves the sidecar applied all mutations correctly.
-        let reference_hash = nodes.0[0].store.compute_reference_hash().await?;
-        nodes
-            .assert_checkpoint_hashes_match_reference(&reference_hash)
-            .await?;
-
-        Ok(())
+        // All 3 parties must agree on the BLAKE3 hash and cross-check against the
+        // reference hash computed from the full WAL in the test process — proves
+        // the sidecar applied all mutations correctly.
+        nodes.assert_consensus_and_reference().await
     }
 
     async fn teardown(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
