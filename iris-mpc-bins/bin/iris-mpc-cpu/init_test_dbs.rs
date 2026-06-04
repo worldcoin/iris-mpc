@@ -366,9 +366,12 @@ async fn main() -> Result<()> {
         n_existing_irises
     );
 
-    let num_irises = args
-        .target_db_size
-        .map(|target| target.saturating_sub(n_existing_irises));
+    // reconcile_parties cleared the graph, so n_existing_irises (graph max) is
+    // 0 and we rebuild from scratch. Cover the full *persisted* iris set (DB
+    // count), not target_db_size: when a DB is already over target the old
+    // `target` here built a graph smaller than the iris table (inconsistent).
+    let num_irises =
+        Some(dbs[DEFAULT_PARTY_IDX].store.get_max_serial_id().await? - n_existing_irises);
 
     // TODO: use reader function to read NDJSON file.
     tracing::info!("Initializing in-memory vectors from NDJSON file");
