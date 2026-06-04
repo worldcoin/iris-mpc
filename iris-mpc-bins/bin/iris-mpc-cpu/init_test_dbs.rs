@@ -12,29 +12,20 @@ use iris_mpc_cpu::{
     hawkers::aby3::aby3_store::FhdOps,
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef, SharedPlaintextStore},
     hnsw::{
-        graph::{neighborhood::Neighborhood, test_utils::DbContext},
+        graph::{
+            neighborhood::Neighborhood,
+            test_utils::{deserialize_graph, serialize_graph, DbContext},
+        },
         searcher::LayerDistribution,
-        vector_store::VectorStoreMut,
         GraphMem, HnswSearcher, SortedNeighborhood,
     },
     protocol::shared_iris::{GaloisRingSharedIris, GaloisRingSharedIrisPair},
-    utils::{
-        constants::N_PARTIES,
-        serialization::{
-            iris_ndjson::{irises_from_ndjson_iter, IrisSelection},
-            types::iris_base64::Base64IrisCode,
-        },
-    },
+    utils::{constants::N_PARTIES, serialization::types::iris_base64::Base64IrisCode},
 };
 use itertools::{izip, Itertools};
 use rand::{prelude::StdRng, SeedableRng};
 use serde_json::Deserializer;
-use std::{
-    fs::File,
-    io::BufReader,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{fs::File, io::BufReader, path::PathBuf, sync::Arc};
 use tokio::{
     sync::mpsc,
     task::JoinSet,
@@ -164,6 +155,13 @@ struct Args {
     /// Hawk Main's batch behavior.
     #[clap(long, default_value = "64")]
     build_batch_size: usize,
+
+    /// Optional path to checkpoint the built in-memory graph. If the file
+    /// exists (and matches the persisted iris count) the graph is loaded from
+    /// it instead of rebuilt; otherwise the freshly built graph is written
+    /// there. Lets a DB-persist failure resume without re-running the build.
+    #[clap(long)]
+    graph_checkpoint_file: Option<PathBuf>,
 
     /// PRF key for HNSW insertion, used to select the layer at which new
     /// elements are inserted into the hierarchical graph structure.
@@ -336,262 +334,255 @@ async fn main() -> Result<()> {
 
     tracing::info!("⚓ ANCHOR: Constructing HNSW graph databases");
 
-    tracing::info!("Initializing in-memory graphs from databases");
-    let graphs = if n_existing_irises > 0 {
-        // read graph store from party 0
-        let graph_l = dbs[DEFAULT_PARTY_IDX]
-            .load_graph_to_mem(StoreId::Left)
-            .await?;
-        let graph_r = dbs[DEFAULT_PARTY_IDX]
-            .load_graph_to_mem(StoreId::Right)
-            .await?;
-        [graph_l, graph_r]
+    // reconcile_parties cleared any partial DB graph, so the graph is always
+    // (re)built or loaded from scratch over the full persisted iris set.
+    let total_irises = dbs[DEFAULT_PARTY_IDX].store.get_max_serial_id().await?;
+
+    // Load the built graph from a checkpoint file if present and matching; this
+    // lets a DB-persist failure resume without re-running the ~O(N) build.
+    let loaded = match &args.graph_checkpoint_file {
+        Some(p) if p.exists() => {
+            let g = deserialize_graph(p).await?;
+            let n = get_max_serial_id(&g[0]).unwrap_or(0) as usize;
+            if n == total_irises {
+                tracing::info!("Loaded graph checkpoint {:?} ({} nodes)", p, n);
+                Some(g)
+            } else {
+                tracing::warn!(
+                    "Checkpoint {:?} has {} nodes != {} persisted irises; rebuilding",
+                    p,
+                    n,
+                    total_irises
+                );
+                None
+            }
+        }
+        _ => None,
+    };
+
+    let built = loaded.is_none();
+    let graphs: [GraphMem<PlaintextVectorRef>; 2] = if let Some(g) = loaded {
+        g
     } else {
-        // new graphs
-        [GraphMem::new(), GraphMem::new()]
-    };
+        // Graph is empty (cleared), so there is nothing to skip or preload.
+        let graphs = [GraphMem::new(), GraphMem::new()];
+        let n_existing_irises = 0usize;
+        let num_irises = Some(total_irises);
+        let vectors = [
+            PlaintextStore::<FhdOps>::new(),
+            PlaintextStore::<FhdOps>::new(),
+        ];
 
-    let n_existing_irises = {
-        let n_left = get_max_serial_id(&graphs[0]).unwrap_or(0);
-        let n_right = get_max_serial_id(&graphs[1]).unwrap_or(0);
-
-        assert_eq!(
-            n_left, n_right,
-            "Max serial id not equal in existing left and right HNSW graphs"
+        tracing::info!(
+            "Reading NDJSON file of plaintext iris codes: {:?}",
+            args.path_to_iris_codes
         );
-        n_left as usize
-    };
-    tracing::info!(
-        "Detected {} existing irises in database HNSW graphs",
-        n_existing_irises
-    );
 
-    // reconcile_parties cleared the graph, so n_existing_irises (graph max) is
-    // 0 and we rebuild from scratch. Cover the full *persisted* iris set (DB
-    // count), not target_db_size: when a DB is already over target the old
-    // `target` here built a graph smaller than the iris table (inconsistent).
-    let num_irises =
-        Some(dbs[DEFAULT_PARTY_IDX].store.get_max_serial_id().await? - n_existing_irises);
+        let (tx_l, rx_l) = mpsc::channel::<IrisCodeWithSerialId>(256);
+        let (tx_r, rx_r) = mpsc::channel::<IrisCodeWithSerialId>(256);
+        let processors = [tx_l, tx_r];
+        let receivers = [rx_l, rx_r];
+        let mut jobs: JoinSet<Result<_>> = JoinSet::new();
 
-    // TODO: use reader function to read NDJSON file.
-    tracing::info!("Initializing in-memory vectors from NDJSON file");
-    let mut vectors = [
-        PlaintextStore::<FhdOps>::new(),
-        PlaintextStore::<FhdOps>::new(),
-    ];
-    if n_existing_irises > 0 {
-        let stream = irises_from_ndjson_iter(
-            Path::new(args.path_to_iris_codes.as_path()),
-            num_irises,
-            IrisSelection::All,
-        )?;
-        for (count, raw_query) in stream.enumerate() {
-            let side = count % 2;
-            let query = Arc::new(raw_query);
-            vectors[side].insert(&query).await;
-        }
-    }
+        tracing::info!("Initializing I/O thread for reading plaintext iris codes");
+        let io_thread = tokio::task::spawn_blocking(move || {
+            let file = File::open(args.path_to_iris_codes.as_path()).unwrap();
+            let reader = BufReader::new(file);
 
-    tracing::info!(
-        "Reading NDJSON file of plaintext iris codes: {:?}",
-        args.path_to_iris_codes
-    );
+            let stream = Deserializer::from_reader(reader)
+                .into_iter::<Base64IrisCode>()
+                .skip(2 * n_existing_irises)
+                .take(num_irises.map(|x| 2 * x).unwrap_or(usize::MAX));
+            for (idx, json_pt) in stream.enumerate() {
+                let iris_code_query = (&json_pt.unwrap()).into();
+                let serial_id = ((idx / 2) + 1 + n_existing_irises) as u32;
+                let raw_query = IrisCodeWithSerialId {
+                    iris_code: iris_code_query,
+                    serial_id,
+                };
 
-    let (tx_l, rx_l) = mpsc::channel::<IrisCodeWithSerialId>(256);
-    let (tx_r, rx_r) = mpsc::channel::<IrisCodeWithSerialId>(256);
-    let processors = [tx_l, tx_r];
-    let receivers = [rx_l, rx_r];
-    let mut jobs: JoinSet<Result<_>> = JoinSet::new();
+                let side = idx % 2;
+                processors[side].blocking_send(raw_query).unwrap();
+            }
+        });
 
-    tracing::info!("Initializing I/O thread for reading plaintext iris codes");
-    let io_thread = tokio::task::spawn_blocking(move || {
-        let file = File::open(args.path_to_iris_codes.as_path()).unwrap();
-        let reader = BufReader::new(file);
+        tracing::info!(
+            "Initializing per-eye jobs (parallel search, batch size {})",
+            args.build_batch_size
+        );
+        let searcher = Arc::new(searcher);
+        for (side, mut rx, vector_store, graph) in izip!(
+            STORE_IDS,
+            receivers.into_iter(),
+            vectors.into_iter(),
+            graphs.into_iter(),
+        ) {
+            let searcher = searcher.clone();
+            let prf_seed = (args.hnsw_prf_key as u128).to_le_bytes();
+            let skip_serial_ids = args.skip_insert_serial_ids.clone();
+            let batch_size = args.build_batch_size;
 
-        let stream = Deserializer::from_reader(reader)
-            .into_iter::<Base64IrisCode>()
-            .skip(2 * n_existing_irises)
-            .take(num_irises.map(|x| 2 * x).unwrap_or(usize::MAX));
-        for (idx, json_pt) in stream.enumerate() {
-            let iris_code_query = (&json_pt.unwrap()).into();
-            let serial_id = ((idx / 2) + 1 + n_existing_irises) as u32;
-            let raw_query = IrisCodeWithSerialId {
-                iris_code: iris_code_query,
-                serial_id,
-            };
+            jobs.spawn(async move {
+                // Arc/RwLock-backed store so each parallel search gets a cheap,
+                // shared-read handle (mirrors Hawk Main's per-session store).
+                let mut store: SharedPlaintextStore<FhdOps> = vector_store.into();
+                let mut graph = graph;
+                let mut counter = 0usize;
+                let mut closed = false;
 
-            let side = idx % 2;
-            processors[side].blocking_send(raw_query).unwrap();
-        }
-    });
-
-    tracing::info!(
-        "Initializing per-eye jobs (parallel search, batch size {})",
-        args.build_batch_size
-    );
-    let searcher = Arc::new(searcher);
-    for (side, mut rx, vector_store, graph) in izip!(
-        STORE_IDS,
-        receivers.into_iter(),
-        vectors.into_iter(),
-        graphs.into_iter(),
-    ) {
-        let searcher = searcher.clone();
-        let prf_seed = (args.hnsw_prf_key as u128).to_le_bytes();
-        let skip_serial_ids = args.skip_insert_serial_ids.clone();
-        let batch_size = args.build_batch_size;
-
-        jobs.spawn(async move {
-            // Arc/RwLock-backed store so each parallel search gets a cheap,
-            // shared-read handle (mirrors Hawk Main's per-session store).
-            let mut store: SharedPlaintextStore<FhdOps> = vector_store.into();
-            let mut graph = graph;
-            let mut counter = 0usize;
-            let mut closed = false;
-
-            while !closed {
-                // 1. Collect a batch from the channel, assigning insertion
-                //    layers up front (deterministic PRF, as in Hawk Main).
-                let mut batch: Vec<(IrisVectorId, Arc<IrisCode>, usize)> =
-                    Vec::with_capacity(batch_size);
-                while batch.len() < batch_size {
-                    match rx.recv().await {
-                        Some(raw_query) => {
-                            let serial_id = raw_query.serial_id;
-                            if skip_serial_ids.contains(&serial_id) {
-                                tracing::info!(
-                                    "Skipping insertion of serial id {} for {} side",
-                                    serial_id,
-                                    side
-                                );
-                                continue;
+                while !closed {
+                    // 1. Collect a batch from the channel, assigning insertion
+                    //    layers up front (deterministic PRF, as in Hawk Main).
+                    let mut batch: Vec<(IrisVectorId, Arc<IrisCode>, usize)> =
+                        Vec::with_capacity(batch_size);
+                    while batch.len() < batch_size {
+                        match rx.recv().await {
+                            Some(raw_query) => {
+                                let serial_id = raw_query.serial_id;
+                                if skip_serial_ids.contains(&serial_id) {
+                                    tracing::info!(
+                                        "Skipping insertion of serial id {} for {} side",
+                                        serial_id,
+                                        side
+                                    );
+                                    continue;
+                                }
+                                let inserted_id = IrisVectorId::from_serial_id(serial_id);
+                                let query = Arc::new(raw_query.iris_code);
+                                let insertion_layer =
+                                    searcher.gen_layer_prf(&prf_seed, &(inserted_id, side))?;
+                                batch.push((inserted_id, query, insertion_layer));
                             }
-                            let inserted_id = IrisVectorId::from_serial_id(serial_id);
-                            let query = Arc::new(raw_query.iris_code);
-                            let insertion_layer =
-                                searcher.gen_layer_prf(&prf_seed, &(inserted_id, side))?;
-                            batch.push((inserted_id, query, insertion_layer));
-                        }
-                        None => {
-                            closed = true;
-                            break;
+                            None => {
+                                closed = true;
+                                break;
+                            }
                         }
                     }
+                    if batch.is_empty() {
+                        break;
+                    }
+
+                    // 2. Searches run in parallel against the pre-batch graph
+                    //    snapshot; same-batch nodes are invisible to each other,
+                    //    matching Hawk Main's batch semantics.
+                    let graph_arc = Arc::new(graph);
+                    let mut handles = Vec::with_capacity(batch.len());
+                    for (_, query, insertion_layer) in &batch {
+                        let mut search_store = store.clone();
+                        let graph_arc = graph_arc.clone();
+                        let searcher = searcher.clone();
+                        let query = query.clone();
+                        let insertion_layer = *insertion_layer;
+                        handles.push(tokio::spawn(async move {
+                            let (links, update_ep) = searcher
+                                .search_to_insert::<_, SortedNeighborhood<_>>(
+                                    &mut search_store,
+                                    &graph_arc,
+                                    &query,
+                                    insertion_layer,
+                                )
+                                .await?;
+
+                            // Trim each layer's neighborhood to M and extract ids.
+                            let mut links_unstructured = Vec::with_capacity(links.len());
+                            for (lc, mut l) in links.into_iter().enumerate() {
+                                let m = searcher.params.get_M(lc);
+                                l.trim(&mut search_store, m).await?;
+                                links_unstructured.push(l.edge_ids());
+                            }
+
+                            Ok::<_, eyre::Report>(InsertPlanV::<SharedPlaintextStore> {
+                                query,
+                                links: links_unstructured,
+                                update_ep,
+                            })
+                        }));
+                    }
+
+                    let mut plans = Vec::with_capacity(handles.len());
+                    for handle in handles {
+                        plans.push(Some(handle.await??));
+                    }
+
+                    // Reclaim sole ownership of the graph for the insert phase.
+                    graph = Arc::try_unwrap(graph_arc)
+                        .map_err(|_| eyre!("graph Arc still shared after search tasks"))?;
+
+                    // 3. Apply the batch sequentially via Hawk Main's insert logic.
+                    //    Vectors are inserted into the store here; join_plans
+                    //    reconciles batch entry-point updates (a no-op in
+                    //    linear-scan mode, where multiple appends are all valid).
+                    let ids: Vec<Option<IrisVectorId>> =
+                        batch.iter().map(|(id, _, _)| Some(*id)).collect();
+                    insert::insert(&mut store, &mut graph, &searcher, plans, &ids).await?;
+
+                    counter += batch.len();
+                    tracing::info!("Processed {} plaintext entries for {} side", counter, side);
                 }
-                if batch.is_empty() {
-                    break;
-                }
 
-                // 2. Searches run in parallel against the pre-batch graph
-                //    snapshot; same-batch nodes are invisible to each other,
-                //    matching Hawk Main's batch semantics.
-                let graph_arc = Arc::new(graph);
-                let mut handles = Vec::with_capacity(batch.len());
-                for (_, query, insertion_layer) in &batch {
-                    let mut search_store = store.clone();
-                    let graph_arc = graph_arc.clone();
-                    let searcher = searcher.clone();
-                    let query = query.clone();
-                    let insertion_layer = *insertion_layer;
-                    handles.push(tokio::spawn(async move {
-                        let (links, update_ep) = searcher
-                            .search_to_insert::<_, SortedNeighborhood<_>>(
-                                &mut search_store,
-                                &graph_arc,
-                                &query,
-                                insertion_layer,
-                            )
-                            .await?;
+                Ok((side, graph))
+            });
+        }
 
-                        // Trim each layer's neighborhood to M and extract ids.
-                        let mut links_unstructured = Vec::with_capacity(links.len());
-                        for (lc, mut l) in links.into_iter().enumerate() {
-                            let m = searcher.params.get_M(lc);
-                            l.trim(&mut search_store, m).await?;
-                            links_unstructured.push(l.edge_ids());
-                        }
+        tracing::info!("Building in-memory plaintext vector stores and HNSW graphs");
 
-                        Ok::<_, eyre::Report>(InsertPlanV::<SharedPlaintextStore> {
-                            query,
-                            links: links_unstructured,
-                            update_ep,
-                        })
-                    }));
-                }
+        let mut results: Vec<_> = jobs
+            .join_all()
+            .await
+            .into_iter()
+            .collect::<Result<_, _>>()?;
+        results.sort_by_key(|x| x.0 as usize);
 
-                let mut plans = Vec::with_capacity(handles.len());
-                for handle in handles {
-                    plans.push(Some(handle.await??));
-                }
+        io_thread.await?;
 
-                // Reclaim sole ownership of the graph for the insert phase.
-                graph = Arc::try_unwrap(graph_arc)
-                    .map_err(|_| eyre!("graph Arc still shared after search tasks"))?;
+        tracing::info!(
+            "Finished building HNSW graphs with {} nodes",
+            get_max_serial_id(&results[0].1).unwrap_or(0)
+        );
 
-                // 3. Apply the batch sequentially via Hawk Main's insert logic.
-                //    Vectors are inserted into the store here; join_plans
-                //    reconciles batch entry-point updates (a no-op in
-                //    linear-scan mode, where multiple appends are all valid).
-                let ids: Vec<Option<IrisVectorId>> =
-                    batch.iter().map(|(id, _, _)| Some(*id)).collect();
-                insert::insert(&mut store, &mut graph, &searcher, plans, &ids).await?;
+        let [(.., graph_l), (.., graph_r)] = results.try_into().unwrap();
+        [graph_l, graph_r]
+    };
 
-                counter += batch.len();
-                tracing::info!("Processed {} plaintext entries for {} side", counter, side);
-            }
-
-            Ok((side, graph))
-        });
+    // Checkpoint the freshly built graph so a later DB-persist failure can
+    // reload it instead of rebuilding.
+    if built {
+        if let Some(p) = &args.graph_checkpoint_file {
+            tracing::info!("Writing graph checkpoint to {:?}", p);
+            serialize_graph(p, &graphs).await?;
+        }
     }
 
-    tracing::info!("Building in-memory plaintext vector stores and HNSW graphs");
+    let [graph_l, graph_r] = graphs;
 
-    let mut results: Vec<_> = jobs
-        .join_all()
-        .await
-        .into_iter()
-        .collect::<Result<_, _>>()?;
-    results.sort_by_key(|x| x.0 as usize);
-
-    io_thread.await?;
-
-    tracing::info!(
-        "Finished building HNSW graphs with {} nodes",
-        get_max_serial_id(&results[0].1).unwrap_or(0)
-    );
-
-    let [(.., graph_l), (.., graph_r)] = results.try_into().unwrap();
-
-    // Persist graphs to the 3 parties concurrently (sides sequential within a
-    // party to bound memory to ~3 in-flight graph clones), with a fail-fast
-    // timeout per side. Graph topology is public, so the same graph goes to all.
+    // Persist to all 3 parties AND both sides concurrently (6-way), each with a
+    // fail-fast timeout. Graph topology is public, so the same graph goes to all.
     let graph_l = Arc::new(graph_l);
     let graph_r = Arc::new(graph_r);
-    let graph_persists: Vec<_> = dbs
-        .iter()
-        .enumerate()
-        .map(|(party, db)| {
-            let gl = graph_l.clone();
-            let gr = graph_r.clone();
-            async move {
-                for (graph, side) in [(gl, StoreId::Left), (gr, StoreId::Right)] {
-                    tracing::info!("Persisting {} graph for party {}", side, party);
-                    timeout(
-                        GRAPH_PERSIST_TIMEOUT,
-                        db.persist_graph_db((*graph).clone(), side),
+    let mut graph_persists = Vec::with_capacity(dbs.len() * 2);
+    for (party, db) in dbs.iter().enumerate() {
+        for (graph, side) in [
+            (graph_l.clone(), StoreId::Left),
+            (graph_r.clone(), StoreId::Right),
+        ] {
+            graph_persists.push(async move {
+                tracing::info!("Persisting {} graph for party {}", side, party);
+                timeout(
+                    GRAPH_PERSIST_TIMEOUT,
+                    db.persist_graph_db((*graph).clone(), side),
+                )
+                .await
+                .map_err(|_| {
+                    eyre!(
+                        "persist_graph_db timed out after {:?} (wedged tunnel?)",
+                        GRAPH_PERSIST_TIMEOUT
                     )
-                    .await
-                    .map_err(|_| {
-                        eyre!(
-                            "persist_graph_db timed out after {:?} (wedged tunnel?)",
-                            GRAPH_PERSIST_TIMEOUT
-                        )
-                    })??;
-                }
+                })??;
                 Ok::<(), eyre::Report>(())
-            }
-        })
-        .collect();
+            });
+        }
+    }
     try_join_all(graph_persists).await?;
 
     tracing::info!("Exited successfully! 🎉");

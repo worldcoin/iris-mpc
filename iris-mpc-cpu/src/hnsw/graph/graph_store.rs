@@ -10,7 +10,9 @@ use futures::future::try_join_all;
 use futures::StreamExt;
 use iris_mpc_common::{postgres::PostgresClient, vector_id::VectorId};
 use serde::{de::DeserializeOwned, Serialize};
-use sqlx::{error::BoxDynError, types::Json, PgConnection, Postgres, Row, Transaction};
+use sqlx::{
+    error::BoxDynError, types::Json, PgConnection, Postgres, QueryBuilder, Row, Transaction,
+};
 use std::{collections::BTreeMap, marker::PhantomData, ops::DerefMut, str::FromStr};
 use tokio::sync::mpsc;
 
@@ -634,6 +636,45 @@ impl<V: VectorStore<VectorRef = VectorId>> GraphOps<'_, '_, V> {
         .execute(self.tx())
         .await
         .map_err(|e| eyre!("Failed to set links: {e}"))?;
+
+        Ok(())
+    }
+
+    /// Batched multi-row upsert of links, to cut per-node round-trips when
+    /// persisting a whole graph. Link lists are pre-serialized (bincode is
+    /// fallible; the `push_values` closure is not).
+    pub async fn set_links_batch(
+        &mut self,
+        rows: Vec<(V::VectorRef, Vec<V::VectorRef>, usize)>,
+    ) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let table = self.links_table();
+        let graph_id = self.graph_id();
+
+        let mut prepared = Vec::with_capacity(rows.len());
+        for (base, links, lc) in rows {
+            let bytes =
+                bincode::serialize(&links).map_err(|e| eyre!("Failed to serialize links: {e}"))?;
+            prepared.push((base.serial_id() as i64, base.version_id(), lc as i16, bytes));
+        }
+
+        let mut qb: QueryBuilder<Postgres> = QueryBuilder::new(format!(
+            "INSERT INTO {table} (graph_id, serial_id, version_id, layer, links) "
+        ));
+        qb.push_values(prepared, |mut b, (serial_id, version_id, layer, bytes)| {
+            b.push_bind(graph_id)
+                .push_bind(serial_id)
+                .push_bind(version_id)
+                .push_bind(layer)
+                .push_bind(bytes);
+        });
+        qb.push(" ON CONFLICT (graph_id, serial_id, version_id, layer) DO UPDATE SET links = EXCLUDED.links");
+        qb.build()
+            .execute(self.tx())
+            .await
+            .map_err(|e| eyre!("Failed to set links batch: {e}"))?;
 
         Ok(())
     }

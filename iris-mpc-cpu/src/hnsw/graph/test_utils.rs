@@ -102,17 +102,26 @@ impl DbContext {
             }
         }
 
+        // Batch link writes into multi-row upserts to cut per-node round-trips.
+        const LINK_BATCH: usize = 512;
         for (lc, layer) in layers.into_iter().enumerate() {
-            for (idx, (pt, links)) in layer.links.into_iter().enumerate() {
-                {
-                    let mut graph_ops = graph_tx.with_graph(side);
-                    graph_ops.set_links(pt, links, lc).await?;
-                }
-
-                if (idx % 1000) == 999 {
+            let mut batch: Vec<(PlaintextVectorRef, Vec<PlaintextVectorRef>, usize)> =
+                Vec::with_capacity(LINK_BATCH);
+            for (pt, links) in layer.links.into_iter() {
+                batch.push((pt, links, lc));
+                if batch.len() >= LINK_BATCH {
+                    graph_tx
+                        .with_graph(side)
+                        .set_links_batch(std::mem::take(&mut batch))
+                        .await?;
                     graph_tx.tx.commit().await?;
                     graph_tx = self.graph_pg.tx().await?;
                 }
+            }
+            if !batch.is_empty() {
+                graph_tx.with_graph(side).set_links_batch(batch).await?;
+                graph_tx.tx.commit().await?;
+                graph_tx = self.graph_pg.tx().await?;
             }
         }
 
@@ -359,7 +368,7 @@ impl DbContext {
     }
 }
 
-async fn serialize_graph(
+pub async fn serialize_graph(
     path: &Path,
     value: &BothEyes<GraphMem<PlaintextVectorRef>>,
 ) -> Result<()> {
@@ -370,7 +379,7 @@ async fn serialize_graph(
     Ok(())
 }
 
-async fn deserialize_graph(path: &Path) -> Result<BothEyes<GraphMem<PlaintextVectorRef>>> {
+pub async fn deserialize_graph(path: &Path) -> Result<BothEyes<GraphMem<PlaintextVectorRef>>> {
     let data = tokio::fs::read(path).await?;
     Ok(bincode::deserialize(&data)?)
 }
