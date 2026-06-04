@@ -7,6 +7,8 @@ use iris_mpc_cpu::{
         mutation::{EdgeType, GraphMutation, MutationOp, UpdateEntryPoint},
     },
 };
+use iris_mpc_utils::{aws::AwsClient, irises::generate_iris_shares_for_upload_both_eyes};
+use rand::{rngs::StdRng, SeedableRng};
 
 use super::cpu_node::CpuNodes;
 
@@ -154,7 +156,7 @@ impl WalMutationBuilder {
                 r#"
                 INSERT INTO modifications
                     (id, serial_id, request_type, s3_url, status, persisted, result_message_body)
-                VALUES ($1, $2, 'Uniqueness', $3, 'COMPLETED', TRUE, $4)
+                VALUES ($1, $2, 'uniqueness', $3, 'COMPLETED', TRUE, $4)
                 ON CONFLICT (id) DO NOTHING
                 "#,
             )
@@ -219,7 +221,7 @@ impl WalMutationBuilder {
                 r#"
                 INSERT INTO modifications
                     (id, serial_id, request_type, s3_url, status, persisted, result_message_body)
-                VALUES ($1, $2, 'Uniqueness', $3, 'COMPLETED', $4, $5)
+                VALUES ($1, $2, 'uniqueness', $3, 'COMPLETED', $4, $5)
                 ON CONFLICT (id) DO NOTHING
                 "#,
             )
@@ -230,6 +232,34 @@ impl WalMutationBuilder {
             .bind(&result_message_body)
             .execute(graph.pool())
             .await?;
+        }
+        Ok(())
+    }
+
+    /// Upload fake iris shares to S3 for each modification entry.
+    ///
+    /// Each entry's S3 key is the deterministic UUID derived from `modification_id`,
+    /// matching the `s3_url` written by `seed_modifications` / `seed_modifications_partial`.
+    /// This is required when the modification `request_type` is `'uniqueness'` (or any
+    /// other type that triggers an S3 fetch in `sync_modifications`).
+    ///
+    /// The `aws_client` must already have its public keyset loaded
+    /// (`client.set_public_keyset().await?` called before passing it here).
+    ///
+    /// Shares are randomly generated — their iris content does not matter for
+    /// WAL-sync tests; only the presence of a valid S3 object at the expected key
+    /// is required.
+    pub async fn upload_iris_shares(&self, aws_client: &AwsClient) -> eyre::Result<()> {
+        let mut rng = StdRng::seed_from_u64(42);
+        for (modification_id, _) in &self.entries {
+            let uuid = uuid::Uuid::from_u128(*modification_id as u128);
+            let shares = generate_iris_shares_for_upload_both_eyes(&mut rng, None, None);
+            aws_client
+                .s3_upload_iris_shares(&uuid, &shares)
+                .await
+                .map_err(|e| {
+                    eyre::eyre!("S3 upload failed for modification_id={modification_id}: {e}")
+                })?;
         }
         Ok(())
     }

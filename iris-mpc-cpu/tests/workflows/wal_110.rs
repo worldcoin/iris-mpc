@@ -27,6 +27,7 @@
 /// DB state is unchanged from setup: party 0 still has 0 WAL rows.
 use std::time::Duration;
 
+use iris_mpc_utils::aws::{AwsClient, AwsClientConfig};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -61,6 +62,21 @@ impl TestRun for Wal110 {
         // Different serial_ids produce different bincode bytes, triggering the mismatch.
         let builder_a = WalMutationBuilder::new().add_node(MOD_ID, 1, 1); // serial_id = 1
         let builder_b = WalMutationBuilder::new().add_node(MOD_ID, 99, 1); // serial_id = 99
+
+        // Upload fake iris shares to S3 so sync_modifications can fetch them when
+        // it rolls forward party 0's unpersisted 'uniqueness' modification.
+        let aws_config = AwsClientConfig::new(
+            "dev".to_string(),
+            ctx.env.public_key_base_url().to_string(),
+            "wf-smpcv2-dev-sns-requests".to_string(),
+            String::new(),
+            0,
+            vec![],
+        )
+        .await;
+        let mut aws_client = AwsClient::new(aws_config);
+        aws_client.set_public_keyset().await?;
+        builder_a.upload_iris_shares(&aws_client).await?;
 
         // WAL seeding:
         //   party 0 — no entry (modification not yet persisted)

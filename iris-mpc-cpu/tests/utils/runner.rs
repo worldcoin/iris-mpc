@@ -146,4 +146,11 @@ impl TestEnvironment {
             Self::Docker => "http://localstack:4566",
         }
     }
+
+    pub fn public_key_base_url(&self) -> &'static str {
+        match self {
+            Self::Local => "http://localhost:4566/wf-dev-public-keys",
+            Self::Docker => "http://localstack:4566/wf-dev-public-keys",
+        }
+    }
 }

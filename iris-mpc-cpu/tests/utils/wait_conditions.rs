@@ -79,12 +79,7 @@ pub async fn wait_for_new_checkpoint(
         Ok::<(), eyre::Error>(())
     })
     .await
-    .map_err(|_| {
-        eyre::eyre!(
-            "sidecar did not produce a new checkpoint within {:?}",
-            dur
-        )
-    })??;
+    .map_err(|_| eyre::eyre!("sidecar did not produce a new checkpoint within {:?}", dur))??;
 
     // Verify S3 objects exist for each party's latest checkpoint.
     for (node, config) in nodes.0.iter().zip(configs.iter()) {
@@ -128,10 +123,5 @@ pub async fn wait_for_hawk_failure(
         ))
     })
     .await
-    .map_err(|_| {
-        eyre::eyre!(
-            "hawk_main did not produce an error within {:?}",
-            dur
-        )
-    })?
+    .map_err(|_| eyre::eyre!("hawk_main did not produce an error within {:?}", dur))?
 }

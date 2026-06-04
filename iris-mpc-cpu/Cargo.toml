@@ -83,6 +83,7 @@ aws-sdk-secretsmanager.workspace = true
 serial_test.workspace = true
 sodiumoxide.workspace = true
 iris-mpc = { path = "../iris-mpc" }
+iris-mpc-utils = { path = "../iris-mpc-utils" }
 
 [features]
 db_dependent = []
