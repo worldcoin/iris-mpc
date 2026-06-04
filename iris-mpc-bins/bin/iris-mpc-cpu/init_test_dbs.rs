@@ -131,6 +131,18 @@ struct Args {
     #[clap(long("hnsw-p"), short('p'))]
     layer_probability: Option<f64>,
 
+    /// Build the graph in linear-scan layer mode (layers capped at
+    /// `max_graph_layer`, higher promotions kept as linearly-scanned entry
+    /// points), matching the Hawk server's search mode. When false, the
+    /// default `Standard` layer mode is used.
+    #[clap(long, default_value = "false")]
+    linear_scan: bool,
+
+    /// Maximum graph layer for linear-scan mode. Should match the server's
+    /// `LINEAR_SCAN_MAX_GRAPH_LAYER`. Ignored unless `--linear-scan` is set.
+    #[clap(long, default_value = "1")]
+    max_graph_layer: usize,
+
     /// PRF key for HNSW insertion, used to select the layer at which new
     /// elements are inserted into the hierarchical graph structure.
     #[clap(long, default_value = "0")]
@@ -175,7 +187,11 @@ impl Args {
 // Convertor: Args -> HnswSearcher.
 impl From<&Args> for HnswSearcher {
     fn from(args: &Args) -> Self {
-        let mut searcher = HnswSearcher::new_standard(args.ef, args.ef, args.M);
+        let mut searcher = if args.linear_scan {
+            HnswSearcher::new_linear_scan(args.ef, args.ef, args.M, args.max_graph_layer)
+        } else {
+            HnswSearcher::new_standard(args.ef, args.ef, args.M)
+        };
         if let Some(q) = args.layer_probability {
             match &mut searcher.layer_distribution {
                 LayerDistribution::Geometric { layer_probability } => {

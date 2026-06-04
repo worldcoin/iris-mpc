@@ -79,9 +79,16 @@ impl DbContext {
             layers,
         } = graph;
 
-        if let Some(EntryPoint { point, layer }) = entry_point.first().cloned() {
+        // Persist the full entry-point list: linear-scan graphs keep several
+        // entry points (all at max_graph_layer) and the load path reads them
+        // all. set_entry_point clears the table, so use it only for the first.
+        for (i, EntryPoint { point, layer }) in entry_point.into_iter().enumerate() {
             let mut graph_ops = graph_tx.with_graph(side);
-            graph_ops.set_entry_point(point, layer).await?;
+            if i == 0 {
+                graph_ops.set_entry_point(point, layer).await?;
+            } else {
+                graph_ops.add_entry_point(point, layer).await?;
+            }
         }
 
         for (lc, layer) in layers.into_iter().enumerate() {
