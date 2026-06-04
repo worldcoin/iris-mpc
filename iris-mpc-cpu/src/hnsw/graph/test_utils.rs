@@ -67,6 +67,17 @@ impl DbContext {
         Self { store, graph_pg }
     }
 
+    /// Clear both eyes' graph (entry points + links) so it can be rebuilt from
+    /// scratch. Used to reconcile partial/inconsistent state before re-indexing.
+    pub async fn clear_graph(&self) -> Result<()> {
+        let mut graph_tx = self.graph_pg.tx().await?;
+        for side in [StoreId::Left, StoreId::Right] {
+            graph_tx.with_graph(side).clear_tables().await?;
+        }
+        graph_tx.tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn persist_graph_db(
         &self,
         graph: GraphMem<PlaintextVectorRef>,

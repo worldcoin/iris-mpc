@@ -1,7 +1,8 @@
 #![recursion_limit = "256"]
 
 use clap::Parser;
-use eyre::{eyre, Result};
+use eyre::{bail, eyre, Result};
+use futures::future::try_join_all;
 use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId, IrisVectorId};
 use iris_mpc_cpu::{
     execution::hawk_main::{
@@ -34,13 +35,22 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tokio::{sync::mpsc, task::JoinSet};
+use tokio::{
+    sync::mpsc,
+    task::JoinSet,
+    time::{timeout, Duration},
+};
 
 /// Default party ordinal identifer.
 const DEFAULT_PARTY_IDX: usize = 0;
 
 /// Number of iris code pairs to generate secret shares for at a time.
 const SECRET_SHARING_BATCH_SIZE: usize = 5000;
+
+/// Per-operation timeout for remote DB writes, so a wedged tunnel connection
+/// fails fast (sqlx has no socket timeout) instead of hanging the whole run.
+const SHARE_PERSIST_TIMEOUT: Duration = Duration::from_secs(180);
+const GRAPH_PERSIST_TIMEOUT: Duration = Duration::from_secs(1200);
 
 /// Builds an HNSW graph from plaintext NDJSON encoded iris codes & persists to
 /// Postgres databases. This binary iteratively builds up a graph in stages
@@ -235,12 +245,11 @@ async fn main() -> Result<()> {
     tracing::info!("Setting database connections");
     let dbs = init_dbs(&args).await;
 
-    tracing::info!("Setting count of previously indexed irises");
-    let n_existing_irises = dbs[DEFAULT_PARTY_IDX].store.get_max_serial_id().await?;
-    tracing::info!("Found {} existing database irises", n_existing_irises);
-    tracing::warn!(
-        "TODO: Escape if count of persisted irises is not equivalent across all parties"
-    );
+    // Reconcile partial/inconsistent state left by an interrupted run: align
+    // all parties' iris tables down to the common floor and clear the graphs so
+    // they rebuild fresh. Makes any restart safe to resume.
+    let n_existing_irises = reconcile_parties(&dbs).await?;
+    tracing::info!("Resuming from reconciled iris floor: {}", n_existing_irises);
 
     // number of iris pairs that need to be inserted to increase the DB size to at least the target
     let n_irises = args
@@ -284,11 +293,34 @@ async fn main() -> Result<()> {
         let cur_batch_len = batch[0].len();
         let last_idx = batch_idx * SECRET_SHARING_BATCH_SIZE + cur_batch_len + n_existing_irises;
 
-        for (db, shares) in izip!(&dbs, batch.iter_mut()) {
-            #[allow(clippy::drain_collect)]
-            let (_, end_serial_id) = db.persist_vector_shares(shares.drain(..).collect()).await?;
-            assert_eq!(end_serial_id, last_idx);
-        }
+        // Persist the 3 parties concurrently (independent DBs/tunnels), each
+        // with a fail-fast timeout so a wedged connection errors out instead of
+        // hanging the whole run.
+        let persists: Vec<_> = izip!(&dbs, batch.iter_mut())
+            .map(|(db, shares)| {
+                let shares = std::mem::take(shares);
+                async move {
+                    let (_, end_serial_id) =
+                        timeout(SHARE_PERSIST_TIMEOUT, db.persist_vector_shares(shares))
+                            .await
+                            .map_err(|_| {
+                                eyre!(
+                                    "persist_vector_shares timed out after {:?} (wedged tunnel?)",
+                                    SHARE_PERSIST_TIMEOUT
+                                )
+                            })??;
+                    if end_serial_id != last_idx {
+                        bail!(
+                            "serial id mismatch: end={} expected={}",
+                            end_serial_id,
+                            last_idx
+                        );
+                    }
+                    Ok::<(), eyre::Report>(())
+                }
+            })
+            .collect();
+        try_join_all(persists).await?;
         tracing::info!(
             "Persisted {} locally generated shares",
             last_idx - n_existing_irises
@@ -527,16 +559,74 @@ async fn main() -> Result<()> {
 
     let [(.., graph_l), (.., graph_r)] = results.try_into().unwrap();
 
-    for (party, db) in dbs.iter().enumerate() {
-        for (graph, side) in [(&graph_l, StoreId::Left), (&graph_r, StoreId::Right)] {
-            tracing::info!("Persisting {} graph for party {}", side, party);
-            db.persist_graph_db(graph.clone(), side).await?;
-        }
-    }
+    // Persist graphs to the 3 parties concurrently (sides sequential within a
+    // party to bound memory to ~3 in-flight graph clones), with a fail-fast
+    // timeout per side. Graph topology is public, so the same graph goes to all.
+    let graph_l = Arc::new(graph_l);
+    let graph_r = Arc::new(graph_r);
+    let graph_persists: Vec<_> = dbs
+        .iter()
+        .enumerate()
+        .map(|(party, db)| {
+            let gl = graph_l.clone();
+            let gr = graph_r.clone();
+            async move {
+                for (graph, side) in [(gl, StoreId::Left), (gr, StoreId::Right)] {
+                    tracing::info!("Persisting {} graph for party {}", side, party);
+                    timeout(
+                        GRAPH_PERSIST_TIMEOUT,
+                        db.persist_graph_db((*graph).clone(), side),
+                    )
+                    .await
+                    .map_err(|_| {
+                        eyre!(
+                            "persist_graph_db timed out after {:?} (wedged tunnel?)",
+                            GRAPH_PERSIST_TIMEOUT
+                        )
+                    })??;
+                }
+                Ok::<(), eyre::Report>(())
+            }
+        })
+        .collect();
+    try_join_all(graph_persists).await?;
 
     tracing::info!("Exited successfully! 🎉");
 
     Ok(())
+}
+
+/// Align all parties to a consistent base before (re)indexing: delete iris rows
+/// above the common floor (the min serial id across parties) and clear every
+/// party's graph so it is rebuilt from scratch. Parties are independent DBs with
+/// no cross-party transaction, so an interrupted run can leave them at different
+/// counts; this repairs that skew and returns the floor to resume from.
+async fn reconcile_parties(dbs: &[DbContext]) -> Result<usize> {
+    let mut maxes = Vec::with_capacity(dbs.len());
+    for db in dbs {
+        maxes.push(db.store.get_max_serial_id().await?);
+    }
+    let floor = *maxes.iter().min().unwrap_or(&0);
+    tracing::info!(
+        "Party iris counts: {:?}; reconciling to floor {}",
+        maxes,
+        floor
+    );
+    for (party, db) in dbs.iter().enumerate() {
+        if maxes[party] > floor {
+            tracing::warn!(
+                "Party {} has {} irises > floor {}; deleting overflow",
+                party,
+                maxes[party],
+                floor
+            );
+            db.store.delete_irises_after_id(floor).await?;
+        }
+        // Always rebuild the graph: clearing here avoids partial-graph skew
+        // across parties and is cheap relative to the iris writes.
+        db.clear_graph().await?;
+    }
+    Ok(floor)
 }
 
 async fn init_dbs(args: &Args) -> Vec<DbContext> {
