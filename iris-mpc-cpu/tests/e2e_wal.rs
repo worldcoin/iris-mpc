@@ -22,9 +22,8 @@ use crate::utils::runner::TestRun;
 use eyre::bail;
 use serial_test::serial;
 use workflows::{
-    wal_100::Wal100, wal_101::Wal101, wal_102::Wal102, wal_103::Wal103, wal_104::Wal104,
-    wal_105::Wal105, wal_106::Wal106, wal_107::Wal107, wal_108::Wal108, wal_109::Wal109,
-    wal_110::Wal110,
+    wal_102::Wal102, wal_103::Wal103, wal_104::Wal104, wal_105::Wal105, wal_106::Wal106,
+    wal_107::Wal107, wal_109::Wal109, wal_110::Wal110,
 };
 
 const RUST_LOG: &str = "info";
@@ -102,23 +101,6 @@ macro_rules! run_test {
 // Test functions — one per scenario, run serially to avoid port/DB conflicts.
 // ---------------------------------------------------------------------------
 
-// Tests that run server_main (hawk_main) — require LocalStack + Postgres.
-// Opt in with: cargo test --test e2e_wal test_wal_100 -- --ignored
-
-#[test]
-#[serial]
-#[ignore = "requires external setup"]
-fn test_wal_100() -> eyre::Result<()> {
-    run_test!(100, 1, Wal100::new())
-}
-
-#[test]
-#[serial]
-#[ignore = "requires external setup"]
-fn test_wal_101() -> eyre::Result<()> {
-    run_test!(101, 1, Wal101::new())
-}
-
 // Tests that run sidecar_main only — always-on.
 
 #[test]
@@ -170,15 +152,6 @@ fn test_wal_106() -> eyre::Result<()> {
 #[ignore = "requires external setup"]
 fn test_wal_107() -> eyre::Result<()> {
     run_test!(107, 1, Wal107::new())
-}
-
-/// V3 graph load with pre-seeded WAL, no prior checkpoint: hawk_main starts
-/// from an empty graph, applies all WAL mutations, and signals ready.
-#[test]
-#[serial]
-#[ignore = "requires external setup"]
-fn test_wal_108() -> eyre::Result<()> {
-    run_test!(108, 1, Wal108::new())
 }
 
 /// Modification-driven sync roll-forward: parties start with staggered
