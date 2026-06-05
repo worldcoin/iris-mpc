@@ -138,6 +138,9 @@ pub fn make_hawk_config(
         hnsw_param_ef_search: 256,
         hnsw_param_ef_supermatch: 4000,
 
+        // Database size limit for tests.
+        max_db_size: 20_000_000,
+
         // Everything else: serde defaults (empty queues, disabled features, etc.)
         ..serde_json::from_str("{}").expect("Config serde defaults")
     }
