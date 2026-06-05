@@ -12,7 +12,7 @@ datadog:
 hostNetwork: false
 
 ports:
-  - containerPort: 3000
+  - containerPort: 8000
     name: health
     protocol: TCP
   - containerPort: 4000
@@ -46,7 +46,7 @@ readinessProbe:
     port: health
 
 startupProbe:
-  initialDelaySeconds: 60
+  initialDelaySeconds: 900
   failureThreshold: 120
   periodSeconds: 30
   httpGet:

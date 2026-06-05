@@ -1,15 +1,21 @@
 use clap::Parser;
 use eyre::{bail, Result};
 use iris_mpc_cpu::analysis::accuracy::{
-    load_graph, load_iris_store, process_results, run_analysis, Config,
+    self, load_graph as load_iris_graph, load_iris_store, process_results as process_iris_results,
+    run_analysis as run_iris_analysis,
+};
+use iris_mpc_cpu::analysis::accuracy_deep_id::{
+    self, load_deep_id_store, load_graph as load_deep_id_graph,
+    process_results as process_deep_id_results, run_analysis as run_deep_id_analysis,
 };
 use iris_mpc_cpu::hawkers::aby3::aby3_store::{DistanceOps, FhdOps, NhdOps};
 use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
-use iris_mpc_cpu::utils::serialization::load_toml;
+use iris_mpc_cpu::utils::serialization::load_store_kind_toml;
 use metrics_tracing_context::{MetricsLayer, TracingContextLayer};
 use metrics_util::debugging::{DebuggingRecorder, Snapshotter};
 use metrics_util::layers::Layer;
 use rand::rngs::StdRng;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing_subscriber::layer::SubscriberExt;
@@ -23,7 +29,17 @@ struct Cli {
     job_spec: PathBuf,
 }
 
-async fn run_with_ops<D: DistanceOps>(config: Config, rng: &mut StdRng) -> Result<()> {
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum Config {
+    Iris(accuracy::Config),
+    DeepID(accuracy_deep_id::Config),
+}
+
+async fn run_iris_with_ops<D: DistanceOps>(
+    config: accuracy::Config,
+    rng: &mut StdRng,
+) -> Result<()> {
     let mut store: PlaintextStore<D> =
         load_iris_store(config.irises, rng, config.analysis.get_distance_mode()?).await?;
     println!(
@@ -33,38 +49,24 @@ async fn run_with_ops<D: DistanceOps>(config: Config, rng: &mut StdRng) -> Resul
     );
 
     println!("Initializing graph...");
-    let graph = load_graph(&config.graph, &mut store, rng).await?;
+    let graph = load_iris_graph(&config.graph, &mut store, rng).await?;
     println!("Graph initialized.");
 
-    // Conditionally set up metrics collection
-    let snapshotter: Option<Snapshotter> = if config.analysis.metrics_path.is_some() {
-        tracing_subscriber::registry()
-            .with(MetricsLayer::new())
-            .init();
-
-        let recorder = DebuggingRecorder::new();
-        let snapshotter = recorder.snapshotter();
-
-        let recorder = TracingContextLayer::only_allow(["__query_id", "__mutation", "__rotation"])
-            .layer(recorder);
-        metrics::set_global_recorder(recorder).expect("failed to install recorder");
-
-        Some(snapshotter)
-    } else {
-        None
-    };
+    let snapshotter: Option<Snapshotter> = init_metrics(
+        &config.analysis.metrics_path,
+        &["__query_id", "__mutation", "__rotation"],
+    );
 
     println!("Starting analysis...");
-    let results = run_analysis(config.analysis.clone(), store, graph, rng).await?;
+    let results = run_iris_analysis(config.analysis.clone(), store, graph, rng).await?;
 
-    process_results(&config.analysis, results)?;
+    process_iris_results(&config.analysis, results)?;
 
     println!(
         "Results written to {}.",
         config.analysis.output_path.display()
     );
 
-    // Conditionally export metrics
     if let (Some(snapshotter), Some(metrics_path)) = (&snapshotter, &config.analysis.metrics_path) {
         export_metrics_csv(snapshotter, metrics_path)?;
         println!("Metrics written to {}.", metrics_path.display());
@@ -73,21 +75,83 @@ async fn run_with_ops<D: DistanceOps>(config: Config, rng: &mut StdRng) -> Resul
     Ok(())
 }
 
+async fn run_deep_id(config: accuracy_deep_id::Config, rng: &mut StdRng) -> Result<()> {
+    let mut store = load_deep_id_store(config.vectors, config.threshold, rng).await?;
+    println!(
+        "Loaded {} deep-ID vectors into PlaintextDeepIDStore (threshold {}).",
+        store.len(),
+        store.threshold
+    );
+
+    println!("Initializing graph...");
+    let graph = load_deep_id_graph(&config.graph, &mut store, rng).await?;
+    println!("Graph initialized.");
+
+    let snapshotter: Option<Snapshotter> =
+        init_metrics(&config.analysis.metrics_path, &["__query_id", "__noise"]);
+
+    println!("Starting analysis...");
+    let results = run_deep_id_analysis(config.analysis.clone(), store, graph, rng).await?;
+
+    process_deep_id_results(&config.analysis, results)?;
+
+    println!(
+        "Results written to {}.",
+        config.analysis.output_path.display()
+    );
+
+    if let (Some(snapshotter), Some(metrics_path)) = (&snapshotter, &config.analysis.metrics_path) {
+        export_metrics_csv(snapshotter, metrics_path)?;
+        println!("Metrics written to {}.", metrics_path.display());
+    }
+
+    Ok(())
+}
+
+fn init_metrics(
+    metrics_path: &Option<PathBuf>,
+    allowed_labels: &[&'static str],
+) -> Option<Snapshotter> {
+    if metrics_path.is_some() {
+        tracing_subscriber::registry()
+            .with(MetricsLayer::new())
+            .init();
+
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        let recorder = TracingContextLayer::only_allow(allowed_labels.to_vec()).layer(recorder);
+        metrics::set_global_recorder(recorder).expect("failed to install recorder");
+
+        Some(snapshotter)
+    } else {
+        None
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
-    let config: Config = load_toml(&cli.job_spec)?;
+    let config: Config = load_store_kind_toml(&cli.job_spec)?;
 
     println!("Configuration loaded from {}.", cli.job_spec.display());
-    let mut rng = rand::SeedableRng::seed_from_u64(config.analysis.seed.unwrap_or(0));
 
-    match config.analysis.distance_ops.as_str() {
-        "fhd" => run_with_ops::<FhdOps>(config, &mut rng).await,
-        "nhd" => run_with_ops::<NhdOps>(config, &mut rng).await,
-        other => bail!(
-            "Unknown distance_ops: '{}'. Must be \"fhd\" or \"nhd\".",
-            other
-        ),
+    match config {
+        Config::Iris(iris_cfg) => {
+            let mut rng = rand::SeedableRng::seed_from_u64(iris_cfg.analysis.seed.unwrap_or(0));
+            match iris_cfg.analysis.distance_ops.as_str() {
+                "fhd" => run_iris_with_ops::<FhdOps>(iris_cfg, &mut rng).await,
+                "nhd" => run_iris_with_ops::<NhdOps>(iris_cfg, &mut rng).await,
+                other => bail!(
+                    "Unknown distance_ops: '{}'. Must be \"fhd\" or \"nhd\".",
+                    other
+                ),
+            }
+        }
+        Config::DeepID(deepid_cfg) => {
+            let mut rng = rand::SeedableRng::seed_from_u64(deepid_cfg.analysis.seed.unwrap_or(0));
+            run_deep_id(deepid_cfg, &mut rng).await
+        }
     }
 }
 
@@ -137,4 +201,81 @@ fn export_metrics_csv(snapshotter: &Snapshotter, path: &Path) -> Result<()> {
 
     wtr.flush()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_iris_accuracy_config_deserializes_as_iris() {
+        // Smoke version of accuracy1.toml — just enough to disambiguate.
+        let toml_str = r#"
+[irises]
+option = "Random"
+number = 16
+
+[graph]
+option = "GenerateDynamic"
+size = 16
+[graph.gen_hnsw_config]
+ef_construction = 32
+ef_search = 32
+M = 16
+layer_mode = { LinearScan = { max_graph_layer = 1 } }
+
+[analysis]
+sample_size = 4
+distance_fn = "simple"
+k_neighbors = 1
+output_format = "rate"
+output_path = "out.csv"
+rotations = { start = 0, end = 1 }
+mutations = [0.0]
+neighborhood_mode = "Sorted"
+distance_ops = "fhd"
+[analysis.search_hnsw_config]
+ef_construction = 32
+ef_search = 32
+M = 16
+layer_mode = { LinearScan = { max_graph_layer = 1 } }
+"#;
+        let cfg: Config = toml::from_str(toml_str).expect("legacy iris accuracy TOML");
+        assert!(matches!(cfg, Config::Iris(_)));
+    }
+
+    #[test]
+    fn deepid_accuracy_config_deserializes_as_deepid() {
+        let toml_str = r#"
+threshold = 5000
+
+[vectors]
+option = "Random"
+number = 16
+
+[graph]
+option = "GenerateDynamic"
+size = 16
+[graph.gen_hnsw_config]
+ef_construction = 32
+ef_search = 32
+M = 16
+layer_mode = { LinearScan = { max_graph_layer = 1 } }
+
+[analysis]
+sample_size = 4
+k_neighbors = 1
+output_format = "rate"
+output_path = "out.csv"
+noise_levels = [0.0, 0.05]
+neighborhood_mode = "Sorted"
+[analysis.search_hnsw_config]
+ef_construction = 32
+ef_search = 32
+M = 16
+layer_mode = { LinearScan = { max_graph_layer = 1 } }
+"#;
+        let cfg: Config = toml::from_str(toml_str).expect("deepid accuracy TOML");
+        assert!(matches!(cfg, Config::DeepID(_)));
+    }
 }

@@ -5,10 +5,13 @@ use std::{
 };
 
 use clap::Parser;
-use iris_mpc_common::{iris_db::iris::IrisCode, IrisSerialId};
+use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId};
 use iris_mpc_cpu::{
-    hawkers::ideal_knn_engines::{Engine, EngineChoice, KNNResult},
-    utils::serialization::iris_ndjson::{irises_from_ndjson_iter, IrisSelection},
+    hawkers::ideal_knn_engines::{Engine, EngineInt4, EngineKind, KNNResult},
+    utils::serialization::{
+        int4_ndjson::int4_vectors_from_ndjson,
+        iris_ndjson::{irises_from_ndjson_iter, IrisSelection},
+    },
 };
 use metrics::IntoF64;
 
@@ -18,21 +21,53 @@ use std::time::Instant;
 /// A struct to hold the metadata stored in the first line of the results file.
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 struct ResultsHeader {
-    iris_selection: IrisSelection,
-    num_irises: usize,
+    /// Iris selection used to load the input. `Some(..)` for iris engines,
+    /// `None` for the deep-ID Int4 engine (the Int4 loader has no selection).
+    iris_selection: Option<IrisSelection>,
+    /// Engine identity, so resuming a file rejects a mismatched distance/store.
+    engine_choice: EngineKind,
+    num_vectors: usize,
     k: usize,
+}
+
+/// Dispatch wrapper so the chunk/append loop is written once regardless of
+/// store kind. Both inner engines return `Vec<KNNResult<SerialId>>`.
+enum AnyEngine {
+    Iris(Engine),
+    Int4(EngineInt4),
+}
+
+impl AnyEngine {
+    fn next_id(&self) -> SerialId {
+        match self {
+            AnyEngine::Iris(e) => e.next_id(),
+            AnyEngine::Int4(e) => e.next_id(),
+        }
+    }
+
+    fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult<SerialId>> {
+        match self {
+            AnyEngine::Iris(e) => e.compute_chunk(chunk_size),
+            AnyEngine::Int4(e) => e.compute_chunk(chunk_size),
+        }
+    }
 }
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Number of irises to process
-    #[arg(long, default_value_t = 1000)]
-    num_irises: usize,
+    #[arg(long, alias = "num_irises", default_value_t = 1000)]
+    num_vectors: usize,
 
-    /// Path to the iris codes file
-    #[arg(long, default_value = "data/store.ndjson")]
-    path_to_iris_codes: PathBuf,
+    /// Path to the input file of vectors: iris codes ndjson for iris engines,
+    /// or Int4 vectors ndjson when --engine-choice is NaiveInt4Dot.
+    #[arg(
+        long = "input",
+        alias = "path-to-iris-codes",
+        default_value = "data/store.ndjson"
+    )]
+    path_to_vectors: PathBuf,
 
     /// The k for k-NN
     #[arg(long)]
@@ -42,17 +77,26 @@ struct Args {
     #[arg(long)]
     results_file: PathBuf,
 
-    /// Selection of irises to process
+    /// Selection of irises to process (iris engines only; ignored for NaiveInt4Dot).
     #[arg(long, value_enum, default_value_t = IrisSelection::All)]
     irises_selection: IrisSelection,
 
-    /// Selection of irises to process
-    #[arg(long, value_enum, default_value_t = EngineChoice::NaiveFHD)]
-    engine_choice: EngineChoice,
+    /// Engine (distance + store kind). Iris variants use --irises-selection;
+    /// NaiveInt4Dot reads a deep-ID Int4 ndjson and ignores --irises-selection.
+    #[arg(long, value_enum, default_value_t = EngineKind::NaiveFHD)]
+    engine_choice: EngineKind,
 }
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
+
+    // Iris selection only applies to iris engines; the Int4 loader has none.
+    let header_selection = if args.engine_choice.is_int4() {
+        None
+    } else {
+        Some(args.irises_selection)
+    };
+
     let (num_already_processed, nodes) = match File::open(&args.results_file) {
         Ok(file) => {
             let reader = BufReader::new(file);
@@ -88,8 +132,9 @@ async fn main() {
 
             // 2. Check for configuration mismatches with a single comparison
             let expected_header = ResultsHeader {
-                iris_selection: args.irises_selection,
-                num_irises: args.num_irises,
+                iris_selection: header_selection,
+                engine_choice: args.engine_choice,
+                num_vectors: args.num_vectors,
                 k: args.k,
             };
 
@@ -102,11 +147,10 @@ async fn main() {
             }
 
             // 3. Process the rest of the lines as KNN results
-            let results: Result<Vec<KNNResult<IrisSerialId>>, _> = lines
+            let results: Result<Vec<KNNResult<SerialId>>, _> = lines
                 .map(|line_result| {
                     let line = line_result.map_err(|e| e.to_string())?;
-                    serde_json::from_str::<KNNResult<IrisSerialId>>(&line)
-                        .map_err(|e| e.to_string())
+                    serde_json::from_str::<KNNResult<SerialId>>(&line).map_err(|e| e.to_string())
                 })
                 .collect();
 
@@ -124,18 +168,19 @@ async fn main() {
                 }
             };
 
-            let nodes: Vec<IrisSerialId> = deserialized_results
+            let nodes: Vec<SerialId> = deserialized_results
                 .into_iter()
                 .map(|result| result.node)
                 .collect();
-            (nodes.len() as IrisSerialId, nodes)
+            (nodes.len() as SerialId, nodes)
         }
         Err(_) => {
             // File doesn't exist, create it and write the header.
             let mut file = File::create(&args.results_file).expect("Unable to create results file");
             let header = ResultsHeader {
-                iris_selection: args.irises_selection,
-                num_irises: args.num_irises,
+                iris_selection: header_selection,
+                engine_choice: args.engine_choice,
+                num_vectors: args.num_vectors,
                 k: args.k,
             };
             let header_str =
@@ -146,7 +191,7 @@ async fn main() {
     };
 
     if num_already_processed > 0 {
-        let expected_nodes: Vec<IrisSerialId> = (1..num_already_processed + 1).collect();
+        let expected_nodes: Vec<SerialId> = (1..num_already_processed + 1).collect();
         if nodes != expected_nodes {
             eprintln!(
                 "Error: The result nodes in the file are not a contiguous sequence from 1 to N."
@@ -159,54 +204,75 @@ async fn main() {
         }
     }
 
-    let path_to_iris_codes = args.path_to_iris_codes;
-    assert!(args.num_irises > args.k);
+    let path_to_vectors = args.path_to_vectors;
+    assert!(args.num_vectors > args.k);
 
-    let mut irises: Vec<IrisCode> = Vec::with_capacity(args.num_irises);
-
-    let stream_iterator_res = irises_from_ndjson_iter(
-        path_to_iris_codes.as_path(),
-        Some(args.num_irises),
-        args.irises_selection,
-    );
-    let stream_iterator = match stream_iterator_res {
-        Ok(iter) => iter,
-        Err(e) => {
-            eprintln!("Error: Failed to open irises input file.");
-            eprintln!(" -> Error details: {}", e);
-            std::process::exit(1);
-        }
+    let next_id = num_already_processed + 1;
+    let (num_vectors, mut engine): (SerialId, AnyEngine) = if args.engine_choice.is_int4() {
+        let echoice = args
+            .engine_choice
+            .as_int4()
+            .expect("is_int4() implies as_int4() is Some");
+        let vectors =
+            match int4_vectors_from_ndjson(path_to_vectors.as_path(), Some(args.num_vectors)) {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("Error: Failed to load Int4 vectors input file.");
+                    eprintln!(" -> Error details: {}", e);
+                    std::process::exit(1);
+                }
+            };
+        assert_eq!(vectors.len(), args.num_vectors);
+        let n = vectors.len() as SerialId;
+        (
+            n,
+            AnyEngine::Int4(EngineInt4::init(echoice, vectors, args.k, next_id)),
+        )
+    } else {
+        let echoice = args
+            .engine_choice
+            .as_iris()
+            .expect("non-int4 implies as_iris() is Some");
+        let mut irises: Vec<IrisCode> = Vec::with_capacity(args.num_vectors);
+        let stream_iterator = match irises_from_ndjson_iter(
+            path_to_vectors.as_path(),
+            Some(args.num_vectors),
+            args.irises_selection,
+        ) {
+            Ok(iter) => iter,
+            Err(e) => {
+                eprintln!("Error: Failed to open irises input file.");
+                eprintln!(" -> Error details: {}", e);
+                std::process::exit(1);
+            }
+        };
+        irises.extend(stream_iterator);
+        assert_eq!(irises.len(), args.num_vectors);
+        let n = irises.len() as SerialId;
+        (
+            n,
+            AnyEngine::Iris(Engine::init(echoice, irises, args.k, next_id)),
+        )
     };
-
-    irises.extend(stream_iterator);
-    assert!(irises.len() == args.num_irises);
-
-    let num_irises = irises.len() as IrisSerialId;
-    let mut engine = Engine::init(
-        args.engine_choice,
-        irises,
-        args.k,
-        num_already_processed + 1,
-    );
 
     let chunk_size = 2000;
     let mut evaluated_pairs = 0u64;
     println!("Starting work at serial id: {}", engine.next_id());
 
     let start_t = Instant::now();
-    while engine.next_id() <= num_irises {
+    while engine.next_id() <= num_vectors {
         let start = engine.next_id();
         let results = engine.compute_chunk(chunk_size);
         let end = engine.next_id();
 
-        evaluated_pairs += ((end - start) as u64) * (num_irises as u64);
+        evaluated_pairs += ((end - start) as u64) * (num_vectors as u64);
 
         let mut file = OpenOptions::new()
             .append(true)
             .open(&args.results_file)
             .expect("Unable to open results file for appending");
 
-        println!("Appending iris results from {} to {}", start, end - 1);
+        println!("Appending results from {} to {}", start, end - 1);
         for result in &results {
             let json_line = serde_json::to_string(result).expect("Failed to serialize KNNResult");
             writeln!(file, "{}", json_line).expect("Failed to write to results file");
@@ -217,4 +283,39 @@ async fn main() {
         "naive_knn took {:?} (per evaluated pair)",
         duration.into_f64() / (evaluated_pairs as f64)
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn header_roundtrip_iris() {
+        let header = ResultsHeader {
+            iris_selection: Some(IrisSelection::Odd),
+            engine_choice: EngineKind::NaiveFHD,
+            num_vectors: 1000,
+            k: 16,
+        };
+        let s = serde_json::to_string(&header).unwrap();
+        let back: ResultsHeader = serde_json::from_str(&s).unwrap();
+        assert_eq!(header, back);
+        assert_eq!(back.iris_selection, Some(IrisSelection::Odd));
+        assert!(!back.engine_choice.is_int4());
+    }
+
+    #[test]
+    fn header_roundtrip_int4() {
+        let header = ResultsHeader {
+            iris_selection: None,
+            engine_choice: EngineKind::NaiveInt4Dot,
+            num_vectors: 4096,
+            k: 32,
+        };
+        let s = serde_json::to_string(&header).unwrap();
+        let back: ResultsHeader = serde_json::from_str(&s).unwrap();
+        assert_eq!(header, back);
+        assert_eq!(back.iris_selection, None);
+        assert!(back.engine_choice.is_int4());
+    }
 }
