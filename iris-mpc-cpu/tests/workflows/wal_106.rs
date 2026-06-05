@@ -182,14 +182,12 @@ impl TestRun for Wal106 {
             .assert_wal_row_count(TOTAL_WAL)
             .assert_max_modification_id(max_mod_id)
             .assert_checkpoint_count(2)
-            .assert_latest_checkpoint_mod_id(max_mod_id)
-            .assert_s3_object_exists(true);
+            .assert_latest_checkpoint_mod_id(max_mod_id);
         let p12_post = WalAssertions::new()
             .assert_wal_row_count(TOTAL_WAL)
             .assert_max_modification_id(max_mod_id)
             .assert_checkpoint_count(3)
-            .assert_latest_checkpoint_mod_id(max_mod_id)
-            .assert_s3_object_exists(true);
+            .assert_latest_checkpoint_mod_id(max_mod_id);
         nodes.apply_split_assertions(&p0_post, &p12_post).await?;
 
         // All parties must agree on the BLAKE3 hash of the phase-2 checkpoint and

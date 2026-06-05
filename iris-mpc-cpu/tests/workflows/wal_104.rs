@@ -62,11 +62,11 @@ impl TestRun for Wal104 {
         // 10 AddNode mutations (modification_ids 1–10).
         // 10 AddEdges mutations (modification_ids 11–20): each node connects to the
         // next two neighbors (wrapping).
-        const NUM_NODES: u32 = 10;
+        const NUM_NODES: usize = 10;
         const EDGES_START_MOD_ID: i64 = 11;
         let builder = WalMutationBuilder::new()
-            .add_nodes_sequential_from(1, 10)
-            .add_edges_wrapping(10, EDGES_START_MOD_ID);
+            .add_nodes_sequential_from(1, NUM_NODES)
+            .add_edges_wrapping(NUM_NODES, EDGES_START_MOD_ID);
 
         builder.build(&nodes).await?;
 
@@ -115,9 +115,7 @@ impl TestRun for Wal104 {
         let nodes = self.nodes.as_ref().unwrap();
 
         // After AllOlder pruning, exactly 1 checkpoint row remains per party.
-        let post = WalAssertions::new()
-            .assert_checkpoint_count(1)
-            .assert_s3_object_exists(true);
+        let post = WalAssertions::new().assert_checkpoint_count(1);
         nodes.apply_uniform_assertions(&post).await?;
 
         nodes.assert_checkpoint_hashes_agree().await?;

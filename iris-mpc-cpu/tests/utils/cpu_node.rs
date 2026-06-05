@@ -136,20 +136,21 @@ impl CpuNode {
         })
     }
 
-    /// Head-check the latest checkpoint's S3 key to confirm the object exists.
-    pub async fn verify_latest_checkpoint_s3_object(&self, bucket: &str) -> eyre::Result<()> {
-        let row = self
-            .store
-            .latest_checkpoint()
-            .await?
-            .ok_or_else(|| eyre!("no checkpoint row"))?;
-        self.s3
-            .head_object()
-            .bucket(bucket)
-            .key(&row.s3_key)
-            .send()
-            .await
-            .map_err(|e| eyre!("S3 object {} missing: {}", row.s3_key, e))?;
+    /// Verify that all checkpoint S3 objects exist.
+    ///
+    /// Reads all checkpoints from the store and head-checks each one's S3 key
+    /// to confirm the object exists in the bucket.
+    pub async fn verify_all_checkpoints_in_s3(&self, bucket: &str) -> eyre::Result<()> {
+        let checkpoints = self.store.graph.get_genesis_graph_checkpoints().await?;
+        for row in checkpoints {
+            self.s3
+                .head_object()
+                .bucket(bucket)
+                .key(&row.s3_key)
+                .send()
+                .await
+                .map_err(|e| eyre!("S3 object {} missing: {}", row.s3_key, e))?;
+        }
         Ok(())
     }
 
@@ -269,6 +270,8 @@ impl CpuNode {
     }
 
     /// Run all set assertions in `assertions` against this node.
+    ///
+    /// Always verifies that all checkpoint S3 objects exist in the bucket.
     pub async fn assert(&self, assertions: &WalAssertions) -> eyre::Result<()> {
         let store = &self.store;
         if let Some(expected) = assertions.wal_row_count {
@@ -307,10 +310,9 @@ impl CpuNode {
             );
         }
 
-        if let Some(true) = assertions.s3_object_exists {
-            self.verify_latest_checkpoint_s3_object(&self.config.checkpoint_bucket)
-                .await?;
-        }
+        // Always verify all checkpoint S3 objects exist.
+        self.verify_all_checkpoints_in_s3(&self.config.checkpoint_bucket)
+            .await?;
 
         Ok(())
     }
@@ -508,6 +510,9 @@ impl CpuNodes {
 /// Post-condition assertions for a single party's WAL and checkpoint state.
 ///
 /// All fields are optional — only set fields are checked.
+///
+/// S3 checkpoint object existence is verified automatically for all checkpoints
+/// whenever assertions are run.
 #[derive(Debug, Default, Clone)]
 pub struct WalAssertions {
     /// Expected number of rows in `hawk_graph_mutations`.
@@ -518,8 +523,6 @@ pub struct WalAssertions {
     pub checkpoint_count: Option<usize>,
     /// Expected `graph_mutation_id` of the latest checkpoint row.
     pub latest_checkpoint_mod_id: Option<i64>,
-    /// If Some(true), verify the latest checkpoint's S3 object exists.
-    pub s3_object_exists: Option<bool>,
 }
 
 impl WalAssertions {
@@ -544,11 +547,6 @@ impl WalAssertions {
 
     pub fn assert_latest_checkpoint_mod_id(mut self, id: i64) -> Self {
         self.latest_checkpoint_mod_id = Some(id);
-        self
-    }
-
-    pub fn assert_s3_object_exists(mut self, exists: bool) -> Self {
-        self.s3_object_exists = Some(exists);
         self
     }
 }

@@ -71,8 +71,7 @@ impl TestRun for Wal102 {
 
         let post = WalAssertions::new()
             .assert_checkpoint_count(1)
-            .assert_latest_checkpoint_mod_id(EDGES_START_MOD_ID + WAL_MUTATION_COUNT - 1)
-            .assert_s3_object_exists(true);
+            .assert_latest_checkpoint_mod_id(EDGES_START_MOD_ID + WAL_MUTATION_COUNT - 1);
         nodes.apply_uniform_assertions(&post).await?;
 
         // Materialise the same WAL rows in the test process, hash the result,

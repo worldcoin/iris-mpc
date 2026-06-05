@@ -149,12 +149,11 @@ impl TestRun for Wal109 {
         let nodes = self.nodes.as_ref().unwrap();
 
         // All parties hold all 10 mutation rows, 1 checkpoint anchored at the
-        // last modification, and a corresponding S3 object.
+        // last modification, and a corresponding S3 object (verified automatically).
         let post = WalAssertions::new()
             .assert_wal_row_count(TOTAL_MODS as usize)
             .assert_checkpoint_count(1)
-            .assert_latest_checkpoint_mod_id(TOTAL_MODS)
-            .assert_s3_object_exists(true);
+            .assert_latest_checkpoint_mod_id(TOTAL_MODS);
         nodes.apply_uniform_assertions(&post).await?;
 
         // All 3 parties must agree on the BLAKE3 hash of the checkpoint.

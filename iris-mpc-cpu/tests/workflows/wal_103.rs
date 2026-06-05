@@ -97,8 +97,7 @@ impl TestRun for Wal103 {
         // After the sidecar cycle, the new checkpoint should be anchored at the last edge mod_id.
         let post = WalAssertions::new()
             .assert_checkpoint_count(2)
-            .assert_latest_checkpoint_mod_id(EDGES_START_MOD_ID + NODES_COUNT as i64 - 1)
-            .assert_s3_object_exists(true);
+            .assert_latest_checkpoint_mod_id(EDGES_START_MOD_ID + NODES_COUNT as i64 - 1);
         nodes.apply_uniform_assertions(&post).await?;
 
         // Materialise the full WAL (mutations 51..=100) in the test process

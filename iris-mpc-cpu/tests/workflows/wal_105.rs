@@ -140,8 +140,7 @@ impl TestRun for Wal105 {
             .assert_wal_row_count(TOTAL_WAL)
             .assert_max_modification_id(last_mod_id)
             .assert_checkpoint_count(3) // seeded + phase-1 sidecar + phase-2 sidecar
-            .assert_latest_checkpoint_mod_id(last_mod_id)
-            .assert_s3_object_exists(true);
+            .assert_latest_checkpoint_mod_id(last_mod_id);
         nodes.apply_uniform_assertions(&post).await?;
 
         // All 3 parties must agree on the phase-2 checkpoint BLAKE3 hash and cross-check

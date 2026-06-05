@@ -148,12 +148,11 @@ impl TestRun for Wal107 {
     async fn exec_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
 
-        // One checkpoint per party (sidecar cycle).  S3 objects must exist.
+        // One checkpoint per party (sidecar cycle).
         // Max modification_id is based on the last edge added for party 0's extra mutations.
         let post = WalAssertions::new()
             .assert_checkpoint_count(1)
-            .assert_latest_checkpoint_mod_id(PARTY0_EDGES_START + PARTY0_EXTRA_NODES as i64 - 1)
-            .assert_s3_object_exists(true);
+            .assert_latest_checkpoint_mod_id(PARTY0_EDGES_START + PARTY0_EXTRA_NODES as i64 - 1);
         nodes.apply_uniform_assertions(&post).await?;
 
         // All three parties must agree on the checkpoint BLAKE3 hash.
