@@ -20,8 +20,9 @@
 ///            delta, and writes a checkpoint at mod_id=170 (baseline=2).
 use tokio_util::sync::CancellationToken;
 
+use super::expect_sidecar_success;
 use crate::{
-    run_sidecar, stop_and_join,
+    run_sidecar,
     utils::{
         cpu_node::{CpuNodes, WalAssertions},
         runner::{CpuTestContext, TestRun},
@@ -92,8 +93,8 @@ impl TestRun for Wal105 {
         // Baseline = 1 (the seeded checkpoint already present); wait for a second row.
         {
             let shutdown = CancellationToken::new();
-            let mut sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
-            stop_and_join!(shutdown, sidecar_set);
+            let sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
+            expect_sidecar_success(shutdown, sidecar_set).await?;
         }
 
         // Seed additional WAL mutations 101..=110.
@@ -122,8 +123,8 @@ impl TestRun for Wal105 {
         // baseline = 2 (seeded + phase-1 checkpoint); wait for a third row.
         {
             let shutdown = CancellationToken::new();
-            let mut sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
-            stop_and_join!(shutdown, sidecar_set);
+            let sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
+            expect_sidecar_success(shutdown, sidecar_set).await?;
         }
 
         Ok(())

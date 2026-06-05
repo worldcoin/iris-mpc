@@ -8,8 +8,9 @@
 /// hashes it, and verifies all 3 parties' stored hashes match the reference.
 use tokio_util::sync::CancellationToken;
 
+use super::expect_sidecar_success;
 use crate::{
-    run_sidecar, stop_and_join,
+    run_sidecar,
     utils::{
         cpu_node::{CpuNodes, WalAssertions},
         runner::{CpuTestContext, TestRun},
@@ -60,10 +61,8 @@ impl TestRun for Wal102 {
 
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
         let shutdown = CancellationToken::new();
-        let mut sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
-
-        stop_and_join!(shutdown, sidecar_set);
-        Ok(())
+        let sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
+        expect_sidecar_success(shutdown, sidecar_set).await
     }
 
     async fn exec_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {

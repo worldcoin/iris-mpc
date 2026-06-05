@@ -30,6 +30,7 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
+use super::expect_sidecar_success;
 use crate::{
     run_hawk, run_sidecar, stop_and_join,
     utils::{
@@ -138,8 +139,8 @@ impl TestRun for Wal107 {
         // parties 1 and 2 and the consensus round fails — surfacing the bug.
         {
             let shutdown = CancellationToken::new();
-            let mut sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
-            stop_and_join!(shutdown, sidecar_set);
+            let sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
+            expect_sidecar_success(shutdown, sidecar_set).await?;
         }
 
         Ok(())

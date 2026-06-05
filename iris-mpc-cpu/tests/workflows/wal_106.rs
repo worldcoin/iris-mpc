@@ -20,8 +20,9 @@ use std::time::Duration;
 use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
 
+use super::expect_sidecar_success;
 use crate::{
-    run_sidecar, stop_and_join,
+    run_sidecar,
     utils::{
         cpu_node::{CpuNodes, WalAssertions},
         runner::{CpuTestContext, TestRun},
@@ -91,8 +92,8 @@ impl TestRun for Wal106 {
         // All three parties now have 2 rows: seeded (mod_id=0) + new (mod_id=10).
         {
             let shutdown = CancellationToken::new();
-            let mut sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
-            stop_and_join!(shutdown, sidecar_set);
+            let sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
+            expect_sidecar_success(shutdown, sidecar_set).await?;
         }
 
         // Introduce a checkpoint desync: delete party 0's most recent checkpoint row
@@ -141,7 +142,7 @@ impl TestRun for Wal106 {
             let baselines = nodes.checkpoint_counts().await?; // [1, 2, 2]
 
             let shutdown = CancellationToken::new();
-            let mut sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
+            let sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
 
             let wait_res = timeout(Duration::from_secs(120), async {
                 loop {
@@ -165,7 +166,7 @@ impl TestRun for Wal106 {
                 )
             });
 
-            stop_and_join!(shutdown, sidecar_set);
+            expect_sidecar_success(shutdown, sidecar_set).await?;
             wait_res??;
         }
 

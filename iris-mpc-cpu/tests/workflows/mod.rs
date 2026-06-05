@@ -129,7 +129,7 @@ macro_rules! run_hawk {
 /// ```rust
 /// let shutdown = CancellationToken::new();
 /// let mut sidecar_set = run_sidecar!(configs, shutdown.clone());
-/// stop_and_join!(shutdown, sidecar_set);
+/// expect_sidecar_success(shutdown, sidecar_set).await?;
 /// ```
 #[macro_export]
 macro_rules! run_sidecar {
@@ -236,4 +236,54 @@ macro_rules! stop_and_join {
             }
         }
     }};
+}
+
+/// Wait for sidecar tasks to complete naturally (one-shot mode) with a 1-minute timeout.
+///
+/// If the timeout is exceeded, cancels via the token and drains remaining tasks.
+/// Asserts that all tasks complete successfully.
+///
+/// Usage:
+/// ```rust
+/// let shutdown = CancellationToken::new();
+/// let sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
+/// expect_sidecar_success(shutdown, sidecar_set).await?;
+/// ```
+pub async fn expect_sidecar_success(
+    shutdown: tokio_util::sync::CancellationToken,
+    mut join_set: tokio::task::JoinSet<eyre::Result<()>>,
+) -> eyre::Result<()> {
+    use std::time::Duration;
+
+    // Wait on JoinSet for up to 1 minute (sidecar runs in one-shot mode)
+    let timeout_result = tokio::time::timeout(Duration::from_secs(60), async {
+        while let Some(result) = join_set.join_next().await {
+            result
+                .map_err(|e| eyre::eyre!("sidecar task join error: {e}"))?
+                .map_err(|e| eyre::eyre!("sidecar task error: {e:#}"))?;
+        }
+        Ok::<(), eyre::Report>(())
+    })
+    .await;
+
+    // If timeout occurred, cancel and drain remaining tasks
+    if timeout_result.is_err() {
+        shutdown.cancel();
+        while let Some(result) = join_set.join_next().await {
+            // On timeout, we still check results but log them for debugging
+            match result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    tracing::warn!("sidecar task error after timeout: {e:#}")
+                }
+                Err(e) if e.is_cancelled() => {}
+                Err(e) => {
+                    tracing::warn!("sidecar task join error after timeout: {e}")
+                }
+            }
+        }
+        return Err(eyre::eyre!("sidecar did not complete within 60 seconds"));
+    }
+
+    timeout_result?
 }

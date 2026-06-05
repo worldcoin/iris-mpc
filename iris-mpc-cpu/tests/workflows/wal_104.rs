@@ -20,8 +20,9 @@
 use iris_mpc_cpu::graph_checkpoint::PruningMode;
 use tokio_util::sync::CancellationToken;
 
+use super::expect_sidecar_success;
 use crate::{
-    run_sidecar, stop_and_join,
+    run_sidecar,
     utils::{
         cpu_node::{CpuNodes, WalAssertions},
         runner::{CpuTestContext, TestRun},
@@ -49,9 +50,8 @@ impl Wal104 {
         }
 
         let shutdown = CancellationToken::new();
-        let mut sidecar_set = run_sidecar!(configs, shutdown.clone(), ctx);
-        stop_and_join!(shutdown, sidecar_set);
-        Ok(())
+        let sidecar_set = run_sidecar!(configs, shutdown.clone(), ctx);
+        expect_sidecar_success(shutdown, sidecar_set).await
     }
 }
 
