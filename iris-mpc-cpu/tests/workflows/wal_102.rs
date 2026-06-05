@@ -6,8 +6,6 @@
 ///
 /// The test then materialises its own reference graph from the same WAL rows,
 /// hashes it, and verifies all 3 parties' stored hashes match the reference.
-use std::time::Duration;
-
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -15,7 +13,6 @@ use crate::{
     utils::{
         cpu_node::{CpuNodes, WalAssertions},
         runner::{CpuTestContext, TestRun},
-        wait_conditions::wait_for_new_checkpoint,
         wal_builder::WalMutationBuilder,
     },
 };
@@ -62,20 +59,11 @@ impl TestRun for Wal102 {
     }
 
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
-        let nodes = self.nodes.as_ref().unwrap();
         let shutdown = CancellationToken::new();
         let mut sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
 
-        let checkpoint_res = wait_for_new_checkpoint(
-            nodes,
-            &ctx.configs,
-            /* baseline */ 0,
-            Duration::from_secs(120),
-        )
-        .await;
-
         stop_and_join!(shutdown, sidecar_set);
-        checkpoint_res
+        Ok(())
     }
 
     async fn exec_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {

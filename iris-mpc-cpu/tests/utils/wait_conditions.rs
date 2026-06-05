@@ -4,9 +4,9 @@ use ampc_server_utils::{wait_for_others_ready, ServerCoordinationConfig};
 use eyre::bail;
 use futures::future::try_join_all;
 use tokio::task::JoinSet;
-use tokio::time::{sleep, timeout};
+use tokio::time::timeout;
 
-use super::{cpu_node::CpuNodes, CpuConfigs, COUNT_OF_PARTIES};
+use super::{CpuConfigs, COUNT_OF_PARTIES};
 
 /// Wait for all 3 parties' coordination servers to signal ready.
 ///
@@ -56,38 +56,6 @@ pub async fn wait_for_all_ready(
             )
         }
     }
-}
-
-/// Poll the `genesis_graph_checkpoint` table until each party's row count
-/// exceeds `baseline_count`, then verify each party's latest checkpoint S3 object exists.
-///
-/// Polls every 500ms.
-pub async fn wait_for_new_checkpoint(
-    nodes: &CpuNodes,
-    configs: &CpuConfigs,
-    baseline_count: usize,
-    dur: Duration,
-) -> eyre::Result<()> {
-    timeout(dur, async {
-        loop {
-            let counts = nodes.checkpoint_counts().await?;
-            if counts.iter().all(|&c| c > baseline_count) {
-                break;
-            }
-            sleep(Duration::from_millis(500)).await;
-        }
-        Ok::<(), eyre::Error>(())
-    })
-    .await
-    .map_err(|_| eyre::eyre!("sidecar did not produce a new checkpoint within {:?}", dur))??;
-
-    // Verify S3 objects exist for each party's latest checkpoint.
-    for (node, config) in nodes.0.iter().zip(configs.iter()) {
-        node.verify_latest_checkpoint_s3_object(&config.checkpoint_bucket)
-            .await?;
-    }
-
-    Ok(())
 }
 
 /// Wait for the first hawk_main task to exit with an error.

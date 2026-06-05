@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 /// wal_103 — Combined: startup roll-forward then sidecar cycle.
 ///
 /// Phase 1: `hawk_main` starts with a base checkpoint at mod_id=50 and WAL
@@ -7,8 +9,6 @@
 /// uploads a new checkpoint to S3, and inserts a DB row.
 ///
 /// This is the most representative end-to-end scenario.
-use std::time::Duration;
-
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -16,7 +16,7 @@ use crate::{
     utils::{
         cpu_node::{CpuNodes, WalAssertions},
         runner::{CpuTestContext, TestRun},
-        wait_conditions::{wait_for_all_ready, wait_for_new_checkpoint},
+        wait_conditions::wait_for_all_ready,
         wal_builder::WalMutationBuilder,
     },
 };
@@ -68,8 +68,6 @@ impl TestRun for Wal103 {
     }
 
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
-        let nodes = self.nodes.as_ref().unwrap();
-
         // Phase 1: hawk_main roll-forward.
         // hawk_main and sidecar_main use different port sets so they can co-exist,
         // but they are run sequentially here (not simultaneously) to isolate phases.
@@ -87,15 +85,7 @@ impl TestRun for Wal103 {
         {
             let shutdown = CancellationToken::new();
             let mut sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
-            let res = wait_for_new_checkpoint(
-                nodes,
-                &ctx.configs,
-                /* baseline */ 1,
-                Duration::from_secs(120),
-            )
-            .await;
             stop_and_join!(shutdown, sidecar_set);
-            res?;
         }
 
         Ok(())

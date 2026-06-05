@@ -129,7 +129,6 @@ macro_rules! run_hawk {
 /// ```rust
 /// let shutdown = CancellationToken::new();
 /// let mut sidecar_set = run_sidecar!(configs, shutdown.clone());
-/// wait_for_new_checkpoint(&nodes, &configs, baseline, Duration::from_secs(120)).await?;
 /// stop_and_join!(shutdown, sidecar_set);
 /// ```
 #[macro_export]

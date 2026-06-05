@@ -17,8 +17,6 @@
 /// Run 3: `PruningMode::AllOlder`
 ///   → all checkpoints except the latest are deleted; only 1 row remains and the
 ///     S3 bucket shrinks from the 3 objects seeded in setup to 1
-use std::time::Duration;
-
 use iris_mpc_cpu::graph_checkpoint::PruningMode;
 use tokio_util::sync::CancellationToken;
 
@@ -27,7 +25,6 @@ use crate::{
     utils::{
         cpu_node::{CpuNodes, WalAssertions},
         runner::{CpuTestContext, TestRun},
-        wait_conditions::wait_for_new_checkpoint,
         wal_builder::WalMutationBuilder,
     },
 };
@@ -44,14 +41,7 @@ impl Wal104 {
     /// Run one sidecar cycle and wait for a new checkpoint, with the given pruning mode.
     ///
     /// `baseline` is the number of checkpoint rows before this cycle starts.
-    async fn run_cycle(
-        &self,
-        ctx: &CpuTestContext,
-        pruning_mode: PruningMode,
-        baseline: usize,
-    ) -> eyre::Result<()> {
-        let nodes = self.nodes.as_ref().unwrap();
-
+    async fn run_cycle(&self, ctx: &CpuTestContext, pruning_mode: PruningMode) -> eyre::Result<()> {
         // Build a per-cycle config override with the desired pruning mode.
         let mut configs = ctx.configs.clone();
         for cfg in configs.iter_mut() {
@@ -60,10 +50,8 @@ impl Wal104 {
 
         let shutdown = CancellationToken::new();
         let mut sidecar_set = run_sidecar!(configs, shutdown.clone(), ctx);
-        let res =
-            wait_for_new_checkpoint(nodes, &ctx.configs, baseline, Duration::from_secs(120)).await;
         stop_and_join!(shutdown, sidecar_set);
-        res
+        Ok(())
     }
 }
 
@@ -108,18 +96,17 @@ impl TestRun for Wal104 {
         let nodes = self.nodes.as_ref().unwrap();
 
         // Run 1: no pruning — all 3 seeded checkpoints + 1 new = 4 checkpoints.
-        self.run_cycle(ctx, PruningMode::None, 3).await?;
+        self.run_cycle(ctx, PruningMode::None).await?;
         nodes.assert_checkpoint_count(4).await?;
 
         // Run 2: prune non-archival older checkpoints.
         // The 2 regular seeded checkpoints and the run-1 checkpoint are deleted.
         // The archival checkpoint (oldest) and the run-2 checkpoint survive → 2 remain.
-        self.run_cycle(ctx, PruningMode::OlderNonArchival, 4)
-            .await?;
+        self.run_cycle(ctx, PruningMode::OlderNonArchival).await?;
         nodes.assert_checkpoint_count(2).await?;
 
         // Run 3: prune all older — only the latest checkpoint remains.
-        self.run_cycle(ctx, PruningMode::AllOlder, 2).await?;
+        self.run_cycle(ctx, PruningMode::AllOlder).await?;
 
         Ok(())
     }

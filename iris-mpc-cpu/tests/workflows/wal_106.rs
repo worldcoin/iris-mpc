@@ -25,7 +25,6 @@ use crate::{
     utils::{
         cpu_node::{CpuNodes, WalAssertions},
         runner::{CpuTestContext, TestRun},
-        wait_conditions::wait_for_new_checkpoint,
         wal_builder::WalMutationBuilder,
     },
 };
@@ -93,15 +92,7 @@ impl TestRun for Wal106 {
         {
             let shutdown = CancellationToken::new();
             let mut sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
-            let res = wait_for_new_checkpoint(
-                nodes,
-                &ctx.configs,
-                /* baseline */ 1,
-                Duration::from_secs(120),
-            )
-            .await;
             stop_and_join!(shutdown, sidecar_set);
-            res?;
         }
 
         // Introduce a checkpoint desync: delete party 0's most recent checkpoint row

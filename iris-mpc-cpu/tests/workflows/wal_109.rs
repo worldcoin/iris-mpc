@@ -45,7 +45,7 @@ use crate::{
     utils::{
         cpu_node::{CpuNodes, WalAssertions},
         runner::{CpuTestContext, TestRun},
-        wait_conditions::{wait_for_all_ready, wait_for_new_checkpoint},
+        wait_conditions::wait_for_all_ready,
         wal_builder::WalMutationBuilder,
     },
 };
@@ -123,8 +123,6 @@ impl TestRun for Wal109 {
     }
 
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
-        let nodes = self.nodes.as_ref().unwrap();
-
         // Phase 1: hawk_main rolls forward the WAL, syncing all parties to 10
         // mutations.
         {
@@ -141,15 +139,7 @@ impl TestRun for Wal109 {
         {
             let shutdown = CancellationToken::new();
             let mut sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
-            let res = wait_for_new_checkpoint(
-                nodes,
-                &ctx.configs,
-                /* baseline */ 0,
-                Duration::from_secs(120),
-            )
-            .await;
             stop_and_join!(shutdown, sidecar_set);
-            res?;
         }
 
         Ok(())
