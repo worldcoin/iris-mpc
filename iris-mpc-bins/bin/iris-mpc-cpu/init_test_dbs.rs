@@ -3,12 +3,22 @@
 use clap::Parser;
 use eyre::{bail, eyre, Result};
 use futures::future::try_join_all;
-use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId, IrisVectorId};
+use iris_mpc_common::{
+    helpers::smpc_request::{
+        IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RECOVERY_UPDATE_MESSAGE_TYPE,
+        RESET_UPDATE_MESSAGE_TYPE,
+    },
+    iris_db::iris::IrisCode,
+    postgres::{AccessMode, PostgresClient},
+    vector_id::SerialId,
+    IrisVectorId,
+};
 use iris_mpc_cpu::{
     execution::hawk_main::{
         insert::{self, InsertPlanV},
-        StoreId, STORE_IDS,
+        load_graphs_from_pg, BothEyes, GraphRef, GraphStore, StoreId, STORE_IDS,
     },
+    graph_checkpoint::upload_graph_checkpoint,
     hawkers::aby3::aby3_store::FhdOps,
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef, SharedPlaintextStore},
     hnsw::{
@@ -182,6 +192,27 @@ struct Args {
     /// Skip insertion of specific serial IDs ... used primarily in genesis testing.
     #[clap(long, num_args = 1..)]
     skip_insert_serial_ids: Vec<u32>,
+
+    /// Migration mode: skip all seeding/graph-build. Instead, for each party load
+    /// the existing graph from `hawk_graph_links`, upload it to S3 as a graph
+    /// checkpoint, and record the `genesis_graph_checkpoint` row — i.e. produce
+    /// the same S3 + DB state a `main`-branch genesis run leaves, without a
+    /// re-index. Bootstraps the WAL-branch migration.
+    #[clap(long, default_value = "false")]
+    migrate_checkpoint: bool,
+
+    /// S3 bucket for each party's graph checkpoint (party order 1, 2, 3).
+    /// Required when `--migrate-checkpoint` is set.
+    #[clap(long)]
+    graph_bucket_party1: Option<String>,
+    #[clap(long)]
+    graph_bucket_party2: Option<String>,
+    #[clap(long)]
+    graph_bucket_party3: Option<String>,
+
+    /// AWS region of the graph-checkpoint buckets.
+    #[clap(long, default_value = "eu-central-1")]
+    graph_bucket_region: String,
 }
 
 impl Args {
@@ -230,6 +261,136 @@ pub struct IrisCodeWithSerialId {
     pub serial_id: SerialId,
 }
 
+/// Step A of the WAL migration. For each party, load the graph already persisted
+/// in `hawk_graph_links`, upload it to that party's S3 bucket as a graph
+/// checkpoint (current = v3), and record the `genesis_graph_checkpoint` row —
+/// reproducing the S3 + DB state a `main`-branch genesis run leaves, without a
+/// re-index. The graph structure is identical across parties, so the three
+/// checkpoints share a blake3 hash (what the WAL boot consensus requires).
+///
+/// Reuses the exact `load_graphs_from_pg` / `upload_graph_checkpoint` /
+/// `insert_genesis_graph_checkpoint` paths genesis uses, so the bytes match.
+async fn migrate_checkpoint_to_s3(args: &Args) -> Result<()> {
+    let buckets = [
+        &args.graph_bucket_party1,
+        &args.graph_bucket_party2,
+        &args.graph_bucket_party3,
+    ];
+    let urls = args.db_urls();
+    let schemas = args.db_schemas();
+
+    let s3_config = aws_config::from_env()
+        .region(aws_sdk_s3::config::Region::new(
+            args.graph_bucket_region.clone(),
+        ))
+        .load()
+        .await;
+    let s3_client = aws_sdk_s3::Client::new(&s3_config);
+
+    for party_id in 0..N_PARTIES {
+        let bucket = buckets[party_id].clone().ok_or_else(|| {
+            eyre!(
+                "--graph-bucket-party{} is required for --migrate-checkpoint",
+                party_id + 1
+            )
+        })?;
+        let schema = &schemas[party_id];
+        let url = &urls[party_id];
+
+        tracing::info!("Party {party_id}: connecting to schema {schema}");
+        let client = PostgresClient::new(url, schema, AccessMode::ReadWrite).await?;
+        let graph_store = GraphStore::new(&client).await?;
+
+        tracing::info!("Party {party_id}: loading graph from hawk_graph_links");
+        let [graph_left, graph_right] = load_graphs_from_pg(&graph_store, 8).await?;
+        let graph_refs: BothEyes<GraphRef> = [graph_left.to_arc(), graph_right.to_arc()];
+
+        // last_indexed_iris_id: the graph covers every iris in the table. Guard
+        // against over-claiming — a checkpoint claiming more coverage than the
+        // graph has would make a WAL-branch boot roll back (delete) irises above
+        // the real high-water mark. Require graph max node == iris max id.
+        let max_iris: i64 = sqlx::query_scalar(&format!(
+            "SELECT COALESCE(MAX(id), 0)::bigint FROM \"{schema}\".irises"
+        ))
+        .fetch_one(graph_store.pool())
+        .await?;
+        let max_graph_serial: i64 = sqlx::query_scalar(&format!(
+            "SELECT COALESCE(MAX(serial_id), 0)::bigint FROM \"{schema}\".hawk_graph_links"
+        ))
+        .fetch_one(graph_store.pool())
+        .await?;
+        if max_graph_serial != max_iris {
+            bail!(
+                "party {party_id}: graph coverage mismatch — hawk_graph_links max serial_id {} != \
+                 irises max id {}; refusing to write a checkpoint that misclaims coverage",
+                max_graph_serial,
+                max_iris
+            );
+        }
+
+        // last_indexed_modification_id: match genesis exactly — high-water mark
+        // over *indexable* modifications only (reset_update, recovery_update,
+        // reauth, identity_deletion) that are persisted and COMPLETED. Plain
+        // uniqueness enrollments are tracked via last_indexed_iris_id, not here.
+        let indexable_types: [&str; 4] = [
+            RESET_UPDATE_MESSAGE_TYPE,
+            RECOVERY_UPDATE_MESSAGE_TYPE,
+            REAUTH_MESSAGE_TYPE,
+            IDENTITY_DELETION_MESSAGE_TYPE,
+        ];
+        let last_indexed_modification_id: i64 = sqlx::query_scalar::<_, Option<i64>>(&format!(
+            "SELECT MAX(id) FROM \"{schema}\".modifications \
+             WHERE persisted = true AND status = 'COMPLETED' AND request_type = ANY($1)"
+        ))
+        .bind(&indexable_types[..])
+        .fetch_one(graph_store.pool())
+        .await?
+        .unwrap_or(0);
+        let last_indexed_iris_id: SerialId = max_iris.try_into()?;
+
+        tracing::info!(
+            "Party {party_id}: uploading checkpoint to {bucket} \
+             (last_indexed_iris_id={last_indexed_iris_id}, \
+             last_indexed_modification_id={last_indexed_modification_id})"
+        );
+        let state = upload_graph_checkpoint(
+            &bucket,
+            party_id,
+            &graph_refs,
+            &s3_client,
+            last_indexed_iris_id,
+            last_indexed_modification_id,
+            None, // graph_mutation_id: genesis-style checkpoint
+            true, // is_archival
+        )
+        .await?;
+
+        let mut tx = graph_store.pool().begin().await?;
+        GraphStore::insert_genesis_graph_checkpoint(
+            &mut tx,
+            &state.s3_key,
+            last_indexed_iris_id as i64,
+            last_indexed_modification_id,
+            None,
+            &state.blake3_hash,
+            true,
+            state.graph_version,
+        )
+        .await?;
+        tx.commit().await?;
+
+        tracing::info!(
+            "Party {party_id}: checkpoint recorded — s3_key={}, blake3={}, graph_version={}",
+            state.s3_key,
+            state.blake3_hash,
+            state.graph_version
+        );
+    }
+
+    tracing::info!("✅ Checkpoint migration complete for all {N_PARTIES} parties");
+    Ok(())
+}
+
 #[allow(non_snake_case)]
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -238,6 +399,11 @@ async fn main() -> Result<()> {
 
     tracing::info!("Parsing CLI arguments");
     let args = Args::parse();
+
+    if args.migrate_checkpoint {
+        return migrate_checkpoint_to_s3(&args).await;
+    }
+
     let searcher = HnswSearcher::from(&args);
 
     tracing::info!("Setting database connections");
