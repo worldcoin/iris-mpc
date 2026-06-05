@@ -62,8 +62,8 @@ impl TestRun for Wal106 {
 
         // Seed WAL mutations 1..=10.
         let builder = WalMutationBuilder::new()
-            .add_nodes_sequential(FIRST_BATCH_NODES, 1)
-            .add_edges_wrapping(FIRST_BATCH_NODES, FIRST_BATCH_EDGES_START, 0);
+            .add_nodes_sequential_from(1, FIRST_BATCH_NODES)
+            .add_edges_wrapping(FIRST_BATCH_NODES, FIRST_BATCH_EDGES_START);
 
         builder.build(&nodes).await?;
 
@@ -82,9 +82,7 @@ impl TestRun for Wal106 {
             .assert_max_modification_id(FIRST_BATCH_EDGES_START + FIRST_BATCH_NODES as i64 - 1)
             .assert_checkpoint_count(1)
             .assert_latest_checkpoint_mod_id(SEED_MOD_ID);
-        nodes
-            .apply_uniform_assertions(&pre)
-            .await
+        nodes.apply_uniform_assertions(&pre).await
     }
 
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
@@ -125,7 +123,7 @@ impl TestRun for Wal106 {
         // within the full combined graph — too complex for the simple helpers.
         let builder = (FIRST_BATCH_UP_TO + 1..=SECOND_BATCH_UP_TO)
             .fold(WalMutationBuilder::new(), |b, id| {
-                b.add_node(id, (id - 1) as u32, 1)
+                b.add_node(id, (id - 1) as u32)
             });
         // Add edges for second batch: each node connects to the next two neighbors
         // (wrapping within the full combined graph, not just this batch).
@@ -134,7 +132,11 @@ impl TestRun for Wal106 {
             let num_nodes = (FIRST_BATCH_NODES + SECOND_BATCH_NODES) as u32;
             let neighbor1 = (base + 1) % num_nodes;
             let neighbor2 = (base + 2) % num_nodes;
-            b.add_edges(SECOND_BATCH_EDGES_START + idx, base, vec![neighbor1, neighbor2], 0)
+            b.add_edges(
+                SECOND_BATCH_EDGES_START + idx,
+                base,
+                vec![neighbor1, neighbor2],
+            )
         });
 
         builder.build(nodes).await?;
@@ -197,9 +199,7 @@ impl TestRun for Wal106 {
             .assert_checkpoint_count(3)
             .assert_latest_checkpoint_mod_id(max_mod_id)
             .assert_s3_object_exists(true);
-        nodes
-            .apply_split_assertions(&p0_post, &p12_post)
-            .await?;
+        nodes.apply_split_assertions(&p0_post, &p12_post).await?;
 
         // All parties must agree on the BLAKE3 hash of the phase-2 checkpoint and
         // verify against the reference hash computed from the full WAL (1..=20).

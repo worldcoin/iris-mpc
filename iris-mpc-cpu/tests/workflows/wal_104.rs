@@ -77,8 +77,8 @@ impl TestRun for Wal104 {
         const NUM_NODES: u32 = 10;
         const EDGES_START_MOD_ID: i64 = 11;
         let builder = WalMutationBuilder::new()
-            .add_nodes_sequential(10, 1)
-            .add_edges_wrapping(10, EDGES_START_MOD_ID, 0);
+            .add_nodes_sequential_from(1, 10)
+            .add_edges_wrapping(10, EDGES_START_MOD_ID);
 
         builder.build(&nodes).await?;
 
@@ -101,9 +101,7 @@ impl TestRun for Wal104 {
         let pre = WalAssertions::new()
             .assert_checkpoint_count(3)
             .assert_wal_row_count(20);
-        nodes
-            .apply_uniform_assertions(&pre)
-            .await
+        nodes.apply_uniform_assertions(&pre).await
     }
 
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
@@ -133,9 +131,7 @@ impl TestRun for Wal104 {
         let post = WalAssertions::new()
             .assert_checkpoint_count(1)
             .assert_s3_object_exists(true);
-        nodes
-            .apply_uniform_assertions(&post)
-            .await?;
+        nodes.apply_uniform_assertions(&post).await?;
 
         nodes.assert_checkpoint_hashes_agree().await?;
 

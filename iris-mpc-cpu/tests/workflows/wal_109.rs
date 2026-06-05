@@ -69,12 +69,12 @@ impl TestRun for Wal109 {
 
         // One AddNode mutation per modification_id, serial_id = mod_id - 1 (0-indexed).
         let builder10 = (1i64..=TOTAL_MODS).fold(WalMutationBuilder::new(), |b, id| {
-            b.add_node(id, (id - 1) as u32, 1)
+            b.add_node(id, (id - 1) as u32)
         });
 
         // Builder for the first 5 mutations only — seeded into party 1.
         let builder5 = (1i64..=5).fold(WalMutationBuilder::new(), |b, id| {
-            b.add_node(id, (id - 1) as u32, 1)
+            b.add_node(id, (id - 1) as u32)
         });
 
         // WAL seeding:
@@ -165,9 +165,7 @@ impl TestRun for Wal109 {
             .assert_checkpoint_count(1)
             .assert_latest_checkpoint_mod_id(TOTAL_MODS)
             .assert_s3_object_exists(true);
-        nodes
-            .apply_uniform_assertions(&post)
-            .await?;
+        nodes.apply_uniform_assertions(&post).await?;
 
         // All 3 parties must agree on the BLAKE3 hash of the checkpoint.
         nodes.assert_checkpoint_hashes_agree().await

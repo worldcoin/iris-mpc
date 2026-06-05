@@ -59,8 +59,8 @@ impl TestRun for Wal110 {
 
         // Two builders for the same modification_id but different node serial_ids.
         // Different serial_ids produce different bincode bytes, triggering the mismatch.
-        let builder_a = WalMutationBuilder::new().add_node(MOD_ID, 1, 1); // serial_id = 1
-        let builder_b = WalMutationBuilder::new().add_node(MOD_ID, 99, 1); // serial_id = 99
+        let builder_a = WalMutationBuilder::new().add_node(MOD_ID, 1); // serial_id = 1
+        let builder_b = WalMutationBuilder::new().add_node(MOD_ID, 99); // serial_id = 99
 
         // Upload fake iris shares to S3 so sync_modifications can fetch them when
         // it rolls forward party 0's unpersisted 'uniqueness' modification.

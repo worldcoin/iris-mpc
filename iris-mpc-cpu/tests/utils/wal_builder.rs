@@ -30,9 +30,9 @@ use super::cpu_node::CpuNodes;
 ///
 /// ```rust
 /// WalMutationBuilder::new()
-///     .add_node(1, 0, 3)                     // mod_id=1, node_id=0, height=3
-///     .add_node(2, 1, 2)                     // mod_id=2, node_id=1, height=2
-///     .add_edges(3, 0, vec![1], 0)           // mod_id=3, base=0, neighbors=[1], layer=0
+///     .add_node(1, 0)                        // mod_id=1, node_id=0
+///     .add_node(2, 1)                        // mod_id=2, node_id=1
+///     .add_edges(3, 0, vec![1])              // mod_id=3, base=0, neighbors=[1]
 ///     .build(&nodes)
 ///     .await?;
 /// ```
@@ -50,13 +50,12 @@ impl WalMutationBuilder {
     /// Add an `AddNode` mutation for both eyes at the given `modification_id`.
     ///
     /// `node_id` is the HNSW node identifier (use sequential values starting from 0).
-    /// `height` is the HNSW layer height for this node.
-    pub fn add_node(mut self, modification_id: i64, node_id: u32, height: usize) -> Self {
+    pub fn add_node(mut self, modification_id: i64, node_id: u32) -> Self {
         let mutation = GraphMutation {
             seq_no: modification_id as u64,
             ops: vec![MutationOp::AddNode {
                 id: IrisVectorId::from_serial_id(node_id),
-                height,
+                height: 1,
                 update_ep: UpdateEntryPoint::False,
             }],
         };
@@ -66,15 +65,9 @@ impl WalMutationBuilder {
 
     /// Add an `AddEdges` mutation for both eyes at the given `modification_id`.
     ///
-    /// `base` is the source node; `neighbors` are the nodes it connects to at `layer`.
+    /// `base` is the source node; `neighbors` are the nodes it connects to at layer 0.
     /// Keep `neighbors.len()` under 100 to stay within realistic HNSW degree bounds.
-    pub fn add_edges(
-        mut self,
-        modification_id: i64,
-        base: u32,
-        neighbors: Vec<u32>,
-        layer: usize,
-    ) -> Self {
+    pub fn add_edges(mut self, modification_id: i64, base: u32, neighbors: Vec<u32>) -> Self {
         assert!(
             neighbors.len() <= 100,
             "neighbors.len() = {} exceeds the 100-edge limit per add_edges call",
@@ -88,7 +81,7 @@ impl WalMutationBuilder {
                     .iter()
                     .map(|&n| IrisVectorId::from_serial_id(n))
                     .collect(),
-                layer,
+                layer: 0,
                 edge_type: EdgeType::All,
             }],
         };
@@ -96,25 +89,18 @@ impl WalMutationBuilder {
         self
     }
 
-    /// Add `count` sequential AddNode mutations. Node serial IDs are 0..count,
-    /// mod IDs are 1..=count (i.e. mod_id = serial_id + 1).
-    pub fn add_nodes_sequential(self, count: usize, height: u32) -> Self {
-        self.add_nodes_sequential_from(1, count, height)
-    }
-
     /// Add `count` sequential AddNode mutations starting at `start_mod_id`.
     /// Serial IDs start at 0 (relative to this batch): serial = idx, mod_id = start_mod_id + idx.
     /// Use this for WAL batches whose mod_ids are offset from 1 (e.g. 51..=100).
-    pub fn add_nodes_sequential_from(self, start_mod_id: i64, count: usize, height: u32) -> Self {
-        (0..count as i64).fold(self, |b, idx| {
-            b.add_node(start_mod_id + idx, idx as u32, height as usize)
-        })
+    /// For clean inits, use `start_mod_id = 1`.
+    pub fn add_nodes_sequential_from(self, start_mod_id: i64, count: usize) -> Self {
+        (0..count as i64).fold(self, |b, idx| b.add_node(start_mod_id + idx, idx as u32))
     }
 
     /// Add wrapping AddEdges mutations for `count` nodes. Each node i gets edges
     /// to (i+1)%count and (i+2)%count. `edges_start_mod_id` is the mod_id for
     /// the first edge entry.
-    pub fn add_edges_wrapping(self, count: usize, edges_start_mod_id: i64, layer: u32) -> Self {
+    pub fn add_edges_wrapping(self, count: usize, edges_start_mod_id: i64) -> Self {
         (0..count as i64).fold(self, |b, idx| {
             let base = idx as u32;
             let n = count as u32;
@@ -122,7 +108,6 @@ impl WalMutationBuilder {
                 edges_start_mod_id + idx,
                 base,
                 vec![(base + 1) % n, (base + 2) % n],
-                layer as usize,
             )
         })
     }

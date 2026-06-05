@@ -43,8 +43,8 @@ impl TestRun for Wal103 {
 
         // WAL delta 51..=100.
         let builder = WalMutationBuilder::new()
-            .add_nodes_sequential_from(CHECKPOINT_AT_MOD_ID + 1, NODES_COUNT, 1)
-            .add_edges_wrapping(NODES_COUNT, EDGES_START_MOD_ID, 0);
+            .add_nodes_sequential_from(CHECKPOINT_AT_MOD_ID + 1, NODES_COUNT)
+            .add_edges_wrapping(NODES_COUNT, EDGES_START_MOD_ID);
 
         builder.build(&nodes).await?;
 

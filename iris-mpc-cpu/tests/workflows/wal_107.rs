@@ -68,8 +68,8 @@ impl TestRun for Wal107 {
 
         // Seed WAL mutations 1..=10 into all three parties.
         let shared_builder = WalMutationBuilder::new()
-            .add_nodes_sequential(SHARED_NODES, 1)
-            .add_edges_wrapping(SHARED_NODES, SHARED_EDGES_START, 0);
+            .add_nodes_sequential_from(1, SHARED_NODES)
+            .add_edges_wrapping(SHARED_NODES, SHARED_EDGES_START);
 
         shared_builder.build(&nodes).await?;
 
@@ -77,13 +77,9 @@ impl TestRun for Wal107 {
         // that committed additional work before the others diverged.
         // IDs start at PARTY0_NODES_START (21) to avoid colliding with shared edge
         // modification IDs 11..=20.
-        let party0_builder =
-            (0..PARTY0_EXTRA_NODES as i64).fold(WalMutationBuilder::new(), |b, idx| {
-                b.add_node(
-                    PARTY0_NODES_START + idx,
-                    SHARED_NODES as u32 + idx as u32,
-                    1,
-                )
+        let party0_builder = (0..PARTY0_EXTRA_NODES as i64)
+            .fold(WalMutationBuilder::new(), |b, idx| {
+                b.add_node(PARTY0_NODES_START + idx, SHARED_NODES as u32 + idx as u32)
             });
 
         // Add edges for party 0's extra batch: each node connects to the next two neighbors (wrapping).
@@ -92,12 +88,7 @@ impl TestRun for Wal107 {
             let num_nodes = PARTY0_EXTRA_NODES as u32;
             let neighbor1 = (base + 1) % num_nodes;
             let neighbor2 = (base + 2) % num_nodes;
-            b.add_edges(
-                PARTY0_EDGES_START + idx,
-                base,
-                vec![neighbor1, neighbor2],
-                0,
-            )
+            b.add_edges(PARTY0_EDGES_START + idx, base, vec![neighbor1, neighbor2])
         });
 
         party0_builder

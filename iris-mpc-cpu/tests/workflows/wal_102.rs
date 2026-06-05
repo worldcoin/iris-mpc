@@ -43,8 +43,8 @@ impl TestRun for Wal102 {
         // No base checkpoint — sidecar starts from scratch.
         // Seed AddNode mutations 1..=10.
         let builder = WalMutationBuilder::new()
-            .add_nodes_sequential(WAL_MUTATION_COUNT as usize, 1)
-            .add_edges_wrapping(WAL_MUTATION_COUNT as usize, EDGES_START_MOD_ID, 0);
+            .add_nodes_sequential_from(1, WAL_MUTATION_COUNT as usize)
+            .add_edges_wrapping(WAL_MUTATION_COUNT as usize, EDGES_START_MOD_ID);
 
         builder.build(&nodes).await?;
 
