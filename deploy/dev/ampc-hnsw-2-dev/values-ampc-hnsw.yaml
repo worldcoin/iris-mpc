@@ -56,13 +56,22 @@ env:
     value: "2"
 
   - name: SMPC__SCHEMA_NAME
-    value: "genesis"
+    value: "SMPC"
 
   - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
-    value: "_cpu1M"
+    value: "_minfhd_SMALL_JUNE_2026"
 
   - name: SMPC__GPU_SCHEMA_NAME_SUFFIX
     value: "_gpu1M"
+
+  - name: SMPC__HNSW_PARAM_M
+    value: "320"
+
+  - name: SMPC__HNSW_PARAM_EF_SEARCH
+    value: "320"
+
+  - name: SMPC__HNSW_PARAM_EF_CONSTR
+    value: "320"
 
   - name: SMPC__SERVICE__SERVICE_NAME
     value: "hnsw-service-2"
