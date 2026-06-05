@@ -262,6 +262,7 @@ pub async fn expect_sidecar_success(
                 .map_err(|e| eyre::eyre!("sidecar task join error: {e}"))?
                 .map_err(|e| eyre::eyre!("sidecar task error: {e:#}"))?;
         }
+        tracing::info!("sidecar joined successfully");
         Ok::<(), eyre::Report>(())
     })
     .await;
