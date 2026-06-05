@@ -83,7 +83,7 @@ macro_rules! run_hawk {
         }
 
         for (party_idx, cpu_cfg) in ($configs).iter().enumerate() {
-            let config = crate::utils::configs::make_hawk_config(cpu_cfg, &$configs, &$ctx.env);
+            let config = $crate::utils::configs::make_hawk_config(cpu_cfg, &$configs, &$ctx.env);
             let notify = notify.clone();
 
             // spawn_blocking: the closure is Send (captures only Config and

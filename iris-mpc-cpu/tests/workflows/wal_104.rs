@@ -45,7 +45,7 @@ impl Wal104 {
         // Build a per-cycle config override with the desired pruning mode.
         let mut configs = ctx.configs.clone();
         for cfg in configs.iter_mut() {
-            cfg.sidecar.pruning_mode = pruning_mode.clone();
+            cfg.sidecar.pruning_mode = pruning_mode;
         }
 
         let shutdown = CancellationToken::new();
