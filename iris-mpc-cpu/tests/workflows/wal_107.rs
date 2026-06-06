@@ -38,6 +38,7 @@ use crate::{
         runner::{CpuTestContext, TestRun},
         wait_conditions::wait_for_all_ready,
         wal_builder::WalMutationBuilder,
+        MIN_MUTATIONS_PER_SIDECAR_CYCLE,
     },
 };
 
@@ -57,11 +58,15 @@ impl TestRun for Wal107 {
 
         // seed the wal
         let mut builder = WalMutationBuilder::new();
-        builder.add_nodes(10);
+        builder.add_nodes(MIN_MUTATIONS_PER_SIDECAR_CYCLE);
+        builder.build(&nodes).await?;
+        nodes.make_checkpoints().await?;
+
+        builder.add_nodes(MIN_MUTATIONS_PER_SIDECAR_CYCLE);
         builder.build(&nodes).await?;
 
         // make one node ahead
-        builder.add_nodes(10);
+        builder.add_nodes(MIN_MUTATIONS_PER_SIDECAR_CYCLE);
         builder.build_single(&nodes.0[0], true, true).await?;
 
         self.nodes = Some(nodes);
@@ -74,13 +79,13 @@ impl TestRun for Wal107 {
         // Party 0 has all entries (10 shared nodes + 10 shared edges + 5 extra nodes + 5 extra edges = 30);
         // parties 1 and 2 have only shared nodes + edges (10 + 10 = 20).
         let p0_pre = WalAssertions::new()
-            .assert_wal_row_count(20)
-            .assert_max_modification_id(20)
-            .assert_checkpoint_count(0);
+            .assert_wal_row_count(3 * MIN_MUTATIONS_PER_SIDECAR_CYCLE)
+            .assert_max_modification_id(3 * MIN_MUTATIONS_PER_SIDECAR_CYCLE as i64)
+            .assert_checkpoint_count(1);
         let p12_pre = WalAssertions::new()
-            .assert_wal_row_count(10)
-            .assert_max_modification_id(10)
-            .assert_checkpoint_count(0);
+            .assert_wal_row_count(2 * MIN_MUTATIONS_PER_SIDECAR_CYCLE)
+            .assert_max_modification_id(2 * MIN_MUTATIONS_PER_SIDECAR_CYCLE as i64)
+            .assert_checkpoint_count(1);
         nodes.apply_split_assertions(&p0_pre, &p12_pre).await
     }
 
@@ -115,8 +120,8 @@ impl TestRun for Wal107 {
         let nodes = self.nodes.as_ref().unwrap();
 
         let post = WalAssertions::new()
-            .assert_checkpoint_count(1)
-            .assert_latest_checkpoint_mod_id(20);
+            .assert_checkpoint_count(2)
+            .assert_latest_checkpoint_mod_id(3 * MIN_MUTATIONS_PER_SIDECAR_CYCLE as i64);
         nodes.apply_uniform_assertions(&post).await?;
 
         // All three parties must agree on the checkpoint BLAKE3 hash.
