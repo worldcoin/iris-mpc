@@ -14,6 +14,7 @@ use crate::{
         runner::{CpuTestContext, TestRun},
         wait_conditions::wait_for_all_ready,
         wal_builder::WalMutationBuilder,
+        MIN_MUTATIONS_PER_SIDECAR_CYCLE,
     },
 };
 
@@ -30,25 +31,26 @@ impl Wal109 {
 impl TestRun for Wal109 {
     async fn setup(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = CpuNodes::new_clean(&ctx.configs).await?;
+        let aws_client = ctx.make_aws_client().await?;
 
         let mut builder0 = WalMutationBuilder::new();
-        builder0.add_nodes(10);
-        for idx in 1..=10 {
-            builder0.set_persisted(idx, false);
+        builder0.add_nodes(2 * MIN_MUTATIONS_PER_SIDECAR_CYCLE);
+        for idx in 1..=2 * MIN_MUTATIONS_PER_SIDECAR_CYCLE {
+            builder0.set_persisted(idx as _, false);
         }
         builder0.build_single(&nodes.0[0], false, true).await?;
 
         let mut builder1 = WalMutationBuilder::new();
-        builder1.add_nodes(5);
+        builder1.add_nodes(MIN_MUTATIONS_PER_SIDECAR_CYCLE);
         builder1.build_single(&nodes.0[1], true, true).await?;
-        builder1.add_nodes(5);
-        for idx in 6..=10 {
-            builder1.set_persisted(idx, false);
+        builder1.add_nodes(MIN_MUTATIONS_PER_SIDECAR_CYCLE);
+        for idx in MIN_MUTATIONS_PER_SIDECAR_CYCLE + 1..=2 * MIN_MUTATIONS_PER_SIDECAR_CYCLE {
+            builder1.set_persisted(idx as _, false);
         }
         builder1.build_single(&nodes.0[1], false, true).await?;
 
         WalMutationBuilder::new()
-            .add_nodes(10)
+            .add_nodes(2 * MIN_MUTATIONS_PER_SIDECAR_CYCLE)
             .build_single(&nodes.0[2], true, true)
             .await?;
 
@@ -64,12 +66,12 @@ impl TestRun for Wal109 {
                     .assert_wal_row_count(0)
                     .assert_checkpoint_count(0),
                 WalAssertions::new()
-                    .assert_wal_row_count(5)
-                    .assert_max_modification_id(5)
+                    .assert_wal_row_count(MIN_MUTATIONS_PER_SIDECAR_CYCLE)
+                    .assert_max_modification_id(MIN_MUTATIONS_PER_SIDECAR_CYCLE as _)
                     .assert_checkpoint_count(0),
                 WalAssertions::new()
-                    .assert_wal_row_count(10)
-                    .assert_max_modification_id(10)
+                    .assert_wal_row_count(2 * MIN_MUTATIONS_PER_SIDECAR_CYCLE)
+                    .assert_max_modification_id(2 * MIN_MUTATIONS_PER_SIDECAR_CYCLE as i64)
                     .assert_checkpoint_count(0),
             ])
             .await
@@ -100,9 +102,9 @@ impl TestRun for Wal109 {
         let nodes = self.nodes.as_ref().unwrap();
 
         let post = WalAssertions::new()
-            .assert_wal_row_count(10)
+            .assert_wal_row_count(2 * MIN_MUTATIONS_PER_SIDECAR_CYCLE)
             .assert_checkpoint_count(1)
-            .assert_latest_checkpoint_mod_id(10);
+            .assert_latest_checkpoint_mod_id(2 * MIN_MUTATIONS_PER_SIDECAR_CYCLE as i64);
         nodes.apply_uniform_assertions(&post).await?;
 
         nodes.assert_checkpoint_hashes_agree().await

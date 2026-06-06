@@ -4,7 +4,6 @@
 /// so party 0's sync request receives mismatched payloads and hawk_main errors out.
 use std::time::Duration;
 
-use iris_mpc_utils::aws::{AwsClient, AwsClientConfig};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -43,17 +42,7 @@ impl TestRun for Wal110 {
         builder_b.add_nodes(2);
 
         // Party 0's modification is unpersisted; sync needs iris shares in S3 to roll it forward.
-        let aws_config = AwsClientConfig::new(
-            "dev".to_string(),
-            ctx.env.public_key_base_url().to_string(),
-            "wf-smpcv2-dev-sns-requests".to_string(),
-            String::new(),
-            0,
-            vec![],
-        )
-        .await;
-        let mut aws_client = AwsClient::new(aws_config);
-        aws_client.set_public_keyset().await?;
+        let aws_client = ctx.make_aws_client().await?;
         builder_a.upload_iris_shares(&aws_client).await?;
 
         builder_a.insert_mutations(&nodes.0[1].store.graph).await?;

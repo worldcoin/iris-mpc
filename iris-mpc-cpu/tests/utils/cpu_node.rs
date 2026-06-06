@@ -11,6 +11,8 @@ use iris_mpc_cpu::graph_checkpoint::stream_serialize_and_upload_with;
 use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 use iris_mpc_cpu::hnsw::graph::graph_store::{GraphCheckpointRow, GraphPg};
 use iris_mpc_cpu::hnsw::GraphMem;
+use iris_mpc_utils::{aws::AwsClient, irises::generate_iris_shares_for_upload_both_eyes};
+use rand::{rngs::StdRng, SeedableRng};
 
 /// Per-party database handles for test setup and post-condition assertions.
 ///
@@ -389,6 +391,25 @@ impl CpuNodes {
         let nodes = Self::new(configs).await?;
         nodes.clear_all_s3_buckets(configs).await?;
         nodes.truncate_checkpoint_tables().await?;
+        // Log the exclusions file if it exists — leftover state from a prior run
+        // may or may not affect this test, but it is useful to know about.
+        if let Ok(resp) = nodes.0[0]
+            .s3
+            .get_object()
+            .bucket("wf-smpcv2-dev-sync-protocol")
+            .key("dev_deleted_serial_ids.json")
+            .send()
+            .await
+        {
+            if let Ok(body) = resp.body.collect().await {
+                let bytes = body.into_bytes();
+                let text = String::from_utf8_lossy(&bytes);
+                tracing::warn!(
+                    exclusions = %text,
+                    "dev_deleted_serial_ids.json exists in S3 at test start"
+                );
+            }
+        }
         Ok(nodes)
     }
 
@@ -518,6 +539,25 @@ impl CpuNodes {
             self.0[2].make_archival_checkpoint(),
         )?;
         Ok([r0, r1, r2])
+    }
+
+    /// Upload deterministic fake iris shares to S3 for modifications 1..=count.
+    ///
+    /// Each share set is seeded by its modification ID so the content is stable
+    /// across calls and test runs. S3 puts are idempotent.
+    pub async fn init_iris_shares(&self, count: usize, aws_client: &AwsClient) -> eyre::Result<()> {
+        for modification_id in 1..=(count as i64) {
+            let uuid = uuid::Uuid::from_u128(modification_id as u128);
+            let mut rng = StdRng::seed_from_u64(modification_id as u64);
+            let shares = generate_iris_shares_for_upload_both_eyes(&mut rng, None, None);
+            aws_client
+                .s3_upload_iris_shares(&uuid, &shares)
+                .await
+                .map_err(|e| {
+                    eyre::eyre!("S3 upload failed for modification_id={modification_id}: {e}")
+                })?;
+        }
+        Ok(())
     }
 
     /// Delete all S3 objects from all checkpoint buckets.

@@ -115,6 +115,27 @@ pub struct CpuTestContext {
 }
 
 impl CpuTestContext {
+    /// Creates an [`iris_mpc_utils::aws::AwsClient`] pointed at the LocalStack
+    /// instance for the current [`TestEnvironment`].  Use this in test setups
+    /// that need to upload iris shares (e.g. via
+    /// [`WalMutationBuilder::with_aws_client`]) rather than repeating the
+    /// `AwsClientConfig::new(...)` boilerplate in every test file.
+    pub async fn make_aws_client(&self) -> eyre::Result<iris_mpc_utils::aws::AwsClient> {
+        use iris_mpc_utils::aws::{AwsClient, AwsClientConfig};
+        let aws_config = AwsClientConfig::new(
+            "dev".to_string(),
+            self.env.public_key_base_url().to_string(),
+            "wf-smpcv2-dev-sns-requests".to_string(),
+            String::new(),
+            0,
+            vec![],
+        )
+        .await;
+        let mut aws_client = AwsClient::new(aws_config);
+        aws_client.set_public_keyset().await?;
+        Ok(aws_client)
+    }
+
     pub fn new(kind: usize, idx: usize) -> Self {
         let env = if std::path::Path::new("/.dockerenv").exists() {
             TestEnvironment::Docker

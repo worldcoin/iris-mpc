@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use iris_mpc_common::IrisVectorId;
 use iris_mpc_cpu::{
     execution::hawk_main::BothEyes,
@@ -9,12 +7,10 @@ use iris_mpc_cpu::{
         mutation::{EdgeType, GraphMutation, MutationOp, UpdateEntryPoint},
     },
 };
-use iris_mpc_utils::{aws::AwsClient, irises::generate_iris_shares_for_upload_both_eyes};
-use rand::{rngs::StdRng, SeedableRng};
-
-use crate::utils::cpu_node::CpuNode;
+use std::collections::HashMap;
 
 use super::cpu_node::CpuNodes;
+use crate::utils::cpu_node::CpuNode;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ModificationStatus {
@@ -233,31 +229,6 @@ impl WalMutationBuilder {
                 .await?;
         }
         self.processed = self.entries.len();
-        Ok(())
-    }
-
-    pub async fn build_slice(&mut self, nodes: &[&CpuNode]) -> eyre::Result<()> {
-        for node in nodes {
-            self.insert_mutations(&node.store.graph).await?;
-            self.seed_modifications(&node.store.graph, node.config.party_id)
-                .await?;
-        }
-        self.processed = self.entries.len();
-        Ok(())
-    }
-
-    pub async fn upload_iris_shares(&self, aws_client: &AwsClient) -> eyre::Result<()> {
-        let mut rng = StdRng::seed_from_u64(42);
-        for (modification_id, _) in &self.entries {
-            let uuid = uuid::Uuid::from_u128(*modification_id as u128);
-            let shares = generate_iris_shares_for_upload_both_eyes(&mut rng, None, None);
-            aws_client
-                .s3_upload_iris_shares(&uuid, &shares)
-                .await
-                .map_err(|e| {
-                    eyre::eyre!("S3 upload failed for modification_id={modification_id}: {e}")
-                })?;
-        }
         Ok(())
     }
 }
