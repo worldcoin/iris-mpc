@@ -18,11 +18,7 @@ use crate::{
     },
 };
 
-/// Seed 10 AddNode mutations.  min_mutations_per_cycle = 5, so the sidecar
-/// will cycle on the first pass.
-const WAL_MUTATION_COUNT: i64 = 10;
-const EDGES_START_MOD_ID: i64 = WAL_MUTATION_COUNT + 1;
-const TOTAL_MUTATIONS: usize = (WAL_MUTATION_COUNT as usize) * 2; // nodes + edges
+const WAL_MUTATION_COUNT: usize = 10;
 
 pub struct Wal102 {
     nodes: Option<CpuNodes>,
@@ -40,12 +36,10 @@ impl TestRun for Wal102 {
 
         // No base checkpoint — sidecar starts from scratch.
         // Seed AddNode mutations 1..=10.
-        let builder = WalMutationBuilder::new()
-            .add_nodes_sequential_from(1, WAL_MUTATION_COUNT as usize)
-            .add_edges_wrapping(WAL_MUTATION_COUNT as usize, EDGES_START_MOD_ID);
-
-        builder.build(&nodes).await?;
-
+        WalMutationBuilder::new()
+            .add_nodes(WAL_MUTATION_COUNT)
+            .build(&nodes)
+            .await?;
         self.nodes = Some(nodes);
         Ok(())
     }
@@ -53,8 +47,8 @@ impl TestRun for Wal102 {
     async fn setup_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
         let pre = WalAssertions::new()
-            .assert_wal_row_count(TOTAL_MUTATIONS)
-            .assert_max_modification_id(EDGES_START_MOD_ID + WAL_MUTATION_COUNT - 1)
+            .assert_wal_row_count(WAL_MUTATION_COUNT)
+            .assert_max_modification_id(WAL_MUTATION_COUNT as _)
             .assert_checkpoint_count(0);
         nodes.apply_uniform_assertions(&pre).await
     }
@@ -70,7 +64,7 @@ impl TestRun for Wal102 {
 
         let post = WalAssertions::new()
             .assert_checkpoint_count(1)
-            .assert_latest_checkpoint_mod_id(EDGES_START_MOD_ID + WAL_MUTATION_COUNT - 1);
+            .assert_latest_checkpoint_mod_id(WAL_MUTATION_COUNT as _);
         nodes.apply_uniform_assertions(&post).await?;
 
         // Materialise the same WAL rows in the test process, hash the result,

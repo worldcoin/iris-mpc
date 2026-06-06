@@ -29,65 +29,85 @@ impl ModificationStatus {
     }
 }
 
-/// Test utility that pre-builds one modification per node.
+/// Stateful test utility for building WAL mutations incrementally.
 ///
-/// Each modification (keyed by `modification_id = node_index as i64`) contains
-/// two [`GraphMutation`]s:
-///   1. `AddNode`  – layer 0, height 1
-///   2. `AddEdges` – layer 0, edges to `(base+1) % n` and `(base+2) % n`, [`EdgeType::All`]
+/// Call [`add_nodes`] one or more times to append batches of nodes. Each call
+/// continues sequentially from the last assigned modification ID / node ID, so
+/// you can interleave calls with [`build`] and checkpoint operations:
+///
+/// ```ignore
+/// let mut builder = WalMutationBuilder::new();
+/// builder.add_nodes(50);
+/// builder.build(&nodes).await?;
+/// nodes.make_checkpoints(49, 49).await?;   // checkpoint the first batch
+/// builder.add_nodes(50);                    // 50 more nodes on top
+/// builder.build(&nodes).await?;             // upserts are idempotent
+/// ```
+///
+/// For each new node, `add_nodes` creates two [`GraphMutation`]s:
+///   1. `AddNode`  – height 1
+///   2. `AddEdges` – layer 0, [`EdgeType::All`], connecting to **every
+///      previously added node** (full mesh up to that point)
 ///
 /// Default `persisted = true`, default `status = COMPLETED`.
 /// Use [`set_persisted`] / [`set_status`] to override individual modifications.
 pub struct WalMutationBuilder {
-    entries: HashMap<i64, Vec<GraphMutation<IrisVectorId>>>,
+    entries: HashMap<i64, GraphMutation<IrisVectorId>>,
     persisted: HashMap<i64, bool>,
     status: HashMap<i64, ModificationStatus>,
+    processed: usize,
 }
 
 impl WalMutationBuilder {
-    pub fn new(num_nodes: usize) -> Self {
-        let mut entries = HashMap::new();
-        let mut persisted = HashMap::new();
-        let mut status = HashMap::new();
+    pub fn new() -> Self {
+        Self {
+            entries: HashMap::new(),
+            persisted: HashMap::new(),
+            status: HashMap::new(),
+            processed: 0,
+        }
+    }
 
-        let n = num_nodes as u32;
+    /// Appends `count` new nodes, continuing from the last assigned IDs.
+    ///
+    /// Each node connects (via `AddEdges`) to every node added in prior calls
+    /// as well as every node added earlier within the same call.
+    pub fn add_nodes(&mut self, count: usize) -> &mut Self {
+        let starting_idx = self.entries.len();
+        let new_len = starting_idx + count;
+        for idx in starting_idx..new_len {
+            let node_id = idx + 1;
+            // All nodes added before this one become neighbors.
+            let neighbors: Vec<IrisVectorId> = (1..=new_len)
+                .filter(|x| x != &node_id)
+                .map(|x| x as u32)
+                .map(IrisVectorId::from_serial_id)
+                .collect();
 
-        for i in 0..num_nodes {
-            let modification_id = i as i64;
-            let node_id = i as u32;
-
-            let add_node = GraphMutation {
-                seq_no: modification_id as u64,
-                ops: vec![MutationOp::AddNode {
-                    id: IrisVectorId::from_serial_id(node_id),
-                    height: 1,
-                    update_ep: UpdateEntryPoint::False,
-                }],
+            let mut mutation = GraphMutation {
+                seq_no: node_id as u64,
+                ops: vec![],
             };
+            mutation.ops.push(MutationOp::AddNode {
+                id: IrisVectorId::from_serial_id(node_id as _),
+                height: 1,
+                update_ep: UpdateEntryPoint::False,
+            });
 
-            let add_edges = GraphMutation {
-                seq_no: modification_id as u64,
-                ops: vec![MutationOp::AddEdges {
-                    base: IrisVectorId::from_serial_id(node_id),
-                    neighbors: vec![
-                        IrisVectorId::from_serial_id((node_id + 1) % n),
-                        IrisVectorId::from_serial_id((node_id + 2) % n),
-                    ],
+            if !neighbors.is_empty() {
+                mutation.ops.push(MutationOp::AddEdges {
+                    base: IrisVectorId::from_serial_id(node_id as _),
+                    neighbors,
                     layer: 0,
                     edge_type: EdgeType::All,
-                }],
-            };
-
-            entries.insert(modification_id, vec![add_node, add_edges]);
-            persisted.insert(modification_id, true);
-            status.insert(modification_id, ModificationStatus::Completed);
+                });
+            }
+            self.entries.insert(node_id as _, mutation);
+            self.persisted.insert(node_id as _, true);
+            self.status
+                .insert(node_id as _, ModificationStatus::Completed);
         }
-
-        Self {
-            entries,
-            persisted,
-            status,
-        }
+        self
     }
 
     /// Sets the `persisted` flag for a single modification.
@@ -103,16 +123,24 @@ impl WalMutationBuilder {
     }
 
     pub async fn insert_mutations(&self, graph: &GraphPg<PlaintextStore>) -> eyre::Result<()> {
-        for (modification_id, mutations) in &self.entries {
-            let both_eyes: BothEyes<Vec<GraphMutation<IrisVectorId>>> =
-                [mutations.clone(), mutations.clone()];
+        let mut mutations: Vec<_> = self
+            .entries
+            .values()
+            .filter(|x| x.seq_no > self.processed as u64)
+            .cloned()
+            .collect();
+        mutations.sort_by(|a, b| a.seq_no.cmp(&b.seq_no));
+        let mut tx = graph.pool().begin().await?;
+        for m in mutations {
+            let modification_id = m.seq_no as _;
+            let m = vec![m];
+            let both_eyes: BothEyes<Vec<GraphMutation<IrisVectorId>>> = [m.clone(), m];
             let bytes = bincode::serialize(&both_eyes)?;
-            let mut tx = graph.pool().begin().await?;
             graph
-                .upsert_hawk_graph_mutations(&mut tx, *modification_id, &bytes)
+                .upsert_hawk_graph_mutations(&mut tx, modification_id, &bytes)
                 .await?;
-            tx.commit().await?;
         }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -128,18 +156,30 @@ impl WalMutationBuilder {
         graph: &GraphPg<PlaintextStore>,
         party_id: usize,
     ) -> eyre::Result<()> {
+        let mut mutations: Vec<_> = self
+            .entries
+            .values()
+            .filter(|x| x.seq_no > self.processed as u64)
+            .cloned()
+            .collect();
+        mutations.sort_by(|a, b| a.seq_no.cmp(&b.seq_no));
         let result_message_body = format!(r#"{{"node_id":{party_id}}}"#);
-        for (modification_id, mutations) in &self.entries {
-            let serial_id: i64 = match mutations.first().and_then(|m| m.ops.first()) {
+        for m in mutations {
+            let modification_id = m.seq_no as i64;
+            let serial_id: i64 = match m.ops.first() {
                 Some(MutationOp::AddNode { id, .. }) => id.serial_id() as i64,
                 Some(MutationOp::AddEdges { base, .. }) => base.serial_id() as i64,
                 _ => 0,
             };
-            let s3_url = uuid::Uuid::from_u128(*modification_id as u128).to_string();
-            let persisted = self.persisted.get(modification_id).copied().unwrap_or(true);
+            let s3_url = uuid::Uuid::from_u128(modification_id as u128).to_string();
+            let persisted = self
+                .persisted
+                .get(&modification_id)
+                .copied()
+                .unwrap_or(true);
             let status = self
                 .status
-                .get(modification_id)
+                .get(&modification_id)
                 .map(|s| s.as_str())
                 .unwrap_or("COMPLETED");
             sqlx::query(
@@ -170,9 +210,10 @@ impl WalMutationBuilder {
         Ok(())
     }
 
-    pub async fn build(&self, nodes: &CpuNodes) -> eyre::Result<()> {
+    pub async fn build(&mut self, nodes: &CpuNodes) -> eyre::Result<()> {
         self.insert_mutations_all(nodes).await?;
         self.seed_modifications_all(nodes).await?;
+        self.processed = self.entries.len();
         Ok(())
     }
 
@@ -189,5 +230,11 @@ impl WalMutationBuilder {
                 })?;
         }
         Ok(())
+    }
+}
+
+impl Default for WalMutationBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
