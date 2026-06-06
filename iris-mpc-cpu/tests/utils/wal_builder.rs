@@ -219,10 +219,29 @@ impl WalMutationBuilder {
         Ok(())
     }
 
-    pub async fn build_single(&mut self, node: &CpuNode) -> eyre::Result<()> {
-        self.insert_mutations(&node.store.graph).await?;
-        self.seed_modifications(&node.store.graph, node.config.party_id)
-            .await?;
+    pub async fn build_single(
+        &mut self,
+        node: &CpuNode,
+        mutations: bool,
+        modifications: bool,
+    ) -> eyre::Result<()> {
+        if mutations {
+            self.insert_mutations(&node.store.graph).await?;
+        }
+        if modifications {
+            self.seed_modifications(&node.store.graph, node.config.party_id)
+                .await?;
+        }
+        self.processed = self.entries.len();
+        Ok(())
+    }
+
+    pub async fn build_slice(&mut self, nodes: &[&CpuNode]) -> eyre::Result<()> {
+        for node in nodes {
+            self.insert_mutations(&node.store.graph).await?;
+            self.seed_modifications(&node.store.graph, node.config.party_id)
+                .await?;
+        }
         self.processed = self.entries.len();
         Ok(())
     }

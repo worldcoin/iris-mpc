@@ -51,9 +51,6 @@ use crate::{
     },
 };
 
-/// Total number of modifications / AddNode WAL entries.
-const TOTAL_MODS: i64 = 10;
-
 pub struct Wal109 {
     nodes: Option<CpuNodes>,
 }
@@ -68,37 +65,26 @@ impl TestRun for Wal109 {
     async fn setup(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = CpuNodes::new_clean(&ctx.configs).await?;
 
-        // One AddNode mutation per modification_id, serial_id = mod_id - 1 (0-indexed).
-        let builder10 = (1i64..=TOTAL_MODS).fold(WalMutationBuilder::new(), |b, id| {
-            b.add_node(id, (id - 1) as u32)
-        });
-
-        // Builder for the first 5 mutations only — seeded into party 1.
-        let builder5 = (1i64..=5).fold(WalMutationBuilder::new(), |b, id| {
-            b.add_node(id, (id - 1) as u32)
-        });
-
-        // WAL seeding:
-        //   party 0 — 0 entries (starts with empty WAL; sync will fill it in)
-        //   party 1 — 5 entries (mods 1–5)
-        //   party 2 — 10 entries (mods 1–10)
-        builder5.insert_mutations(&nodes.0[1].store.graph).await?;
-        builder10.insert_mutations(&nodes.0[2].store.graph).await?;
-
-        // Modification seeding — ALL parties receive ALL 10 modification rows,
-        // but with staggered `persisted` counts mirroring the genesis test:
-        //   party 0 → 0 persisted  (all FALSE)
-        //   party 1 → 5 persisted  (mods 1–5 TRUE, 6–10 FALSE)
-        //   party 2 → 10 persisted (all TRUE)
-        for (party_idx, node) in nodes.0.iter().enumerate() {
-            builder10
-                .seed_modifications_partial(
-                    &node.store.graph,
-                    party_idx,
-                    party_idx * 5, // 0, 5, 10
-                )
-                .await?;
+        let mut builder0 = WalMutationBuilder::new();
+        builder0.add_nodes(10);
+        for idx in 1..=10 {
+            builder0.set_persisted(idx, false);
         }
+        builder0.build_single(&nodes.0[0], false, true).await?;
+
+        let mut builder1 = WalMutationBuilder::new();
+        builder1.add_nodes(5);
+        builder1.build_single(&nodes.0[1], true, true).await?;
+        builder1.add_nodes(5);
+        for idx in 5..=10 {
+            builder1.set_persisted(idx, false);
+        }
+        builder1.build_single(&nodes.0[1], false, true).await?;
+
+        WalMutationBuilder::new()
+            .add_nodes(10)
+            .build_single(&nodes.0[2], true, true)
+            .await?;
 
         self.nodes = Some(nodes);
         Ok(())
@@ -117,7 +103,7 @@ impl TestRun for Wal109 {
                     .assert_checkpoint_count(0),
                 WalAssertions::new()
                     .assert_wal_row_count(10)
-                    .assert_max_modification_id(TOTAL_MODS)
+                    .assert_max_modification_id(10)
                     .assert_checkpoint_count(0),
             ])
             .await
@@ -152,9 +138,9 @@ impl TestRun for Wal109 {
         // All parties hold all 10 mutation rows, 1 checkpoint anchored at the
         // last modification, and a corresponding S3 object (verified automatically).
         let post = WalAssertions::new()
-            .assert_wal_row_count(TOTAL_MODS as usize)
+            .assert_wal_row_count(10)
             .assert_checkpoint_count(1)
-            .assert_latest_checkpoint_mod_id(TOTAL_MODS);
+            .assert_latest_checkpoint_mod_id(10);
         nodes.apply_uniform_assertions(&post).await?;
 
         // All 3 parties must agree on the BLAKE3 hash of the checkpoint.

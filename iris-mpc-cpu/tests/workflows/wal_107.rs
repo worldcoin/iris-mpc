@@ -62,7 +62,7 @@ impl TestRun for Wal107 {
 
         // make one node ahead
         builder.add_nodes(10);
-        builder.build_single(&nodes.0[0]).await?;
+        builder.build_single(&nodes.0[0], true, true).await?;
 
         self.nodes = Some(nodes);
         Ok(())
