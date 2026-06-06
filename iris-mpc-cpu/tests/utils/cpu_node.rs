@@ -184,39 +184,45 @@ impl CpuNode {
         Ok(keys)
     }
 
-    /// Seed a genesis checkpoint for this party.
-    ///
-    /// Delegates to [`seed_party_with_options`] with `is_archival = false`.
-    pub async fn make_checkpoint(
-        &self,
-        last_iris_id: i64,
-        last_modification_id: i64,
-    ) -> eyre::Result<GraphCheckpointRow> {
-        self.make_checkpoint_with_options(last_iris_id, last_modification_id, false)
-            .await
+    /// Seed a genesis (seed) checkpoint for this party.
+    pub async fn make_checkpoint(&self) -> eyre::Result<GraphCheckpointRow> {
+        self.make_checkpoint_with_options(false).await
+    }
+
+    /// Seed an archival checkpoint for this party.
+    pub async fn make_archival_checkpoint(&self) -> eyre::Result<GraphCheckpointRow> {
+        self.make_checkpoint_with_options(true).await
     }
 
     /// Build and persist a genesis checkpoint for this party.
     ///
-    /// Replays WAL mutations up to `last_modification_id` from the DB to construct
-    /// the graph state, then serializes and uploads it to S3.
+    /// Replays all WAL mutations from the DB to construct the graph state, then
+    /// serializes and uploads it to S3. The most recent `modification_id` is
+    /// looked up automatically and used as both `last_indexed_iris_id` and
+    /// `last_indexed_modification_id`.
     ///
-    /// 1. Read `hawk_graph_mutations` rows with `modification_id <= last_modification_id`.
-    /// 2. Replay mutations into `[GraphMem<IrisVectorId>; 2]` (left + right eye).
-    /// 3. Serialize with `bincode::serialize` — same wire format as the sidecar.
-    /// 4. Compute BLAKE3 hash of the bytes.
-    /// 5. Upload to S3 at key `"{party_id}/checkpoints/{label}_{last_modification_id}"`,
+    /// 1. Query `MAX(modification_id)` from `hawk_graph_mutations`.
+    /// 2. Read all `hawk_graph_mutations` rows up to that id.
+    /// 3. Replay mutations into `[GraphMem<IrisVectorId>; 2]` (left + right eye).
+    /// 4. Serialize with `bincode::serialize` — same wire format as the sidecar.
+    /// 5. Compute BLAKE3 hash of the bytes.
+    /// 6. Upload to S3 at key `"{party_id}/checkpoints/{label}_{last_modification_id}"`,
     ///    where `label` is `"archival"` when `is_archival` is true, otherwise `"seed"`.
-    /// 6. Insert `genesis_graph_checkpoint` DB row inside a transaction.
-    /// 7. Return the newly inserted `GraphCheckpointRow`.
-    pub async fn make_checkpoint_with_options(
+    /// 7. Insert `genesis_graph_checkpoint` DB row inside a transaction.
+    /// 8. Return the newly inserted `GraphCheckpointRow`.
+    async fn make_checkpoint_with_options(
         &self,
-        last_iris_id: i64,
-        last_modification_id: i64,
         is_archival: bool,
     ) -> eyre::Result<GraphCheckpointRow> {
         let bucket = &self.config.checkpoint_bucket;
         let party_id = self.config.party_id;
+        let last_modification_id = self
+            .store
+            .graph
+            .get_max_hawk_graph_mutation_id()
+            .await?
+            .ok_or_else(|| eyre!("no mutations found; cannot create checkpoint"))?;
+        let last_iris_id = last_modification_id;
         // Build the graph by replaying WAL mutations up to last_modification_id.
         // The checkpoint format is a bincode-serialised pair of GraphMem (left + right eye),
         // matching what the sidecar writes in terminal.rs and the materializer reads.
@@ -437,15 +443,11 @@ impl CpuNodes {
     ///
     /// Each node pulls its own `checkpoint_bucket` and `party_id` from its
     /// internal config — callers do not need to pass a `CpuConfigs`.
-    pub async fn make_checkpoints(
-        &self,
-        last_iris_id: i64,
-        last_modification_id: i64,
-    ) -> eyre::Result<[GraphCheckpointRow; 3]> {
+    pub async fn make_checkpoints(&self) -> eyre::Result<[GraphCheckpointRow; 3]> {
         let (r0, r1, r2) = tokio::try_join!(
-            self.0[0].make_checkpoint(last_iris_id, last_modification_id),
-            self.0[1].make_checkpoint(last_iris_id, last_modification_id),
-            self.0[2].make_checkpoint(last_iris_id, last_modification_id),
+            self.0[0].make_checkpoint(),
+            self.0[1].make_checkpoint(),
+            self.0[2].make_checkpoint(),
         )?;
         Ok([r0, r1, r2])
     }
@@ -455,15 +457,11 @@ impl CpuNodes {
     /// Identical to [`seed_all`] but marks the inserted row as archival (`is_archival = true`).
     /// Archival checkpoints are preserved by [`PruningMode::OlderNonArchival`] and are only
     /// removed by [`PruningMode::AllOlder`].
-    pub async fn make_checkpoint_archival(
-        &self,
-        last_iris_id: i64,
-        last_modification_id: i64,
-    ) -> eyre::Result<[GraphCheckpointRow; 3]> {
+    pub async fn make_archival_checkpoints(&self) -> eyre::Result<[GraphCheckpointRow; 3]> {
         let (r0, r1, r2) = tokio::try_join!(
-            self.0[0].make_checkpoint_with_options(last_iris_id, last_modification_id, true),
-            self.0[1].make_checkpoint_with_options(last_iris_id, last_modification_id, true),
-            self.0[2].make_checkpoint_with_options(last_iris_id, last_modification_id, true),
+            self.0[0].make_archival_checkpoint(),
+            self.0[1].make_archival_checkpoint(),
+            self.0[2].make_archival_checkpoint(),
         )?;
         Ok([r0, r1, r2])
     }

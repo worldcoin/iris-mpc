@@ -62,15 +62,15 @@ impl TestRun for Wal104 {
         let mut builder = WalMutationBuilder::new();
         builder.add_nodes(1);
         builder.build(&nodes).await?;
-        nodes.make_checkpoint_archival(1, 1).await?;
+        nodes.make_archival_checkpoints().await?;
 
         builder.add_nodes(4);
         builder.build(&nodes).await?;
-        nodes.make_checkpoints(5, 5).await?;
+        nodes.make_checkpoints().await?;
 
         builder.add_nodes(5);
         builder.build(&nodes).await?;
-        nodes.make_checkpoints(10, 10).await?;
+        nodes.make_checkpoints().await?;
 
         builder.add_nodes(1);
         builder.build(&nodes).await?;

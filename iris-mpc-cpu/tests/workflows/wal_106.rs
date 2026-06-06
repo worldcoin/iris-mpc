@@ -52,7 +52,7 @@ impl TestRun for Wal106 {
         builder.add_nodes(5);
         builder.build(&nodes).await?;
 
-        nodes.make_checkpoints(5, 5).await?;
+        nodes.make_checkpoints().await?;
 
         builder.add_nodes(5);
         builder.build(&nodes).await?;

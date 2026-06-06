@@ -44,9 +44,7 @@ impl TestRun for Wal103 {
         builder.build(&nodes).await?;
 
         // Build checkpoint from WAL up to modification_id = 50.
-        nodes
-            .make_checkpoints(CHECKPOINT_AT_MOD_ID, CHECKPOINT_AT_MOD_ID)
-            .await?;
+        nodes.make_checkpoints().await?;
 
         // WAL delta 51..=100.
         builder.add_nodes(WAL_LEN / 2).build(&nodes).await?;

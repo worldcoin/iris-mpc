@@ -54,7 +54,7 @@ impl TestRun for Wal105 {
         builder.add_nodes(50);
         builder.build(&nodes).await?;
 
-        nodes.make_checkpoints(50, 50).await?;
+        nodes.make_checkpoints().await?;
 
         builder.add_nodes(100);
         builder.build(&nodes).await?;
