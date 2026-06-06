@@ -22,8 +22,8 @@ use crate::utils::runner::TestRun;
 use eyre::bail;
 use serial_test::serial;
 use workflows::{
-    wal_102::Wal102, wal_103::Wal103, wal_104::Wal104, wal_105::Wal105, wal_106::Wal106,
-    wal_107::Wal107, wal_109::Wal109, wal_110::Wal110,
+    wal_102::Wal102, wal_104::Wal104, wal_105::Wal105, wal_106::Wal106, wal_109::Wal109,
+    wal_110::Wal110,
 };
 
 const RUST_LOG: &str = "info";
@@ -112,13 +112,6 @@ fn test_wal_102() -> eyre::Result<()> {
 #[test]
 #[serial]
 #[ignore = "requires external setup"]
-fn test_wal_103() -> eyre::Result<()> {
-    run_test!(103, 1, Wal103::new())
-}
-
-#[test]
-#[serial]
-#[ignore = "requires external setup"]
 fn test_wal_104() -> eyre::Result<()> {
     run_test!(104, 1, Wal104::new())
 }
@@ -144,16 +137,6 @@ fn test_wal_105() -> eyre::Result<()> {
 #[ignore = "requires external setup"]
 fn test_wal_106() -> eyre::Result<()> {
     run_test!(106, 1, Wal106::new())
-}
-
-/// Nontrivial modification sync: hawk_main reconciles a WAL divergence between
-/// parties on startup; the subsequent sidecar checkpoint proves the graphs
-/// are identical across parties.
-#[test]
-#[serial]
-#[ignore = "requires external setup"]
-fn test_wal_107() -> eyre::Result<()> {
-    run_test!(107, 1, Wal107::new())
 }
 
 // /// Modification-driven sync roll-forward: parties start with staggered

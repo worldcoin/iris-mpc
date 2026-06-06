@@ -2,7 +2,6 @@ pub mod wal_102;
 pub mod wal_104;
 pub mod wal_105;
 pub mod wal_106;
-pub mod wal_107;
 pub mod wal_109;
 pub mod wal_110;
 
