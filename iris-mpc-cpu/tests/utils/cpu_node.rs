@@ -304,11 +304,23 @@ impl CpuNode {
             );
 
             // When checkpoint count is asserted, also verify S3 object count matches.
-            let s3_count = self.list_s3_keys(&self.config.checkpoint_bucket).await?.len();
+            // Filter S3 keys by party_id since the bucket is shared across all parties.
+            let all_keys = self.list_s3_keys(&self.config.checkpoint_bucket).await?;
+            let party_id_str = format!("{}/", self.config.party_id);
+            let party_keys: Vec<String> = all_keys
+                .iter()
+                .filter(|k| {
+                    k.starts_with(&party_id_str)
+                        || k.starts_with(&format!("genesis/{}/", self.config.party_id))
+                })
+                .cloned()
+                .collect();
+            let s3_count = party_keys.len();
             eyre::ensure!(
                 s3_count == expected,
-                "S3 object count in bucket {}: expected {expected}, got {s3_count}",
-                self.config.checkpoint_bucket
+                "S3 object count in bucket {} for party {}: expected {expected}, got {s3_count}",
+                self.config.checkpoint_bucket,
+                self.config.party_id
             );
         }
 
