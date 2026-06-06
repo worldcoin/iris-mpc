@@ -3,8 +3,8 @@
 /// Three sequential sidecar cycles exercise the three `PruningMode` variants.
 /// Each cycle starts from the DB state left by the previous one.
 ///
-/// Setup seeds three checkpoints: one archival (oldest) and two regular, plus 20
-/// WAL mutations (10 nodes + 10 edges).  The archival checkpoint is inserted first
+/// Setup seeds three checkpoints: one archival (oldest) and two regular.
+///  The archival checkpoint is inserted first
 /// so it receives the lowest DB row id and is therefore "oldest".
 ///
 /// Run 1: `PruningMode::None`
@@ -59,25 +59,21 @@ impl TestRun for Wal104 {
     async fn setup(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = CpuNodes::new_clean(&ctx.configs).await?;
 
-        // 10 AddNode mutations (modification_ids 1–10).
-        // 10 AddEdges mutations (modification_ids 11–20): each node connects to the
-        // next two neighbors (wrapping).
-        const NUM_NODES: usize = 10;
-        const EDGES_START_MOD_ID: i64 = 11;
-        let builder = WalMutationBuilder::new()
-            .add_nodes_sequential_from(1, NUM_NODES)
-            .add_edges_wrapping(NUM_NODES, EDGES_START_MOD_ID);
-
+        let mut builder = WalMutationBuilder::new();
+        builder.add_nodes(1);
         builder.build(&nodes).await?;
+        nodes.make_checkpoint_archival(1, 1).await?;
 
-        // Build checkpoints from WAL after mutations are seeded, so each snapshot
-        // reflects the correct graph state.  Order preserved: archival oldest, then
-        // two regular checkpoints at later modification ids.  The sidecar will see
-        // WAL mutations after modification_id=10 (the latest checkpoint) and build
-        // its first real checkpoint from mutations 11–20.
-        nodes.seed_all_archival(0, 0).await?; // archival, last_mod_id=0  (oldest)
-        nodes.make_checkpoints(0, 5).await?; // regular,  last_mod_id=5
-        nodes.make_checkpoints(0, 10).await?; // regular,  last_mod_id=10 (latest)
+        builder.add_nodes(4);
+        builder.build(&nodes).await?;
+        nodes.make_checkpoints(5, 5).await?;
+
+        builder.add_nodes(5);
+        builder.build(&nodes).await?;
+        nodes.make_checkpoints(10, 10).await?;
+
+        builder.add_nodes(1);
+        builder.build(&nodes).await?;
 
         self.nodes = Some(nodes);
         Ok(())
@@ -88,7 +84,7 @@ impl TestRun for Wal104 {
         // 1 archival + 2 regular seeded checkpoints; 10 nodes + 10 edges in the WAL.
         let pre = WalAssertions::new()
             .assert_checkpoint_count(3)
-            .assert_wal_row_count(20);
+            .assert_wal_row_count(11);
         nodes.apply_uniform_assertions(&pre).await
     }
 

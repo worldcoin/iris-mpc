@@ -31,32 +31,17 @@ use crate::{
     },
 };
 
-/// Seed checkpoint anchor.
-const CHECKPOINT_AT_MOD_ID: i64 = 50;
-/// Number of initial nodes (and initial edges) seeded in setup.
-const INITIAL_NODES: usize = 50;
-/// First modification_id for initial edges (immediately after the initial nodes).
-const INITIAL_EDGES_START: i64 = CHECKPOINT_AT_MOD_ID + INITIAL_NODES as i64 + 1; // 101
-/// Phase-1 sidecar checkpoints at the last initial-edge mutation.
-const SIDECAR_CHECKPOINT_MOD_ID: i64 = INITIAL_EDGES_START + INITIAL_NODES as i64 - 1; // 150
-/// Number of hawk-batch nodes (and hawk-batch edges) seeded after phase 1.
-const HAWK_NODES: usize = 10;
-/// Upper boundary of the hawk-node batch (hawk nodes occupy 151..=160).
-const HAWK_DELTA_UP_TO_MOD_ID: i64 = SIDECAR_CHECKPOINT_MOD_ID + HAWK_NODES as i64; // 160
-/// First modification_id for hawk edges (immediately after hawk nodes).
-const HAWK_EDGES_START: i64 = HAWK_DELTA_UP_TO_MOD_ID + 1; // 161
-
-const INITIAL_DELTA: usize = INITIAL_NODES + INITIAL_NODES; // nodes + edges (50 + 50)
-const HAWK_DELTA: usize = HAWK_NODES + HAWK_NODES; // nodes + edges (10 + 10)
-const TOTAL_WAL: usize = INITIAL_DELTA + HAWK_DELTA; // 120
-
 pub struct Wal105 {
     nodes: Option<CpuNodes>,
+    builder: Option<WalMutationBuilder>,
 }
 
 impl Wal105 {
     pub fn new() -> Self {
-        Self { nodes: None }
+        Self {
+            nodes: None,
+            builder: None,
+        }
     }
 }
 
@@ -65,33 +50,33 @@ impl TestRun for Wal105 {
         let nodes = CpuNodes::new_clean(&ctx.configs).await?;
 
         // Seed WAL mutations 51..=150 (50 nodes + 50 edges) for the sidecar to consume in phase 1.
-        let builder = WalMutationBuilder::new()
-            .add_nodes_sequential_from(CHECKPOINT_AT_MOD_ID + 1, INITIAL_NODES)
-            .add_edges_wrapping(INITIAL_NODES, INITIAL_EDGES_START);
-
+        let mut builder = WalMutationBuilder::new();
+        builder.add_nodes(50);
         builder.build(&nodes).await?;
 
-        // Build checkpoint from WAL up to modification_id = 50.
-        nodes
-            .make_checkpoints(CHECKPOINT_AT_MOD_ID, CHECKPOINT_AT_MOD_ID)
-            .await?;
+        nodes.make_checkpoints(50, 50).await?;
+
+        builder.add_nodes(100);
+        builder.build(&nodes).await?;
 
         self.nodes = Some(nodes);
+        self.builder.replace(builder);
         Ok(())
     }
 
     async fn setup_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
         let pre = WalAssertions::new()
-            .assert_wal_row_count(INITIAL_DELTA)
-            .assert_max_modification_id(INITIAL_EDGES_START + INITIAL_NODES as i64 - 1)
+            .assert_wal_row_count(150)
+            .assert_max_modification_id(150)
             .assert_checkpoint_count(1)
-            .assert_latest_checkpoint_mod_id(CHECKPOINT_AT_MOD_ID);
+            .assert_latest_checkpoint_mod_id(50);
         nodes.apply_uniform_assertions(&pre).await
     }
 
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
+        let builder = self.builder.as_mut().unwrap();
 
         // Phase 1: sidecar materialises WAL 51..=150 (nodes + edges) and writes checkpoint at mod_id=150.
         // Baseline = 1 (the seeded checkpoint already present); wait for a second row.
@@ -101,31 +86,20 @@ impl TestRun for Wal105 {
             expect_sidecar_success(shutdown, sidecar_set).await?;
         }
 
-        // Seed additional WAL mutations 151..=160 (hawk nodes).
-        // These represent work that arrived after the sidecar checkpoint was written.
-        // Second batch: node serial IDs continue from the first batch (50..=59), and
-        // edges wrap within the full combined graph — too complex for the simple helpers.
-        let builder = (0..HAWK_NODES as i64).fold(WalMutationBuilder::new(), |b, idx| {
-            b.add_node(
-                SIDECAR_CHECKPOINT_MOD_ID + 1 + idx,
-                INITIAL_NODES as u32 + idx as u32,
-            )
-        });
-        // Add edges for second batch: each node connects to the next two neighbors
-        // (wrapping within the full combined graph, not just this batch).
-        let builder = (0..HAWK_NODES as i64).fold(builder, |b, idx| {
-            let base = (INITIAL_NODES as u32) + (idx as u32);
-            let num_nodes = (INITIAL_NODES + HAWK_NODES) as u32;
-            let neighbor1 = (base + 1) % num_nodes;
-            let neighbor2 = (base + 2) % num_nodes;
-            b.add_edges(HAWK_EDGES_START + idx, base, vec![neighbor1, neighbor2])
-        });
+        let pre = WalAssertions::new()
+            .assert_wal_row_count(150)
+            .assert_max_modification_id(150)
+            .assert_checkpoint_count(2)
+            .assert_latest_checkpoint_mod_id(150);
+        nodes.apply_uniform_assertions(&pre).await?;
 
+        // Seed additional WAL mutations 151..=160 (hawk nodes).
+        builder.add_nodes(10);
         builder.build(nodes).await?;
 
         // Phase 2: sidecar starts.  It must discover the Phase 1 checkpoint at
         // mod_id=150 as the latest base ("V4 path") and materialise only the new
-        // delta (mutations 151..=170), then write a new checkpoint.
+        // delta (mutations 151..=160), then write a new checkpoint.
         // baseline = 2 (seeded + phase-1 checkpoint); wait for a third row.
         {
             let shutdown = CancellationToken::new();
@@ -139,15 +113,11 @@ impl TestRun for Wal105 {
     async fn exec_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
 
-        // After both sidecar cycles: seeded + phase-1 + phase-2 = 3 checkpoints.
-        // WAL is intact: 120 rows total.  Phase-2 checkpoint anchored at the last
-        // mutation of the hawk delta batch.
-        let last_mod_id = HAWK_EDGES_START + HAWK_NODES as i64 - 1;
         let post = WalAssertions::new()
-            .assert_wal_row_count(TOTAL_WAL)
-            .assert_max_modification_id(last_mod_id)
+            .assert_wal_row_count(160)
+            .assert_max_modification_id(160)
             .assert_checkpoint_count(3) // seeded + phase-1 sidecar + phase-2 sidecar
-            .assert_latest_checkpoint_mod_id(last_mod_id);
+            .assert_latest_checkpoint_mod_id(160);
         nodes.apply_uniform_assertions(&post).await?;
 
         // All 3 parties must agree on the phase-2 checkpoint BLAKE3 hash and cross-check

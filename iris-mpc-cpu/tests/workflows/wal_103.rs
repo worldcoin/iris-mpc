@@ -22,11 +22,8 @@ use crate::{
     },
 };
 
+const WAL_LEN: usize = 100;
 const CHECKPOINT_AT_MOD_ID: i64 = 50;
-const WAL_UP_TO_MOD_ID: i64 = 100;
-const NODES_COUNT: usize = (WAL_UP_TO_MOD_ID - CHECKPOINT_AT_MOD_ID) as usize; // 50
-const EDGES_START_MOD_ID: i64 = WAL_UP_TO_MOD_ID + 1;
-const DELTA_SIZE: usize = NODES_COUNT + NODES_COUNT; // nodes + edges
 
 pub struct Wal103 {
     nodes: Option<CpuNodes>,
@@ -42,17 +39,17 @@ impl TestRun for Wal103 {
     async fn setup(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = CpuNodes::new_clean(&ctx.configs).await?;
 
-        // WAL delta 51..=100.
-        let builder = WalMutationBuilder::new()
-            .add_nodes_sequential_from(CHECKPOINT_AT_MOD_ID + 1, NODES_COUNT)
-            .add_edges_wrapping(NODES_COUNT, EDGES_START_MOD_ID);
-
+        let mut builder = WalMutationBuilder::new();
+        builder.add_nodes(WAL_LEN / 2);
         builder.build(&nodes).await?;
 
         // Build checkpoint from WAL up to modification_id = 50.
         nodes
             .make_checkpoints(CHECKPOINT_AT_MOD_ID, CHECKPOINT_AT_MOD_ID)
             .await?;
+
+        // WAL delta 51..=100.
+        builder.add_nodes(WAL_LEN / 2).build(&nodes).await?;
 
         self.nodes = Some(nodes);
         Ok(())
@@ -61,8 +58,8 @@ impl TestRun for Wal103 {
     async fn setup_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
         let pre = WalAssertions::new()
-            .assert_wal_row_count(DELTA_SIZE)
-            .assert_max_modification_id(EDGES_START_MOD_ID + NODES_COUNT as i64 - 1)
+            .assert_wal_row_count(WAL_LEN)
+            .assert_max_modification_id(WAL_LEN as _)
             .assert_checkpoint_count(1)
             .assert_latest_checkpoint_mod_id(CHECKPOINT_AT_MOD_ID);
         nodes.apply_uniform_assertions(&pre).await
@@ -98,7 +95,7 @@ impl TestRun for Wal103 {
         // After the sidecar cycle, the new checkpoint should be anchored at the last edge mod_id.
         let post = WalAssertions::new()
             .assert_checkpoint_count(2)
-            .assert_latest_checkpoint_mod_id(EDGES_START_MOD_ID + NODES_COUNT as i64 - 1);
+            .assert_latest_checkpoint_mod_id(WAL_LEN as _);
         nodes.apply_uniform_assertions(&post).await?;
 
         // Materialise the full WAL (mutations 51..=100) in the test process

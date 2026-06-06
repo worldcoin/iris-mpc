@@ -455,7 +455,7 @@ impl CpuNodes {
     /// Identical to [`seed_all`] but marks the inserted row as archival (`is_archival = true`).
     /// Archival checkpoints are preserved by [`PruningMode::OlderNonArchival`] and are only
     /// removed by [`PruningMode::AllOlder`].
-    pub async fn seed_all_archival(
+    pub async fn make_checkpoint_archival(
         &self,
         last_iris_id: i64,
         last_modification_id: i64,
