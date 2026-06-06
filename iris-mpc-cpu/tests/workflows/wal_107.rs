@@ -1,24 +1,7 @@
-/// wal_107 — Nontrivial modification sync: hawk_main reconciles a WAL mismatch
-/// between parties on startup.
+/// wal_107 — hawk_main syncs extra mutations on party 0 to parties 1 and 2 at startup.
 ///
-/// Party 0 is given extra mutations beyond what parties 1 and 2
-/// have, simulating a scenario where one party processed additional work before
-/// an unclean shutdown while the others did not.
-///
-/// hawk_main's modification sync protocol must:
-///   1. Detect the mismatch
-///   2. Transfer mutations
-///   3. Allow all three parties to signal ready.
-///
-/// A subsequent sidecar cycle then materialises each party's WAL independently
-/// and reaches 3-party BLAKE3 consensus.  If modification sync resulted in
-/// identical in-memory graphs, the sidecar's DB-materialised checkpoints must
-/// agree.  A hash mismatch here is a definitive signal that the sync protocol
-/// left parties in an inconsistent state.
-///
-/// Protocol:
-///   Phase 1: `hawk_main` → modification sync → signals ready.
-///   Phase 2: `sidecar_main` → checkpoint.
+/// Sidecar consensus after the sync proves the transferred mutations were persisted to DB,
+/// not just applied in-memory.
 use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
@@ -49,7 +32,6 @@ impl TestRun for Wal107 {
     async fn setup(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = CpuNodes::new_clean(&ctx.configs).await?;
 
-        // seed the wal
         let mut builder = WalMutationBuilder::new();
         builder.add_nodes(MIN_MUTATIONS_PER_SIDECAR_CYCLE);
         builder.build(&nodes).await?;
@@ -58,7 +40,7 @@ impl TestRun for Wal107 {
         builder.add_nodes(MIN_MUTATIONS_PER_SIDECAR_CYCLE);
         builder.build(&nodes).await?;
 
-        // make one node ahead
+        // Party 0 gets extra mutations that parties 1 and 2 don't have yet.
         builder.add_nodes(MIN_MUTATIONS_PER_SIDECAR_CYCLE);
         builder.build_single(&nodes.0[0], true, true).await?;
 
@@ -81,9 +63,7 @@ impl TestRun for Wal107 {
     }
 
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
-        // Phase 1: hawk_main starts.  The modification sync protocol detects that
-        // party 0 is 5 mutations ahead, transfers them to parties 1 and 2, and all
-        // three parties signal ready once their graphs converge.
+        // Phase 1: hawk_main syncs mutations and signals ready.
         {
             let shutdown = CancellationToken::new();
             let mut hawk_set = run_hawk!(ctx.configs, shutdown.clone(), ctx);
@@ -93,11 +73,7 @@ impl TestRun for Wal107 {
             res?;
         }
 
-        // Phase 2: sidecar materialises each party's WAL from the DB and reaches
-        // 3-party BLAKE3 consensus.  If modification sync wrote the transferred
-        // mutations to DB, all parties' WAL sets are identical and the checkpoint
-        // hashes agree.  If sync was in-memory only, party 0's WAL differs from
-        // parties 1 and 2 and the consensus round fails — surfacing the bug.
+        // Phase 2: sidecar checkpoints; consensus proves sync persisted to DB.
         {
             let shutdown = CancellationToken::new();
             let sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
@@ -115,10 +91,6 @@ impl TestRun for Wal107 {
             .assert_latest_checkpoint_mod_id(3 * MIN_MUTATIONS_PER_SIDECAR_CYCLE as i64);
         nodes.apply_uniform_assertions(&post).await?;
 
-        // All three parties must agree on the checkpoint BLAKE3 hash.
-        // This is the key assertion: agreement proves modification sync
-        // produced identical graphs across parties. Cross-check against the
-        // reference materialised from party 0's WAL.
         nodes.assert_consensus_and_reference().await
     }
 

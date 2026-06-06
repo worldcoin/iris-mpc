@@ -7,52 +7,11 @@ pub mod wal_107;
 pub mod wal_109;
 pub mod wal_110;
 
-// ---------------------------------------------------------------------------
-// Service runner macros
-// ---------------------------------------------------------------------------
-//
-// Both hawk_main and sidecar_main are daemon loops.  Tests start them, wait
-// for a termination condition (e.g., all servers ready or new checkpoint), then
-// cancel via a shared CancellationToken.
-//
-// Both services can be called inline (no subprocess needed; no global
-// side-effects).  A JoinSet is used so the wait_for_all_ready helper can
-// monitor for unexpected early task exit.
-//
-// hawk_main and sidecar_main each require a loopback MPC network.  They use
-// different ports (hawk uses CpuNodeConfig.service_port, sidecar uses
-// CpuNodeConfig.sidecar_port) so both can run in the same process during
-// wal_103 without bind conflicts.
-//
-// run_sidecar! is fully implemented (see below).
-// run_hawk! is fully implemented — all open questions resolved (see readme).
-// ---------------------------------------------------------------------------
-
 /// Spawn `server_main` (hawk_main) for all 3 parties concurrently.
 ///
-/// Because `server_main` holds `!Send` pprof state, it cannot run inside a
-/// `tokio::spawn` task directly.  Instead each party gets its own OS thread
-/// (via `spawn_blocking`) with a dedicated multi-thread runtime.  The
-/// `!Send` future is created and consumed entirely inside `rt.block_on` on
-/// the blocking thread, so it never needs to cross await points as `Send`.
-///
-/// A watcher task bridges the `CancellationToken` to an `Arc<Notify>` so
-/// that `stop_and_join!` call sites remain unchanged.
-///
-/// Service ports are taken from `CpuNodeConfig.service_port` (19000–19002)
-/// and must not conflict with the sidecar ports (20000–20002) or the
-/// hardcoded healthcheck ports (18000–18002).
-///
-/// Returns a `JoinSet<eyre::Result<()>>` that can be polled by the test to
-/// detect unexpected early exit.
-///
-/// Usage:
-/// ```rust
-/// let shutdown = CancellationToken::new();
-/// let mut hawk_set = run_hawk!(ctx.configs, shutdown.clone(), ctx);
-/// wait_for_all_ready(&ctx.configs, &mut hawk_set, Duration::from_secs(60)).await?;
-/// stop_and_join!(shutdown, hawk_set);
-/// ```
+/// `server_main` holds `!Send` state, so each party runs in its own OS thread
+/// via `spawn_blocking` with a dedicated multi-thread runtime.  A shared
+/// `Arc<Notify>` bridges the `CancellationToken` to the blocking threads.
 #[macro_export]
 macro_rules! run_hawk {
     ($configs:expr, $shutdown:expr, $ctx:expr) => {{
@@ -63,11 +22,10 @@ macro_rules! run_hawk {
 
         let mut join_set: tokio::task::JoinSet<eyre::Result<()>> = tokio::task::JoinSet::new();
 
-        // Shared notify: OS threads select on this instead of CancellationToken
-        // (CancellationToken is not Send-across-runtimes friendly).
+        // Arc<Notify> is used instead of CancellationToken because the latter
+        // is not Send across runtimes.
         let notify = Arc::new(Notify::new());
 
-        // Bridge task: when the CancellationToken OR ctx.abort fires, wake all server threads.
         {
             let notify = notify.clone();
             let shutdown = $shutdown.clone();
@@ -86,9 +44,7 @@ macro_rules! run_hawk {
             let config = $crate::utils::configs::make_hawk_config(cpu_cfg, &$configs, &$ctx.env);
             let notify = notify.clone();
 
-            // spawn_blocking: the closure is Send (captures only Config and
-            // Arc<Notify>); server_main is created and consumed entirely
-            // inside rt.block_on on the blocking thread, so !Send is fine.
+            // server_main is !Send; block_on inside spawn_blocking avoids Send requirements.
             join_set.spawn(async move {
                 tokio::task::spawn_blocking(move || {
                     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -113,24 +69,10 @@ macro_rules! run_hawk {
     }};
 }
 
-/// Spawn `sidecar_main` for all 3 parties concurrently.
+/// Spawn `sidecar_main` for all 3 parties concurrently in one-shot mode.
 ///
-/// Uses `CpuNodeConfig.sidecar_port` (127.0.0.1 + that port) so hawk_main and
-/// sidecar_main can co-exist in the same test process during wal_103 without
-/// bind conflicts.
-///
-/// The sidecar's `GraphPg<Aby3Store>` connects to the same DB tables as the
-/// test's `GraphPg<PlaintextStore>` — the `VectorStore` type parameter is
-/// phantom and doesn't affect the WAL or checkpoint table queries.
-///
-/// Returns a `JoinSet<eyre::Result<()>>`.
-///
-/// Usage:
-/// ```rust
-/// let shutdown = CancellationToken::new();
-/// let mut sidecar_set = run_sidecar!(configs, shutdown.clone());
-/// expect_sidecar_success(shutdown, sidecar_set).await?;
-/// ```
+/// Uses `CpuNodeConfig.sidecar_port` so hawk_main and sidecar_main can
+/// co-exist in the same test process without port conflicts.
 #[macro_export]
 macro_rules! run_sidecar {
     ($configs:expr, $shutdown:expr, $ctx:expr) => {{
@@ -158,8 +100,7 @@ macro_rules! run_sidecar {
                 use std::time::Duration;
                 use tracing::{info_span, Instrument};
 
-                // Build HawkArgs with only the networking fields populated.
-                // HNSW and persistence fields are irrelevant to the sidecar.
+                // Only networking fields are relevant; HNSW/persistence fields are unused.
                 let hawk_args = HawkArgs {
                     party_index: config.party_id,
                     addresses: addresses.clone(),
@@ -186,9 +127,7 @@ macro_rules! run_sidecar {
                 let postgres =
                     PostgresClient::new(&config.db_url, &config.db_schema, AccessMode::ReadWrite)
                         .await?;
-                // Aby3Store is the production VectorStore; the type parameter is
-                // phantom for WAL/checkpoint table operations so PlaintextStore-seeded
-                // data is fully compatible.
+                // Aby3Store type param is phantom for WAL/checkpoint ops; store-agnostic.
                 let graph_store: GraphPg<Aby3Store> = GraphPg::new(&postgres).await?;
 
                 let aws_config = aws_config::load_from_env().await;
@@ -238,24 +177,14 @@ macro_rules! stop_and_join {
     }};
 }
 
-/// Wait for sidecar tasks to complete naturally (one-shot mode) with a 1-minute timeout.
-///
-/// If the timeout is exceeded, cancels via the token and drains remaining tasks.
-/// Asserts that all tasks complete successfully.
-///
-/// Usage:
-/// ```rust
-/// let shutdown = CancellationToken::new();
-/// let sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
-/// expect_sidecar_success(shutdown, sidecar_set).await?;
-/// ```
+/// Wait for all sidecar tasks to complete with a 60-second timeout.
+/// Cancels and drains remaining tasks on timeout, then returns an error.
 pub async fn expect_sidecar_success(
     shutdown: tokio_util::sync::CancellationToken,
     mut join_set: tokio::task::JoinSet<eyre::Result<()>>,
 ) -> eyre::Result<()> {
     use std::time::Duration;
 
-    // Wait on JoinSet for up to 1 minute (sidecar runs in one-shot mode)
     let timeout_result = tokio::time::timeout(Duration::from_secs(60), async {
         while let Some(result) = join_set.join_next().await {
             result
@@ -267,11 +196,9 @@ pub async fn expect_sidecar_success(
     })
     .await;
 
-    // If timeout occurred, cancel and drain remaining tasks
     if timeout_result.is_err() {
         shutdown.cancel();
         while let Some(result) = join_set.join_next().await {
-            // On timeout, we still check results but log them for debugging
             match result {
                 Ok(Ok(())) => {}
                 Ok(Err(e)) => {

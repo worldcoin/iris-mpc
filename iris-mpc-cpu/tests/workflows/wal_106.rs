@@ -1,20 +1,4 @@
-/// wal_106 — Checkpoint desync: sidecar recovers when one party's checkpoint
-/// table is behind the others'.
-///
-/// After a first sidecar cycle creates a checkpoint for all three parties,
-/// party 0's newest checkpoint row is manually deleted so that its
-/// `genesis_graph_checkpoint` only holds the seeded row (mod_id=0).  Ten more
-/// nodes are then seeded for every party.
-///
-/// A second sidecar cycle must still reach 3-party BLAKE3 consensus and produce
-/// a new checkpoint row for every party — even though party 0's "latest
-/// checkpoint" (mod_id=0) differs from parties 1 and 2.
-///
-/// Protocol:
-///   Phase 1: `sidecar_main` → checkpoint at end of first batch (baseline=1).
-///   Desync: delete party 0's newest checkpoint row.
-///   Seed 10 more nodes for all parties.
-///   Phase 2: `sidecar_main` → checkpoint at end of second batch (inline per-party poll).
+/// wal_106 — Sidecar reaches consensus even when one party's checkpoint table is behind the others'.
 use std::time::Duration;
 
 use tokio::time::{sleep, timeout};
@@ -83,12 +67,9 @@ impl TestRun for Wal106 {
             expect_sidecar_success(shutdown, sidecar_set).await?;
         }
 
-        // Introduce a checkpoint desync: delete party 0's most recent checkpoint row.
-        // Party 0 is left with only the seeded row (mod_id=0) while parties 1 and 2
-        // retain both rows.
+        // Introduce desync: delete party 0's newest checkpoint so it lags behind parties 1 and 2.
         nodes.0[0].delete_latest_checkpoint().await?;
 
-        // Sanity-check: party 0 now has 1 checkpoint; parties 1 and 2 still have 2.
         {
             let counts = nodes.checkpoint_counts().await?;
             eyre::ensure!(
@@ -97,17 +78,12 @@ impl TestRun for Wal106 {
             );
         }
 
-        // Seed additional WAL mutations for all parties.
         builder.add_nodes(2 * MIN_MUTATIONS_PER_SIDECAR_CYCLE);
         builder.build(nodes).await?;
 
-        // Phase 2: sidecar runs again.  Despite the desync, every party must reach
-        // 3-party BLAKE3 consensus and insert a new checkpoint row anchored at mod_id=40.
-        //
-        // Per-party baselines before this run: [1, 2, 2].
-        // We wait until each party's count strictly exceeds its individual baseline.
+        // Phase 2: sidecar runs. Wait until each party's checkpoint count exceeds its individual baseline.
         {
-            let baselines = nodes.checkpoint_counts().await?; // [1, 2, 2]
+            let baselines = nodes.checkpoint_counts().await?;
 
             let shutdown = CancellationToken::new();
             let sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
@@ -156,8 +132,6 @@ impl TestRun for Wal106 {
             .assert_latest_checkpoint_mod_id(20);
         nodes.apply_split_assertions(&p0_post, &p12_post).await?;
 
-        // All parties must agree on the BLAKE3 hash of the phase-2 checkpoint and
-        // verify against the reference hash computed from the full WAL.
         nodes.assert_consensus_and_reference().await
     }
 

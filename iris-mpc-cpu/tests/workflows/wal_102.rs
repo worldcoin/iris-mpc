@@ -1,11 +1,4 @@
-/// wal_102 — Sidecar: WAL present → checkpoint uploaded to S3.
-///
-/// Verifies that `sidecar_main` materialises the WAL, reaches 3-party BLAKE3
-/// hash consensus, uploads a checkpoint to S3, and inserts a DB row with the
-/// correct WAL anchor.
-///
-/// The test then materialises its own reference graph from the same WAL rows,
-/// hashes it, and verifies all 3 parties' stored hashes match the reference.
+/// wal_102 — Sidecar produces a checkpoint from a fresh WAL with no base checkpoint.
 use tokio_util::sync::CancellationToken;
 
 use super::expect_sidecar_success;
@@ -34,7 +27,6 @@ impl TestRun for Wal102 {
         let nodes = CpuNodes::new_clean(&ctx.configs).await?;
 
         // No base checkpoint — sidecar starts from scratch.
-        // Seed AddNode mutations 1..=10.
         WalMutationBuilder::new()
             .add_nodes(MIN_MUTATIONS_PER_SIDECAR_CYCLE)
             .build(&nodes)
@@ -66,8 +58,6 @@ impl TestRun for Wal102 {
             .assert_latest_checkpoint_mod_id(MIN_MUTATIONS_PER_SIDECAR_CYCLE as _);
         nodes.apply_uniform_assertions(&post).await?;
 
-        // Materialise the same WAL rows in the test process, hash the result,
-        // and verify it matches every party's stored BLAKE3.
         nodes.assert_consensus_and_reference().await?;
 
         Ok(())
