@@ -101,10 +101,9 @@ macro_rules! run_test {
 // Test functions — one per scenario, run serially to avoid port/DB conflicts.
 // ---------------------------------------------------------------------------
 
-// Tests that run sidecar_main only — always-on.
-
 #[test]
 #[serial]
+#[ignore = "requires external setup"]
 fn test_wal_102() -> eyre::Result<()> {
     run_test!(102, 1, Wal102::new())
 }

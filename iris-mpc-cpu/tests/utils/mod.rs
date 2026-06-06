@@ -10,6 +10,8 @@ pub mod wal_builder;
 /// Number of MPC parties.
 pub const COUNT_OF_PARTIES: usize = 3;
 
+pub const MIN_MUTATIONS_PER_SIDECAR_CYCLE: usize = 5;
+
 /// Per-party configuration array.
 pub type CpuConfigs = [CpuNodeConfig; COUNT_OF_PARTIES];
 
@@ -58,7 +60,7 @@ impl Default for SidecarTestConfig {
             cycle_interval_secs: 1,
             retry_interval_secs: 1,
             peer_round_timeout_secs: 30,
-            min_mutations_per_cycle: 5,
+            min_mutations_per_cycle: MIN_MUTATIONS_PER_SIDECAR_CYCLE as _,
             checkpoint_window: 10,
             is_archival: false,
             pruning_mode: PruningMode::None,

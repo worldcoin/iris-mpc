@@ -17,28 +17,33 @@ pub trait TestRun {
 
         // Capture the first failure from setup → exec → exec_assert without
         // short-circuiting out of `run`, so teardown always gets a chance to run.
-        let phase_res = async {
+        let setup_res = async {
             tracing::info!("[{}] Starting phase: setup", test_id);
             self.setup(ctx).await?;
             tracing::info!("[{}] Starting phase: setup_assert", test_id);
-            self.setup_assert(ctx).await?;
-            tracing::info!("[{}] Starting phase: exec", test_id);
-            self.exec(ctx).await?;
-            tracing::info!("[{}] Starting phase: exec_assert", test_id);
-            self.exec_assert(ctx).await
+            self.setup_assert(ctx).await
         }
         .await;
 
-        if let Err(ref e) = phase_res {
-            tracing::error!("[{}] Phase error: {}", test_id, e);
-        }
+        let phase_res = if let Err(ref e) = setup_res {
+            tracing::error!("[{}] Setup error: {}", test_id, e);
+            setup_res
+        } else {
+            let exec_res = async {
+                tracing::info!("[{}] Starting phase: exec", test_id);
+                self.exec(ctx).await?;
+                tracing::info!("[{}] Starting phase: exec_assert", test_id);
+                self.exec_assert(ctx).await
+            }
+            .await;
+
+            if let Err(ref e) = exec_res {
+                tracing::error!("[{}] Exec error: {}", test_id, e);
+            }
+            exec_res
+        };
 
         // Teardown always runs, even if an earlier phase failed.
-        tracing::info!(
-            "[{}] Starting phase: teardown (phase_failed={})",
-            test_id,
-            phase_res.is_err()
-        );
         let teardown_res = self.teardown(ctx).await;
         if let Err(ref e) = teardown_res {
             tracing::error!(
