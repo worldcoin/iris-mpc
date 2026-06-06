@@ -12,13 +12,14 @@ use crate::{
     },
 };
 
+#[derive(Default)]
 pub struct Wal102 {
     nodes: Option<CpuNodes>,
 }
 
 impl Wal102 {
     pub fn new() -> Self {
-        Self { nodes: None }
+        Self::default()
     }
 }
 

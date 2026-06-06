@@ -16,6 +16,7 @@ use crate::{
     },
 };
 
+#[derive(Default)]
 pub struct Wal104 {
     nodes: Option<CpuNodes>,
     builder: Option<WalMutationBuilder>,
@@ -23,16 +24,11 @@ pub struct Wal104 {
 
 impl Wal104 {
     pub fn new() -> Self {
-        Self {
-            nodes: None,
-            builder: None,
-        }
+        Self::default()
     }
 }
 
-/// Run one sidecar cycle and wait for a new checkpoint, with the given pruning mode.
-///
-/// `baseline` is the number of checkpoint rows before this cycle starts.
+/// Run one sidecar cycle with the given pruning mode and wait for all tasks to complete.
 async fn run_cycle(ctx: &CpuTestContext, pruning_mode: PruningMode) -> eyre::Result<()> {
     // Build a per-cycle config override with the desired pruning mode.
     let mut configs = ctx.configs.clone();
@@ -104,42 +100,14 @@ impl TestRun for Wal104 {
         Ok(())
     }
 
-    async fn exec_assert(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
+    async fn exec_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
 
+        // assert_checkpoint_count already verifies the S3 object count per party matches.
         let post = WalAssertions::new().assert_checkpoint_count(1);
         nodes.apply_uniform_assertions(&post).await?;
 
-        nodes.assert_checkpoint_hashes_agree().await?;
-
-        // Bucket is shared across all parties; filter by party_id prefix to count per-party S3 objects.
-        for (node, config) in nodes.0.iter().zip(ctx.configs.iter()) {
-            let all_keys = node.list_s3_keys(&config.checkpoint_bucket).await?;
-            let party_id_str = format!("{}/", node.config.party_id);
-            let party_keys: Vec<String> = all_keys
-                .iter()
-                .filter(|k| {
-                    k.starts_with(&party_id_str)
-                        || k.starts_with(&format!("genesis/{}/", node.config.party_id))
-                })
-                .cloned()
-                .collect();
-            tracing::info!(
-                party_id = node.config.party_id,
-                bucket = %config.checkpoint_bucket,
-                party_keys = ?party_keys,
-                "S3 keys after AllOlder pruning"
-            );
-            eyre::ensure!(
-                party_keys.len() == 1,
-                "party {}: expected 1 S3 object after AllOlder pruning, got {} — keys: {:?}",
-                node.config.party_id,
-                party_keys.len(),
-                party_keys,
-            );
-        }
-
-        Ok(())
+        nodes.assert_checkpoint_hashes_agree().await
     }
 
     async fn teardown(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {

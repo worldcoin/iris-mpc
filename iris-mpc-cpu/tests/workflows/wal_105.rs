@@ -1,7 +1,7 @@
-use std::time::Duration;
-
 /// wal_105 — Second sidecar cycle loads a prior checkpoint as its base and applies only the delta.
 /// Also exercise applying WAL to existing checkpoint in server_main
+use std::time::Duration;
+
 use tokio_util::sync::CancellationToken;
 
 use super::expect_sidecar_success;
@@ -15,6 +15,14 @@ use crate::{
     },
 };
 
+/// Nodes in the initial batch — seeded, then checkpointed before adding more.
+const INITIAL_CHECKPOINT_NODES: usize = 50;
+/// Additional nodes written after the initial checkpoint (phase-1 delta).
+const FIRST_DELTA_NODES: usize = 100;
+/// Additional nodes written after the phase-1 checkpoint (phase-2 delta).
+const SECOND_DELTA_NODES: usize = 10;
+
+#[derive(Default)]
 pub struct Wal105 {
     nodes: Option<CpuNodes>,
     builder: Option<WalMutationBuilder>,
@@ -22,10 +30,7 @@ pub struct Wal105 {
 
 impl Wal105 {
     pub fn new() -> Self {
-        Self {
-            nodes: None,
-            builder: None,
-        }
+        Self::default()
     }
 }
 
@@ -34,12 +39,12 @@ impl TestRun for Wal105 {
         let nodes = CpuNodes::new_clean(&ctx.configs).await?;
 
         let mut builder = WalMutationBuilder::new();
-        builder.add_nodes(50);
+        builder.add_nodes(INITIAL_CHECKPOINT_NODES);
         builder.build(&nodes).await?;
 
         nodes.make_checkpoints().await?;
 
-        builder.add_nodes(100);
+        builder.add_nodes(FIRST_DELTA_NODES);
         builder.build(&nodes).await?;
 
         self.nodes = Some(nodes);
@@ -49,11 +54,12 @@ impl TestRun for Wal105 {
 
     async fn setup_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
+        let total_after_setup = INITIAL_CHECKPOINT_NODES + FIRST_DELTA_NODES;
         let pre = WalAssertions::new()
-            .assert_wal_row_count(150)
-            .assert_max_modification_id(150)
+            .assert_wal_row_count(total_after_setup)
+            .assert_max_modification_id(total_after_setup as i64)
             .assert_checkpoint_count(1)
-            .assert_latest_checkpoint_mod_id(50);
+            .assert_latest_checkpoint_mod_id(INITIAL_CHECKPOINT_NODES as i64);
         nodes.apply_uniform_assertions(&pre).await
     }
 
@@ -78,14 +84,15 @@ impl TestRun for Wal105 {
             expect_sidecar_success(shutdown, sidecar_set).await?;
         }
 
+        let total_phase1 = INITIAL_CHECKPOINT_NODES + FIRST_DELTA_NODES;
         let pre = WalAssertions::new()
-            .assert_wal_row_count(150)
-            .assert_max_modification_id(150)
+            .assert_wal_row_count(total_phase1)
+            .assert_max_modification_id(total_phase1 as i64)
             .assert_checkpoint_count(2)
-            .assert_latest_checkpoint_mod_id(150);
+            .assert_latest_checkpoint_mod_id(total_phase1 as i64);
         nodes.apply_uniform_assertions(&pre).await?;
 
-        builder.add_nodes(10);
+        builder.add_nodes(SECOND_DELTA_NODES);
         builder.build(nodes).await?;
 
         // Phase 2: sidecar loads the phase-1 checkpoint as base and applies only the new delta.
@@ -101,11 +108,12 @@ impl TestRun for Wal105 {
     async fn exec_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
 
+        let total_final = INITIAL_CHECKPOINT_NODES + FIRST_DELTA_NODES + SECOND_DELTA_NODES;
         let post = WalAssertions::new()
-            .assert_wal_row_count(160)
-            .assert_max_modification_id(160)
+            .assert_wal_row_count(total_final)
+            .assert_max_modification_id(total_final as i64)
             .assert_checkpoint_count(3) // seeded + phase-1 sidecar + phase-2 sidecar
-            .assert_latest_checkpoint_mod_id(160);
+            .assert_latest_checkpoint_mod_id(total_final as i64);
         nodes.apply_uniform_assertions(&post).await?;
 
         nodes.assert_consensus_and_reference().await

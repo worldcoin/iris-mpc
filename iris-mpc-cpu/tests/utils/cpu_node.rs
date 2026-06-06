@@ -11,6 +11,8 @@ use iris_mpc_cpu::graph_checkpoint::stream_serialize_and_upload_with;
 use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 use iris_mpc_cpu::hnsw::graph::graph_store::{GraphCheckpointRow, GraphPg};
 use iris_mpc_cpu::hnsw::GraphMem;
+use iris_mpc_cpu::utils::serialization::graph::GraphFormat;
+use iris_mpc_cpu::utils::serialization::types::graph_v3;
 use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
 use iris_mpc_utils::{aws::AwsClient, irises::generate_iris_shares_for_upload_both_eyes};
 use rand::{rngs::StdRng, SeedableRng};
@@ -335,6 +337,113 @@ impl CpuNode {
             .ok_or_else(|| eyre!("no checkpoint row found after insert"))
     }
 
+    /// Create a non-archival genesis checkpoint serialized in the given
+    /// `format`.  Currently only [`GraphFormat::V3`] is supported; passing
+    /// any other variant will compile fine but may produce a checkpoint that
+    /// the node cannot load.
+    ///
+    /// Use [`CpuNodes::make_checkpoints_v3`] to fan this out across all three
+    /// parties in a single `tokio::try_join!`.
+    pub async fn make_checkpoint_v3(
+        &self,
+        format: GraphFormat,
+    ) -> eyre::Result<GraphCheckpointRow> {
+        let bucket = &self.config.checkpoint_bucket;
+        let party_id = self.config.party_id;
+        let last_modification_id = self
+            .store
+            .graph
+            .get_max_hawk_graph_mutation_id()
+            .await?
+            .ok_or_else(|| eyre!("no mutations found; cannot create checkpoint"))?;
+        let last_iris_id = last_modification_id;
+        let mutation_rows = self
+            .store
+            .graph
+            .get_hawk_graph_mutations(Some(last_modification_id))
+            .await?;
+        let mut left_graph = GraphMem::<IrisVectorId>::new();
+        let mut right_graph = GraphMem::<IrisVectorId>::new();
+        for row in &mutation_rows {
+            let both_eyes = row.deserialize_mutations()?;
+            left_graph.insert_apply_all(&both_eyes[0])?;
+            right_graph.insert_apply_all(&both_eyes[1])?;
+        }
+
+        // Convert GraphMem → GraphV3 by copying entry_points and layers,
+        // dropping the seq_no field that is absent in the V3 format.
+        let to_v3 = |g: GraphMem<IrisVectorId>| -> graph_v3::GraphV3 {
+            let vec_id = |v: &IrisVectorId| graph_v3::VectorId {
+                id:      v.serial_id(),
+                version: v.version_id(),
+            };
+            graph_v3::GraphV3 {
+                entry_point: g
+                    .entry_points
+                    .iter()
+                    .map(|ep| graph_v3::EntryPoint {
+                        point: vec_id(&ep.point),
+                        layer: ep.layer,
+                    })
+                    .collect(),
+                layers: g
+                    .layers
+                    .iter()
+                    .map(|layer| graph_v3::Layer {
+                        links: layer
+                            .links
+                            .iter()
+                            .map(|(k, vs)| {
+                                (
+                                    vec_id(k),
+                                    graph_v3::EdgeIds(
+                                        vs.iter().map(|v| vec_id(v)).collect(),
+                                    ),
+                                )
+                            })
+                            .collect(),
+                        set_hash: layer.checksum(),
+                    })
+                    .collect(),
+            }
+        };
+
+        let graph_pair: [graph_v3::GraphV3; 2] = [to_v3(left_graph), to_v3(right_graph)];
+        let bytes = bincode::serialize(&graph_pair)?;
+        let hash_hex = hex::encode(blake3::hash(&bytes).as_bytes());
+        let s3_key = format!("{party_id}/checkpoints/seed_{last_modification_id}");
+
+        stream_serialize_and_upload_with(
+            &self.s3,
+            bucket,
+            &s3_key,
+            move |w| w.write_all(&bytes).map_err(|e| eyre::eyre!(e)),
+            8 * 1024 * 1024,
+            4,
+        )
+        .await?;
+
+        let mut tx = self.store.graph.begin_tx().await?;
+        GraphPg::<PlaintextStore>::insert_genesis_graph_checkpoint(
+            &mut tx,
+            &s3_key,
+            last_iris_id,
+            last_modification_id,
+            Some(last_modification_id),
+            &hash_hex,
+            false, // non-archival
+            format.version(),
+        )
+        .await?;
+        tx.commit().await?;
+
+        self.store
+            .graph
+            .get_latest_genesis_graph_checkpoint()
+            .await?
+            .ok_or_else(|| eyre!("no checkpoint row found after insert"))
+    }
+
     /// Run all set assertions in `assertions` against this node.
     ///
     /// Always verifies that all checkpoint S3 objects exist in the bucket.
@@ -556,6 +665,22 @@ impl CpuNodes {
             self.0[0].make_checkpoint(),
             self.0[1].make_checkpoint(),
             self.0[2].make_checkpoint(),
+        )?;
+        Ok([r0, r1, r2])
+    }
+
+    /// Seed a V3-format genesis checkpoint for all 3 parties concurrently.
+    ///
+    /// Each checkpoint is non-archival and serialized without the `seq_no`
+    /// field (see [`CpuNode::make_checkpoint_v3`]).
+    pub async fn make_checkpoints_v3(
+        &self,
+        format: GraphFormat,
+    ) -> eyre::Result<[GraphCheckpointRow; 3]> {
+        let (r0, r1, r2) = tokio::try_join!(
+            self.0[0].make_checkpoint_v3(format),
+            self.0[1].make_checkpoint_v3(format),
+            self.0[2].make_checkpoint_v3(format),
         )?;
         Ok([r0, r1, r2])
     }
