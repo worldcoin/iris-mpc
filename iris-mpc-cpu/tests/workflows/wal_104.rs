@@ -142,7 +142,10 @@ impl TestRun for Wal104 {
             let party_id_str = format!("{}/", node.config.party_id);
             let party_keys: Vec<String> = all_keys
                 .iter()
-                .filter(|k| k.starts_with(&party_id_str) || k.starts_with(&format!("genesis/{}/", node.config.party_id)))
+                .filter(|k| {
+                    k.starts_with(&party_id_str)
+                        || k.starts_with(&format!("genesis/{}/", node.config.party_id))
+                })
                 .cloned()
                 .collect();
             tracing::info!(

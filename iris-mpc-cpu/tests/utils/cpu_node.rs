@@ -302,6 +302,14 @@ impl CpuNode {
                 actual == expected,
                 "checkpoint count: expected {expected}, got {actual}"
             );
+
+            // When checkpoint count is asserted, also verify S3 object count matches.
+            let s3_count = self.list_s3_keys(&self.config.checkpoint_bucket).await?.len();
+            eyre::ensure!(
+                s3_count == expected,
+                "S3 object count in bucket {}: expected {expected}, got {s3_count}",
+                self.config.checkpoint_bucket
+            );
         }
 
         if let Some(expected_mod_id) = assertions.latest_checkpoint_mod_id {
@@ -336,6 +344,15 @@ impl CpuNodes {
             CpuNode::new(configs[2].clone()),
         )?;
         Ok(Self([n0, n1, n2]))
+    }
+
+    /// Create nodes and immediately truncate checkpoint tables and clear S3 buckets —
+    /// the standard starting state for every workflow test.
+    pub async fn new_clean(configs: &CpuConfigs) -> eyre::Result<Self> {
+        let nodes = Self::new(configs).await?;
+        nodes.clear_all_s3_buckets(configs).await?;
+        nodes.truncate_checkpoint_tables().await?;
+        Ok(nodes)
     }
 
     /// Run `WalAssertions` against each party in sequence.
@@ -466,12 +483,27 @@ impl CpuNodes {
         Ok([r0, r1, r2])
     }
 
-    /// Create nodes and immediately truncate checkpoint tables — the standard
-    /// starting state for every workflow test.
-    pub async fn new_clean(configs: &CpuConfigs) -> eyre::Result<Self> {
-        let nodes = Self::new(configs).await?;
-        nodes.truncate_checkpoint_tables().await?;
-        Ok(nodes)
+    /// Delete all S3 objects from all checkpoint buckets.
+    ///
+    /// Iterates through all parties' checkpoint buckets, lists all objects,
+    /// and deletes them. Ignores individual deletion errors to handle cases
+    /// where objects may have already been deleted.
+    pub async fn clear_all_s3_buckets(&self, configs: &CpuConfigs) -> eyre::Result<()> {
+        for (node, config) in self.0.iter().zip(configs.iter()) {
+            let bucket = &config.checkpoint_bucket;
+            let keys = node.list_s3_keys(bucket).await?;
+            for key in keys {
+                // Ignore errors — objects may already be gone or other transient issues.
+                let _ = node
+                    .s3
+                    .delete_object()
+                    .bucket(bucket)
+                    .key(&key)
+                    .send()
+                    .await;
+            }
+        }
+        Ok(())
     }
 
     /// Assert all parties produced the same checkpoint hash and that it matches
@@ -510,7 +542,8 @@ impl CpuNodes {
 /// All fields are optional — only set fields are checked.
 ///
 /// S3 checkpoint object existence is verified automatically for all checkpoints
-/// whenever assertions are run.
+/// whenever assertions are run. When checkpoint_count is asserted, the S3 object
+/// count is also automatically verified to match.
 #[derive(Debug, Default, Clone)]
 pub struct WalAssertions {
     /// Expected number of rows in `hawk_graph_mutations`.

@@ -15,10 +15,9 @@ use crate::{
         cpu_node::{CpuNodes, WalAssertions},
         runner::{CpuTestContext, TestRun},
         wal_builder::WalMutationBuilder,
+        MIN_MUTATIONS_PER_SIDECAR_CYCLE,
     },
 };
-
-const WAL_MUTATION_COUNT: usize = 10;
 
 pub struct Wal102 {
     nodes: Option<CpuNodes>,
@@ -37,7 +36,7 @@ impl TestRun for Wal102 {
         // No base checkpoint — sidecar starts from scratch.
         // Seed AddNode mutations 1..=10.
         WalMutationBuilder::new()
-            .add_nodes(WAL_MUTATION_COUNT)
+            .add_nodes(MIN_MUTATIONS_PER_SIDECAR_CYCLE)
             .build(&nodes)
             .await?;
         self.nodes = Some(nodes);
@@ -47,8 +46,8 @@ impl TestRun for Wal102 {
     async fn setup_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
         let pre = WalAssertions::new()
-            .assert_wal_row_count(WAL_MUTATION_COUNT)
-            .assert_max_modification_id(WAL_MUTATION_COUNT as _)
+            .assert_wal_row_count(MIN_MUTATIONS_PER_SIDECAR_CYCLE)
+            .assert_max_modification_id(MIN_MUTATIONS_PER_SIDECAR_CYCLE as _)
             .assert_checkpoint_count(0);
         nodes.apply_uniform_assertions(&pre).await
     }
@@ -64,7 +63,7 @@ impl TestRun for Wal102 {
 
         let post = WalAssertions::new()
             .assert_checkpoint_count(1)
-            .assert_latest_checkpoint_mod_id(WAL_MUTATION_COUNT as _);
+            .assert_latest_checkpoint_mod_id(MIN_MUTATIONS_PER_SIDECAR_CYCLE as _);
         nodes.apply_uniform_assertions(&post).await?;
 
         // Materialise the same WAL rows in the test process, hash the result,

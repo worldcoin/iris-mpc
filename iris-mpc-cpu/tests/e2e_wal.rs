@@ -105,6 +105,7 @@ macro_rules! run_test {
 #[serial]
 #[ignore = "requires external setup"]
 fn test_wal_102() -> eyre::Result<()> {
+    // TODO: fix bug in sidecar where it refuses to run if none of the nodes have a checkpoint
     run_test!(102, 1, Wal102::new())
 }
 
@@ -117,6 +118,7 @@ fn test_wal_103() -> eyre::Result<()> {
 
 #[test]
 #[serial]
+#[ignore = "requires external setup"]
 fn test_wal_104() -> eyre::Result<()> {
     run_test!(104, 1, Wal104::new())
 }
@@ -139,6 +141,7 @@ fn test_wal_105() -> eyre::Result<()> {
 /// even when one party's checkpoint table has fallen behind the others.
 #[test]
 #[serial]
+#[ignore = "requires external setup"]
 fn test_wal_106() -> eyre::Result<()> {
     run_test!(106, 1, Wal106::new())
 }
