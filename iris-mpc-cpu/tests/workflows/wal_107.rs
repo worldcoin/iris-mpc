@@ -1,15 +1,9 @@
 /// wal_107 — Nontrivial modification sync: hawk_main reconciles a WAL mismatch
 /// between parties on startup.
 ///
-/// Party 0 is given 5 extra node+edge mutations beyond what parties 1 and 2
+/// Party 0 is given extra mutations beyond what parties 1 and 2
 /// have, simulating a scenario where one party processed additional work before
 /// an unclean shutdown while the others did not.
-///
-/// WAL modification ID layout:
-///   1–10:   shared node mutations (all parties)
-///   11–20:  shared edge mutations (all parties)
-///   21–25:  extra node mutations (party 0 only)
-///   26–30:  extra edge mutations (party 0 only)
 ///
 /// hawk_main's modification sync protocol must:
 ///   1. Detect the mismatch
@@ -23,7 +17,6 @@
 /// left parties in an inconsistent state.
 ///
 /// Protocol:
-///   Setup: seed WAL mods 1..=10 for all parties; seed WAL mods 11..=20 for party 0 only.
 ///   Phase 1: `hawk_main` → modification sync → signals ready.
 ///   Phase 2: `sidecar_main` → checkpoint.
 use std::time::Duration;
@@ -76,8 +69,6 @@ impl TestRun for Wal107 {
     async fn setup_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
 
-        // Party 0 has all entries (10 shared nodes + 10 shared edges + 5 extra nodes + 5 extra edges = 30);
-        // parties 1 and 2 have only shared nodes + edges (10 + 10 = 20).
         let p0_pre = WalAssertions::new()
             .assert_wal_row_count(3 * MIN_MUTATIONS_PER_SIDECAR_CYCLE)
             .assert_max_modification_id(3 * MIN_MUTATIONS_PER_SIDECAR_CYCLE as i64)
