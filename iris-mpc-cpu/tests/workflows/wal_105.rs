@@ -1,12 +1,16 @@
+use std::time::Duration;
+
 /// wal_105 — Second sidecar cycle loads a prior checkpoint as its base and applies only the delta.
+/// Also exercise applying WAL to existing checkpoint in server_main
 use tokio_util::sync::CancellationToken;
 
 use super::expect_sidecar_success;
 use crate::{
-    run_sidecar,
+    run_hawk, run_sidecar, stop_and_join,
     utils::{
         cpu_node::{CpuNodes, WalAssertions},
         runner::{CpuTestContext, TestRun},
+        wait_conditions::wait_for_all_ready,
         wal_builder::WalMutationBuilder,
     },
 };
@@ -56,6 +60,16 @@ impl TestRun for Wal105 {
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
         let builder = self.builder.as_mut().unwrap();
+
+        // Phase 0: exercise server_main()
+        {
+            let shutdown = CancellationToken::new();
+            let mut hawk_set = run_hawk!(ctx.configs, shutdown.clone(), ctx);
+            let res =
+                wait_for_all_ready(&ctx.configs, &mut hawk_set, Duration::from_secs(60)).await;
+            stop_and_join!(shutdown, hawk_set);
+            res?;
+        }
 
         // Phase 1: sidecar materialises WAL delta and writes a checkpoint.
         {

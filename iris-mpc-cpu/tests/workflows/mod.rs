@@ -1,5 +1,4 @@
 pub mod wal_102;
-pub mod wal_103;
 pub mod wal_104;
 pub mod wal_105;
 pub mod wal_106;
