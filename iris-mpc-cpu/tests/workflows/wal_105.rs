@@ -121,7 +121,7 @@ impl TestRun for Wal105 {
         nodes.apply_uniform_assertions(&post).await?;
 
         // All 3 parties must agree on the phase-2 checkpoint BLAKE3 hash and cross-check
-        // against the reference hash computed from the full WAL (initial 51..=150 + hawk delta 151..=170).
+        // against the reference hash computed from the full WAL (initial 1..=150 + hawk delta 151..=160).
         // This proves the phase-2 sidecar loaded the phase-1 checkpoint as its base, not the genesis one.
         nodes.assert_consensus_and_reference().await
     }

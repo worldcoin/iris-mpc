@@ -76,7 +76,7 @@ impl TestRun for Wal109 {
         builder1.add_nodes(5);
         builder1.build_single(&nodes.0[1], true, true).await?;
         builder1.add_nodes(5);
-        for idx in 5..=10 {
+        for idx in 6..=10 {
             builder1.set_persisted(idx, false);
         }
         builder1.build_single(&nodes.0[1], false, true).await?;

@@ -143,8 +143,6 @@ impl TestRun for Wal106 {
     async fn exec_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
 
-        // Party 0: seeded (mod_id=0) + phase-2 new = 2 rows.
-        // Parties 1&2: seeded + phase-1 + phase-2 = 3 rows.
         let p0_post = WalAssertions::new()
             .assert_wal_row_count(20)
             .assert_max_modification_id(20)

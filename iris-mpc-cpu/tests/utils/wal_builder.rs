@@ -80,7 +80,7 @@ impl WalMutationBuilder {
         for idx in starting_idx..new_len {
             let node_id = idx + 1;
             // All nodes added before this one become neighbors.
-            let neighbors: Vec<IrisVectorId> = (1..=new_len)
+            let neighbors: Vec<IrisVectorId> = (1..=node_id)
                 .filter(|x| x != &node_id)
                 .map(|x| x as u32)
                 .map(IrisVectorId::from_serial_id)

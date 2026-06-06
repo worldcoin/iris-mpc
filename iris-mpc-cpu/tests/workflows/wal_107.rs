@@ -12,8 +12,8 @@
 ///   26–30:  extra edge mutations (party 0 only)
 ///
 /// hawk_main's modification sync protocol must:
-///   1. Detect the mismatch (party 0 max_modification_id = 30; others = 20).
-///   2. Transfer mutations 21..=30 from party 0 to parties 1 and 2.
+///   1. Detect the mismatch
+///   2. Transfer mutations
 ///   3. Allow all three parties to signal ready.
 ///
 /// A subsequent sidecar cycle then materialises each party's WAL independently
@@ -23,7 +23,7 @@
 /// left parties in an inconsistent state.
 ///
 /// Protocol:
-///   Setup: seed WAL mods 1..=20 for all parties; seed WAL mods 21..=30 for party 0 only.
+///   Setup: seed WAL mods 1..=10 for all parties; seed WAL mods 11..=20 for party 0 only.
 ///   Phase 1: `hawk_main` → modification sync → signals ready.
 ///   Phase 2: `sidecar_main` → checkpoint.
 use std::time::Duration;
@@ -114,8 +114,6 @@ impl TestRun for Wal107 {
     async fn exec_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
 
-        // One checkpoint per party (sidecar cycle).
-        // Max modification_id is 30 (the last edge added for party 0's extra mutations).
         let post = WalAssertions::new()
             .assert_checkpoint_count(1)
             .assert_latest_checkpoint_mod_id(20);
