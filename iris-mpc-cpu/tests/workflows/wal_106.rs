@@ -27,6 +27,7 @@ use crate::{
         cpu_node::{CpuNodes, WalAssertions},
         runner::{CpuTestContext, TestRun},
         wal_builder::WalMutationBuilder,
+        MIN_MUTATIONS_PER_SIDECAR_CYCLE,
     },
 };
 
@@ -49,12 +50,12 @@ impl TestRun for Wal106 {
         let nodes = CpuNodes::new_clean(&ctx.configs).await?;
 
         let mut builder = WalMutationBuilder::new();
-        builder.add_nodes(5);
+        builder.add_nodes(MIN_MUTATIONS_PER_SIDECAR_CYCLE);
         builder.build(&nodes).await?;
 
         nodes.make_checkpoints().await?;
 
-        builder.add_nodes(5);
+        builder.add_nodes(MIN_MUTATIONS_PER_SIDECAR_CYCLE);
         builder.build(&nodes).await?;
 
         self.nodes = Some(nodes);
@@ -85,7 +86,7 @@ impl TestRun for Wal106 {
         // Introduce a checkpoint desync: delete party 0's most recent checkpoint row.
         // Party 0 is left with only the seeded row (mod_id=0) while parties 1 and 2
         // retain both rows.
-        nodes.0[0].store.delete_latest_checkpoint().await?;
+        nodes.0[0].delete_latest_checkpoint().await?;
 
         // Sanity-check: party 0 now has 1 checkpoint; parties 1 and 2 still have 2.
         {
@@ -97,7 +98,7 @@ impl TestRun for Wal106 {
         }
 
         // Seed additional WAL mutations for all parties.
-        builder.add_nodes(10);
+        builder.add_nodes(2 * MIN_MUTATIONS_PER_SIDECAR_CYCLE);
         builder.build(nodes).await?;
 
         // Phase 2: sidecar runs again.  Despite the desync, every party must reach

@@ -77,16 +77,23 @@ impl DbStores {
     /// Uses `MAX(id)` as the tiebreaker so it always removes exactly the row
     /// that `latest_checkpoint()` would return.  A no-op when the table is empty.
     ///
+    /// Returns the s3_key of the deleted checkpoint, or None if no checkpoint existed.
+    ///
     /// Intended for checkpoint-desync tests that need to artificially regress one
     /// party's checkpoint state.
-    pub async fn delete_latest_checkpoint(&self) -> eyre::Result<()> {
-        sqlx::query(
-            "DELETE FROM genesis_graph_checkpoint \
-             WHERE id = (SELECT MAX(id) FROM genesis_graph_checkpoint)",
-        )
-        .execute(self.graph.pool())
-        .await?;
-        Ok(())
+    pub async fn delete_latest_checkpoint(&self) -> eyre::Result<Option<String>> {
+        // First fetch the latest checkpoint to get its s3_key before deletion
+        if let Some(checkpoint) = self.latest_checkpoint().await? {
+            sqlx::query(
+                "DELETE FROM genesis_graph_checkpoint \
+                 WHERE id = (SELECT MAX(id) FROM genesis_graph_checkpoint)",
+            )
+            .execute(self.graph.pool())
+            .await?;
+            Ok(Some(checkpoint.s3_key))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Get MAX(modification_id) from `hawk_graph_mutations`, returns None if empty.
@@ -134,6 +141,24 @@ impl CpuNode {
             s3,
             config,
         })
+    }
+
+    /// Delete the latest checkpoint from both the database and S3.
+    ///
+    /// This ensures that when a checkpoint row is removed from the DB, its
+    /// corresponding S3 object is also cleaned up to maintain consistency.
+    pub async fn delete_latest_checkpoint(&self) -> eyre::Result<()> {
+        if let Some(s3_key) = self.store.delete_latest_checkpoint().await? {
+            // Best-effort cleanup: ignore errors if the S3 object is already gone
+            let _ = self
+                .s3
+                .delete_object()
+                .bucket(&self.config.checkpoint_bucket)
+                .key(&s3_key)
+                .send()
+                .await;
+        }
+        Ok(())
     }
 
     /// Verify that all checkpoint S3 objects exist.
