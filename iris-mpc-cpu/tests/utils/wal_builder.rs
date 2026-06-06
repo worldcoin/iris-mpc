@@ -120,6 +120,43 @@ impl WalMutationBuilder {
         self
     }
 
+    /// Add a single node with explicit neighbor IDs, bypassing the auto-neighbor logic.
+    ///
+    /// Unlike [`add_nodes`], this always emits an `AddEdges` op regardless of how many
+    /// nodes have been added previously — useful for crafting WAL entries that are
+    /// intentionally incompatible with those produced by [`add_nodes`] at the same
+    /// modification ID.
+    pub fn add_node_with_neighbors(&mut self, neighbor_ids: &[u32]) -> &mut Self {
+        let node_id = (self.entries.len() + 1) as u32;
+        let modification_id = node_id as i64;
+        let neighbors: Vec<IrisVectorId> = neighbor_ids
+            .iter()
+            .map(|&id| IrisVectorId::from_serial_id(id))
+            .collect();
+        let mut ops = vec![MutationOp::AddNode {
+            id: IrisVectorId::from_serial_id(node_id),
+            height: 1,
+            update_ep: UpdateEntryPoint::False,
+        }];
+        if !neighbors.is_empty() {
+            ops.push(MutationOp::AddEdges {
+                base: IrisVectorId::from_serial_id(node_id),
+                neighbors,
+                layer: 0,
+                edge_type: EdgeType::All,
+            });
+        }
+        let mutation = GraphMutation {
+            seq_no: node_id as u64,
+            ops,
+        };
+        self.entries.insert(modification_id, mutation);
+        self.persisted.insert(modification_id, true);
+        self.status
+            .insert(modification_id, ModificationStatus::Completed);
+        self
+    }
+
     pub async fn insert_mutations(&self, graph: &GraphPg<PlaintextStore>) -> eyre::Result<()> {
         let mut mutations: Vec<_> = self
             .entries

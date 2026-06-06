@@ -32,35 +32,43 @@ impl Wal110 {
 impl TestRun for Wal110 {
     async fn setup(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = CpuNodes::new_clean(&ctx.configs).await?;
+        let aws_client = ctx.make_aws_client().await?;
 
-        // builder_a (1 node): AddNode only — no neighbors, so no AddEdges emitted.
-        // builder_b (2 nodes): AddNode + AddEdges for mod_id=1, producing different bytes.
+        // builder_a (party 1): AddNode only for node 1 — no prior nodes, so no AddEdges.
+        // builder_b (party 2): AddNode + AddEdges for node 1 via add_node_with_neighbors,
+        //   which forces an AddEdges op with a fake neighbor even though no prior nodes
+        //   exist.  The two serialised byte payloads for mod_id=1 therefore differ, which
+        //   is exactly the incompatibility hawk_main must detect and report.
         let mut builder_a = WalMutationBuilder::new();
         builder_a.add_nodes(1);
 
         let mut builder_b = WalMutationBuilder::new();
-        builder_b.add_nodes(2);
+        builder_b.add_node_with_neighbors(&[99]);
 
-        // Party 0's modification is unpersisted; sync needs iris shares in S3 to roll it forward.
-        let aws_client = ctx.make_aws_client().await?;
-        //builder_a.upload_iris_shares(&aws_client).await?;
-
+        // Insert the differing WAL entries into the respective parties.
         builder_a.insert_mutations(&nodes.0[1].store.graph).await?;
         builder_b.insert_mutations(&nodes.0[2].store.graph).await?;
 
+        // Party 0: modification present but unpersisted — hawk_main must fetch its bytes
+        // from the other two parties, where it will find a mismatch.
         builder_a.set_persisted(MOD_ID, false);
         builder_a
             .seed_modifications(&nodes.0[0].store.graph, 0)
             .await?;
 
+        // Party 1: modification persisted (WAL entry from builder_a).
         builder_a.set_persisted(MOD_ID, true);
         builder_a
             .seed_modifications(&nodes.0[1].store.graph, 1)
             .await?;
 
+        // Party 2: modification persisted (WAL entry from builder_b — incompatible bytes).
         builder_b
             .seed_modifications(&nodes.0[2].store.graph, 2)
             .await?;
+
+        // Upload iris shares so hawk_main can locate each modification's payload.
+        nodes.init_iris_shares(1, &aws_client).await?;
 
         self.nodes = Some(nodes);
         Ok(())
@@ -72,8 +80,8 @@ impl TestRun for Wal110 {
             .apply_assertions(&[
                 WalAssertions::new().assert_wal_row_count(0),
                 WalAssertions::new().assert_wal_row_count(1),
-                // builder_b inserted 2 entries (mod_id=1 and mod_id=2).
-                WalAssertions::new().assert_wal_row_count(2),
+                // builder_b inserted 1 entry (mod_id=1, AddNode + AddEdges).
+                WalAssertions::new().assert_wal_row_count(1),
             ])
             .await
     }
@@ -100,7 +108,7 @@ impl TestRun for Wal110 {
             .apply_assertions(&[
                 WalAssertions::new().assert_wal_row_count(0),
                 WalAssertions::new().assert_wal_row_count(1),
-                WalAssertions::new().assert_wal_row_count(2),
+                WalAssertions::new().assert_wal_row_count(1),
             ])
             .await
     }
