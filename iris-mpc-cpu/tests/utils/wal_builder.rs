@@ -12,6 +12,8 @@ use iris_mpc_cpu::{
 use iris_mpc_utils::{aws::AwsClient, irises::generate_iris_shares_for_upload_both_eyes};
 use rand::{rngs::StdRng, SeedableRng};
 
+use crate::utils::cpu_node::CpuNode;
+
 use super::cpu_node::CpuNodes;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -213,6 +215,14 @@ impl WalMutationBuilder {
     pub async fn build(&mut self, nodes: &CpuNodes) -> eyre::Result<()> {
         self.insert_mutations_all(nodes).await?;
         self.seed_modifications_all(nodes).await?;
+        self.processed = self.entries.len();
+        Ok(())
+    }
+
+    pub async fn build_single(&mut self, node: &CpuNode) -> eyre::Result<()> {
+        self.insert_mutations(&node.store.graph).await?;
+        self.seed_modifications(&node.store.graph, node.config.party_id)
+            .await?;
         self.processed = self.entries.len();
         Ok(())
     }
