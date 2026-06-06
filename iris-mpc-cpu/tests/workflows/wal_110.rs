@@ -43,7 +43,7 @@ impl TestRun for Wal110 {
 
         // Party 0's modification is unpersisted; sync needs iris shares in S3 to roll it forward.
         let aws_client = ctx.make_aws_client().await?;
-        builder_a.upload_iris_shares(&aws_client).await?;
+        //builder_a.upload_iris_shares(&aws_client).await?;
 
         builder_a.insert_mutations(&nodes.0[1].store.graph).await?;
         builder_b.insert_mutations(&nodes.0[2].store.graph).await?;

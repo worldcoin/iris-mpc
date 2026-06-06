@@ -11,19 +11,17 @@ use iris_mpc_cpu::graph_checkpoint::stream_serialize_and_upload_with;
 use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 use iris_mpc_cpu::hnsw::graph::graph_store::{GraphCheckpointRow, GraphPg};
 use iris_mpc_cpu::hnsw::GraphMem;
+use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
 use iris_mpc_utils::{aws::AwsClient, irises::generate_iris_shares_for_upload_both_eyes};
 use rand::{rngs::StdRng, SeedableRng};
 
 /// Per-party database handles for test setup and post-condition assertions.
 ///
-/// Only the graph store is needed — WAL mutations and checkpoints both live in
-/// the graph store's tables.  There is no iris store because WAL mutations are seeded
-/// synthetically.
-///
 /// The checkpoint format (`bincode([GraphMem; 2])`) is store-agnostic, so `PlaintextStore`
 /// is safe to use here even though `hawk_main` uses `Aby3Store` at runtime.
 pub struct DbStores {
     pub graph: GraphPg<PlaintextStore>,
+    pub iris_store: IrisStore,
 }
 
 impl DbStores {
@@ -32,7 +30,8 @@ impl DbStores {
             PostgresClient::new(&config.db_url, &config.db_schema, AccessMode::ReadWrite).await?;
         pg.migrate().await;
         let graph = GraphPg::new(&pg).await?;
-        Ok(Self { graph })
+        let iris_store = IrisStore::new(&pg).await?;
+        Ok(Self { graph, iris_store })
     }
 
     /// Count rows in `genesis_graph_checkpoint`.
@@ -48,8 +47,8 @@ impl DbStores {
         self.graph.get_latest_genesis_graph_checkpoint().await
     }
 
-    /// Truncate all WAL and checkpoint tables for this party.
-    /// Covers: hawk_graph_mutations, genesis_graph_checkpoint, persistent_state, and modifications.
+    /// Truncate all WAL, checkpoint, and iris tables for this party.
+    /// Covers: hawk_graph_mutations, genesis_graph_checkpoint, persistent_state, modifications, and irises.
     pub async fn truncate_checkpoint_tables(&self) -> eyre::Result<()> {
         sqlx::query("TRUNCATE hawk_graph_mutations")
             .execute(self.graph.pool())
@@ -62,6 +61,9 @@ impl DbStores {
             .await?;
         sqlx::query("TRUNCATE modifications")
             .execute(self.graph.pool())
+            .await?;
+        sqlx::query("TRUNCATE irises")
+            .execute(&self.iris_store.pool)
             .await?;
         Ok(())
     }
@@ -143,6 +145,37 @@ impl CpuNode {
             s3,
             config,
         })
+    }
+
+    /// Insert one iris share into this node's iris store.
+    ///
+    /// Writes the party-specific left/right code+mask into the `irises` table
+    /// using the node's own schema, so the `check_store_consistency` invariant
+    /// (`COUNT(*) == MAX(id)`) holds when the server starts.
+    pub async fn insert_iris_share(
+        &self,
+        id: i64,
+        left_code: &[u16],
+        left_mask: &[u16],
+        right_code: &[u16],
+        right_mask: &[u16],
+    ) -> eyre::Result<()> {
+        let mut tx = self.store.iris_store.pool.begin().await?;
+        self.store
+            .iris_store
+            .insert_irises(
+                &mut tx,
+                &[StoredIrisRef {
+                    id,
+                    left_code,
+                    left_mask,
+                    right_code,
+                    right_mask,
+                }],
+            )
+            .await?;
+        tx.commit().await?;
+        Ok(())
     }
 
     /// Delete the latest checkpoint from both the database and S3.
@@ -541,10 +574,13 @@ impl CpuNodes {
         Ok([r0, r1, r2])
     }
 
-    /// Upload deterministic fake iris shares to S3 for modifications 1..=count.
+    /// Upload deterministic fake iris shares to S3 for modifications 1..=count,
+    /// then update every party's `modifications.s3_url` to the uploaded key.
     ///
-    /// Each share set is seeded by its modification ID so the content is stable
-    /// across calls and test runs. S3 puts are idempotent.
+    /// All parties receive the same S3 key (technically incorrect for real MPC,
+    /// but sufficient for tests that only need the server to find an object at
+    /// the expected key). Each share set is seeded by its modification ID so
+    /// the content is stable across calls and test runs.
     pub async fn init_iris_shares(&self, count: usize, aws_client: &AwsClient) -> eyre::Result<()> {
         for modification_id in 1..=(count as i64) {
             let uuid = uuid::Uuid::from_u128(modification_id as u128);
@@ -556,6 +592,26 @@ impl CpuNodes {
                 .map_err(|e| {
                     eyre::eyre!("S3 upload failed for modification_id={modification_id}: {e}")
                 })?;
+            let s3_key = uuid.to_string();
+            for node in &self.0 {
+                sqlx::query("UPDATE modifications SET s3_url = $1 WHERE id = $2")
+                    .bind(&s3_key)
+                    .bind(modification_id)
+                    .execute(node.store.graph.pool())
+                    .await?;
+
+                let party_id = node.config.party_id;
+                let left = &shares[0][party_id];
+                let right = &shares[1][party_id];
+                node.insert_iris_share(
+                    modification_id,
+                    &left.code.coefs,
+                    &left.mask.coefs,
+                    &right.code.coefs,
+                    &right.mask.coefs,
+                )
+                .await?;
+            }
         }
         Ok(())
     }

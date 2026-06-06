@@ -54,6 +54,10 @@ impl TestRun for Wal109 {
             .build_single(&nodes.0[2], true, true)
             .await?;
 
+        nodes
+            .init_iris_shares(2 * MIN_MUTATIONS_PER_SIDECAR_CYCLE, &aws_client)
+            .await?;
+
         self.nodes = Some(nodes);
         Ok(())
     }
