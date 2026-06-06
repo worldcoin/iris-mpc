@@ -5,7 +5,7 @@ use super::CpuConfigs;
 use eyre::eyre;
 use iris_mpc_common::{
     postgres::{AccessMode, PostgresClient},
-    IrisVectorId,
+    IrisVectorId, MASK_CODE_LENGTH,
 };
 use iris_mpc_cpu::graph_checkpoint::stream_serialize_and_upload_with;
 use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
@@ -606,9 +606,9 @@ impl CpuNodes {
                 node.insert_iris_share(
                     modification_id,
                     &left.code.coefs,
-                    &left.mask.coefs,
+                    &left.mask.coefs[..MASK_CODE_LENGTH],
                     &right.code.coefs,
-                    &right.mask.coefs,
+                    &right.mask.coefs[..MASK_CODE_LENGTH],
                 )
                 .await?;
             }
