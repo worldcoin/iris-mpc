@@ -11,7 +11,10 @@ use iris_mpc_cpu::graph_checkpoint::stream_serialize_and_upload_with;
 use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 use iris_mpc_cpu::hnsw::graph::graph_store::{GraphCheckpointRow, GraphPg};
 use iris_mpc_cpu::hnsw::GraphMem;
+// Retained for upcoming v3 checkpoint support — not yet wired up.
+#[allow(unused_imports)]
 use iris_mpc_cpu::utils::serialization::graph::GraphFormat;
+#[allow(unused_imports)]
 use iris_mpc_cpu::utils::serialization::types::graph_v3;
 use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
 use iris_mpc_utils::{aws::AwsClient, irises::generate_iris_shares_for_upload_both_eyes};
@@ -374,7 +377,7 @@ impl CpuNode {
         // dropping the seq_no field that is absent in the V3 format.
         let to_v3 = |g: GraphMem<IrisVectorId>| -> graph_v3::GraphV3 {
             let vec_id = |v: &IrisVectorId| graph_v3::VectorId {
-                id:      v.serial_id(),
+                id: v.serial_id(),
                 version: v.version_id(),
             };
             graph_v3::GraphV3 {
@@ -396,9 +399,7 @@ impl CpuNode {
                             .map(|(k, vs)| {
                                 (
                                     vec_id(k),
-                                    graph_v3::EdgeIds(
-                                        vs.iter().map(|v| vec_id(v)).collect(),
-                                    ),
+                                    graph_v3::EdgeIds(vs.iter().map(|v| vec_id(v)).collect()),
                                 )
                             })
                             .collect(),

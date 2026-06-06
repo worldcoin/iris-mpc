@@ -15,6 +15,7 @@ use crate::{
     },
 };
 
+#[derive(Default)]
 pub struct Wal106 {
     nodes: Option<CpuNodes>,
     builder: Option<WalMutationBuilder>,
@@ -22,10 +23,7 @@ pub struct Wal106 {
 
 impl Wal106 {
     pub fn new() -> Self {
-        Self {
-            nodes: None,
-            builder: None,
-        }
+        Self::default()
     }
 }
 

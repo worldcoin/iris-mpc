@@ -58,12 +58,7 @@ pub struct WalMutationBuilder {
 
 impl WalMutationBuilder {
     pub fn new() -> Self {
-        Self {
-            entries: HashMap::new(),
-            persisted: HashMap::new(),
-            status: HashMap::new(),
-            processed: 0,
-        }
+        Self::default()
     }
 
     /// Appends `count` new nodes, continuing from the last assigned IDs.

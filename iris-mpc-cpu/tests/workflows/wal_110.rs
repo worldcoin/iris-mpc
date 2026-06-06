@@ -19,13 +19,14 @@ use crate::{
 const MOD_ID: i64 = 1;
 const MISMATCH_ERR: &str = "graph mutation mismatch between parties";
 
+#[derive(Default)]
 pub struct Wal110 {
     nodes: Option<CpuNodes>,
 }
 
 impl Wal110 {
     pub fn new() -> Self {
-        Self { nodes: None }
+        Self::default()
     }
 }
 
