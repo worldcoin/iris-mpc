@@ -1,5 +1,15 @@
 #!/bin/sh
 
+# Migrate-checkpoint mode: skip seeding entirely and idle, so a checkpoint
+# migration can be driven interactively (`kubectl exec` -> `init-test-dbs
+# --migrate-checkpoint --party $SMPC__SERVER_COORDINATION__PARTY_ID ...`).
+# Avoids auto-writing on every restart (the row insert is not idempotent).
+if [ -n "${MIGRATE_CHECKPOINT:-}" ]; then
+    echo "MIGRATE_CHECKPOINT set: skipping seed, idling for manual checkpoint migration"
+    trap 'echo "Shutdown requested"; exit 0' SIGTERM SIGINT
+    while true; do sleep 1; done
+fi
+
 # opt-in codes left, right
 aws s3 cp s3://wf-smpcv2-stage-hnsw-performance-reports/graph_right.dat /tmp/graph_right.dat
 aws s3 cp s3://wf-smpcv2-stage-hnsw-performance-reports/graph_left.dat /tmp/graph_left.dat
