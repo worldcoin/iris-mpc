@@ -216,10 +216,12 @@ struct Args {
 
     /// Restrict `--migrate-checkpoint` to a single party (0, 1, or 2). Lets each
     /// party's checkpoint be uploaded under that party's own credentials, since
-    /// the per-party buckets are pod-IAM-role-scoped. When set, only that party's
-    /// `--db-url-party{N+1}` / `--db-schema-party{N+1}` / `--graph-bucket-party{N+1}`
-    /// are used; the other slots are ignored (pass any placeholder). When omitted,
-    /// all parties are processed in one run.
+    /// the per-party buckets are pod-IAM-role-scoped. When set, the connection and
+    /// bucket are taken from the party1 slot (`--db-url-party1` / `--db-schema-party1`
+    /// / `--graph-bucket-party1`) regardless of the party value, so every per-party
+    /// invocation is identical except `--party`; the value only sets the party_id
+    /// used for the S3 key namespace. The party2/party3 slots are ignored. When
+    /// omitted, all parties are processed in one run from their respective slots.
     #[clap(long)]
     party: Option<usize>,
 }
@@ -307,14 +309,18 @@ async fn migrate_checkpoint_to_s3(args: &Args) -> Result<()> {
     };
 
     for party_id in party_ids {
-        let bucket = buckets[party_id].clone().ok_or_else(|| {
+        // In single-party mode the connection/bucket come from the party1 slot
+        // regardless of which party_id this is, so every per-party invocation is
+        // identical except `--party`. `party_id` still drives the S3 key namespace.
+        let slot = if args.party.is_some() { 0 } else { party_id };
+        let bucket = buckets[slot].clone().ok_or_else(|| {
             eyre!(
                 "--graph-bucket-party{} is required for --migrate-checkpoint",
-                party_id + 1
+                slot + 1
             )
         })?;
-        let schema = &schemas[party_id];
-        let url = &urls[party_id];
+        let schema = &schemas[slot];
+        let url = &urls[slot];
 
         tracing::info!("Party {party_id}: connecting to schema {schema}");
         let client = PostgresClient::new(url, schema, AccessMode::ReadWrite).await?;
