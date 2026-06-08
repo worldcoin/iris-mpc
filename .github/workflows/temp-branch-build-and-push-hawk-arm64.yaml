@@ -6,6 +6,7 @@ on:
       - "dev"
       - "feat/recovery-update"
       - "pop-3712-reauth-skip-persistence-alias"
+      - "chore/migrate-checkpoint-init-db-image"
 
     paths-ignore:
       - "deploy/**"
@@ -57,4 +58,4 @@ jobs:
             ARCHITECTURE=aarch64
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          file: Dockerfile.arm64.hawk
+          file: Dockerfile.arm64.init-db
