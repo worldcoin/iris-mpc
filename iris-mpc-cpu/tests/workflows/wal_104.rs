@@ -84,7 +84,7 @@ impl TestRun for Wal104 {
 
         // Sidecar requires new mutations to trigger a cycle.
         builder.add_nodes(MIN_MUTATIONS_PER_SIDECAR_CYCLE);
-        builder.build(&nodes).await?;
+        builder.build(nodes).await?;
 
         // OlderNonArchival: removes the 3 non-archival older checkpoints; archival survives → 2 remain.
         run_cycle(ctx, PruningMode::OlderNonArchival).await?;
@@ -92,7 +92,7 @@ impl TestRun for Wal104 {
 
         // Sidecar requires new mutations to trigger a cycle.
         builder.add_nodes(MIN_MUTATIONS_PER_SIDECAR_CYCLE);
-        builder.build(&nodes).await?;
+        builder.build(nodes).await?;
 
         // AllOlder: only the latest checkpoint survives.
         run_cycle(ctx, PruningMode::AllOlder).await?;

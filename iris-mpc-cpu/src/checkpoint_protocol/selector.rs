@@ -212,7 +212,7 @@ mod tests {
             blake3_hash: "hash_5".into(),
             graph_version: 1,
         }];
-        let result = MostRecentCommon.pick(&mine, &vec![peer0, peer1]);
+        let result = MostRecentCommon.pick(&mine, &[peer0, peer1]);
         assert!(
             result.is_some(),
             "should find common checkpoint despite differing checkpoint_ids"
@@ -241,7 +241,7 @@ mod tests {
             blake3_hash: "hash_5".into(),
             graph_version: 1,
         }];
-        let result = StrictLatest.pick(&mine, &vec![peer0]);
+        let result = StrictLatest.pick(&mine, &[peer0]);
         assert!(
             result.is_some(),
             "should agree despite differing checkpoint_ids"

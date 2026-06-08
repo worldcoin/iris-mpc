@@ -162,7 +162,7 @@ impl WalMutationBuilder {
             .filter(|x| x.seq_no > self.processed as u64)
             .cloned()
             .collect();
-        mutations.sort_by(|a, b| a.seq_no.cmp(&b.seq_no));
+        mutations.sort_by_key(|a| a.seq_no);
         let mut tx = graph.pool().begin().await?;
         for m in mutations {
             let modification_id = m.seq_no as _;
@@ -195,7 +195,7 @@ impl WalMutationBuilder {
             .filter(|x| x.seq_no > self.processed as u64)
             .cloned()
             .collect();
-        mutations.sort_by(|a, b| a.seq_no.cmp(&b.seq_no));
+        mutations.sort_by_key(|a| a.seq_no);
         let result_message_body = format!(r#"{{"node_id":{party_id}}}"#);
         for m in mutations {
             let modification_id = m.seq_no as i64;
