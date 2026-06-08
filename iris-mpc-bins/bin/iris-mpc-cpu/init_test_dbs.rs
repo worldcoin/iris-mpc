@@ -213,6 +213,15 @@ struct Args {
     /// AWS region of the graph-checkpoint buckets.
     #[clap(long, default_value = "eu-central-1")]
     graph_bucket_region: String,
+
+    /// Restrict `--migrate-checkpoint` to a single party (0, 1, or 2). Lets each
+    /// party's checkpoint be uploaded under that party's own credentials, since
+    /// the per-party buckets are pod-IAM-role-scoped. When set, only that party's
+    /// `--db-url-party{N+1}` / `--db-schema-party{N+1}` / `--graph-bucket-party{N+1}`
+    /// are used; the other slots are ignored (pass any placeholder). When omitted,
+    /// all parties are processed in one run.
+    #[clap(long)]
+    party: Option<usize>,
 }
 
 impl Args {
@@ -287,7 +296,17 @@ async fn migrate_checkpoint_to_s3(args: &Args) -> Result<()> {
         .await;
     let s3_client = aws_sdk_s3::Client::new(&s3_config);
 
-    for party_id in 0..N_PARTIES {
+    let party_ids: Vec<usize> = match args.party {
+        Some(p) => {
+            if p >= N_PARTIES {
+                bail!("--party {p} out of range; must be 0..{N_PARTIES}");
+            }
+            vec![p]
+        }
+        None => (0..N_PARTIES).collect(),
+    };
+
+    for party_id in party_ids {
         let bucket = buckets[party_id].clone().ok_or_else(|| {
             eyre!(
                 "--graph-bucket-party{} is required for --migrate-checkpoint",
@@ -387,7 +406,10 @@ async fn migrate_checkpoint_to_s3(args: &Args) -> Result<()> {
         );
     }
 
-    tracing::info!("✅ Checkpoint migration complete for all {N_PARTIES} parties");
+    match args.party {
+        Some(p) => tracing::info!("✅ Checkpoint migration complete for party {p}"),
+        None => tracing::info!("✅ Checkpoint migration complete for all {N_PARTIES} parties"),
+    }
     Ok(())
 }
 
