@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use super::cpu_node::CpuNodes;
 use crate::utils::cpu_node::CpuNode;
 
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ModificationStatus {
     Completed,
@@ -111,6 +112,7 @@ impl WalMutationBuilder {
     }
 
     /// Sets the `status` for a single modification to `COMPLETED` or `PENDING`.
+    #[allow(dead_code)]
     pub fn set_status(&mut self, modification_id: i64, value: ModificationStatus) -> &mut Self {
         self.status.insert(modification_id, value);
         self
@@ -265,4 +267,3 @@ impl WalMutationBuilder {
         Ok(())
     }
 }
-

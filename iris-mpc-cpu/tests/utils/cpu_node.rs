@@ -7,10 +7,13 @@ use iris_mpc_common::{
     postgres::{AccessMode, PostgresClient},
     IrisVectorId, MASK_CODE_LENGTH,
 };
-use iris_mpc_cpu::graph_checkpoint::stream_serialize_and_upload_with;
 use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 use iris_mpc_cpu::hnsw::graph::graph_store::{GraphCheckpointRow, GraphPg};
 use iris_mpc_cpu::hnsw::GraphMem;
+use iris_mpc_cpu::{
+    graph_checkpoint::stream_serialize_and_upload_with,
+    utils::serialization::types::graph_v3::write_graph_v3,
+};
 // Retained for upcoming v3 checkpoint support — not yet wired up.
 #[allow(unused_imports)]
 use iris_mpc_cpu::utils::serialization::graph::GraphFormat;
@@ -350,11 +353,22 @@ impl CpuNode {
             .await?
             .ok_or_else(|| eyre!("no mutations found; cannot create checkpoint"))?;
         let last_iris_id = last_modification_id;
+        tracing::info!(
+            party_id,
+            last_modification_id,
+            "make_checkpoint_v3: fetching mutations"
+        );
         let mutation_rows = self
             .store
             .graph
             .get_hawk_graph_mutations(Some(last_modification_id))
             .await?;
+        tracing::info!(
+            party_id,
+            last_modification_id,
+            mutation_count = mutation_rows.len(),
+            "make_checkpoint_v3: mutations fetched"
+        );
         let mut left_graph = GraphMem::<IrisVectorId>::new();
         let mut right_graph = GraphMem::<IrisVectorId>::new();
         for row in &mutation_rows {
@@ -400,9 +414,21 @@ impl CpuNode {
         };
 
         let graph_pair: [graph_v3::GraphV3; 2] = [to_v3(left_graph), to_v3(right_graph)];
-        let bytes = bincode::serialize(&graph_pair)?;
+        // Use deterministic serialization so all parties produce identical bytes
+        // for the same logical graph (HashMap iteration order is non-deterministic).
+        let mut bytes = Vec::new();
+        write_graph_v3(&mut bytes, &graph_pair[0])?;
+        write_graph_v3(&mut bytes, &graph_pair[1])?;
         let hash_hex = hex::encode(blake3::hash(&bytes).as_bytes());
         let s3_key = format!("{party_id}/checkpoints/seed_{last_modification_id}");
+        tracing::info!(
+            party_id,
+            last_modification_id,
+            hash = %hash_hex,
+            graph_version = GraphFormat::V3.version(),
+            s3_key = %s3_key,
+            "make_checkpoint_v3: checkpoint computed"
+        );
 
         stream_serialize_and_upload_with(
             &self.s3,
