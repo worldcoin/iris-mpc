@@ -340,17 +340,7 @@ impl CpuNode {
             .ok_or_else(|| eyre!("no checkpoint row found after insert"))
     }
 
-    /// Create a non-archival genesis checkpoint serialized in the given
-    /// `format`.  Currently only [`GraphFormat::V3`] is supported; passing
-    /// any other variant will compile fine but may produce a checkpoint that
-    /// the node cannot load.
-    ///
-    /// Use [`CpuNodes::make_checkpoints_v3`] to fan this out across all three
-    /// parties in a single `tokio::try_join!`.
-    pub async fn make_checkpoint_v3(
-        &self,
-        format: GraphFormat,
-    ) -> eyre::Result<GraphCheckpointRow> {
+    pub async fn make_checkpoint_v3(&self) -> eyre::Result<GraphCheckpointRow> {
         let bucket = &self.config.checkpoint_bucket;
         let party_id = self.config.party_id;
         let last_modification_id = self
@@ -433,7 +423,7 @@ impl CpuNode {
             Some(last_modification_id),
             &hash_hex,
             false, // non-archival
-            format.version(),
+            GraphFormat::V3.version(),
         )
         .await?;
         tx.commit().await?;
@@ -674,14 +664,11 @@ impl CpuNodes {
     ///
     /// Each checkpoint is non-archival and serialized without the `seq_no`
     /// field (see [`CpuNode::make_checkpoint_v3`]).
-    pub async fn make_checkpoints_v3(
-        &self,
-        format: GraphFormat,
-    ) -> eyre::Result<[GraphCheckpointRow; 3]> {
+    pub async fn make_checkpoints_v3(&self) -> eyre::Result<[GraphCheckpointRow; 3]> {
         let (r0, r1, r2) = tokio::try_join!(
-            self.0[0].make_checkpoint_v3(format),
-            self.0[1].make_checkpoint_v3(format),
-            self.0[2].make_checkpoint_v3(format),
+            self.0[0].make_checkpoint_v3(),
+            self.0[1].make_checkpoint_v3(),
+            self.0[2].make_checkpoint_v3(),
         )?;
         Ok([r0, r1, r2])
     }
