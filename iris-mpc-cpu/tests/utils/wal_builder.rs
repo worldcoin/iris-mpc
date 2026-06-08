@@ -49,6 +49,7 @@ impl ModificationStatus {
 ///
 /// Default `persisted = true`, default `status = COMPLETED`.
 /// Use [`set_persisted`] / [`set_status`] to override individual modifications.
+#[derive(Default)]
 pub struct WalMutationBuilder {
     entries: HashMap<i64, GraphMutation<IrisVectorId>>,
     persisted: HashMap<i64, bool>,
@@ -265,8 +266,3 @@ impl WalMutationBuilder {
     }
 }
 
-impl Default for WalMutationBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
-}
