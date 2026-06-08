@@ -1,4 +1,5 @@
 pub mod distance_comparator;
+pub mod nvme_db;
 pub mod share_db;
 
 use std::collections::HashMap;

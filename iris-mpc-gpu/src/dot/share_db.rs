@@ -189,8 +189,8 @@ impl ProcessedDatabase for SlicedProcessedDatabase {
             index,
             &self.code_gr,
             record,
-            engine.device_manager.device_count(),
-            engine.code_length,
+            engine.device_manager().device_count(),
+            engine.code_length(),
         );
     }
 
@@ -206,8 +206,8 @@ impl ProcessedDatabase for SlicedProcessedDatabase {
             &self.code_gr,
             a0_host,
             a1_host,
-            engine.device_manager.device_count(),
-            engine.code_length,
+            engine.device_manager().device_count(),
+            engine.code_length(),
         );
     }
 
@@ -222,7 +222,7 @@ impl ProcessedDatabase for SlicedProcessedDatabase {
         device_index: usize,
         streams: &[CudaStream],
     ) {
-        let code_length = engine.code_length;
+        let code_length = engine.code_length();
         unsafe {
             dtoh_at_offset(
                 self.code_gr.limb_0[device_index],
@@ -263,8 +263,8 @@ impl ProcessedDatabase for SlicedProcessedDatabase {
     }
 
     fn preprocess(&mut self, engine: &ShareDB, db_lens: &[usize]) {
-        let code_len = engine.code_length;
-        for device_index in 0..engine.device_manager.device_count() {
+        let code_len = engine.code_length();
+        for device_index in 0..engine.device_manager().device_count() {
             for (limbs, sum_slices) in [
                 (&self.code_gr.limb_0, &mut self.code_sums_gr.limb_0),
                 (&self.code_gr.limb_1, &mut self.code_sums_gr.limb_1),
@@ -304,8 +304,8 @@ impl ProcessedDatabase for SlicedProcessedDatabase {
         db_sizes: &[usize],
         streams: &[CudaStream],
     ) {
-        for idx in 0..engine.device_manager.device_count() {
-            let device = engine.device_manager.device(idx);
+        for idx in 0..engine.device_manager().device_count() {
+            let device = engine.device_manager().device(idx);
             device.bind_to_thread().unwrap();
 
             if offset[idx] >= db_sizes[idx]
@@ -319,9 +319,9 @@ impl ProcessedDatabase for SlicedProcessedDatabase {
                 cudarc::driver::sys::lib()
                     .cuMemcpyHtoDAsync_v2(
                         *buffers.limb_0[idx].device_ptr(),
-                        (self.code_gr.limb_0[idx] as usize + offset[idx] * engine.code_length)
+                        (self.code_gr.limb_0[idx] as usize + offset[idx] * engine.code_length())
                             as *mut _,
-                        chunk_sizes[idx] * engine.code_length,
+                        chunk_sizes[idx] * engine.code_length(),
                         streams[idx].stream,
                     )
                     .result()
@@ -330,9 +330,9 @@ impl ProcessedDatabase for SlicedProcessedDatabase {
                 cudarc::driver::sys::lib()
                     .cuMemcpyHtoDAsync_v2(
                         *buffers.limb_1[idx].device_ptr(),
-                        (self.code_gr.limb_1[idx] as usize + offset[idx] * engine.code_length)
+                        (self.code_gr.limb_1[idx] as usize + offset[idx] * engine.code_length())
                             as *mut _,
-                        chunk_sizes[idx] * engine.code_length,
+                        chunk_sizes[idx] * engine.code_length(),
                         streams[idx].stream,
                     )
                     .result()
@@ -348,8 +348,8 @@ impl ProcessedDatabase for SlicedProcessedDatabase {
         indices: &[Vec<u32>],
         streams: &[CudaStream],
     ) {
-        for idx in 0..engine.device_manager.device_count() {
-            let device = engine.device_manager.device(idx);
+        for idx in 0..engine.device_manager().device_count() {
+            let device = engine.device_manager().device(idx);
             device.bind_to_thread().unwrap();
 
             for (offset, wanted_idx) in indices[idx].iter().enumerate() {
@@ -357,11 +357,11 @@ impl ProcessedDatabase for SlicedProcessedDatabase {
                     cudarc::driver::sys::lib()
                         .cuMemcpyHtoDAsync_v2(
                             *buffers.limb_0[idx].device_ptr()
-                                + (offset * engine.code_length) as u64,
+                                + (offset * engine.code_length()) as u64,
                             (self.code_gr.limb_0[idx] as usize
-                                + *wanted_idx as usize * engine.code_length)
+                                + *wanted_idx as usize * engine.code_length())
                                 as *mut _,
-                            engine.code_length,
+                            engine.code_length(),
                             streams[idx].stream,
                         )
                         .result()
@@ -370,11 +370,11 @@ impl ProcessedDatabase for SlicedProcessedDatabase {
                     cudarc::driver::sys::lib()
                         .cuMemcpyHtoDAsync_v2(
                             *buffers.limb_1[idx].device_ptr()
-                                + (offset * engine.code_length) as u64,
+                                + (offset * engine.code_length()) as u64,
                             (self.code_gr.limb_1[idx] as usize
-                                + *wanted_idx as usize * engine.code_length)
+                                + *wanted_idx as usize * engine.code_length())
                                 as *mut _,
-                            engine.code_length,
+                            engine.code_length(),
                             streams[idx].stream,
                         )
                         .result()
@@ -414,10 +414,10 @@ impl SlicedProcessedDatabase {
     /// [`ProcessedDatabase::preprocess`].
     #[allow(clippy::type_complexity)]
     pub fn load_full_db(&mut self, engine: &ShareDB, db_entries: &[u16]) -> Vec<usize> {
-        assert!(db_entries.len().is_multiple_of(engine.code_length));
+        assert!(db_entries.len().is_multiple_of(engine.code_length()));
 
-        let code_length = engine.code_length;
-        let n_shards = engine.device_manager.device_count();
+        let code_length = engine.code_length();
+        let n_shards = engine.device_manager().device_count();
         db_entries
             .par_chunks(code_length)
             .enumerate()
@@ -462,6 +462,16 @@ pub struct ShareDB {
 }
 
 impl ShareDB {
+    /// The per-record code length this engine operates on.
+    pub(crate) fn code_length(&self) -> usize {
+        self.code_length
+    }
+
+    /// The device manager backing this engine.
+    pub(crate) fn device_manager(&self) -> &Arc<DeviceManager> {
+        &self.device_manager
+    }
+
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::arc_with_non_send_sync)]
     pub fn init(
