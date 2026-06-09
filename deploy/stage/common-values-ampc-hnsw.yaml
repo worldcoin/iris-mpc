@@ -3,6 +3,83 @@ image: "ghcr.io/worldcoin/iris-mpc-cpu:v0.31.10@sha256:cf2f715c66748171940b44816
 environment: stage
 replicaCount: 1
 
+# Common environment variables shared across all hnsw nodes.
+# Defined as a map (keyed by variable name) so Helm deep-merges these with the
+# per-node `env` maps in each ampc-hnsw-N-stage/values-ampc-hnsw.yaml.
+env:
+  RUST_LOG: "info"
+  RUST_BACKTRACE: "full"
+  SMPC__PPROF_FLAME_ONLY: "true"
+  SMPC__ENABLE_PPROF_PER_BATCH: "true"
+  # Optional overrides (uncomment/customize as needed)
+  SMPC__PPROF_S3_BUCKET: "wf-smpcv2-stage-hnsw-performance-reports"
+  SMPC__PPROF_PREFIX: "stage/hnsw"
+  SMPC__PPROF_SECONDS: "180"
+  SMPC__PPROF_FREQUENCY: "49"
+  # Use Pod annotation as run-id (set via `podAnnotations` above)
+  SMPC__PPROF_RUN_ID:
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.annotations['loadtest/run-id']
+  SMPC__ENVIRONMENT: "stage"
+  SMPC__CPU_DATABASE__URL:
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_HNSW_URL
+        name: application
+  SMPC__MAX_DB_SIZE: "2000000"
+  SMPC__MAX_BATCH_SIZE: "1"
+  SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS: "30"
+  SMPC__PROCESSING_TIMEOUT_SECS: "1240"  # 2 minutes per batch in stage, bump to 4 in prod
+  SMPC__HAWK_REQUEST_PARALLELISM: "1024"
+  SMPC__HAWK_CONNECTION_PARALLELISM: "48"
+  SMPC__HAWK_STREAM_PARALLELISM: "32"
+  SMPC__OVERRIDE_MAX_BATCH_SIZE: "false"
+  SMPC__DISABLE_PERSISTENCE: "false"
+  SMPC__ENABLE_REAUTH: "true"
+  SMPC__ENABLE_RESET: "true"
+  SMPC__ENABLE_RECOVERY: "true"
+  SMPC__ENABLE_DELETION: "true"
+  SMPC__LUC_ENABLED: "true"
+  SMPC__LUC_LOOKBACK_RECORDS: "5"
+  SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST: "false"
+  SMPC__AWS__REGION: "eu-north-1"
+  SMPC__SERVICE_PORTS: '["4000","4001","4002"]'
+  SMPC__SERVER_COORDINATION__IMAGE_NAME: $(IMAGE_NAME)
+  SMPC__SHARES_BUCKET_NAME: "wf-smpcv2-stage-sns-requests"
+  SMPC__ENABLE_S3_IMPORTER: "false"
+  SMPC__DB_CHUNKS_FOLDER_NAME: "hnsw_even_odd_with_version_id_output_16k"
+  SMPC__LOAD_CHUNKS_PARALLELISM: "64"
+  SMPC__LOAD_CHUNKS_BUFFER_SIZE: "1024"
+  SMPC__REQUESTS_QUEUE_URL:
+    valueFrom:
+      secretKeyRef:
+        key: SQS_URL
+        name: application
+  SMPC__RESULTS_TOPIC_ARN:
+    valueFrom:
+      secretKeyRef:
+        key: SNS_RESULTS_ARN
+        name: application
+  SMPC__KMS_KEY_ARNS:
+    valueFrom:
+      secretKeyRef:
+        key: KMS_KEYS
+        name: application
+  SMPC__HEARTBEAT_INITIAL_RETRIES: "65"
+  SMPC__SERVICE__METRICS__HOST:
+    valueFrom:
+      fieldRef:
+        fieldPath: status.hostIP
+  SMPC__SERVICE__METRICS__PORT: "8125"
+  SMPC__SERVICE__METRICS__QUEUE_SIZE: "5000"
+  SMPC__SERVICE__METRICS__BUFFER_SIZE: "256"
+  SMPC__ENABLE_MODIFICATIONS_SYNC: "true"
+  SMPC__ENABLE_MODIFICATIONS_REPLAY: "true"
+  SMPC__TLS__PRIVATE_KEY: "/etc/ssl/private/key.pem"
+  SMPC__TLS__LEAF_CERT: "/etc/ssl/private/certificate.crt"
+  SMPC__TLS__ROOT_CERTS: '["/usr/local/share/ca-certificates/ca_party_stage_0.crt", "/usr/local/share/ca-certificates/ca_party_stage_1.crt", "/usr/local/share/ca-certificates/ca_party_stage_2.crt"]'
+
 strategy:
   type: Recreate
 
