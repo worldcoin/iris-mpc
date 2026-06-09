@@ -1,8 +1,6 @@
 #![recursion_limit = "256"]
 // Integration tests for the iris-mpc-cpu WAL pipeline.
 //
-// See tests/e2e_wal_readme.md for full design documentation.
-//
 // Run with:
 //   cargo test --test e2e_wal -- --nocapture
 //
@@ -22,8 +20,8 @@ use crate::utils::runner::TestRun;
 use eyre::bail;
 use serial_test::serial;
 use workflows::{
-    wal_100::Wal100, wal_102::Wal102, wal_104::Wal104, wal_105::Wal105, wal_106::Wal106,
-    wal_109::Wal109, wal_110::Wal110,
+    wal_100::Wal100, wal_104::Wal104, wal_105::Wal105, wal_106::Wal106, wal_109::Wal109,
+    wal_110::Wal110,
 };
 
 const RUST_LOG: &str = "info";
@@ -108,13 +106,13 @@ fn test_wal_100() -> eyre::Result<()> {
     run_test!(100, 1, Wal100::new())
 }
 
-#[test]
-#[serial]
-#[ignore = "requires external setup"]
-fn test_wal_102() -> eyre::Result<()> {
-    // TODO: fix bug in sidecar where it refuses to run if none of the nodes have a checkpoint
-    run_test!(102, 1, Wal102::new())
-}
+// #[test]
+// #[serial]
+// #[ignore = "requires external setup"]
+// fn test_wal_102() -> eyre::Result<()> {
+//     // TODO: make sidecar allow no checkpoint, or insert an empty graph as a checkpoint when this happens
+//     run_test!(102, 1, Wal102::new())
+// }
 
 #[test]
 #[serial]

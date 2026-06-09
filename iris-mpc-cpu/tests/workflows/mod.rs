@@ -1,4 +1,5 @@
 pub mod wal_100;
+#[allow(dead_code)]
 pub mod wal_102;
 pub mod wal_104;
 pub mod wal_105;
