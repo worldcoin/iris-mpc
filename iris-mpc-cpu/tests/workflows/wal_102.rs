@@ -25,7 +25,7 @@ impl Wal102 {
 
 impl TestRun for Wal102 {
     async fn setup(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
-        let nodes = CpuNodes::new_clean(&ctx.configs, ctx.make_s3_client().await).await?;
+        let nodes = CpuNodes::new_clean(&ctx.configs, ctx.s3_client.clone()).await?;
 
         // No base checkpoint — sidecar starts from scratch.
         WalMutationBuilder::new()

@@ -58,7 +58,7 @@ macro_rules! run_test {
 
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(async {
-            let ctx = utils::runner::CpuTestContext::new($kind, $idx);
+            let ctx = utils::runner::CpuTestContext::new($kind, $idx).await;
 
             // One-time global setup: runs only for the first test in the suite.
             // Tests are serial so there is no concurrent access concern here.

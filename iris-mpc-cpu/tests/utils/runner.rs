@@ -107,6 +107,9 @@ pub trait TestRun {
 pub struct CpuTestContext {
     pub configs: CpuConfigs,
     pub env: TestEnvironment,
+    /// Pre-built S3 client pointed at the LocalStack instance for this environment.
+    /// Shared across all lifecycle phases to guarantee a consistent endpoint configuration.
+    pub s3_client: aws_sdk_s3::Client,
     /// Test number (100–104) for log tagging and config selection.
     pub kind: usize,
     /// Test run index (usually 1) for multi-run scenarios.
@@ -116,18 +119,6 @@ pub struct CpuTestContext {
 }
 
 impl CpuTestContext {
-    /// Creates an [`aws_sdk_s3::Client`] pointed at the LocalStack instance for
-    /// the current [`TestEnvironment`].  Pass this to [`CpuNodes::new`] /
-    /// [`CpuNodes::new_clean`] so all nodes share one properly-configured client.
-    pub async fn make_s3_client(&self) -> aws_sdk_s3::Client {
-        let aws_config = aws_config::load_from_env().await;
-        let s3_config = aws_sdk_s3::config::Builder::from(&aws_config)
-            .endpoint_url(self.env.s3_endpoint())
-            .force_path_style(true)
-            .build();
-        aws_sdk_s3::Client::from_conf(s3_config)
-    }
-
     /// Creates an [`iris_mpc_utils::aws::AwsClient`] pointed at the LocalStack
     /// instance for the current [`TestEnvironment`].  Use this in test setups
     /// that need to upload iris shares
@@ -147,14 +138,22 @@ impl CpuTestContext {
         Ok(aws_client)
     }
 
-    pub fn new(kind: usize, idx: usize) -> Self {
+    pub async fn new(kind: usize, idx: usize) -> Self {
         let env = if std::path::Path::new("/.dockerenv").exists() {
             TestEnvironment::Docker
         } else {
             TestEnvironment::Local
         };
+        let aws_config = aws_config::load_from_env().await;
+        let s3_client = aws_sdk_s3::Client::from_conf(
+            aws_sdk_s3::config::Builder::from(&aws_config)
+                .endpoint_url(env.s3_endpoint())
+                .force_path_style(true)
+                .build(),
+        );
         Self {
             configs: Self::load_configs(&env),
+            s3_client,
             env,
             kind,
             idx,

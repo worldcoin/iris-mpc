@@ -76,11 +76,7 @@ macro_rules! run_hawk {
 #[macro_export]
 macro_rules! run_sidecar {
     ($configs:expr, $shutdown:expr, $ctx:expr) => {{
-        // Build the S3 client once using the test context so that the correct
-        // LocalStack endpoint (http://localstack:4566 in Docker CI) is used.
-        // Without this, aws_config::load_from_env() produces a client that
-        // resolves real AWS S3 hostnames, causing DNS failures in CI.
-        let s3_client = $ctx.make_s3_client().await;
+        let s3_client = $ctx.s3_client.clone();
         let mut join_set: tokio::task::JoinSet<eyre::Result<()>> = tokio::task::JoinSet::new();
         let sidecar_addresses: Vec<String> = ($configs)
             .iter()
