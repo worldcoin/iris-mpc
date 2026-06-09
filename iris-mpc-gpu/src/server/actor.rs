@@ -2,12 +2,13 @@ use super::BatchQuery;
 use crate::{
     dot::{
         distance_comparator::DistanceComparator,
-        share_db::{preprocess_query, DBChunkBuffers, ShareDB, SlicedProcessedDatabase},
+        share_db::{
+            preprocess_query, DBChunkBuffers, ProcessedDatabase, ShareDB, SlicedProcessedDatabase,
+        },
         PartialResultsWithRotations, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS, THRESHOLD_A,
         THRESHOLD_ANON_STATS_A,
     },
     helpers::{
-        self,
         comm::NcclComm,
         device_manager::DeviceManager,
         htod_on_stream_sync,
@@ -1538,6 +1539,8 @@ impl ServerActor {
                         self.device_manager.device(i).bind_to_thread().unwrap();
                         for insertion_idx in uniqueness_insertion_list[i].clone() {
                             write_db_at_index(
+                                &self.codes_engine,
+                                &self.masks_engine,
                                 match self.full_scan_side {
                                     Eye::Left => &self.left_code_db_slices,
                                     Eye::Right => &self.right_code_db_slices,
@@ -1593,6 +1596,8 @@ impl ServerActor {
                                 continue;
                             }
                             write_db_at_index(
+                                &self.codes_engine,
+                                &self.masks_engine,
                                 match self.full_scan_side {
                                     Eye::Left => &self.left_code_db_slices,
                                     Eye::Right => &self.right_code_db_slices,
@@ -1966,14 +1971,14 @@ impl ServerActor {
                 "prefetch_db_chunk",
                 self.enable_debug_timing,
                 {
-                    self.codes_engine.prefetch_db_subset_into_chunk_buffers(
-                        code_db_slices,
+                    code_db_slices.prefetch_subset(
+                        &self.codes_engine,
                         &self.code_chunk_buffers[0],
                         &db_subset_idx_chunk,
                         &self.streams[0],
                     );
-                    self.masks_engine.prefetch_db_subset_into_chunk_buffers(
-                        mask_db_slices,
+                    mask_db_slices.prefetch_subset(
+                        &self.masks_engine,
                         &self.mask_chunk_buffers[0],
                         &db_subset_idx_chunk,
                         &self.streams[0],
@@ -2285,16 +2290,16 @@ impl ServerActor {
             "prefetch_db_chunk",
             self.enable_debug_timing,
             {
-                self.codes_engine.prefetch_db_chunk(
-                    code_db_slices,
+                code_db_slices.prefetch_chunk(
+                    &self.codes_engine,
                     &self.code_chunk_buffers[0],
                     &chunk_sizes(0),
                     &vec![0; self.device_manager.device_count()],
                     &self.current_db_sizes,
                     &self.streams[0],
                 );
-                self.masks_engine.prefetch_db_chunk(
-                    mask_db_slices,
+                mask_db_slices.prefetch_chunk(
+                    &self.masks_engine,
                     &self.mask_chunk_buffers[0],
                     &chunk_sizes(0),
                     &vec![0; self.device_manager.device_count()],
@@ -2346,16 +2351,16 @@ impl ServerActor {
                 "prefetch_db_chunk",
                 self.enable_debug_timing,
                 {
-                    self.codes_engine.prefetch_db_chunk(
-                        code_db_slices,
+                    code_db_slices.prefetch_chunk(
+                        &self.codes_engine,
                         &self.code_chunk_buffers[(db_chunk_idx + 1) % 2],
                         &next_chunk_size,
                         &chunk_size.iter().map(|s| offset + s).collect::<Vec<_>>(),
                         &self.current_db_sizes,
                         next_request_streams,
                     );
-                    self.masks_engine.prefetch_db_chunk(
-                        mask_db_slices,
+                    mask_db_slices.prefetch_chunk(
+                        &self.masks_engine,
                         &self.mask_chunk_buffers[(db_chunk_idx + 1) % 2],
                         &next_chunk_size,
                         &chunk_size.iter().map(|s| offset + s).collect::<Vec<_>>(),
@@ -2654,6 +2659,8 @@ impl ServerActor {
                     .bind_to_thread()
                     .unwrap();
                 write_db_at_index(
+                    &self.codes_engine,
+                    &self.masks_engine,
                     &self.left_code_db_slices,
                     &self.left_mask_db_slices,
                     &self.right_code_db_slices,
@@ -2697,6 +2704,8 @@ impl ServerActor {
                     .bind_to_thread()
                     .unwrap();
                 write_db_at_index(
+                    &self.codes_engine,
+                    &self.masks_engine,
                     &self.left_code_db_slices,
                     &self.left_mask_db_slices,
                     &self.right_code_db_slices,
@@ -3534,6 +3543,8 @@ impl ServerActor {
 
 #[allow(clippy::too_many_arguments)]
 fn write_db_at_index(
+    code_engine: &ShareDB,
+    mask_engine: &ShareDB,
     left_code_db_slices: &SlicedProcessedDatabase,
     left_mask_db_slices: &SlicedProcessedDatabase,
     right_code_db_slices: &SlicedProcessedDatabase,
@@ -3547,69 +3558,41 @@ fn write_db_at_index(
     device_index: usize,
     streams: &[CudaStream],
 ) {
-    for (code_length, db, query, sums) in [
+    for (engine, db, query, sums) in [
         (
-            IRIS_CODE_LENGTH,
+            code_engine,
             left_code_db_slices,
             &compact_device_queries_left.code_query_insert,
             &compact_device_sums_left.code_query_insert,
         ),
         (
-            MASK_CODE_LENGTH,
+            mask_engine,
             left_mask_db_slices,
             &compact_device_queries_left.mask_query_insert,
             &compact_device_sums_left.mask_query_insert,
         ),
         (
-            IRIS_CODE_LENGTH,
+            code_engine,
             right_code_db_slices,
             &compact_device_queries_right.code_query_insert,
             &compact_device_sums_right.code_query_insert,
         ),
         (
-            MASK_CODE_LENGTH,
+            mask_engine,
             right_mask_db_slices,
             &compact_device_queries_right.mask_query_insert,
             &compact_device_sums_right.mask_query_insert,
         ),
     ] {
-        unsafe {
-            helpers::dtoh_at_offset(
-                db.code_gr.limb_0[device_index],
-                dst_index * code_length,
-                *query.limb_0[device_index].device_ptr(),
-                code_length * 15 + src_index * code_length * ROTATIONS,
-                code_length,
-                streams[device_index].stream,
-            );
-
-            helpers::dtoh_at_offset(
-                db.code_gr.limb_1[device_index],
-                dst_index * code_length,
-                *query.limb_1[device_index].device_ptr(),
-                code_length * 15 + src_index * code_length * ROTATIONS,
-                code_length,
-                streams[device_index].stream,
-            );
-
-            helpers::dtod_at_offset(
-                *db.code_sums_gr.limb_0[device_index].device_ptr(),
-                dst_index * mem::size_of::<u32>(),
-                *sums.limb_0[device_index].device_ptr(),
-                mem::size_of::<u32>() * 15 + src_index * mem::size_of::<u32>() * ROTATIONS,
-                mem::size_of::<u32>(),
-                streams[device_index].stream,
-            );
-
-            helpers::dtod_at_offset(
-                *db.code_sums_gr.limb_1[device_index].device_ptr(),
-                dst_index * mem::size_of::<u32>(),
-                *sums.limb_1[device_index].device_ptr(),
-                size_of::<u32>() * 15 + src_index * mem::size_of::<u32>() * ROTATIONS,
-                size_of::<u32>(),
-                streams[device_index].stream,
-            );
-        }
+        db.write_at_index(
+            engine,
+            query,
+            sums,
+            src_index,
+            dst_index,
+            device_index,
+            streams,
+        );
     }
 }
 
@@ -3683,34 +3666,14 @@ impl InMemoryStore for ServerActor {
         right_code: &[u16],
         right_mask: &[u16],
     ) {
-        ShareDB::load_single_record_from_db(
-            index,
-            &self.left_code_db_slices.code_gr,
-            left_code,
-            self.device_manager.device_count(),
-            IRIS_CODE_LENGTH,
-        );
-        ShareDB::load_single_record_from_db(
-            index,
-            &self.left_mask_db_slices.code_gr,
-            left_mask,
-            self.device_manager.device_count(),
-            MASK_CODE_LENGTH,
-        );
-        ShareDB::load_single_record_from_db(
-            index,
-            &self.right_code_db_slices.code_gr,
-            right_code,
-            self.device_manager.device_count(),
-            IRIS_CODE_LENGTH,
-        );
-        ShareDB::load_single_record_from_db(
-            index,
-            &self.right_mask_db_slices.code_gr,
-            right_mask,
-            self.device_manager.device_count(),
-            MASK_CODE_LENGTH,
-        );
+        self.left_code_db_slices
+            .load_single_record_from_db(&self.codes_engine, index, left_code);
+        self.left_mask_db_slices
+            .load_single_record_from_db(&self.masks_engine, index, left_mask);
+        self.right_code_db_slices
+            .load_single_record_from_db(&self.codes_engine, index, right_code);
+        self.right_mask_db_slices
+            .load_single_record_from_db(&self.masks_engine, index, right_mask);
     }
     fn increment_db_size(&mut self, index: usize) {
         self.current_db_sizes[index % self.device_manager.device_count()] += 1;
@@ -3729,37 +3692,29 @@ impl InMemoryStore for ServerActor {
         right_mask_odd: &[u8],
         right_mask_even: &[u8],
     ) {
-        ShareDB::load_single_record_from_s3(
+        self.left_code_db_slices.load_single_record_from_s3(
+            &self.codes_engine,
             index,
-            &self.left_code_db_slices.code_gr,
             left_code_odd,
             left_code_even,
-            self.device_manager.device_count(),
-            IRIS_CODE_LENGTH,
         );
-        ShareDB::load_single_record_from_s3(
+        self.left_mask_db_slices.load_single_record_from_s3(
+            &self.masks_engine,
             index,
-            &self.left_mask_db_slices.code_gr,
             left_mask_odd,
             left_mask_even,
-            self.device_manager.device_count(),
-            MASK_CODE_LENGTH,
         );
-        ShareDB::load_single_record_from_s3(
+        self.right_code_db_slices.load_single_record_from_s3(
+            &self.codes_engine,
             index,
-            &self.right_code_db_slices.code_gr,
             right_code_odd,
             right_code_even,
-            self.device_manager.device_count(),
-            IRIS_CODE_LENGTH,
         );
-        ShareDB::load_single_record_from_s3(
+        self.right_mask_db_slices.load_single_record_from_s3(
+            &self.masks_engine,
             index,
-            &self.right_mask_db_slices.code_gr,
             right_mask_odd,
             right_mask_even,
-            self.device_manager.device_count(),
-            MASK_CODE_LENGTH,
         );
     }
 
@@ -3767,14 +3722,14 @@ impl InMemoryStore for ServerActor {
         // we also register the memory allocated, page-locking it for more performance
         self.register_host_memory();
 
-        self.codes_engine
-            .preprocess_db(&mut self.left_code_db_slices, &self.current_db_sizes);
-        self.masks_engine
-            .preprocess_db(&mut self.left_mask_db_slices, &self.current_db_sizes);
-        self.codes_engine
-            .preprocess_db(&mut self.right_code_db_slices, &self.current_db_sizes);
-        self.masks_engine
-            .preprocess_db(&mut self.right_mask_db_slices, &self.current_db_sizes);
+        self.left_code_db_slices
+            .preprocess(&self.codes_engine, &self.current_db_sizes);
+        self.left_mask_db_slices
+            .preprocess(&self.masks_engine, &self.current_db_sizes);
+        self.right_code_db_slices
+            .preprocess(&self.codes_engine, &self.current_db_sizes);
+        self.right_mask_db_slices
+            .preprocess(&self.masks_engine, &self.current_db_sizes);
     }
 
     fn current_db_sizes(&self) -> impl std::fmt::Debug {
