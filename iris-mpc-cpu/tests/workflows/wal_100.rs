@@ -46,7 +46,7 @@ impl Wal100 {
 
 impl TestRun for Wal100 {
     async fn setup(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
-        let nodes = CpuNodes::new_clean(&ctx.configs).await?;
+        let nodes = CpuNodes::new_clean(&ctx.configs, ctx.make_s3_client().await).await?;
         let mut builder = WalMutationBuilder::new();
 
         // Phase 1: build the genesis graph and checkpoint it in V3 format.

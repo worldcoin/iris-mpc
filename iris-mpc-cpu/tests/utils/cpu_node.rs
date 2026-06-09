@@ -144,10 +144,8 @@ pub struct CpuNode {
 }
 
 impl CpuNode {
-    pub async fn new(config: CpuNodeConfig) -> eyre::Result<Self> {
+    pub async fn new(config: CpuNodeConfig, s3: aws_sdk_s3::Client) -> eyre::Result<Self> {
         let stores = DbStores::new(&config).await?;
-        let aws_config = aws_config::load_from_env().await;
-        let s3 = aws_sdk_s3::Client::new(&aws_config);
         Ok(Self {
             store: stores,
             s3,
@@ -534,20 +532,20 @@ impl CpuNode {
 pub struct CpuNodes(pub [CpuNode; 3]);
 
 impl CpuNodes {
-    pub async fn new(configs: &CpuConfigs) -> eyre::Result<Self> {
+    pub async fn new(configs: &CpuConfigs, s3: aws_sdk_s3::Client) -> eyre::Result<Self> {
         // Construct all 3 concurrently.
         let (n0, n1, n2) = tokio::try_join!(
-            CpuNode::new(configs[0].clone()),
-            CpuNode::new(configs[1].clone()),
-            CpuNode::new(configs[2].clone()),
+            CpuNode::new(configs[0].clone(), s3.clone()),
+            CpuNode::new(configs[1].clone(), s3.clone()),
+            CpuNode::new(configs[2].clone(), s3),
         )?;
         Ok(Self([n0, n1, n2]))
     }
 
     /// Create nodes and immediately truncate checkpoint tables and clear S3 buckets —
     /// the standard starting state for every workflow test.
-    pub async fn new_clean(configs: &CpuConfigs) -> eyre::Result<Self> {
-        let nodes = Self::new(configs).await?;
+    pub async fn new_clean(configs: &CpuConfigs, s3: aws_sdk_s3::Client) -> eyre::Result<Self> {
+        let nodes = Self::new(configs, s3).await?;
         nodes.clear_all_s3_buckets(configs).await?;
         nodes.truncate_checkpoint_tables().await?;
         // Log the exclusions file if it exists — leftover state from a prior run

@@ -1,4 +1,5 @@
 use super::CpuConfigs;
+use aws_config;
 use tokio_util::sync::CancellationToken;
 
 /// Lifecycle trait implemented by each `wal_NNN` test struct.
@@ -115,6 +116,18 @@ pub struct CpuTestContext {
 }
 
 impl CpuTestContext {
+    /// Creates an [`aws_sdk_s3::Client`] pointed at the LocalStack instance for
+    /// the current [`TestEnvironment`].  Pass this to [`CpuNodes::new`] /
+    /// [`CpuNodes::new_clean`] so all nodes share one properly-configured client.
+    pub async fn make_s3_client(&self) -> aws_sdk_s3::Client {
+        let aws_config = aws_config::load_from_env().await;
+        let s3_config = aws_sdk_s3::config::Builder::from(&aws_config)
+            .endpoint_url(self.env.s3_endpoint())
+            .force_path_style(true)
+            .build();
+        aws_sdk_s3::Client::from_conf(s3_config)
+    }
+
     /// Creates an [`iris_mpc_utils::aws::AwsClient`] pointed at the LocalStack
     /// instance for the current [`TestEnvironment`].  Use this in test setups
     /// that need to upload iris shares

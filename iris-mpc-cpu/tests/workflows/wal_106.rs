@@ -29,7 +29,7 @@ impl Wal106 {
 
 impl TestRun for Wal106 {
     async fn setup(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
-        let nodes = CpuNodes::new_clean(&ctx.configs).await?;
+        let nodes = CpuNodes::new_clean(&ctx.configs, ctx.make_s3_client().await).await?;
 
         let mut builder = WalMutationBuilder::new();
         builder.add_nodes(MIN_MUTATIONS_PER_SIDECAR_CYCLE);

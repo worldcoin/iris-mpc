@@ -43,7 +43,7 @@ async fn run_cycle(ctx: &CpuTestContext, pruning_mode: PruningMode) -> eyre::Res
 
 impl TestRun for Wal104 {
     async fn setup(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
-        let nodes = CpuNodes::new_clean(&ctx.configs).await?;
+        let nodes = CpuNodes::new_clean(&ctx.configs, ctx.make_s3_client().await).await?;
 
         let mut builder = WalMutationBuilder::new();
         builder.add_nodes(MIN_MUTATIONS_PER_SIDECAR_CYCLE);

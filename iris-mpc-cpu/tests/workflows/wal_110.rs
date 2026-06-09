@@ -32,7 +32,7 @@ impl Wal110 {
 
 impl TestRun for Wal110 {
     async fn setup(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
-        let nodes = CpuNodes::new_clean(&ctx.configs).await?;
+        let nodes = CpuNodes::new_clean(&ctx.configs, ctx.make_s3_client().await).await?;
         let aws_client = ctx.make_aws_client().await?;
 
         // builder_a (party 1): AddNode only for node 1 — no prior nodes, so no AddEdges.
