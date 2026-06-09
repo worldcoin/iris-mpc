@@ -37,7 +37,11 @@ fn meta(id: i64, mut_id: Option<i64>) -> CheckpointMeta {
         last_indexed_iris_id: 0,
         last_indexed_modification_id: 0,
         graph_mutation_id: mut_id,
-        blake3_hash: "deadbeef".into(),
+        // Include `id` in the hash so that checkpoints with different ids are
+        // treated as distinct by `CheckpointMeta::same_checkpoint()`, which
+        // compares `blake3_hash` (among other content fields) but not
+        // `checkpoint_id` (which is considered a local DB artefact).
+        blake3_hash: format!("deadbeef{id:016x}"),
         graph_version: 1,
     }
 }

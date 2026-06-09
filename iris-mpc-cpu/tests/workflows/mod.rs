@@ -160,8 +160,8 @@ macro_rules! run_sidecar {
 
 /// Cancel the shared `CancellationToken` and drain the `JoinSet`.
 ///
-/// Propagates the first task error encountered.  Should be called even when
-/// the test is about to fail so that background tasks are cleaned up.
+/// Task errors are logged as warnings but not propagated.  Should be called
+/// even when the test is about to fail so that background tasks are cleaned up.
 #[macro_export]
 macro_rules! stop_and_join {
     ($token:expr, $join_set:expr) => {{

@@ -1,7 +1,7 @@
 /// wal_100 — hawk_main loads a V3 checkpoint on first run after genesis reset.
 ///
 /// Simulates the scenario where a cluster has been reset to a genesis state and
-/// the V3-format checkpoint is the only graph on disk.  No sidecar is involved.
+/// the V3-format checkpoint is the only graph on disk.
 ///
 /// Sequence:
 ///   1. Seed INITIAL_CHECKPOINT_NODES mutations into the WAL.
@@ -12,7 +12,7 @@
 ///   3. Add DELTA_NODES new mutations after the checkpoint to exercise the
 ///      roll-forward path (graph compaction pipeline + WAL write).
 ///   4. Run hawk_main; assert it reaches "ready" — confirming V3 load works.
-///   5. No sidecar cycle: checkpoint count must remain 1 throughout.
+///   5. sidecar cycle: rollthe DELTA_NODES into a GraphFormat::Current checkpoint
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
@@ -82,14 +82,20 @@ impl TestRun for Wal100 {
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
         // hawk_main must load the V3 checkpoint, replay the DELTA_NODES WAL
         // mutations through the graph compaction pipeline, and reach ready.
-        let shutdown = CancellationToken::new();
-        let mut hawk_set = run_hawk!(ctx.configs, shutdown.clone(), ctx);
-        let res = wait_for_all_ready(&ctx.configs, &mut hawk_set, Duration::from_secs(60)).await;
-        stop_and_join!(shutdown, hawk_set);
-        res?;
+        {
+            let shutdown = CancellationToken::new();
+            let mut hawk_set = run_hawk!(ctx.configs, shutdown.clone(), ctx);
+            let res =
+                wait_for_all_ready(&ctx.configs, &mut hawk_set, Duration::from_secs(60)).await;
+            stop_and_join!(shutdown, hawk_set);
+            res?;
+        }
 
-        let sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
-        expect_sidecar_success(shutdown, sidecar_set).await
+        {
+            let shutdown = CancellationToken::new();
+            let sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
+            expect_sidecar_success(shutdown, sidecar_set).await
+        }
     }
 
     async fn exec_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {

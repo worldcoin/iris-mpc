@@ -117,9 +117,7 @@ pub struct CpuTestContext {
 impl CpuTestContext {
     /// Creates an [`iris_mpc_utils::aws::AwsClient`] pointed at the LocalStack
     /// instance for the current [`TestEnvironment`].  Use this in test setups
-    /// that need to upload iris shares (e.g. via
-    /// [`WalMutationBuilder::with_aws_client`]) rather than repeating the
-    /// `AwsClientConfig::new(...)` boilerplate in every test file.
+    /// that need to upload iris shares
     pub async fn make_aws_client(&self) -> eyre::Result<iris_mpc_utils::aws::AwsClient> {
         use iris_mpc_utils::aws::{AwsClient, AwsClientConfig};
         let aws_config = AwsClientConfig::new(
