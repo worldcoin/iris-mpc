@@ -1,7 +1,7 @@
 //! Setup-time construction of per-eye worker pools and the metadata-only
-//! `VectorIdRegistry`. Registries are derived from the load source
-//! (PG id+version scan, seed map, or known size) — independent of
-//! the worker pool's iris store.
+//! `VectorIdRegistry`. Each registry is derived from its eye's iris store
+//! via `to_registry`, so it mirrors exactly what was loaded — never an
+//! independent scan that could disagree with a concurrently-mutated DB.
 
 use crate::execution::hawk_main::iris_worker::{
     init_workers, IrisPoolHandle, IrisWorkerPool, LocalIrisWorkerPool,
@@ -14,15 +14,13 @@ use crate::hawkers::shared_irises::SharedIrises;
 use crate::protocol::shared_iris::GaloisRingSharedIris;
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use async_trait::async_trait;
-use eyre::{eyre, Result};
-use futures::TryStreamExt;
+use eyre::Result;
 use iris_mpc_common::config::Config;
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::vector_id::VectorId;
 use iris_mpc_store::loader::load_iris_db;
 use iris_mpc_store::Store;
 use itertools::izip;
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::try_join;
 
@@ -159,31 +157,29 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                     iris_pools: workers_handle.clone(),
                     db_size: 0,
                 };
-                // Iris load (full rows) and id+version scan (index-only)
-                // run in parallel against the same PG.
-                let (_, template) = try_join!(
-                    async {
-                        load_iris_db(
-                            &mut adapter,
-                            &store,
-                            max_serial_id,
-                            parallelism,
-                            s3_max_serial_id,
-                            &config,
-                            shutdown_handler,
-                        )
-                        .await
-                    },
-                    build_registry_from_db(&store, max_serial_id),
-                )?;
+                load_iris_db(
+                    &mut adapter,
+                    &store,
+                    max_serial_id,
+                    parallelism,
+                    s3_max_serial_id,
+                    &config,
+                    shutdown_handler,
+                )
+                .await?;
                 // Drain the channels so every fire-and-forget `Insert`
-                // lands in the store before we read `set_hash`.
+                // lands in the store before we derive the registry from it.
                 try_join!(
                     workers_handle[LEFT].wait_completion(),
                     workers_handle[RIGHT].wait_completion(),
                 )?;
                 db_size = adapter.db_size;
-                [template.clone().to_arc(), template.to_arc()]
+                // Derive each eye's registry from its loaded iris store, so
+                // the registry mirrors exactly what was loaded.
+                [
+                    iris_stores[LEFT].data.read().await.to_registry().to_arc(),
+                    iris_stores[RIGHT].data.read().await.to_registry().to_arc(),
+                ]
             }
         };
 
@@ -201,21 +197,6 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
             iris_stores[RIGHT].data.read().await.set_hash.checksum(),
         ];
 
-        // Cross-check: registry-side checksum (load source) must match
-        // pool-side `set_hash` (loaded data). Mismatch = loader dropped
-        // or duplicated rows.
-        for side in [LEFT, RIGHT] {
-            let expected = registries[side].data.read().await.set_hash.checksum();
-            let got = post_load_checksums[side];
-            if expected != got {
-                return Err(eyre!(
-                    "worker pool checksum mismatch on side {side}: \
-                     registry expected {expected:#x}, pool reported {got:#x} \
-                     — loader dropped or duplicated rows vs the registry scan"
-                ));
-            }
-        }
-
         tracing::info!(
             "Workers initialized. Checksums: L={:#x} R={:#x}, db_size={}",
             post_load_checksums[LEFT],
@@ -225,21 +206,6 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
 
         Ok(InitializedWorkers { pools, registries })
     }
-}
-
-/// Build a registry template from a `(serial_id, version_id)` index-only
-/// scan of PG (no iris bytes). Returns the inner `SharedIrises<()>`;
-/// caller wraps each eye in its own `Arc<RwLock>`.
-pub async fn build_registry_from_db(
-    store: &Store,
-    max_serial_id: usize,
-) -> Result<SharedIrises<()>> {
-    let mut points: HashMap<VectorId, ()> = HashMap::with_capacity(max_serial_id);
-    let mut stream = store.stream_iris_ids(max_serial_id);
-    while let Some((id, version_id)) = stream.try_next().await? {
-        points.insert(VectorId::new(id as u32, version_id), ());
-    }
-    Ok(SharedIrises::<()>::new(points, ()))
 }
 
 /// `InMemoryStore` adapter that fans a single PG read into both eyes'
