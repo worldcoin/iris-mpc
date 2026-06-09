@@ -63,6 +63,15 @@ nodeSelector:
   karpenter.sh/capacity-type: on-demand
   topology.k8s.aws/zone-id: "euc1-az1"
 
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: karpenter.k8s.aws/instance-family
+              operator: In
+              values: ["c8g"]
+
 podSecurityContext:
   runAsUser: 65534
   runAsGroup: 65534
