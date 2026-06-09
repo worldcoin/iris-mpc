@@ -1,7 +1,6 @@
 //! Setup-time construction of per-eye worker pools and the metadata-only
 //! `VectorIdRegistry`. Each registry is derived from its eye's iris store
-//! via `to_registry`, so it mirrors exactly what was loaded — never an
-//! independent scan that could disagree with a concurrently-mutated DB.
+//! via `to_registry`, so it mirrors exactly what was loaded.
 
 use crate::execution::hawk_main::iris_worker::{
     init_workers, IrisPoolHandle, IrisWorkerPool, LocalIrisWorkerPool,
@@ -167,15 +166,13 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                     shutdown_handler,
                 )
                 .await?;
-                // Drain the channels so every fire-and-forget `Insert`
-                // lands in the store before we derive the registry from it.
+                // Drain the channels so every fire-and-forget `Insert` lands
+                // in the store before we read it back via `to_registry`.
                 try_join!(
                     workers_handle[LEFT].wait_completion(),
                     workers_handle[RIGHT].wait_completion(),
                 )?;
                 db_size = adapter.db_size;
-                // Derive each eye's registry from its loaded iris store, so
-                // the registry mirrors exactly what was loaded.
                 [
                     iris_stores[LEFT].data.read().await.to_registry().to_arc(),
                     iris_stores[RIGHT].data.read().await.to_registry().to_arc(),
