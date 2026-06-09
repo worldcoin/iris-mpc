@@ -160,20 +160,25 @@ macro_rules! run_sidecar {
 
 /// Cancel the shared `CancellationToken` and drain the `JoinSet`.
 ///
-/// Task errors are logged as warnings but not propagated.  Should be called
+/// Returns the first task error encountered, or `Ok(())` if all tasks shut
+/// down cleanly.  Always drains the full set regardless.  Should be called
 /// even when the test is about to fail so that background tasks are cleaned up.
 #[macro_export]
 macro_rules! stop_and_join {
     ($token:expr, $join_set:expr) => {{
         $token.cancel();
+        let mut first_err: Option<eyre::Report> = None;
         while let Some(result) = $join_set.join_next().await {
-            match result {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => tracing::warn!("task error during shutdown: {e:#}"),
-                Err(e) if e.is_cancelled() => {}
-                Err(e) => tracing::warn!("task join error during shutdown: {e}"),
-            }
+            let err = match result {
+                Ok(Ok(())) => continue,
+                Err(e) if e.is_cancelled() => continue,
+                Ok(Err(e)) => e,
+                Err(e) => eyre::eyre!("task join error: {e}"),
+            };
+            tracing::warn!("task error during shutdown: {err:#}");
+            first_err.get_or_insert(err);
         }
+        first_err.map_or(Ok(()), Err)
     }};
 }
 
