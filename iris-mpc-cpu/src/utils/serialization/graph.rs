@@ -806,3 +806,43 @@ fn read_hashed_layer_streaming<R: std::io::Read + ?Sized>(
 
     Ok(layer)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Multi-node layer inserted out of key order, so `HashMap` iteration order
+    /// is overwhelmingly unlikely to coincide with sorted order — i.e. the test
+    /// actually exercises the link sorting.
+    fn sample_graph() -> GraphMem<IrisVectorId> {
+        let v = IrisVectorId::from_serial_id;
+        let mut layer = Layer::new();
+        for &n in &[7u32, 3, 9, 1, 5, 8, 2, 6, 4] {
+            layer.set_links(v(n), vec![v(n + 1), v(n + 2)]);
+        }
+        let mut g = GraphMem::new();
+        g.entry_points = vec![layered_graph::EntryPoint {
+            point: v(1),
+            layer: 0,
+        }];
+        g.layers = vec![layer];
+        g
+    }
+
+    /// The `Current` (GraphV4) file format must serialize byte-identically to the
+    /// raw `GraphMem` wire format used by `upload_graph_checkpoint` and the
+    /// materializer. If they drift, checkpoints minted via `graph-utils` won't
+    /// match those minted by the sidecar and cross-party BLAKE3 consensus breaks.
+    #[test]
+    fn current_serialization_matches_raw_graphmem() {
+        let g = sample_graph();
+        let mut cur = Vec::new();
+        write_graph_current(&mut cur, g.clone()).unwrap();
+        let mut raw = Vec::new();
+        write_graph_raw(&mut raw, g).unwrap();
+        assert_eq!(
+            cur, raw,
+            "GraphV4/Current serialization diverged from raw GraphMem bytes"
+        );
+    }
+}
