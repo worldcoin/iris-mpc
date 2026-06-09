@@ -70,7 +70,7 @@ affinity:
         - matchExpressions:
             - key: karpenter.k8s.aws/instance-family
               operator: In
-              values: ["c8g"]
+              values: ["r8g", "c8g", "m8g"]
 
 podSecurityContext:
   runAsUser: 65534
