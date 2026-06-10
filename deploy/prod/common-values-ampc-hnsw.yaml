@@ -1,7 +1,7 @@
 image: "ghcr.io/worldcoin/iris-mpc-cpu:v0.31.10@sha256:cf2f715c66748171940b448163f6b0e0ce7dedae783282b43b135fc2589f4f29"
 
 environment: prod
-replicaCount: 0
+replicaCount: 1
 
 strategy:
   type: Recreate
