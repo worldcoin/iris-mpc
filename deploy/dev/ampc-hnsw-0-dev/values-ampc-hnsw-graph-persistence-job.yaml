@@ -7,23 +7,8 @@ args:
   - "--one-shot"
 
 env:
-  - name: ENV
-    value: dev
-  - name: AWS_REGION
-    value: eu-central-1
-  - name: RUST_LOG
-    value: info
-  - name: RUST_BACKTRACE
-    value: full
-  - name: SMPC__CPU_DATABASE__URL
-    valueFrom:
-      secretKeyRef:
-        key: DATABASE_AURORA_HNSW_URL
-        name: application
-  - name: SMPC__CPU_DATABASE__SCHEMA
-    value: "SMPC_graph_persistence_test_0"
-  - name: SMPC__GRAPH_CHECKPOINT_BUCKET_NAME
-    value: "ampc-hnsw-graph-store-node-0-dev-eu-central-1"
+  SMPC__CPU_DATABASE__SCHEMA: "SMPC_graph_persistence_test_0"
+  SMPC__GRAPH_CHECKPOINT_BUCKET_NAME: "ampc-hnsw-graph-store-node-0-dev-eu-central-1"
 
 initContainer:
   enabled: true
