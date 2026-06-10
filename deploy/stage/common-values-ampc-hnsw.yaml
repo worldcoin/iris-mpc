@@ -46,6 +46,8 @@ env:
   SMPC__AWS__REGION: "eu-north-1"
   SMPC__SERVICE_PORTS: '["4000","4001","4002"]'
   SMPC__SERVER_COORDINATION__IMAGE_NAME: $(IMAGE_NAME)
+  SMPC__SERVER_COORDINATION__HEARTBEAT_INITIAL_RETRIES: "65"
+  SMPC__SERVER_COORDINATION__HEARTBEAT_INTERVAL_SECS: "3"
   SMPC__SHARES_BUCKET_NAME: "wf-smpcv2-stage-sns-requests"
   SMPC__ENABLE_S3_IMPORTER: "false"
   SMPC__DB_CHUNKS_FOLDER_NAME: "hnsw_even_odd_with_version_id_output_16k"
@@ -66,7 +68,6 @@ env:
       secretKeyRef:
         key: KMS_KEYS
         name: application
-  SMPC__HEARTBEAT_INITIAL_RETRIES: "65"
   SMPC__SERVICE__METRICS__HOST:
     valueFrom:
       fieldRef:

@@ -41,7 +41,6 @@ env:
         key: SNS_RESULTS_ARN
         name: application
   SMPC__PROCESSING_TIMEOUT_SECS: "120"
-  SMPC__HEARTBEAT_INITIAL_RETRIES: "65"
   SMPC__PATH: "/data/"
   SMPC__KMS_KEY_ARNS:
     valueFrom:
@@ -50,6 +49,8 @@ env:
         name: application
   SMPC__SERVER_COORDINATION__NODE_HOSTNAMES: '["iris-mpc-node.1.stage.smpcv2.worldcoin.dev","iris-mpc-node.2.stage.smpcv2.worldcoin.dev","iris-mpc-node.3.stage.smpcv2.worldcoin.dev"]'
   SMPC__SERVER_COORDINATION__IMAGE_NAME: $(IMAGE_NAME)
+  SMPC__SERVER_COORDINATION__HEARTBEAT_INITIAL_RETRIES: "65"
+  SMPC__SERVER_COORDINATION__HEARTBEAT_INTERVAL_SECS: "3"
   SMPC__PUBLIC_KEY_BASE_URL: "https://pki-smpcv2-stage.worldcoin.org"
   SMPC__SHARES_BUCKET_NAME: "wf-smpcv2-stage-sns-requests"
   SMPC__ENABLE_S3_IMPORTER: "true"

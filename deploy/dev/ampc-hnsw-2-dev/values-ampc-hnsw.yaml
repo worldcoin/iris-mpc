@@ -150,8 +150,11 @@ env:
         key: KMS_KEYS
         name: application
 
-  - name: SMPC__HEARTBEAT_INITIAL_RETRIES
+  - name: SMPC__SERVER_COORDINATION__HEARTBEAT_INITIAL_RETRIES
     value: "65"
+
+  - name: SMPC__SERVER_COORDINATION__HEARTBEAT_INTERVAL_SECS
+    value: "3"
 
   - name: SMPC__SERVICE__METRICS__HOST
     valueFrom:
