@@ -3,6 +3,62 @@ image: "ghcr.io/worldcoin/anon-stats-server:c59018b12faf4dbed9c34216b6b915f25d8e
 environment: stage
 replicaCount: 1
 
+# Common environment variables shared across all anon-stats-server smpcv2 nodes.
+# Defined as a map so Helm deep-merges with per-node env maps.
+env:
+  RUST_LOG: "info"
+  SMPC__ENVIRONMENT: "stage"
+  SMPC__SNS_BUFFER_BUCKET_NAME: "wf-smpcv2-stage-sns-buffer"
+  SMPC__DB_URL:
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_URL
+        name: application
+  SMPC__SERVICE_PORTS: '["4000","4001","4002"]'
+  SMPC__SERVER_COORDINATION__IMAGE_NAME: $(IMAGE_NAME)
+  SMPC__RESULTS_TOPIC_ARN:
+    valueFrom:
+      secretKeyRef:
+        key: SNS_RESULTS_ARN
+        name: application
+  SMPC__AWS__REGION: "eu-north-1"
+  SMPC__SERVER_COORDINATION__HEARTBEAT_INITIAL_RETRIES: "5"
+  SMPC__SERVER_COORDINATION__HTTP_QUERY_RETRY_DELAY_MS: "5000"
+  SMPC__SERVER_COORDINATION__HEARTBEAT_INTERVAL_SECS: "3"
+  SMPC__SERVER_COORDINATION__SHUTDOWN_LAST_RESULTS_SYNC_TIMEOUT_SECS: "10"
+  SMPC__SERVICE__METRICS__HOST:
+    valueFrom:
+      fieldRef:
+        fieldPath: status.hostIP
+  SMPC__SERVICE__METRICS__PORT: "8125"
+  SMPC__SERVICE__METRICS__QUEUE_SIZE: "5000"
+  SMPC__SERVICE__METRICS__BUFFER_SIZE: "256"
+  SMPC__N_BUCKETS_1D: "375"
+  SMPC__N_BUCKETS_2D: "375"
+  SMPC__N_BUCKETS_1D_REAUTH: "500"
+  SMPC__N_BUCKETS_2D_REAUTH: "500"
+  SMPC__MIN_1D_JOB_SIZE_REAUTH: "10"
+  SMPC__MIN_1D_JOB_SIZE: "64"
+  SMPC__MIN_1D_JOB_SIZE_MIRROR: "64"
+  SMPC__MIN_2D_JOB_SIZE_REAUTH: "10"
+  SMPC__MIN_2D_JOB_SIZE: "64"
+  SMPC__MIN_2D_JOB_SIZE_MIRROR: "64"
+  SMPC__NHD_THRESHOLD_RATIO: "0.4"
+  SMPC__POLL_INTERVAL_SECS: "30"
+  SMPC__TLS__PRIVATE_KEY: "/etc/ssl/private/key.pem"
+  SMPC__TLS__LEAF_CERT: "/etc/ssl/private/certificate.crt"
+  SMPC__TLS__ROOT_CERTS: '["/usr/local/share/ca-certificates/ca_smpcv2_party_stage_0.crt", "/usr/local/share/ca-certificates/ca_smpcv2_party_stage_1.crt", "/usr/local/share/ca-certificates/ca_smpcv2_party_stage_2.crt"]'
+
+nodeSelector:
+  kubernetes.io/arch: amd64
+  workload: "anon-stats-server"
+
+tolerations:
+  - key: "dedicated"
+    operator: "Equal"
+    value: "anonStatsServer"
+    effect: "NoSchedule"
+
 strategy:
   type: Recreate
 

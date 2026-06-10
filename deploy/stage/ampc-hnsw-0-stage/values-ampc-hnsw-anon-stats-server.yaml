@@ -1,111 +1,9 @@
+# Per-node overrides; shared vars live in common-values-ampc-hnsw-anon-stats-server.yaml.
 env:
-  - name: RUST_LOG
-    value: "info"
-
-  - name: SMPC__ENVIRONMENT
-    value: "stage"
-
-  - name: SMPC__SERVICE__SERVICE_NAME
-    value: "anon-stats-server-hnsw-0"
-
-  - name: SMPC__SNS_BUFFER_BUCKET_NAME
-    value: "wf-hnsw-stage-sns-buffer"
-
-  - name: SMPC__DB_URL
-    valueFrom:
-      secretKeyRef:
-        key: DATABASE_AURORA_URL
-        name: application
-
-  - name: SMPC__SERVICE_PORTS
-    value: '["4000","4001","4002"]'
-
-  - name: SMPC__SERVER_COORDINATION__PARTY_ID
-    value: "0"
-
-  - name: SMPC__SERVER_COORDINATION__NODE_HOSTNAMES
-    value: '["0.0.0.0","anon-stats-server.1.stage.hnsw.worldcoin.dev","anon-stats-server.2.stage.hnsw.worldcoin.dev"]'
-
-  - name: SMPC__SERVER_COORDINATION__IMAGE_NAME
-    value: $(IMAGE_NAME)
-
-  - name: SMPC__RESULTS_TOPIC_ARN
-    valueFrom:
-      secretKeyRef:
-        key: SNS_RESULTS_ARN
-        name: application
-
-  - name: SMPC__AWS__REGION
-    value: "eu-north-1"
-
-  - name: SMPC__SERVER_COORDINATION__HEARTBEAT_INITIAL_RETRIES
-    value: "5"
-
-  - name: SMPC__SERVER_COORDINATION__HTTP_QUERY_RETRY_DELAY_MS
-    value: "5000"
-
-  - name: SMPC__SERVER_COORDINATION__HEARTBEAT_INTERVAL_SECS
-    value: "3"
-
-  - name: SMPC__SERVER_COORDINATION__SHUTDOWN_LAST_RESULTS_SYNC_TIMEOUT_SECS
-    value: "10"
-
-  - name: SMPC__SERVICE__METRICS__HOST
-    valueFrom:
-      fieldRef:
-        fieldPath: status.hostIP
-
-  - name: SMPC__SERVICE__METRICS__PORT
-    value: "8125"
-
-  - name: SMPC__SERVICE__METRICS__QUEUE_SIZE
-    value: "5000"
-
-  - name: SMPC__SERVICE__METRICS__BUFFER_SIZE
-    value: "256"
-
-  - name: SMPC__SERVICE__METRICS__PREFIX
-    value: "anon-stats-server-hnsw-0"
-
-  - name: SMPC__N_BUCKETS_1D
-    value: "375"
-
-  - name: SMPC__N_BUCKETS_2D
-    value: "375"
-
-  - name: SMPC__MIN_1D_JOB_SIZE_REAUTH
-    value: "10"
-
-  - name: SMPC__MIN_1D_JOB_SIZE
-    value: "64"
-
-  - name: SMPC__MIN_1D_JOB_SIZE_MIRROR
-    value: "64"
-
-  - name: SMPC__MIN_2D_JOB_SIZE_REAUTH
-    value: "10"
-
-  - name: SMPC__MIN_2D_JOB_SIZE
-    value: "64"
-
-  - name: SMPC__MIN_2D_JOB_SIZE_MIRROR
-    value: "64"
-
-  - name: SMPC__NHD_THRESHOLD_RATIO
-    value: "0.4"
-
-  - name: SMPC__POLL_INTERVAL_SECS
-    value: "30"
-
-  - name: SMPC__TLS__PRIVATE_KEY
-    value: "/etc/ssl/private/key.pem"
-
-  - name: SMPC__TLS__LEAF_CERT
-    value: "/etc/ssl/private/certificate.crt"
-
-  - name: SMPC__TLS__ROOT_CERTS
-    value: '["/usr/local/share/ca-certificates/ca_ampc_hnsw_party_stage_0.crt", "/usr/local/share/ca-certificates/ca_ampc_hnsw_party_stage_1.crt", "/usr/local/share/ca-certificates/ca_ampc_hnsw_party_stage_2.crt"]'
-
+  SMPC__SERVICE__SERVICE_NAME: "anon-stats-server-hnsw-0"
+  SMPC__SERVER_COORDINATION__PARTY_ID: "0"
+  SMPC__SERVER_COORDINATION__NODE_HOSTNAMES: '["0.0.0.0","anon-stats-server.1.stage.hnsw.worldcoin.dev","anon-stats-server.2.stage.hnsw.worldcoin.dev"]'
+  SMPC__SERVICE__METRICS__PREFIX: "anon-stats-server-hnsw-0"
 
 initContainer:
   enabled: true
@@ -153,4 +51,3 @@ attachSecurityGroupPolicy:
   enabled: true
   groupIds:
     - sg-0beac480d3e23411c
-
