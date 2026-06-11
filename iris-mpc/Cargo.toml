@@ -39,7 +39,12 @@ ampc-anon-stats.workspace = true
 ampc-server-utils.workspace = true
 
 [dev-dependencies]
+ampc-actor-utils.workspace = true
+blake3.workspace = true
+futures.workspace = true
+hex.workspace = true
 serial_test.workspace = true
+tracing-subscriber.workspace = true
 iris-mpc-utils = { path = "../iris-mpc-utils" }
 
 [features]
