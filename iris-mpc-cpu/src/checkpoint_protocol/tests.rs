@@ -46,6 +46,35 @@ fn meta(id: i64, mut_id: Option<i64>) -> CheckpointMeta {
     }
 }
 
+// ── content nonce ────────────────────────────────────────────────────────
+
+/// `checkpoint_id` (and `s3_key`) are party-local; the cycle nonce must be
+/// identical across parties for the same logical checkpoint, otherwise the
+/// transport's fatal nonce-mismatch check wedges Phases 2-5 whenever local
+/// ids diverge.
+#[test]
+fn content_nonce_ignores_party_local_fields() {
+    let a = meta(1, Some(100));
+    let mut b = meta(2, Some(100));
+    b.blake3_hash = a.blake3_hash.clone();
+    assert_ne!(a.checkpoint_id, b.checkpoint_id);
+    assert_ne!(a.s3_key, b.s3_key);
+    assert_eq!(a, b);
+    assert_eq!(a.content_nonce(), b.content_nonce());
+}
+
+/// Distinct content (different base) → distinct nonce, including the
+/// `graph_mutation_id` None/Some distinction.
+#[test]
+fn content_nonce_differs_for_different_content() {
+    let a = meta(1, Some(100));
+    assert_ne!(a.content_nonce(), meta(2, Some(100)).content_nonce());
+    assert_ne!(
+        meta(1, Some(0)).content_nonce(),
+        meta(1, None).content_nonce()
+    );
+}
+
 // ── mock MutationStore ───────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -289,7 +318,7 @@ async fn happy_path_finalizes() {
 
     // Phase 1 uses the fixed BASE_PHASE_NONCE sentinel (the agreed base
     // isn't known yet); Phases 2-5 share a nonce derived from the agreed
-    // base's checkpoint_id. Two distinct nonces overall.
+    // base's content. Two distinct nonces overall.
     let nonces: std::collections::HashSet<u128> = calls.iter().map(|c| c.nonce).collect();
     assert_eq!(nonces.len(), 2, "phase 1 nonce differs from phases 2-5");
     assert_eq!(
