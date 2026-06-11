@@ -63,8 +63,7 @@ pub struct CheckpointMeta {
 /// Equality is therefore defined over all content fields except `checkpoint_id`.
 impl PartialEq for CheckpointMeta {
     fn eq(&self, other: &Self) -> bool {
-        self.s3_key == other.s3_key
-            && self.last_indexed_iris_id == other.last_indexed_iris_id
+        self.last_indexed_iris_id == other.last_indexed_iris_id
             && self.last_indexed_modification_id == other.last_indexed_modification_id
             && self.graph_mutation_id == other.graph_mutation_id
             && self.blake3_hash == other.blake3_hash
