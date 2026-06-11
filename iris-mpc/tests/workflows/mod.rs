@@ -25,41 +25,25 @@ use crate::utils::{runner::CpuTestContext, CpuNodeConfig};
 /// Spawn `server_main` (hawk_main) for all 3 parties concurrently.
 ///
 /// `server_main` holds `!Send` state, so each party runs in its own OS thread
-/// via `spawn_blocking` with a dedicated multi-thread runtime.  A shared
-/// `Arc<Notify>` bridges the `CancellationToken` to the blocking threads.
+/// via `spawn_blocking` with a dedicated multi-thread runtime.
+/// `CancellationToken` is cloned directly into each
+/// `spawn_blocking` closure and selected on inside the new runtime.
 pub fn run_hawk(
     configs: &[CpuNodeConfig; 3],
     shutdown: CancellationToken,
     ctx: &CpuTestContext,
 ) -> JoinSet<eyre::Result<()>> {
     use iris_mpc::server::server_main;
-    use std::sync::Arc;
-    use tokio::sync::Notify;
 
     let mut join_set: JoinSet<eyre::Result<()>> = JoinSet::new();
 
-    // Arc<Notify> is used instead of CancellationToken because the latter
-    // is not Send across runtimes.
-    let notify = Arc::new(Notify::new());
-
-    {
-        let notify = notify.clone();
-        let abort = ctx.abort.clone();
-        join_set.spawn(async move {
-            tokio::select! {
-                _ = shutdown.cancelled() => {},
-                _ = abort.cancelled() => {},
-            }
-            notify.notify_waiters();
-            Ok(())
-        });
-    }
-
     for (party_idx, cpu_cfg) in configs.iter().enumerate() {
         let config = crate::utils::configs::make_hawk_config(cpu_cfg, configs, &ctx.env);
-        let notify = notify.clone();
+        let shutdown = shutdown.clone();
+        let abort = ctx.abort.clone();
 
         // server_main is !Send; block_on inside spawn_blocking avoids Send requirements.
+        // CancellationToken is Send + Sync and runtime-agnostic: clone it directly.
         join_set.spawn(async move {
             tokio::task::spawn_blocking(move || {
                 let rt = tokio::runtime::Builder::new_multi_thread()
@@ -70,7 +54,8 @@ pub fn run_hawk(
                 rt.block_on(async move {
                     tokio::select! {
                         res = server_main(config).instrument(span) => res,
-                        _ = notify.notified() => Ok(()),
+                        _ = shutdown.cancelled() => Ok(()),
+                        _ = abort.cancelled() => Ok(()),
                     }
                 })
             })
@@ -167,22 +152,45 @@ pub fn run_sidecar(
 /// Returns the first task error encountered, or `Ok(())` if all tasks shut
 /// down cleanly.  Always drains the full set regardless.  Should be called
 /// even when the test is about to fail so that background tasks are cleaned up.
+///
+/// Enforces a 60-second timeout (matching `expect_sidecar_success`) so that a
+/// server ignoring cancellation fails with a clear diagnostic rather than
+/// hanging CI indefinitely.
 pub async fn stop_and_join(
     token: CancellationToken,
     join_set: &mut JoinSet<eyre::Result<()>>,
 ) -> eyre::Result<()> {
     token.cancel();
     let mut first_err: Option<eyre::Report> = None;
-    while let Some(result) = join_set.join_next().await {
-        let err = match result {
-            Ok(Ok(())) => continue,
-            Err(e) if e.is_cancelled() => continue,
-            Ok(Err(e)) => e,
-            Err(e) => eyre::eyre!("task join error: {e}"),
-        };
-        tracing::warn!("task error during shutdown: {err:#}");
-        first_err.get_or_insert(err);
+
+    let timeout_result = tokio::time::timeout(Duration::from_secs(60), async {
+        while let Some(result) = join_set.join_next().await {
+            let err = match result {
+                Ok(Ok(())) => continue,
+                Err(e) if e.is_cancelled() => continue,
+                Ok(Err(e)) => e,
+                Err(e) => eyre::eyre!("task join error: {e}"),
+            };
+            tracing::warn!("task error during shutdown: {err:#}");
+            first_err.get_or_insert(err);
+        }
+    })
+    .await;
+
+    if timeout_result.is_err() {
+        join_set.abort_all();
+        while let Some(result) = join_set.join_next().await {
+            match result {
+                Ok(Ok(())) | Err(_) => {}
+                Ok(Err(e)) => tracing::warn!("task error after stop_and_join timeout: {e:#}"),
+            }
+        }
+        return first_err.map_or(
+            Err(eyre::eyre!("servers did not shut down within 60 seconds")),
+            Err,
+        );
     }
+
     first_err.map_or(Ok(()), Err)
 }
 
