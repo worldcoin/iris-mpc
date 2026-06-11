@@ -41,7 +41,7 @@ impl BaseSelector for StrictLatest {
         let mine = my_recent.first()?;
         for peer in peer_lists {
             let theirs = peer.first()?;
-            if !theirs.same_checkpoint(mine) {
+            if theirs != mine {
                 return None;
             }
         }
@@ -66,11 +66,7 @@ impl BaseSelector for MostRecentCommon {
     ) -> Option<CheckpointMeta> {
         my_recent
             .iter()
-            .find(|cp| {
-                peer_lists
-                    .iter()
-                    .all(|peer| peer.iter().any(|p| p.same_checkpoint(cp)))
-            })
+            .find(|cp| peer_lists.iter().all(|peer| peer.iter().any(|p| p == cp)))
             .cloned()
     }
 }
