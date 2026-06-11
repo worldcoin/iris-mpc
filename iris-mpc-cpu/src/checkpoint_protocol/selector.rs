@@ -66,7 +66,7 @@ impl BaseSelector for MostRecentCommon {
     ) -> Option<CheckpointMeta> {
         my_recent
             .iter()
-            .find(|cp| peer_lists.iter().all(|peer| peer.iter().any(|p| p == cp)))
+            .find(|cp| peer_lists.iter().all(|peer| peer.iter().any(|p| p == *cp)))
             .cloned()
     }
 }
