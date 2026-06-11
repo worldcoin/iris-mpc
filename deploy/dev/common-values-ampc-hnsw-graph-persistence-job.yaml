@@ -60,3 +60,7 @@ podSecurityContext:
   runAsGroup: 65534
 
 terminationGracePeriodSeconds: 120
+
+mountSSLCerts:
+  enabled: true
+  mountPath: /etc/ssl/private
