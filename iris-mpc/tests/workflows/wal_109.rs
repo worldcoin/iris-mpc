@@ -135,7 +135,7 @@ impl TestRun for Wal109 {
             .assert_latest_checkpoint_mod_id(3 * MIN_MUTATIONS_PER_SIDECAR_CYCLE as i64);
         nodes.apply_uniform_assertions(&post).await?;
 
-        nodes.assert_checkpoint_hashes_agree().await;
+        nodes.assert_checkpoint_hashes_agree().await?;
         nodes.assert_consensus_and_reference().await
     }
 
