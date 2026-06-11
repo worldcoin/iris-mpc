@@ -47,7 +47,7 @@ pub type Graph = BothEyes<GraphMem<VectorId>>;
 ///
 /// `graph_version` is included so version-skewed parties fail the base
 /// round rather than slipping through to a hash mismatch.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CheckpointMeta {
     pub checkpoint_id: i64,
     pub s3_key: String,
@@ -57,6 +57,21 @@ pub struct CheckpointMeta {
     pub blake3_hash: String,
     pub graph_version: i32,
 }
+
+/// `checkpoint_id` is a DB-local auto-increment primary key; each party's
+/// database independently assigns its own value for the same checkpoint.
+/// Equality is therefore defined over all content fields except `checkpoint_id`.
+impl PartialEq for CheckpointMeta {
+    fn eq(&self, other: &Self) -> bool {
+        self.last_indexed_iris_id == other.last_indexed_iris_id
+            && self.last_indexed_modification_id == other.last_indexed_modification_id
+            && self.graph_mutation_id == other.graph_mutation_id
+            && self.blake3_hash == other.blake3_hash
+            && self.graph_version == other.graph_version
+    }
+}
+
+impl Eq for CheckpointMeta {}
 
 /// Inclusive upper bound on `graph_mutation_id` to apply during materialization.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
