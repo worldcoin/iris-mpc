@@ -106,6 +106,7 @@ impl WalMutationBuilder {
     }
 
     /// Sets the `persisted` flag for a single modification.
+    /// must preceed `build()`
     pub fn set_persisted(&mut self, modification_id: i64, value: bool) -> &mut Self {
         self.persisted.insert(modification_id, value);
         self
@@ -250,19 +251,16 @@ impl WalMutationBuilder {
         Ok(())
     }
 
-    pub async fn build_single(
-        &mut self,
-        node: &CpuNode,
-        mutations: bool,
-        modifications: bool,
-    ) -> eyre::Result<()> {
+    /// used to simulate the mutations (WAL) falling behind the modifications.
+    /// set to mutations = false to only seed modifications.
+    /// note that if any mutations are skipped, there is no way to use the WalBuilder
+    /// to seed them later
+    pub async fn build_single(&mut self, node: &CpuNode, mutations: bool) -> eyre::Result<()> {
         if mutations {
             self.insert_mutations(&node.store.graph).await?;
         }
-        if modifications {
-            self.seed_modifications(&node.store.graph, node.config.party_id)
-                .await?;
-        }
+        self.seed_modifications(&node.store.graph, node.config.party_id)
+            .await?;
         self.processed = self.entries.len();
         Ok(())
     }

@@ -47,9 +47,9 @@ impl TestRun for Wal109 {
         builder1.add_nodes(MIN_MUTATIONS_PER_SIDECAR_CYCLE);
         builder2.add_nodes(MIN_MUTATIONS_PER_SIDECAR_CYCLE);
 
-        builder0.build_single(&nodes.0[0], true, true).await?;
-        builder1.build_single(&nodes.0[1], true, true).await?;
-        builder2.build_single(&nodes.0[2], true, true).await?;
+        builder0.build_single(&nodes.0[0], true).await?;
+        builder1.build_single(&nodes.0[1], true).await?;
+        builder2.build_single(&nodes.0[2], true).await?;
 
         nodes.make_checkpoints().await?;
 
@@ -59,20 +59,20 @@ impl TestRun for Wal109 {
         for idx in MIN_MUTATIONS_PER_SIDECAR_CYCLE + 1..=3 * MIN_MUTATIONS_PER_SIDECAR_CYCLE {
             builder0.set_persisted(idx as _, false);
         }
-        builder0.build_single(&nodes.0[0], false, true).await?;
+        builder0.build_single(&nodes.0[0], false).await?;
 
         // Party 1: first MIN new mutations persisted, second MIN unpersisted.
         builder1.add_nodes(MIN_MUTATIONS_PER_SIDECAR_CYCLE);
-        builder1.build_single(&nodes.0[1], true, true).await?;
+        builder1.build_single(&nodes.0[1], true).await?;
         builder1.add_nodes(MIN_MUTATIONS_PER_SIDECAR_CYCLE);
         for idx in 2 * MIN_MUTATIONS_PER_SIDECAR_CYCLE + 1..=3 * MIN_MUTATIONS_PER_SIDECAR_CYCLE {
             builder1.set_persisted(idx as _, false);
         }
-        builder1.build_single(&nodes.0[1], false, true).await?;
+        builder1.build_single(&nodes.0[1], false).await?;
 
         // Party 2: 2*MIN new mutations, all persisted.
         builder2.add_nodes(2 * MIN_MUTATIONS_PER_SIDECAR_CYCLE);
-        builder2.build_single(&nodes.0[2], true, true).await?;
+        builder2.build_single(&nodes.0[2], true).await?;
 
         nodes
             .init_iris_shares(3 * MIN_MUTATIONS_PER_SIDECAR_CYCLE, &aws_client)
@@ -135,7 +135,7 @@ impl TestRun for Wal109 {
             .assert_latest_checkpoint_mod_id(3 * MIN_MUTATIONS_PER_SIDECAR_CYCLE as i64);
         nodes.apply_uniform_assertions(&post).await?;
 
-        nodes.assert_checkpoint_hashes_agree().await
+        nodes.assert_checkpoint_hashes_agree().await;
         nodes.assert_consensus_and_reference().await
     }
 
