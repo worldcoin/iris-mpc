@@ -9,16 +9,13 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
-use super::{expect_sidecar_success, run_sidecar, stop_and_join};
-use crate::{
-    run_hawk,
-    utils::{
-        cpu_node::{CpuNodes, WalAssertions},
-        runner::{CpuTestContext, TestRun},
-        wait_conditions::wait_for_all_ready,
-        wal_builder::WalMutationBuilder,
-        MIN_MUTATIONS_PER_SIDECAR_CYCLE,
-    },
+use super::{expect_sidecar_success, run_hawk, run_sidecar, stop_and_join};
+use crate::utils::{
+    cpu_node::{CpuNodes, WalAssertions},
+    runner::{CpuTestContext, TestRun},
+    wait_conditions::wait_for_all_ready,
+    wal_builder::WalMutationBuilder,
+    MIN_MUTATIONS_PER_SIDECAR_CYCLE,
 };
 
 #[derive(Default)]
@@ -110,7 +107,7 @@ impl TestRun for Wal109 {
         // Phase 1: hawk_main syncs all parties to the full mutation set.
         {
             let shutdown = CancellationToken::new();
-            let mut hawk_set = run_hawk!(ctx.configs, shutdown.clone(), ctx);
+            let mut hawk_set = run_hawk(&ctx.configs, shutdown.clone(), ctx);
             let res =
                 wait_for_all_ready(&ctx.configs, &mut hawk_set, Duration::from_secs(60)).await;
             res.and(stop_and_join(shutdown, &mut hawk_set).await)?;

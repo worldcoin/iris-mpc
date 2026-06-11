@@ -6,15 +6,12 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
-use super::stop_and_join;
-use crate::{
-    run_hawk,
-    utils::{
-        cpu_node::{CpuNodes, WalAssertions},
-        runner::{CpuTestContext, TestRun},
-        wait_conditions::wait_for_hawk_failure,
-        wal_builder::WalMutationBuilder,
-    },
+use super::{run_hawk, stop_and_join};
+use crate::utils::{
+    cpu_node::{CpuNodes, WalAssertions},
+    runner::{CpuTestContext, TestRun},
+    wait_conditions::wait_for_hawk_failure,
+    wal_builder::WalMutationBuilder,
 };
 
 const MOD_ID: i64 = 1;
@@ -90,7 +87,7 @@ impl TestRun for Wal110 {
 
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
         let shutdown = CancellationToken::new();
-        let mut hawk_set = run_hawk!(ctx.configs, shutdown.clone(), ctx);
+        let mut hawk_set = run_hawk(&ctx.configs, shutdown.clone(), ctx);
 
         let failure = wait_for_hawk_failure(&mut hawk_set, Duration::from_secs(30)).await;
         let _ = stop_and_join(shutdown, &mut hawk_set).await; // failure already captured above

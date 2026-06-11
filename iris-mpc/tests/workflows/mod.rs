@@ -27,61 +27,60 @@ use crate::utils::{runner::CpuTestContext, CpuNodeConfig};
 /// `server_main` holds `!Send` state, so each party runs in its own OS thread
 /// via `spawn_blocking` with a dedicated multi-thread runtime.  A shared
 /// `Arc<Notify>` bridges the `CancellationToken` to the blocking threads.
-#[macro_export]
-macro_rules! run_hawk {
-    ($configs:expr, $shutdown:expr, $ctx:expr) => {{
-        use iris_mpc::server::server_main;
-        use std::sync::Arc;
-        use tokio::sync::Notify;
-        use tracing::{info_span, Instrument};
+pub fn run_hawk(
+    configs: &[CpuNodeConfig; 3],
+    shutdown: CancellationToken,
+    ctx: &CpuTestContext,
+) -> JoinSet<eyre::Result<()>> {
+    use iris_mpc::server::server_main;
+    use std::sync::Arc;
+    use tokio::sync::Notify;
 
-        let mut join_set: tokio::task::JoinSet<eyre::Result<()>> = tokio::task::JoinSet::new();
+    let mut join_set: JoinSet<eyre::Result<()>> = JoinSet::new();
 
-        // Arc<Notify> is used instead of CancellationToken because the latter
-        // is not Send across runtimes.
-        let notify = Arc::new(Notify::new());
+    // Arc<Notify> is used instead of CancellationToken because the latter
+    // is not Send across runtimes.
+    let notify = Arc::new(Notify::new());
 
-        {
-            let notify = notify.clone();
-            let shutdown = $shutdown.clone();
-            let abort = $ctx.abort.clone();
-            join_set.spawn(async move {
-                tokio::select! {
-                    _ = shutdown.cancelled() => {},
-                    _ = abort.cancelled() => {},
-                }
-                notify.notify_waiters();
-                Ok(())
-            });
-        }
+    {
+        let notify = notify.clone();
+        let abort = ctx.abort.clone();
+        join_set.spawn(async move {
+            tokio::select! {
+                _ = shutdown.cancelled() => {},
+                _ = abort.cancelled() => {},
+            }
+            notify.notify_waiters();
+            Ok(())
+        });
+    }
 
-        for (party_idx, cpu_cfg) in ($configs).iter().enumerate() {
-            let config = $crate::utils::configs::make_hawk_config(cpu_cfg, &$configs, &$ctx.env);
-            let notify = notify.clone();
+    for (party_idx, cpu_cfg) in configs.iter().enumerate() {
+        let config = crate::utils::configs::make_hawk_config(cpu_cfg, configs, &ctx.env);
+        let notify = notify.clone();
 
-            // server_main is !Send; block_on inside spawn_blocking avoids Send requirements.
-            join_set.spawn(async move {
-                tokio::task::spawn_blocking(move || {
-                    let rt = tokio::runtime::Builder::new_multi_thread()
-                        .enable_all()
-                        .build()
-                        .expect("failed to build server runtime");
-                    let span = info_span!("mpc_node", idx = party_idx);
-                    rt.block_on(async move {
-                        tokio::select! {
-                            res = server_main(config).instrument(span) => res,
-                            _ = notify.notified() => Ok(()),
-                        }
-                    })
+        // server_main is !Send; block_on inside spawn_blocking avoids Send requirements.
+        join_set.spawn(async move {
+            tokio::task::spawn_blocking(move || {
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to build server runtime");
+                let span = info_span!("mpc_node", idx = party_idx);
+                rt.block_on(async move {
+                    tokio::select! {
+                        res = server_main(config).instrument(span) => res,
+                        _ = notify.notified() => Ok(()),
+                    }
                 })
-                .await
-                .map_err(|e| eyre::eyre!("server task panicked: {e}"))
-                .and_then(|r| r)
-            });
-        }
+            })
+            .await
+            .map_err(|e| eyre::eyre!("server task panicked: {e}"))
+            .and_then(|r| r)
+        });
+    }
 
-        join_set
-    }};
+    join_set
 }
 
 /// Spawn `sidecar_main` for all 3 parties concurrently in one-shot mode.
