@@ -85,6 +85,7 @@ impl TestRun for Wal106 {
 
             let shutdown = CancellationToken::new();
             let sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
+            expect_sidecar_success(shutdown, sidecar_set).await?;
 
             let wait_res = timeout(Duration::from_secs(120), async {
                 loop {
@@ -108,7 +109,6 @@ impl TestRun for Wal106 {
                 )
             });
 
-            expect_sidecar_success(shutdown, sidecar_set).await?;
             wait_res??;
         }
 
