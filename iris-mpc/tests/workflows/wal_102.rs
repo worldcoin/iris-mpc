@@ -1,15 +1,12 @@
 /// wal_102 — Sidecar produces a checkpoint from a fresh WAL with no base checkpoint.
 use tokio_util::sync::CancellationToken;
 
-use super::expect_sidecar_success;
-use crate::{
-    run_sidecar,
-    utils::{
-        cpu_node::{CpuNodes, WalAssertions},
-        runner::{CpuTestContext, TestRun},
-        wal_builder::WalMutationBuilder,
-        MIN_MUTATIONS_PER_SIDECAR_CYCLE,
-    },
+use super::{expect_sidecar_success, run_sidecar};
+use crate::utils::{
+    cpu_node::{CpuNodes, WalAssertions},
+    runner::{CpuTestContext, TestRun},
+    wal_builder::WalMutationBuilder,
+    MIN_MUTATIONS_PER_SIDECAR_CYCLE,
 };
 
 #[derive(Default)]
@@ -47,7 +44,7 @@ impl TestRun for Wal102 {
 
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
         let shutdown = CancellationToken::new();
-        let sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
+        let sidecar_set = run_sidecar(&ctx.configs, shutdown.clone(), ctx);
         expect_sidecar_success(shutdown, sidecar_set).await
     }
 

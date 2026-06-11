@@ -6,8 +6,9 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
+use super::stop_and_join;
 use crate::{
-    run_hawk, stop_and_join,
+    run_hawk,
     utils::{
         cpu_node::{CpuNodes, WalAssertions},
         runner::{CpuTestContext, TestRun},
@@ -92,7 +93,7 @@ impl TestRun for Wal110 {
         let mut hawk_set = run_hawk!(ctx.configs, shutdown.clone(), ctx);
 
         let failure = wait_for_hawk_failure(&mut hawk_set, Duration::from_secs(30)).await;
-        let _ = stop_and_join!(shutdown, hawk_set); // failure already captured above
+        let _ = stop_and_join(shutdown, &mut hawk_set).await; // failure already captured above
 
         let err = failure?;
         eyre::ensure!(

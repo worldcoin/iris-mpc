@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 
-use super::expect_sidecar_success;
+use super::{expect_sidecar_success, run_sidecar, stop_and_join};
 use crate::{
-    run_hawk, run_sidecar, stop_and_join,
+    run_hawk,
     utils::{
         cpu_node::{CpuNodes, WalAssertions},
         runner::{CpuTestContext, TestRun},
@@ -73,13 +73,13 @@ impl TestRun for Wal105 {
             let mut hawk_set = run_hawk!(ctx.configs, shutdown.clone(), ctx);
             let res =
                 wait_for_all_ready(&ctx.configs, &mut hawk_set, Duration::from_secs(60)).await;
-            res.and(stop_and_join!(shutdown, hawk_set))?;
+            res.and(stop_and_join(shutdown, &mut hawk_set).await)?;
         }
 
         // Phase 1: sidecar materialises WAL delta and writes a checkpoint.
         {
             let shutdown = CancellationToken::new();
-            let sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
+            let sidecar_set = run_sidecar(&ctx.configs, shutdown.clone(), ctx);
             expect_sidecar_success(shutdown, sidecar_set).await?;
         }
 
@@ -97,7 +97,7 @@ impl TestRun for Wal105 {
         // Phase 2: sidecar loads the phase-1 checkpoint as base and applies only the new delta.
         {
             let shutdown = CancellationToken::new();
-            let sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
+            let sidecar_set = run_sidecar(&ctx.configs, shutdown.clone(), ctx);
             expect_sidecar_success(shutdown, sidecar_set).await?;
         }
 

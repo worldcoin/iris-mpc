@@ -4,15 +4,12 @@ use std::time::Duration;
 use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
 
-use super::expect_sidecar_success;
-use crate::{
-    run_sidecar,
-    utils::{
-        cpu_node::{CpuNodes, WalAssertions},
-        runner::{CpuTestContext, TestRun},
-        wal_builder::WalMutationBuilder,
-        MIN_MUTATIONS_PER_SIDECAR_CYCLE,
-    },
+use super::{expect_sidecar_success, run_sidecar};
+use crate::utils::{
+    cpu_node::{CpuNodes, WalAssertions},
+    runner::{CpuTestContext, TestRun},
+    wal_builder::WalMutationBuilder,
+    MIN_MUTATIONS_PER_SIDECAR_CYCLE,
 };
 
 #[derive(Default)]
@@ -61,7 +58,7 @@ impl TestRun for Wal106 {
 
         {
             let shutdown = CancellationToken::new();
-            let sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
+            let sidecar_set = run_sidecar(&ctx.configs, shutdown.clone(), ctx);
             expect_sidecar_success(shutdown, sidecar_set).await?;
         }
 
@@ -84,7 +81,7 @@ impl TestRun for Wal106 {
             let baselines = nodes.checkpoint_counts().await?;
 
             let shutdown = CancellationToken::new();
-            let sidecar_set = run_sidecar!(ctx.configs, shutdown.clone(), ctx);
+            let sidecar_set = run_sidecar(&ctx.configs, shutdown.clone(), ctx);
             expect_sidecar_success(shutdown, sidecar_set).await?;
 
             let wait_res = timeout(Duration::from_secs(120), async {
