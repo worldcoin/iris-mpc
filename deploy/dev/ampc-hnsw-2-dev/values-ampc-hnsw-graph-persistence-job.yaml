@@ -5,7 +5,7 @@ args:
   - "--peer-round-timeout-secs=30"
   - "--min-mutations-per-cycle=10000"
   - "--one-shot"
-  -
+
 env:
   SMPC__CPU_DATABASE__SCHEMA: "SMPC_graph_persistence_test_2"
   SMPC__GRAPH_CHECKPOINT_BUCKET_NAME: "ampc-hnsw-graph-store-node-2-dev-eu-central-1"
