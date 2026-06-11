@@ -110,7 +110,7 @@ pub struct CpuTestContext {
     /// Pre-built S3 client pointed at the LocalStack instance for this environment.
     /// Shared across all lifecycle phases to guarantee a consistent endpoint configuration.
     pub s3_client: aws_sdk_s3::Client,
-    /// Test number (100–104) for log tagging and config selection.
+    /// Test number for log tagging and config selection.
     pub kind: usize,
     /// Test run index (usually 1) for multi-run scenarios.
     pub idx: usize,
