@@ -38,6 +38,10 @@ pprof = { version = "0.15.0", features = ["flamegraph", "prost-codec"] }
 ampc-anon-stats.workspace = true
 ampc-server-utils.workspace = true
 
+[dev-dependencies]
+serial_test.workspace = true
+iris-mpc-utils = { path = "../iris-mpc-utils" }
+
 [features]
 default = []
 # enable the BatchMessage sqs_request type. used by the client to circumvent
