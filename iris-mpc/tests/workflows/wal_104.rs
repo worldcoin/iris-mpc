@@ -83,15 +83,16 @@ impl TestRun for Wal104 {
         builder.add_nodes(MIN_MUTATIONS_PER_SIDECAR_CYCLE);
         builder.build(nodes).await?;
 
-        // OlderNonArchival: removes the 3 non-archival older checkpoints; archival survives → 2 remain.
+        // OlderNonArchival: removes non-archival checkpoints older than the
+        // agreed base (the cycle-1 product); archival + base + new survive → 3.
         run_cycle(ctx, PruningMode::OlderNonArchival).await?;
-        nodes.assert_checkpoint_count(2).await?;
+        nodes.assert_checkpoint_count(3).await?;
 
         // Sidecar requires new mutations to trigger a cycle.
         builder.add_nodes(MIN_MUTATIONS_PER_SIDECAR_CYCLE);
         builder.build(nodes).await?;
 
-        // AllOlder: only the latest checkpoint survives.
+        // AllOlder: everything below the agreed base goes; base + new survive.
         run_cycle(ctx, PruningMode::AllOlder).await?;
 
         Ok(())
@@ -101,7 +102,7 @@ impl TestRun for Wal104 {
         let nodes = self.nodes.as_ref().unwrap();
 
         // assert_checkpoint_count already verifies the S3 object count per party matches.
-        let post = WalAssertions::new().assert_checkpoint_count(1);
+        let post = WalAssertions::new().assert_checkpoint_count(2);
         nodes.apply_uniform_assertions(&post).await?;
 
         nodes.assert_checkpoint_hashes_agree().await

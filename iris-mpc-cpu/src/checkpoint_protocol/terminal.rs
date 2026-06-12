@@ -139,10 +139,14 @@ impl<V: VectorStore + Send + Sync> TerminalAction for UploadAndRecord<'_, V> {
             graph_version: GraphFormat::Current.version(),
             is_archival: self.is_archival,
         };
+        // Retain the agreed base (and anything newer): peers provably hold
+        // the base durably, but may not have recorded the new checkpoint yet.
+        // See `cleanup_checkpoints` docs.
         if let Err(e) = cleanup_checkpoints(
             &self.bucket,
             self.s3_client,
             &graph_checkpoint,
+            Some(base.checkpoint_id),
             self.graph_store,
             self.pruning_mode,
         )
