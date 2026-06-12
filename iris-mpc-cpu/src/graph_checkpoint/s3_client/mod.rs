@@ -270,10 +270,20 @@ pub async fn save_checkpoint_state<V: VectorStore>(
 /// reached consensus on a common checkpoint.
 /// if the parties have not reached agreement, then
 /// calling this function could make rollback impossible
+///
+/// `retain_from_id`: local row-id watermark; rows with `id >= retain_from_id`
+/// are kept regardless of pruning mode. Callers pruning right after recording
+/// a checkpoint that peers have NOT yet confirmed durable (the sidecar's
+/// `UploadAndRecord`) must pass the cycle's agreed base id here: the base was
+/// advertised by every party in Phase 1, so retaining it guarantees a common
+/// checkpoint survives even if a peer crashes before recording the new one.
+/// `None` is only safe when `current_state` itself is known to be durably
+/// recorded by all parties (the startup-agreed common checkpoint).
 pub async fn cleanup_checkpoints<V: VectorStore>(
     bucket: &str,
     s3_client: &S3Client,
     current_state: &GraphCheckpointState,
+    retain_from_id: Option<i64>,
     graph_store: &GraphPg<V>,
     pruning_mode: PruningMode,
 ) -> Result<()> {
@@ -298,6 +308,7 @@ pub async fn cleanup_checkpoints<V: VectorStore>(
     for checkpoint in all_checkpoints
         .into_iter()
         .filter(|x| x.s3_key != current_state.s3_key)
+        .filter(|x| retain_from_id.map_or(true, |min_id| x.id < min_id))
         .filter(|x| match pruning_mode {
             PruningMode::AllOlder => true,
             PruningMode::OlderNonArchival => !x.is_archival,
