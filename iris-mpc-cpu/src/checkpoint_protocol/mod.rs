@@ -129,8 +129,14 @@ pub enum SkipReason {
         base: GraphMutationId,
     },
     /// [`BaseSelector::pick`] returned `None` — no checkpoint shared across
-    /// all parties.
+    /// all parties. A party with a non-empty checkpoint table lands here
+    /// when any peer advertises an empty list.
     NoCommonBase,
+    /// No party advertised any checkpoint — a fresh deployment. Distinct
+    /// from [`SkipReason::NoCommonBase`] so callers can treat "everyone is
+    /// empty" (expected, proceed empty) differently from "someone lost
+    /// their checkpoints" (divergence, fail loudly).
+    NoCheckpoints,
 }
 
 #[derive(Debug, Error)]
@@ -275,6 +281,12 @@ where
             cfg.peer_round_timeout,
         )
         .await?;
+    // A party with an empty table must still reach this point (i.e. it must
+    // participate in the exchange above): silently sitting out the ring
+    // would leave its peers timing out with no indication of the cause.
+    if my_recent.is_empty() && peer_lists.iter().all(|l| l.is_empty()) {
+        return Ok(Outcome::Skipped(SkipReason::NoCheckpoints));
+    }
     let agreed_base = match selector.pick(&my_recent, &peer_lists) {
         Some(b) => b,
         None => return Ok(Outcome::Skipped(SkipReason::NoCommonBase)),

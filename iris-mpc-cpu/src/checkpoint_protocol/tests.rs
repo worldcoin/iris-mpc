@@ -423,6 +423,96 @@ async fn restart_with_min_zero_runs_even_with_no_new_mutations() {
     assert_eq!(fin.calls.lock().unwrap().len(), 1);
 }
 
+// ── empty checkpoint tables ──────────────────────────────────────────────
+
+/// All parties empty → consistent `NoCheckpoints` skip, decided *after*
+/// participating in the Phase 1 exchange — a party that sat out the ring
+/// instead would leave its peers timing out with no indication why.
+#[tokio::test]
+async fn all_parties_empty_skips_with_no_checkpoints() {
+    let mut mat = MockMaterializer::new();
+    let mut fin = MockFinalizer::new();
+    let store = MockStore {
+        recent: vec![],
+        max_id: 0,
+    };
+    let canned = vec![vec![ConsensusMessage::BaseProposal { recent: vec![] }]];
+    let transport = MockTransport::new(canned);
+    let hasher = ConstHasher(hash_a());
+
+    let outcome = run_cycle(
+        &mut mat,
+        &mut fin,
+        &transport,
+        &store,
+        &hasher,
+        &MostRecentCommon,
+        &cfg(0),
+    )
+    .await
+    .expect("all-empty is a skip, not an error");
+
+    assert!(matches!(
+        outcome,
+        Outcome::Skipped(SkipReason::NoCheckpoints)
+    ));
+    assert_eq!(
+        transport.calls.lock().unwrap().len(),
+        1,
+        "the Phase 1 exchange must have run"
+    );
+    assert!(mat.freezes.lock().unwrap().is_empty());
+    assert!(fin.calls.lock().unwrap().is_empty());
+}
+
+/// Asymmetric emptiness is `NoCommonBase`, not `NoCheckpoints`, from both
+/// sides: the empty party and its non-empty peer reach the same conclusion.
+#[tokio::test]
+async fn asymmetric_empty_table_skips_no_common_base_on_both_sides() {
+    // Empty party's view: peer advertises a checkpoint.
+    let store = MockStore {
+        recent: vec![],
+        max_id: 0,
+    };
+    let canned = vec![vec![ConsensusMessage::BaseProposal {
+        recent: vec![meta(1, Some(100))],
+    }]];
+    let outcome = run_cycle(
+        &mut MockMaterializer::new(),
+        &mut MockFinalizer::new(),
+        &MockTransport::new(canned),
+        &store,
+        &ConstHasher(hash_a()),
+        &MostRecentCommon,
+        &cfg(0),
+    )
+    .await
+    .expect("skip, not error");
+    assert!(matches!(
+        outcome,
+        Outcome::Skipped(SkipReason::NoCommonBase)
+    ));
+
+    // Non-empty party's view: peer advertises nothing.
+    let store = MockStore::with_latest(meta(1, Some(100)), 100);
+    let canned = vec![vec![ConsensusMessage::BaseProposal { recent: vec![] }]];
+    let outcome = run_cycle(
+        &mut MockMaterializer::new(),
+        &mut MockFinalizer::new(),
+        &MockTransport::new(canned),
+        &store,
+        &ConstHasher(hash_a()),
+        &MostRecentCommon,
+        &cfg(0),
+    )
+    .await
+    .expect("skip, not error");
+    assert!(matches!(
+        outcome,
+        Outcome::Skipped(SkipReason::NoCommonBase)
+    ));
+}
+
 // ── base disagreement: StrictLatest skips; MostRecentCommon falls back ──
 
 #[tokio::test]
