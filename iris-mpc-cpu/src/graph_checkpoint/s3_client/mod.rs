@@ -308,7 +308,7 @@ pub async fn cleanup_checkpoints<V: VectorStore>(
     for checkpoint in all_checkpoints
         .into_iter()
         .filter(|x| x.s3_key != current_state.s3_key)
-        .filter(|x| retain_from_id.map_or(true, |min_id| x.id < min_id))
+        .filter(|x| retain_from_id.is_none_or(|min_id| x.id < min_id))
         .filter(|x| match pruning_mode {
             PruningMode::AllOlder => true,
             PruningMode::OlderNonArchival => !x.is_archival,
