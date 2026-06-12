@@ -459,10 +459,13 @@ async fn exec_setup(
     // the old checkpoints could still be found;
     // if the peers are consistent and stores are consistent, then clean up s3 checkpoints
     if let Some(graph_checkpoint) = graph_checkpoint.as_ref() {
+        // `graph_checkpoint` is the startup-agreed common checkpoint, so all
+        // parties hold it durably; no extra watermark needed.
         if let Err(e) = cleanup_checkpoints(
             &config.graph_checkpoint_bucket_name,
             &checkpoint_s3_client,
             graph_checkpoint,
+            None,
             &graph_store_arc,
             args.pruning_mode,
         )
