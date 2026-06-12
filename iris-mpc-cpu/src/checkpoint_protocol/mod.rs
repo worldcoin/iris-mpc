@@ -73,6 +73,34 @@ impl PartialEq for CheckpointMeta {
 
 impl Eq for CheckpointMeta {}
 
+impl CheckpointMeta {
+    /// Cycle nonce for Phases 2-5, derived from the same content fields as
+    /// `PartialEq` so every party computes the same value for the same
+    /// logical checkpoint. `checkpoint_id` must not feed this: it is
+    /// DB-local, and a nonce mismatch is fatal in the transport.
+    pub fn content_nonce(&self) -> u128 {
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(&self.last_indexed_iris_id.to_le_bytes());
+        hasher.update(&self.last_indexed_modification_id.to_le_bytes());
+        match self.graph_mutation_id {
+            Some(id) => {
+                hasher.update(&[1]);
+                hasher.update(&id.to_le_bytes());
+            }
+            None => {
+                hasher.update(&[0]);
+            }
+        }
+        hasher.update(self.blake3_hash.as_bytes());
+        hasher.update(&self.graph_version.to_le_bytes());
+        u128::from_le_bytes(
+            hasher.finalize().as_bytes()[..16]
+                .try_into()
+                .expect("16-byte slice"),
+        )
+    }
+}
+
 /// Inclusive upper bound on `graph_mutation_id` to apply during materialization.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FreezeHeight(pub GraphMutationId);
@@ -209,8 +237,8 @@ pub trait GraphHasher: Send + Sync {
 /// Sentinel nonce for Phase 1's base-list exchange. The nonce-derived-from-
 /// agreed-base trick can't be used yet (we're trying to agree on the base),
 /// so we use a fixed value. Cross-cycle crossed-wire detection is weaker for
-/// Phase 1 only — Phases 2-5 use `agreed_base.checkpoint_id` as the nonce and
-/// remain fully protected.
+/// Phase 1 only — Phases 2-5 use the agreed base's content nonce and remain
+/// fully protected.
 const BASE_PHASE_NONCE: u128 = 0xC4EC_B45E_C4EC_B45E_C4EC_B45E_C4EC_B45E_u128;
 
 /// Runs one cycle of the protocol. No looping, no sleeping; the caller's
@@ -251,9 +279,11 @@ where
         Some(b) => b,
         None => return Ok(Outcome::Skipped(SkipReason::NoCommonBase)),
     };
-    // Phases 2-5 share a nonce derived from the agreed base — preserves the
-    // crossed-wire detection the original strict-equality design had.
-    let cycle_nonce = agreed_base.checkpoint_id as u128;
+    // Phases 2-5 share a nonce derived from the agreed base's content —
+    // preserves the crossed-wire detection the original strict-equality
+    // design had, and additionally catches parties that picked different
+    // bases at Phase 2 instead of at the Phase 5 hash mismatch.
+    let cycle_nonce = agreed_base.content_nonce();
 
     // Phase 2 — height agreement. Pick the min across parties so every party
     // is guaranteed to have all WAL rows up to and including the freeze.
