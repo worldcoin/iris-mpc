@@ -18,6 +18,7 @@ use crate::{
         graph_v2::{self, read_graph_v2, GraphV2},
         graph_v3::{self, read_graph_v3, GraphV3},
         graph_v4::{self, read_graph_v4, GraphV4},
+        graph_v5::{read_graph_v5, GraphV5},
     },
 };
 
@@ -27,6 +28,18 @@ use crate::{
 pub enum GraphFormat {
     /// Designated current stable format for `GraphMem` serialization.
     Current,
+
+    /// Stable graph serialization format Version 5.
+    ///
+    /// - Binary format
+    /// - Multiple entry-points
+    /// - VectorId = SerialId
+    /// - Contains layer checksums
+    /// - Edges store VectorIds only
+    /// - Sequence number for timestamping graph mutations
+    /// - Neighborhoods contain the last updated sequence number <-- DIFF with V4
+    /// - Contains a HashMap of (VectorId, sequence number) to invalidate old edges <-- DIFF with V4
+    V5,
 
     /// Stable graph serialization format Version 4.
     ///
@@ -85,7 +98,8 @@ impl GraphFormat {
     /// Convert GraphFormat to its corresponding i32 value for storage.
     pub fn version(&self) -> i32 {
         match self {
-            GraphFormat::Current | GraphFormat::V4 => 4,
+            GraphFormat::Current | GraphFormat::V5 => 5,
+            GraphFormat::V4 => 4,
             GraphFormat::V3 => 3,
             GraphFormat::V2 => 2,
             GraphFormat::V1 => 1,
@@ -99,7 +113,8 @@ impl GraphFormat {
 }
 
 /// Array of all concrete graph formats
-pub const ALL_CONCRETE_GRAPH_FORMATS: [GraphFormat; 6] = [
+pub const ALL_CONCRETE_GRAPH_FORMATS: [GraphFormat; 7] = [
+    GraphFormat::V5,
     GraphFormat::V4,
     GraphFormat::V3,
     GraphFormat::V2,
@@ -112,6 +127,7 @@ impl Display for GraphFormat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             GraphFormat::Current => "Current",
+            GraphFormat::V5 => "V5",
             GraphFormat::V4 => "V4",
             GraphFormat::V3 => "V3",
             GraphFormat::V2 => "V2",
@@ -133,6 +149,7 @@ impl TryFrom<i32> for GraphFormat {
             2 => Ok(GraphFormat::V2),
             3 => Ok(GraphFormat::V3),
             4 => Ok(GraphFormat::V4),
+            5 => Ok(GraphFormat::V5),
             -1 => Ok(GraphFormat::Raw),
             _ => Err(eyre::eyre!("unsupported graph format version: {}", value)),
         }
@@ -140,21 +157,21 @@ impl TryFrom<i32> for GraphFormat {
 }
 
 /// Designated method for reading a `GraphMem`. Currently goes through the
-/// `GraphV4` serialization type.
+/// `GraphV5` serialization type.
 pub fn read_graph_current<R: std::io::Read>(
     reader: &mut R,
 ) -> eyre::Result<GraphMem<IrisVectorId>> {
-    let data = bincode::deserialize_from::<_, GraphV4>(reader)?.into();
+    let data = bincode::deserialize_from::<_, GraphV5>(reader)?.into();
     Ok(data)
 }
 
 /// Designated method for writing a `GraphMem`. Currently goes through the
-/// `GraphV4` serialization type.
+/// `GraphV5` serialization type.
 pub fn write_graph_current<W: std::io::Write>(
     writer: &mut W,
     data: GraphMem<IrisVectorId>,
 ) -> Result<()> {
-    bincode::serialize_into::<_, GraphV4>(writer, &(data.into()))?;
+    bincode::serialize_into::<_, GraphV5>(writer, &(data.into()))?;
     Ok(())
 }
 
@@ -188,6 +205,10 @@ pub fn read_graph<R: std::io::Read>(
 ) -> Result<GraphMem<IrisVectorId>> {
     match format {
         GraphFormat::Current => read_graph_current(reader),
+        GraphFormat::V5 => {
+            let graph = read_graph_v5(reader)?;
+            Ok(graph.into())
+        }
         GraphFormat::V4 => {
             let graph = read_graph_v4(reader)?;
             Ok(graph.into())
@@ -275,22 +296,22 @@ fn read_pair<R: std::io::Read + ?Sized, G: for<'a> Deserialize<'a>>(
 }
 
 /// Designated method for reading a pair of `GraphMem` structs. Currently goes
-/// through the `GraphV4` serialization type.
+/// through the `GraphV5` serialization type.
 pub fn read_graph_pair_current<R: std::io::Read + ?Sized>(
     reader: &mut R,
 ) -> Result<[GraphMem<IrisVectorId>; 2]> {
-    let data = read_pair::<_, GraphV4>(reader)?.map(|graph| graph.into());
+    let data = read_pair::<_, GraphV5>(reader)?.map(|graph| graph.into());
     Ok(data)
 }
 
 /// Designated method for writing a pair of `GraphMem` structs. Currently goes
-/// through the `GraphV4` serialization type.
+/// through the `GraphV5` serialization type.
 pub fn write_graph_pair_current<W: std::io::Write>(
     writer: &mut W,
     data: [GraphMem<IrisVectorId>; 2],
 ) -> Result<()> {
     let data = data.map(|graph| graph.into());
-    bincode::serialize_into::<_, [GraphV4; 2]>(writer, &data)?;
+    bincode::serialize_into::<_, [GraphV5; 2]>(writer, &data)?;
     Ok(())
 }
 
@@ -326,6 +347,10 @@ pub fn read_graph_pair<R: std::io::Read + ?Sized>(
 ) -> Result<[GraphMem<IrisVectorId>; 2]> {
     match format {
         GraphFormat::Current => read_graph_pair_current(reader),
+        GraphFormat::V5 => {
+            let graphs = read_pair::<_, GraphV5>(reader)?;
+            Ok(graphs.map(|graph| graph.into()))
+        }
         GraphFormat::V4 => {
             let graphs = read_pair::<_, GraphV4>(reader)?;
             Ok(graphs.map(|graph| graph.into()))

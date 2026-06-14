@@ -107,11 +107,6 @@ pub struct GraphMem<V: Ref + Display + FromStr + Ord> {
     /// each layer represent approximate nearest neighbors within that layer.
     pub layers: Vec<Layer<V>>,
 
-    /// The sequence number of the most recently applied `GraphMutation`. `0`
-    /// means no mutation has been applied. Advanced by `insert_apply` on
-    /// success.
-    pub last_update_seq_no: u64,
-
     /// Maps each node's vector reference to the graph modification counter at
     /// the time it was (re-)initialized.  Used together with
     /// [`Neighborhood::updated_seq_no`] to determine edge validity: an edge to `B`
@@ -121,6 +116,11 @@ pub struct GraphMem<V: Ref + Display + FromStr + Ord> {
     /// implicit timestamp of `0`, consistent with their neighborhoods also
     /// carrying `updated_seq_no = 0`.
     pub node_init_seq_no: HashMap<V, u64>,
+
+    /// The sequence number of the most recently applied `GraphMutation`. `0`
+    /// means no mutation has been applied. Advanced by `insert_apply` on
+    /// success.
+    pub last_update_seq_no: u64,
 }
 
 impl Display for GraphMem<IrisVectorId> {
