@@ -64,7 +64,7 @@ impl<V: VectorStore> Clone for InsertPlanV<V> {
 /// ("delete-then-add"), each in its own `GraphMutation`.
 ///
 /// Returns a parallel pair of `VecRequests`:
-/// - the per-slot `Vec<ConnectPlanV<V>>` carrying the graph mutations to persist (a slot
+/// - the per-slot `Vec<ConnectPlanV>` carrying the graph mutations to persist (a slot
 ///   may produce 0 to 3 mutations from the per-slot steps, and the last non-empty slot may
 ///   additionally carry the batch's single global compaction mutation);
 /// - the per-slot `Option<V::VectorRef>` identifying the newly inserted vector, or `None`
@@ -77,7 +77,7 @@ pub async fn insert<V: VectorStoreMut>(
     insert_ids: &VecRequests<Option<V::VectorRef>>,
     replace_ids: &VecRequests<Option<V::VectorRef>>,
 ) -> Result<(
-    VecRequests<Vec<ConnectPlanV<V>>>,
+    VecRequests<Vec<ConnectPlanV>>,
     VecRequests<Option<V::VectorRef>>,
 )> {
     tracing::debug!("Inserting {} InsertPlans into store", plans.len());
@@ -99,7 +99,7 @@ pub async fn insert<V: VectorStoreMut>(
     let mut intra_batch_inserted: Vec<SerialId> = vec![];
     let m = searcher.params.get_M(0);
 
-    let mut slot_outputs: Vec<Vec<ConnectPlanV<V>>> = vec![vec![]; insert_plans.len()];
+    let mut slot_outputs: Vec<Vec<ConnectPlanV>> = vec![vec![]; insert_plans.len()];
     let mut slot_inserted_ids: Vec<Option<V::VectorRef>> = vec![None; insert_plans.len()];
     let mut batch_expanded: BTreeSet<(SerialId, usize)> = BTreeSet::new();
 

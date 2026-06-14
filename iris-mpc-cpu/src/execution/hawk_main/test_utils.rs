@@ -24,8 +24,7 @@ use crate::{
 };
 
 use super::{
-    iris_worker::QueryId, scheduler::parallelize, HawkActor, HawkArgs, HawkRequest, VectorId, LEFT,
-    RIGHT,
+    iris_worker::QueryId, scheduler::parallelize, HawkActor, HawkArgs, HawkRequest, LEFT, RIGHT,
 };
 
 pub async fn setup_hawk_actors() -> Result<Vec<HawkActor>> {
@@ -85,7 +84,7 @@ pub async fn init_iris_db(actor: &mut HawkActor) -> Result<()> {
 pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
     let db_size = 5;
     let layer_mode = actor.searcher().layer_mode.clone();
-    let id = |i: usize| VectorId::from_0_index(i as u32);
+    let id = |i: usize| i as u32;
     let next = |i: usize| (i + 1) % db_size;
     let edges = |i: usize| vec![id(next(i))];
 

@@ -223,7 +223,7 @@ pub trait MutationStore {
         &self,
         lo_exclusive: GraphMutationId,
         hi_inclusive: GraphMutationId,
-    ) -> Result<BoxStream<'_, Result<BothEyes<Vec<GraphMutation<VectorId>>>, CycleError>>, CycleError>;
+    ) -> Result<BoxStream<'_, Result<BothEyes<Vec<GraphMutation<SerialId>>>, CycleError>>, CycleError>;
 
     /// Largest `graph_mutation_id` currently visible to this party.
     /// Used for the height-agreement round.

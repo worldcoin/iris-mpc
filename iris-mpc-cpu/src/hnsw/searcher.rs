@@ -296,7 +296,7 @@ pub struct HnswSearcher {
 /// A list of graph mutations representing state updates for insertion of new nodes
 /// into the HNSW graph.
 pub type ConnectPlan<Vector> = GraphMutation<Vector>;
-pub type ConnectPlanV<V> = ConnectPlan<SerialId>;
+pub type ConnectPlanV = ConnectPlan<SerialId>;
 
 /// Represents a graph update of a single node's neighborhood in a graph, given
 /// by a tuple `(update_layer, update_vector, new_neighborhood)`.

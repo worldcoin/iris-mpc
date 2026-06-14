@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::stream::{self, BoxStream};
-use iris_mpc_common::vector_id::VectorId;
+use iris_mpc_common::vector_id::SerialId;
 
 use crate::checkpoint_protocol::{
     run_cycle, Blake3Hash, CheckpointMeta, ConsensusMessage, ConsensusTransport, CycleConfig,
@@ -19,7 +19,7 @@ use crate::hnsw::{graph::mutation::GraphMutation, GraphMem};
 // ── shared fixtures ──────────────────────────────────────────────────────
 
 fn empty_graph() -> Graph {
-    [GraphMem::<VectorId>::new(), GraphMem::<VectorId>::new()]
+    [GraphMem::<SerialId>::new(), GraphMem::<SerialId>::new()]
 }
 
 fn cfg(min: u64) -> CycleConfig {
@@ -102,7 +102,7 @@ impl MutationStore for MockStore {
         &self,
         _lo_exclusive: GraphMutationId,
         _hi_inclusive: GraphMutationId,
-    ) -> Result<BoxStream<'_, Result<BothEyes<Vec<GraphMutation<VectorId>>>, CycleError>>, CycleError>
+    ) -> Result<BoxStream<'_, Result<BothEyes<Vec<GraphMutation<SerialId>>>, CycleError>>, CycleError>
     {
         Ok(Box::pin(stream::empty()))
     }
