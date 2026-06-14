@@ -13,7 +13,7 @@ use crate::{
 use aes_prng::AesRng;
 use iris_mpc_common::{
     iris_db::{db::IrisDB, iris::IrisCode},
-    vector_id::VectorId,
+    vector_id::{SerialId, VectorId},
 };
 use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
@@ -108,7 +108,7 @@ impl<D: DistanceOps> PlaintextStore<D> {
         rng: &mut R,
         graph_size: usize,
         searcher: &HnswSearcher,
-    ) -> Result<GraphMem<<Self as VectorStore>::VectorRef>> {
+    ) -> Result<GraphMem<SerialId>> {
         let mut graph = GraphMem::new();
         let mut rng = AesRng::from_rng(rng.clone())?;
 
@@ -203,6 +203,19 @@ impl<D: DistanceOps> VectorStore for PlaintextStore<D> {
     ) -> Vec<Self::VectorRef> {
         vectors.retain(|v| self.storage.contains(v));
         vectors
+    }
+
+    async fn serial_ids_to_vector_refs(
+        &mut self,
+        ids: Vec<iris_mpc_common::vector_id::SerialId>,
+    ) -> Vec<Self::VectorRef> {
+        ids.into_iter()
+            .filter_map(|sid| {
+                self.storage
+                    .get_current_version(sid)
+                    .map(|version| VectorId::new(sid, version))
+            })
+            .collect()
     }
 }
 
@@ -353,6 +366,20 @@ impl<D: DistanceOps> VectorStore for SharedPlaintextStore<D> {
         let storage = self.storage.read().await;
         vectors.retain(|v| storage.contains(v));
         vectors
+    }
+
+    async fn serial_ids_to_vector_refs(
+        &mut self,
+        ids: Vec<iris_mpc_common::vector_id::SerialId>,
+    ) -> Vec<Self::VectorRef> {
+        let storage = self.storage.read().await;
+        ids.into_iter()
+            .filter_map(|sid| {
+                storage
+                    .get_current_version(sid)
+                    .map(|version| VectorId::new(sid, version))
+            })
+            .collect()
     }
 }
 

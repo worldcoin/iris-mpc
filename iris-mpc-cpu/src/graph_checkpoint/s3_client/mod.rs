@@ -10,7 +10,6 @@ use eyre::{bail, eyre, Result};
 
 use crate::{
     execution::hawk_main::{BothEyes, GraphRef, LEFT, RIGHT},
-    hawkers::plaintext_store::PlaintextVectorRef,
     hnsw::{
         graph::{
             graph_store::{self, GraphPg},
@@ -22,7 +21,7 @@ use crate::{
 };
 
 use crate::graph_checkpoint::data::*;
-use iris_mpc_common::{IrisSerialId, IrisVectorId};
+use iris_mpc_common::{vector_id::SerialId, IrisSerialId};
 pub use multipart::*;
 pub use streaming::*;
 pub use streaming_download::*;
@@ -71,7 +70,7 @@ pub async fn upload_graph_checkpoint(
 pub async fn upload_graph_checkpoint_plaintext(
     bucket: &str,
     party_id: usize,
-    graph_mem: &BothEyes<GraphMem<PlaintextVectorRef>>,
+    graph_mem: &BothEyes<GraphMem<SerialId>>,
     s3_client: &S3Client,
     last_indexed_iris_id: IrisSerialId,
     last_indexed_modification_id: i64,
@@ -173,7 +172,7 @@ pub async fn download_graph_checkpoint(
     s3_client: &S3Client,
     bucket: &str,
     state: &GraphCheckpointState,
-) -> Result<BothEyes<GraphMem<IrisVectorId>>> {
+) -> Result<BothEyes<GraphMem<IrisSerialId>>> {
     let format = GraphFormat::try_from(state.graph_version)?;
     if format == GraphFormat::Raw {
         bail!("Unexpected graph checkpoint format: Raw");
@@ -204,7 +203,7 @@ pub async fn download_genesis_checkpoint_plaintext(
     s3_client: &S3Client,
     bucket: &str,
     state: &GraphCheckpointState,
-) -> Result<BothEyes<GraphMem<PlaintextVectorRef>>> {
+) -> Result<BothEyes<GraphMem<SerialId>>> {
     if state.graph_version != GraphFormat::Current.version() {
         bail!("unexpected graph version: {}", state.graph_version);
     }

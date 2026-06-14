@@ -3,7 +3,7 @@ use crate::{
     hnsw::{graph::GraphMutation, VectorStore},
 };
 use eyre::{eyre, Result};
-use iris_mpc_common::{postgres::PostgresClient, IrisVectorId};
+use iris_mpc_common::{postgres::PostgresClient, IrisSerialId};
 use serde::{de::DeserializeOwned, Serialize};
 use sqlx::{types::Json, Postgres, Row, Transaction};
 use std::{marker::PhantomData, ops::DerefMut};
@@ -24,7 +24,7 @@ pub struct GraphCheckpointRow {
 #[derive(sqlx::FromRow, Debug, Clone, PartialEq, Eq)]
 pub struct GraphMutationRow {
     pub modification_id: i64,
-    /// Bincode-serialized `BothEyes<Vec<GraphMutation<VectorId>>>` (mutations for both eyes)
+    /// Bincode-serialized `BothEyes<Vec<GraphMutation<SerialId>>>` (mutations for both eyes)
     pub serialized_mutations: Vec<u8>,
 }
 
@@ -35,8 +35,8 @@ pub struct GraphPg<V: VectorStore> {
 }
 
 impl GraphMutationRow {
-    pub fn deserialize_mutations(&self) -> Result<BothEyes<Vec<GraphMutation<IrisVectorId>>>> {
-        let both_eyes: BothEyes<Vec<GraphMutation<IrisVectorId>>> =
+    pub fn deserialize_mutations(&self) -> Result<BothEyes<Vec<GraphMutation<IrisSerialId>>>> {
+        let both_eyes: BothEyes<Vec<GraphMutation<IrisSerialId>>> =
             bincode::deserialize(&self.serialized_mutations)?;
         Ok(both_eyes)
     }

@@ -24,7 +24,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
-use iris_mpc_common::vector_id::VectorId;
+use iris_mpc_common::vector_id::SerialId;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -41,7 +41,7 @@ pub type GraphMutationId = i64;
 
 /// The graph each materializer produces and each terminal action consumes.
 /// Both eyes together — left then right — matching the rest of Hawk.
-pub type Graph = BothEyes<GraphMem<VectorId>>;
+pub type Graph = BothEyes<GraphMem<SerialId>>;
 
 /// Metadata for the base checkpoint a cycle starts from.
 ///

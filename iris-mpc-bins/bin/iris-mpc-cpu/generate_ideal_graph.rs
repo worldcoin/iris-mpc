@@ -1,5 +1,5 @@
 use eyre::Result;
-use iris_mpc_common::IrisVectorId;
+use iris_mpc_common::{IrisSerialId, IrisVectorId};
 use iris_mpc_cpu::hawkers::aby3::aby3_store::{DistanceOps, FhdOps, NhdOps};
 use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 use iris_mpc_cpu::hnsw::searcher::LayerMode;
@@ -40,7 +40,7 @@ where
 }
 
 async fn run_sanity_check<D: DistanceOps>(
-    graph: &GraphMem<IrisVectorId>,
+    graph: &GraphMem<IrisSerialId>,
     searcher: &HnswSearcher,
     irises: Vec<iris_mpc_common::iris_db::iris::IrisCode>,
     echoice: EngineChoice,
@@ -92,7 +92,7 @@ async fn run_sanity_check<D: DistanceOps>(
         store.insert_with_id(IrisVectorId::from_serial_id((i as u32) + 1), Arc::new(iris));
     }
 
-    let sample_iris = store.storage.get_vector(&sample).cloned().unwrap();
+    let sample_iris = store.storage.get_vector_by_serial_id(sample).cloned().unwrap();
 
     for lc in 0..graph.layers.len() {
         let neighbors = graph.layers[lc]
@@ -117,7 +117,7 @@ async fn run_sanity_check<D: DistanceOps>(
                 .filter(|n| {
                     let d = D::plaintext_distance(
                         &sample_iris,
-                        store.storage.get_vector(n).unwrap(),
+                        store.storage.get_vector_by_serial_id(*n).unwrap(),
                         store.distance_mode,
                     );
                     matches!(D::plaintext_ordering(&d, &kth_dist), Ordering::Greater)

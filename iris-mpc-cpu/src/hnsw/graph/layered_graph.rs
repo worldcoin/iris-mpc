@@ -18,7 +18,7 @@ use crate::{
 };
 
 use eyre::Result;
-use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
+use iris_mpc_common::{iris_db::iris::IrisCode, IrisSerialId};
 use itertools::{izip, Itertools};
 use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::{
@@ -123,7 +123,7 @@ pub struct GraphMem<V: Ref + Display + FromStr + Ord> {
     pub last_update_seq_no: u64,
 }
 
-impl Display for GraphMem<IrisVectorId> {
+impl Display for GraphMem<IrisSerialId> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "GraphMem")?;
         let eps_str = self
@@ -140,7 +140,7 @@ impl Display for GraphMem<IrisVectorId> {
     }
 }
 
-impl Display for Layer<IrisVectorId> {
+impl Display for Layer<IrisSerialId> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut links = self
             .links
@@ -582,7 +582,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
     }
 }
 
-impl GraphMem<IrisVectorId> {
+impl GraphMem<IrisSerialId> {
     /// Builds an idealized GraphMem, where all nearest-neighborhoods are exact.
     ///
     /// Layer 0 is built directly from a file (which generally is expensive to produce).
@@ -608,7 +608,7 @@ impl GraphMem<IrisVectorId> {
             }
             let results = results
                 .into_par_iter()
-                .map(|result| result.map(IrisVectorId::from_serial_id))
+                .map(|result| result.map(|sid| sid as IrisSerialId))
                 .collect::<Vec<_>>();
             Layer::from_knn_results(results, irises.len())
         };
@@ -620,7 +620,7 @@ impl GraphMem<IrisVectorId> {
         .collect::<Vec<_>>();
 
         // Collect nodes into layers they are inserted into (for layers > 0)
-        let mut nonzero_layers_map: BTreeMap<usize, Vec<(IrisVectorId, IrisCode)>> =
+        let mut nonzero_layers_map: BTreeMap<usize, Vec<(IrisSerialId, IrisCode)>> =
             BTreeMap::new();
         for (vector_id, iris) in irises_with_vector_ids.iter() {
             let layer = searcher.gen_layer_prf(&prf_seed, &vector_id)?;
@@ -633,7 +633,7 @@ impl GraphMem<IrisVectorId> {
             }
         }
 
-        let mut nodes_for_nonzero_layers: Vec<Vec<(IrisVectorId, IrisCode)>> =
+        let mut nodes_for_nonzero_layers: Vec<Vec<(IrisSerialId, IrisCode)>> =
             nonzero_layers_map.into_values().collect::<Vec<Vec<_>>>();
 
         // Initialize entry points and truncate layers depending on the layer mode
@@ -1027,7 +1027,7 @@ mod tests {
     use crate::{
         hawkers::{
             aby3::aby3_store::FhdOps,
-            plaintext_store::{PlaintextStore, PlaintextVectorRef},
+            plaintext_store::PlaintextStore,
         },
         hnsw::{
             graph::layered_graph::migrate, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
@@ -1036,7 +1036,7 @@ mod tests {
     };
     use aes_prng::AesRng;
     use eyre::Result;
-    use iris_mpc_common::{iris_db::db::IrisDB, vector_id::VectorId, IrisVectorId};
+    use iris_mpc_common::{iris_db::db::IrisDB, vector_id::{HasSerialId, SerialId, VectorId}, IrisSerialId};
 
     use rand::{RngCore, SeedableRng};
 
@@ -1142,9 +1142,7 @@ mod tests {
                 .await?;
         }
 
-        let different_graph_store: GraphMem<VectorId> = migrate(graph_store.clone(), |v| {
-            VectorId::from_0_index(v.index() * 2)
-        });
+        let different_graph_store: GraphMem<SerialId> = migrate(graph_store.clone(), |v| v * 2);
         assert_ne!(graph_store, different_graph_store);
 
         Ok(())
@@ -1152,14 +1150,14 @@ mod tests {
 
     #[test]
     fn test_layer_deterministic_serialize_order() {
-        let mut layer_a = super::Layer::new();
-        let mut layer_b = super::Layer::new();
+        let mut layer_a = super::Layer::<IrisSerialId>::new();
+        let mut layer_b = super::Layer::<IrisSerialId>::new();
 
-        let v1 = IrisVectorId::from_serial_id(1);
-        let v2 = IrisVectorId::from_serial_id(2);
-        let v3 = IrisVectorId::from_serial_id(3);
-        let v4 = IrisVectorId::from_serial_id(4);
-        let v5 = IrisVectorId::from_serial_id(5);
+        let v1: IrisSerialId = 1;
+        let v2: IrisSerialId = 2;
+        let v3: IrisSerialId = 3;
+        let v4: IrisSerialId = 4;
+        let v5: IrisSerialId = 5;
 
         layer_a.set_links(v1, vec![v2, v3], 0);
         layer_a.set_links(v4, vec![v5], 0);
@@ -1180,7 +1178,7 @@ mod tests {
         let searcher = HnswSearcher::new_with_test_parameters();
         let mut rng = AesRng::seed_from_u64(0_u64);
 
-        let mut point_ids_map: HashMap<PlaintextVectorRef, usize> = HashMap::new();
+        let mut point_ids_map: HashMap<SerialId, usize> = HashMap::new();
 
         for raw_query in IrisDB::new_random_rng(20, &mut rng).db {
             let query = Arc::new(raw_query);
@@ -1204,7 +1202,7 @@ mod tests {
                 )
                 .await?;
 
-            point_ids_map.insert(inserted, rng.next_u32() as usize);
+            point_ids_map.insert(inserted.serial_id(), rng.next_u32() as usize);
         }
 
         let new_graph_store: GraphMem<<TestStore as VectorStore>::VectorRef> =
@@ -1244,10 +1242,10 @@ mod tests {
 
     #[test]
     fn add_edges_outgoing_writes_only_to_id_list() {
-        let mut graph = GraphMem::<IrisVectorId>::new();
-        let a = IrisVectorId::from_serial_id(1);
-        let b = IrisVectorId::from_serial_id(2);
-        let c = IrisVectorId::from_serial_id(3);
+        let mut graph = GraphMem::<IrisSerialId>::new();
+        let a: IrisSerialId = 1;
+        let b: IrisSerialId = 2;
+        let c: IrisSerialId = 3;
         // Seed: a, b, c all exist at layer 0 with no edges.
         graph
             .insert_apply(&GraphMutation {
@@ -1285,20 +1283,20 @@ mod tests {
         assert_eq!(graph.layers[0].get_links(&a).unwrap(), &[b, c]);
         assert_eq!(
             graph.layers[0].get_links(&b).unwrap(),
-            &[] as &[IrisVectorId]
+            &[] as &[IrisSerialId]
         );
         assert_eq!(
             graph.layers[0].get_links(&c).unwrap(),
-            &[] as &[IrisVectorId]
+            &[] as &[IrisSerialId]
         );
     }
 
     #[test]
     fn add_edges_incoming_writes_only_to_target_lists() {
-        let mut graph = GraphMem::<IrisVectorId>::new();
-        let a = IrisVectorId::from_serial_id(1);
-        let b = IrisVectorId::from_serial_id(2);
-        let c = IrisVectorId::from_serial_id(3);
+        let mut graph = GraphMem::<IrisSerialId>::new();
+        let a: IrisSerialId = 1;
+        let b: IrisSerialId = 2;
+        let c: IrisSerialId = 3;
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 1,
@@ -1334,7 +1332,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             graph.layers[0].get_links(&a).unwrap(),
-            &[] as &[IrisVectorId]
+            &[] as &[IrisSerialId]
         );
         assert_eq!(graph.layers[0].get_links(&b).unwrap(), &[a]);
         assert_eq!(graph.layers[0].get_links(&c).unwrap(), &[a]);
@@ -1342,10 +1340,10 @@ mod tests {
 
     #[test]
     fn add_edges_bidirectional_writes_both_sides() {
-        let mut graph = GraphMem::<IrisVectorId>::new();
-        let a = IrisVectorId::from_serial_id(1);
-        let b = IrisVectorId::from_serial_id(2);
-        let c = IrisVectorId::from_serial_id(3);
+        let mut graph = GraphMem::<IrisSerialId>::new();
+        let a: IrisSerialId = 1;
+        let b: IrisSerialId = 2;
+        let c: IrisSerialId = 3;
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 1,
@@ -1386,10 +1384,10 @@ mod tests {
 
     #[test]
     fn remove_edges_outgoing_only_modifies_id_list() {
-        let mut graph = GraphMem::<IrisVectorId>::new();
-        let a = IrisVectorId::from_serial_id(1);
-        let b = IrisVectorId::from_serial_id(2);
-        let c = IrisVectorId::from_serial_id(3);
+        let mut graph = GraphMem::<IrisSerialId>::new();
+        let a: IrisSerialId = 1;
+        let b: IrisSerialId = 2;
+        let c: IrisSerialId = 3;
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 1,
@@ -1450,9 +1448,9 @@ mod tests {
     fn two_phase_apply_edges_before_node_in_vec_still_works() {
         // Pass 1 should apply AddNode before pass 2 applies AddEdges, regardless
         // of their order in the input Vec.
-        let mut graph = GraphMem::<IrisVectorId>::new();
-        let a = IrisVectorId::from_serial_id(1);
-        let b = IrisVectorId::from_serial_id(2);
+        let mut graph = GraphMem::<IrisSerialId>::new();
+        let a: IrisSerialId = 1;
+        let b: IrisSerialId = 2;
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 1,
@@ -1486,8 +1484,7 @@ mod tests {
     #[test]
     fn next_seq_no_is_one_past_last_and_does_not_mutate() {
         use crate::hnsw::GraphMem;
-        use iris_mpc_common::IrisVectorId;
-        let mut graph = GraphMem::<IrisVectorId>::new();
+        let mut graph = GraphMem::<IrisSerialId>::new();
         assert_eq!(graph.last_update_seq_no, 0);
         assert_eq!(graph.next_sequence_number(), 1);
         assert_eq!(graph.next_sequence_number(), 1, "peek must not mutate");
@@ -1498,9 +1495,9 @@ mod tests {
 
     #[test]
     fn insert_apply_advances_last_update_seq_no_on_success() {
-        let mut graph = GraphMem::<IrisVectorId>::new();
-        let a = IrisVectorId::from_serial_id(1);
-        let mutation = GraphMutation::<IrisVectorId> {
+        let mut graph = GraphMem::<IrisSerialId>::new();
+        let a: IrisSerialId = 1;
+        let mutation = GraphMutation::<IrisSerialId> {
             seq_no: 1,
             ops: vec![MutationOp::AddNode {
                 id: a,
@@ -1516,12 +1513,12 @@ mod tests {
 
     #[test]
     fn insert_apply_rejects_seq_no_equal_to_last_update_seq_no() {
-        let mut graph = GraphMem::<IrisVectorId>::new();
+        let mut graph = GraphMem::<IrisSerialId>::new();
         graph.last_update_seq_no = 5;
-        let mutation = GraphMutation::<IrisVectorId> {
+        let mutation = GraphMutation::<IrisSerialId> {
             seq_no: 5,
             ops: vec![MutationOp::AddNode {
-                id: IrisVectorId::from_serial_id(1),
+                id: 1_u32,
                 height: 1,
                 update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
             }],
@@ -1537,12 +1534,12 @@ mod tests {
 
     #[test]
     fn insert_apply_rejects_seq_no_below_last_update_seq_no() {
-        let mut graph = GraphMem::<IrisVectorId>::new();
+        let mut graph = GraphMem::<IrisSerialId>::new();
         graph.last_update_seq_no = 10;
-        let mutation = GraphMutation::<IrisVectorId> {
+        let mutation = GraphMutation::<IrisSerialId> {
             seq_no: 9,
             ops: vec![MutationOp::AddNode {
-                id: IrisVectorId::from_serial_id(1),
+                id: 1_u32,
                 height: 1,
                 update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
             }],
@@ -1554,11 +1551,11 @@ mod tests {
 
     #[test]
     fn insert_apply_all_short_circuits_on_first_violation() {
-        let mut graph = GraphMem::<IrisVectorId>::new();
-        let a = IrisVectorId::from_serial_id(1);
-        let b = IrisVectorId::from_serial_id(2);
+        let mut graph = GraphMem::<IrisSerialId>::new();
+        let a: IrisSerialId = 1;
+        let b: IrisSerialId = 2;
         let mutations = vec![
-            GraphMutation::<IrisVectorId> {
+            GraphMutation::<IrisSerialId> {
                 seq_no: 1,
                 ops: vec![MutationOp::AddNode {
                     id: a,
@@ -1567,7 +1564,7 @@ mod tests {
                 }],
             },
             // Equal seq_no — should fail.
-            GraphMutation::<IrisVectorId> {
+            GraphMutation::<IrisSerialId> {
                 seq_no: 1,
                 ops: vec![MutationOp::AddNode {
                     id: b,
@@ -1589,9 +1586,9 @@ mod tests {
 
     #[test]
     fn node_init_ts_recorded_on_add_node() {
-        let mut graph = GraphMem::<IrisVectorId>::new();
-        let a = IrisVectorId::from_serial_id(1);
-        let b = IrisVectorId::from_serial_id(2);
+        let mut graph = GraphMem::<IrisSerialId>::new();
+        let a: IrisSerialId = 1;
+        let b: IrisSerialId = 2;
 
         graph
             .insert_apply(&GraphMutation {
@@ -1617,8 +1614,8 @@ mod tests {
 
     #[test]
     fn node_init_ts_removed_on_remove_node() {
-        let mut graph = GraphMem::<IrisVectorId>::new();
-        let a = IrisVectorId::from_serial_id(1);
+        let mut graph = GraphMem::<IrisSerialId>::new();
+        let a: IrisSerialId = 1;
 
         graph
             .insert_apply(&GraphMutation {
@@ -1646,9 +1643,9 @@ mod tests {
         // Node `b` is added at seq_no=1, then neighborhood of `a` is written at
         // seq_no=2 pointing to `b`. Then `b` is re-initialized at seq_no=3,
         // making the edge stale (init_ts=3 > updated_ts=2).
-        let mut graph = GraphMem::<IrisVectorId>::new();
-        let a = IrisVectorId::from_serial_id(1);
-        let b = IrisVectorId::from_serial_id(2);
+        let mut graph = GraphMem::<IrisSerialId>::new();
+        let a: IrisSerialId = 1;
+        let b: IrisSerialId = 2;
 
         // Add both nodes and connect a → b.
         graph
@@ -1711,9 +1708,9 @@ mod tests {
 
     #[test]
     fn canonicalize_removes_stale_edges() {
-        let mut graph = GraphMem::<IrisVectorId>::new();
-        let a = IrisVectorId::from_serial_id(1);
-        let b = IrisVectorId::from_serial_id(2);
+        let mut graph = GraphMem::<IrisSerialId>::new();
+        let a: IrisSerialId = 1;
+        let b: IrisSerialId = 2;
 
         graph
             .insert_apply(&GraphMutation {
@@ -1759,7 +1756,7 @@ mod tests {
         graph.canonicalize();
         assert_eq!(
             graph.layers[0].get_links(&a).unwrap(),
-            &[] as &[IrisVectorId]
+            &[] as &[IrisSerialId]
         ); // pruned
     }
 }

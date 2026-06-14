@@ -8,7 +8,7 @@ use iris_mpc_common::{
         REAUTH_MESSAGE_TYPE, RECOVERY_UPDATE_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
     },
     postgres::{AccessMode, PostgresClient},
-    vector_id::VectorId,
+    vector_id::SerialId,
 };
 use iris_mpc_cpu::{
     execution::hawk_main::{BothEyes, LEFT, RIGHT},
@@ -306,7 +306,7 @@ async fn main() -> Result<()> {
         bucket,
         checkpoint_state.s3_key
     );
-    let mut graphs: BothEyes<GraphMem<VectorId>> =
+    let mut graphs: BothEyes<GraphMem<SerialId>> =
         download_graph_checkpoint(&checkpoint_s3_client, bucket, &checkpoint_state).await?;
     rpt!(rpt, "  Checkpoint loaded and BLAKE3 verified.");
 
@@ -378,7 +378,7 @@ async fn main() -> Result<()> {
     );
     stats.add("checkpoint_blake3_hash", &checkpoint_state.blake3_hash);
 
-    let s3_graphs: Option<BothEyes<GraphMem<VectorId>>> = Some(graphs);
+    let s3_graphs: Option<BothEyes<GraphMem<SerialId>>> = Some(graphs);
 
     rpt!(rpt, "--- Collecting iris IDs ---");
     let iris_ids = collect_iris_ids(&hnsw_store, &mut stats).await?;
@@ -495,7 +495,7 @@ async fn collect_iris_ids(store: &Store, stats: &mut Stats) -> Result<HashSet<i6
 
 #[allow(clippy::too_many_arguments)]
 async fn run_graph_checks(
-    s3_graphs: Option<&BothEyes<GraphMem<VectorId>>>,
+    s3_graphs: Option<&BothEyes<GraphMem<SerialId>>>,
     iris_ids: &HashSet<i64>,
     exclusions: &Option<HashSet<u32>>,
     m: usize,
@@ -557,7 +557,7 @@ async fn run_graph_checks(
 #[allow(clippy::too_many_arguments)]
 fn check_single_graph(
     eye: &str,
-    graph: &GraphMem<VectorId>,
+    graph: &GraphMem<SerialId>,
     iris_ids: &HashSet<i64>,
     exclusions: &Option<HashSet<u32>>,
     m: usize,
@@ -622,7 +622,7 @@ fn check_single_graph(
         .layers
         .iter()
         .flat_map(|l| l.links.keys())
-        .filter(|n| !iris_ids.contains(&(n.serial_id() as i64)))
+        .filter(|n| !iris_ids.contains(&(**n as i64)))
         .count();
     checks.push(CheckResult::new(
         "1a",
@@ -639,7 +639,7 @@ fn check_single_graph(
     let layer0_ids: HashSet<u32> = graph
         .layers
         .first()
-        .map(|l| l.links.keys().map(|v| v.serial_id()).collect())
+        .map(|l| l.links.keys().copied().collect())
         .unwrap_or_default();
     let uncovered: HashSet<u32> = iris_ids
         .iter()
@@ -721,12 +721,12 @@ fn check_single_graph(
         .layers
         .iter()
         .map(|layer| {
-            let nodes: HashSet<&VectorId> = layer.links.keys().collect();
+            let nodes: HashSet<SerialId> = layer.links.keys().copied().collect();
             layer
                 .links
                 .values()
                 .flat_map(|nbs| nbs.iter())
-                .filter(|nb| !nodes.contains(nb))
+                .filter(|nb| !nodes.contains(*nb))
                 .count() as u64
         })
         .sum();
@@ -765,7 +765,7 @@ fn check_single_graph(
         .iter()
         .flat_map(|l| l.links.values())
         .map(|nbs| {
-            let unique: HashSet<&VectorId> = nbs.iter().collect();
+            let unique: HashSet<SerialId> = nbs.iter().copied().collect();
             (nbs.len() - unique.len()) as u64
         })
         .sum();
@@ -956,7 +956,7 @@ async fn load_checkpoint_state(
 async fn run_persistent_state_checks(
     graph_pg: &GraphPg<Aby3Store>,
     iris_max_serial_id: usize,
-    s3_graphs: Option<&BothEyes<GraphMem<VectorId>>>,
+    s3_graphs: Option<&BothEyes<GraphMem<SerialId>>>,
     checks: &mut Vec<CheckResult>,
     stats: &mut Stats,
 ) -> Result<Option<i64>> {
@@ -1028,17 +1028,11 @@ async fn run_persistent_state_checks(
 /// Returns the maximum serial_id across all nodes in layer 0 of an in-memory
 /// graph, or 0 if the graph is empty. Matches the semantics of
 /// `GraphOps::get_max_serial_id`, which returns 0 when the links table is empty.
-fn graph_mem_max_serial_id(graph: &GraphMem<VectorId>) -> i64 {
+fn graph_mem_max_serial_id(graph: &GraphMem<SerialId>) -> i64 {
     graph
         .layers
         .first()
-        .and_then(|layer| {
-            layer
-                .get_links_map()
-                .keys()
-                .map(|vec_id| vec_id.serial_id())
-                .max()
-        })
+        .and_then(|layer| layer.get_links_map().keys().copied().max())
         .map(|id| id as i64)
         .unwrap_or(0)
 }

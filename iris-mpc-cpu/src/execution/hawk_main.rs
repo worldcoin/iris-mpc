@@ -112,7 +112,7 @@ use iris_mpc_common::{
         REAUTH_MESSAGE_TYPE, RECOVERY_CHECK_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
         UNIQUENESS_MESSAGE_TYPE,
     },
-    vector_id::VectorId,
+    vector_id::{SerialId, VectorId},
 };
 use iris_mpc_common::{
     helpers::sync::{Modification, ModificationKey},
@@ -404,8 +404,8 @@ type UseOrRule = bool;
 
 type Aby3Ref = Arc<RwLock<Aby3Store<HawkOps>>>;
 
-pub type GraphRef = Arc<RwLock<GraphMem<Aby3VectorRef>>>;
-pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3VectorRef>>;
+pub type GraphRef = Arc<RwLock<GraphMem<SerialId>>>;
+pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<SerialId>>;
 
 /// A container for state required to perform parallel MPC operations.
 ///
@@ -465,7 +465,7 @@ pub struct HawkInsertPlan {
 /// A `ConnectPlan` is one finalized step of the HNSW insertion pipeline —
 /// a `GraphMutation` produced by the per-slot insert loop or by the
 /// post-batch `compact_batch` / `prune_invalid_links` helpers.
-pub type ConnectPlan = GraphMutation<VectorId>;
+pub type ConnectPlan = GraphMutation<SerialId>;
 
 /// Build the MPC network handle. Cheap — just TCP listener setup.
 /// Callers that need peer sync before iris load (genesis) call
@@ -496,7 +496,7 @@ impl HawkActor {
         args: HawkArgs,
         networking: Box<dyn NetworkHandle>,
         initialized: worker_pool_initializer::InitializedWorkers,
-        graph: BothEyes<GraphMem<Aby3VectorRef>>,
+        graph: BothEyes<GraphMem<SerialId>>,
     ) -> Self {
         let party_id = args.party_index;
 
@@ -555,7 +555,7 @@ impl HawkActor {
     pub async fn from_cli_with_graph_and_store(
         args: &HawkArgs,
         shutdown_ct: CancellationToken,
-        graph: BothEyes<GraphMem<Aby3VectorRef>>,
+        graph: BothEyes<GraphMem<SerialId>>,
         iris_store: BothEyes<Aby3SharedIrises>,
     ) -> Result<Self> {
         use worker_pool_initializer::WorkerPoolInitializer;
@@ -775,7 +775,9 @@ impl HawkActor {
                 if let Some(rid) = replace_id {
                     slot_mutations.push(GraphMutation {
                         seq_no: 0,
-                        ops: vec![MutationOp::RemoveNode { id: *rid }],
+                        ops: vec![MutationOp::RemoveNode {
+                            id: rid.serial_id(),
+                        }],
                     });
                 }
 
@@ -790,7 +792,7 @@ impl HawkActor {
                     slot_mutations.push(GraphMutation {
                         seq_no: 0,
                         ops: vec![MutationOp::AddNode {
-                            id: inserted_vector,
+                            id: inserted_vector.serial_id(),
                             height: plan.plan.links.len(),
                             update_ep: UpdateEntryPoint::False,
                         }],
@@ -1067,7 +1069,7 @@ pub struct GraphLoader<'a>(BothEyes<GraphMut<'a>>);
 
 #[allow(clippy::needless_lifetimes)]
 impl<'a> GraphLoader<'a> {
-    pub fn load_graphs_from_checkpoint(self, graphs: BothEyes<GraphMem<VectorId>>) {
+    pub fn load_graphs_from_checkpoint(self, graphs: BothEyes<GraphMem<SerialId>>) {
         let [left, right] = graphs;
         let GraphLoader(mut dest_graphs) = self;
         *dest_graphs[LEFT] = left;
@@ -2504,18 +2506,19 @@ mod hawk_mutation_tests {
     use iris_mpc_common::helpers::sync::ModificationKey;
 
     fn create_test_connect_plan(vector_id: VectorId) -> ConnectPlan {
+        let sid = vector_id.serial_id();
         GraphMutation {
             seq_no: 0,
             ops: vec![
                 MutationOp::AddNode {
-                    id: vector_id,
+                    id: sid,
                     height: 1,
                     update_ep: UpdateEntryPoint::False,
                 },
                 MutationOp::AddEdges {
-                    base: vector_id,
+                    base: sid,
                     layer: 0,
-                    neighbors: vec![vector_id],
+                    neighbors: vec![sid],
                     edge_type: EdgeType::Base,
                 },
             ],
@@ -2696,16 +2699,14 @@ mod hawk_mutation_tests {
         let plan_a = GraphMutation {
             seq_no: 5,
             ops: vec![MutationOp::AddNode {
-                id: VectorId::from_serial_id(1),
+                id: 1u32,
                 height: 1,
                 update_ep: UpdateEntryPoint::False,
             }],
         };
         let plan_b = GraphMutation {
             seq_no: 6,
-            ops: vec![MutationOp::RemoveNode {
-                id: VectorId::from_serial_id(2),
-            }],
+            ops: vec![MutationOp::RemoveNode { id: 2u32 }],
         };
         let mutation = SingleHawkMutation {
             plans: [vec![plan_a.clone()], vec![plan_b.clone()]],

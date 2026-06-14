@@ -16,6 +16,7 @@ use crate::{
 use eyre::{bail, eyre, Result};
 use iris_mpc_common::{
     iris_db::iris::{IrisCode, IrisMutationFamily},
+    vector_id::SerialId,
     IrisSerialId, IrisVectorId as VectorId,
 };
 use itertools::{izip, Itertools};
@@ -96,7 +97,7 @@ where
 pub async fn run_analysis<D: DistanceOps>(
     config: AnalysisConfig,
     store: PlaintextStore<D>,
-    graph: GraphMem<VectorId>,
+    graph: GraphMem<SerialId>,
     rng: &mut StdRng,
 ) -> Result<Vec<AnalysisResult>> {
     // Get all valid VectorIds from the store.
@@ -421,7 +422,7 @@ pub async fn load_graph<D: DistanceOps>(
     config: &GraphInit,
     store: &mut PlaintextStore<D>,
     rng: &mut StdRng,
-) -> Result<GraphMem<VectorId>> {
+) -> Result<GraphMem<SerialId>> {
     match config {
         GraphInit::BinFile { path, format } => {
             println!("Loading graph from binary file: {}", path.display());

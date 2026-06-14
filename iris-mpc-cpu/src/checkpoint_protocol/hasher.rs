@@ -34,22 +34,22 @@ impl GraphHasher for Blake3GraphHasher {
 mod tests {
     use super::*;
     use crate::hnsw::graph::layered_graph::{EntryPoint, GraphMem, Layer};
-    use iris_mpc_common::vector_id::VectorId;
+    use iris_mpc_common::vector_id::SerialId;
 
-    fn vid(i: u32) -> VectorId {
-        VectorId::from_0_index(i)
+    fn vid(i: u32) -> SerialId {
+        i
     }
 
-    type LayerInput = Vec<(usize, Vec<(VectorId, Vec<VectorId>)>)>;
+    type LayerInput = Vec<(usize, Vec<(SerialId, Vec<SerialId>)>)>;
 
     /// Bypasses the planner so tests can pin serializer-level determinism
     /// independently of the planner's sortedness invariant.
     fn graph_from(eyes: [LayerInput; 2]) -> Graph {
-        let build = |layers_in: LayerInput| -> GraphMem<VectorId> {
-            let mut g = GraphMem::<VectorId>::new();
+        let build = |layers_in: LayerInput| -> GraphMem<SerialId> {
+            let mut g = GraphMem::<SerialId>::new();
             let max_lc = layers_in.iter().map(|(lc, _)| *lc).max().unwrap_or(0);
-            let mut layers: Vec<Layer<VectorId>> =
-                (0..=max_lc).map(|_| Layer::<VectorId>::new()).collect();
+            let mut layers: Vec<Layer<SerialId>> =
+                (0..=max_lc).map(|_| Layer::<SerialId>::new()).collect();
             for (lc, pairs) in layers_in {
                 for (k, v) in pairs {
                     layers[lc].set_links(k, v);
@@ -102,7 +102,7 @@ mod tests {
     /// HashMap iteration order irrelevant to the hash.
     #[test]
     fn hash_is_independent_of_hashmap_insertion_order() {
-        let entries: Vec<(VectorId, Vec<VectorId>)> = (0..32)
+        let entries: Vec<(SerialId, Vec<SerialId>)> = (0..32)
             .map(|i| (vid(i), vec![vid(i + 100), vid(i + 200)]))
             .collect();
 
@@ -142,8 +142,8 @@ mod tests {
 
     #[test]
     fn empty_graphs_hash_consistently() {
-        let g1: Graph = [GraphMem::<VectorId>::new(), GraphMem::<VectorId>::new()];
-        let g2: Graph = [GraphMem::<VectorId>::new(), GraphMem::<VectorId>::new()];
+        let g1: Graph = [GraphMem::<SerialId>::new(), GraphMem::<SerialId>::new()];
+        let g2: Graph = [GraphMem::<SerialId>::new(), GraphMem::<SerialId>::new()];
         let h = Blake3GraphHasher::new();
         assert_eq!(h.hash_canonical(&g1), h.hash_canonical(&g2));
     }
@@ -151,16 +151,16 @@ mod tests {
     #[test]
     fn left_right_swap_changes_hash() {
         let left = {
-            let mut l = Layer::<VectorId>::new();
+            let mut l = Layer::<SerialId>::new();
             l.set_links(vid(1), vec![vid(2)]);
-            let mut g = GraphMem::<VectorId>::new();
+            let mut g = GraphMem::<SerialId>::new();
             g.layers = vec![l];
             g
         };
         let right = {
-            let mut l = Layer::<VectorId>::new();
+            let mut l = Layer::<SerialId>::new();
             l.set_links(vid(5), vec![vid(6)]);
-            let mut g = GraphMem::<VectorId>::new();
+            let mut g = GraphMem::<SerialId>::new();
             g.layers = vec![l];
             g
         };

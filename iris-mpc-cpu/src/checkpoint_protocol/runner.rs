@@ -27,7 +27,7 @@ use crate::hnsw::{
     graph::{graph_store::GraphPg, layered_graph::GraphMem},
     VectorStore,
 };
-use iris_mpc_common::vector_id::VectorId;
+use iris_mpc_common::vector_id::SerialId;
 
 // ── In-process Sidecar  ───────────────────────────────────────────────────────
 
@@ -263,7 +263,7 @@ pub async fn restart_from_checkpoint<V: VectorStore + Send + Sync>(
     s3_client: &S3Client,
     bucket: String,
     networking: &mut Box<dyn NetworkHandle>,
-    target: BothEyes<Arc<RwLock<GraphMem<VectorId>>>>,
+    target: BothEyes<Arc<RwLock<GraphMem<SerialId>>>>,
     peer_round_timeout: Duration,
     checkpoint_window: usize,
 ) -> Result<RestartOutcome> {

@@ -21,6 +21,7 @@ use iris_mpc_common::{
         RESET_UPDATE_MESSAGE_TYPE,
     },
     iris_db::iris::IrisCode,
+    vector_id::{HasSerialId, SerialId},
     IrisSerialId, IrisVectorId, IrisVersionId,
 };
 use itertools::izip;
@@ -33,7 +34,7 @@ use crate::{
     },
     genesis::{BatchSize, BatchSizeConfig},
     graph_checkpoint::PruningMode,
-    hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
+    hawkers::plaintext_store::PlaintextStore,
     hnsw::{
         graph::neighborhood::Neighborhood, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
         SortedNeighborhood,
@@ -48,7 +49,7 @@ pub type IrisesTable = HashMap<IrisSerialId, (IrisVersionId, IrisCode, IrisCode)
 pub type ModificationsTable = HashMap<i64, (IrisSerialId, String, bool, bool)>;
 
 /// Represents a left/right pair of plaintext in-memory HNSW graphs.
-pub type PlaintextGraphs = BothEyes<GraphMem<PlaintextVectorRef>>;
+pub type PlaintextGraphs = BothEyes<GraphMem<SerialId>>;
 
 /// List of serial ids to treat as deleted enrollments in the source iris database.
 pub type GenesisDeletions = Vec<IrisSerialId>;
@@ -256,7 +257,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                     for (lc, mut l) in links.into_iter().enumerate() {
                         let m = searcher.params.get_M(lc);
                         l.trim(store, m).await?;
-                        links_unstructured.push(l.edge_ids())
+                        links_unstructured.push(l.edge_ids().iter().map(|v| v.serial_id()).collect())
                     }
 
                     let insert_plan = InsertPlanV {

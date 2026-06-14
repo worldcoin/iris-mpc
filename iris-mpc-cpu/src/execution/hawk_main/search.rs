@@ -20,7 +20,7 @@ use crate::{
     },
 };
 use eyre::{OptionExt, Result};
-use iris_mpc_common::iris_db::iris::Threshold;
+use iris_mpc_common::{iris_db::iris::Threshold, vector_id::{HasSerialId, SerialId}};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
@@ -232,7 +232,7 @@ async fn classify_and_extend(
     query: &Aby3Query,
     search_params: &SearchParams,
     aby3_store: &mut Aby3Store<HawkOps>,
-    graph_store: &GraphMem<Aby3VectorRef>,
+    graph_store: &GraphMem<SerialId>,
     ef: usize,
 ) -> Result<ClassifiedMatches> {
     let margin = search_params.saturation_margin;
@@ -345,7 +345,7 @@ async fn per_insert_query<N: Neighborhood<Aby3Store<HawkOps>>>(
     query: Aby3Query,
     search_params: &SearchParams,
     aby3_store: &mut Aby3Store<HawkOps>,
-    graph_store: &GraphMem<Aby3VectorRef>,
+    graph_store: &GraphMem<SerialId>,
     insertion_layer: usize,
 ) -> Result<HawkInsertPlan> {
     let start = Instant::now();
@@ -380,7 +380,7 @@ async fn per_insert_query<N: Neighborhood<Aby3Store<HawkOps>>>(
     for (lc, mut l) in links.iter().cloned().enumerate() {
         let m = search_params.hnsw.params.get_M(lc);
         l.trim(aby3_store, m).await?;
-        links_unstructured.push(l.edge_ids())
+        links_unstructured.push(l.edge_ids().iter().map(|v| v.serial_id()).collect())
     }
 
     metrics::histogram!("search_query_duration").record(start.elapsed().as_secs_f64());
@@ -399,7 +399,7 @@ async fn per_search_query(
     query: Aby3Query,
     search_params: &SearchParams,
     aby3_store: &mut Aby3Store<HawkOps>,
-    graph_store: &GraphMem<Aby3VectorRef>,
+    graph_store: &GraphMem<SerialId>,
 ) -> Result<HawkInsertPlan> {
     let start = Instant::now();
 
@@ -409,7 +409,7 @@ async fn per_search_query(
         .search::<_, SortedNeighborhood<_>>(aby3_store, graph_store, &query, ef_search)
         .await?;
 
-    let links_unstructured = vec![layer_0_neighbors.edge_ids()];
+    let links_unstructured = vec![layer_0_neighbors.edge_ids().iter().map(|v| v.serial_id()).collect()];
 
     let classified = if search_params.do_match {
         classify_and_extend(
@@ -462,7 +462,7 @@ pub async fn search_single_query_no_match_count<H: std::hash::Hash>(
     for (lc, mut l) in links.iter().cloned().enumerate() {
         let m = searcher.params.get_M(lc);
         l.trim(&mut store, m).await?;
-        links_unstructured.push(l.edge_ids());
+        links_unstructured.push(l.edge_ids().iter().map(|v| v.serial_id()).collect());
     }
 
     metrics::histogram!("search_query_duration").record(start.elapsed().as_secs_f64());

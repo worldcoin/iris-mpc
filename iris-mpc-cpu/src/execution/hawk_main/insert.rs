@@ -11,6 +11,7 @@ use crate::hnsw::{
 use super::VecRequests;
 
 use eyre::{bail, Result};
+use iris_mpc_common::vector_id::{HasSerialId, SerialId};
 use itertools::izip;
 use std::collections::BTreeSet;
 
@@ -32,7 +33,7 @@ use std::collections::BTreeSet;
 #[derive(Debug)]
 pub struct InsertPlanV<V: VectorStore> {
     pub query: V::QueryRef,
-    pub links: Vec<Vec<V::VectorRef>>,
+    pub links: Vec<Vec<SerialId>>,
     pub update_ep: UpdateEntryPoint,
 }
 
@@ -70,7 +71,7 @@ impl<V: VectorStore> Clone for InsertPlanV<V> {
 ///   for pure deletions and no-op slots.
 pub async fn insert<V: VectorStoreMut>(
     store: &mut V,
-    graph: &mut GraphMem<<V as VectorStore>::VectorRef>,
+    graph: &mut GraphMem<SerialId>,
     searcher: &HnswSearcher,
     plans: VecRequests<Option<InsertPlanV<V>>>,
     insert_ids: &VecRequests<Option<V::VectorRef>>,
@@ -95,22 +96,22 @@ pub async fn insert<V: VectorStoreMut>(
     let insert_plans = join_plans(plans, &searcher.layer_mode);
     validate_ep_updates(&insert_plans, &searcher.layer_mode)?;
 
-    let mut intra_batch_inserted = vec![];
+    let mut intra_batch_inserted: Vec<SerialId> = vec![];
     let m = searcher.params.get_M(0);
 
     let mut slot_outputs: Vec<Vec<ConnectPlanV<V>>> = vec![vec![]; insert_plans.len()];
     let mut slot_inserted_ids: Vec<Option<V::VectorRef>> = vec![None; insert_plans.len()];
-    let mut batch_expanded: BTreeSet<(V::VectorRef, usize)> = BTreeSet::new();
+    let mut batch_expanded: BTreeSet<(SerialId, usize)> = BTreeSet::new();
 
     for (idx, (plan, insert_id, replace_id)) in
         izip!(insert_plans, insert_ids, replace_ids).enumerate()
     {
-        let mut slot_updated: BTreeSet<(V::VectorRef, usize)> = BTreeSet::new();
+        let mut slot_updated: BTreeSet<(SerialId, usize)> = BTreeSet::new();
 
         // (a) Delete first: own GraphMutation with the lower seq_no.
         if let Some(rid) = replace_id {
             let mutation = graph.apply_new(UnstampedMutation {
-                ops: vec![MutationOp::RemoveNode { id: rid.clone() }],
+                ops: vec![MutationOp::RemoveNode { id: rid.serial_id() }],
             })?;
             slot_outputs[idx].push(mutation);
         }
@@ -135,17 +136,18 @@ pub async fn insert<V: VectorStoreMut>(
                 None => store.insert(&query).await,
                 Some(id) => store.insert_at(id, &query).await?,
             };
-            intra_batch_inserted.push(inserted_id.clone());
-            slot_inserted_ids[idx] = Some(inserted_id.clone());
+            let inserted_sid = inserted_id.serial_id();
+            intra_batch_inserted.push(inserted_sid);
+            slot_inserted_ids[idx] = Some(inserted_id);
 
-            let mut ops: Vec<MutationOp<V::VectorRef>> = vec![MutationOp::AddNode {
-                id: inserted_id.clone(),
+            let mut ops: Vec<MutationOp<SerialId>> = vec![MutationOp::AddNode {
+                id: inserted_sid,
                 height: links.len(),
                 update_ep,
             }];
             for (layer_idx, layer_links) in links.into_iter().enumerate() {
                 ops.push(MutationOp::AddEdges {
-                    base: inserted_id.clone(),
+                    base: inserted_sid,
                     layer: layer_idx,
                     neighbors: layer_links,
                     edge_type: EdgeType::All,
@@ -307,7 +309,7 @@ fn validate_ep_updates<V: VectorStore>(
 mod tests {
     use crate::hawkers::plaintext_store::PlaintextStore;
     use crate::hnsw::graph::GraphMutation;
-    use iris_mpc_common::iris_db::iris::IrisCode;
+    use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::{HasSerialId, SerialId}};
     use itertools::Itertools;
     use std::sync::Arc;
 
@@ -333,7 +335,7 @@ mod tests {
     /// Lets tests construct insertions that produce real `AddEdges` ops.
     fn dummy_insert_plan_with_links(
         ep_update: UpdateEntryPoint,
-        links: Vec<Vec<<PlaintextStore as VectorStore>::VectorRef>>,
+        links: Vec<Vec<SerialId>>,
     ) -> InsertPlanV<PlaintextStore> {
         InsertPlanV {
             query: Arc::new(IrisCode::default()),
@@ -720,7 +722,7 @@ mod tests {
     #[tokio::test]
     async fn test_insert_with_pure_deletion_preserves_slot_order() {
         let mut store = PlaintextStore::default();
-        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let mut graph: GraphMem<SerialId> = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
 
         // Seed the store/graph with two existing vectors A and B so we have something
@@ -778,7 +780,7 @@ mod tests {
         assert_eq!(slot1.len(), 1, "pure-delete slot has one GraphMutation");
         assert_eq!(slot1[0].ops.len(), 1, "and one op");
         match &slot1[0].ops[0] {
-            MutationOp::RemoveNode { id } => assert_eq!(*id, a),
+            MutationOp::RemoveNode { id } => assert_eq!(*id, a.serial_id()),
             other => panic!("expected RemoveNode(a) in slot 1, got {:?}", other),
         }
 
@@ -787,7 +789,7 @@ mod tests {
         assert_eq!(slot2.len(), 1, "pure-delete slot has one GraphMutation");
         assert_eq!(slot2[0].ops.len(), 1, "and one op");
         match &slot2[0].ops[0] {
-            MutationOp::RemoveNode { id } => assert_eq!(*id, b),
+            MutationOp::RemoveNode { id } => assert_eq!(*id, b.serial_id()),
             other => panic!("expected RemoveNode(b) in slot 2, got {:?}", other),
         }
     }
@@ -799,7 +801,7 @@ mod tests {
     #[tokio::test]
     async fn test_insert_with_combined_replace_emits_removenode_then_addnode() {
         let mut store = PlaintextStore::default();
-        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let mut graph: GraphMem<SerialId> = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
 
         let old = store.insert(&Arc::new(IrisCode::default())).await;
@@ -837,7 +839,7 @@ mod tests {
             .position(|g| {
                 g.ops
                     .iter()
-                    .any(|m| matches!(m, MutationOp::RemoveNode { id } if *id == old))
+                    .any(|m| matches!(m, MutationOp::RemoveNode { id } if *id == old.serial_id()))
             })
             .expect("slot should contain a GraphMutation with RemoveNode(old)");
         let add_pos = slot0
@@ -866,7 +868,7 @@ mod tests {
     #[tokio::test]
     async fn test_insert_with_none_slot_yields_empty_vec() {
         let mut store = PlaintextStore::default();
-        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let mut graph: GraphMem<SerialId> = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
 
         let plans: VecRequests<Option<InsertPlanV<PlaintextStore>>> = vec![None];
@@ -899,7 +901,7 @@ mod tests {
     #[tokio::test]
     async fn test_insert_stamps_strictly_increasing_seq_nos_per_slot() {
         let mut store = PlaintextStore::default();
-        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let mut graph: GraphMem<SerialId> = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
 
         let expected_start = graph.next_sequence_number();
@@ -961,7 +963,7 @@ mod tests {
                             _ => None,
                         })
                     });
-                    assert_eq!(add_id, Some(*id));
+                    assert_eq!(add_id, Some(id.serial_id()));
                 }
                 None => {
                     assert!(
@@ -982,7 +984,7 @@ mod tests {
     #[tokio::test]
     async fn test_insert_appends_global_compaction_to_last_nonempty_slot() {
         let mut store = PlaintextStore::default();
-        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let mut graph: GraphMem<SerialId> = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
         let m_limit = searcher.params.get_M_limit(0);
 
@@ -1001,11 +1003,11 @@ mod tests {
         //     nodes (size m_limit, since there are m_limit + 1 seeds total).
         // EdgeType::Base ensures the back-edges aren't auto-created — keeps
         // each neighborhood exactly at m_limit.
-        let mut setup_ops: Vec<MutationOp<<PlaintextStore as VectorStore>::VectorRef>> =
+        let mut setup_ops: Vec<MutationOp<SerialId>> =
             Vec::with_capacity(seed_count * 2);
         for (i, &id) in seed_ids.iter().enumerate() {
             setup_ops.push(MutationOp::AddNode {
-                id,
+                id: id.serial_id(),
                 height: 1,
                 update_ep: if i == 0 {
                     UpdateEntryPoint::SetUnique { layer: 0 }
@@ -1015,15 +1017,15 @@ mod tests {
             });
         }
         for (i, &id) in seed_ids.iter().enumerate() {
-            let neighbors: Vec<_> = seed_ids
+            let neighbors: Vec<SerialId> = seed_ids
                 .iter()
                 .enumerate()
                 .filter(|(j, _)| *j != i)
-                .map(|(_, v)| *v)
+                .map(|(_, v)| v.serial_id())
                 .collect();
             assert_eq!(neighbors.len(), m_limit);
             setup_ops.push(MutationOp::AddEdges {
-                base: id,
+                base: id.serial_id(),
                 layer: 0,
                 neighbors,
                 edge_type: EdgeType::Base,
@@ -1039,8 +1041,10 @@ mod tests {
         // With EdgeType::All, each seed's neighborhood gains the new node,
         // pushing each from m_limit → m_limit + 1, which exceeds M_limit and
         // triggers compaction.
-        let new_plan =
-            dummy_insert_plan_with_links(UpdateEntryPoint::False, vec![seed_ids.clone()]);
+        let new_plan = dummy_insert_plan_with_links(
+            UpdateEntryPoint::False,
+            vec![seed_ids.iter().map(|id| id.serial_id()).collect()],
+        );
         let plans = vec![Some(new_plan), None];
         let insert_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
             vec![None, None];

@@ -30,6 +30,7 @@ pub type IrisCodeDbSlice<'a> = (&'a [u16], &'a [u16]);
 
 pub use ampc_secret_sharing::galois;
 pub use ampc_secret_sharing::id;
+pub use vector_id::HasSerialId;
 pub use vector_id::SerialId as IrisSerialId;
 pub use vector_id::VectorId as IrisVectorId;
 pub use vector_id::VersionId as IrisVersionId;

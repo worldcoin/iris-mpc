@@ -5,7 +5,7 @@ use std::{
 };
 
 use eyre::{bail, eyre, OptionExt, Result};
-use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
+use iris_mpc_common::{iris_db::iris::IrisCode, IrisSerialId};
 use rand::{rngs::StdRng, RngCore, SeedableRng};
 use serde::Deserialize;
 
@@ -104,7 +104,7 @@ pub struct LoadGraphConfig {
 }
 
 impl LoadGraphConfig {
-    pub fn read_graph_from_file(&self) -> Result<GraphMem<IrisVectorId>> {
+    pub fn read_graph_from_file(&self) -> Result<GraphMem<IrisSerialId>> {
         let format = self.format.unwrap_or(GraphFormat::Current);
         super::serialization::graph::read_graph_from_file(&self.path, format)
     }

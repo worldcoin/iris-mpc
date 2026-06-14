@@ -1,4 +1,5 @@
 use eyre::{bail, OptionExt, Result};
+use iris_mpc_common::vector_id::{HasSerialId, SerialId};
 use itertools::izip;
 use serde::Serialize;
 use std::{
@@ -44,7 +45,12 @@ pub trait VectorStore: Debug {
     /// Opaque reference to a stored vector.
     ///
     /// Example: a vector ID.
-    type VectorRef: Ref + Display + FromStr + Ord;
+    ///
+    /// The `HasSerialId` bound lets generic search code extract a bare
+    /// `SerialId` from any `VectorRef` in generic context. This is the only
+    /// bridge needed between the graph's `SerialId` nodes and the store's
+    /// richer `VectorRef` type — no extra trait methods on `VectorStore`.
+    type VectorRef: Ref + Display + FromStr + Ord + HasSerialId;
 
     /// Opaque reference to a distance metric.
     ///
@@ -81,6 +87,21 @@ pub trait VectorStore: Debug {
     /// Retain only vectors that are valid and currently usable by other methods.
     async fn only_valid_vectors(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::VectorRef> {
         vectors
+    }
+
+    /// Reconstruct full `VectorRef`s from bare `SerialId`s, filtering any
+    /// that are absent (deleted or never inserted).
+    ///
+    /// This is the only direction of `SerialId ↔ VectorRef` conversion that
+    /// requires store internals: going from `SerialId` to `VectorRef` needs
+    /// the store's version registry to reconstruct the current `VectorId`.
+    /// The reverse direction (`VectorRef → SerialId`) is handled zero-cost
+    /// by the `HasSerialId` bound on `Self::VectorRef`.
+    ///
+    /// The default implementation is a no-op that returns an empty `Vec`.
+    /// All production stores should override this method.
+    async fn serial_ids_to_vector_refs(&mut self, _ids: Vec<SerialId>) -> Vec<Self::VectorRef> {
+        vec![]
     }
 
     /// Evaluate the distance between pairs of (query, vector), in batch.

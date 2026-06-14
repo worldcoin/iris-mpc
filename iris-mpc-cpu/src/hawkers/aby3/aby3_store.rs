@@ -596,6 +596,20 @@ where
         vectors
     }
 
+    async fn serial_ids_to_vector_refs(
+        &mut self,
+        ids: Vec<iris_mpc_common::vector_id::SerialId>,
+    ) -> Vec<Self::VectorRef> {
+        let registry = self.registry.read().await;
+        ids.into_iter()
+            .filter_map(|sid| {
+                registry
+                    .get_current_version(sid)
+                    .map(|version| VectorId::new(sid, version))
+            })
+            .collect()
+    }
+
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn eval_distance(
         &mut self,
@@ -1552,7 +1566,7 @@ mod tests {
             .collect();
 
         let mut plaintext_store = PlaintextStore::<FhdOps>::new();
-        let mut plaintext_graph: GraphMem<VectorId> = GraphMem::new();
+        let mut plaintext_graph: GraphMem<iris_mpc_common::vector_id::SerialId> = GraphMem::new();
         let plaintext_span = info_span!("plaintext_insert");
         for (iris, &layer) in cleartext_db.iter().zip(insertion_layers.iter()) {
             let query = Arc::new(iris.clone());
@@ -1581,18 +1595,18 @@ mod tests {
                 let mpc_span = info_span!("mpc_insert", id = idx);
                 let mut store = store.lock().await;
                 let queries = cache_irises(store.workers.as_ref(), irises).await?;
-                let mut graph: GraphMem<VectorId> = GraphMem::new();
+                let mut graph: GraphMem<iris_mpc_common::vector_id::SerialId> = GraphMem::new();
                 for (query, &layer) in queries.iter().zip(layers.iter()) {
                     searcher
                         .insert::<_, SortedNeighborhood<_>>(&mut *store, &mut graph, query, layer)
                         .instrument(mpc_span.clone())
                         .await?;
                 }
-                Ok::<(usize, GraphMem<VectorId>), eyre::Report>((role, graph))
+                Ok::<(usize, GraphMem<iris_mpc_common::vector_id::SerialId>), eyre::Report>((role, graph))
             });
         }
 
-        let mut mpc_graphs: Vec<Option<GraphMem<VectorId>>> = (0..3).map(|_| None).collect();
+        let mut mpc_graphs: Vec<Option<GraphMem<iris_mpc_common::vector_id::SerialId>>> = (0..3).map(|_| None).collect();
         while let Some(res) = jobs.join_next().await {
             let (role, graph) = res??;
             mpc_graphs[role] = Some(graph);

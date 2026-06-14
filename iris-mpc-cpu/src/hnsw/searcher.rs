@@ -21,6 +21,7 @@ use crate::hnsw::{
 use crate::hnsw::GraphMem;
 
 use aes_prng::AesRng;
+use iris_mpc_common::vector_id::{HasSerialId, SerialId};
 use ampc_actor_utils::fast_metrics::FastHistogram;
 use eyre::{bail, eyre, OptionExt, Result};
 use itertools::{izip, Itertools};
@@ -295,7 +296,7 @@ pub struct HnswSearcher {
 /// A list of graph mutations representing state updates for insertion of new nodes
 /// into the HNSW graph.
 pub type ConnectPlan<Vector> = GraphMutation<Vector>;
-pub type ConnectPlanV<V> = ConnectPlan<<V as VectorStore>::VectorRef>;
+pub type ConnectPlanV<V> = ConnectPlan<SerialId>;
 
 /// Represents a graph update of a single node's neighborhood in a graph, given
 /// by a tuple `(update_layer, update_vector, new_neighborhood)`.
@@ -405,7 +406,7 @@ impl HnswSearcher {
     async fn search_init<V: VectorStore, N: Neighborhood<V>>(
         &self,
         store: &mut V,
-        graph: &GraphMem<V::VectorRef>,
+        graph: &GraphMem<SerialId>,
         query: &V::QueryRef,
         insertion_layer: usize,
     ) -> Result<(N, usize, usize, UpdateEntryPoint)> {
@@ -434,14 +435,12 @@ impl HnswSearcher {
                 Ok((W, n_layers, bounded_insertion_layer, update_ep))
             }
             LayerMode::LinearScan { max_graph_layer } => {
-                // Get all valid entry points
-                let (ep_vectors, ep_layers): (Vec<_>, Vec<_>) = graph
-                    .entry_points
-                    .iter()
-                    .cloned()
-                    .map(|ep| (ep.point, ep.layer))
-                    .unzip();
-                let ep_vectors = store.only_valid_vectors(ep_vectors).await;
+                // Get all valid entry points (graph stores SerialIds; convert to VectorRefs)
+                let ep_layers: Vec<usize> =
+                    graph.entry_points.iter().map(|ep| ep.layer).collect();
+                let ep_sids: Vec<SerialId> =
+                    graph.entry_points.iter().map(|ep| ep.point).collect();
+                let ep_vectors = store.serial_ids_to_vector_refs(ep_sids).await;
                 metrics::gauge!("entry_points_count").set(ep_vectors.len() as f64);
 
                 // TODO when updating entry points, should check for invalid vectors and remove
@@ -497,14 +496,19 @@ impl HnswSearcher {
     async fn init_nbhd_from_ep<V: VectorStore, N: Neighborhood<V>>(
         &self,
         store: &mut V,
-        ep: Option<(V::VectorRef, usize)>,
+        ep: Option<(SerialId, usize)>,
         query: &V::QueryRef,
     ) -> Result<(N, Option<usize>)> {
-        if let Some((entry_point, layer)) = ep {
-            let distance = store.eval_distance(query, &entry_point).await?;
-
-            let W = N::from_singleton((entry_point, distance));
-            Ok((W, Some(layer)))
+        if let Some((entry_point_sid, layer)) = ep {
+            // Convert SerialId → VectorRef; absent SerialId means graph is effectively empty
+            let mut vrefs = store.serial_ids_to_vector_refs(vec![entry_point_sid]).await;
+            if let Some(entry_point) = vrefs.pop() {
+                let distance = store.eval_distance(query, &entry_point).await?;
+                let W = N::from_singleton((entry_point, distance));
+                Ok((W, Some(layer)))
+            } else {
+                Ok((N::new(), None))
+            }
         } else {
             Ok((N::new(), None))
         }
@@ -522,7 +526,7 @@ impl HnswSearcher {
     #[allow(non_snake_case)]
     async fn search_layer<V: VectorStore, N: Neighborhood<V>>(
         store: &mut V,
-        graph: &GraphMem<V::VectorRef>,
+        graph: &GraphMem<SerialId>,
         q: &V::QueryRef,
         W: &mut N,
         ef: usize,
@@ -562,18 +566,18 @@ impl HnswSearcher {
     #[instrument(level = "debug", skip(store, graph, q, W))]
     async fn layer_search_std<V: VectorStore, N: Neighborhood<V>>(
         store: &mut V,
-        graph: &GraphMem<V::VectorRef>,
+        graph: &GraphMem<SerialId>,
         q: &V::QueryRef,
         W: &mut N,
         ef: usize,
         lc: usize,
     ) -> Result<()> {
-        // The set of vectors which have been considered as potential neighbors
+        // The set of serial IDs which have been considered as potential neighbors
         let mut visited =
-            HashSet::<V::VectorRef>::from_iter(W.as_ref().iter().map(|(e, _eq)| e.clone()));
+            HashSet::<SerialId>::from_iter(W.as_ref().iter().map(|(e, _eq)| e.serial_id()));
 
-        // The set of visited vectors for which we have inspected their neighborhood
-        let mut opened = HashSet::<V::VectorRef>::new();
+        // The set of visited serial IDs for which we have inspected their neighborhood
+        let mut opened = HashSet::<SerialId>::new();
 
         // fq: The current furthest distance in W.
         let (_, mut fq) = W
@@ -593,14 +597,14 @@ impl HnswSearcher {
             .as_ref()
             .iter()
             .map(|(c, _)| c)
-            .find(|&c| !opened.contains(c))
+            .find(|&c| !opened.contains(&c.serial_id()))
         {
             // Open the candidate node and visit its unvisited neighbors, computing
             // distances between the query and neighbors as a batch
             let c_links = HnswSearcher::open_node(store, graph, c, lc, q, &mut visited)
                 .instrument(eval_dist_span.clone())
                 .await?;
-            opened.insert(c.clone());
+            opened.insert(c.serial_id());
             debug!(event_type = Operation::OpenNode.id(), ef, lc);
 
             for (e, eq) in c_links.into_iter() {
@@ -710,7 +714,7 @@ impl HnswSearcher {
     #[instrument(level = "debug", skip(store, graph, q, W))]
     async fn layer_search_batched<V: VectorStore, N: Neighborhood<V>>(
         store: &mut V,
-        graph: &GraphMem<V::VectorRef>,
+        graph: &GraphMem<SerialId>,
         q: &V::QueryRef,
         W: &mut N,
         ef: usize,
@@ -719,12 +723,12 @@ impl HnswSearcher {
         let metrics_labels = [("layer", lc.to_string())];
         let mut metric_edges = FastHistogram::new(&format!("search_edges_layer{}", lc));
 
-        // The set of vectors which have been considered as potential neighbors
+        // The set of serial IDs which have been considered as potential neighbors
         let mut visited =
-            HashSet::<V::VectorRef>::from_iter(W.as_ref().iter().map(|(e, _eq)| e.clone()));
+            HashSet::<SerialId>::from_iter(W.as_ref().iter().map(|(e, _eq)| e.serial_id()));
 
-        // The set of visited vectors for which we have inspected their neighborhood
-        let mut opened = HashSet::<V::VectorRef>::new();
+        // The set of visited serial IDs for which we have inspected their neighborhood
+        let mut opened = HashSet::<SerialId>::new();
 
         // c: the current candidate to be opened, initialized to first entry of W
         let (mut c, _cq) = W.as_ref().first().ok_or_eyre("W cannot be empty")?.clone();
@@ -768,7 +772,7 @@ impl HnswSearcher {
             let mut c_links = HnswSearcher::open_node(store, graph, &c, lc, q, &mut visited)
                 .instrument(eval_dist_span.clone())
                 .await?;
-            opened.insert(c.clone());
+            opened.insert(c.serial_id());
             debug!(event_type = Operation::OpenNode.id(), ef, lc);
             metric_edges.record(c_links.len() as f64);
 
@@ -859,7 +863,7 @@ impl HnswSearcher {
                 .as_ref()
                 .iter()
                 .map(|(c, _)| c)
-                .find(|&c| !opened.contains(c))
+                .find(|&c| !opened.contains(&c.serial_id()))
                 .cloned();
 
             // Once we've opened all elements of candidate neighborhood W, process any
@@ -916,7 +920,7 @@ impl HnswSearcher {
                     .as_ref()
                     .iter()
                     .map(|(c, _)| c)
-                    .find(|&c| !opened.contains(c))
+                    .find(|&c| !opened.contains(&c.serial_id()))
                     .cloned();
             }
 
@@ -997,7 +1001,7 @@ impl HnswSearcher {
     #[instrument(level = "debug", skip(store, graph, q, W))]
     async fn layer_search_batched_v2<V: VectorStore, N: Neighborhood<V>>(
         store: &mut V,
-        graph: &GraphMem<V::VectorRef>,
+        graph: &GraphMem<SerialId>,
         q: &V::QueryRef,
         W: &mut N,
         ef: usize,
@@ -1010,11 +1014,12 @@ impl HnswSearcher {
         let insert_span =
             trace_span!(target: "searcher::cpu_time", "insert_into_sorted_neighborhood_aggr");
 
-        // The set of vectors which have been considered as potential neighbors
-        let mut visited = HashSet::from_iter(W.as_ref().iter().map(|(e, _eq)| e.clone()));
+        // The set of serial IDs which have been considered as potential neighbors
+        let mut visited =
+            HashSet::<SerialId>::from_iter(W.as_ref().iter().map(|(e, _eq)| e.serial_id()));
 
-        // The set of visited vectors for which we have inspected their neighborhood
-        let mut opened = HashSet::new();
+        // The set of visited serial IDs for which we have inspected their neighborhood
+        let mut opened = HashSet::<SerialId>::new();
 
         // Fill initial candidate neighborhood from W.  List is constructed as:
         //
@@ -1030,14 +1035,13 @@ impl HnswSearcher {
         let mut open_idx = 0;
         while open_idx < init_nodes.len() && init_nodes.len() < ef {
             // get valid, unvisited neighbors of current node at `open_idx`
-            let nbhd: Vec<_> = graph
-                .get_links(&init_nodes[open_idx], lc)
+            let nbhd_sids: Vec<SerialId> = graph
+                .get_links(&init_nodes[open_idx].serial_id(), lc)
                 .await
-                .iter()
-                .filter(|x| !init_nodes.contains(x))
-                .cloned()
+                .into_iter()
+                .filter(|sid| !init_nodes.iter().any(|v| v.serial_id() == *sid))
                 .collect();
-            let nbhd = store.only_valid_vectors(nbhd).await;
+            let nbhd = store.serial_ids_to_vector_refs(nbhd_sids).await;
 
             // extend `init_nodes` with these neighbors, and progress
             init_nodes.extend(nbhd);
@@ -1060,7 +1064,7 @@ impl HnswSearcher {
         let mut opened_so_far = init_opened.len();
         let mut visited_so_far = init_links.len();
 
-        opened.extend(init_opened);
+        opened.extend(init_opened.iter().map(|v| v.serial_id()));
 
         W.insert_batch_and_trim(store, &init_links, ef)
             .instrument(insert_span.clone())
@@ -1094,7 +1098,7 @@ impl HnswSearcher {
             W.as_ref()
                 .iter()
                 .map(|(c, _)| c)
-                .filter(|&c| !opened.contains(c))
+                .filter(|&c| !opened.contains(&c.serial_id()))
                 .cloned(),
         );
 
@@ -1141,7 +1145,7 @@ impl HnswSearcher {
                 ef,
                 lc
             );
-            opened.extend(new_opened);
+            opened.extend(new_opened.iter().map(|v| v.serial_id()));
 
             // Compare elements against current farthest element of W and filter
             let (filtered_links, batch_size) = {
@@ -1214,7 +1218,7 @@ impl HnswSearcher {
                 W.as_ref()
                     .iter()
                     .map(|(c, _)| c)
-                    .filter(|&c| !opened.contains(c))
+                    .filter(|&c| !opened.contains(&c.serial_id()))
                     .cloned(),
             );
         }
@@ -1231,7 +1235,7 @@ impl HnswSearcher {
     #[instrument(level = "debug", skip(store, graph, q, start))]
     async fn layer_search_greedy<V: VectorStore>(
         store: &mut V,
-        graph: &GraphMem<V::VectorRef>,
+        graph: &GraphMem<SerialId>,
         q: &V::QueryRef,
         start: &(V::VectorRef, V::DistanceRef),
         lc: usize,
@@ -1240,9 +1244,9 @@ impl HnswSearcher {
         // Current node of graph traversal
         let (mut c_vec, mut c_dist) = start.clone();
 
-        // The set of vectors which have been considered as potential neighbors
-        let mut visited = HashSet::<V::VectorRef>::new();
-        visited.insert(c_vec.clone());
+        // The set of serial IDs which have been considered as potential neighbors
+        let mut visited = HashSet::<SerialId>::new();
+        visited.insert(c_vec.serial_id());
 
         // These spans accumulate running time of multiple atomic operations
         let eval_dist_span = trace_span!(target: "searcher::cpu_time", "eval_distance_batch_aggr");
@@ -1307,21 +1311,23 @@ impl HnswSearcher {
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn open_node<V: VectorStore>(
         store: &mut V,
-        graph: &GraphMem<V::VectorRef>,
+        graph: &GraphMem<SerialId>,
         node: &V::VectorRef,
         lc: usize,
         query: &V::QueryRef,
-        visited: &mut HashSet<V::VectorRef>,
+        visited: &mut HashSet<SerialId>,
     ) -> Result<Vec<(V::VectorRef, V::DistanceRef)>> {
-        let neighbors = graph.get_links(node, lc).await;
+        // HasSerialId bound lets us extract SerialId in generic context
+        let node_sid = node.serial_id();
+        let neighbor_sids = graph.get_links(&node_sid, lc).await;
 
-        let unvisited_neighbors: Vec<_> = neighbors
-            .iter()
-            .filter(|e| visited.insert((*e).clone()))
-            .cloned()
+        let unvisited_sids: Vec<SerialId> = neighbor_sids
+            .into_iter()
+            .filter(|sid| visited.insert(*sid))
             .collect();
 
-        let valid_neighbors = store.only_valid_vectors(unvisited_neighbors).await;
+        // SerialId → VectorRef: requires store registry (version lookup)
+        let valid_neighbors = store.serial_ids_to_vector_refs(unvisited_sids).await;
 
         let distances = store.eval_distance_batch(query, &valid_neighbors).await?;
 
@@ -1343,26 +1349,26 @@ impl HnswSearcher {
     #[allow(clippy::type_complexity)]
     async fn open_nodes_batch<V: VectorStore>(
         store: &mut V,
-        graph: &GraphMem<V::VectorRef>,
+        graph: &GraphMem<SerialId>,
         nodes: &[V::VectorRef],
         lc: usize,
         query: &V::QueryRef,
-        visited: &mut HashSet<V::VectorRef>,
+        visited: &mut HashSet<SerialId>,
         limit: Option<usize>,
     ) -> Result<(Vec<V::VectorRef>, Vec<(V::VectorRef, V::DistanceRef)>)> {
         let mut valid_neighbors = Vec::new();
         let mut opened_nodes = Vec::with_capacity(nodes.len());
 
         for node in nodes {
-            let neighbors = graph.get_links(node, lc).await;
+            let node_sid = node.serial_id();
+            let neighbor_sids = graph.get_links(&node_sid, lc).await;
 
-            let unvisited_neighbors: Vec<_> = neighbors
-                .iter()
-                .filter(|e| visited.insert((*e).clone()))
-                .cloned()
+            let unvisited_sids: Vec<SerialId> = neighbor_sids
+                .into_iter()
+                .filter(|sid| visited.insert(*sid))
                 .collect();
 
-            valid_neighbors.extend(store.only_valid_vectors(unvisited_neighbors).await);
+            valid_neighbors.extend(store.serial_ids_to_vector_refs(unvisited_sids).await);
             opened_nodes.push(node.clone());
 
             // halt opening once at least limit valid neighbors have been visited, if specified
@@ -1393,7 +1399,7 @@ impl HnswSearcher {
     pub async fn search<V: VectorStore, N: Neighborhood<V>>(
         &self,
         store: &mut V,
-        graph: &GraphMem<V::VectorRef>,
+        graph: &GraphMem<SerialId>,
         query: &V::QueryRef,
         k: usize,
     ) -> Result<N> {
@@ -1430,7 +1436,7 @@ impl HnswSearcher {
     pub async fn insert<V: VectorStoreMut, N: Neighborhood<V>>(
         &self,
         store: &mut V,
-        graph: &mut GraphMem<V::VectorRef>,
+        graph: &mut GraphMem<SerialId>,
         query: &V::QueryRef,
         insertion_layer: usize,
     ) -> Result<V::VectorRef> {
@@ -1472,7 +1478,7 @@ impl HnswSearcher {
     pub async fn search_to_insert<V: VectorStore, N: Neighborhood<V>>(
         &self,
         store: &mut V,
-        graph: &GraphMem<V::VectorRef>,
+        graph: &GraphMem<SerialId>,
         query: &V::QueryRef,
         insertion_layer: usize,
     ) -> Result<(Vec<N>, UpdateEntryPoint)> {
@@ -1543,16 +1549,16 @@ impl HnswSearcher {
     pub async fn compact_batch<V: VectorStore>(
         &self,
         store: &mut V,
-        graph: &GraphMem<V::VectorRef>,
-        candidates: &BTreeSet<(V::VectorRef, usize)>,
-    ) -> Result<Vec<MutationOp<V::VectorRef>>> {
+        graph: &GraphMem<SerialId>,
+        candidates: &BTreeSet<(SerialId, usize)>,
+    ) -> Result<Vec<MutationOp<SerialId>>> {
         // Read the current neighborhood for each candidate; keep only those
         // exceeding M_limit on their layer.
-        let mut oversized: Vec<(V::VectorRef, usize, Vec<V::VectorRef>)> = Vec::new();
+        let mut oversized: Vec<(SerialId, usize, Vec<SerialId>)> = Vec::new();
         for (id, layer) in candidates {
             let nbhd = graph.get_links(id, *layer).await.to_vec();
             if nbhd.len() > self.params.get_M_limit(*layer) {
-                oversized.push((id.clone(), *layer, nbhd));
+                oversized.push((*id, *layer, nbhd));
             }
         }
 
@@ -1566,33 +1572,48 @@ impl HnswSearcher {
             return Ok(Vec::new());
         }
 
-        // Build parallel slices for the batched MPC compaction call.
-        let base_nodes: Vec<_> = oversized.iter().map(|(id, _, _)| id.clone()).collect();
-        let neighborhoods: Vec<_> = oversized.iter().map(|(_, _, nbhd)| nbhd.clone()).collect();
+        // Collect all unique SerialIds that appear as base nodes or neighbors,
+        // convert to VectorRefs once, then use for the batched store call.
+        let base_sids: Vec<SerialId> = oversized.iter().map(|(id, _, _)| *id).collect();
+        let layers: Vec<_> = oversized.iter().map(|(_, layer, _)| *layer).collect();
+
+        // Convert base SerialIds to VectorRefs for store operations
+        let base_vrefs = store.serial_ids_to_vector_refs(base_sids.clone()).await;
+
+        // Convert neighbor SerialIds to VectorRefs for each neighborhood
+        let neighborhoods_vref: Vec<Vec<V::VectorRef>> = {
+            let mut result = Vec::with_capacity(oversized.len());
+            for (_, _, nbhd_sids) in &oversized {
+                result.push(store.serial_ids_to_vector_refs(nbhd_sids.clone()).await);
+            }
+            result
+        };
+
         let max_sizes: Vec<_> = oversized
             .iter()
             .map(|(_, layer, _)| self.params.get_M_max(*layer))
             .collect();
-        let layers: Vec<_> = oversized.iter().map(|(_, layer, _)| *layer).collect();
 
         let compacted_nbhds = store
-            .compact_neighborhood_batch(&base_nodes, &neighborhoods, &max_sizes)
+            .compact_neighborhood_batch(&base_vrefs, &neighborhoods_vref, &max_sizes)
             .await?;
 
         // Diff each (original, compacted) to derive RemoveEdges ops.
+        // Convert VectorRef results back to SerialId for the graph mutation.
         let mut ops = Vec::with_capacity(compacted_nbhds.len());
-        for (id, layer, original, compacted) in
-            izip!(&base_nodes, &layers, &neighborhoods, compacted_nbhds)
+        for (base_sid, layer, original_sids, compacted_vrefs) in
+            izip!(&base_sids, &layers, oversized.iter().map(|(_, _, n)| n), compacted_nbhds)
         {
-            let compacted_set: HashSet<_> = compacted.iter().collect();
-            let to_remove: Vec<V::VectorRef> = original
+            let compacted_sids: HashSet<SerialId> =
+                compacted_vrefs.iter().map(|v| v.serial_id()).collect();
+            let to_remove: Vec<SerialId> = original_sids
                 .iter()
-                .filter(|v| !compacted_set.contains(v))
-                .cloned()
+                .filter(|sid| !compacted_sids.contains(sid))
+                .copied()
                 .collect();
             if !to_remove.is_empty() {
                 ops.push(MutationOp::RemoveEdges {
-                    base: id.clone(),
+                    base: *base_sid,
                     layer: *layer,
                     neighbors: to_remove,
                     edge_type: EdgeType::Base,
@@ -1615,27 +1636,29 @@ impl HnswSearcher {
     pub async fn prune_invalid_links<V: VectorStore>(
         &self,
         store: &mut V,
-        graph: &GraphMem<V::VectorRef>,
-        candidates: &BTreeSet<(V::VectorRef, usize)>,
-    ) -> Result<Vec<MutationOp<V::VectorRef>>> {
+        graph: &GraphMem<SerialId>,
+        candidates: &BTreeSet<(SerialId, usize)>,
+    ) -> Result<Vec<MutationOp<SerialId>>> {
         let mut ops = Vec::new();
         for (id, layer) in candidates {
-            let current_links = graph.get_links(id, *layer).await.to_vec();
-            if current_links.is_empty() {
+            let current_sids = graph.get_links(id, *layer).await.to_vec();
+            if current_sids.is_empty() {
                 continue;
             }
-            let valid_links = store.only_valid_vectors(current_links.clone()).await;
-            if valid_links.len() == current_links.len() {
+            // Convert to VectorRefs to check store validity; filter_map acts as validity filter
+            let valid_vrefs = store.serial_ids_to_vector_refs(current_sids.clone()).await;
+            if valid_vrefs.len() == current_sids.len() {
                 continue;
             }
-            let valid_set: HashSet<_> = valid_links.iter().collect();
-            let to_remove: Vec<V::VectorRef> = current_links
+            let valid_sid_set: HashSet<SerialId> =
+                valid_vrefs.iter().map(|v| v.serial_id()).collect();
+            let to_remove: Vec<SerialId> = current_sids
                 .into_iter()
-                .filter(|v| !valid_set.contains(v))
+                .filter(|sid| !valid_sid_set.contains(sid))
                 .collect();
             if !to_remove.is_empty() {
                 ops.push(MutationOp::RemoveEdges {
-                    base: id.clone(),
+                    base: *id,
                     layer: *layer,
                     neighbors: to_remove,
                     edge_type: EdgeType::Base,
@@ -1656,30 +1679,31 @@ impl HnswSearcher {
     pub async fn insert_from_search_results<V: VectorStore, N: Neighborhood<V>>(
         &self,
         store: &mut V,
-        graph: &mut GraphMem<V::VectorRef>,
+        graph: &mut GraphMem<SerialId>,
         inserted_vector: V::VectorRef,
         links: Vec<N>,
         update_ep: UpdateEntryPoint,
     ) -> Result<()> {
-        // Trim and extract unstructured vector lists.
-        let mut links_unstructured: Vec<Vec<V::VectorRef>> = Vec::new();
+        // Trim and extract unstructured neighbor SerialId lists.
+        // VectorRef → SerialId via HasSerialId (zero-cost, no store call needed).
+        let inserted_sid = inserted_vector.serial_id();
+        let mut links_unstructured: Vec<Vec<SerialId>> = Vec::new();
         for (lc, mut l) in links.iter().cloned().enumerate() {
             let m = self.params.get_M(lc);
             l.trim(store, m).await?;
-            links_unstructured.push(l.edge_ids());
+            links_unstructured.push(l.edge_ids().iter().map(|v| v.serial_id()).collect());
         }
 
-        // Build the AddNode + per-layer AddEdges mutation, apply it, then run
-        // the same post-apply prune + compaction the batched path uses.
+        // Build the AddNode + per-layer AddEdges mutation with SerialId nodes.
         let height = links_unstructured.len();
-        let mut ops: Vec<MutationOp<V::VectorRef>> = vec![MutationOp::AddNode {
-            id: inserted_vector.clone(),
+        let mut ops: Vec<MutationOp<SerialId>> = vec![MutationOp::AddNode {
+            id: inserted_sid,
             height,
             update_ep,
         }];
         for (layer_idx, layer_links) in links_unstructured.into_iter().enumerate() {
             ops.push(MutationOp::AddEdges {
-                base: inserted_vector.clone(),
+                base: inserted_sid,
                 layer: layer_idx,
                 neighbors: layer_links,
                 edge_type: EdgeType::All,
@@ -1936,7 +1960,7 @@ mod tests {
     #[tokio::test]
     async fn prune_invalid_links_emits_remove_edges_for_stale_refs() -> Result<()> {
         let mut store = PlaintextStore::<FhdOps>::new();
-        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let mut graph: GraphMem<SerialId> = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
 
         // Real, inserted vector.
@@ -1995,7 +2019,7 @@ mod tests {
     #[tokio::test]
     async fn prune_invalid_links_noop_when_all_valid() -> Result<()> {
         let mut store = PlaintextStore::<FhdOps>::new();
-        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let mut graph: GraphMem<SerialId> = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
 
         let a = store.insert(&Arc::new(IrisCode::default())).await;
@@ -2034,7 +2058,7 @@ mod tests {
     #[tokio::test]
     async fn compact_batch_emits_remove_edges_for_oversized() -> Result<()> {
         let mut store = PlaintextStore::<FhdOps>::new();
-        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let mut graph: GraphMem<SerialId> = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
 
         // Seed a base vector and enough neighbors to exceed M_limit at layer 0.
@@ -2111,7 +2135,7 @@ mod tests {
         use std::sync::Arc;
 
         let mut store = PlaintextStore::<FhdOps>::new();
-        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let mut graph: GraphMem<SerialId> = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
 
         let a = store.insert(&Arc::new(IrisCode::default())).await;

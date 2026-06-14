@@ -7,6 +7,32 @@ pub type SerialId = u32;
 // An Iris pair version identifier.
 pub type VersionId = i16;
 
+/// Implemented by any type that carries a graph-level [`SerialId`].
+///
+/// This is the minimal bridge between the graph's `SerialId` representation
+/// and the store's `VectorRef` type. Adding this as a bound on
+/// `VectorStore::VectorRef` lets generic search code extract a `SerialId`
+/// from a `VectorRef` without any trait methods on `VectorStore` itself.
+pub trait HasSerialId {
+    fn serial_id(&self) -> SerialId;
+}
+
+impl HasSerialId for VectorId {
+    #[inline]
+    fn serial_id(&self) -> SerialId {
+        self.id
+    }
+}
+
+/// Blanket implementation for `usize` so that `TestStore` (which uses
+/// `type VectorRef = usize`) compiles without modification.
+impl HasSerialId for usize {
+    #[inline]
+    fn serial_id(&self) -> SerialId {
+        *self as SerialId
+    }
+}
+
 /// Unique identifier for an immutable pair of iris codes.
 #[derive(
     Copy, Default, Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, PartialOrd, Ord,

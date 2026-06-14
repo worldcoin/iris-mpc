@@ -18,7 +18,7 @@ use aws_sdk_s3::{
     Client as S3Client, Config,
 };
 use eyre::{eyre, Result};
-use iris_mpc_common::IrisVectorId;
+use iris_mpc_common::IrisSerialId;
 use iris_mpc_cpu::{
     graph_checkpoint::{
         stream_download_and_deserialize_graph_pair, stream_download_and_deserialize_with,
@@ -308,7 +308,7 @@ async fn v3_graph_pair_streams_to_graphmem() -> Result<()> {
         *blake3::hash(&bytes).as_bytes()
     };
 
-    // Stream-download V3 bytes → `[GraphMem<IrisVectorId>; 2]`.
+    // Stream-download V3 bytes → `[GraphMem<IrisSerialId>; 2]`.
     let download =
         stream_download_and_deserialize_graph_pair(&client, &bucket, key, GraphFormat::V3).await;
     cleanup_bucket(&client, &bucket).await;
@@ -318,7 +318,7 @@ async fn v3_graph_pair_streams_to_graphmem() -> Result<()> {
     assert_eq!(hash, expected_hash, "BLAKE3 hash mismatch");
 
     // Reference: standard `.into()` conversion on the original in-memory pair.
-    let expected: [GraphMem<IrisVectorId>; 2] = pair.map(|g| g.into());
+    let expected: [GraphMem<IrisSerialId>; 2] = pair.map(|g| g.into());
 
     for i in 0..2 {
         assert_eq!(
@@ -422,7 +422,7 @@ async fn v4_graph_pair_streams_to_graphmem_seq_no_preserved() -> Result<()> {
         return Err(e);
     }
 
-    // Stream-download V4 bytes → `[GraphMem<IrisVectorId>; 2]`.
+    // Stream-download V4 bytes → `[GraphMem<IrisSerialId>; 2]`.
     let download =
         stream_download_and_deserialize_graph_pair(&client, &bucket, key, GraphFormat::V4).await;
     cleanup_bucket(&client, &bucket).await;
@@ -432,7 +432,7 @@ async fn v4_graph_pair_streams_to_graphmem_seq_no_preserved() -> Result<()> {
     assert_eq!(hash, expected_hash, "BLAKE3 hash mismatch");
 
     // Reference: standard `.into()` conversion on the original in-memory pair.
-    let expected: [GraphMem<IrisVectorId>; 2] = pair.map(|g| g.into());
+    let expected: [GraphMem<IrisSerialId>; 2] = pair.map(|g| g.into());
 
     for i in 0..2 {
         assert_eq!(
