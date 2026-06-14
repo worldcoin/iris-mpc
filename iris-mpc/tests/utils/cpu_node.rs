@@ -394,10 +394,7 @@ impl CpuNode {
                 // Convert GraphMem → GraphV3 by copying entry_points and layers,
                 // dropping the seq_no field that is absent in the V3 format.
                 let to_v3 = |g: GraphMem<IrisSerialId>| -> graph_v3::GraphV3 {
-                    let vec_id = |v: &IrisSerialId| graph_v3::VectorId {
-                        id: *v,
-                        version: 0,
-                    };
+                    let vec_id = |v: &IrisSerialId| graph_v3::VectorId { id: *v, version: 0 };
                     graph_v3::GraphV3 {
                         entry_point: g
                             .entry_points

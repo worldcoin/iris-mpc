@@ -111,7 +111,9 @@ pub async fn insert<V: VectorStoreMut>(
         // (a) Delete first: own GraphMutation with the lower seq_no.
         if let Some(rid) = replace_id {
             let mutation = graph.apply_new(UnstampedMutation {
-                ops: vec![MutationOp::RemoveNode { id: rid.serial_id() }],
+                ops: vec![MutationOp::RemoveNode {
+                    id: rid.serial_id(),
+                }],
             })?;
             slot_outputs[idx].push(mutation);
         }
@@ -309,7 +311,10 @@ fn validate_ep_updates<V: VectorStore>(
 mod tests {
     use crate::hawkers::plaintext_store::PlaintextStore;
     use crate::hnsw::graph::GraphMutation;
-    use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::{HasSerialId, SerialId}};
+    use iris_mpc_common::{
+        iris_db::iris::IrisCode,
+        vector_id::{HasSerialId, SerialId},
+    };
     use itertools::Itertools;
     use std::sync::Arc;
 
@@ -1003,8 +1008,7 @@ mod tests {
         //     nodes (size m_limit, since there are m_limit + 1 seeds total).
         // EdgeType::Base ensures the back-edges aren't auto-created — keeps
         // each neighborhood exactly at m_limit.
-        let mut setup_ops: Vec<MutationOp<SerialId>> =
-            Vec::with_capacity(seed_count * 2);
+        let mut setup_ops: Vec<MutationOp<SerialId>> = Vec::with_capacity(seed_count * 2);
         for (i, &id) in seed_ids.iter().enumerate() {
             setup_ops.push(MutationOp::AddNode {
                 id: id.serial_id(),

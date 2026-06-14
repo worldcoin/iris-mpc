@@ -1,17 +1,18 @@
 use std::sync::Arc;
 
 use eyre::Result;
-use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::{HasSerialId, SerialId}, IrisVectorId};
+use iris_mpc_common::{
+    iris_db::iris::IrisCode,
+    vector_id::{HasSerialId, SerialId},
+    IrisVectorId,
+};
 use itertools::Itertools;
 use tokio::task::JoinSet;
 use tracing::info;
 
 use crate::{
     execution::hawk_main::insert::{self, InsertPlanV},
-    hawkers::{
-        aby3::aby3_store::DistanceOps,
-        plaintext_store::SharedPlaintextStore,
-    },
+    hawkers::{aby3::aby3_store::DistanceOps, plaintext_store::SharedPlaintextStore},
     hnsw::{graph::neighborhood::Neighborhood, GraphMem, HnswSearcher, SortedNeighborhood},
 };
 

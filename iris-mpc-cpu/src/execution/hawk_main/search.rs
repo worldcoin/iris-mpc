@@ -20,7 +20,10 @@ use crate::{
     },
 };
 use eyre::{OptionExt, Result};
-use iris_mpc_common::{iris_db::iris::Threshold, vector_id::{HasSerialId, SerialId}};
+use iris_mpc_common::{
+    iris_db::iris::Threshold,
+    vector_id::{HasSerialId, SerialId},
+};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
@@ -409,7 +412,11 @@ async fn per_search_query(
         .search::<_, SortedNeighborhood<_>>(aby3_store, graph_store, &query, ef_search)
         .await?;
 
-    let links_unstructured = vec![layer_0_neighbors.edge_ids().iter().map(|v| v.serial_id()).collect()];
+    let links_unstructured = vec![layer_0_neighbors
+        .edge_ids()
+        .iter()
+        .map(|v| v.serial_id())
+        .collect()];
 
     let classified = if search_params.do_match {
         classify_and_extend(

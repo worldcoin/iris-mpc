@@ -482,11 +482,7 @@ async fn init_dbs(args: &Args) -> Vec<DbContext> {
 
 fn get_max_serial_id(graph: &GraphMem<SerialId>) -> Option<u32> {
     if let Some(layer) = graph.layers.first() {
-        layer
-            .get_links_map()
-            .keys()
-            .copied()
-            .max()
+        layer.get_links_map().keys().copied().max()
     } else {
         None
     }

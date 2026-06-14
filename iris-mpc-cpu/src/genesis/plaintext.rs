@@ -257,7 +257,8 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                     for (lc, mut l) in links.into_iter().enumerate() {
                         let m = searcher.params.get_M(lc);
                         l.trim(store, m).await?;
-                        links_unstructured.push(l.edge_ids().iter().map(|v| v.serial_id()).collect())
+                        links_unstructured
+                            .push(l.edge_ids().iter().map(|v| v.serial_id()).collect())
                     }
 
                     let insert_plan = InsertPlanV {

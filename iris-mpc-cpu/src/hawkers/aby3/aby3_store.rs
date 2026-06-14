@@ -1602,11 +1602,14 @@ mod tests {
                         .instrument(mpc_span.clone())
                         .await?;
                 }
-                Ok::<(usize, GraphMem<iris_mpc_common::vector_id::SerialId>), eyre::Report>((role, graph))
+                Ok::<(usize, GraphMem<iris_mpc_common::vector_id::SerialId>), eyre::Report>((
+                    role, graph,
+                ))
             });
         }
 
-        let mut mpc_graphs: Vec<Option<GraphMem<iris_mpc_common::vector_id::SerialId>>> = (0..3).map(|_| None).collect();
+        let mut mpc_graphs: Vec<Option<GraphMem<iris_mpc_common::vector_id::SerialId>>> =
+            (0..3).map(|_| None).collect();
         while let Some(res) = jobs.join_next().await {
             let (role, graph) = res??;
             mpc_graphs[role] = Some(graph);

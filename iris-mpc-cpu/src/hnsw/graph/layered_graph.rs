@@ -1025,10 +1025,7 @@ mod tests {
     use std::{collections::HashMap, sync::Arc};
 
     use crate::{
-        hawkers::{
-            aby3::aby3_store::FhdOps,
-            plaintext_store::PlaintextStore,
-        },
+        hawkers::{aby3::aby3_store::FhdOps, plaintext_store::PlaintextStore},
         hnsw::{
             graph::layered_graph::migrate, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
             SortedNeighborhood, VectorStore,
@@ -1036,7 +1033,11 @@ mod tests {
     };
     use aes_prng::AesRng;
     use eyre::Result;
-    use iris_mpc_common::{iris_db::db::IrisDB, vector_id::{HasSerialId, SerialId, VectorId}, IrisSerialId};
+    use iris_mpc_common::{
+        iris_db::db::IrisDB,
+        vector_id::{HasSerialId, SerialId, VectorId},
+        IrisSerialId,
+    };
 
     use rand::{RngCore, SeedableRng};
 

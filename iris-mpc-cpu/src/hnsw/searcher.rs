@@ -21,9 +21,9 @@ use crate::hnsw::{
 use crate::hnsw::GraphMem;
 
 use aes_prng::AesRng;
-use iris_mpc_common::vector_id::{HasSerialId, SerialId};
 use ampc_actor_utils::fast_metrics::FastHistogram;
 use eyre::{bail, eyre, OptionExt, Result};
+use iris_mpc_common::vector_id::{HasSerialId, SerialId};
 use itertools::{izip, Itertools};
 use rand::{RngCore, SeedableRng};
 use rand_distr::{Distribution, Geometric};
@@ -436,10 +436,8 @@ impl HnswSearcher {
             }
             LayerMode::LinearScan { max_graph_layer } => {
                 // Get all valid entry points (graph stores SerialIds; convert to VectorRefs)
-                let ep_layers: Vec<usize> =
-                    graph.entry_points.iter().map(|ep| ep.layer).collect();
-                let ep_sids: Vec<SerialId> =
-                    graph.entry_points.iter().map(|ep| ep.point).collect();
+                let ep_layers: Vec<usize> = graph.entry_points.iter().map(|ep| ep.layer).collect();
+                let ep_sids: Vec<SerialId> = graph.entry_points.iter().map(|ep| ep.point).collect();
                 let ep_vectors = store.serial_ids_to_vector_refs(ep_sids).await;
                 metrics::gauge!("entry_points_count").set(ep_vectors.len() as f64);
 
@@ -1601,9 +1599,12 @@ impl HnswSearcher {
         // Diff each (original, compacted) to derive RemoveEdges ops.
         // Convert VectorRef results back to SerialId for the graph mutation.
         let mut ops = Vec::with_capacity(compacted_nbhds.len());
-        for (base_sid, layer, original_sids, compacted_vrefs) in
-            izip!(&base_sids, &layers, oversized.iter().map(|(_, _, n)| n), compacted_nbhds)
-        {
+        for (base_sid, layer, original_sids, compacted_vrefs) in izip!(
+            &base_sids,
+            &layers,
+            oversized.iter().map(|(_, _, n)| n),
+            compacted_nbhds
+        ) {
             let compacted_sids: HashSet<SerialId> =
                 compacted_vrefs.iter().map(|v| v.serial_id()).collect();
             let to_remove: Vec<SerialId> = original_sids

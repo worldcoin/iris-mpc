@@ -502,11 +502,7 @@ impl From<graph_v1::Layer> for Layer<IrisSerialId> {
     fn from(value: graph_v1::Layer) -> Self {
         let mut layer = Layer::new();
         for (v, nb) in value.links.into_iter() {
-            layer.set_links(
-                v.into(),
-                nb.0.into_iter().map(|x| x.into()).collect(),
-                0,
-            );
+            layer.set_links(v.into(), nb.0.into_iter().map(|x| x.into()).collect(), 0);
         }
         layer
     }
@@ -656,7 +652,10 @@ impl From<graph_v4::GraphV4> for GraphMem<IrisSerialId> {
 impl From<IrisSerialId> for graph_v4::VectorId {
     fn from(value: IrisSerialId) -> Self {
         // V4 required a version field; default to 0 when writing back from IrisSerialId.
-        graph_v4::VectorId { id: value, version: 0 }
+        graph_v4::VectorId {
+            id: value,
+            version: 0,
+        }
     }
 }
 
@@ -1009,10 +1008,7 @@ mod tests {
             layer.set_links(n, vec![n + 1, n + 2], 0);
         }
         let mut g = GraphMem::new();
-        g.entry_points = vec![layered_graph::EntryPoint {
-            point: 1,
-            layer: 0,
-        }];
+        g.entry_points = vec![layered_graph::EntryPoint { point: 1, layer: 0 }];
         g.layers = vec![layer];
         g
     }
@@ -1025,6 +1021,9 @@ mod tests {
         let mut buf = Vec::new();
         write_graph_current(&mut buf, g.clone()).unwrap();
         let g2 = read_graph_current(&mut buf.as_slice()).unwrap();
-        assert_eq!(g, g2, "GraphV5/Current round-trip produced a different graph");
+        assert_eq!(
+            g, g2,
+            "GraphV5/Current round-trip produced a different graph"
+        );
     }
 }

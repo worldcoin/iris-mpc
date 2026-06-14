@@ -3,7 +3,10 @@ use std::{collections::HashMap, path::Path, sync::Arc};
 use aes_prng::AesRng;
 use eyre::{bail, Result};
 use futures::future::join_all;
-use iris_mpc_common::{iris_db::db::IrisDB, vector_id::{SerialId, VectorId}};
+use iris_mpc_common::{
+    iris_db::db::IrisDB,
+    vector_id::{SerialId, VectorId},
+};
 use rand::{CryptoRng, RngCore, SeedableRng};
 use tokio::{sync::Mutex, task::JoinHandle};
 

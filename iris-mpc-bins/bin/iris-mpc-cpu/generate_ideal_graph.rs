@@ -92,7 +92,11 @@ async fn run_sanity_check<D: DistanceOps>(
         store.insert_with_id(IrisVectorId::from_serial_id((i as u32) + 1), Arc::new(iris));
     }
 
-    let sample_iris = store.storage.get_vector_by_serial_id(sample).cloned().unwrap();
+    let sample_iris = store
+        .storage
+        .get_vector_by_serial_id(sample)
+        .cloned()
+        .unwrap();
 
     for lc in 0..graph.layers.len() {
         let neighbors = graph.layers[lc]
