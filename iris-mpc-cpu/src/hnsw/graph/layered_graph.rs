@@ -48,6 +48,45 @@ pub struct EntryPoint<VectorRef> {
     pub layer: usize,
 }
 
+/// A node's neighbor list together with the graph modification counter at the
+/// time the list was last written.
+///
+/// An edge to neighbor `B` in this neighborhood is **valid** iff
+/// `node_init_seq_no[B] <= self.updated_seq_no`, meaning `B` was initialized before or
+/// during the modification step that last wrote this neighborhood.  Edges
+/// failing this check are logically absent; they are stale references left over
+/// from an efficient lazy-deletion scheme.
+///
+/// Neighborhoods in graphs built via [`GraphMem::from_precomputed`] carry
+/// `updated_seq_no = 0` and their nodes carry `node_init_seq_no = 0`, so all edges are
+/// considered valid for those graphs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Neighborhood<V> {
+    /// The neighboring node IDs, kept sorted and deduplicated.
+    pub neighbors: Vec<V>,
+    /// Graph modification counter at the time this neighborhood was last
+    /// written.
+    pub updated_seq_no: u64,
+}
+
+impl<V> Neighborhood<V> {
+    /// Construct a neighborhood with the given neighbors and timestamp.
+    pub fn new(neighbors: Vec<V>, updated_seq_no: u64) -> Self {
+        Neighborhood {
+            neighbors,
+            updated_seq_no,
+        }
+    }
+
+    /// Construct an empty neighborhood at the given timestamp.
+    pub fn empty(updated_seq_no: u64) -> Self {
+        Neighborhood {
+            neighbors: Vec::new(),
+            updated_seq_no,
+        }
+    }
+}
+
 /// An in-memory implementation of an HNSW hierarchical graph.
 #[derive(Default, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(bound = "V: Ref + Display + FromStr")]
@@ -72,6 +111,16 @@ pub struct GraphMem<V: Ref + Display + FromStr + Ord> {
     /// means no mutation has been applied. Advanced by `insert_apply` on
     /// success.
     pub last_update_seq_no: u64,
+
+    /// Maps each node's vector reference to the graph modification counter at
+    /// the time it was (re-)initialized.  Used together with
+    /// [`Neighborhood::updated_seq_no`] to determine edge validity: an edge to `B`
+    /// is valid iff `node_init_seq_no[B] <= neighborhood.updated_seq_no`.
+    ///
+    /// Nodes in graphs built via [`GraphMem::from_precomputed`] receive an
+    /// implicit timestamp of `0`, consistent with their neighborhoods also
+    /// carrying `updated_seq_no = 0`.
+    pub node_init_seq_no: HashMap<V, u64>,
 }
 
 impl Display for GraphMem<IrisVectorId> {
@@ -96,7 +145,7 @@ impl Display for Layer<IrisVectorId> {
         let mut links = self
             .links
             .iter()
-            .map(|(k, v)| (*k, v.clone()))
+            .map(|(k, nbhd)| (*k, nbhd.neighbors.clone()))
             .collect_vec();
         links.sort_by_key(|(k, _)| *k);
         for (id, l) in links.iter() {
@@ -113,6 +162,7 @@ impl<V: Ref + Display + FromStr + Ord> Clone for GraphMem<V> {
             entry_points: self.entry_points.clone(),
             layers: self.layers.clone(),
             last_update_seq_no: self.last_update_seq_no,
+            node_init_seq_no: self.node_init_seq_no.clone(),
         }
     }
 }
@@ -123,6 +173,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
             entry_points: vec![],
             layers: vec![],
             last_update_seq_no: 0,
+            node_init_seq_no: HashMap::new(),
         }
     }
 
@@ -137,6 +188,13 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
     }
 
     pub fn from_precomputed(entry_points: Vec<(V, usize)>, layers: Vec<Layer<V>>) -> Self {
+        // All nodes in a precomputed graph receive timestamp 0 — consistent with
+        // their neighborhoods also carrying seq_no = 0.
+        let node_init_seq_no: HashMap<V, u64> = layers
+            .iter()
+            .flat_map(|l| l.links.keys().cloned().map(|k| (k, 0u64)))
+            .collect();
+
         GraphMem {
             entry_points: entry_points
                 .into_iter()
@@ -147,6 +205,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                 .collect::<Vec<_>>(),
             layers,
             last_update_seq_no: 0,
+            node_init_seq_no,
         }
     }
 
@@ -207,14 +266,17 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
             ));
         }
 
+        let seq_no = mutation.seq_no;
+
         // Pass 1: apply node-level mutations.
         for op in mutation.ops.iter() {
             match op {
                 MutationOp::RemoveNode { id } => {
                     for layer in &mut self.layers {
-                        layer.remove_node(id);
+                        layer.remove_node(id, seq_no);
                     }
                     self.entry_points.retain(|ep| &ep.point != id);
+                    self.node_init_seq_no.remove(id);
                 }
                 MutationOp::AddNode {
                     id,
@@ -240,11 +302,14 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                         UpdateEntryPoint::False => {}
                     }
 
+                    // Record the modification counter at which this node was initialized.
+                    self.node_init_seq_no.insert(id.clone(), seq_no);
+
                     if self.layers.len() < *height {
                         self.layers.resize(*height, Layer::new());
                     }
                     for layer_idx in 0..*height {
-                        self.layers[layer_idx].insert_node(id, Vec::new());
+                        self.layers[layer_idx].insert_node(id, Vec::new(), seq_no);
                     }
                 }
                 MutationOp::AddEdges { .. } | MutationOp::RemoveEdges { .. } => {}
@@ -274,7 +339,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     base
                                 );
                             } else {
-                                layer_mut.link_neighbors_to_node(base, to_add.clone());
+                                layer_mut.link_neighbors_to_node(base, to_add.clone(), seq_no);
                             }
                         }
                         EdgeType::Neighbors => {
@@ -286,7 +351,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     );
                                 }
                             }
-                            layer_mut.link_node_to_neighbors(base, to_add.clone());
+                            layer_mut.link_node_to_neighbors(base, to_add.clone(), seq_no);
                         }
                         EdgeType::All => {
                             if layer_mut.get_links(base).is_none() {
@@ -295,7 +360,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     base
                                 );
                             } else {
-                                layer_mut.link_neighbors_to_node(base, to_add.clone());
+                                layer_mut.link_neighbors_to_node(base, to_add.clone(), seq_no);
                             }
                             for target in to_add {
                                 if layer_mut.get_links(target).is_none() {
@@ -305,7 +370,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     );
                                 }
                             }
-                            layer_mut.link_node_to_neighbors(base, to_add.clone());
+                            layer_mut.link_node_to_neighbors(base, to_add.clone(), seq_no);
                         }
                     }
                 }
@@ -332,7 +397,11 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     base
                                 );
                             } else {
-                                layer_mut.unlink_neighbors_from_node(base, to_remove.clone());
+                                layer_mut.unlink_neighbors_from_node(
+                                    base,
+                                    to_remove.clone(),
+                                    seq_no,
+                                );
                             }
                         }
                         EdgeType::Neighbors => {
@@ -344,7 +413,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     );
                                 }
                             }
-                            layer_mut.unlink_node_from_neighbors(base, to_remove.clone());
+                            layer_mut.unlink_node_from_neighbors(base, to_remove.clone(), seq_no);
                         }
                         EdgeType::All => {
                             if layer_mut.get_links(base).is_none() {
@@ -353,7 +422,11 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     base
                                 );
                             } else {
-                                layer_mut.unlink_neighbors_from_node(base, to_remove.clone());
+                                layer_mut.unlink_neighbors_from_node(
+                                    base,
+                                    to_remove.clone(),
+                                    seq_no,
+                                );
                             }
                             for target in to_remove {
                                 if layer_mut.get_links(target).is_none() {
@@ -363,14 +436,14 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                                     );
                                 }
                             }
-                            layer_mut.unlink_node_from_neighbors(base, to_remove.clone());
+                            layer_mut.unlink_node_from_neighbors(base, to_remove.clone(), seq_no);
                         }
                     }
                 }
             }
         }
 
-        self.last_update_seq_no = mutation.seq_no;
+        self.last_update_seq_no = seq_no;
         Ok(())
     }
 
@@ -435,18 +508,45 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
         self.entry_points = vec![EntryPoint { point, layer }];
     }
 
-    pub async fn get_links(&self, base: &V, lc: usize) -> &[V] {
+    /// Return the **valid** neighbors of `base` at layer `lc`.
+    ///
+    /// An edge to neighbor `B` is valid iff `node_init_seq_no[B] <=
+    /// neighborhood.updated_seq_no`.  Stale edges (references to nodes that were
+    /// re-initialized after the neighborhood was last written) are filtered out.
+    /// An empty `Vec` is returned when `base` is not present in `lc` or `lc`
+    /// does not exist.
+    pub async fn get_links(&self, base: &V, lc: usize) -> Vec<V> {
+        if lc >= self.layers.len() {
+            return vec![];
+        }
         let layer = &self.layers[lc];
-        layer.get_links(base).unwrap_or(&[])
+        match layer.links.get(base) {
+            None => vec![],
+            Some(nbhd) => {
+                let updated_seq_no = nbhd.updated_seq_no;
+                nbhd.neighbors
+                    .iter()
+                    .filter(|nb| {
+                        self.node_init_seq_no
+                            .get(*nb)
+                            .map_or(false, |&init_seq_no| init_seq_no <= updated_seq_no)
+                    })
+                    .cloned()
+                    .collect()
+            }
+        }
     }
 
     /// Set the neighbors of vertex `base` at layer `lc` to `links`.
+    ///
+    /// The neighborhood timestamp is set to `self.last_update_seq_no`.
     pub async fn set_links(&mut self, base: V, links: Vec<V>, lc: usize) {
         if self.layers.len() < lc + 1 {
             self.layers.resize(lc + 1, Layer::new());
         }
+        let seq_no = self.last_update_seq_no;
         let layer = self.layers.get_mut(lc).unwrap();
-        layer.set_links(base, links);
+        layer.set_links(base, links, seq_no);
     }
 
     pub fn num_layers(&self) -> usize {
@@ -463,6 +563,22 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
             set_hash.add_unordered((lc as u64, layer.set_hash.checksum()));
         }
         set_hash.checksum()
+    }
+
+    /// Remove all stale edges from every layer, producing a canonical graph
+    /// representation where every stored edge is valid.
+    ///
+    /// An edge from node `A`'s neighborhood to node `B` is stale when
+    /// `node_init_seq_no[B] > A's neighborhood.updated_seq_no`, meaning `B` was
+    /// (re-)initialized after the neighborhood was last written.  Stale edges
+    /// are normally tolerated for efficiency (lazy deletion), but
+    /// canonicalization is useful before serialization to enable
+    /// binary-equivalence checks between parties.
+    pub fn canonicalize(&mut self) {
+        let node_init_seq_no = &self.node_init_seq_no;
+        for layer in &mut self.layers {
+            layer.canonicalize(node_init_seq_no);
+        }
     }
 }
 
@@ -576,15 +692,17 @@ impl GraphMem<IrisVectorId> {
 #[derive(PartialEq, Eq, Default, Debug, Deserialize)]
 #[serde(bound = "V: Ref + Display + FromStr")]
 pub struct Layer<V: Ref + Display + FromStr + Ord> {
-    /// Map a base vector to its neighbors.
-    pub links: HashMap<V, Vec<V>>,
+    /// Map a base vector to its neighborhood (neighbors + write timestamp).
+    pub links: HashMap<V, Neighborhood<V>>,
     /// A checksum of the layer's links, used for state verification.
-    /// This hash is updated whenever links are modified.
+    /// This hash is updated whenever links are modified.  Note that
+    /// `updated_seq_no` is intentionally excluded from the hash — only the
+    /// `(node, set-of-neighbors)` content is checksummed.
     set_hash: SetHash,
 }
 
 struct SortedLinks<'a, V: Ord> {
-    links: &'a HashMap<V, Vec<V>>,
+    links: &'a HashMap<V, Neighborhood<V>>,
 }
 
 impl<'a, V> Serialize for SortedLinks<'a, V>
@@ -638,8 +756,16 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         }
     }
 
+    /// Return the raw stored neighbor slice for `from`, or `None` if the node
+    /// is not present.  This is the unfiltered list; callers that need stale
+    /// edges excluded should use [`GraphMem::get_links`] instead.
     pub fn get_links(&self, from: &V) -> Option<&[V]> {
-        self.links.get(from).map(|v| v.as_slice())
+        self.links.get(from).map(|nbhd| nbhd.neighbors.as_slice())
+    }
+
+    /// Return the full [`Neighborhood`] for `from`, including its timestamp.
+    pub fn get_neighborhood(&self, from: &V) -> Option<&Neighborhood<V>> {
+        self.links.get(from)
     }
 
     /// Order-agnostic checksum of this layer's link map. Two layers with the
@@ -649,8 +775,8 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         self.set_hash.checksum()
     }
 
-    pub fn insert_node(&mut self, id: &V, neighbors: Vec<V>) {
-        self.set_links(id.clone(), neighbors.clone());
+    pub fn insert_node(&mut self, id: &V, neighbors: Vec<V>, seq_no: u64) {
+        self.set_links(id.clone(), neighbors, seq_no);
     }
 
     /// Insert `id` as an incoming edge into each target's neighbor list,
@@ -658,14 +784,17 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
     /// this layer are silently skipped (callers that need to log the missing
     /// case should check `get_links(target)` first). Idempotent: if `id` is
     /// already present in a target's list, that target is left unchanged.
-    pub fn link_node_to_neighbors(&mut self, node: &V, neighbors: Vec<V>) {
+    /// The `updated_seq_no` of each modified neighborhood is set to `seq_no`.
+    pub fn link_node_to_neighbors(&mut self, node: &V, neighbors: Vec<V>, seq_no: u64) {
         for target in &neighbors {
-            if let Some(target_links) = self.links.get_mut(target) {
-                if let Err(pos) = target_links.binary_search(node) {
+            if let Some(target_nbhd) = self.links.get_mut(target) {
+                if let Err(pos) = target_nbhd.neighbors.binary_search(node) {
                     self.set_hash
-                        .remove_unordered_set(target, target_links.iter());
-                    target_links.insert(pos, node.clone());
-                    self.set_hash.add_unordered_set(target, target_links.iter());
+                        .remove_unordered_set(target, target_nbhd.neighbors.iter());
+                    target_nbhd.neighbors.insert(pos, node.clone());
+                    target_nbhd.updated_seq_no = seq_no;
+                    self.set_hash
+                        .add_unordered_set(target, target_nbhd.neighbors.iter());
                 }
             }
         }
@@ -675,94 +804,138 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
     /// No-op if `id` is not present in this layer (callers that need to log
     /// the missing case should check `get_links(id)` first). Idempotent:
     /// existing entries are not duplicated.
-    pub fn link_neighbors_to_node(&mut self, node: &V, neighbors: Vec<V>) {
-        let Some(node_links) = self.links.get_mut(node) else {
+    /// The `updated_ts` of the neighborhood is set to `ts` when any edge is added.
+    pub fn link_neighbors_to_node(&mut self, node: &V, neighbors: Vec<V>, seq_no: u64) {
+        let Some(node_nbhd) = self.links.get_mut(node) else {
             return;
         };
-        self.set_hash.remove_unordered_set(node, node_links.iter());
+        self.set_hash
+            .remove_unordered_set(node, node_nbhd.neighbors.iter());
+        let mut modified = false;
         for nb in neighbors {
-            if let Err(pos) = node_links.binary_search(&nb) {
-                node_links.insert(pos, nb);
+            if let Err(pos) = node_nbhd.neighbors.binary_search(&nb) {
+                node_nbhd.neighbors.insert(pos, nb);
+                modified = true;
             }
         }
-        self.set_hash.add_unordered_set(node, node_links.iter());
+        if modified {
+            node_nbhd.updated_seq_no = seq_no;
+        }
+        self.set_hash
+            .add_unordered_set(node, node_nbhd.neighbors.iter());
     }
 
     /// Remove a node from the graph and clean up all backlinks from its neighbors.
-    pub fn remove_node(&mut self, id: &V) {
-        // Remove the node's links and get its neighbors
-        if let Some(neighbors) = self.links.remove(id) {
-            // Update set_hash for removed node
-            self.set_hash.remove_unordered_set(id, neighbors.iter());
+    /// The `updated_seq_no` of each modified neighbor neighborhood is set to `seq_no`.
+    pub fn remove_node(&mut self, id: &V, seq_no: u64) {
+        // Remove the node's links and get its neighbors.
+        if let Some(nbhd) = self.links.remove(id) {
+            // Update set_hash for removed node.
+            self.set_hash
+                .remove_unordered_set(id, nbhd.neighbors.iter());
 
-            // Remove the node from all neighbors' neighborhoods (bidirectional cleanup)
+            // Remove the node from all neighbors' neighborhoods (bidirectional cleanup).
             // note that if this node did compaction then some old neighbors could still have links
             // to this deleted node. that is ok. it is also ok if the following code block is deleted.
             // this is just an opportunistic low-cost cleanup.
-            for neighbor in neighbors {
-                if let Some(neighbor_links) = self.links.get_mut(&neighbor) {
+            for neighbor in nbhd.neighbors {
+                if let Some(neighbor_nbhd) = self.links.get_mut(&neighbor) {
                     self.set_hash
-                        .remove_unordered_set(&neighbor, neighbor_links.iter());
-                    neighbor_links.retain(|x| x != id);
+                        .remove_unordered_set(&neighbor, neighbor_nbhd.neighbors.iter());
+                    neighbor_nbhd.neighbors.retain(|x| x != id);
+                    neighbor_nbhd.updated_seq_no = seq_no;
                     self.set_hash
-                        .add_unordered_set(&neighbor, neighbor_links.iter());
+                        .add_unordered_set(&neighbor, neighbor_nbhd.neighbors.iter());
                 }
             }
         }
     }
 
     /// Remove `id` from each target's neighbor list, where `target` ranges over
-    /// `to_remove`. Targets that don't exist in this layer are silently skipped
+    /// `neighbors`. Targets that don't exist in this layer are silently skipped
     /// (the caller's apply path is responsible for any logging).
-    pub fn unlink_node_from_neighbors(&mut self, node: &V, neighbors: Vec<V>) {
+    /// The `updated_ts` of each modified neighborhood is set to `ts`.
+    pub fn unlink_node_from_neighbors(&mut self, node: &V, neighbors: Vec<V>, seq_no: u64) {
         for target in &neighbors {
-            if let Some(target_links) = self.links.get_mut(target) {
+            if let Some(target_nbhd) = self.links.get_mut(target) {
                 self.set_hash
-                    .remove_unordered_set(target, target_links.iter());
-                target_links.retain(|x| x != node);
-                self.set_hash.add_unordered_set(target, target_links.iter());
+                    .remove_unordered_set(target, target_nbhd.neighbors.iter());
+                target_nbhd.neighbors.retain(|x| x != node);
+                target_nbhd.updated_seq_no = seq_no;
+                self.set_hash
+                    .add_unordered_set(target, target_nbhd.neighbors.iter());
             }
         }
     }
 
-    /// Remove each entry in `to_remove` from `id`'s own neighbor list. No-op
-    /// if `id` is not present in this layer (callers that need to log the
-    /// missing case should check `get_links(id)` first). The removal is
+    /// Remove each entry in `neighbors` from `node`'s own neighbor list. No-op
+    /// if `node` is not present in this layer (callers that need to log the
+    /// missing case should check `get_links(node)` first). The removal is
     /// unidirectional: the targets' own link lists are not modified.
-    pub fn unlink_neighbors_from_node(&mut self, node: &V, neighbors: Vec<V>) {
-        let Some(node_links) = self.links.get_mut(node) else {
+    /// The `updated_seq_no` of the neighborhood is set to `seq_no`.
+    pub fn unlink_neighbors_from_node(&mut self, node: &V, neighbors: Vec<V>, seq_no: u64) {
+        let Some(node_nbhd) = self.links.get_mut(node) else {
             return;
         };
-        self.set_hash.remove_unordered_set(node, node_links.iter());
-        node_links.retain(|x| !neighbors.contains(x));
-        self.set_hash.add_unordered_set(node, node_links.iter());
+        self.set_hash
+            .remove_unordered_set(node, node_nbhd.neighbors.iter());
+        node_nbhd.neighbors.retain(|x| !neighbors.contains(x));
+        node_nbhd.updated_seq_no = seq_no;
+        self.set_hash
+            .add_unordered_set(node, node_nbhd.neighbors.iter());
     }
 
-    pub fn set_links(&mut self, from: V, links: Vec<V>) {
+    pub fn set_links(&mut self, from: V, links: Vec<V>, seq_no: u64) {
         use std::collections::hash_map::Entry;
         match self.links.entry(from) {
             Entry::Occupied(mut e) => {
-                self.set_hash.remove_unordered_set(e.key(), e.get().iter());
+                self.set_hash
+                    .remove_unordered_set(e.key(), e.get().neighbors.iter());
                 let existing = e.get_mut();
-                existing.clear();
-                existing.extend(links);
-                self.set_hash.add_unordered_set(e.key(), e.get().iter());
+                existing.neighbors.clear();
+                existing.neighbors.extend(links);
+                existing.updated_seq_no = seq_no;
+                self.set_hash
+                    .add_unordered_set(e.key(), e.get().neighbors.iter());
             }
             Entry::Vacant(e) => {
                 self.set_hash.add_unordered_set(e.key(), links.iter());
-                e.insert(links);
+                e.insert(Neighborhood::new(links, seq_no));
             }
         }
     }
 
-    pub fn get_links_map(&self) -> &HashMap<V, Vec<V>> {
+    pub fn get_links_map(&self) -> &HashMap<V, Neighborhood<V>> {
         &self.links
+    }
+
+    /// Remove all stale edges from this layer in-place and recompute the
+    /// checksum.  `node_init_seq_no` is the per-node initialization timestamp map
+    /// from the owning [`GraphMem`].
+    pub fn canonicalize(&mut self, node_init_seq_no: &HashMap<V, u64>) {
+        for nbhd in self.links.values_mut() {
+            let updated_seq_no = nbhd.updated_seq_no;
+            nbhd.neighbors.retain(|nb| {
+                node_init_seq_no
+                    .get(nb)
+                    .map_or(false, |&init_seq_no| init_seq_no <= updated_seq_no)
+            });
+        }
+        self.recompute_set_hash();
+    }
+
+    /// Recompute `set_hash` from scratch based on the current `links` content.
+    fn recompute_set_hash(&mut self) {
+        self.set_hash = SetHash::default();
+        for (node, nbhd) in &self.links {
+            self.set_hash.add_unordered_set(node, nbhd.neighbors.iter());
+        }
     }
 
     fn from_knn_results(results: Vec<KNNResult<V>>, n: usize) -> Self {
         let mut ret = Layer::new();
         for KNNResult { node, neighbors } in results.into_iter().take(n) {
-            ret.set_links(node, neighbors);
+            ret.set_links(node, neighbors, 0);
         }
         ret
     }
@@ -807,6 +980,13 @@ where
     VecMap: Fn(U) -> V + Copy,
 {
     let last_update_seq_no = graph.last_update_seq_no;
+
+    let node_init_seq_no: HashMap<V, u64> = graph
+        .node_init_seq_no
+        .into_iter()
+        .map(|(k, seq_no)| (vector_map(k), seq_no))
+        .collect();
+
     let new_entry_point = graph
         .entry_points
         .iter()
@@ -822,7 +1002,11 @@ where
         .map(|v| {
             let mut layer = Layer::new();
             for (from, nbhd) in v.links.into_iter() {
-                layer.set_links(vector_map(from), nbhd.into_iter().map(vector_map).collect());
+                layer.set_links(
+                    vector_map(from),
+                    nbhd.neighbors.into_iter().map(vector_map).collect(),
+                    nbhd.updated_seq_no,
+                );
             }
             layer
         })
@@ -832,6 +1016,7 @@ where
         entry_points: new_entry_point,
         layers: new_layers,
         last_update_seq_no,
+        node_init_seq_no,
     }
 }
 
@@ -976,11 +1161,11 @@ mod tests {
         let v4 = IrisVectorId::from_serial_id(4);
         let v5 = IrisVectorId::from_serial_id(5);
 
-        layer_a.set_links(v1, vec![v2, v3]);
-        layer_a.set_links(v4, vec![v5]);
+        layer_a.set_links(v1, vec![v2, v3], 0);
+        layer_a.set_links(v4, vec![v5], 0);
 
-        layer_b.set_links(v4, vec![v5]);
-        layer_b.set_links(v1, vec![v2, v3]);
+        layer_b.set_links(v4, vec![v5], 0);
+        layer_b.set_links(v1, vec![v2, v3], 0);
 
         let bytes_a = bincode::serialize(&layer_a).expect("layer_a serialize");
         let bytes_b = bincode::serialize(&layer_b).expect("layer_b serialize");
@@ -1043,10 +1228,10 @@ mod tests {
                 clippy::iter_over_hash_type,
                 reason = "Iteration is for assertions against a parallel data structure, compared entry by entry."
             )]
-            for (point_id, queue) in links.iter() {
+            for (point_id, nbhd) in links.iter() {
                 let new_point_id = point_ids_map[point_id];
-                let new_queue_vec = new_links[&new_point_id].to_vec();
-                for (neighbor_id, new_neighbor_id) in queue.iter().zip(new_queue_vec) {
+                let new_neighbors = new_links[&new_point_id].neighbors.to_vec();
+                for (neighbor_id, new_neighbor_id) in nbhd.neighbors.iter().zip(new_neighbors) {
                     assert_eq!(point_ids_map[neighbor_id], new_neighbor_id);
                 }
             }
@@ -1400,5 +1585,181 @@ mod tests {
         // First mutation's AddNode took effect, second did not.
         assert!(graph.layers[0].get_links(&a).is_some());
         assert!(graph.layers[0].get_links(&b).is_none());
+    }
+
+    #[test]
+    fn node_init_ts_recorded_on_add_node() {
+        let mut graph = GraphMem::<IrisVectorId>::new();
+        let a = IrisVectorId::from_serial_id(1);
+        let b = IrisVectorId::from_serial_id(2);
+
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 7,
+                ops: vec![
+                    MutationOp::AddNode {
+                        id: a,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+                    },
+                    MutationOp::AddNode {
+                        id: b,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::False,
+                    },
+                ],
+            })
+            .unwrap();
+
+        assert_eq!(graph.node_init_seq_no[&a], 7);
+        assert_eq!(graph.node_init_seq_no[&b], 7);
+    }
+
+    #[test]
+    fn node_init_ts_removed_on_remove_node() {
+        let mut graph = GraphMem::<IrisVectorId>::new();
+        let a = IrisVectorId::from_serial_id(1);
+
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 1,
+                ops: vec![MutationOp::AddNode {
+                    id: a,
+                    height: 1,
+                    update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+                }],
+            })
+            .unwrap();
+        assert!(graph.node_init_seq_no.contains_key(&a));
+
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 2,
+                ops: vec![MutationOp::RemoveNode { id: a }],
+            })
+            .unwrap();
+        assert!(!graph.node_init_seq_no.contains_key(&a));
+    }
+
+    #[test]
+    fn get_links_filters_stale_edges() {
+        // Node `b` is added at seq_no=1, then neighborhood of `a` is written at
+        // seq_no=2 pointing to `b`. Then `b` is re-initialized at seq_no=3,
+        // making the edge stale (init_ts=3 > updated_ts=2).
+        let mut graph = GraphMem::<IrisVectorId>::new();
+        let a = IrisVectorId::from_serial_id(1);
+        let b = IrisVectorId::from_serial_id(2);
+
+        // Add both nodes and connect a → b.
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 1,
+                ops: vec![
+                    MutationOp::AddNode {
+                        id: a,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+                    },
+                    MutationOp::AddNode {
+                        id: b,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::False,
+                    },
+                ],
+            })
+            .unwrap();
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 2,
+                ops: vec![MutationOp::AddEdges {
+                    base: a,
+                    layer: 0,
+                    neighbors: vec![b],
+                    edge_type: EdgeType::Base,
+                }],
+            })
+            .unwrap();
+
+        // Edge is valid: b's init_ts (1) <= a's neighborhood updated_ts (2).
+        let valid = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(graph.get_links(&a, 0));
+        assert_eq!(valid, vec![b]);
+
+        // Re-initialize b at seq_no=3 — the edge a→b is now stale.
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 3,
+                ops: vec![MutationOp::AddNode {
+                    id: b,
+                    height: 1,
+                    update_ep: UpdateEntryPoint::False,
+                }],
+            })
+            .unwrap();
+
+        // Raw layer still stores the edge…
+        assert_eq!(graph.layers[0].get_links(&a).unwrap(), &[b]);
+        // …but get_links filters it out.
+        let filtered = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(graph.get_links(&a, 0));
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn canonicalize_removes_stale_edges() {
+        let mut graph = GraphMem::<IrisVectorId>::new();
+        let a = IrisVectorId::from_serial_id(1);
+        let b = IrisVectorId::from_serial_id(2);
+
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 1,
+                ops: vec![
+                    MutationOp::AddNode {
+                        id: a,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+                    },
+                    MutationOp::AddNode {
+                        id: b,
+                        height: 1,
+                        update_ep: UpdateEntryPoint::False,
+                    },
+                ],
+            })
+            .unwrap();
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 2,
+                ops: vec![MutationOp::AddEdges {
+                    base: a,
+                    layer: 0,
+                    neighbors: vec![b],
+                    edge_type: EdgeType::Base,
+                }],
+            })
+            .unwrap();
+        // Re-initialize b — edge a→b becomes stale.
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 3,
+                ops: vec![MutationOp::AddNode {
+                    id: b,
+                    height: 1,
+                    update_ep: UpdateEntryPoint::False,
+                }],
+            })
+            .unwrap();
+
+        assert_eq!(graph.layers[0].get_links(&a).unwrap(), &[b]); // still stored
+        graph.canonicalize();
+        assert_eq!(
+            graph.layers[0].get_links(&a).unwrap(),
+            &[] as &[IrisVectorId]
+        ); // pruned
     }
 }
