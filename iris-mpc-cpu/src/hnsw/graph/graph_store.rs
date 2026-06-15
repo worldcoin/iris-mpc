@@ -559,6 +559,7 @@ pub mod test_utils {
 mod tests {
     use super::{test_utils::TestGraphPg, *};
     use crate::hawkers::plaintext_store::PlaintextStore;
+    use iris_mpc_common::IrisVectorId;
     use tokio;
 
     #[tokio::test]

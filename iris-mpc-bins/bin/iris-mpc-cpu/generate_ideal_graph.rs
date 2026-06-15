@@ -49,7 +49,7 @@ async fn run_sanity_check<D: DistanceOps>(
     for (lc, layer) in graph.layers.iter().enumerate() {
         let expected_nb_size = searcher.params.get_M_max(lc).min(layer.links.len() - 1);
         for (_, value) in layer.links.iter() {
-            assert_eq!(value.len(), expected_nb_size);
+            assert_eq!(value.neighbors.len(), expected_nb_size);
         }
     }
 
@@ -106,7 +106,10 @@ async fn run_sanity_check<D: DistanceOps>(
         let mut dists = Vec::new();
         for k in graph.layers[lc].links.keys() {
             if *k != sample {
-                let dist = store.eval_distance(&sample_iris, k).await.unwrap();
+                let dist = store
+                    .eval_distance(&sample_iris, &IrisVectorId::from_serial_id(*k))
+                    .await
+                    .unwrap();
                 dists.push((*k, dist));
             }
         }
@@ -121,7 +124,7 @@ async fn run_sanity_check<D: DistanceOps>(
                 .filter(|n| {
                     let d = D::plaintext_distance(
                         &sample_iris,
-                        store.storage.get_vector_by_serial_id(*n).unwrap(),
+                        store.storage.get_vector_by_serial_id(**n).unwrap(),
                         store.distance_mode,
                     );
                     matches!(D::plaintext_ordering(&d, &kth_dist), Ordering::Greater)

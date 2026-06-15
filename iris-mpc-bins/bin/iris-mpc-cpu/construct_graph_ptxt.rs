@@ -128,14 +128,7 @@ async fn build_graph<D: DistanceOps>(
         let graph_max_id = graph
             .get_layers()
             .first()
-            .map(|layer_0| {
-                layer_0
-                    .links
-                    .keys()
-                    .map(|id| id.serial_id())
-                    .max()
-                    .unwrap_or(0)
-            })
+            .map(|layer_0| layer_0.links.keys().copied().max().unwrap_or(0))
             .unwrap_or(0);
         tracing::info!("Loaded graph has max node id {graph_max_id}");
         (graph, graph_max_id)
