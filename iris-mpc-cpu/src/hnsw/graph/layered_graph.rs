@@ -522,12 +522,18 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
         let layer = &self.layers[lc];
         match layer.links.get(base) {
             None => vec![],
-            Some(nbhd) => nbhd
-                .neighbors
-                .iter()
-                .filter(|nb| self.node_init_seq_no.contains_key(*nb))
-                .cloned()
-                .collect(),
+            Some(nbhd) => {
+                let updated_seq_no = nbhd.updated_seq_no;
+                nbhd.neighbors
+                    .iter()
+                    .filter(|nb| {
+                        self.node_init_seq_no
+                            .get(*nb)
+                            .is_some_and(|&init_seq_no| init_seq_no <= updated_seq_no)
+                    })
+                    .cloned()
+                    .collect()
+            }
         }
     }
 

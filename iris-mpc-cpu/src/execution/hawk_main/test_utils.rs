@@ -90,6 +90,9 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
 
     for side in [LEFT, RIGHT] {
         let mut graph = actor.graph_store[side].write().await;
+        // Pass 1: add all nodes so that every node_init_seq_no is set before
+        // any edges are recorded.  This ensures edges added in pass 2 are
+        // never considered stale (init_seq_no <= edge updated_seq_no).
         for i in 0..db_size {
             let update_ep = if i == 0 {
                 match layer_mode {
@@ -99,23 +102,30 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
             } else {
                 UpdateEntryPoint::False
             };
-            let mutations = vec![
-                MutationOp::AddNode {
-                    id: id(i),
-                    height: 1,
-                    update_ep,
-                },
-                MutationOp::AddEdges {
-                    base: id(i),
-                    layer: 0,
-                    neighbors: edges(i),
-                    edge_type: EdgeType::All,
-                },
-            ];
             graph
                 .insert_apply(&GraphMutation {
                     seq_no: (i as u64) + 1,
-                    ops: mutations,
+                    ops: vec![MutationOp::AddNode {
+                        id: id(i),
+                        height: 1,
+                        update_ep,
+                    }],
+                })
+                .unwrap();
+        }
+
+        // Pass 2: add edges; seq_nos are > all node init seq_nos so edges are
+        // valid under the stale-edge filter.
+        for i in 0..db_size {
+            graph
+                .insert_apply(&GraphMutation {
+                    seq_no: (db_size + i + 1) as u64,
+                    ops: vec![MutationOp::AddEdges {
+                        base: id(i),
+                        layer: 0,
+                        neighbors: edges(i),
+                        edge_type: EdgeType::All,
+                    }],
                 })
                 .unwrap();
         }
