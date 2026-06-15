@@ -1970,11 +1970,18 @@ mod tests {
         let stale = VectorId::from_serial_id(999_999);
 
         // Wire a → [stale] directly into the graph.
+        // stale must be registered as a node so get_links returns it; the
+        // store check inside prune_invalid_links will then flag it as absent.
         let setup = GraphMutation {
             seq_no: graph.next_sequence_number(),
             ops: vec![
                 MutationOp::AddNode {
                     id: a.serial_id(),
+                    height: 1,
+                    update_ep: UpdateEntryPoint::False,
+                },
+                MutationOp::AddNode {
+                    id: stale.serial_id(),
                     height: 1,
                     update_ep: UpdateEntryPoint::False,
                 },
@@ -2069,21 +2076,31 @@ mod tests {
             nbrs.push(store.insert(&Arc::new(IrisCode::default())).await);
         }
 
+        // All neighbor nodes must be registered via AddNode so that get_links
+        // returns them and the oversized check can fire.
         let setup = GraphMutation {
             seq_no: graph.next_sequence_number(),
-            ops: vec![
-                MutationOp::AddNode {
+            ops: {
+                let mut ops = vec![MutationOp::AddNode {
                     id: base.serial_id(),
                     height: 1,
                     update_ep: UpdateEntryPoint::False,
-                },
-                MutationOp::AddEdges {
+                }];
+                for nbr in &nbrs {
+                    ops.push(MutationOp::AddNode {
+                        id: nbr.serial_id(),
+                        height: 1,
+                        update_ep: UpdateEntryPoint::False,
+                    });
+                }
+                ops.push(MutationOp::AddEdges {
                     base: base.serial_id(),
                     neighbors: nbrs.iter().map(|v| v.serial_id()).collect(),
                     layer: 0,
                     edge_type: EdgeType::Base,
-                },
-            ],
+                });
+                ops
+            },
         };
         graph.insert_apply(&setup)?;
 

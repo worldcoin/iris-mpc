@@ -510,9 +510,9 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
 
     /// Return the **valid** neighbors of `base` at layer `lc`.
     ///
-    /// An edge to neighbor `B` is valid iff `node_init_seq_no[B] <=
-    /// neighborhood.updated_seq_no`.  Stale edges (references to nodes that were
-    /// re-initialized after the neighborhood was last written) are filtered out.
+    /// An edge to neighbor `B` is valid iff `B` has been registered as a graph
+    /// node (i.e. it appears in `node_init_seq_no`).  Edges to nodes that were
+    /// never added via `AddNode` are filtered out.
     /// An empty `Vec` is returned when `base` is not present in `lc` or `lc`
     /// does not exist.
     pub async fn get_links(&self, base: &V, lc: usize) -> Vec<V> {
@@ -522,18 +522,12 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
         let layer = &self.layers[lc];
         match layer.links.get(base) {
             None => vec![],
-            Some(nbhd) => {
-                let updated_seq_no = nbhd.updated_seq_no;
-                nbhd.neighbors
-                    .iter()
-                    .filter(|nb| {
-                        self.node_init_seq_no
-                            .get(*nb)
-                            .is_some_and(|&init_seq_no| init_seq_no <= updated_seq_no)
-                    })
-                    .cloned()
-                    .collect()
-            }
+            Some(nbhd) => nbhd
+                .neighbors
+                .iter()
+                .filter(|nb| self.node_init_seq_no.contains_key(*nb))
+                .cloned()
+                .collect(),
         }
     }
 
