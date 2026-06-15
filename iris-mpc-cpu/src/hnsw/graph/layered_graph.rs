@@ -88,7 +88,7 @@ impl<V> Neighborhood<V> {
 }
 
 /// An in-memory implementation of an HNSW hierarchical graph.
-#[derive(Default, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Default, PartialEq, Eq, Debug, Deserialize)]
 #[serde(bound = "V: Ref + Display + FromStr")]
 pub struct GraphMem<V: Ref + Display + FromStr + Ord> {
     /// Entry points for HNSW search.
@@ -121,6 +121,37 @@ pub struct GraphMem<V: Ref + Display + FromStr + Ord> {
     /// means no mutation has been applied. Advanced by `insert_apply` on
     /// success.
     pub last_update_seq_no: u64,
+}
+
+/// Custom `Serialize` for [`GraphMem`] that emits `node_init_seq_no` entries
+/// sorted by key.
+///
+/// `node_init_seq_no` is a `HashMap`, whose iteration order is random per
+/// instance.  Cross-party hash consensus (Phase 4 of the checkpoint protocol)
+/// requires that `bincode::serialize(graph)` produces identical bytes on
+/// every party for the same logical graph.  Sorting before serializing
+/// guarantees this, mirroring the `SortedMap` treatment already applied to
+/// `Layer.links`.
+impl<V> Serialize for GraphMem<V>
+where
+    V: Ref + Display + FromStr + Ord + Serialize,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("GraphMem", 4)?;
+        state.serialize_field("entry_points", &self.entry_points)?;
+        state.serialize_field("layers", &self.layers)?;
+        state.serialize_field(
+            "node_init_seq_no",
+            &SortedMap {
+                map: &self.node_init_seq_no,
+            },
+        )?;
+        state.serialize_field("last_update_seq_no", &self.last_update_seq_no)?;
+        state.end()
+    }
 }
 
 impl Display for GraphMem<IrisSerialId> {
@@ -701,20 +732,27 @@ pub struct Layer<V: Ref + Display + FromStr + Ord> {
     set_hash: SetHash,
 }
 
-struct SortedLinks<'a, V: Ord> {
-    links: &'a HashMap<V, Neighborhood<V>>,
+/// A `&HashMap<K, V>` wrapper that serializes entries sorted by key.
+///
+/// Ensures deterministic byte output regardless of each `HashMap` instance's
+/// random internal order.  Used by both [`Layer`] (for `links`) and
+/// [`GraphMem`] (for `node_init_seq_no`) so that `blake3::hash(bincode::serialize(…))`
+/// produces the same digest on every party for the same logical graph.
+struct SortedMap<'a, K: Ord, V> {
+    map: &'a HashMap<K, V>,
 }
 
-impl<'a, V> Serialize for SortedLinks<'a, V>
+impl<'a, K, V> Serialize for SortedMap<'a, K, V>
 where
-    V: Serialize + Ord,
+    K: Serialize + Ord,
+    V: Serialize,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let mut entries: Vec<_> = self.links.iter().collect();
-        entries.sort_by_key(|(left, _)| *left);
+        let mut entries: Vec<_> = self.map.iter().collect();
+        entries.sort_by_key(|(k, _)| *k);
 
         let mut map = serializer.serialize_map(Some(entries.len()))?;
         for (key, value) in entries {
@@ -733,7 +771,7 @@ where
         S: Serializer,
     {
         let mut state = serializer.serialize_struct("Layer", 2)?;
-        state.serialize_field("links", &SortedLinks { links: &self.links })?;
+        state.serialize_field("links", &SortedMap { map: &self.links })?;
         state.serialize_field("set_hash", &self.set_hash)?;
         state.end()
     }

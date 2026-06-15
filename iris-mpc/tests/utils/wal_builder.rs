@@ -1,4 +1,4 @@
-use iris_mpc_common::IrisVectorId;
+use iris_mpc_common::IrisSerialId;
 use iris_mpc_cpu::{
     execution::hawk_main::BothEyes,
     hawkers::plaintext_store::PlaintextStore,
@@ -52,7 +52,7 @@ impl ModificationStatus {
 /// Use [`set_persisted`] / [`set_status`] to override individual modifications.
 #[derive(Default)]
 pub struct WalMutationBuilder {
-    entries: HashMap<i64, GraphMutation<IrisVectorId>>,
+    entries: HashMap<i64, GraphMutation<IrisSerialId>>,
     persisted: HashMap<i64, bool>,
     status: HashMap<i64, ModificationStatus>,
     processed: usize,
@@ -73,10 +73,9 @@ impl WalMutationBuilder {
         for idx in starting_idx..new_len {
             let node_id = idx + 1;
             // All nodes added before this one become neighbors.
-            let neighbors: Vec<IrisVectorId> = (1..=node_id)
+            let neighbors: Vec<IrisSerialId> = (1..=node_id)
                 .filter(|x| x != &node_id)
                 .map(|x| x as u32)
-                .map(IrisVectorId::from_serial_id)
                 .collect();
 
             let mut mutation = GraphMutation {
@@ -84,14 +83,14 @@ impl WalMutationBuilder {
                 ops: vec![],
             };
             mutation.ops.push(MutationOp::AddNode {
-                id: IrisVectorId::from_serial_id(node_id as _),
+                id: node_id as u32,
                 height: 1,
                 update_ep: UpdateEntryPoint::False,
             });
 
             if !neighbors.is_empty() {
                 mutation.ops.push(MutationOp::AddEdges {
-                    base: IrisVectorId::from_serial_id(node_id as _),
+                    base: node_id as u32,
                     neighbors,
                     layer: 0,
                     edge_type: EdgeType::All,
@@ -128,18 +127,15 @@ impl WalMutationBuilder {
     pub fn add_node_with_neighbors(&mut self, neighbor_ids: &[u32]) -> &mut Self {
         let node_id = (self.entries.len() + 1) as u32;
         let modification_id = node_id as i64;
-        let neighbors: Vec<IrisVectorId> = neighbor_ids
-            .iter()
-            .map(|&id| IrisVectorId::from_serial_id(id))
-            .collect();
+        let neighbors: Vec<IrisSerialId> = neighbor_ids.iter().copied().collect();
         let mut ops = vec![MutationOp::AddNode {
-            id: IrisVectorId::from_serial_id(node_id),
+            id: node_id,
             height: 1,
             update_ep: UpdateEntryPoint::False,
         }];
         if !neighbors.is_empty() {
             ops.push(MutationOp::AddEdges {
-                base: IrisVectorId::from_serial_id(node_id),
+                base: node_id,
                 neighbors,
                 layer: 0,
                 edge_type: EdgeType::All,
@@ -168,7 +164,7 @@ impl WalMutationBuilder {
         for m in mutations {
             let modification_id = m.seq_no as _;
             let m = vec![m];
-            let both_eyes: BothEyes<Vec<GraphMutation<IrisVectorId>>> = [m.clone(), m];
+            let both_eyes: BothEyes<Vec<GraphMutation<IrisSerialId>>> = [m.clone(), m];
             let bytes = bincode::serialize(&both_eyes)?;
             graph
                 .upsert_hawk_graph_mutations(&mut tx, modification_id, &bytes)
@@ -201,8 +197,8 @@ impl WalMutationBuilder {
         for m in mutations {
             let modification_id = m.seq_no as i64;
             let serial_id: i64 = match m.ops.first() {
-                Some(MutationOp::AddNode { id, .. }) => id.serial_id() as i64,
-                Some(MutationOp::AddEdges { base, .. }) => base.serial_id() as i64,
+                Some(MutationOp::AddNode { id, .. }) => *id as i64,
+                Some(MutationOp::AddEdges { base, .. }) => *base as i64,
                 _ => 0,
             };
             let s3_url = uuid::Uuid::from_u128(modification_id as u128).to_string();

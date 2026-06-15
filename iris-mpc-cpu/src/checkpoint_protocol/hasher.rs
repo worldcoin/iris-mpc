@@ -1,10 +1,12 @@
 //! Streaming BLAKE3 over the canonical bytes of a `Graph`.
 //!
-//! Cross-party determinism depends on two non-obvious invariants:
+//! Cross-party determinism depends on three non-obvious invariants:
 //!
-//! - **`Layer.links: HashMap<V, Vec<V>>`** is serialized via the custom
-//!   `SortedLinks` wrapper in `layered_graph.rs`, which sorts entries by
+//! - **`Layer.links: HashMap<V, Neighborhood<V>>`** is serialized via the
+//!   custom `SortedMap` wrapper in `layered_graph.rs`, which sorts entries by
 //!   key before emitting — so HashMap iteration order is not a hash risk.
+//! - **`GraphMem.node_init_seq_no: HashMap<V, u64>`** is also serialized via
+//!   `SortedMap` through `GraphMem`'s custom `Serialize` impl — same reason.
 //! - **Per-key neighbor `Vec<V>`** is emitted in insertion order; the
 //!   planner is responsible for sorting neighbors before `set_links`, and
 //!   `Layer::add_neighbor` maintains sortedness. Bypassing the planner
@@ -98,8 +100,8 @@ mod tests {
         assert_ne!(h.hash_canonical(&g1), h.hash_canonical(&g2));
     }
 
-    /// Load-bearing: pins the `SortedLinks` Serialize impl that makes
-    /// HashMap iteration order irrelevant to the hash.
+    /// Load-bearing: pins the `SortedMap` Serialize impl on `Layer.links` —
+    /// HashMap insertion order must not affect the hash.
     #[test]
     fn hash_is_independent_of_hashmap_insertion_order() {
         let entries: Vec<(SerialId, Vec<SerialId>)> = (0..32)
@@ -146,6 +148,33 @@ mod tests {
         let g2: Graph = [GraphMem::<SerialId>::new(), GraphMem::<SerialId>::new()];
         let h = Blake3GraphHasher::new();
         assert_eq!(h.hash_canonical(&g1), h.hash_canonical(&g2));
+    }
+
+    /// Regression guard: `GraphMem.node_init_seq_no` is a `HashMap` and must
+    /// serialize deterministically.  Two `GraphMem` instances with the same
+    /// logical `node_init_seq_no` content (different insertion order) must
+    /// produce the same hash.
+    #[test]
+    fn hash_is_independent_of_node_init_seq_no_insertion_order() {
+        let mut g1 = GraphMem::<SerialId>::new();
+        let mut g2 = GraphMem::<SerialId>::new();
+
+        // Insert the same entries in opposite orders.
+        for i in 0u32..16 {
+            g1.node_init_seq_no.insert(i, i as u64 * 10);
+        }
+        for i in (0u32..16).rev() {
+            g2.node_init_seq_no.insert(i, i as u64 * 10);
+        }
+
+        let h = Blake3GraphHasher::new();
+        let graph1: Graph = [g1, GraphMem::new()];
+        let graph2: Graph = [g2, GraphMem::new()];
+        assert_eq!(
+            h.hash_canonical(&graph1),
+            h.hash_canonical(&graph2),
+            "node_init_seq_no HashMap insertion order must not affect the hash"
+        );
     }
 
     #[test]
