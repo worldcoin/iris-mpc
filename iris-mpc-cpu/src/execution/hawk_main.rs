@@ -816,7 +816,7 @@ impl HawkActor {
 
         insert::insert(
             &mut *store,
-            &mut *graph,
+            &mut graph,
             &self.searcher,
             plans,
             &insertion_ids,

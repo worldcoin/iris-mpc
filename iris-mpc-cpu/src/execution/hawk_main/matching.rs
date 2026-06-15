@@ -515,7 +515,6 @@ mod tests {
 
     use super::VectorId;
     use super::*;
-    use iris_mpc_common::vector_id::HasSerialId;
     use std::collections::HashMap;
 
     const FILTER_BOTH: Filter = Filter {

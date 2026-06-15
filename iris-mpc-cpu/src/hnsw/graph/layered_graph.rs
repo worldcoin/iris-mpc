@@ -529,7 +529,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
                     .filter(|nb| {
                         self.node_init_seq_no
                             .get(*nb)
-                            .map_or(false, |&init_seq_no| init_seq_no <= updated_seq_no)
+                            .is_some_and(|&init_seq_no| init_seq_no <= updated_seq_no)
                     })
                     .cloned()
                     .collect()
@@ -913,12 +913,14 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
     /// checksum.  `node_init_seq_no` is the per-node initialization timestamp map
     /// from the owning [`GraphMem`].
     pub fn canonicalize(&mut self, node_init_seq_no: &HashMap<V, u64>) {
-        for nbhd in self.links.values_mut() {
+        let mut entries: Vec<(&V, &mut Neighborhood<V>)> = self.links.iter_mut().collect();
+        entries.sort_by_key(|(k, _)| *k);
+        for (_, nbhd) in entries {
             let updated_seq_no = nbhd.updated_seq_no;
             nbhd.neighbors.retain(|nb| {
                 node_init_seq_no
                     .get(nb)
-                    .map_or(false, |&init_seq_no| init_seq_no <= updated_seq_no)
+                    .is_some_and(|&init_seq_no| init_seq_no <= updated_seq_no)
             });
         }
         self.recompute_set_hash();
@@ -926,10 +928,13 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
 
     /// Recompute `set_hash` from scratch based on the current `links` content.
     fn recompute_set_hash(&mut self) {
-        self.set_hash = SetHash::default();
-        for (node, nbhd) in &self.links {
-            self.set_hash.add_unordered_set(node, nbhd.neighbors.iter());
+        let mut new_hash = SetHash::default();
+        let mut entries: Vec<(&V, &Neighborhood<V>)> = self.links.iter().collect();
+        entries.sort_by_key(|(k, _)| *k);
+        for (node, nbhd) in entries {
+            new_hash.add_unordered_set(node, nbhd.neighbors.iter());
         }
+        self.set_hash = new_hash;
     }
 
     fn from_knn_results(results: Vec<KNNResult<V>>, n: usize) -> Self {
