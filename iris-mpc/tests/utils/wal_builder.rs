@@ -127,7 +127,7 @@ impl WalMutationBuilder {
     pub fn add_node_with_neighbors(&mut self, neighbor_ids: &[u32]) -> &mut Self {
         let node_id = (self.entries.len() + 1) as u32;
         let modification_id = node_id as i64;
-        let neighbors: Vec<IrisSerialId> = neighbor_ids.iter().copied().collect();
+        let neighbors: Vec<IrisSerialId> = neighbor_ids.to_vec();
         let mut ops = vec![MutationOp::AddNode {
             id: node_id,
             height: 1,

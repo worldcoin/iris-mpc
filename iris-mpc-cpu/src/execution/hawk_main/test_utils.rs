@@ -90,54 +90,52 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
 
     for side in [LEFT, RIGHT] {
         let mut graph = actor.graph_store[side].write().await;
-        // Pass 1: add all nodes so that every node_init_seq_no is set before
-        // any edges are recorded.  This ensures edges added in pass 2 are
-        // never considered stale (init_seq_no <= edge updated_seq_no).
-        for i in 0..db_size {
-            let update_ep = match layer_mode {
-                // Standard mode: only the first node sets the unique entry point.
-                LayerMode::Standard { .. } => {
-                    if i == 0 {
-                        UpdateEntryPoint::SetUnique { layer: 0 }
-                    } else {
-                        UpdateEntryPoint::False
-                    }
-                }
-                // LinearScan mode: every node is an entry point (the searcher scans
-                // all of them via serial_ids_to_vector_refs).  This mirrors what
-                // insert_from_search_results does in production when
-                // insertion_layer > max_graph_layer.
-                LayerMode::LinearScan { max_graph_layer } => UpdateEntryPoint::Append {
-                    layer: max_graph_layer,
-                },
-            };
-            graph
-                .insert_apply(&GraphMutation {
-                    seq_no: (i as u64) + 1,
-                    ops: vec![MutationOp::AddNode {
-                        id: id(i),
-                        height: 1,
-                        update_ep,
-                    }],
-                })
-                .unwrap();
-        }
 
-        // Pass 2: add edges; seq_nos are > all node init seq_nos so edges are
-        // valid under the stale-edge filter.
-        for i in 0..db_size {
-            graph
-                .insert_apply(&GraphMutation {
-                    seq_no: (db_size + i + 1) as u64,
-                    ops: vec![MutationOp::AddEdges {
-                        base: id(i),
-                        layer: 0,
-                        neighbors: edges(i),
-                        edge_type: EdgeType::All,
-                    }],
-                })
-                .unwrap();
-        }
+        // Build AddNode ops for all nodes.
+        let node_ops: Vec<MutationOp<u32>> = (0..db_size)
+            .map(|i| {
+                let update_ep = match layer_mode {
+                    LayerMode::Standard { .. } => {
+                        if i == 0 {
+                            UpdateEntryPoint::SetUnique { layer: 0 }
+                        } else {
+                            UpdateEntryPoint::False
+                        }
+                    }
+                    LayerMode::LinearScan { max_graph_layer } => UpdateEntryPoint::Append {
+                        layer: max_graph_layer,
+                    },
+                };
+                MutationOp::AddNode {
+                    id: id(i),
+                    height: 1,
+                    update_ep,
+                }
+            })
+            .collect();
+
+        // Build AddEdges ops for all nodes.
+        let edge_ops: Vec<MutationOp<u32>> = (0..db_size)
+            .map(|i| MutationOp::AddEdges {
+                base: id(i),
+                layer: 0,
+                neighbors: edges(i),
+                edge_type: EdgeType::All,
+            })
+            .collect();
+
+        // A single mutation containing both AddNode and AddEdges ops is valid:
+        // insert_apply processes them in two passes (nodes first, then edges),
+        // so every node_init_seq_no is set before any neighborhood is written.
+        // The staleness check (node_init_seq_no[B] <= neighborhood.updated_seq_no)
+        // reduces to seq_no <= seq_no, which always holds.
+        // here edge_ops is put first in the array on purpose
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 1,
+                ops: edge_ops.into_iter().chain(node_ops).collect(),
+            })
+            .unwrap();
     }
 
     Ok(())

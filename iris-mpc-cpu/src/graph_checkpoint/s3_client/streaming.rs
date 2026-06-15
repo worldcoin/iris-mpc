@@ -48,7 +48,7 @@ pub const DEFAULT_STREAMING_PARALLELISM: usize = 8;
 ///
 /// ```no_run
 /// # use std::io::Write;
-/// # use iris_mpc_cpu::graph_checkpoint::s3_client::{
+/// # use iris_mpc_cpu::graph_checkpoint::{
 /// #     BlakeTeeWriter, stream_serialize_and_upload_with,
 /// #     DEFAULT_STREAMING_PART_SIZE, DEFAULT_STREAMING_PARALLELISM,
 /// # };
