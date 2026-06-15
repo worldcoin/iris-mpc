@@ -66,6 +66,7 @@ imagePullSecrets:
 
 podAnnotations:
   karpenter.sh/do-not-disrupt: "true"
+  rollme: "wal-replay-1"
 
 nodeSelector:
   kubernetes.io/arch: arm64
