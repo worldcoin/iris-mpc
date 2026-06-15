@@ -3,10 +3,18 @@
 use aws_sdk_s3::config::Region as S3Region;
 use aws_sdk_s3::Client as S3Client;
 use clap::Parser;
-use eyre::Result;
-use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId, IrisVectorId};
+use eyre::{bail, eyre, Result};
+use iris_mpc_common::{
+    iris_db::iris::IrisCode,
+    postgres::{AccessMode, PostgresClient},
+    vector_id::SerialId,
+    IrisVectorId,
+};
 use iris_mpc_cpu::{
-    execution::hawk_main::STORE_IDS,
+    execution::hawk_main::{BothEyes, GraphRef, GraphStore, STORE_IDS},
+    graph_checkpoint::{
+        download_graph_checkpoint, get_latest_checkpoint_state, upload_graph_checkpoint,
+    },
     hawkers::aby3::aby3_store::FhdOps,
     hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
     hnsw::{
@@ -17,6 +25,7 @@ use iris_mpc_cpu::{
     utils::{
         constants::N_PARTIES,
         serialization::{
+            graph::GraphFormat,
             iris_ndjson::{irises_from_ndjson_iter, IrisSelection},
             types::iris_base64::Base64IrisCode,
         },
@@ -153,13 +162,31 @@ struct Args {
     #[clap(long, num_args = 1..)]
     skip_insert_serial_ids: Vec<u32>,
 
-    /// S3 bucket for graph checkpoints.
+    /// S3 bucket for graph checkpoints. In `--migrate-checkpoint` mode this is
+    /// the single (this party's own) graph-store bucket.
     #[clap(long)]
     s3_bucket: String,
 
     /// AWS region for the S3 checkpoint client (defaults to env/instance metadata)
     #[clap(long)]
     aws_region: Option<String>,
+
+    /// Migration mode: skip all seeding/graph-build. Instead, for one party,
+    /// read the latest `genesis_graph_checkpoint` row, download its checkpoint
+    /// (any reader-supported format, e.g. v3), re-serialize it as the current
+    /// format (v4) under a new S3 key, and record a new checkpoint row. The
+    /// graph structure is byte-identical across parties, so the three v4
+    /// checkpoints share a blake3 hash (what the WAL boot consensus requires).
+    /// Idempotent: a no-op if the latest checkpoint is already current.
+    #[clap(long, default_value = "false")]
+    migrate_checkpoint: bool,
+
+    /// Party ordinal (0, 1, or 2) for `--migrate-checkpoint`. Drives the S3 key
+    /// namespace of the new checkpoint and must match the party whose DB
+    /// (`--db-url-party1` / `--db-schema-party1`) and bucket (`--s3-bucket`)
+    /// this invocation targets. Required when `--migrate-checkpoint` is set.
+    #[clap(long)]
+    party: Option<usize>,
 }
 
 impl Args {
@@ -204,6 +231,102 @@ pub struct IrisCodeWithSerialId {
     pub serial_id: SerialId,
 }
 
+/// Step B of the WAL migration. For one party, upgrade the latest graph
+/// checkpoint to the current serialization format (v4) so WAL Hawk Main —
+/// whose boot materializer accepts only the current version — can boot off it.
+///
+/// Reads the latest `genesis_graph_checkpoint` row, downloads its object via the
+/// format-aware reader (which decodes the stored format, e.g. v3, and verifies
+/// its blake3), re-serializes the in-memory graph through `upload_graph_checkpoint`
+/// (current = v4, byte-identical to the raw `GraphMem` wire format the materializer
+/// reads, hence deterministic across parties), and inserts a new checkpoint row.
+/// The original row is left in place; the higher-id v4 row wins selection.
+///
+/// Cursors (`last_indexed_iris_id`, `last_indexed_modification_id`,
+/// `graph_mutation_id`) are carried over verbatim from the source row — the
+/// graph content is unchanged, only its encoding.
+async fn migrate_checkpoint_to_v4(args: &Args) -> Result<()> {
+    let party_id = args
+        .party
+        .ok_or_else(|| eyre!("--party is required for --migrate-checkpoint"))?;
+    if party_id >= N_PARTIES {
+        bail!("--party {party_id} out of range; must be 0..{N_PARTIES}");
+    }
+    let bucket = &args.s3_bucket;
+
+    let mut builder = aws_config::from_env();
+    if let Some(region) = args.aws_region.clone() {
+        builder = builder.region(S3Region::new(region));
+    }
+    let s3_client = S3Client::new(&builder.load().await);
+
+    let url = &args.db_url_party1;
+    let schema = &args.db_schema_party1;
+    tracing::info!("Party {party_id}: connecting to schema {schema}");
+    let client = PostgresClient::new(url, schema, AccessMode::ReadWrite).await?;
+    let graph_store = GraphStore::new(&client).await?;
+
+    let state = get_latest_checkpoint_state(&graph_store)
+        .await?
+        .ok_or_else(|| eyre!("party {party_id}: no genesis_graph_checkpoint row to migrate"))?;
+
+    let target_version = GraphFormat::Current.version();
+    if state.graph_version == target_version {
+        tracing::info!(
+            "Party {party_id}: latest checkpoint already at current version (v{}); nothing to do",
+            state.graph_version
+        );
+        return Ok(());
+    }
+    tracing::info!(
+        "Party {party_id}: migrating checkpoint v{} -> v{} (s3_key={}, blake3={})",
+        state.graph_version,
+        target_version,
+        state.s3_key,
+        state.blake3_hash,
+    );
+
+    // Download + decode the existing checkpoint; this also verifies its blake3
+    // against the source row. IrisVectorId == Aby3VectorRef == VectorId, so the
+    // returned graphs are directly the serving-graph type.
+    let [graph_left, graph_right] = download_graph_checkpoint(&s3_client, bucket, &state).await?;
+    let graph_refs: BothEyes<GraphRef> = [graph_left.to_arc(), graph_right.to_arc()];
+
+    let new_state = upload_graph_checkpoint(
+        bucket,
+        party_id,
+        &graph_refs,
+        &s3_client,
+        state.last_indexed_iris_id,
+        state.last_indexed_modification_id,
+        state.graph_mutation_id,
+        true, // is_archival: protect the migration base from pruning
+    )
+    .await?;
+
+    let mut tx = graph_store.begin_tx().await?;
+    GraphStore::insert_genesis_graph_checkpoint(
+        &mut tx,
+        &new_state.s3_key,
+        new_state.last_indexed_iris_id as i64,
+        new_state.last_indexed_modification_id,
+        new_state.graph_mutation_id,
+        &new_state.blake3_hash,
+        true,
+        new_state.graph_version,
+    )
+    .await?;
+    tx.commit().await?;
+
+    tracing::info!(
+        "✅ Party {party_id}: v{} checkpoint recorded — s3_key={}, blake3={}",
+        new_state.graph_version,
+        new_state.s3_key,
+        new_state.blake3_hash,
+    );
+    Ok(())
+}
+
 #[allow(non_snake_case)]
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -212,6 +335,11 @@ async fn main() -> Result<()> {
 
     tracing::info!("Parsing CLI arguments");
     let args = Args::parse();
+
+    if args.migrate_checkpoint {
+        return migrate_checkpoint_to_v4(&args).await;
+    }
+
     let searcher = HnswSearcher::from(&args);
 
     tracing::info!("Setting database connections");
