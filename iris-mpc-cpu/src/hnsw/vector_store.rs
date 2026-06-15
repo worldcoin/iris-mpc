@@ -100,9 +100,7 @@ pub trait VectorStore: Debug {
     ///
     /// The default implementation is a no-op that returns an empty `Vec`.
     /// All production stores should override this method.
-    async fn serial_ids_to_vector_refs(&mut self, _ids: Vec<SerialId>) -> Vec<Self::VectorRef> {
-        vec![]
-    }
+    async fn serial_ids_to_vector_refs(&mut self, _ids: Vec<SerialId>) -> Vec<Self::VectorRef>;
 
     /// Evaluate the distance between pairs of (query, vector), in batch.
     /// The default implementation is a loop over `eval_distance`.

@@ -468,14 +468,21 @@ impl From<graph_v0::Layer> for Layer<IrisSerialId> {
 
 impl From<graph_v0::GraphV0> for GraphMem<IrisSerialId> {
     fn from(value: GraphV0) -> Self {
+        let layers: Vec<Layer<IrisSerialId>> =
+            value.layers.into_iter().map(|layer| layer.into()).collect();
+        let node_init_seq_no = layers
+            .iter()
+            .flat_map(|l| l.links.keys().cloned())
+            .map(|v| (v, 0u64))
+            .collect();
         GraphMem {
             entry_points: value
                 .entry_point
                 .map(|ep| ep.into())
                 .into_iter()
                 .collect::<Vec<_>>(),
-            layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
-            node_init_seq_no: HashMap::new(),
+            layers,
+            node_init_seq_no,
             last_update_seq_no: 0,
         }
     }
@@ -510,14 +517,21 @@ impl From<graph_v1::Layer> for Layer<IrisSerialId> {
 
 impl From<graph_v1::GraphV1> for GraphMem<IrisSerialId> {
     fn from(value: GraphV1) -> Self {
+        let layers: Vec<Layer<IrisSerialId>> =
+            value.layers.into_iter().map(|layer| layer.into()).collect();
+        let node_init_seq_no = layers
+            .iter()
+            .flat_map(|l| l.links.keys().cloned())
+            .map(|v| (v, 0u64))
+            .collect();
         GraphMem {
             entry_points: value
                 .entry_point
                 .map(|e| e.into())
                 .into_iter()
                 .collect::<Vec<_>>(),
-            layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
-            node_init_seq_no: HashMap::new(),
+            layers,
+            node_init_seq_no,
             last_update_seq_no: 0,
         }
     }
@@ -555,6 +569,13 @@ impl From<graph_v2::Layer> for Layer<IrisSerialId> {
 
 impl From<graph_v2::GraphV2> for GraphMem<IrisSerialId> {
     fn from(value: graph_v2::GraphV2) -> Self {
+        let layers: Vec<Layer<IrisSerialId>> =
+            value.layers.into_iter().map(|layer| layer.into()).collect();
+        let node_init_seq_no = layers
+            .iter()
+            .flat_map(|l| l.links.keys().cloned())
+            .map(|v| (v, 0u64))
+            .collect();
         GraphMem {
             // GraphMem uses a Vec<EntryPoint>, V2 uses Option<EntryPoint>.
             entry_points: value
@@ -562,8 +583,8 @@ impl From<graph_v2::GraphV2> for GraphMem<IrisSerialId> {
                 .map(|e| e.into())
                 .into_iter()
                 .collect::<Vec<_>>(),
-            layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
-            node_init_seq_no: HashMap::new(),
+            layers,
+            node_init_seq_no,
             last_update_seq_no: 0,
         }
     }
@@ -598,11 +619,18 @@ impl From<graph_v3::Layer> for Layer<IrisSerialId> {
 
 impl From<graph_v3::GraphV3> for GraphMem<IrisSerialId> {
     fn from(value: graph_v3::GraphV3) -> Self {
+        let layers: Vec<Layer<IrisSerialId>> =
+            value.layers.into_iter().map(|layer| layer.into()).collect();
+        let node_init_seq_no = layers
+            .iter()
+            .flat_map(|l| l.links.keys().cloned())
+            .map(|v| (v, 0u64))
+            .collect();
         GraphMem {
             // V3 uses a Vec<EntryPoint>, which matches GraphMem
             entry_points: value.entry_point.into_iter().map(|e| e.into()).collect(),
-            layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
-            node_init_seq_no: HashMap::new(),
+            layers,
+            node_init_seq_no,
             last_update_seq_no: 0,
         }
     }
@@ -638,10 +666,17 @@ impl From<graph_v4::Layer> for Layer<IrisSerialId> {
 
 impl From<graph_v4::GraphV4> for GraphMem<IrisSerialId> {
     fn from(value: graph_v4::GraphV4) -> Self {
+        let layers: Vec<Layer<IrisSerialId>> =
+            value.layers.into_iter().map(|layer| layer.into()).collect();
+        let node_init_seq_no = layers
+            .iter()
+            .flat_map(|l| l.links.keys().cloned())
+            .map(|v| (v, 0u64))
+            .collect();
         GraphMem {
             entry_points: value.entry_points.into_iter().map(|e| e.into()).collect(),
-            layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
-            node_init_seq_no: HashMap::new(),
+            layers,
+            node_init_seq_no,
             last_update_seq_no: value.last_update_seq_no,
         }
     }
@@ -834,10 +869,15 @@ fn read_graph_v4_streaming<R: std::io::Read + ?Sized>(
     let last_update_seq_no: u64 = bincode::deserialize_from(&mut *reader)
         .map_err(|e| eyre::eyre!("v4 streaming last_update_seq_no: {e}"))?;
 
+    let node_init_seq_no = layers
+        .iter()
+        .flat_map(|l| l.links.keys().cloned())
+        .map(|v| (v, 0u64))
+        .collect();
     Ok(GraphMem {
         entry_points: entry_points.into_iter().map(|e| e.into()).collect(),
         layers,
-        node_init_seq_no: HashMap::new(),
+        node_init_seq_no,
         last_update_seq_no,
     })
 }
@@ -868,10 +908,15 @@ fn read_graph_v3_streaming<R: std::io::Read + ?Sized>(
     }
 
     // V3 has no `last_update_seq_no`; default to 0.
+    let node_init_seq_no = layers
+        .iter()
+        .flat_map(|l| l.links.keys().cloned())
+        .map(|v| (v, 0u64))
+        .collect();
     Ok(GraphMem {
         entry_points: entry_points.into_iter().map(|e| e.into()).collect(),
         layers,
-        node_init_seq_no: HashMap::new(),
+        node_init_seq_no,
         last_update_seq_no: 0,
     })
 }

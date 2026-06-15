@@ -1110,6 +1110,10 @@ mod tests {
             Ok(vectors)
         }
 
+        async fn serial_ids_to_vector_refs(&mut self, _ids: Vec<SerialId>) -> Vec<Self::VectorRef> {
+            vec![]
+        }
+
         async fn eval_distance(
             &mut self,
             query: &Self::QueryRef,

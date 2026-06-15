@@ -1577,6 +1577,13 @@ impl HnswSearcher {
 
         // Convert base SerialIds to VectorRefs for store operations
         let base_vrefs = store.serial_ids_to_vector_refs(base_sids.clone()).await;
+        // this should never happen because get_links already filters for invalid nodes
+        if base_vrefs.len() != base_sids.len() {
+            bail!(
+                "compact_batch: base candidates contain {} SerialId(s) not present in the store",
+                base_sids.len() - base_vrefs.len()
+            );
+        }
 
         // Convert neighbor SerialIds to VectorRefs for each neighborhood
         let neighborhoods_vref: Vec<Vec<V::VectorRef>> = {
