@@ -311,10 +311,7 @@ fn validate_ep_updates<V: VectorStore>(
 mod tests {
     use crate::hawkers::plaintext_store::PlaintextStore;
     use crate::hnsw::graph::GraphMutation;
-    use iris_mpc_common::{
-        iris_db::iris::IrisCode,
-        vector_id::{HasSerialId, SerialId},
-    };
+    use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId};
     use itertools::Itertools;
     use std::sync::Arc;
 

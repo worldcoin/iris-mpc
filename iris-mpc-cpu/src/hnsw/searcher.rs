@@ -1773,7 +1773,7 @@ mod tests {
     use aes_prng::AesRng;
     use iris_mpc_common::{
         iris_db::{db::IrisDB, iris::IrisCode},
-        vector_id::VectorId,
+        vector_id::{HasSerialId, VectorId},
     };
     use rand::SeedableRng;
     use tokio;
@@ -1974,13 +1974,13 @@ mod tests {
             seq_no: graph.next_sequence_number(),
             ops: vec![
                 MutationOp::AddNode {
-                    id: a,
+                    id: a.serial_id(),
                     height: 1,
                     update_ep: UpdateEntryPoint::False,
                 },
                 MutationOp::AddEdges {
-                    base: a,
-                    neighbors: vec![stale],
+                    base: a.serial_id(),
+                    neighbors: vec![stale.serial_id()],
                     layer: 0,
                     edge_type: EdgeType::Base,
                 },
@@ -1988,9 +1988,8 @@ mod tests {
         };
         graph.insert_apply(&setup)?;
 
-        let mut candidates: BTreeSet<(<PlaintextStore as VectorStore>::VectorRef, usize)> =
-            BTreeSet::new();
-        candidates.insert((a, 0));
+        let mut candidates = BTreeSet::new();
+        candidates.insert((a.serial_id(), 0));
 
         let ops = searcher
             .prune_invalid_links(&mut store, &graph, &candidates)
@@ -2004,10 +2003,10 @@ mod tests {
                 neighbors,
                 edge_type,
             } => {
-                assert_eq!(*base, a);
+                assert_eq!(*base, a.serial_id());
                 assert_eq!(layer, &0);
                 assert_eq!(edge_type, &EdgeType::Base);
-                assert_eq!(neighbors, &vec![stale]);
+                assert_eq!(neighbors, &vec![stale.serial_id()]);
             }
             other => panic!("expected RemoveEdges, got {:?}", other),
         }
@@ -2030,13 +2029,13 @@ mod tests {
             seq_no: graph.next_sequence_number(),
             ops: vec![
                 MutationOp::AddNode {
-                    id: a,
+                    id: a.serial_id(),
                     height: 1,
                     update_ep: UpdateEntryPoint::False,
                 },
                 MutationOp::AddEdges {
-                    base: a,
-                    neighbors: vec![b],
+                    base: a.serial_id(),
+                    neighbors: vec![b.serial_id()],
                     layer: 0,
                     edge_type: EdgeType::Base,
                 },
@@ -2045,7 +2044,7 @@ mod tests {
         graph.insert_apply(&setup)?;
 
         let mut candidates = BTreeSet::new();
-        candidates.insert((a, 0));
+        candidates.insert((a.serial_id(), 0));
 
         let ops = searcher
             .prune_invalid_links(&mut store, &graph, &candidates)
@@ -2074,13 +2073,13 @@ mod tests {
             seq_no: graph.next_sequence_number(),
             ops: vec![
                 MutationOp::AddNode {
-                    id: base,
+                    id: base.serial_id(),
                     height: 1,
                     update_ep: UpdateEntryPoint::False,
                 },
                 MutationOp::AddEdges {
-                    base,
-                    neighbors: nbrs.clone(),
+                    base: base.serial_id(),
+                    neighbors: nbrs.iter().map(|v| v.serial_id()).collect(),
                     layer: 0,
                     edge_type: EdgeType::Base,
                 },
@@ -2089,7 +2088,7 @@ mod tests {
         graph.insert_apply(&setup)?;
 
         let mut candidates = BTreeSet::new();
-        candidates.insert((base, 0));
+        candidates.insert((base.serial_id(), 0));
 
         let ops = searcher
             .compact_batch(&mut store, &graph, &candidates)
@@ -2103,13 +2102,13 @@ mod tests {
                 neighbors,
                 edge_type,
             } => {
-                assert_eq!(*b, base);
+                assert_eq!(*b, base.serial_id());
                 assert_eq!(layer, &0);
                 assert_eq!(edge_type, &EdgeType::Base);
                 let expected_trim = oversized_count - searcher.params.get_M_max(0);
                 assert_eq!(neighbors.len(), expected_trim);
                 // Every removed neighbor came from the original set.
-                let orig: HashSet<_> = nbrs.iter().collect();
+                let orig: HashSet<_> = nbrs.iter().map(|v| v.serial_id()).collect();
                 for n in neighbors {
                     assert!(
                         orig.contains(n),
@@ -2130,7 +2129,6 @@ mod tests {
         use crate::hawkers::plaintext_store::PlaintextStore;
         use crate::hnsw::graph::mutation::EdgeType;
         use crate::hnsw::GraphMem;
-        use crate::hnsw::VectorStore;
         use iris_mpc_common::iris_db::iris::IrisCode;
         use std::collections::BTreeSet;
         use std::sync::Arc;
@@ -2146,13 +2144,13 @@ mod tests {
             seq_no: graph.next_sequence_number(),
             ops: vec![
                 MutationOp::AddNode {
-                    id: a,
+                    id: a.serial_id(),
                     height: 1,
                     update_ep: UpdateEntryPoint::False,
                 },
                 MutationOp::AddEdges {
-                    base: a,
-                    neighbors: vec![b],
+                    base: a.serial_id(),
+                    neighbors: vec![b.serial_id()],
                     layer: 0,
                     edge_type: EdgeType::Base,
                 },
@@ -2161,7 +2159,7 @@ mod tests {
         graph.insert_apply(&setup)?;
 
         let mut candidates = BTreeSet::new();
-        candidates.insert((a, 0));
+        candidates.insert((a.serial_id(), 0));
 
         let ops = searcher
             .compact_batch(&mut store, &graph, &candidates)

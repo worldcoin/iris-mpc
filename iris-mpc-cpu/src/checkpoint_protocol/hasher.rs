@@ -52,7 +52,7 @@ mod tests {
                 (0..=max_lc).map(|_| Layer::<SerialId>::new()).collect();
             for (lc, pairs) in layers_in {
                 for (k, v) in pairs {
-                    layers[lc].set_links(k, v);
+                    layers[lc].set_links(k, v, 0);
                 }
             }
             g.layers = layers;
@@ -152,14 +152,14 @@ mod tests {
     fn left_right_swap_changes_hash() {
         let left = {
             let mut l = Layer::<SerialId>::new();
-            l.set_links(vid(1), vec![vid(2)]);
+            l.set_links(vid(1), vec![vid(2)], 0);
             let mut g = GraphMem::<SerialId>::new();
             g.layers = vec![l];
             g
         };
         let right = {
             let mut l = Layer::<SerialId>::new();
-            l.set_links(vid(5), vec![vid(6)]);
+            l.set_links(vid(5), vec![vid(6)], 0);
             let mut g = GraphMem::<SerialId>::new();
             g.layers = vec![l];
             g

@@ -21,7 +21,7 @@ use iris_mpc_common::{
         RESET_UPDATE_MESSAGE_TYPE,
     },
     iris_db::iris::IrisCode,
-    vector_id::{HasSerialId, SerialId},
+    vector_id::SerialId,
     IrisSerialId, IrisVectorId, IrisVersionId,
 };
 use itertools::izip;

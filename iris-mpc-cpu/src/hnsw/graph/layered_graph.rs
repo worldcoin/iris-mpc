@@ -1033,11 +1033,7 @@ mod tests {
     };
     use aes_prng::AesRng;
     use eyre::Result;
-    use iris_mpc_common::{
-        iris_db::db::IrisDB,
-        vector_id::{HasSerialId, SerialId, VectorId},
-        IrisSerialId,
-    };
+    use iris_mpc_common::{iris_db::db::IrisDB, vector_id::SerialId, IrisSerialId};
 
     use rand::{RngCore, SeedableRng};
 

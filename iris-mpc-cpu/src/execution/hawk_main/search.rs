@@ -20,10 +20,7 @@ use crate::{
     },
 };
 use eyre::{OptionExt, Result};
-use iris_mpc_common::{
-    iris_db::iris::Threshold,
-    vector_id::{HasSerialId, SerialId},
-};
+use iris_mpc_common::{iris_db::iris::Threshold, vector_id::SerialId};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};

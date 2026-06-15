@@ -1,11 +1,7 @@
 use std::sync::Arc;
 
 use eyre::Result;
-use iris_mpc_common::{
-    iris_db::iris::IrisCode,
-    vector_id::{HasSerialId, SerialId},
-    IrisVectorId,
-};
+use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId, IrisVectorId};
 use itertools::Itertools;
 use tokio::task::JoinSet;
 use tracing::info;
