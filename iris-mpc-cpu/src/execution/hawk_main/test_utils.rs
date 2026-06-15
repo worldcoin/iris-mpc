@@ -94,13 +94,22 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
         // any edges are recorded.  This ensures edges added in pass 2 are
         // never considered stale (init_seq_no <= edge updated_seq_no).
         for i in 0..db_size {
-            let update_ep = if i == 0 {
-                match layer_mode {
-                    LayerMode::Standard { .. } => UpdateEntryPoint::SetUnique { layer: 0 },
-                    LayerMode::LinearScan { .. } => UpdateEntryPoint::False,
+            let update_ep = match layer_mode {
+                // Standard mode: only the first node sets the unique entry point.
+                LayerMode::Standard { .. } => {
+                    if i == 0 {
+                        UpdateEntryPoint::SetUnique { layer: 0 }
+                    } else {
+                        UpdateEntryPoint::False
+                    }
                 }
-            } else {
-                UpdateEntryPoint::False
+                // LinearScan mode: every node is an entry point (the searcher scans
+                // all of them via serial_ids_to_vector_refs).  This mirrors what
+                // insert_from_search_results does in production when
+                // insertion_layer > max_graph_layer.
+                LayerMode::LinearScan { max_graph_layer } => UpdateEntryPoint::Append {
+                    layer: max_graph_layer,
+                },
             };
             graph
                 .insert_apply(&GraphMutation {
