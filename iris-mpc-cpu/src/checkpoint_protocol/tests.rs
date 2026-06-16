@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::stream::{self, BoxStream};
-use iris_mpc_common::vector_id::VectorId;
 
 use crate::checkpoint_protocol::{
     run_cycle, Blake3Hash, CheckpointMeta, ConsensusMessage, ConsensusTransport, CycleConfig,

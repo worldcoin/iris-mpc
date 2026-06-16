@@ -47,7 +47,6 @@ use aws_sdk_s3::Client as S3Client;
 use bytes::Bytes;
 use eyre::{eyre, Result};
 use futures::stream::{self, Stream};
-use iris_mpc_common::IrisVectorId;
 use serde::de::DeserializeOwned;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::time::sleep;

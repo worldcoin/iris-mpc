@@ -11,7 +11,7 @@ use tracing::{
     span::{Attributes, Id},
     Event, Subscriber,
 };
-use tracing_subscriber::layer::{Context, Layer};
+use tracing_subscriber::layer::Context;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Operation {

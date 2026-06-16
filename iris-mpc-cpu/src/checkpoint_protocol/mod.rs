@@ -24,7 +24,6 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
-use iris_mpc_common::vector_id::VectorId;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 

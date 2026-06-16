@@ -21,7 +21,7 @@ use crate::{
 };
 
 use crate::graph_checkpoint::data::*;
-use iris_mpc_common::{IrisSerialId, IrisVectorId};
+use iris_mpc_common::IrisSerialId;
 pub use multipart::*;
 pub use streaming::*;
 pub use streaming_download::*;

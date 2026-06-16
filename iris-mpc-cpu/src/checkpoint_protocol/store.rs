@@ -13,7 +13,6 @@ use crate::hnsw::{
     graph::{graph_store::GraphPg, mutation::GraphMutation},
     VectorStore,
 };
-use iris_mpc_common::vector_id::VectorId;
 
 #[async_trait]
 impl<V: VectorStore + Send + Sync> MutationStore for GraphPg<V> {

@@ -37,7 +37,6 @@ use clap::ValueEnum;
 use eyre::Result;
 use iris_mpc_common::iris_db::db::IrisDB;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
-use iris_mpc_common::vector_id::VectorId;
 use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::Itertools;
 use rand::SeedableRng;
