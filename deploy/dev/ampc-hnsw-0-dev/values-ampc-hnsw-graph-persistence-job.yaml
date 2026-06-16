@@ -3,11 +3,11 @@ args:
   - "--addresses=0.0.0.0:5000,sidecar.1.dev.hnsw.worldcoin.dev:5001,sidecar.2.dev.hnsw.worldcoin.dev:5002"
   - "--outbound-addrs=sidecar.0.dev.hnsw.worldcoin.dev:5000,sidecar.1.dev.hnsw.worldcoin.dev:5001,sidecar.2.dev.hnsw.worldcoin.dev:5002"
   - "--peer-round-timeout-secs=30"
-  - "--min-mutations-per-cycle=10000"
+  - "--min-mutations-per-cycle=1"
   - "--one-shot"
 
 env:
-  SMPC__CPU_DATABASE__SCHEMA: "SMPC_graph_persistence_test_0"
+  SMPC__CPU_DATABASE__SCHEMA: "SMPC_minfhd_SMALL_JUNE_2026_dev_0"
   SMPC__GRAPH_CHECKPOINT_BUCKET_NAME: "ampc-hnsw-graph-store-node-0-dev-eu-central-1"
 
 initContainer:
