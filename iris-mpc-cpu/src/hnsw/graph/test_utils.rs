@@ -9,7 +9,6 @@ use crate::{
         STATE_DOMAIN, STATE_KEY_LAST_INDEXED_IRIS_ID, STATE_KEY_LAST_INDEXED_MODIFICATION_ID,
     },
     graph_checkpoint::download_genesis_checkpoint_plaintext,
-    hawkers::plaintext_store::PlaintextVectorRef,
     hnsw::{
         graph::{
             graph_diff::{
@@ -38,6 +37,7 @@ use clap::ValueEnum;
 use eyre::Result;
 use iris_mpc_common::iris_db::db::IrisDB;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_common::vector_id::VectorId;
 use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::Itertools;
 use rand::SeedableRng;
@@ -100,7 +100,7 @@ impl DbContext {
     /// Upload a BothEyes graph to S3 and record it in genesis_graph_checkpoint.
     pub async fn store_checkpoint(
         &self,
-        graph: &BothEyes<GraphMem<PlaintextVectorRef>>,
+        graph: &BothEyes<GraphMem<VectorId>>,
         last_indexed_iris_id: i64,
         last_indexed_modification_id: i64,
         graph_mutation_id: Option<i64>,
@@ -138,7 +138,7 @@ impl DbContext {
     /// Create a checkpoint from a graph in memory: get required metadata and upload to S3 and update databases.
     pub async fn make_checkpoint_from_graph(
         &self,
-        graph: &BothEyes<GraphMem<PlaintextVectorRef>>,
+        graph: &BothEyes<GraphMem<VectorId>>,
     ) -> Result<()> {
         let graph_mutation_id = self.graph_pg.get_max_hawk_graph_mutation_id().await?;
         let last_indexed_iris_id: i64 = self
@@ -197,10 +197,10 @@ impl DbContext {
     /// Reconstruct the current graph state by:
     ///   1. Downloading the latest checkpoint from S3
     ///   2. Applying all hawk_graph_mutations written after that checkpoint
-    pub async fn get_both_eyes(&self) -> Result<BothEyes<GraphMem<PlaintextVectorRef>>> {
+    pub async fn get_both_eyes(&self) -> Result<BothEyes<GraphMem<VectorId>>> {
         let checkpoint_row = self.graph_pg.get_latest_genesis_graph_checkpoint().await?;
 
-        let mut graph: BothEyes<GraphMem<PlaintextVectorRef>> = match checkpoint_row {
+        let mut graph: BothEyes<GraphMem<VectorId>> = match checkpoint_row {
             None => [GraphMem::new(), GraphMem::new()],
             Some(ref row) => {
                 let state = GraphCheckpointState {
@@ -274,7 +274,7 @@ impl DbContext {
             println!("{:#?}", stored_graph);
         }
         let data = tokio::fs::read(path).await?;
-        let loaded_graph: BothEyes<GraphMem<PlaintextVectorRef>> = bincode::deserialize(&data)?;
+        let loaded_graph: BothEyes<GraphMem<VectorId>> = bincode::deserialize(&data)?;
         if dbg {
             println!("loaded graph:");
             println!("{:#?}", loaded_graph);
@@ -345,7 +345,7 @@ impl DbContext {
     /// the test database is initially empty and some data is needed to
     /// test the backup and restore commands.
     /// The graph isn't actually random - the RNG uses the same seed.
-    pub async fn store_random_graph(&self) -> Result<BothEyes<GraphMem<PlaintextVectorRef>>> {
+    pub async fn store_random_graph(&self) -> Result<BothEyes<GraphMem<VectorId>>> {
         const NUM_RANDOM_IRIS_CODES: usize = 10;
         let rng = &mut AesRng::seed_from_u64(0_u64);
         let mut vector_store = PlaintextStore::<FhdOps>::new();
@@ -374,7 +374,7 @@ impl DbContext {
         };
 
         // Build the graph topology as mutations, then apply to an in-memory graph
-        let mut left_graph = GraphMem::<PlaintextVectorRef>::new();
+        let mut left_graph = GraphMem::<VectorId>::new();
 
         // Set entry point via InsertNode with SetUnique
         let ep_mutation = MutationOp::AddNode {
@@ -428,7 +428,7 @@ impl DbContext {
     }
 }
 
-async fn deserialize_graph(path: &Path) -> Result<BothEyes<GraphMem<PlaintextVectorRef>>> {
+async fn deserialize_graph(path: &Path) -> Result<BothEyes<GraphMem<VectorId>>> {
     let data = tokio::fs::read(path).await?;
     Ok(bincode::deserialize(&data)?)
 }

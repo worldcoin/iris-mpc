@@ -12,6 +12,7 @@ use crate::hnsw::{
 };
 use delegate::delegate;
 use eyre::Result;
+use iris_mpc_common::vector_id::VectorId;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
@@ -21,7 +22,7 @@ use tracing::debug;
 /// - The last element in the container is the largest one.
 #[allow(async_fn_in_trait)]
 pub trait Neighborhood<V: VectorStore>:
-    Send + Sync + Clone + AsRef<[(V::VectorRef, V::DistanceRef)]> + Into<WrappedNeighborhood<V>>
+    Send + Sync + Clone + AsRef<[(VectorId, V::DistanceRef)]> + Into<WrappedNeighborhood<V>>
 {
     fn new() -> Self;
 
@@ -33,9 +34,9 @@ pub trait Neighborhood<V: VectorStore>:
         self.as_ref().is_empty()
     }
 
-    fn from_singleton(element: (V::VectorRef, V::DistanceRef)) -> Self;
+    fn from_singleton(element: (VectorId, V::DistanceRef)) -> Self;
 
-    fn edge_ids(&self) -> Vec<V::VectorRef> {
+    fn edge_ids(&self) -> Vec<VectorId> {
         self.as_ref()
             .iter()
             .map(|(v, _)| v.clone())
@@ -49,7 +50,7 @@ pub trait Neighborhood<V: VectorStore>:
     async fn insert_batch_and_trim(
         &mut self,
         store: &mut V,
-        vals: &[(V::VectorRef, V::DistanceRef)],
+        vals: &[(VectorId, V::DistanceRef)],
         k: usize,
     ) -> Result<()>;
 
@@ -67,7 +68,7 @@ pub trait Neighborhood<V: VectorStore>:
     async fn insert_and_trim(
         &mut self,
         store: &mut V,
-        to: V::VectorRef,
+        to: VectorId,
         dist: V::DistanceRef,
         k: usize,
     ) -> Result<()> {
@@ -76,10 +77,10 @@ pub trait Neighborhood<V: VectorStore>:
 
     /// Returns matching records in the neighborhood.
     /// No specific order should be assumed.
-    async fn matches(&self, store: &mut V) -> Result<Vec<(V::VectorRef, V::DistanceRef)>>;
+    async fn matches(&self, store: &mut V) -> Result<Vec<(VectorId, V::DistanceRef)>>;
 
     /// Returns the node with maximum distance in the neighborhood
-    fn get_furthest(&self) -> Option<&(V::VectorRef, V::DistanceRef)>;
+    fn get_furthest(&self) -> Option<&(VectorId, V::DistanceRef)>;
 }
 
 /// SortedNeighborhood maintains a collection of distance-weighted oriented
@@ -100,12 +101,12 @@ pub trait Neighborhood<V: VectorStore>:
 pub struct SortedNeighborhood<V: VectorStore> {
     /// List of distance-weighted directed edges, specified as tuples
     /// `(target, weight)`. Edges are sorted in increasing order of distance.
-    pub edges: Vec<(V::VectorRef, V::DistanceRef)>,
+    pub edges: Vec<(VectorId, V::DistanceRef)>,
 }
 
 impl<V: VectorStore> Clone for SortedNeighborhood<V>
 where
-    V::VectorRef: Clone,
+    VectorId: Clone,
     V::DistanceRef: Clone,
 {
     fn clone(&self) -> Self {
@@ -116,15 +117,15 @@ where
 }
 
 impl<V: VectorStore> SortedNeighborhood<V> {
-    pub fn from_ascending_vec(edges: Vec<(V::VectorRef, V::DistanceRef)>) -> Self {
+    pub fn from_ascending_vec(edges: Vec<(VectorId, V::DistanceRef)>) -> Self {
         SortedNeighborhood { edges }
     }
 
-    pub fn get_k_nearest(&self, k: usize) -> &[(V::VectorRef, V::DistanceRef)] {
+    pub fn get_k_nearest(&self, k: usize) -> &[(VectorId, V::DistanceRef)] {
         &self.edges[..k]
     }
 
-    pub fn as_vec_ref(&self) -> &[(V::VectorRef, V::DistanceRef)] {
+    pub fn as_vec_ref(&self) -> &[(VectorId, V::DistanceRef)] {
         &self.edges
     }
 
@@ -135,7 +136,7 @@ impl<V: VectorStore> SortedNeighborhood<V> {
     async fn batcher_insert(
         &mut self,
         store: &mut V,
-        vals: &[(V::VectorRef, V::DistanceRef)],
+        vals: &[(VectorId, V::DistanceRef)],
     ) -> Result<()> {
         let sorted_prefix_size = self.edges.len();
         let unsorted_size = vals.len();
@@ -155,7 +156,7 @@ impl<V: VectorStore> SortedNeighborhood<V> {
     async fn quicksort_insert(
         &mut self,
         store: &mut V,
-        vals: &[(V::VectorRef, V::DistanceRef)],
+        vals: &[(VectorId, V::DistanceRef)],
         truncate_k: Option<usize>,
     ) -> Result<()> {
         let sorted_prefix_size = self.edges.len();
@@ -174,8 +175,8 @@ impl<V: VectorStore> SortedNeighborhood<V> {
     }
 }
 
-impl<V: VectorStore> AsRef<[(V::VectorRef, V::DistanceRef)]> for SortedNeighborhood<V> {
-    fn as_ref(&self) -> &[(V::VectorRef, V::DistanceRef)] {
+impl<V: VectorStore> AsRef<[(VectorId, V::DistanceRef)]> for SortedNeighborhood<V> {
+    fn as_ref(&self) -> &[(VectorId, V::DistanceRef)] {
         &self.edges
     }
 }
@@ -192,7 +193,7 @@ impl<V: VectorStore> Neighborhood<V> for SortedNeighborhood<V> {
         }
     }
 
-    fn from_singleton(element: (<V as VectorStore>::VectorRef, V::DistanceRef)) -> Self {
+    fn from_singleton(element: (VectorId, V::DistanceRef)) -> Self {
         SortedNeighborhood {
             edges: vec![element],
         }
@@ -205,7 +206,7 @@ impl<V: VectorStore> Neighborhood<V> for SortedNeighborhood<V> {
     async fn insert_batch_and_trim(
         &mut self,
         store: &mut V,
-        vals: &[(V::VectorRef, V::DistanceRef)],
+        vals: &[(VectorId, V::DistanceRef)],
         k: usize,
     ) -> Result<()> {
         debug!(batch_size = vals.len(), "Insert batch into neighborhood");
@@ -222,12 +223,12 @@ impl<V: VectorStore> Neighborhood<V> for SortedNeighborhood<V> {
         Ok(())
     }
 
-    fn get_furthest(&self) -> Option<&(V::VectorRef, V::DistanceRef)> {
+    fn get_furthest(&self) -> Option<&(VectorId, V::DistanceRef)> {
         self.edges.last()
     }
     /// Count the neighbors that match according to `store.is_match`.
     /// The nearest `count` elements are matches and the rest are non-matches.
-    async fn matches(&self, store: &mut V) -> Result<Vec<(V::VectorRef, V::DistanceRef)>> {
+    async fn matches(&self, store: &mut V) -> Result<Vec<(VectorId, V::DistanceRef)>> {
         let mut left = 0;
         let mut right = self.edges.len();
 
@@ -248,12 +249,12 @@ impl<V: VectorStore> Neighborhood<V> for SortedNeighborhood<V> {
 pub struct UnsortedNeighborhood<V: VectorStore> {
     /// List of distance-weighted directed edges, specified as tuples
     /// `(target, weight)`
-    pub edges: Vec<(V::VectorRef, V::DistanceRef)>,
+    pub edges: Vec<(VectorId, V::DistanceRef)>,
 }
 
 impl<V: VectorStore> Clone for UnsortedNeighborhood<V>
 where
-    V::VectorRef: Clone,
+    VectorId: Clone,
     V::DistanceRef: Clone,
 {
     fn clone(&self) -> Self {
@@ -282,8 +283,8 @@ impl<V: VectorStore> UnsortedNeighborhood<V> {
     }
 }
 
-impl<V: VectorStore> AsRef<[(V::VectorRef, V::DistanceRef)]> for UnsortedNeighborhood<V> {
-    fn as_ref(&self) -> &[(V::VectorRef, V::DistanceRef)] {
+impl<V: VectorStore> AsRef<[(VectorId, V::DistanceRef)]> for UnsortedNeighborhood<V> {
+    fn as_ref(&self) -> &[(VectorId, V::DistanceRef)] {
         &self.edges
     }
 }
@@ -295,7 +296,7 @@ impl<V: VectorStore> Neighborhood<V> for UnsortedNeighborhood<V> {
         }
     }
 
-    fn from_singleton(element: (<V as VectorStore>::VectorRef, V::DistanceRef)) -> Self {
+    fn from_singleton(element: (VectorId, V::DistanceRef)) -> Self {
         UnsortedNeighborhood {
             edges: vec![element],
         }
@@ -307,7 +308,7 @@ impl<V: VectorStore> Neighborhood<V> for UnsortedNeighborhood<V> {
     async fn insert_batch_and_trim(
         &mut self,
         store: &mut V,
-        vals: &[(V::VectorRef, V::DistanceRef)],
+        vals: &[(VectorId, V::DistanceRef)],
         k: usize,
     ) -> Result<()> {
         debug!(batch_size = vals.len(), "Insert batch into neighborhood");
@@ -324,12 +325,12 @@ impl<V: VectorStore> Neighborhood<V> for UnsortedNeighborhood<V> {
         Ok(())
     }
 
-    fn get_furthest(&self) -> Option<&(V::VectorRef, V::DistanceRef)> {
+    fn get_furthest(&self) -> Option<&(VectorId, V::DistanceRef)> {
         self.edges.last()
     }
 
     /// Count the neighbors that match according to `store.is_match`.
-    async fn matches(&self, store: &mut V) -> Result<Vec<(V::VectorRef, V::DistanceRef)>> {
+    async fn matches(&self, store: &mut V) -> Result<Vec<(VectorId, V::DistanceRef)>> {
         let distances = self
             .edges
             .iter()
@@ -380,19 +381,19 @@ impl<V: VectorStore> WrappedNeighborhood<V> {
             async fn insert_batch_and_trim(
                 &mut self,
                 store: &mut V,
-                vals: &[(V::VectorRef, V::DistanceRef)],
+                vals: &[(VectorId, V::DistanceRef)],
                 k: usize,
             ) -> Result<()>;
 
-            async fn matches(&self, store: &mut V) -> Result<Vec<(V::VectorRef, V::DistanceRef)>>;
+            async fn matches(&self, store: &mut V) -> Result<Vec<(VectorId, V::DistanceRef)>>;
 
-            fn get_furthest(&self) -> Option<&(V::VectorRef, V::DistanceRef)>;
+            fn get_furthest(&self) -> Option<&(VectorId, V::DistanceRef)>;
         }
     }
 }
 
-impl<V: VectorStore> AsRef<[(V::VectorRef, V::DistanceRef)]> for WrappedNeighborhood<V> {
-    fn as_ref(&self) -> &[(V::VectorRef, V::DistanceRef)] {
+impl<V: VectorStore> AsRef<[(VectorId, V::DistanceRef)]> for WrappedNeighborhood<V> {
+    fn as_ref(&self) -> &[(VectorId, V::DistanceRef)] {
         match self {
             WrappedNeighborhood::Sorted(nb) => nb.as_ref(),
             WrappedNeighborhood::Unsorted(nb) => nb.as_ref(),

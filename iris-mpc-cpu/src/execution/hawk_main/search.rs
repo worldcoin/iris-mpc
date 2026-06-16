@@ -9,9 +9,7 @@ use crate::{
         scheduler::{collect_results, parallelize},
         InsertPlanV, StoreId,
     },
-    hawkers::aby3::aby3_store::{
-        Aby3DistanceRef, Aby3Query, Aby3Store, Aby3VectorRef, DistanceOps,
-    },
+    hawkers::aby3::aby3_store::{Aby3DistanceRef, Aby3Query, Aby3Store, DistanceOps},
     hnsw::{
         graph::neighborhood::{Neighborhood, UnsortedNeighborhood},
         graph::UpdateEntryPoint,
@@ -21,6 +19,7 @@ use crate::{
 };
 use eyre::{OptionExt, Result};
 use iris_mpc_common::iris_db::iris::Threshold;
+use iris_mpc_common::vector_id::VectorId;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
@@ -225,14 +224,11 @@ async fn per_session<const ROTMASK: u32, N: Neighborhood<Aby3Store<HawkOps>>>(
 ///   larger `ef` to get a more complete picture.
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 async fn classify_and_extend(
-    edges: &[(
-        Aby3VectorRef,
-        Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>,
-    )],
+    edges: &[(VectorId, Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>)],
     query: &Aby3Query,
     search_params: &SearchParams,
     aby3_store: &mut Aby3Store<HawkOps>,
-    graph_store: &GraphMem<Aby3VectorRef>,
+    graph_store: &GraphMem<VectorId>,
     ef: usize,
 ) -> Result<ClassifiedMatches> {
     let margin = search_params.saturation_margin;
@@ -285,10 +281,7 @@ async fn classify_and_extend(
 /// Batch-classify edges at both the match threshold and the anon stats threshold.
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 async fn classify_edges(
-    edges: &[(
-        Aby3VectorRef,
-        Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>,
-    )],
+    edges: &[(VectorId, Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>)],
     aby3_store: &mut Aby3Store<HawkOps>,
     ef: usize,
     saturation_margin: usize,
@@ -345,7 +338,7 @@ async fn per_insert_query<N: Neighborhood<Aby3Store<HawkOps>>>(
     query: Aby3Query,
     search_params: &SearchParams,
     aby3_store: &mut Aby3Store<HawkOps>,
-    graph_store: &GraphMem<Aby3VectorRef>,
+    graph_store: &GraphMem<VectorId>,
     insertion_layer: usize,
 ) -> Result<HawkInsertPlan> {
     let start = Instant::now();
@@ -399,7 +392,7 @@ async fn per_search_query(
     query: Aby3Query,
     search_params: &SearchParams,
     aby3_store: &mut Aby3Store<HawkOps>,
-    graph_store: &GraphMem<Aby3VectorRef>,
+    graph_store: &GraphMem<VectorId>,
 ) -> Result<HawkInsertPlan> {
     let start = Instant::now();
 

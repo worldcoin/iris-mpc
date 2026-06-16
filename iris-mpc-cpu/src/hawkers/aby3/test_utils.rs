@@ -14,9 +14,7 @@ use crate::{
         session::SessionHandles,
     },
     hawkers::{
-        aby3::aby3_store::{Aby3SharedIrisesRef, Aby3VectorRef},
-        plaintext_store::{PlaintextStore, PlaintextVectorRef},
-        TEST_DISTANCE_MODE,
+        aby3::aby3_store::Aby3SharedIrisesRef, plaintext_store::PlaintextStore, TEST_DISTANCE_MODE,
     },
     hnsw::{GraphMem, HnswSearcher, SortedNeighborhood, VectorStore},
     network::mpc::NetworkType,
@@ -148,8 +146,8 @@ pub fn get_trivial_share(distance: u16, player_index: usize) -> Result<Share<u32
 /// `eval_distance_batch` to compute the distance via the worker pool.
 pub async fn eval_vector_distance(
     store: &mut Aby3Store,
-    vector1: &Aby3VectorRef,
-    vector2: &Aby3VectorRef,
+    vector1: &VectorId,
+    vector2: &VectorId,
 ) -> Result<<Aby3Store as VectorStore>::DistanceRef> {
     let query = store.cache_query_from_store(vector2).await?;
     let distances = store.eval_distance_batch(&query, &[*vector1]).await?;
@@ -164,7 +162,7 @@ pub async fn eval_vector_distance(
 ///
 /// Previously this involved conversion of cached distances, but since distances
 /// are not currently cached this operation is a clone plus type cast.
-async fn graph_from_plain(graph_store: &GraphMem<PlaintextVectorRef>) -> GraphMem<Aby3VectorRef> {
+async fn graph_from_plain(graph_store: &GraphMem<VectorId>) -> GraphMem<VectorId> {
     graph_store.clone()
 }
 
@@ -181,8 +179,8 @@ pub async fn lazy_setup_from_files<R: RngCore + Clone + CryptoRng>(
     database_size: usize,
     network_t: NetworkType,
 ) -> Result<(
-    (PlaintextStore, GraphMem<PlaintextVectorRef>),
-    Vec<(Aby3StoreRef, GraphMem<Aby3VectorRef>)>,
+    (PlaintextStore, GraphMem<VectorId>),
+    Vec<(Aby3StoreRef, GraphMem<VectorId>)>,
 )> {
     if database_size > 100_000 {
         return Err(eyre::eyre!("Database size too large, max. 100,000"));
@@ -195,7 +193,7 @@ pub async fn lazy_setup_from_files<R: RngCore + Clone + CryptoRng>(
         IrisSelection::All,
     )
     .map_err(|e| eyre::eyre!("Cannot find store: {e}. {generation_comment}"))?;
-    let plaintext_graph_store: GraphMem<PlaintextVectorRef> =
+    let plaintext_graph_store: GraphMem<VectorId> =
         read_graph_from_file(Path::new(plaingraph_file), GraphFormat::Raw)
             .map_err(|e| eyre::eyre!("Cannot find graph: {e}. {generation_comment}"))?;
 
@@ -232,8 +230,8 @@ pub async fn lazy_setup_from_files_with_grpc<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
 ) -> Result<(
-    (PlaintextStore, GraphMem<PlaintextVectorRef>),
-    Vec<(Aby3StoreRef, GraphMem<Aby3VectorRef>)>,
+    (PlaintextStore, GraphMem<VectorId>),
+    Vec<(Aby3StoreRef, GraphMem<VectorId>)>,
 )> {
     lazy_setup_from_files(
         plainstore_file,
@@ -256,8 +254,8 @@ pub async fn lazy_random_setup<R: RngCore + Clone + CryptoRng>(
     database_size: usize,
     network_t: NetworkType,
 ) -> Result<(
-    (PlaintextStore, GraphMem<PlaintextVectorRef>),
-    Vec<(Aby3StoreRef, GraphMem<Aby3VectorRef>)>,
+    (PlaintextStore, GraphMem<VectorId>),
+    Vec<(Aby3StoreRef, GraphMem<VectorId>)>,
 )> {
     let searcher = HnswSearcher::new_with_test_parameters();
 
@@ -297,8 +295,8 @@ pub async fn lazy_random_setup_with_local_channel<R: RngCore + Clone + CryptoRng
     rng: &mut R,
     database_size: usize,
 ) -> Result<(
-    (PlaintextStore, GraphMem<PlaintextVectorRef>),
-    Vec<(Aby3StoreRef, GraphMem<Aby3VectorRef>)>,
+    (PlaintextStore, GraphMem<VectorId>),
+    Vec<(Aby3StoreRef, GraphMem<VectorId>)>,
 )> {
     lazy_random_setup(rng, database_size, NetworkType::Local).await
 }
@@ -310,8 +308,8 @@ pub async fn lazy_random_setup_with_grpc<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
 ) -> Result<(
-    (PlaintextStore, GraphMem<PlaintextVectorRef>),
-    Vec<(Aby3StoreRef, GraphMem<Aby3VectorRef>)>,
+    (PlaintextStore, GraphMem<VectorId>),
+    Vec<(Aby3StoreRef, GraphMem<VectorId>)>,
 )> {
     lazy_random_setup(rng, database_size, NetworkType::default_tcp()).await
 }
@@ -322,7 +320,7 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
     network_t: NetworkType,
-) -> Result<Vec<(Aby3StoreRef, GraphMem<Aby3VectorRef>)>> {
+) -> Result<Vec<(Aby3StoreRef, GraphMem<VectorId>)>> {
     let rng_searcher = AesRng::from_rng(rng.clone())?;
     let cleartext_database = IrisDB::new_random_rng(database_size, rng).db;
     let shared_irises: Vec<_> = (0..database_size)
@@ -341,7 +339,7 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
             .map(|id| Arc::new(shared_irises[id][role].clone()))
             .collect();
         let store = store.clone();
-        let task: JoinHandle<Result<(Aby3StoreRef, GraphMem<Aby3VectorRef>)>> =
+        let task: JoinHandle<Result<(Aby3StoreRef, GraphMem<VectorId>)>> =
             tokio::spawn(async move {
                 let mut store_lock = store.lock().await;
                 let queries = cache_irises(store_lock.workers.as_ref(), irises).await?;
@@ -383,7 +381,7 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
 pub async fn shared_random_setup_with_local_channel<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
-) -> Result<Vec<(Aby3StoreRef, GraphMem<Aby3VectorRef>)>> {
+) -> Result<Vec<(Aby3StoreRef, GraphMem<VectorId>)>> {
     shared_random_setup(rng, database_size, NetworkType::Local).await
 }
 
@@ -392,6 +390,6 @@ pub async fn shared_random_setup_with_local_channel<R: RngCore + Clone + CryptoR
 pub async fn shared_random_setup_with_grpc<R: RngCore + Clone + CryptoRng>(
     rng: &mut R,
     database_size: usize,
-) -> Result<Vec<(Aby3StoreRef, GraphMem<Aby3VectorRef>)>> {
+) -> Result<Vec<(Aby3StoreRef, GraphMem<VectorId>)>> {
     shared_random_setup(rng, database_size, NetworkType::default_tcp()).await
 }

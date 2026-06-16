@@ -915,10 +915,7 @@ mod tests {
     use std::{collections::HashMap, sync::Arc};
 
     use crate::{
-        hawkers::{
-            aby3::aby3_store::FhdOps,
-            plaintext_store::{PlaintextStore, PlaintextVectorRef},
-        },
+        hawkers::{aby3::aby3_store::FhdOps, plaintext_store::PlaintextStore},
         hnsw::{
             graph::layered_graph::migrate, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
             SortedNeighborhood, VectorStore,
@@ -950,24 +947,27 @@ mod tests {
 
     impl VectorStore for TestStore {
         type QueryRef = usize; // Vector ID, pending insertion.
-        type VectorRef = usize; // Vector ID, inserted.
         type DistanceRef = u32; // Eager distance representation as fraction.
 
         async fn vectors_as_queries(
             &mut self,
-            vectors: Vec<Self::VectorRef>,
+            vectors: Vec<VectorId>,
         ) -> Result<Vec<Self::QueryRef>> {
-            Ok(vectors)
+            Ok(vectors
+                .into_iter()
+                .map(|v| v.serial_id() as usize)
+                .collect())
         }
 
         async fn eval_distance(
             &mut self,
             query: &Self::QueryRef,
-            vector: &Self::VectorRef,
+            vector: &VectorId,
         ) -> Result<Self::DistanceRef> {
             // Hamming distance
+            let vector_1_idx = vector.serial_id() as usize;
             let vector_0 = self.points[query].data;
-            let vector_1 = self.points[vector].data;
+            let vector_1 = self.points[&vector_1_idx].data;
             Ok(hamming_distance(vector_0, vector_1))
         }
 
@@ -985,17 +985,17 @@ mod tests {
     }
 
     impl VectorStoreMut for TestStore {
-        async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
+        async fn insert(&mut self, query: &Self::QueryRef) -> VectorId {
             // The query is now accepted in the store. It keeps the same ID.
             self.points.get_mut(query).unwrap().is_persistent = true;
-            *query
+            VectorId::from_serial_id(*query as u32)
         }
 
         async fn insert_at(
             &mut self,
-            _vector_ref: &Self::VectorRef,
+            _vector_ref: &VectorId,
             _query: &Self::QueryRef,
-        ) -> Result<Self::VectorRef> {
+        ) -> Result<VectorId> {
             unimplemented!()
         }
     }
@@ -1070,7 +1070,7 @@ mod tests {
         let searcher = HnswSearcher::new_with_test_parameters();
         let mut rng = AesRng::seed_from_u64(0_u64);
 
-        let mut point_ids_map: HashMap<PlaintextVectorRef, usize> = HashMap::new();
+        let mut point_ids_map: HashMap<VectorId, usize> = HashMap::new();
 
         for raw_query in IrisDB::new_random_rng(20, &mut rng).db {
             let query = Arc::new(raw_query);
@@ -1097,8 +1097,7 @@ mod tests {
             point_ids_map.insert(inserted, rng.next_u32() as usize);
         }
 
-        let new_graph_store: GraphMem<<TestStore as VectorStore>::VectorRef> =
-            migrate(graph_store.clone(), |v| point_ids_map[&v]);
+        let new_graph_store: GraphMem<usize> = migrate(graph_store.clone(), |v| point_ids_map[&v]);
 
         let (entry_point, layer) = graph_store.get_first_entry_point().await.unwrap();
         let (new_entry_point, new_layer) = new_graph_store.get_first_entry_point().await.unwrap();
@@ -1119,8 +1118,8 @@ mod tests {
                 reason = "Iteration is for assertions against a parallel data structure, compared entry by entry."
             )]
             for (point_id, queue) in links.iter() {
-                let new_point_id = point_ids_map[point_id];
-                let new_queue_vec = new_links[&new_point_id].to_vec();
+                let new_point_id = &point_ids_map[point_id];
+                let new_queue_vec = new_links[new_point_id].to_vec();
                 for (neighbor_id, new_neighbor_id) in queue.iter().zip(new_queue_vec) {
                     assert_eq!(point_ids_map[neighbor_id], new_neighbor_id);
                 }

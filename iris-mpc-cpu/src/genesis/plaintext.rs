@@ -33,7 +33,7 @@ use crate::{
     },
     genesis::{BatchSize, BatchSizeConfig},
     graph_checkpoint::PruningMode,
-    hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
+    hawkers::plaintext_store::PlaintextStore,
     hnsw::{
         graph::neighborhood::Neighborhood, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
         SortedNeighborhood,
@@ -48,7 +48,7 @@ pub type IrisesTable = HashMap<IrisSerialId, (IrisVersionId, IrisCode, IrisCode)
 pub type ModificationsTable = HashMap<i64, (IrisSerialId, String, bool, bool)>;
 
 /// Represents a left/right pair of plaintext in-memory HNSW graphs.
-pub type PlaintextGraphs = BothEyes<GraphMem<PlaintextVectorRef>>;
+pub type PlaintextGraphs = BothEyes<GraphMem<IrisVectorId>>;
 
 /// List of serial ids to treat as deleted enrollments in the source iris database.
 pub type GenesisDeletions = Vec<IrisSerialId>;
