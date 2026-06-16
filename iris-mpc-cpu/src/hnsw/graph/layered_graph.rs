@@ -927,6 +927,7 @@ mod tests {
 
     use rand::{RngCore, SeedableRng};
 
+    #[allow(dead_code)]
     #[derive(Default, Clone, Debug, PartialEq, Eq)]
     pub struct TestStore {
         points: HashMap<usize, Point>,

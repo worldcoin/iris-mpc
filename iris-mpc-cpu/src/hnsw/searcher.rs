@@ -2102,7 +2102,7 @@ mod tests {
         use crate::hawkers::plaintext_store::PlaintextStore;
         use crate::hnsw::graph::mutation::EdgeType;
         use crate::hnsw::GraphMem;
-        use crate::hnsw::VectorStore;
+        
         use iris_mpc_common::iris_db::iris::IrisCode;
         use std::collections::BTreeSet;
         use std::sync::Arc;
