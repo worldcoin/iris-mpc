@@ -2,7 +2,7 @@
 // Integration tests for the iris-mpc-cpu WAL pipeline.
 //
 // Run with:
-//   cargo test --test e2e_wal -- --nocapture
+//   cargo test --test e2e_hawk_init -- --nocapture
 //
 // Requires:
 //   - PostgreSQL running (via docker-compose) with per-party schemas

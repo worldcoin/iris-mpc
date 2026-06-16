@@ -106,7 +106,7 @@ impl WalMutationBuilder {
     }
 
     /// Sets the `persisted` flag for a single modification.
-    /// must preceed `build()`
+    /// must precede `build()`
     pub fn set_persisted(&mut self, modification_id: i64, value: bool) -> &mut Self {
         self.persisted.insert(modification_id, value);
         self
