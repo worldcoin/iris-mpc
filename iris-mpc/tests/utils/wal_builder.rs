@@ -52,7 +52,7 @@ impl ModificationStatus {
 /// Use [`set_persisted`] / [`set_status`] to override individual modifications.
 #[derive(Default)]
 pub struct WalMutationBuilder {
-    entries: HashMap<i64, GraphMutation<IrisVectorId>>,
+    entries: HashMap<i64, GraphMutation>,
     persisted: HashMap<i64, bool>,
     status: HashMap<i64, ModificationStatus>,
     processed: usize,
@@ -168,7 +168,7 @@ impl WalMutationBuilder {
         for m in mutations {
             let modification_id = m.seq_no as _;
             let m = vec![m];
-            let both_eyes: BothEyes<Vec<GraphMutation<IrisVectorId>>> = [m.clone(), m];
+            let both_eyes: BothEyes<Vec<GraphMutation>> = [m.clone(), m];
             let bytes = bincode::serialize(&both_eyes)?;
             graph
                 .upsert_hawk_graph_mutations(&mut tx, modification_id, &bytes)

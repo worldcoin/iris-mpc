@@ -168,7 +168,7 @@ async fn init_hnsw(
 ) -> Result<(
     HnswSearcher,
     PlaintextStore,
-    GraphMem<VectorId>,
+    GraphMem,
     Arc<IrisCode>,
     Arc<IrisCode>,
 )> {
@@ -183,7 +183,7 @@ async fn init_hnsw(
 async fn hnsw_search_queries_seq(
     searcher: &HnswSearcher,
     vector_store: &mut PlaintextStore,
-    graph_store: &mut GraphMem<VectorId>,
+    graph_store: &mut GraphMem,
     query1: Arc<IrisCode>,
     query2: Arc<IrisCode>,
 ) -> Result<()> {
@@ -199,7 +199,7 @@ async fn hnsw_search_queries_seq(
 async fn hnsw_search_queries_par(
     searcher: &HnswSearcher,
     vector_store: &mut PlaintextStore,
-    graph_store: &mut GraphMem<VectorId>,
+    graph_store: &mut GraphMem,
     query1: Arc<IrisCode>,
     query2: Arc<IrisCode>,
 ) {

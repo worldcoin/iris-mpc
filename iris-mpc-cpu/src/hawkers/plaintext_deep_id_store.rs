@@ -213,8 +213,8 @@ impl PlaintextDeepIDStore {
         rng: &mut R,
         graph_size: usize,
         searcher: &HnswSearcher,
-    ) -> Result<GraphMem<VectorId>> {
-        let mut graph: GraphMem<VectorId> = GraphMem::new();
+    ) -> Result<GraphMem> {
+        let mut graph: GraphMem = GraphMem::new();
         let mut rng = AesRng::from_rng(rng.clone())?;
 
         if graph_size > self.len() {

@@ -403,8 +403,8 @@ type UseOrRule = bool;
 
 type Aby3Ref = Arc<RwLock<Aby3Store<HawkOps>>>;
 
-pub type GraphRef = Arc<RwLock<GraphMem<VectorId>>>;
-pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<VectorId>>;
+pub type GraphRef = Arc<RwLock<GraphMem>>;
+pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem>;
 
 /// A container for state required to perform parallel MPC operations.
 ///
@@ -458,7 +458,7 @@ pub struct HawkInsertPlan {
 /// A `ConnectPlan` is one finalized step of the HNSW insertion pipeline —
 /// a `GraphMutation` produced by the per-slot insert loop or by the
 /// post-batch `compact_batch` / `prune_invalid_links` helpers.
-pub type ConnectPlan = GraphMutation<VectorId>;
+pub type ConnectPlan = GraphMutation;
 
 /// Build the MPC network handle. Cheap — just TCP listener setup.
 /// Callers that need peer sync before iris load (genesis) call
@@ -489,7 +489,7 @@ impl HawkActor {
         args: HawkArgs,
         networking: Box<dyn NetworkHandle>,
         initialized: worker_pool_initializer::InitializedWorkers,
-        graph: BothEyes<GraphMem<VectorId>>,
+        graph: BothEyes<GraphMem>,
     ) -> Self {
         let party_id = args.party_index;
 
@@ -548,7 +548,7 @@ impl HawkActor {
     pub async fn from_cli_with_graph_and_store(
         args: &HawkArgs,
         shutdown_ct: CancellationToken,
-        graph: BothEyes<GraphMem<VectorId>>,
+        graph: BothEyes<GraphMem>,
         iris_store: BothEyes<Aby3SharedIrises>,
     ) -> Result<Self> {
         use worker_pool_initializer::WorkerPoolInitializer;
@@ -1060,7 +1060,7 @@ pub struct GraphLoader<'a>(BothEyes<GraphMut<'a>>);
 
 #[allow(clippy::needless_lifetimes)]
 impl<'a> GraphLoader<'a> {
-    pub fn load_graphs_from_checkpoint(self, graphs: BothEyes<GraphMem<VectorId>>) {
+    pub fn load_graphs_from_checkpoint(self, graphs: BothEyes<GraphMem>) {
         let [left, right] = graphs;
         let GraphLoader(mut dest_graphs) = self;
         *dest_graphs[LEFT] = left;

@@ -118,11 +118,11 @@ impl DbStores {
     /// digest of its bincode serialisation.
     ///
     /// This mirrors exactly what the sidecar does in `terminal.rs`:
-    /// `bincode::serialize_into(writer, &graph)` where `graph: BothEyes<GraphMem<VectorId>>`.
+    /// `bincode::serialize_into(writer, &graph)` where `graph: BothEyes<GraphMem>`.
     /// Use this to build a reference hash for `CpuNodes::assert_checkpoint_hashes_match_reference`.
     pub async fn compute_reference_hash(&self) -> eyre::Result<[u8; 32]> {
         let rows = self.graph.get_hawk_graph_mutations_after(None).await?;
-        let mut graph_pair: [GraphMem<IrisVectorId>; 2] = [GraphMem::new(), GraphMem::new()];
+        let mut graph_pair: [GraphMem; 2] = [GraphMem::new(), GraphMem::new()];
         for row in &rows {
             let [left_muts, right_muts] = row.deserialize_mutations()?;
             graph_pair[0].insert_apply_all(&left_muts)?;
@@ -346,7 +346,7 @@ impl CpuNode {
     ///
     /// 1. Query `MAX(modification_id)` from `hawk_graph_mutations`.
     /// 2. Read all `hawk_graph_mutations` rows up to that id.
-    /// 3. Replay mutations into `[GraphMem<IrisVectorId>; 2]` (left + right eye).
+    /// 3. Replay mutations into `[GraphMem; 2]` (left + right eye).
     /// 4. Serialize according to `format`:
     ///    - `Current` → `bincode::serialize(&[GraphMem; 2])` (sidecar wire format).
     ///    - `V3`      → deterministic custom encoding via `write_graph_v3` (no `seq_no`).
@@ -376,8 +376,8 @@ impl CpuNode {
             .get_hawk_graph_mutations(Some(last_modification_id))
             .await?;
 
-        let mut left_graph = GraphMem::<IrisVectorId>::new();
-        let mut right_graph = GraphMem::<IrisVectorId>::new();
+        let mut left_graph = GraphMem::new();
+        let mut right_graph = GraphMem::new();
         for row in &mutation_rows {
             let both_eyes = row.deserialize_mutations()?;
             left_graph.insert_apply_all(&both_eyes[0])?;
@@ -387,13 +387,13 @@ impl CpuNode {
         let bytes: Vec<u8> = match &format {
             GraphFormat::Current => {
                 // bincode-serialised [GraphMem; 2] — matches the sidecar wire format.
-                let graph_pair: [GraphMem<IrisVectorId>; 2] = [left_graph, right_graph];
+                let graph_pair: [GraphMem; 2] = [left_graph, right_graph];
                 bincode::serialize(&graph_pair)?
             }
             GraphFormat::V3 => {
                 // Convert GraphMem → GraphV3 by copying entry_points and layers,
                 // dropping the seq_no field that is absent in the V3 format.
-                let to_v3 = |g: GraphMem<IrisVectorId>| -> graph_v3::GraphV3 {
+                let to_v3 = |g: GraphMem| -> graph_v3::GraphV3 {
                     let vec_id = |v: &IrisVectorId| graph_v3::VectorId {
                         id: v.serial_id(),
                         version: v.version_id(),

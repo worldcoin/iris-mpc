@@ -71,7 +71,7 @@ where
 }
 
 async fn run_sanity_check_iris<D: DistanceOps>(
-    graph: &GraphMem<IrisVectorId>,
+    graph: &GraphMem,
     searcher: &HnswSearcher,
     irises: Vec<iris_mpc_common::iris_db::iris::IrisCode>,
     echoice: EngineChoice,
@@ -164,7 +164,7 @@ async fn run_sanity_check_iris<D: DistanceOps>(
 }
 
 async fn run_sanity_check_deep_id(
-    graph: &GraphMem<IrisVectorId>,
+    graph: &GraphMem,
     searcher: &HnswSearcher,
     vectors: Vec<Int4Vector>,
     threshold: i32,

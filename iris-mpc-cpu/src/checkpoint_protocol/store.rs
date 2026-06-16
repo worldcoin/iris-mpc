@@ -43,8 +43,7 @@ impl<V: VectorStore + Send + Sync> MutationStore for GraphPg<V> {
         &self,
         lo_exclusive: GraphMutationId,
         hi_inclusive: GraphMutationId,
-    ) -> Result<BoxStream<'_, Result<BothEyes<Vec<GraphMutation<VectorId>>>, CycleError>>, CycleError>
-    {
+    ) -> Result<BoxStream<'_, Result<BothEyes<Vec<GraphMutation>>, CycleError>>, CycleError> {
         let stream = self
             .stream_hawk_graph_mutations_in_range(lo_exclusive, hi_inclusive)
             .map_err(|e| CycleError::Transient(format!("stream hawk_graph_mutations: {e}")))
@@ -84,9 +83,9 @@ mod tests {
         VectorId::from_serial_id(n)
     }
 
-    /// Builds a `BothEyes<Vec<GraphMutation<VectorId>>>` with one RemoveNode per eye,
+    /// Builds a `BothEyes<Vec<GraphMutation>>` with one RemoveNode per eye,
     /// targeting different ids so left/right are distinguishable in the test.
-    fn both_eyes_payload(left_id: u32, right_id: u32) -> BothEyes<Vec<GraphMutation<VectorId>>> {
+    fn both_eyes_payload(left_id: u32, right_id: u32) -> BothEyes<Vec<GraphMutation>> {
         let mk = |id: u32| GraphMutation {
             seq_no: 1,
             ops: vec![MutationOp::RemoveNode { id: vid(id) }],
@@ -97,7 +96,7 @@ mod tests {
     async fn insert_row(
         store: &TestGraphPg<PlaintextStore>,
         modification_id: i64,
-        payload: &BothEyes<Vec<GraphMutation<VectorId>>>,
+        payload: &BothEyes<Vec<GraphMutation>>,
     ) -> eyre::Result<()> {
         let bytes = bincode::serialize(payload)?;
         let mut graph_tx = store.tx().await?;
@@ -163,7 +162,7 @@ mod tests {
         insert_row(&store, 9, &both_eyes_payload(109, 209)).await?;
 
         let stream = MutationStore::mutations_in_range(&store.graph, 1, 9).await?;
-        let rows: Vec<BothEyes<Vec<GraphMutation<VectorId>>>> = stream.try_collect().await?;
+        let rows: Vec<BothEyes<Vec<GraphMutation>>> = stream.try_collect().await?;
 
         assert_eq!(rows.len(), 2, "(1,9] should include ids 5 and 9");
         for (row, expected) in rows.iter().zip([(105, 205), (109, 209)]) {

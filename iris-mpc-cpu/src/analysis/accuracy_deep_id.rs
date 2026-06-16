@@ -173,7 +173,7 @@ pub async fn load_graph(
     config: &GraphInit,
     store: &mut PlaintextDeepIDStore,
     rng: &mut StdRng,
-) -> Result<GraphMem<VectorId>> {
+) -> Result<GraphMem> {
     match config {
         GraphInit::BinFile { path, format } => {
             println!("Loading graph from binary file: {}", path.display());
@@ -239,7 +239,7 @@ where
 pub async fn run_analysis(
     config: AnalysisConfig,
     store: PlaintextDeepIDStore,
-    graph: GraphMem<VectorId>,
+    graph: GraphMem,
     rng: &mut StdRng,
 ) -> Result<Vec<AnalysisResult>> {
     config.validate()?;

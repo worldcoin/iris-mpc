@@ -4,7 +4,7 @@ use pyo3::{exceptions::PyIOError, prelude::*};
 
 #[pyclass]
 #[derive(Clone, Default)]
-pub struct PyGraphStore(pub GraphMem<IrisVectorId>);
+pub struct PyGraphStore(pub GraphMem);
 
 #[pymethods]
 impl PyGraphStore {
