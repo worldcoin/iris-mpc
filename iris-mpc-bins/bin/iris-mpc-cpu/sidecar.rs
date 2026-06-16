@@ -11,6 +11,7 @@ use std::process::exit;
 use std::time::Duration;
 
 use ampc_actor_utils::network::tcp::TlsConfig;
+use iris_mpc_common::config::Config;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::tracing::initialize_tracing;
 use iris_mpc_cpu::{
@@ -111,7 +112,7 @@ impl SidecarArgs {
     }
 }
 
-fn hawk_args_from(args: &SidecarArgs) -> HawkArgs {
+fn hawk_args_from(args: &SidecarArgs, tls: Option<TlsConfig>) -> HawkArgs {
     HawkArgs {
         party_index: args.party_index,
         addresses: args.addresses.clone(),
@@ -128,7 +129,7 @@ fn hawk_args_from(args: &SidecarArgs) -> HawkArgs {
         hnsw_prf_key: None,
         disable_persistence: true,
         hnsw_disable_memory_persistence: true,
-        tls: None::<TlsConfig>,
+        tls,
         numa: false,
     }
 }
@@ -178,7 +179,10 @@ async fn main() -> Result<()> {
     let aws_cfg = aws_config::from_env().load().await;
     let s3_client = aws_sdk_s3::Client::new(&aws_cfg);
 
-    let hawk_args = hawk_args_from(&args);
+    // TLS is supplied via SMPC__TLS__* env vars (same path as Hawk Main), not
+    // CLI flags; load it from the SMPC-prefixed config and feed it through.
+    let tls = Config::load_config("SMPC")?.tls;
+    let hawk_args = hawk_args_from(&args, tls);
     let mut networking = build_hawk_network_handle(&hawk_args, shutdown_ct.clone()).await?;
 
     let cfg = SidecarConfig {

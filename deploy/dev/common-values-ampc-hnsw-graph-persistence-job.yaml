@@ -1,7 +1,7 @@
-image: "ghcr.io/worldcoin/iris-mpc-cpu:f6d63d5de0aa9799ef122f0388239ec3e9d3dff6-arm64"
+image: "ghcr.io/worldcoin/iris-mpc-cpu:eb609d38d29a2e80261d392c9aaf3156704dfa9a-arm64"
 
 environment: dev
-schedule: "0 */4 * * *"
+schedule: "*/10 * * * *"
 
 env:
   ENV: "dev"
@@ -11,12 +11,11 @@ env:
   SMPC__CPU_DATABASE__URL:
     valueFrom:
       secretKeyRef:
-        key: DATABASE_AURORA_HNSW_URL
+        key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
         name: application
   SMPC__TLS__PRIVATE_KEY: "/etc/ssl/private/key.pem"
   SMPC__TLS__LEAF_CERT: "/etc/ssl/private/certificate.crt"
   SMPC__TLS__ROOT_CERTS: '["/usr/local/share/ca-certificates/ca_party_dev_0.crt", "/usr/local/share/ca-certificates/ca_party_dev_1.crt", "/usr/local/share/ca-certificates/ca_party_dev_2.crt"]'
-  SMPC__TLS__CLIENT_ONLY_TLS: false
 
 backoffLimit: 0
 concurrencyPolicy: Forbid
@@ -61,3 +60,7 @@ podSecurityContext:
   runAsGroup: 65534
 
 terminationGracePeriodSeconds: 120
+
+mountSSLCerts:
+  enabled: true
+  mountPath: /etc/ssl/private

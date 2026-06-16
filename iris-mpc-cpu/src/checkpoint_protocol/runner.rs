@@ -241,8 +241,9 @@ async fn sidecar_cycle<V: VectorStore + Send + Sync>(
 pub enum RestartOutcome {
     /// A graph was installed at the reported height.
     Installed { height: GraphMutationId },
-    /// No `genesis_graph_checkpoint` row exists; caller falls back to its
-    /// own bootstrap path (empty graph, plaintext checkpoint migration).
+    /// No party has any `genesis_graph_checkpoint` row (agreed via the ring,
+    /// not inferred locally); caller falls back to its own bootstrap path
+    /// (empty graph, plaintext checkpoint migration).
     NoCheckpoint,
     /// A peer's `current_max_mutation_id` came in below the agreed base.
     /// Restart can be retried once peers catch up; not a fatal error.
@@ -267,15 +268,16 @@ pub async fn restart_from_checkpoint<V: VectorStore + Send + Sync>(
     peer_round_timeout: Duration,
     checkpoint_window: usize,
 ) -> Result<RestartOutcome> {
-    if graph_store
-        .get_latest_genesis_graph_checkpoint()
-        .await
-        .map_err(|e| eyre!("get_latest_genesis_graph_checkpoint: {e}"))?
-        .is_none()
-    {
-        return Ok(RestartOutcome::NoCheckpoint);
-    }
-
+    tracing::info!(
+        bucket = %bucket,
+        checkpoint_window,
+        peer_round_timeout = ?peer_round_timeout,
+        "restart: restoring graph from checkpoint via ring consensus"
+    );
+    // No local-table fast path here: a party with an empty table must still
+    // join the ring, or its peers block in the Phase 1 exchange until
+    // timeout and crash-loop while this party silently boots empty.
+    // "Nobody has a checkpoint" is a consensus outcome, not a local one.
     let channel = networking
         .control_channel()
         .await
@@ -312,6 +314,10 @@ pub async fn restart_from_checkpoint<V: VectorStore + Send + Sync>(
         Outcome::Skipped(SkipReason::PeerBehindBase { freeze, base }) => {
             tracing::warn!(freeze, base, "restart skipped: peer behind base");
             Ok(RestartOutcome::PeerBehindBase { freeze, base })
+        }
+        Outcome::Skipped(SkipReason::NoCheckpoints) => {
+            tracing::info!("restart: no party has any checkpoint");
+            Ok(RestartOutcome::NoCheckpoint)
         }
         Outcome::Skipped(SkipReason::NoCommonBase) => {
             tracing::warn!("restart skipped: no common base across parties");
