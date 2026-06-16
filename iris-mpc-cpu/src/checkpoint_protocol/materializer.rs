@@ -9,7 +9,6 @@ use crate::graph_checkpoint::stream_download_and_deserialize_graph_pair;
 use crate::hnsw::{graph::graph_store::GraphPg, VectorStore};
 use crate::utils::serialization::graph::GraphFormat;
 use futures::TryStreamExt;
-use iris_mpc_common::vector_id::VectorId;
 
 /// Rebuilds the graph from an S3 checkpoint plus WAL replay.
 pub struct RebuildFromCheckpoint<'a, V: VectorStore> {
@@ -124,9 +123,10 @@ mod tests {
     use crate::hnsw::graph::layered_graph::GraphMem;
     use crate::hnsw::graph::mutation::{GraphMutation, MutationOp, UpdateEntryPoint};
     use futures::{stream, StreamExt};
+    use iris_mpc_common::IrisVectorId;
 
-    fn vid(n: u32) -> VectorId {
-        VectorId::from_serial_id(n)
+    fn vid(n: u32) -> IrisVectorId {
+        IrisVectorId::from_serial_id(n)
     }
 
     // Use `n` itself as the seq_no — every test below picks node ids that

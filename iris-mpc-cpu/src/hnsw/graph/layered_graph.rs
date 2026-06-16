@@ -21,7 +21,6 @@ use crate::{
 use eyre::Result;
 use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
 use itertools::{izip, Itertools};
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::{
     ser::{SerializeMap, SerializeStruct, Serializer},
     Deserialize, Serialize,
@@ -1404,7 +1403,6 @@ mod tests {
     #[test]
     fn next_seq_no_is_one_past_last_and_does_not_mutate() {
         use crate::hnsw::GraphMem;
-        use iris_mpc_common::IrisVectorId;
         let mut graph = GraphMem::new();
         assert_eq!(graph.last_update_seq_no, 0);
         assert_eq!(graph.next_sequence_number(), 1);

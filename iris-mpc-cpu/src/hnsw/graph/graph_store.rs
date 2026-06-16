@@ -3,7 +3,7 @@ use crate::{
     hnsw::{graph::GraphMutation, VectorStore},
 };
 use eyre::{eyre, Result};
-use iris_mpc_common::{postgres::PostgresClient, IrisVectorId};
+use iris_mpc_common::postgres::PostgresClient;
 use serde::{de::DeserializeOwned, Serialize};
 use sqlx::{types::Json, Postgres, Row, Transaction};
 use std::{marker::PhantomData, ops::DerefMut};
@@ -559,6 +559,7 @@ pub mod test_utils {
 mod tests {
     use super::{test_utils::TestGraphPg, *};
     use crate::hawkers::plaintext_store::PlaintextStore;
+    use iris_mpc_common::IrisVectorId;
     use tokio;
 
     #[tokio::test]
@@ -823,7 +824,7 @@ mod tests {
 
         let store = TestGraphPg::<PlaintextStore>::new().await?;
 
-        let plan_left = GraphMutation::<IrisVectorId> {
+        let plan_left = GraphMutation {
             seq_no: 1,
             ops: vec![MutationOp::AddNode {
                 id: IrisVectorId::from_serial_id(1),
@@ -831,7 +832,7 @@ mod tests {
                 update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
             }],
         };
-        let plan_right = GraphMutation::<IrisVectorId> {
+        let plan_right = GraphMutation {
             seq_no: 1,
             ops: vec![MutationOp::AddNode {
                 id: IrisVectorId::from_serial_id(2),

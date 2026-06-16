@@ -2,10 +2,7 @@ use std::collections::HashMap;
 
 use aws_sdk_s3::Client;
 use eyre::{bail, eyre, Result};
-use iris_mpc_common::{
-    helpers::sync::{SyncResult, SyncState},
-    IrisVectorId,
-};
+use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use itertools::izip;
 
 use super::{download_graph_checkpoint, GraphCheckpointState};
@@ -185,6 +182,7 @@ pub fn apply_graph_mutations(
 mod tests {
     use super::*;
     use crate::hnsw::graph::mutation::{MutationOp, UpdateEntryPoint};
+    use iris_mpc_common::IrisVectorId;
 
     // ── helpers ───────────────────────────────────────────────────────────────
 

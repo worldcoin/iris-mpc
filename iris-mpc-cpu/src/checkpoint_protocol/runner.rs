@@ -27,7 +27,6 @@ use crate::hnsw::{
     graph::{graph_store::GraphPg, layered_graph::GraphMem},
     VectorStore,
 };
-use iris_mpc_common::vector_id::VectorId;
 
 // ── In-process Sidecar  ───────────────────────────────────────────────────────
 

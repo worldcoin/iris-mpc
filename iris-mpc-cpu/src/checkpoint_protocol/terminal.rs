@@ -16,7 +16,6 @@ use crate::hnsw::{
     VectorStore,
 };
 use crate::utils::serialization::graph::GraphFormat;
-use iris_mpc_common::vector_id::VectorId;
 
 /// Uploads the materialized graph to S3 and inserts a new
 /// `genesis_graph_checkpoint` row.
@@ -190,9 +189,10 @@ impl TerminalAction for InstallAsServing {
 mod tests {
     use super::*;
     use crate::hnsw::graph::mutation::{GraphMutation, MutationOp, UpdateEntryPoint};
+    use iris_mpc_common::IrisVectorId;
 
-    fn vid(n: u32) -> VectorId {
-        VectorId::from_serial_id(n)
+    fn vid(n: u32) -> IrisVectorId {
+        IrisVectorId::from_serial_id(n)
     }
 
     fn cp_meta() -> CheckpointMeta {

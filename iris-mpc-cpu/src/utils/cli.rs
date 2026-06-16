@@ -5,7 +5,7 @@ use std::{
 };
 
 use eyre::{bail, eyre, OptionExt, Result};
-use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
+use iris_mpc_common::iris_db::iris::IrisCode;
 use rand::{rngs::StdRng, RngCore, SeedableRng};
 use serde::Deserialize;
 
