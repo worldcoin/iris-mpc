@@ -18,7 +18,6 @@ use aws_sdk_s3::{
     Client as S3Client, Config,
 };
 use eyre::{eyre, Result};
-use iris_mpc_common::IrisVectorId;
 use iris_mpc_cpu::{
     graph_checkpoint::{
         stream_download_and_deserialize_graph_pair, stream_download_and_deserialize_with,

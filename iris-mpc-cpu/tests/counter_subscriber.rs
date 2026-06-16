@@ -14,7 +14,7 @@
 
 use aes_prng::AesRng;
 use eyre::Result;
-use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::VectorId};
+use iris_mpc_common::iris_db::iris::IrisCode;
 use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{
