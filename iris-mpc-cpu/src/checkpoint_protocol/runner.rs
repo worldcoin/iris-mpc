@@ -268,6 +268,12 @@ pub async fn restart_from_checkpoint<V: VectorStore + Send + Sync>(
     peer_round_timeout: Duration,
     checkpoint_window: usize,
 ) -> Result<RestartOutcome> {
+    tracing::info!(
+        bucket = %bucket,
+        checkpoint_window,
+        peer_round_timeout = ?peer_round_timeout,
+        "restart: restoring graph from checkpoint via ring consensus"
+    );
     // No local-table fast path here: a party with an empty table must still
     // join the ring, or its peers block in the Phase 1 exchange until
     // timeout and crash-loop while this party silently boots empty.

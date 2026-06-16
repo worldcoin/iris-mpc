@@ -62,6 +62,10 @@ impl ConsensusTransport for RingConsensusTransport {
             ch.send_prev(NetworkValue::Bytes(bytes))
                 .await
                 .map_err(|e| CycleError::Transient(format!("control_channel.send_prev: {e}")))?;
+            tracing::debug!(
+                ?cycle_nonce,
+                "ring exchange: proposals sent, awaiting peers"
+            );
             let next = recv_bytes("recv_next", ch.recv_next().await).await?;
             let prev = recv_bytes("recv_prev", ch.recv_prev().await).await?;
             Ok::<(Vec<u8>, Vec<u8>), CycleError>((next, prev))

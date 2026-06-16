@@ -42,6 +42,12 @@ impl<V: VectorStore + Send + Sync> Materializer for RebuildFromCheckpoint<'_, V>
             )));
         }
 
+        tracing::info!(
+            bucket = %self.bucket,
+            s3_key = %base.s3_key,
+            graph_version = base.graph_version,
+            "materialize: downloading checkpoint base from S3"
+        );
         let (mut graph, downloaded_hash) =
             stream_download_and_deserialize::<Graph>(self.s3_client, &self.bucket, &base.s3_key)
                 .await
@@ -70,8 +76,15 @@ impl<V: VectorStore + Send + Sync> Materializer for RebuildFromCheckpoint<'_, V>
                 "materializer invariant violated: freeze ({hi}) < base.graph_mutation_id ({lo})"
             )));
         }
+        tracing::info!(
+            blake3 = %downloaded_hex,
+            from = lo,
+            to = hi,
+            "materialize: base verified, replaying WAL range (from, to]"
+        );
         let stream = MutationStore::mutations_in_range(self.graph_store, lo, hi).await?;
-        apply_wal_stream(&mut graph, stream).await?;
+        let applied = apply_wal_stream(&mut graph, stream).await?;
+        tracing::info!(rows = applied, "materialize: WAL replay complete");
 
         Ok(graph)
     }
@@ -87,8 +100,9 @@ async fn apply_wal_stream(
         '_,
         Result<BothEyes<Vec<crate::hnsw::graph::mutation::GraphMutation<VectorId>>>, CycleError>,
     >,
-) -> Result<(), CycleError> {
+) -> Result<usize, CycleError> {
     use crate::execution::hawk_main::{LEFT, RIGHT};
+    let mut applied = 0usize;
     while let Some(row) = stream.try_next().await? {
         let [left_muts, right_muts] = row;
         graph[LEFT]
@@ -97,8 +111,9 @@ async fn apply_wal_stream(
         graph[RIGHT]
             .insert_apply_all(&right_muts)
             .map_err(|e| CycleError::Fatal(format!("WAL replay (RIGHT) failed: {e}")))?;
+        applied += 1;
     }
-    Ok(())
+    Ok(applied)
 }
 
 #[cfg(test)]

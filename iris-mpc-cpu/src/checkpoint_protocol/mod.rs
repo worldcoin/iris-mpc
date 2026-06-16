@@ -268,6 +268,11 @@ where
 {
     // Phase 1 — base agreement.
     let my_recent = store.recent_checkpoints(cfg.checkpoint_window).await?;
+    tracing::info!(
+        local_recent = my_recent.len(),
+        window = cfg.checkpoint_window,
+        "checkpoint cycle: phase 1 — exchanging base proposals"
+    );
     let peer_lists = transport
         .exchange(
             ConsensusMessage::BaseProposal {
@@ -291,6 +296,11 @@ where
         Some(b) => b,
         None => return Ok(Outcome::Skipped(SkipReason::NoCommonBase)),
     };
+    tracing::info!(
+        base_mutation_id = ?agreed_base.graph_mutation_id,
+        base_s3_key = %agreed_base.s3_key,
+        "checkpoint cycle: phase 1 — base agreed"
+    );
     // Phases 2-5 share a nonce derived from the agreed base's content —
     // preserves the crossed-wire detection the original strict-equality
     // design had, and additionally catches parties that picked different
@@ -319,6 +329,11 @@ where
             .copied()
             .fold(local_height, GraphMutationId::min),
     );
+    tracing::info!(
+        local_height,
+        freeze = freeze.0,
+        "checkpoint cycle: phase 2 — heights exchanged"
+    );
 
     let lo = agreed_base.graph_mutation_id.unwrap_or(0);
     if freeze.0 < lo {
@@ -339,10 +354,20 @@ where
 
     // Phase 3 — materialize. Pluggable: rebuild-from-checkpoint, live-clone,
     // or future live-fork.
+    tracing::info!(
+        base = lo,
+        freeze = freeze.0,
+        mutations = available,
+        "checkpoint cycle: phase 3 — materializing graph"
+    );
     let graph = materializer.snapshot(agreed_base.clone(), freeze).await?;
 
     // Phase 4 — hash the materialized graph.
     let local_hash = hasher.hash_canonical(&graph);
+    tracing::info!(
+        local_hash = %hex::encode(local_hash),
+        "checkpoint cycle: phase 5 — exchanging graph hashes"
+    );
 
     // Phase 5 — hash consensus. All parties must produce the same canonical
     // bytes; any mismatch is fatal (graph divergence; cycle cannot be trusted).
@@ -367,6 +392,10 @@ where
         }
     }
 
+    tracing::info!(
+        height = freeze.0,
+        "checkpoint cycle: hash consensus reached, running terminal action"
+    );
     finalizer
         .finalize(agreed_base, freeze, graph, local_hash)
         .await?;
