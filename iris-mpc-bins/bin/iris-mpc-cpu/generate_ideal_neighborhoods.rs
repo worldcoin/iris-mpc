@@ -31,7 +31,7 @@ struct ResultsHeader {
 }
 
 /// Dispatch wrapper so the chunk/append loop is written once regardless of
-/// store kind. Both inner engines return `Vec<KNNResult<SerialId>>`.
+/// store kind. Both inner engines return `Vec<KNNResult>`.
 enum AnyEngine {
     Iris(Engine),
     Int4(EngineInt4),
@@ -45,7 +45,7 @@ impl AnyEngine {
         }
     }
 
-    fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult<SerialId>> {
+    fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult> {
         match self {
             AnyEngine::Iris(e) => e.compute_chunk(chunk_size),
             AnyEngine::Int4(e) => e.compute_chunk(chunk_size),
@@ -147,10 +147,10 @@ async fn main() {
             }
 
             // 3. Process the rest of the lines as KNN results
-            let results: Result<Vec<KNNResult<SerialId>>, _> = lines
+            let results: Result<Vec<KNNResult>, _> = lines
                 .map(|line_result| {
                     let line = line_result.map_err(|e| e.to_string())?;
-                    serde_json::from_str::<KNNResult<SerialId>>(&line).map_err(|e| e.to_string())
+                    serde_json::from_str::<KNNResult>(&line).map_err(|e| e.to_string())
                 })
                 .collect();
 
@@ -170,7 +170,7 @@ async fn main() {
 
             let nodes: Vec<SerialId> = deserialized_results
                 .into_iter()
-                .map(|result| result.node)
+                .map(|result| result.node.serial_id())
                 .collect();
             (nodes.len() as SerialId, nodes)
         }

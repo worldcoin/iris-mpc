@@ -24,7 +24,7 @@ pub struct GraphCheckpointRow {
 #[derive(sqlx::FromRow, Debug, Clone, PartialEq, Eq)]
 pub struct GraphMutationRow {
     pub modification_id: i64,
-    /// Bincode-serialized `BothEyes<Vec<GraphMutation<VectorId>>>` (mutations for both eyes)
+    /// Bincode-serialized `BothEyes<Vec<GraphMutation>>` (mutations for both eyes)
     pub serialized_mutations: Vec<u8>,
 }
 
@@ -35,8 +35,8 @@ pub struct GraphPg<V: VectorStore> {
 }
 
 impl GraphMutationRow {
-    pub fn deserialize_mutations(&self) -> Result<BothEyes<Vec<GraphMutation<IrisVectorId>>>> {
-        let both_eyes: BothEyes<Vec<GraphMutation<IrisVectorId>>> =
+    pub fn deserialize_mutations(&self) -> Result<BothEyes<Vec<GraphMutation>>> {
+        let both_eyes: BothEyes<Vec<GraphMutation>> =
             bincode::deserialize(&self.serialized_mutations)?;
         Ok(both_eyes)
     }
@@ -839,7 +839,7 @@ mod tests {
                 update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
             }],
         };
-        let both: BothEyes<Vec<GraphMutation<IrisVectorId>>> =
+        let both: BothEyes<Vec<GraphMutation>> =
             [vec![plan_left.clone()], vec![plan_right.clone()]];
         let payload = bincode::serialize(&both)?;
 

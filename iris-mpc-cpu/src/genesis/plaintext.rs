@@ -48,7 +48,7 @@ pub type IrisesTable = HashMap<IrisSerialId, (IrisVersionId, IrisCode, IrisCode)
 pub type ModificationsTable = HashMap<i64, (IrisSerialId, String, bool, bool)>;
 
 /// Represents a left/right pair of plaintext in-memory HNSW graphs.
-pub type PlaintextGraphs = BothEyes<GraphMem<IrisVectorId>>;
+pub type PlaintextGraphs = BothEyes<GraphMem>;
 
 /// List of serial ids to treat as deleted enrollments in the source iris database.
 pub type GenesisDeletions = Vec<IrisSerialId>;

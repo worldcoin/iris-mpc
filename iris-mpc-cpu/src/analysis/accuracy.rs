@@ -96,7 +96,7 @@ where
 pub async fn run_analysis<D: DistanceOps>(
     config: AnalysisConfig,
     store: PlaintextStore<D>,
-    graph: GraphMem<VectorId>,
+    graph: GraphMem,
     rng: &mut StdRng,
 ) -> Result<Vec<AnalysisResult>> {
     // Get all valid VectorIds from the store.
@@ -421,7 +421,7 @@ pub async fn load_graph<D: DistanceOps>(
     config: &GraphInit,
     store: &mut PlaintextStore<D>,
     rng: &mut StdRng,
-) -> Result<GraphMem<VectorId>> {
+) -> Result<GraphMem> {
     match config {
         GraphInit::BinFile { path, format } => {
             println!("Loading graph from binary file: {}", path.display());

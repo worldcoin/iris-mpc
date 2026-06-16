@@ -71,7 +71,7 @@ impl<V: VectorStore> Clone for InsertPlanV<V> {
 ///   for pure deletions and no-op slots.
 pub async fn insert<V: VectorStoreMut>(
     store: &mut V,
-    graph: &mut GraphMem<VectorId>,
+    graph: &mut GraphMem,
     searcher: &HnswSearcher,
     plans: VecRequests<Option<InsertPlanV<V>>>,
     insert_ids: &VecRequests<Option<VectorId>>,
@@ -139,7 +139,7 @@ pub async fn insert<V: VectorStoreMut>(
             intra_batch_inserted.push(inserted_id);
             slot_inserted_ids[idx] = Some(inserted_id);
 
-            let mut ops: Vec<MutationOp<VectorId>> = vec![MutationOp::AddNode {
+            let mut ops: Vec<MutationOp> = vec![MutationOp::AddNode {
                 id: inserted_id,
                 height: links.len(),
                 update_ep,
@@ -721,7 +721,7 @@ mod tests {
     #[tokio::test]
     async fn test_insert_with_pure_deletion_preserves_slot_order() {
         let mut store = PlaintextStore::default();
-        let mut graph: GraphMem<VectorId> = GraphMem::new();
+        let mut graph: GraphMem = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
 
         // Seed the store/graph with two existing vectors A and B so we have something
@@ -798,7 +798,7 @@ mod tests {
     #[tokio::test]
     async fn test_insert_with_combined_replace_emits_removenode_then_addnode() {
         let mut store = PlaintextStore::default();
-        let mut graph: GraphMem<VectorId> = GraphMem::new();
+        let mut graph: GraphMem = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
 
         let old = store.insert(&Arc::new(IrisCode::default())).await;
@@ -863,7 +863,7 @@ mod tests {
     #[tokio::test]
     async fn test_insert_with_none_slot_yields_empty_vec() {
         let mut store = PlaintextStore::default();
-        let mut graph: GraphMem<VectorId> = GraphMem::new();
+        let mut graph: GraphMem = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
 
         let plans: VecRequests<Option<InsertPlanV<PlaintextStore>>> = vec![None];
@@ -894,7 +894,7 @@ mod tests {
     #[tokio::test]
     async fn test_insert_stamps_strictly_increasing_seq_nos_per_slot() {
         let mut store = PlaintextStore::default();
-        let mut graph: GraphMem<VectorId> = GraphMem::new();
+        let mut graph: GraphMem = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
 
         let expected_start = graph.next_sequence_number();
@@ -975,7 +975,7 @@ mod tests {
     #[tokio::test]
     async fn test_insert_appends_global_compaction_to_last_nonempty_slot() {
         let mut store = PlaintextStore::default();
-        let mut graph: GraphMem<VectorId> = GraphMem::new();
+        let mut graph: GraphMem = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
         let m_limit = searcher.params.get_M_limit(0);
 
@@ -994,7 +994,7 @@ mod tests {
         //     nodes (size m_limit, since there are m_limit + 1 seeds total).
         // EdgeType::Base ensures the back-edges aren't auto-created — keeps
         // each neighborhood exactly at m_limit.
-        let mut setup_ops: Vec<MutationOp<VectorId>> = Vec::with_capacity(seed_count * 2);
+        let mut setup_ops: Vec<MutationOp> = Vec::with_capacity(seed_count * 2);
         for (i, &id) in seed_ids.iter().enumerate() {
             setup_ops.push(MutationOp::AddNode {
                 id,

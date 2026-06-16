@@ -107,7 +107,7 @@ impl<D: DistanceOps> PlaintextStore<D> {
         rng: &mut R,
         graph_size: usize,
         searcher: &HnswSearcher,
-    ) -> Result<GraphMem<VectorId>> {
+    ) -> Result<GraphMem> {
         let mut graph = GraphMem::new();
         let mut rng = AesRng::from_rng(rng.clone())?;
 

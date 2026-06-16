@@ -1540,7 +1540,7 @@ mod tests {
             .collect();
 
         let mut plaintext_store = PlaintextStore::<FhdOps>::new();
-        let mut plaintext_graph: GraphMem<VectorId> = GraphMem::new();
+        let mut plaintext_graph: GraphMem = GraphMem::new();
         let plaintext_span = info_span!("plaintext_insert");
         for (iris, &layer) in cleartext_db.iter().zip(insertion_layers.iter()) {
             let query = Arc::new(iris.clone());
@@ -1569,18 +1569,18 @@ mod tests {
                 let mpc_span = info_span!("mpc_insert", id = idx);
                 let mut store = store.lock().await;
                 let queries = cache_irises(store.workers.as_ref(), irises).await?;
-                let mut graph: GraphMem<VectorId> = GraphMem::new();
+                let mut graph: GraphMem = GraphMem::new();
                 for (query, &layer) in queries.iter().zip(layers.iter()) {
                     searcher
                         .insert::<_, SortedNeighborhood<_>>(&mut *store, &mut graph, query, layer)
                         .instrument(mpc_span.clone())
                         .await?;
                 }
-                Ok::<(usize, GraphMem<VectorId>), eyre::Report>((role, graph))
+                Ok::<(usize, GraphMem), eyre::Report>((role, graph))
             });
         }
 
-        let mut mpc_graphs: Vec<Option<GraphMem<VectorId>>> = (0..3).map(|_| None).collect();
+        let mut mpc_graphs: Vec<Option<GraphMem>> = (0..3).map(|_| None).collect();
         while let Some(res) = jobs.join_next().await {
             let (role, graph) = res??;
             mpc_graphs[role] = Some(graph);

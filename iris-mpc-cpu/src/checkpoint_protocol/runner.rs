@@ -264,7 +264,7 @@ pub async fn restart_from_checkpoint<V: VectorStore + Send + Sync>(
     s3_client: &S3Client,
     bucket: String,
     networking: &mut Box<dyn NetworkHandle>,
-    target: BothEyes<Arc<RwLock<GraphMem<VectorId>>>>,
+    target: BothEyes<Arc<RwLock<GraphMem>>>,
     peer_round_timeout: Duration,
     checkpoint_window: usize,
 ) -> Result<RestartOutcome> {

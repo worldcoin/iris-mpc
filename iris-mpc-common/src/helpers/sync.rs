@@ -10,7 +10,7 @@ pub struct SyncState {
     pub modifications: Vec<Modification>,
     pub next_sns_sequence_num: Option<u128>,
     pub common_config: CommonConfig,
-    /// Bincode-serialized `BothEyes<Vec<GraphMutation<IrisVectorId>>>` for each
+    /// Bincode-serialized `BothEyes<Vec<GraphMutation>>` for each
     /// modification in `modifications` (parallel by index).  `None` means this
     /// party has no WAL entry for that modification.
     ///

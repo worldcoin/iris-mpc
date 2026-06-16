@@ -105,14 +105,14 @@ impl MpcNodes {
     pub async fn assert_s3_checkpoint_graphs(
         &self,
         configs: &HawkConfigs,
-        expected_graphs: &BothEyes<GraphMem<IrisVectorId>>,
+        expected_graphs: &BothEyes<GraphMem>,
     ) -> Result<()> {
         for (i, (node, config)) in self.nodes.iter().zip(configs.iter()).enumerate() {
             let aws_clients = get_aws_clients(config).await?;
             let checkpoint_state = get_latest_checkpoint_state(&node.cpu_stores.graph)
                 .await?
                 .ok_or_else(|| eyre::eyre!("No checkpoint found for node {}", i))?;
-            let s3_graphs: BothEyes<GraphMem<IrisVectorId>> = download_graph_checkpoint(
+            let s3_graphs: BothEyes<GraphMem> = download_graph_checkpoint(
                 &aws_clients.checkpoint_s3_client,
                 &config.graph_checkpoint_bucket_name,
                 &checkpoint_state,

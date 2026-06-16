@@ -60,7 +60,7 @@ async fn create_graph_from_plain_dbs(
     left_db: &IrisDB,
     right_db: &IrisDB,
     searcher: &HnswSearcher,
-) -> Result<([GraphMem<VectorId>; 2], [Aby3SharedIrises; 2])> {
+) -> Result<([GraphMem; 2], [Aby3SharedIrises; 2])> {
     let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
     let left_points: HashMap<VectorId, Arc<IrisCode>> = left_db
         .db
@@ -103,8 +103,8 @@ async fn create_graph_from_plain_dbs(
     assert_eq!(Some(DB_SIZE), left_graph_max_id);
     assert_eq!(Some(DB_SIZE), right_graph_max_id);
 
-    let left_mpc_graph: GraphMem<VectorId> = left_graph;
-    let right_mpc_graph: GraphMem<VectorId> = right_graph;
+    let left_mpc_graph: GraphMem = left_graph;
+    let right_mpc_graph: GraphMem = right_graph;
 
     let mut left_shared_irises = HashMap::new();
     let mut right_shared_irises = HashMap::new();

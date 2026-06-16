@@ -106,7 +106,7 @@ pub struct LoadGraphConfig {
 }
 
 impl LoadGraphConfig {
-    pub fn read_graph_from_file(&self) -> Result<GraphMem<IrisVectorId>> {
+    pub fn read_graph_from_file(&self) -> Result<GraphMem> {
         let format = self.format.unwrap_or(GraphFormat::Current);
         super::serialization::graph::read_graph_from_file(&self.path, format)
     }

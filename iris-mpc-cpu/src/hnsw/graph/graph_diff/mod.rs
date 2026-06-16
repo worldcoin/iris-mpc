@@ -1,7 +1,6 @@
+use crate::hnsw::GraphMem;
+use iris_mpc_common::IrisVectorId;
 use std::fmt::Display;
-use std::str::FromStr;
-
-use crate::hnsw::{vector_store::Ref, GraphMem};
 
 pub mod explicit;
 pub mod jaccard;
@@ -11,7 +10,7 @@ pub mod node_equiv;
 ///
 /// A `Differ` implementation can maintain internal state and update it as the
 /// `run_diff` function traverses the layers and nodes of the graphs.
-pub trait Differ<V: Ref + Display + FromStr + Ord> {
+pub trait Differ {
     /// The final output type of the diffing operation.
     type Output: Display;
 
@@ -22,7 +21,13 @@ pub trait Differ<V: Ref + Display + FromStr + Ord> {
     fn start_layer(&mut self, _layer_index: usize) {}
 
     /// Called for each node that exists in both the `lhs` and `rhs` layer.
-    fn diff_neighborhood(&mut self, layer_index: usize, node: &V, lhs: &[V], rhs: &[V]);
+    fn diff_neighborhood(
+        &mut self,
+        layer_index: usize,
+        node: &IrisVectorId,
+        lhs: &[IrisVectorId],
+        rhs: &[IrisVectorId],
+    );
 
     /// Called after traversing each layer.
     fn end_layer(&mut self, _layer_index: usize) {}
@@ -35,10 +40,9 @@ pub trait Differ<V: Ref + Display + FromStr + Ord> {
 ///
 /// It's recommended to run `ensure_node_equivalence` before using this function
 /// to ensure the graphs have a comparable structure.
-pub fn run_diff<V, D>(lhs: &GraphMem<V>, rhs: &GraphMem<V>, mut differ: D) -> D::Output
+pub fn run_diff<D>(lhs: &GraphMem, rhs: &GraphMem, mut differ: D) -> D::Output
 where
-    V: Ref + Display + FromStr + Ord,
-    D: Differ<V>,
+    D: Differ,
 {
     differ.start_graph();
 

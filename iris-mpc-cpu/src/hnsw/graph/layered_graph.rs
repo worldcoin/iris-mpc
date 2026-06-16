@@ -14,7 +14,6 @@ use crate::{
             GraphMutation, MutationOp, UpdateEntryPoint,
         },
         searcher::LayerMode,
-        vector_store::Ref,
         HnswSearcher,
     },
 };
@@ -32,7 +31,6 @@ use std::{
     fmt::Display,
     iter::once,
     path::PathBuf,
-    str::FromStr,
     sync::Arc,
 };
 use tokio::sync::RwLock;
@@ -42,9 +40,9 @@ use tracing::warn;
 /// This is a vector reference along with the layer of the graph at which
 /// search begins.
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash)]
-pub struct EntryPoint<VectorRef> {
+pub struct EntryPoint {
     /// The vector reference of the entry point
-    pub point: VectorRef,
+    pub point: IrisVectorId,
 
     /// The layer at which HNSW search begins
     pub layer: usize,
@@ -52,8 +50,7 @@ pub struct EntryPoint<VectorRef> {
 
 /// An in-memory implementation of an HNSW hierarchical graph.
 #[derive(Default, PartialEq, Eq, Debug, Serialize, Deserialize)]
-#[serde(bound = "V: Ref + Display + FromStr")]
-pub struct GraphMem<V: Ref + Display + FromStr + Ord> {
+pub struct GraphMem {
     /// Entry points for HNSW search.
     ///
     /// If the graph is built by a searcher in `LinearScan` mode, this list will contain all nodes assigned
@@ -63,12 +60,12 @@ pub struct GraphMem<V: Ref + Display + FromStr + Ord> {
     /// If the graph is built by a searcher in `Standard` or `Bounded` mode this list
     /// will contain a single entry point at any given time, which corresponds to a node
     /// in the highest layer of the graph.
-    pub entry_points: Vec<EntryPoint<V>>,
+    pub entry_points: Vec<EntryPoint>,
 
     /// The layers of the hierarchical graph. The nodes of each layer are a
     /// subset of the nodes of the previous layer, and graph neighborhoods in
     /// each layer represent approximate nearest neighbors within that layer.
-    pub layers: Vec<Layer<V>>,
+    pub layers: Vec<Layer>,
 
     /// The sequence number of the most recently applied `GraphMutation`. `0`
     /// means no mutation has been applied. Advanced by `insert_apply` on
@@ -76,7 +73,7 @@ pub struct GraphMem<V: Ref + Display + FromStr + Ord> {
     pub last_update_seq_no: u64,
 }
 
-impl Display for GraphMem<IrisVectorId> {
+impl Display for GraphMem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "GraphMem")?;
         let eps_str = self
@@ -93,7 +90,7 @@ impl Display for GraphMem<IrisVectorId> {
     }
 }
 
-impl Display for Layer<IrisVectorId> {
+impl Display for Layer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut links = self
             .links
@@ -109,7 +106,7 @@ impl Display for Layer<IrisVectorId> {
     }
 }
 
-impl<V: Ref + Display + FromStr + Ord> Clone for GraphMem<V> {
+impl Clone for GraphMem {
     fn clone(&self) -> Self {
         GraphMem {
             entry_points: self.entry_points.clone(),
@@ -119,7 +116,7 @@ impl<V: Ref + Display + FromStr + Ord> Clone for GraphMem<V> {
     }
 }
 
-impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
+impl GraphMem {
     pub fn new() -> Self {
         GraphMem {
             entry_points: vec![],
@@ -138,7 +135,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
         Arc::new(RwLock::new(self))
     }
 
-    pub fn from_precomputed(entry_points: Vec<(V, usize)>, layers: Vec<Layer<V>>) -> Self {
+    pub fn from_precomputed(entry_points: Vec<(IrisVectorId, usize)>, layers: Vec<Layer>) -> Self {
         GraphMem {
             entry_points: entry_points
                 .into_iter()
@@ -152,7 +149,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
         }
     }
 
-    pub fn get_layers(&self) -> Vec<Layer<V>> {
+    pub fn get_layers(&self) -> Vec<Layer> {
         self.layers.clone()
     }
 
@@ -167,7 +164,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
     ///
     /// This is intended to be used in LinearScan mode while the entry_points
     /// list empty.
-    pub fn get_temporary_entry_point(&self) -> Option<(V, usize)> {
+    pub fn get_temporary_entry_point(&self) -> Option<(IrisVectorId, usize)> {
         self.layers
             .iter()
             .enumerate()
@@ -177,7 +174,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
 
     /// Gets the list of entry points.
     /// If this list is empty in LinearScan mode, `get_temporary_entry_point` may be used instead.
-    pub fn get_entry_points(&self) -> Option<Vec<V>> {
+    pub fn get_entry_points(&self) -> Option<Vec<IrisVectorId>> {
         let v: Vec<_> = self
             .entry_points
             .iter()
@@ -199,7 +196,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
     /// `self.last_update_seq_no`; otherwise the call returns `Err` without
     /// touching the graph. On success `self.last_update_seq_no` advances to
     /// `mutation.seq_no`.
-    pub fn insert_apply(&mut self, mutation: &GraphMutation<V>) -> Result<()> {
+    pub fn insert_apply(&mut self, mutation: &GraphMutation) -> Result<()> {
         if mutation.seq_no <= self.last_update_seq_no {
             return Err(eyre::eyre!(
                 "GraphMem::insert_apply: mutation seq_no {} is not strictly greater than \
@@ -386,7 +383,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
     /// that already carry a sequence number (replayed from a WAL or checkpoint)
     /// go through `insert_apply`/`insert_apply_all` instead, where the strict
     /// monotonicity check guards the externally-supplied `seq_no`.
-    pub fn apply_new(&mut self, mutation: UnstampedMutation<V>) -> Result<GraphMutation<V>> {
+    pub fn apply_new(&mut self, mutation: UnstampedMutation) -> Result<GraphMutation> {
         let stamped = GraphMutation {
             seq_no: self.next_sequence_number(),
             ops: mutation.ops,
@@ -395,34 +392,34 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
         Ok(stamped)
     }
 
-    pub fn insert_apply_all(&mut self, mutations: &[GraphMutation<V>]) -> Result<()> {
+    pub fn insert_apply_all(&mut self, mutations: &[GraphMutation]) -> Result<()> {
         for m in mutations {
             self.insert_apply(m)?;
         }
         Ok(())
     }
 
-    pub async fn get_first_entry_point(&self) -> Option<(V, usize)> {
+    pub async fn get_first_entry_point(&self) -> Option<(IrisVectorId, usize)> {
         self.entry_points
             .first()
             .map(|ep| (ep.point.clone(), ep.layer))
     }
 
-    pub async fn init_entry_points(&mut self, points: Vec<V>, layer: usize) {
+    pub async fn init_entry_points(&mut self, points: Vec<IrisVectorId>, layer: usize) {
         self.entry_points = points
             .into_iter()
             .map(|point| EntryPoint { point, layer })
             .collect()
     }
 
-    pub async fn add_entry_point(&mut self, point: V, layer: usize) {
+    pub async fn add_entry_point(&mut self, point: IrisVectorId, layer: usize) {
         if let Some(previous) = self.entry_points.first() {
             assert!(previous.layer == layer, "add_entry_point: layer mismatch");
         }
         self.entry_points.push(EntryPoint { point, layer });
     }
 
-    pub async fn set_unique_entry_point(&mut self, point: V, layer: usize) {
+    pub async fn set_unique_entry_point(&mut self, point: IrisVectorId, layer: usize) {
         if let Some(previous) = self.entry_points.first() {
             assert!(
                 previous.layer < layer,
@@ -437,13 +434,13 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
         self.entry_points = vec![EntryPoint { point, layer }];
     }
 
-    pub async fn get_links(&self, base: &V, lc: usize) -> &[V] {
+    pub async fn get_links(&self, base: &IrisVectorId, lc: usize) -> &[IrisVectorId] {
         let layer = &self.layers[lc];
         layer.get_links(base).unwrap_or(&[])
     }
 
     /// Set the neighbors of vertex `base` at layer `lc` to `links`.
-    pub async fn set_links(&mut self, base: V, links: Vec<V>, lc: usize) {
+    pub async fn set_links(&mut self, base: IrisVectorId, links: Vec<IrisVectorId>, lc: usize) {
         if self.layers.len() < lc + 1 {
             self.layers.resize(lc + 1, Layer::new());
         }
@@ -468,7 +465,7 @@ impl<V: Ref + Display + FromStr + Ord> GraphMem<V> {
     }
 }
 
-impl GraphMem<IrisVectorId> {
+impl GraphMem {
     /// Builds an idealized GraphMem, where all nearest-neighborhoods are exact.
     ///
     /// Layer 0 is built directly from a file (which generally is expensive to produce).
@@ -537,7 +534,7 @@ fn ideal_graph_from_vectors<K>(
     searcher: &HnswSearcher,
     prf_seed: [u8; 16],
     knn_proto: K,
-) -> Result<GraphMem<IrisVectorId>>
+) -> Result<GraphMem>
 where
     K: IdealKnn,
     K::Vector: Clone,
@@ -547,10 +544,6 @@ where
         for result in results.iter_mut() {
             result.truncate(searcher.params.get_M_max(0));
         }
-        let results = results
-            .into_par_iter()
-            .map(|result| result.map(IrisVectorId::from_serial_id))
-            .collect::<Vec<_>>();
         Layer::from_knn_results(results, vectors.len())
     };
 
@@ -604,11 +597,28 @@ where
         .into_iter()
         .enumerate()
         .map(|(i, layer_data)| {
-            Layer::ideal_from_data::<K>(
-                layer_data,
-                searcher.params.get_M_max(i + 1),
-                knn_proto.clone(),
-            )
+            let (vector_ids, vectors): (Vec<IrisVectorId>, Vec<K::Vector>) =
+                layer_data.into_iter().unzip();
+            let n = vectors.len();
+            let k = searcher.params.get_M_max(i + 1).min(n - 1);
+
+            let mut engine = NaiveKNN::<K>::init(knn_proto.clone(), vectors, k, 1);
+            let results = engine
+                .compute_chunk(n)
+                .into_iter()
+                .map(|result| {
+                    // remap from engine 1-based indices to original vector ids
+                    let node_idx = result.node.serial_id() as usize;
+                    let node = vector_ids[node_idx - 1];
+                    let neighbors: Vec<IrisVectorId> = result
+                        .neighbors
+                        .into_iter()
+                        .map(|neighbor_vid| vector_ids[(neighbor_vid.serial_id() as usize) - 1])
+                        .collect();
+                    KNNResult { node, neighbors }
+                })
+                .collect::<Vec<_>>();
+            Layer::from_knn_results(results, n)
         });
 
     Ok(GraphMem::from_precomputed(
@@ -618,23 +628,19 @@ where
 }
 
 #[derive(PartialEq, Eq, Default, Debug, Deserialize)]
-#[serde(bound = "V: Ref + Display + FromStr")]
-pub struct Layer<V: Ref + Display + FromStr + Ord> {
+pub struct Layer {
     /// Map a base vector to its neighbors.
-    pub links: HashMap<V, Vec<V>>,
+    pub links: HashMap<IrisVectorId, Vec<IrisVectorId>>,
     /// A checksum of the layer's links, used for state verification.
     /// This hash is updated whenever links are modified.
     set_hash: SetHash,
 }
 
-struct SortedLinks<'a, V: Ord> {
-    links: &'a HashMap<V, Vec<V>>,
+struct SortedLinks<'a> {
+    links: &'a HashMap<IrisVectorId, Vec<IrisVectorId>>,
 }
 
-impl<'a, V> Serialize for SortedLinks<'a, V>
-where
-    V: Serialize + Ord,
-{
+impl<'a> Serialize for SortedLinks<'a> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -650,10 +656,7 @@ where
     }
 }
 
-impl<V> Serialize for Layer<V>
-where
-    V: Ref + Display + FromStr + Ord + Serialize,
-{
+impl Serialize for Layer {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -665,7 +668,7 @@ where
     }
 }
 
-impl<V: Ref + Display + FromStr + Ord> Clone for Layer<V> {
+impl Clone for Layer {
     fn clone(&self) -> Self {
         Layer {
             links: self.links.clone(),
@@ -674,7 +677,7 @@ impl<V: Ref + Display + FromStr + Ord> Clone for Layer<V> {
     }
 }
 
-impl<V: Ref + Display + FromStr + Ord> Layer<V> {
+impl Layer {
     pub fn new() -> Self {
         Layer {
             links: HashMap::new(),
@@ -682,7 +685,7 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         }
     }
 
-    pub fn get_links(&self, from: &V) -> Option<&[V]> {
+    pub fn get_links(&self, from: &IrisVectorId) -> Option<&[IrisVectorId]> {
         self.links.get(from).map(|v| v.as_slice())
     }
 
@@ -693,7 +696,7 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         self.set_hash.checksum()
     }
 
-    pub fn insert_node(&mut self, id: &V, neighbors: Vec<V>) {
+    pub fn insert_node(&mut self, id: &IrisVectorId, neighbors: Vec<IrisVectorId>) {
         self.set_links(id.clone(), neighbors.clone());
     }
 
@@ -702,7 +705,7 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
     /// this layer are silently skipped (callers that need to log the missing
     /// case should check `get_links(target)` first). Idempotent: if `id` is
     /// already present in a target's list, that target is left unchanged.
-    pub fn link_node_to_neighbors(&mut self, node: &V, neighbors: Vec<V>) {
+    pub fn link_node_to_neighbors(&mut self, node: &IrisVectorId, neighbors: Vec<IrisVectorId>) {
         for target in &neighbors {
             if let Some(target_links) = self.links.get_mut(target) {
                 if let Err(pos) = target_links.binary_search(node) {
@@ -719,7 +722,7 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
     /// No-op if `id` is not present in this layer (callers that need to log
     /// the missing case should check `get_links(id)` first). Idempotent:
     /// existing entries are not duplicated.
-    pub fn link_neighbors_to_node(&mut self, node: &V, neighbors: Vec<V>) {
+    pub fn link_neighbors_to_node(&mut self, node: &IrisVectorId, neighbors: Vec<IrisVectorId>) {
         let Some(node_links) = self.links.get_mut(node) else {
             return;
         };
@@ -733,7 +736,7 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
     }
 
     /// Remove a node from the graph and clean up all backlinks from its neighbors.
-    pub fn remove_node(&mut self, id: &V) {
+    pub fn remove_node(&mut self, id: &IrisVectorId) {
         // Remove the node's links and get its neighbors
         if let Some(neighbors) = self.links.remove(id) {
             // Update set_hash for removed node
@@ -758,7 +761,11 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
     /// Remove `id` from each target's neighbor list, where `target` ranges over
     /// `to_remove`. Targets that don't exist in this layer are silently skipped
     /// (the caller's apply path is responsible for any logging).
-    pub fn unlink_node_from_neighbors(&mut self, node: &V, neighbors: Vec<V>) {
+    pub fn unlink_node_from_neighbors(
+        &mut self,
+        node: &IrisVectorId,
+        neighbors: Vec<IrisVectorId>,
+    ) {
         for target in &neighbors {
             if let Some(target_links) = self.links.get_mut(target) {
                 self.set_hash
@@ -773,7 +780,11 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
     /// if `id` is not present in this layer (callers that need to log the
     /// missing case should check `get_links(id)` first). The removal is
     /// unidirectional: the targets' own link lists are not modified.
-    pub fn unlink_neighbors_from_node(&mut self, node: &V, neighbors: Vec<V>) {
+    pub fn unlink_neighbors_from_node(
+        &mut self,
+        node: &IrisVectorId,
+        neighbors: Vec<IrisVectorId>,
+    ) {
         let Some(node_links) = self.links.get_mut(node) else {
             return;
         };
@@ -782,7 +793,7 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         self.set_hash.add_unordered_set(node, node_links.iter());
     }
 
-    pub fn set_links(&mut self, from: V, links: Vec<V>) {
+    pub fn set_links(&mut self, from: IrisVectorId, links: Vec<IrisVectorId>) {
         use std::collections::hash_map::Entry;
         match self.links.entry(from) {
             Entry::Occupied(mut e) => {
@@ -799,11 +810,11 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         }
     }
 
-    pub fn get_links_map(&self) -> &HashMap<V, Vec<V>> {
+    pub fn get_links_map(&self) -> &HashMap<IrisVectorId, Vec<IrisVectorId>> {
         &self.links
     }
 
-    fn from_knn_results(results: Vec<KNNResult<V>>, n: usize) -> Self {
+    fn from_knn_results(results: Vec<KNNResult>, n: usize) -> Self {
         let mut ret = Layer::new();
         for KNNResult { node, neighbors } in results.into_iter().take(n) {
             ret.set_links(node, neighbors);
@@ -811,19 +822,35 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
         ret
     }
 
-    /// Constructs a Layer from `(vector_ref, K::Vector)` pairs by brute-force
+    /// Constructs a Layer from `(vector_id, K::Vector)` pairs by brute-force
     /// top-k KNN using the supplied [`IdealKnn`] implementation.
-    pub fn ideal_from_data<K: IdealKnn>(data: Vec<(V, K::Vector)>, k: usize, knn: K) -> Self {
-        let (vector_refs, vectors): (Vec<V>, Vec<K::Vector>) = data.into_iter().unzip();
+    pub fn ideal_from_data<K: IdealKnn>(
+        data: Vec<(IrisVectorId, K::Vector)>,
+        k: usize,
+        knn: K,
+    ) -> Self {
+        let (vector_ids, vectors): (Vec<IrisVectorId>, Vec<K::Vector>) = data.into_iter().unzip();
         let n = vectors.len();
+        if n == 0 {
+            return Layer::new();
+        }
         let k = k.min(n - 1);
 
         let mut engine = NaiveKNN::<K>::init(knn, vectors, k, 1);
         let results = engine
             .compute_chunk(n)
             .into_iter()
-            // remap from engine 1-based indices to original vector ids
-            .map(|result| result.map(|i| vector_refs[(i - 1) as usize].clone()))
+            .map(|result| {
+                // remap from engine 1-based indices to original vector ids
+                let node_idx = result.node.serial_id() as usize;
+                let node = vector_ids[node_idx - 1];
+                let neighbors: Vec<IrisVectorId> = result
+                    .neighbors
+                    .into_iter()
+                    .map(|neighbor_vid| vector_ids[(neighbor_vid.serial_id() as usize) - 1])
+                    .collect();
+                KNNResult { node, neighbors }
+            })
             .collect::<Vec<_>>();
 
         Layer::from_knn_results(results, n)
@@ -832,7 +859,7 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
     /// Layer constructor for iris codes — kept for backward compatibility;
     /// delegates to [`Layer::ideal_from_data`].
     pub fn ideal_from_irises(
-        iris_data: Vec<(V, IrisCode)>,
+        iris_data: Vec<(IrisVectorId, IrisCode)>,
         k: usize,
         echoice: EngineChoice,
     ) -> Self {
@@ -854,7 +881,10 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
     /// Layer constructor for deep-ID Int4 vectors — kept for backward
     /// compatibility; delegates to [`Layer::ideal_from_data`].
     pub fn ideal_from_int4_vectors(
-        data: Vec<(V, crate::hawkers::plaintext_deep_id_store::Int4Vector)>,
+        data: Vec<(
+            IrisVectorId,
+            crate::hawkers::plaintext_deep_id_store::Int4Vector,
+        )>,
         k: usize,
         echoice: crate::hawkers::ideal_knn_engines::EngineChoiceInt4,
     ) -> Self {
@@ -875,11 +905,9 @@ impl<V: Ref + Display + FromStr + Ord> Layer<V> {
 /// vertices or distances is changed, but not the underlying values. For
 /// example:
 /// - vector ids are re-mapped to remove blank entries left by deletions
-pub fn migrate<U, V, VecMap>(graph: GraphMem<U>, vector_map: VecMap) -> GraphMem<V>
+pub fn migrate<VecMap>(graph: GraphMem, vector_map: VecMap) -> GraphMem
 where
-    U: Ref + Display + FromStr + Ord,
-    V: Ref + Display + FromStr + Ord,
-    VecMap: Fn(U) -> V + Copy,
+    VecMap: Fn(IrisVectorId) -> IrisVectorId + Copy,
 {
     let last_update_seq_no = graph.last_update_seq_no;
     let new_entry_point = graph
@@ -903,7 +931,7 @@ where
         })
         .collect();
 
-    GraphMem::<V> {
+    GraphMem {
         entry_points: new_entry_point,
         layers: new_layers,
         last_update_seq_no,
@@ -1033,7 +1061,7 @@ mod tests {
                 .await?;
         }
 
-        let different_graph_store: GraphMem<VectorId> = migrate(graph_store.clone(), |v| {
+        let different_graph_store: GraphMem = migrate(graph_store.clone(), |v| {
             VectorId::from_0_index(v.index() * 2)
         });
         assert_ne!(graph_store, different_graph_store);
@@ -1071,7 +1099,7 @@ mod tests {
         let searcher = HnswSearcher::new_with_test_parameters();
         let mut rng = AesRng::seed_from_u64(0_u64);
 
-        let mut point_ids_map: HashMap<VectorId, usize> = HashMap::new();
+        let mut point_ids_map: HashMap<IrisVectorId, IrisVectorId> = HashMap::new();
 
         for raw_query in IrisDB::new_random_rng(20, &mut rng).db {
             let query = Arc::new(raw_query);
@@ -1095,10 +1123,10 @@ mod tests {
                 )
                 .await?;
 
-            point_ids_map.insert(inserted, rng.next_u32() as usize);
+            point_ids_map.insert(inserted, IrisVectorId::from_serial_id(rng.next_u32()));
         }
 
-        let new_graph_store: GraphMem<usize> = migrate(graph_store.clone(), |v| point_ids_map[&v]);
+        let new_graph_store: GraphMem = migrate(graph_store.clone(), |v| point_ids_map[&v]);
 
         let (entry_point, layer) = graph_store.get_first_entry_point().await.unwrap();
         let (new_entry_point, new_layer) = new_graph_store.get_first_entry_point().await.unwrap();
@@ -1119,8 +1147,8 @@ mod tests {
                 reason = "Iteration is for assertions against a parallel data structure, compared entry by entry."
             )]
             for (point_id, queue) in links.iter() {
-                let new_point_id = &point_ids_map[point_id];
-                let new_queue_vec = new_links[new_point_id].to_vec();
+                let new_point_id = point_ids_map[point_id];
+                let new_queue_vec = new_links[&new_point_id].to_vec();
                 for (neighbor_id, new_neighbor_id) in queue.iter().zip(new_queue_vec) {
                     assert_eq!(point_ids_map[neighbor_id], new_neighbor_id);
                 }
@@ -1134,7 +1162,7 @@ mod tests {
 
     #[test]
     fn add_edges_outgoing_writes_only_to_id_list() {
-        let mut graph = GraphMem::<IrisVectorId>::new();
+        let mut graph = GraphMem::new();
         let a = IrisVectorId::from_serial_id(1);
         let b = IrisVectorId::from_serial_id(2);
         let c = IrisVectorId::from_serial_id(3);
@@ -1185,7 +1213,7 @@ mod tests {
 
     #[test]
     fn add_edges_incoming_writes_only_to_target_lists() {
-        let mut graph = GraphMem::<IrisVectorId>::new();
+        let mut graph = GraphMem::new();
         let a = IrisVectorId::from_serial_id(1);
         let b = IrisVectorId::from_serial_id(2);
         let c = IrisVectorId::from_serial_id(3);
@@ -1232,7 +1260,7 @@ mod tests {
 
     #[test]
     fn add_edges_bidirectional_writes_both_sides() {
-        let mut graph = GraphMem::<IrisVectorId>::new();
+        let mut graph = GraphMem::new();
         let a = IrisVectorId::from_serial_id(1);
         let b = IrisVectorId::from_serial_id(2);
         let c = IrisVectorId::from_serial_id(3);
@@ -1276,7 +1304,7 @@ mod tests {
 
     #[test]
     fn remove_edges_outgoing_only_modifies_id_list() {
-        let mut graph = GraphMem::<IrisVectorId>::new();
+        let mut graph = GraphMem::new();
         let a = IrisVectorId::from_serial_id(1);
         let b = IrisVectorId::from_serial_id(2);
         let c = IrisVectorId::from_serial_id(3);
@@ -1340,7 +1368,7 @@ mod tests {
     fn two_phase_apply_edges_before_node_in_vec_still_works() {
         // Pass 1 should apply AddNode before pass 2 applies AddEdges, regardless
         // of their order in the input Vec.
-        let mut graph = GraphMem::<IrisVectorId>::new();
+        let mut graph = GraphMem::new();
         let a = IrisVectorId::from_serial_id(1);
         let b = IrisVectorId::from_serial_id(2);
         graph
@@ -1377,7 +1405,7 @@ mod tests {
     fn next_seq_no_is_one_past_last_and_does_not_mutate() {
         use crate::hnsw::GraphMem;
         use iris_mpc_common::IrisVectorId;
-        let mut graph = GraphMem::<IrisVectorId>::new();
+        let mut graph = GraphMem::new();
         assert_eq!(graph.last_update_seq_no, 0);
         assert_eq!(graph.next_sequence_number(), 1);
         assert_eq!(graph.next_sequence_number(), 1, "peek must not mutate");
@@ -1388,9 +1416,9 @@ mod tests {
 
     #[test]
     fn insert_apply_advances_last_update_seq_no_on_success() {
-        let mut graph = GraphMem::<IrisVectorId>::new();
+        let mut graph = GraphMem::new();
         let a = IrisVectorId::from_serial_id(1);
-        let mutation = GraphMutation::<IrisVectorId> {
+        let mutation = GraphMutation {
             seq_no: 1,
             ops: vec![MutationOp::AddNode {
                 id: a,
@@ -1406,9 +1434,9 @@ mod tests {
 
     #[test]
     fn insert_apply_rejects_seq_no_equal_to_last_update_seq_no() {
-        let mut graph = GraphMem::<IrisVectorId>::new();
+        let mut graph = GraphMem::new();
         graph.last_update_seq_no = 5;
-        let mutation = GraphMutation::<IrisVectorId> {
+        let mutation = GraphMutation {
             seq_no: 5,
             ops: vec![MutationOp::AddNode {
                 id: IrisVectorId::from_serial_id(1),
@@ -1427,9 +1455,9 @@ mod tests {
 
     #[test]
     fn insert_apply_rejects_seq_no_below_last_update_seq_no() {
-        let mut graph = GraphMem::<IrisVectorId>::new();
+        let mut graph = GraphMem::new();
         graph.last_update_seq_no = 10;
-        let mutation = GraphMutation::<IrisVectorId> {
+        let mutation = GraphMutation {
             seq_no: 9,
             ops: vec![MutationOp::AddNode {
                 id: IrisVectorId::from_serial_id(1),
@@ -1444,11 +1472,11 @@ mod tests {
 
     #[test]
     fn insert_apply_all_short_circuits_on_first_violation() {
-        let mut graph = GraphMem::<IrisVectorId>::new();
+        let mut graph = GraphMem::new();
         let a = IrisVectorId::from_serial_id(1);
         let b = IrisVectorId::from_serial_id(2);
         let mutations = vec![
-            GraphMutation::<IrisVectorId> {
+            GraphMutation {
                 seq_no: 1,
                 ops: vec![MutationOp::AddNode {
                     id: a,
@@ -1457,7 +1485,7 @@ mod tests {
                 }],
             },
             // Equal seq_no — should fail.
-            GraphMutation::<IrisVectorId> {
+            GraphMutation {
                 seq_no: 1,
                 ops: vec![MutationOp::AddNode {
                     id: b,

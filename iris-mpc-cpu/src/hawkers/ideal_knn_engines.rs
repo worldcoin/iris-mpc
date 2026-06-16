@@ -7,7 +7,7 @@ use std::{
 };
 
 use clap::ValueEnum;
-use iris_mpc_common::{iris_db::iris::IrisCode, IrisSerialId};
+use iris_mpc_common::{iris_db::iris::IrisCode, IrisSerialId, IrisVectorId};
 use rayon::{
     iter::{IntoParallelIterator, ParallelIterator},
     ThreadPool, ThreadPoolBuilder,
@@ -20,24 +20,22 @@ use crate::hawkers::{
 };
 
 #[derive(Serialize, Deserialize, Clone, Default)]
-pub struct KNNResult<V> {
-    pub node: V,
-    pub neighbors: Vec<V>,
+pub struct KNNResult {
+    pub node: IrisVectorId,
+    pub neighbors: Vec<IrisVectorId>,
 }
 
-impl<U> KNNResult<U> {
-    pub fn map<V, F>(self, mut f: F) -> KNNResult<V>
+impl KNNResult {
+    pub fn map<F>(self, mut f: F) -> KNNResult
     where
-        F: FnMut(U) -> V,
+        F: FnMut(IrisVectorId) -> IrisVectorId,
     {
         KNNResult {
             node: f(self.node),
             neighbors: self.neighbors.into_iter().map(f).collect(),
         }
     }
-}
 
-impl<V> KNNResult<V> {
     pub fn truncate(&mut self, k: usize) {
         assert!(k <= self.neighbors.len(), "k must be <= neighbors.len()");
         self.neighbors.truncate(k);
@@ -45,8 +43,14 @@ impl<V> KNNResult<V> {
     }
 }
 
-/// Reads a `Vec<KNNResult<u32>>` from a file, skipping the first line (header).
-pub fn read_knn_results_from_file(path: PathBuf) -> std::io::Result<Vec<KNNResult<u32>>> {
+/// Reads a `Vec<KNNResult>` from a file, skipping the first line (header).
+pub fn read_knn_results_from_file(path: PathBuf) -> std::io::Result<Vec<KNNResult>> {
+    #[derive(Deserialize)]
+    struct KNNResultU32 {
+        node: u32,
+        neighbors: Vec<u32>,
+    }
+
     let file = File::open(path)?;
     let mut lines = BufReader::new(file).lines();
 
@@ -56,8 +60,16 @@ pub fn read_knn_results_from_file(path: PathBuf) -> std::io::Result<Vec<KNNResul
     let mut results = Vec::new();
     for line in lines {
         let line = line?;
-        let knn_result: KNNResult<u32> = serde_json::from_str(&line)
+        let knn_result_u32: KNNResultU32 = serde_json::from_str(&line)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let knn_result = KNNResult {
+            node: IrisVectorId::from_serial_id(knn_result_u32.node),
+            neighbors: knn_result_u32
+                .neighbors
+                .into_iter()
+                .map(IrisVectorId::from_serial_id)
+                .collect(),
+        };
         results.push(knn_result);
     }
     Ok(results)
@@ -222,7 +234,7 @@ impl<K: IdealKnn> NaiveKNN<K> {
         self.next_id
     }
 
-    pub fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult<IrisSerialId>> {
+    pub fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult> {
         let start = self.next_id as usize;
         let end = (start + chunk_size).min(self.vectors.len() + 1);
         self.next_id = end as IrisSerialId;
@@ -262,10 +274,10 @@ impl<K: IdealKnn> NaiveKNN<K> {
                     });
 
                     KNNResult {
-                        node: i as IrisSerialId,
+                        node: IrisVectorId::from_serial_id(i as IrisSerialId),
                         neighbors: neighbors
                             .into_iter()
-                            .map(|(j, _)| j as IrisSerialId)
+                            .map(|(j, _)| IrisVectorId::from_serial_id(j as IrisSerialId))
                             .collect(),
                     }
                 })
@@ -306,7 +318,7 @@ impl Engine {
         }
     }
 
-    pub fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult<IrisSerialId>> {
+    pub fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult> {
         match self {
             Self::Fhd(engine) => engine.compute_chunk(chunk_size),
             Self::Nhd(engine) => engine.compute_chunk(chunk_size),
@@ -341,7 +353,7 @@ impl EngineInt4 {
         }
     }
 
-    pub fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult<IrisSerialId>> {
+    pub fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult> {
         match self {
             Self::Int4Dot(engine) => engine.compute_chunk(chunk_size),
         }
@@ -412,13 +424,18 @@ mod int4_engine_tests {
         assert_eq!(results.len(), n);
         for KNNResult { node, neighbors } in results {
             // Brute-force expected top-k by descending dot (excluding self).
-            let me = &vectors[node as usize - 1];
+            let node_serial = node.serial_id();
+            let me = &vectors[node_serial as usize - 1];
             let mut dists: Vec<(IrisSerialId, i32)> = (1..=n as IrisSerialId)
-                .filter(|j| *j != node)
+                .filter(|j| *j != node_serial)
                 .map(|j| (j, me.dot(&vectors[j as usize - 1])))
                 .collect();
             dists.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-            let expected: Vec<IrisSerialId> = dists.into_iter().take(k).map(|(j, _)| j).collect();
+            let expected: Vec<IrisVectorId> = dists
+                .into_iter()
+                .take(k)
+                .map(|(j, _)| IrisVectorId::from_serial_id(j))
+                .collect();
             assert_eq!(neighbors, expected, "node {} top-{}", node, k);
         }
     }

@@ -45,13 +45,13 @@ use crate::{
 const REPORTING_INTERVAL: usize = 1000;
 
 pub async fn plaintext_parallel_batch_insert<D: DistanceOps>(
-    graph: GraphMem<IrisVectorId>,
+    graph: GraphMem,
     mut store: SharedPlaintextStore<D>,
     irises: Vec<(IrisVectorId, IrisCode)>,
     searcher: &HnswSearcher,
     batch_size: usize,
     prf_seed: &[u8; 16],
-) -> Result<(GraphMem<IrisVectorId>, SharedPlaintextStore<D>)> {
+) -> Result<(GraphMem, SharedPlaintextStore<D>)> {
     let mut graph = Arc::new(graph);
 
     let mut inserted_count: usize = 0;
@@ -135,13 +135,13 @@ pub async fn plaintext_parallel_batch_insert<D: DistanceOps>(
 }
 
 pub async fn deep_id_parallel_batch_insert(
-    graph: GraphMem<IrisVectorId>,
+    graph: GraphMem,
     mut store: SharedPlaintextDeepIDStore,
     vectors: Vec<(IrisVectorId, Int4Vector)>,
     searcher: &HnswSearcher,
     batch_size: usize,
     prf_seed: &[u8; 16],
-) -> Result<(GraphMem<IrisVectorId>, SharedPlaintextDeepIDStore)> {
+) -> Result<(GraphMem, SharedPlaintextDeepIDStore)> {
     let mut graph = Arc::new(graph);
 
     let mut inserted_count: usize = 0;
@@ -237,7 +237,7 @@ mod tests {
         to_insert: usize,
     ) -> Result<(
         HnswSearcher,
-        GraphMem<IrisVectorId>,
+        GraphMem,
         SharedPlaintextStore,
         Vec<(IrisVectorId, IrisCode)>,
         [u8; 16],
@@ -272,7 +272,7 @@ mod tests {
 
     async fn check_results(
         mut store: SharedPlaintextStore,
-        graph: GraphMem<IrisVectorId>,
+        graph: GraphMem,
         irises: Vec<(IrisVectorId, IrisCode)>,
         searcher: &HnswSearcher,
         expected_total_size: usize,

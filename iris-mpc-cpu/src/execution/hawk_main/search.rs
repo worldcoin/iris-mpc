@@ -228,7 +228,7 @@ async fn classify_and_extend(
     query: &Aby3Query,
     search_params: &SearchParams,
     aby3_store: &mut Aby3Store<HawkOps>,
-    graph_store: &GraphMem<VectorId>,
+    graph_store: &GraphMem,
     ef: usize,
 ) -> Result<ClassifiedMatches> {
     let margin = search_params.saturation_margin;
@@ -338,7 +338,7 @@ async fn per_insert_query<N: Neighborhood<Aby3Store<HawkOps>>>(
     query: Aby3Query,
     search_params: &SearchParams,
     aby3_store: &mut Aby3Store<HawkOps>,
-    graph_store: &GraphMem<VectorId>,
+    graph_store: &GraphMem,
     insertion_layer: usize,
 ) -> Result<HawkInsertPlan> {
     let start = Instant::now();
@@ -392,7 +392,7 @@ async fn per_search_query(
     query: Aby3Query,
     search_params: &SearchParams,
     aby3_store: &mut Aby3Store<HawkOps>,
-    graph_store: &GraphMem<VectorId>,
+    graph_store: &GraphMem,
 ) -> Result<HawkInsertPlan> {
     let start = Instant::now();
 

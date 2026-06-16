@@ -132,7 +132,7 @@ where
 }
 
 /// Stream the object at `s3://{bucket}/{key}` through BLAKE3 and directly
-/// into a `[GraphMem<IrisVectorId>; 2]` using a format-aware layer-by-layer
+/// into a `[GraphMem; 2]` using a format-aware layer-by-layer
 /// reader that converts each layer immediately upon arrival.
 ///
 /// Unlike `stream_download_and_deserialize::<[GraphVN; 2]>` followed by
@@ -146,7 +146,7 @@ pub async fn stream_download_and_deserialize_graph_pair(
     bucket: &str,
     key: &str,
     format: GraphFormat,
-) -> Result<([GraphMem<IrisVectorId>; 2], [u8; 32])> {
+) -> Result<([GraphMem; 2], [u8; 32])> {
     stream_download_and_deserialize_graph_pair_with(
         s3_client,
         bucket,
@@ -167,7 +167,7 @@ pub async fn stream_download_and_deserialize_graph_pair_with(
     format: GraphFormat,
     pipe_capacity: usize,
     range_size: usize,
-) -> Result<([GraphMem<IrisVectorId>; 2], [u8; 32])> {
+) -> Result<([GraphMem; 2], [u8; 32])> {
     tracing::info!(
         "Streaming download + deserialize graph pair: bucket={bucket}, key={key}, \
          format={format}, pipe_capacity={pipe_capacity}, range_size={range_size}"
