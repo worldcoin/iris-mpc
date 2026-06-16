@@ -6,7 +6,7 @@ schedule: "*/10 * * * *"
 env:
   ENV: "dev"
   AWS_REGION: "eu-central-1"
-  RUST_LOG: "info,ampc_actor_utils::network=debug,iris_mpc_cpu::checkpoint_protocol=debug"
+  RUST_LOG: "info"
   RUST_BACKTRACE: "full"
   SMPC__CPU_DATABASE__URL:
     valueFrom:
