@@ -5,7 +5,7 @@ use crate::checkpoint_protocol::{
     CheckpointMeta, CycleError, FreezeHeight, Graph, Materializer, MutationStore,
 };
 use crate::execution::hawk_main::BothEyes;
-use crate::graph_checkpoint::stream_download_and_deserialize;
+use crate::graph_checkpoint::stream_download_and_deserialize_graph_pair;
 use crate::hnsw::{graph::graph_store::GraphPg, VectorStore};
 use crate::utils::serialization::graph::GraphFormat;
 use futures::TryStreamExt;
@@ -35,28 +35,29 @@ impl<V: VectorStore + Send + Sync> Materializer for RebuildFromCheckpoint<'_, V>
         base: CheckpointMeta,
         freeze: FreezeHeight,
     ) -> Result<Graph, CycleError> {
-        if base.graph_version != GraphFormat::Current.version() {
-            return Err(CycleError::Fatal(format!(
-                "unsupported checkpoint graph_version={} for {}/{}",
-                base.graph_version, self.bucket, base.s3_key,
-            )));
-        }
+        let format = GraphFormat::try_from(base.graph_version)
+            .ok()
+            .filter(|f| matches!(f, GraphFormat::V3 | GraphFormat::V4))
+            .ok_or_else(|| {
+                CycleError::Fatal(format!(
+                    "unsupported checkpoint graph_version={} for {}/{}",
+                    base.graph_version, self.bucket, base.s3_key,
+                ))
+            })?;
 
-        tracing::info!(
-            bucket = %self.bucket,
-            s3_key = %base.s3_key,
-            graph_version = base.graph_version,
-            "materialize: downloading checkpoint base from S3"
-        );
-        let (mut graph, downloaded_hash) =
-            stream_download_and_deserialize::<Graph>(self.s3_client, &self.bucket, &base.s3_key)
-                .await
-                .map_err(|e| {
-                    CycleError::Fatal(format!(
-                        "stream_download_and_deserialize({}/{}): {e}",
-                        self.bucket, base.s3_key,
-                    ))
-                })?;
+        let (mut graph, downloaded_hash) = stream_download_and_deserialize_graph_pair(
+            self.s3_client,
+            &self.bucket,
+            &base.s3_key,
+            format,
+        )
+        .await
+        .map_err(|e| {
+            CycleError::Fatal(format!(
+                "stream_download_and_deserialize_graph_pair({}/{}): {e}",
+                self.bucket, base.s3_key,
+            ))
+        })?;
 
         let downloaded_hex = hex::encode(downloaded_hash);
         if downloaded_hex != base.blake3_hash {
