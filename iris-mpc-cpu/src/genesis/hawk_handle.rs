@@ -207,7 +207,7 @@ impl Handle {
                                     let replace_ids = vec![None; plans.len()];
                                     let (plans, _inserted_ids) = insert(
                                         &mut *store,
-                                        &mut *graph,
+                                        &mut graph,
                                         &searcher,
                                         plans,
                                         &batch_ids,
@@ -315,7 +315,7 @@ impl Handle {
                                     let replace_ids = vec![None; plans.len()];
                                     let (connect_plan, _inserted_id) = insert(
                                         &mut *store,
-                                        &mut *graph,
+                                        &mut graph,
                                         &searcher,
                                         plans,
                                         &ids,

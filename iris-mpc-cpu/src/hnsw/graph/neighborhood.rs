@@ -37,10 +37,7 @@ pub trait Neighborhood<V: VectorStore>:
     fn from_singleton(element: (VectorId, V::DistanceRef)) -> Self;
 
     fn edge_ids(&self) -> Vec<VectorId> {
-        self.as_ref()
-            .iter()
-            .map(|(v, _)| v.clone())
-            .collect::<Vec<_>>()
+        self.as_ref().iter().map(|(v, _)| *v).collect::<Vec<_>>()
     }
 
     /// Inserts a batch of elements into the neighborhood and applies the necessary
@@ -343,7 +340,7 @@ impl<V: VectorStore> Neighborhood<V> for UnsortedNeighborhood<V> {
             .enumerate()
             .filter_map(|(i, (v, d))| {
                 if results[i] {
-                    Some((v.clone(), d.clone()))
+                    Some((*v, d.clone()))
                 } else {
                     None
                 }

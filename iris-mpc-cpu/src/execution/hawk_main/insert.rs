@@ -111,7 +111,7 @@ pub async fn insert<V: VectorStoreMut>(
         // (a) Delete first: own GraphMutation with the lower seq_no.
         if let Some(rid) = replace_id {
             let mutation = graph.apply_new(UnstampedMutation {
-                ops: vec![MutationOp::RemoveNode { id: rid.clone() }],
+                ops: vec![MutationOp::RemoveNode { id: *rid }],
             })?;
             slot_outputs[idx].push(mutation);
         }
@@ -136,17 +136,17 @@ pub async fn insert<V: VectorStoreMut>(
                 None => store.insert(&query).await,
                 Some(id) => store.insert_at(id, &query).await?,
             };
-            intra_batch_inserted.push(inserted_id.clone());
-            slot_inserted_ids[idx] = Some(inserted_id.clone());
+            intra_batch_inserted.push(inserted_id);
+            slot_inserted_ids[idx] = Some(inserted_id);
 
             let mut ops: Vec<MutationOp<VectorId>> = vec![MutationOp::AddNode {
-                id: inserted_id.clone(),
+                id: inserted_id,
                 height: links.len(),
                 update_ep,
             }];
             for (layer_idx, layer_links) in links.into_iter().enumerate() {
                 ops.push(MutationOp::AddEdges {
-                    base: inserted_id.clone(),
+                    base: inserted_id,
                     layer: layer_idx,
                     neighbors: layer_links,
                     edge_type: EdgeType::All,

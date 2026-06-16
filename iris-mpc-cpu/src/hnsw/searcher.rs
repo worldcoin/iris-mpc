@@ -439,7 +439,6 @@ impl HnswSearcher {
                 let (ep_vectors, ep_layers): (Vec<_>, Vec<_>) = graph
                     .entry_points
                     .iter()
-                    .cloned()
                     .map(|ep| (ep.point, ep.layer))
                     .unzip();
                 let ep_vectors = store.only_valid_vectors(ep_vectors).await;
@@ -570,8 +569,7 @@ impl HnswSearcher {
         lc: usize,
     ) -> Result<()> {
         // The set of vectors which have been considered as potential neighbors
-        let mut visited =
-            HashSet::<VectorId>::from_iter(W.as_ref().iter().map(|(e, _eq)| e.clone()));
+        let mut visited = HashSet::<VectorId>::from_iter(W.as_ref().iter().map(|(e, _eq)| *e));
 
         // The set of visited vectors for which we have inspected their neighborhood
         let mut opened = HashSet::<VectorId>::new();
@@ -601,7 +599,7 @@ impl HnswSearcher {
             let c_links = HnswSearcher::open_node(store, graph, c, lc, q, &mut visited)
                 .instrument(eval_dist_span.clone())
                 .await?;
-            opened.insert(c.clone());
+            opened.insert(*c);
             debug!(event_type = Operation::OpenNode.id(), ef, lc);
 
             for (e, eq) in c_links.into_iter() {
@@ -721,8 +719,7 @@ impl HnswSearcher {
         let mut metric_edges = FastHistogram::new(&format!("search_edges_layer{}", lc));
 
         // The set of vectors which have been considered as potential neighbors
-        let mut visited =
-            HashSet::<VectorId>::from_iter(W.as_ref().iter().map(|(e, _eq)| e.clone()));
+        let mut visited = HashSet::<VectorId>::from_iter(W.as_ref().iter().map(|(e, _eq)| *e));
 
         // The set of visited vectors for which we have inspected their neighborhood
         let mut opened = HashSet::<VectorId>::new();
@@ -769,7 +766,7 @@ impl HnswSearcher {
             let mut c_links = HnswSearcher::open_node(store, graph, &c, lc, q, &mut visited)
                 .instrument(eval_dist_span.clone())
                 .await?;
-            opened.insert(c.clone());
+            opened.insert(c);
             debug!(event_type = Operation::OpenNode.id(), ef, lc);
             metric_edges.record(c_links.len() as f64);
 
@@ -1012,7 +1009,7 @@ impl HnswSearcher {
             trace_span!(target: "searcher::cpu_time", "insert_into_sorted_neighborhood_aggr");
 
         // The set of vectors which have been considered as potential neighbors
-        let mut visited = HashSet::from_iter(W.as_ref().iter().map(|(e, _eq)| e.clone()));
+        let mut visited = HashSet::from_iter(W.as_ref().iter().map(|(e, _eq)| *e));
 
         // The set of visited vectors for which we have inspected their neighborhood
         let mut opened = HashSet::new();
@@ -1027,7 +1024,7 @@ impl HnswSearcher {
         // represents a breadth-first traversal of the graph, starting with W.
         // This is done initially without opening nodes so that all distances
         // can be computed in a single batch.
-        let mut init_nodes = Vec::from_iter(W.as_ref().iter().map(|(e, _eq)| e.clone()));
+        let mut init_nodes = Vec::from_iter(W.as_ref().iter().map(|(e, _eq)| *e));
         let mut open_idx = 0;
         while open_idx < init_nodes.len() && init_nodes.len() < ef {
             // get valid, unvisited neighbors of current node at `open_idx`
@@ -1243,7 +1240,7 @@ impl HnswSearcher {
 
         // The set of vectors which have been considered as potential neighbors
         let mut visited = HashSet::<VectorId>::new();
-        visited.insert(c_vec.clone());
+        visited.insert(c_vec);
 
         // These spans accumulate running time of multiple atomic operations
         let eval_dist_span = trace_span!(target: "searcher::cpu_time", "eval_distance_batch_aggr");
@@ -1261,7 +1258,7 @@ impl HnswSearcher {
             debug!(event_type = Operation::OpenNode.id(), ef = 1u64, lc);
 
             // Find minimum distance node also including current node
-            c_links.push((c_vec.clone(), c_dist.clone()));
+            c_links.push((c_vec, c_dist.clone()));
 
             let network = tree_min(c_links.len());
             apply_swap_network(store, &mut c_links, &network)
@@ -1318,7 +1315,7 @@ impl HnswSearcher {
 
         let unvisited_neighbors: Vec<_> = neighbors
             .iter()
-            .filter(|e| visited.insert((*e).clone()))
+            .filter(|e| visited.insert(*(*e)))
             .cloned()
             .collect();
 
@@ -1359,12 +1356,12 @@ impl HnswSearcher {
 
             let unvisited_neighbors: Vec<_> = neighbors
                 .iter()
-                .filter(|e| visited.insert((*e).clone()))
+                .filter(|e| visited.insert(*(*e)))
                 .cloned()
                 .collect();
 
             valid_neighbors.extend(store.only_valid_vectors(unvisited_neighbors).await);
-            opened_nodes.push(node.clone());
+            opened_nodes.push(*node);
 
             // halt opening once at least limit valid neighbors have been visited, if specified
             if let Some(l) = limit {
@@ -1439,7 +1436,7 @@ impl HnswSearcher {
             .search_to_insert::<_, N>(store, graph, query, insertion_layer)
             .await?;
         let inserted = store.insert(query).await;
-        self.insert_from_search_results(store, graph, inserted.clone(), neighbors, update_ep)
+        self.insert_from_search_results(store, graph, inserted, neighbors, update_ep)
             .await?;
         Ok(inserted)
     }
@@ -1553,7 +1550,7 @@ impl HnswSearcher {
         for (id, layer) in candidates {
             let nbhd = graph.get_links(id, *layer).await.to_vec();
             if nbhd.len() > self.params.get_M_limit(*layer) {
-                oversized.push((id.clone(), *layer, nbhd));
+                oversized.push((*id, *layer, nbhd));
             }
         }
 
@@ -1568,7 +1565,7 @@ impl HnswSearcher {
         }
 
         // Build parallel slices for the batched MPC compaction call.
-        let base_nodes: Vec<_> = oversized.iter().map(|(id, _, _)| id.clone()).collect();
+        let base_nodes: Vec<_> = oversized.iter().map(|(id, _, _)| *id).collect();
         let neighborhoods: Vec<_> = oversized.iter().map(|(_, _, nbhd)| nbhd.clone()).collect();
         let max_sizes: Vec<_> = oversized
             .iter()
@@ -1593,7 +1590,7 @@ impl HnswSearcher {
                 .collect();
             if !to_remove.is_empty() {
                 ops.push(MutationOp::RemoveEdges {
-                    base: id.clone(),
+                    base: *id,
                     layer: *layer,
                     neighbors: to_remove,
                     edge_type: EdgeType::Base,
@@ -1636,7 +1633,7 @@ impl HnswSearcher {
                 .collect();
             if !to_remove.is_empty() {
                 ops.push(MutationOp::RemoveEdges {
-                    base: id.clone(),
+                    base: *id,
                     layer: *layer,
                     neighbors: to_remove,
                     edge_type: EdgeType::Base,
@@ -1674,13 +1671,13 @@ impl HnswSearcher {
         // the same post-apply prune + compaction the batched path uses.
         let height = links_unstructured.len();
         let mut ops: Vec<MutationOp<VectorId>> = vec![MutationOp::AddNode {
-            id: inserted_vector.clone(),
+            id: inserted_vector,
             height,
             update_ep,
         }];
         for (layer_idx, layer_links) in links_unstructured.into_iter().enumerate() {
             ops.push(MutationOp::AddEdges {
-                base: inserted_vector.clone(),
+                base: inserted_vector,
                 layer: layer_idx,
                 neighbors: layer_links,
                 edge_type: EdgeType::All,

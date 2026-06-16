@@ -138,7 +138,7 @@ pub trait VectorStore: Debug {
 
         for (id, dist) in distances.iter().skip(1) {
             if self.less_than(dist, &min_dist.1).await? {
-                min_dist = (id.clone(), dist.clone());
+                min_dist = (*id, dist.clone());
             }
         }
         Ok(min_dist)
@@ -168,7 +168,7 @@ pub trait VectorStore: Debug {
         let trimmed = trimmed_idxs
             .into_iter()
             .take(max_size)
-            .map(|idx| neighborhood[idx].clone())
+            .map(|idx| neighborhood[idx])
             .collect();
 
         Ok(trimmed)
