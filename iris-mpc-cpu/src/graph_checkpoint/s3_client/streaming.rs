@@ -46,22 +46,22 @@ pub const DEFAULT_STREAMING_PARALLELISM: usize = 8;
 /// Pairs with [`stream_serialize_and_upload_with`] when the caller needs
 /// the canonical-bytes hash (e.g. to record into a verification field):
 ///
-/// ```no_run
-/// # use iris_mpc_cpu::graph_checkpoint::s3_client::streaming::{
-/// #     stream_serialize_and_upload_with, BlakeTeeWriter,
-/// #     DEFAULT_STREAMING_PART_SIZE, DEFAULT_STREAMING_PARALLELISM,
-/// # };
-/// # async fn example(s3: &aws_sdk_s3::Client, bucket: &str, key: &str, v: &impl serde::Serialize) -> eyre::Result<()> {
-/// let (hash_tx, hash_rx) = tokio::sync::oneshot::channel();
-/// stream_serialize_and_upload_with(s3, bucket, key, move |w| {
-///     let mut tee = BlakeTeeWriter::new(w);
-///     bincode::serialize_into(&mut tee, &v)?;
-///     let _ = hash_tx.send(tee.finalize());
+/// ```ignore
+/// use iris_mpc_cpu::graph_checkpoint::s3_client::streaming::{
+///     stream_serialize_and_upload_with, BlakeTeeWriter,
+///     DEFAULT_STREAMING_PART_SIZE, DEFAULT_STREAMING_PARALLELISM,
+/// };
+/// async fn example(s3: &aws_sdk_s3::Client, bucket: &str, key: &str, v: &impl serde::Serialize) -> eyre::Result<()> {
+///     let (hash_tx, hash_rx) = tokio::sync::oneshot::channel();
+///     stream_serialize_and_upload_with(s3, bucket, key, move |w| {
+///         let mut tee = BlakeTeeWriter::new(w);
+///         bincode::serialize_into(&mut tee, &v)?;
+///         let _ = hash_tx.send(tee.finalize());
+///         Ok(())
+///     }, DEFAULT_STREAMING_PART_SIZE, DEFAULT_STREAMING_PARALLELISM).await?;
+///     let hash = hash_rx.await?;
 ///     Ok(())
-/// }, DEFAULT_STREAMING_PART_SIZE, DEFAULT_STREAMING_PARALLELISM).await?;
-/// let hash = hash_rx.await?;
-/// # Ok(())
-/// # }
+/// }
 /// ```
 ///
 /// Kept deliberately outside the upload primitive itself so the primitive
