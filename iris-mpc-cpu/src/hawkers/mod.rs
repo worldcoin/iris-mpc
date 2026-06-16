@@ -19,6 +19,9 @@ pub mod aby3;
 /// Store with vectors in plaintext form.
 pub mod plaintext_store;
 
+/// Plaintext store over packed int4 vectors with inner-product distance.
+pub mod plaintext_deep_id_store;
+
 /// Data structure for shared in-memory irises
 pub mod shared_irises;
 

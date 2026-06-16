@@ -1,0 +1,62 @@
+image: "ghcr.io/worldcoin/anon-stats-server:v0.31.12@sha256:2c6e9fd6059b1fecd3b9f004205a53e82e8acbe829befc2c8f228b47134f247f"
+
+environment: prod
+replicaCount: 1
+
+strategy:
+  type: Recreate
+
+datadog:
+  enabled: true
+
+hostNetwork: false
+
+ports:
+  - containerPort: 3000
+    name: health
+    protocol: TCP
+  - containerPort: 4000
+    name: tcp-4000
+    protocol: TCP
+  - containerPort: 4001
+    name: tcp-4001
+    protocol: TCP
+  - containerPort: 4002
+    name: tcp-4002
+    protocol: TCP
+
+startupProbe:
+  httpGet:
+    path: /health
+    port: health
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: health
+
+readinessProbe:
+  periodSeconds: 20
+  failureThreshold: 4
+  httpGet:
+    path: /health
+    port: health
+
+resources:
+  limits:
+    cpu: "2"
+    memory: 10Gi
+  requests:
+    cpu: "2"
+    memory: 10Gi
+
+imagePullSecrets:
+  - name: github-secret
+
+podSecurityContext:
+  runAsUser: 65534
+  runAsGroup: 65534
+
+mountSSLCerts:
+  enabled: true
+  mountPath: /etc/ssl/private

@@ -85,16 +85,18 @@ pub async fn sync_modifications(
             | RESET_UPDATE_MESSAGE_TYPE
             | RECOVERY_UPDATE_MESSAGE_TYPE
             | UNIQUENESS_MESSAGE_TYPE => {
+                let s3_url = modification.s3_url.clone().ok_or_else(|| {
+                    eyre!("Persisted modification missing s3_url: {:?}", modification)
+                })?;
                 let (left_shares, right_shares) = get_iris_shares_parse_task(
                     config.party_id,
                     shares_encryption_key_pair.clone(),
                     Arc::clone(&semaphore),
                     aws_clients.s3_client.clone(),
                     config.shares_bucket_name.clone(),
-                    modification.clone().s3_url.unwrap(),
+                    s3_url,
                 )?
-                .await?
-                .unwrap();
+                .await??;
                 (
                     left_shares.code,
                     left_shares.mask,
@@ -103,7 +105,7 @@ pub async fn sync_modifications(
                 )
             }
             _ => {
-                panic!("Unknown modification type: {:?}", modification);
+                return Err(eyre!("Unknown modification type: {:?}", modification));
             }
         };
 

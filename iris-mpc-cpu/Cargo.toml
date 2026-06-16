@@ -37,6 +37,7 @@ rand_distr = "0.4.3"
 rayon.workspace = true
 rstest = "0.23.0"
 serde.workspace = true
+serde-big-array.workspace = true
 serde_json.workspace = true
 serde_with.workspace = true
 serde_path_to_error = "*"
@@ -78,6 +79,7 @@ ampc-server-utils.workspace = true
 criterion = { version = "0.5.1", features = ["async_tokio"] }
 rayon.workspace = true
 num_cpus = "1.16.0"
+tempfile = "3"
 
 [features]
 db_dependent = []

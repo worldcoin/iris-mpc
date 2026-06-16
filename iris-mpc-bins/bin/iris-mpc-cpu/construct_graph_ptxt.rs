@@ -9,13 +9,14 @@ use serde::Deserialize;
 use iris_mpc_cpu::{
     hawkers::{
         aby3::aby3_store::{DistanceMode, DistanceOps, FhdOps, NhdOps},
-        build_plaintext::plaintext_parallel_batch_insert,
+        build_plaintext::{deep_id_parallel_batch_insert, plaintext_parallel_batch_insert},
+        plaintext_deep_id_store::{Int4Vector, PlaintextDeepIDStore, SharedPlaintextDeepIDStore},
         plaintext_store::SharedPlaintextStore,
     },
     hnsw::{vector_store::VectorStoreMut, GraphMem, HnswSearcher},
     utils::{
-        cli::{IrisesConfig, LoadGraphConfig, SearcherConfig},
-        serialization::{graph::write_graph_to_file, load_toml},
+        cli::{Int4VectorsConfig, IrisesConfig, LoadGraphConfig, SearcherConfig},
+        serialization::{graph::write_graph_to_file, load_store_kind_toml},
     },
 };
 use tracing_subscriber::{prelude::*, EnvFilter};
@@ -38,8 +39,10 @@ enum DistanceOpsKind {
 
 #[derive(Clone, Debug, Deserialize)]
 struct CliConfig {
-    /// Specification for iris codes to use in the construction.
-    irises: IrisesConfig,
+    /// Store variant: legacy iris codes or new deep-ID Int4 vectors. The
+    /// variant is selected by which fields are present at the top level.
+    #[serde(flatten)]
+    store: StoreKindConfig,
 
     /// Path and version info for loading an initial graph from file.
     graph: Option<LoadGraphConfig>,
@@ -47,18 +50,35 @@ struct CliConfig {
     /// Configuration to specify HnswSearcher struct for graph construction.
     searcher: SearcherConfig,
 
-    /// Distance function for comparison of iris codes.
-    distance_fn: DistanceMode,
-
-    /// Selects the distance operations type (Fhd or Nhd). Defaults to Fhd.
-    #[serde(default)]
-    distance_ops: DistanceOpsKind,
-
     /// Seed value used for sampling graph layers for insertion.
     hnsw_prf_seed: Option<u64>,
 
     /// Specifies the method of outputing graph data to file after construction.
     output: OutputGraphConfig,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+enum StoreKindConfig {
+    Iris {
+        /// Specification for iris codes to use in the construction.
+        irises: IrisesConfig,
+
+        /// Distance function for comparison of iris codes.
+        distance_fn: DistanceMode,
+
+        /// Selects the distance operations type (Fhd or Nhd). Defaults to Fhd.
+        #[serde(default)]
+        distance_ops: DistanceOpsKind,
+    },
+    DeepID {
+        /// Specification for deep-ID Int4 vectors to use in the construction.
+        vectors: Int4VectorsConfig,
+
+        /// Inner-product match threshold (used to construct the store; not
+        /// directly consulted during graph build).
+        threshold: i32,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -113,16 +133,12 @@ impl Checkpoints {
     }
 }
 
-#[allow(non_snake_case)]
-async fn build_graph<D: DistanceOps>(
-    irises: Vec<(IrisVectorId, IrisCode)>,
+/// Load an existing graph from `graph_spec` (or initialize a fresh one) and
+/// return it along with its highest layer-0 node serial id.
+fn load_existing_graph(
     graph_spec: Option<LoadGraphConfig>,
-    distance_fn: DistanceMode,
-    searcher: &HnswSearcher,
-    prf_seed: &[u8; 16],
-    output: OutputGraphConfig,
-) -> Result<()> {
-    let (mut graph, graph_max_id) = if let Some(graph_spec) = graph_spec {
+) -> Result<(GraphMem<IrisVectorId>, u32)> {
+    if let Some(graph_spec) = graph_spec {
         tracing::info!("Loading graph from file");
         let graph = graph_spec.read_graph_from_file()?;
         let graph_max_id = graph
@@ -138,11 +154,23 @@ async fn build_graph<D: DistanceOps>(
             })
             .unwrap_or(0);
         tracing::info!("Loaded graph has max node id {graph_max_id}");
-        (graph, graph_max_id)
+        Ok((graph, graph_max_id))
     } else {
         tracing::info!("Initializing graph");
-        (GraphMem::new(), 0)
-    };
+        Ok((GraphMem::new(), 0))
+    }
+}
+
+#[allow(non_snake_case)]
+async fn build_iris_graph<D: DistanceOps>(
+    irises: Vec<(IrisVectorId, IrisCode)>,
+    graph_spec: Option<LoadGraphConfig>,
+    distance_fn: DistanceMode,
+    searcher: &HnswSearcher,
+    prf_seed: &[u8; 16],
+    output: OutputGraphConfig,
+) -> Result<()> {
+    let (mut graph, graph_max_id) = load_existing_graph(graph_spec)?;
 
     let start_idx = graph_max_id as usize;
     let end_idx = irises.len();
@@ -170,15 +198,9 @@ async fn build_graph<D: DistanceOps>(
         OutputGraphConfig::Simple { path } => {
             tracing::info!("Building HNSW graph for ids {first_id} to {last_id}");
             let new_irises = irises[(graph_max_id as usize)..].to_vec();
-            (graph, _) = plaintext_parallel_batch_insert(
-                Some(graph),
-                Some(store),
-                new_irises,
-                searcher,
-                1,
-                prf_seed,
-            )
-            .await?;
+            (graph, _) =
+                plaintext_parallel_batch_insert(graph, store, new_irises, searcher, 1, prf_seed)
+                    .await?;
 
             tracing::info!("Persisting HNSW graph to file");
             write_graph_to_file(path, graph)?;
@@ -213,8 +235,8 @@ async fn build_graph<D: DistanceOps>(
                 );
                 let i_new_irises = irises[i_start..i_end].to_vec();
                 (graph, store) = plaintext_parallel_batch_insert(
-                    Some(graph),
-                    Some(store),
+                    graph,
+                    store,
                     i_new_irises,
                     searcher,
                     1,
@@ -225,6 +247,92 @@ async fn build_graph<D: DistanceOps>(
                 let filename = format!("{filename_stem}_{i_end}.dat");
                 let output_path = base_directory.join(filename.clone());
 
+                tracing::info!("Persisting HNSW graph to file: {filename}");
+                write_graph_to_file(output_path, graph.clone())?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+async fn build_deep_id_graph(
+    vectors: Vec<(IrisVectorId, Int4Vector)>,
+    threshold: i32,
+    graph_spec: Option<LoadGraphConfig>,
+    searcher: &HnswSearcher,
+    prf_seed: &[u8; 16],
+    output: OutputGraphConfig,
+) -> Result<()> {
+    let (mut graph, graph_max_id) = load_existing_graph(graph_spec)?;
+
+    let start_idx = graph_max_id as usize;
+    let end_idx = vectors.len();
+    if start_idx >= end_idx {
+        bail!(
+            "Graph max ID ({}) exceeds available deep-ID vectors ({})",
+            start_idx,
+            end_idx
+        );
+    }
+
+    let first_id = vectors[start_idx].0.serial_id();
+    let last_id = vectors[end_idx - 1].0.serial_id();
+
+    tracing::info!("Initializing deep-ID vector store");
+    let mut store_ = PlaintextDeepIDStore::new(threshold);
+    for (id, v) in vectors[0..start_idx].iter() {
+        store_.insert_with_id(*id, Arc::new(v.clone()));
+    }
+    let mut store: SharedPlaintextDeepIDStore = store_.into();
+
+    match output {
+        OutputGraphConfig::Simple { path } => {
+            tracing::info!("Building deep-ID HNSW graph for ids {first_id} to {last_id}");
+            let new_vectors = vectors[start_idx..].to_vec();
+            (graph, _) =
+                deep_id_parallel_batch_insert(graph, store, new_vectors, searcher, 1, prf_seed)
+                    .await?;
+
+            tracing::info!("Persisting HNSW graph to file");
+            write_graph_to_file(path, graph)?;
+        }
+        OutputGraphConfig::Checkpoints {
+            base_directory,
+            filename_stem,
+            checkpoints,
+        } => {
+            if !base_directory.is_dir() {
+                bail!("Specified base directory for graph outputs does not exist");
+            }
+            let intervals = checkpoints.intervals_for_range(start_idx, end_idx);
+
+            tracing::info!(
+                "Building deep-ID HNSW graph with checkpoints, for ids {first_id} to {last_id}"
+            );
+            for (checkpoint_idx, (i_start, i_end)) in intervals.iter().enumerate() {
+                tracing::info!(
+                    "Planned checkpoint {}: ids {} to {}",
+                    checkpoint_idx + 1,
+                    vectors[*i_start].0.serial_id(),
+                    vectors[*i_end - 1].0.serial_id(),
+                );
+            }
+
+            for (checkpoint_idx, (i_start, i_end)) in intervals.into_iter().enumerate() {
+                tracing::info!(
+                    "Building deep-ID graph checkpoint {} for ids {} to {}...",
+                    checkpoint_idx + 1,
+                    vectors[i_start].0.serial_id(),
+                    vectors[i_end - 1].0.serial_id(),
+                );
+                let chunk = vectors[i_start..i_end].to_vec();
+                (graph, store) =
+                    deep_id_parallel_batch_insert(graph, store, chunk, searcher, 1, prf_seed)
+                        .await?;
+
+                let filename = format!("{filename_stem}_{i_end}.dat");
+                let output_path = base_directory.join(filename.clone());
                 tracing::info!("Persisting HNSW graph to file: {filename}");
                 write_graph_to_file(output_path, graph.clone())?;
             }
@@ -246,52 +354,148 @@ async fn main() -> Result<()> {
     // parse args
     tracing::info!("Loading configuration from file");
     let cli = Args::parse();
-    let config: CliConfig = load_toml(&cli.job_spec)?;
+    let config: CliConfig = load_store_kind_toml(&cli.job_spec)?;
     tracing::info!("Configuration loaded from {}", cli.job_spec.display());
 
     tracing::info!("Initializing searcher");
     let searcher: HnswSearcher = (&config.searcher).try_into()?;
     let prf_seed = (config.hnsw_prf_seed.unwrap_or(0) as u128).to_le_bytes();
 
-    tracing::info!("Loading iris codes");
-    let irises_ = iris_mpc_cpu::utils::cli::load_irises(config.irises).await?;
-    let irises: Vec<_> = irises_
-        .into_iter()
-        .enumerate()
-        .map(|(idx, code)| (IrisVectorId::from_0_index(idx as u32), code))
-        .collect();
-    if irises.is_empty() {
-        bail!("Iris DB is empty");
-    }
-    tracing::info!("Loaded {} iris codes to memory", irises.len());
+    match config.store.clone() {
+        StoreKindConfig::Iris {
+            irises,
+            distance_fn,
+            distance_ops,
+        } => {
+            tracing::info!("Loading iris codes");
+            let irises_ = iris_mpc_cpu::utils::cli::load_irises(irises).await?;
+            let irises: Vec<_> = irises_
+                .into_iter()
+                .enumerate()
+                .map(|(idx, code)| (IrisVectorId::from_0_index(idx as u32), code))
+                .collect();
+            if irises.is_empty() {
+                bail!("Iris DB is empty");
+            }
+            tracing::info!("Loaded {} iris codes to memory", irises.len());
 
-    tracing::info!("Using distance ops: {:?}", config.distance_ops);
-    match config.distance_ops {
-        DistanceOpsKind::Fhd => {
-            build_graph::<FhdOps>(
-                irises,
-                config.graph,
-                config.distance_fn,
-                &searcher,
-                &prf_seed,
-                config.output,
-            )
-            .await?
+            tracing::info!("Using distance ops: {:?}", distance_ops);
+            match distance_ops {
+                DistanceOpsKind::Fhd => {
+                    build_iris_graph::<FhdOps>(
+                        irises,
+                        config.graph,
+                        distance_fn,
+                        &searcher,
+                        &prf_seed,
+                        config.output,
+                    )
+                    .await?;
+                }
+                DistanceOpsKind::Nhd => {
+                    build_iris_graph::<NhdOps>(
+                        irises,
+                        config.graph,
+                        distance_fn,
+                        &searcher,
+                        &prf_seed,
+                        config.output,
+                    )
+                    .await?;
+                }
+            }
         }
-        DistanceOpsKind::Nhd => {
-            build_graph::<NhdOps>(
-                irises,
+        StoreKindConfig::DeepID { vectors, threshold } => {
+            tracing::info!("Loading deep-ID vectors");
+            let vectors_ = iris_mpc_cpu::utils::cli::load_int4_vectors(vectors).await?;
+            let vectors: Vec<_> = vectors_
+                .into_iter()
+                .enumerate()
+                .map(|(idx, v)| (IrisVectorId::from_0_index(idx as u32), v))
+                .collect();
+            if vectors.is_empty() {
+                bail!("Deep-ID DB is empty");
+            }
+            tracing::info!("Loaded {} deep-ID vectors to memory", vectors.len());
+
+            build_deep_id_graph(
+                vectors,
+                threshold,
                 config.graph,
-                config.distance_fn,
                 &searcher,
                 &prf_seed,
                 config.output,
             )
-            .await?
+            .await?;
         }
     }
 
     tracing::info!("Done!");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_iris_config_deserializes_as_iris_variant() {
+        let toml_str = r#"
+distance_fn = "MinRotation"
+hnsw_prf_seed = 42
+
+[irises]
+option = "Random"
+number = 64
+seed = 1
+
+[searcher]
+layer_mode = { LinearScan = { max_graph_layer = 1 } }
+
+[searcher.params]
+option = "Standard"
+ef_constr = 32
+ef_search = 32
+M = 16
+
+[output]
+path = "data/out.dat"
+"#;
+        let cfg: CliConfig = toml::from_str(toml_str).expect("legacy iris TOML deserializes");
+        match cfg.store {
+            StoreKindConfig::Iris { .. } => {}
+            other => panic!("expected Iris, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn deepid_config_deserializes_as_deepid_variant() {
+        let toml_str = r#"
+hnsw_prf_seed = 42
+threshold = 5000
+
+[vectors]
+option = "Random"
+number = 64
+seed = 1
+
+[searcher]
+layer_mode = { LinearScan = { max_graph_layer = 1 } }
+
+[searcher.params]
+option = "Standard"
+ef_constr = 32
+ef_search = 32
+M = 16
+
+[output]
+path = "data/out.dat"
+"#;
+        let cfg: CliConfig = toml::from_str(toml_str).expect("deepid TOML deserializes");
+        match cfg.store {
+            StoreKindConfig::DeepID { threshold, .. } => assert_eq!(threshold, 5000),
+            other => panic!("expected DeepID, got {other:?}"),
+        }
+    }
 }

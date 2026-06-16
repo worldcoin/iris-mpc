@@ -426,17 +426,36 @@ impl<'a> BatchProcessor<'a> {
             .string_value()
             .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?;
 
-        self.delete_message(&sqs_message).await?;
-
+        // SQS delete-after-persist (POP-3781). The message is only
+        // deleted once processing has returned Ok — i.e. the modification
+        // row is durably persisted. If the process crashes (or returns
+        // Err) between receiving and persisting, `?` propagates without
+        // acking, SQS visibility timeout expires, and the message is
+        // redelivered. The previous delete-before-process ordering lost
+        // messages on crashes in that window.
+        //
+        // `DeleteMessage` itself uses strict `?` propagation. If the ack
+        // fails after persistence has succeeded, the Err tears down
+        // receive_batch_stream (batch.rs:116 — any Err from receive_batch
+        // breaks the spawn loop), which causes the node to restart. On
+        // restart, modifications_sync GCs any orphan IN_PROGRESS rows
+        // (no peer has them COMPLETED), and the redelivered SQS message
+        // is re-ingested cleanly. Without strict propagation, the orphan
+        // IN_PROGRESS row would persist (modifications_sync only runs at
+        // startup) and visibility-timeout redelivery would produce a
+        // second COMPLETED row plus a duplicate SNS result. Strict `?`
+        // is the trigger for the cleanup path, not just error escalation.
         #[cfg(feature = "explicit-sns-batching")]
         if request_type == BATCH_MESSAGE_TYPE {
             self.process_batch_message(&message, batch_metadata).await?;
+            self.delete_message(&sqs_message).await?;
             self.msg_counter += 1;
             return Ok(());
         }
 
         self.process_message_(&message, request_type, batch_metadata)
             .await?;
+        self.delete_message(&sqs_message).await?;
         self.msg_counter += 1;
         Ok(())
     }
@@ -1184,10 +1203,16 @@ impl<'a> BatchProcessor<'a> {
         &self,
         sqs_message: &aws_sdk_sqs::types::Message,
     ) -> Result<(), ReceiveRequestError> {
+        let receipt_handle = sqs_message.receipt_handle.as_deref().ok_or_else(|| {
+            ReceiveRequestError::FailedToMarkRequestAsDeleted(eyre::eyre!(
+                "SQS message missing receipt handle: {:?}",
+                sqs_message.message_id
+            ))
+        })?;
         self.client
             .delete_message()
             .queue_url(&self.config.requests_queue_url)
-            .receipt_handle(sqs_message.receipt_handle.as_ref().unwrap())
+            .receipt_handle(receipt_handle)
             .send()
             .await
             .map_err(ReceiveRequestError::from)?;

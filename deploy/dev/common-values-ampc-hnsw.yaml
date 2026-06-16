@@ -3,6 +3,88 @@ image: "ghcr.io/worldcoin/iris-mpc-cpu:v0.31.5@sha256:9c69b755ec49a73d3d7bd68420
 environment: dev
 replicaCount: 1
 
+# Common environment variables shared across all hnsw nodes.
+# Defined as a map (keyed by variable name) so Helm deep-merges these with the
+# per-node `env` maps in each ampc-hnsw-N-dev/values-ampc-hnsw.yaml.
+env:
+  GENESIS_MAX_HEIGHT: "1048576"
+  GENESIS_BATCH_SIZE: "dynamic:cap=96,error_rate=128"
+  RUST_LOG: "info"
+  RUST_BACKTRACE: "full"
+  SMPC__SEPARATE_TOKIO_CORES_PER_NODE: "16"
+  SMPC__PPROF_FLAME_ONLY: "true"
+  SMPC__ENABLE_PPROF_PER_BATCH: "true"
+  # Optional overrides (uncomment/customize as needed)
+  SMPC__PPROF_S3_BUCKET: "wf-smpcv2-dev-hnsw-performance-reports"
+  SMPC__PPROF_PREFIX: "dev/hnsw"
+  SMPC__PPROF_SECONDS: "180"
+  SMPC__PPROF_FREQUENCY: "49"
+  # Use Pod annotation as run-id (set via `podAnnotations` above)
+  SMPC__PPROF_RUN_ID:
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.annotations['loadtest/run-id']
+  SMPC__ENVIRONMENT: "dev"
+  SMPC__CPU_DATABASE__URL:
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
+        name: application
+  SMPC__HNSW_SCHEMA_NAME_SUFFIX: "_minfhd"
+  SMPC__MAX_DB_SIZE: "2000000"
+  SMPC__MAX_BATCH_SIZE: "96"
+  SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS: "30"
+  SMPC__PROCESSING_TIMEOUT_SECS: "1800"
+  SMPC__HNSW_FIXED_LAYER_SEARCH_BATCH_SIZE: "8000"
+  SMPC__HAWK_REQUEST_PARALLELISM: "96"
+  SMPC__HAWK_CONNECTION_PARALLELISM: "64"
+  SMPC__HAWK_STREAM_PARALLELISM: "32"
+  SMPC__DISABLE_PERSISTENCE: "true"
+  SMPC__ENABLE_REAUTH: "true"
+  SMPC__ENABLE_RESET: "true"
+  SMPC__ENABLE_DELETION: "true"
+  SMPC__LUC_ENABLED: "true"
+  SMPC__LUC_LOOKBACK_RECORDS: "5"
+  SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST: "false"
+  SMPC__AWS__REGION: "eu-central-1"
+  SMPC__SERVICE_PORTS: '["4000","4001","4002"]'
+  SMPC__SERVER_COORDINATION__IMAGE_NAME: $(IMAGE_NAME)
+  SMPC__SHARES_BUCKET_NAME: "wf-smpcv2-dev-sns-requests-v2"
+  SMPC__ENABLE_S3_IMPORTER: "false"
+  SMPC__DB_CHUNKS_FOLDER_NAME: "hnsw_even_odd_with_version_id_output_16k"
+  SMPC__LOAD_CHUNKS_PARALLELISM: "64"
+  SMPC__LOAD_CHUNKS_BUFFER_SIZE: "1024"
+  SMPC__REQUESTS_QUEUE_URL:
+    valueFrom:
+      secretKeyRef:
+        key: SQS_URL
+        name: application
+  SMPC__RESULTS_TOPIC_ARN:
+    valueFrom:
+      secretKeyRef:
+        key: SNS_RESULTS_ARN
+        name: application
+  SMPC__KMS_KEY_ARNS:
+    valueFrom:
+      secretKeyRef:
+        key: KMS_KEYS
+        name: application
+  SMPC__SERVER_COORDINATION__HEARTBEAT_INITIAL_RETRIES: "65"
+  SMPC__SERVER_COORDINATION__HEARTBEAT_INTERVAL_SECS: "3"
+  SMPC__SERVICE__METRICS__HOST:
+    valueFrom:
+      fieldRef:
+        fieldPath: status.hostIP
+  SMPC__SERVICE__METRICS__PORT: "8125"
+  SMPC__SERVICE__METRICS__QUEUE_SIZE: "5000"
+  SMPC__SERVICE__METRICS__BUFFER_SIZE: "256"
+  SMPC__ENABLE_MODIFICATIONS_SYNC: "true"
+  SMPC__ENABLE_MODIFICATIONS_REPLAY: "false"
+  SMPC__TLS__PRIVATE_KEY: "/etc/ssl/private/key.pem"
+  SMPC__TLS__LEAF_CERT: "/etc/ssl/private/certificate.crt"
+  SMPC__TLS__ROOT_CERTS: '["/usr/local/share/ca-certificates/ca_party_dev_0.crt", "/usr/local/share/ca-certificates/ca_party_dev_1.crt", "/usr/local/share/ca-certificates/ca_party_dev_2.crt"]'
+  SMPC__TLS__CLIENT_ONLY_TLS: "false"
+
 strategy:
   type: Recreate
 
@@ -55,11 +137,11 @@ startupProbe:
 
 resources:
   limits:
-    cpu: 28
-    memory: 450Gi
+    cpu: "1"
+    memory: 16Gi
   requests:
-    cpu: 28
-    memory: 450Gi
+    cpu: "1"
+    memory: 16Gi
 
 imagePullSecrets:
   - name: github-secret
@@ -70,7 +152,16 @@ podAnnotations:
 nodeSelector:
   kubernetes.io/arch: arm64
   karpenter.sh/capacity-type: on-demand
-  node.kubernetes.io/instance-type: "x8g.8xlarge"
+  topology.k8s.aws/zone-id: "euc1-az1"
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: karpenter.k8s.aws/instance-family
+              operator: In
+              values: ["r8g", "c8g", "m8g"]
 
 podSecurityContext:
   runAsUser: 65534

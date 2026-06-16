@@ -39,7 +39,10 @@ use std::{
     collections::HashMap, error::Error, fmt::Write as _, path::PathBuf, sync::Arc, time::Duration,
 };
 
-use ampc_actor_utils::execution::{player::Identity, session::NetworkSession};
+use ampc_actor_utils::{
+    execution::{player::Identity, session::NetworkSession},
+    network::mpc::handle::control_channel::ControlChannel,
+};
 use async_trait::async_trait;
 use clap::Parser;
 use eyre::Result;
@@ -146,10 +149,7 @@ impl NetworkHandle for CountingNetworkHandle {
         self.inner.make_sessions().await
     }
 
-    async fn control_channel(
-        &mut self,
-    ) -> Result<Box<dyn ampc_actor_utils::network::mpc::handle::control_channel::ControlChannel>>
-    {
+    async fn control_channel(&mut self) -> Result<Box<dyn ControlChannel>> {
         self.inner.control_channel().await
     }
 }
@@ -189,10 +189,7 @@ impl NetworkHandle for DummyNetHandle {
     )> {
         unreachable!("DummyNetHandle should never be called")
     }
-    async fn control_channel(
-        &mut self,
-    ) -> Result<Box<dyn ampc_actor_utils::network::mpc::handle::control_channel::ControlChannel>>
-    {
+    async fn control_channel(&mut self) -> Result<Box<dyn ControlChannel>> {
         unreachable!("DummyNetHandle should never be called")
     }
 }
@@ -349,6 +346,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let request_parallelism = config.request_parallelism;
     let connection_parallelism = config.connection_parallelism;
+    let fixed_layer_search_batch_size = config.searcher.fixed_layer_search_batch_size;
 
     for (i, (iris_stores, graphs)) in izip!(party_iris_stores, party_graphs).enumerate() {
         let addresses = addresses.clone();
@@ -357,26 +355,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
             // Stagger startup so TCP listeners bind before connectors
             sleep(Duration::from_millis(100 * i as u64)).await;
 
-            let hawk_args = HawkArgs::parse_from([
-                "hawk_main",
-                "--addresses",
-                &addresses.join(","),
-                "--outbound-addrs",
-                &addresses.join(","),
-                "--party-index",
-                &i.to_string(),
-                "--hnsw-param-ef-constr",
-                &ef_constr.to_string(),
-                "--hnsw-param-m",
-                &m.to_string(),
-                "--hnsw-param-ef-search",
-                &ef_search.to_string(),
-                "--request-parallelism",
-                &request_parallelism.to_string(),
-                "--connection-parallelism",
-                &connection_parallelism.to_string(),
-                "--disable-persistence",
-            ]);
+            let mut cli_args = vec![
+                "hawk_main".to_string(),
+                "--addresses".to_string(),
+                addresses.join(","),
+                "--outbound-addrs".to_string(),
+                addresses.join(","),
+                "--party-index".to_string(),
+                i.to_string(),
+                "--hnsw-param-ef-constr".to_string(),
+                ef_constr.to_string(),
+                "--hnsw-param-m".to_string(),
+                m.to_string(),
+                "--hnsw-param-ef-search".to_string(),
+                ef_search.to_string(),
+                "--request-parallelism".to_string(),
+                request_parallelism.to_string(),
+                "--connection-parallelism".to_string(),
+                connection_parallelism.to_string(),
+                "--disable-persistence".to_string(),
+            ];
+
+            if let Some(batch_size) = fixed_layer_search_batch_size {
+                cli_args.push("--hnsw-fixed-layer-search-batch-size".to_string());
+                cli_args.push(batch_size.to_string());
+            }
+
+            let hawk_args = HawkArgs::parse_from(cli_args);
 
             let mut actor = HawkActor::from_cli_with_graph_and_store(
                 &hawk_args,

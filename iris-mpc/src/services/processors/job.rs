@@ -45,6 +45,8 @@ pub async fn process_job_result(
         request_ids,
         request_types,
         metadata,
+        // `matches` / `matches_with_skip_persistence` are misleadingly named — see job.rs.
+        // Only meaningful filtered to uniqueness rows, which is what this consumer does.
         matches,
         matches_with_skip_persistence,
         skip_persistence,
