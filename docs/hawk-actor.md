@@ -38,7 +38,6 @@ type Aby3Ref = Arc<RwLock<Aby3Store>>;
 HAWK_DISTANCE_FN = DistanceFn::MinFhd      // Distance function choice
 HAWK_MINFHD_ROTATIONS = 11                 // Rotations for MinFhd
 HAWK_BASE_ROTATIONS_MASK = CENTER_AND_10_MASK  // Base rotations for HNSW search
-NEIGHBORHOOD_MODE = NeighborhoodMode::Sorted   // Candidate list strategy
 LINEAR_SCAN_MAX_GRAPH_LAYER = 1
 ```
 

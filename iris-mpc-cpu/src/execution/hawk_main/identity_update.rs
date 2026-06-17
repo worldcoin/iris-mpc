@@ -5,7 +5,7 @@ use super::{
     search::{self, SearchParams, SearchQueries, SearchResults},
     BothEyes, HawkActor, HawkRequest, HawkSession, LEFT, RIGHT,
 };
-use crate::execution::hawk_main::{iris_worker::QueryId, search::SearchIds, NEIGHBORHOOD_MODE};
+use crate::execution::hawk_main::{iris_worker::QueryId, search::SearchIds};
 use eyre::Result;
 use iris_mpc_common::vector_id::VectorId;
 
@@ -47,7 +47,6 @@ pub async fn search_to_identity_update(
         &updates.queries,
         &updates.request_ids,
         search_params,
-        NEIGHBORHOOD_MODE,
     )
     .await?;
 

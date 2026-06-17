@@ -10,7 +10,7 @@ use iris_mpc_cpu::{
             OpCountersLayer, Operation, ParamVertexOpeningsCounter, StaticCounter,
         },
         searcher::LayerDistribution,
-        GraphMem, HnswSearcher, SortedNeighborhood,
+        GraphMem, HnswSearcher,
     },
 };
 use rand::SeedableRng;
@@ -113,12 +113,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let query = Arc::new(raw_query.clone());
                 let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
                 searcher
-                    .insert::<_, SortedNeighborhood<_>>(
-                        &mut vector,
-                        &mut graph,
-                        &query,
-                        insertion_layer,
-                    )
+                    .insert(&mut vector, &mut graph, &query, insertion_layer)
                     .await?;
 
                 if idx % 1000 == 999 {
@@ -144,12 +139,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let query = Arc::new(raw_query.clone());
                 let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
                 searcher
-                    .insert::<_, SortedNeighborhood<_>>(
-                        &mut vector,
-                        &mut graph,
-                        &query,
-                        insertion_layer,
-                    )
+                    .insert(&mut vector, &mut graph, &query, insertion_layer)
                     .await?;
 
                 if idx % 1000 == 999 {

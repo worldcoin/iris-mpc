@@ -945,7 +945,7 @@ mod tests {
         hawkers::{aby3::aby3_store::FhdOps, plaintext_store::PlaintextStore},
         hnsw::{
             graph::layered_graph::migrate, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
-            SortedNeighborhood, VectorStore,
+            VectorStore,
         },
     };
     use aes_prng::AesRng;
@@ -1041,12 +1041,7 @@ mod tests {
             let query = Arc::new(raw_query);
             let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
             let (neighbors, update_ep) = searcher
-                .search_to_insert::<_, SortedNeighborhood<_>>(
-                    &mut vector_store,
-                    &graph_store,
-                    &query,
-                    insertion_layer,
-                )
+                .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
                 .await?;
             let inserted = vector_store.insert(&query).await;
             searcher
@@ -1104,12 +1099,7 @@ mod tests {
             let query = Arc::new(raw_query);
             let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
             let (neighbors, update_ep) = searcher
-                .search_to_insert::<_, SortedNeighborhood<_>>(
-                    &mut vector_store,
-                    &graph_store,
-                    &query,
-                    insertion_layer,
-                )
+                .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
                 .await?;
             let inserted = vector_store.insert(&query).await;
             searcher
