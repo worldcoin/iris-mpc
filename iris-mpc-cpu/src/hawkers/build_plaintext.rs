@@ -13,7 +13,7 @@
 //! `parallel_batch_insert<V: VectorStoreMut>` is because the per-query search
 //! is spawned onto a multi-threaded [`JoinSet`], which requires the spawned
 //! future to be `Send`. The `VectorStore`/`VectorStoreMut` operations (and the
-//! `DistanceOps`/`Neighborhood` methods they call) are `async fn`s in traits,
+//! `DistanceOps` methods they call) are `async fn`s in traits,
 //! which carry no `Send` bound. For a *concrete* store the compiler still
 //! proves each future `Send` by auto-trait leakage, so each function below
 //! compiles; for a *generic* `V` that guarantee is unavailable and the spawn is
@@ -21,7 +21,7 @@
 //!
 //! Plausible upgrade path: add `+ Send` to those trait methods (desugaring the
 //! `async fn`s to `-> impl Future<..> + Send`, which cascades through
-//! `VectorStore`/`VectorStoreMut` into `DistanceOps` and `Neighborhood`), or
+//! `VectorStore`/`VectorStoreMut` into `DistanceOps`), or
 //! push the spawned work behind a higher-order closure whose concrete future is
 //! `Send` at each call site. Either then collapses these two routines into one
 //! generic `parallel_batch_insert<V>`.
@@ -38,7 +38,7 @@ use crate::hawkers::plaintext_deep_id_store::{Int4Vector, SharedPlaintextDeepIDS
 use crate::{
     execution::hawk_main::insert::{self, InsertPlanV},
     hawkers::{aby3::aby3_store::DistanceOps, plaintext_store::SharedPlaintextStore},
-    hnsw::{graph::neighborhood::Neighborhood, GraphMem, HnswSearcher, SortedNeighborhood},
+    hnsw::{GraphMem, HnswSearcher},
 };
 
 /// Number of entries to insert before reporting a new info log entry
@@ -72,12 +72,7 @@ pub async fn plaintext_parallel_batch_insert<D: DistanceOps>(
                 let insertion_layer = searcher.gen_layer_prf(&prf_seed, &(vector_id))?;
 
                 let (links, update_ep) = searcher
-                    .search_to_insert::<_, SortedNeighborhood<_>>(
-                        &mut store,
-                        &graph,
-                        &query,
-                        insertion_layer,
-                    )
+                    .search_to_insert(&mut store, &graph, &query, insertion_layer)
                     .await?;
 
                 // Trim and extract unstructured vector lists
@@ -162,12 +157,7 @@ pub async fn deep_id_parallel_batch_insert(
                 let insertion_layer = searcher.gen_layer_prf(&prf_seed, &(vector_id))?;
 
                 let (links, update_ep) = searcher
-                    .search_to_insert::<_, SortedNeighborhood<_>>(
-                        &mut store,
-                        &graph,
-                        &query,
-                        insertion_layer,
-                    )
+                    .search_to_insert(&mut store, &graph, &query, insertion_layer)
                     .await?;
 
                 // Trim and extract unstructured vector lists
@@ -227,7 +217,10 @@ pub async fn deep_id_parallel_batch_insert(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{hawkers::plaintext_store::PlaintextStore, hnsw::HnswSearcher};
+    use crate::{
+        hawkers::plaintext_store::PlaintextStore,
+        hnsw::{HnswSearcher, SortedNeighborhood},
+    };
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
     use rand::SeedableRng;
@@ -286,9 +279,7 @@ mod tests {
         // Check if each inserted iris can be found and matched correctly
         for (_vector_id, iris_code) in irises {
             let query = Arc::new(iris_code);
-            let result = searcher
-                .search::<_, SortedNeighborhood<_>>(&mut store, &graph, &query, 1)
-                .await?;
+            let result = searcher.search(&mut store, &graph, &query, 1).await?;
             assert!(
                 searcher.is_match(&mut store, &[result]).await?,
                 "Match verification failed for an inserted iris"

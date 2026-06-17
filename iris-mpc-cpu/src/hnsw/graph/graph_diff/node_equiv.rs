@@ -46,7 +46,7 @@ pub fn ensure_node_equivalence(lhs: &GraphMem, rhs: &GraphMem) -> Result<(), Nod
         if let Some(missing_node) = lhs_nodes.difference(&rhs_nodes).next() {
             return Err(NodeEquivalenceError::NodeMissingInRhs {
                 layer_index: i,
-                node: missing_node.clone(),
+                node: *missing_node,
             });
         }
 
@@ -54,7 +54,7 @@ pub fn ensure_node_equivalence(lhs: &GraphMem, rhs: &GraphMem) -> Result<(), Nod
         if let Some(missing_node) = rhs_nodes.difference(&lhs_nodes).next() {
             return Err(NodeEquivalenceError::NodeMissingInLhs {
                 layer_index: i,
-                node: missing_node.clone(),
+                node: *missing_node,
             });
         }
     }

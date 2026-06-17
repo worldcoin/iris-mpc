@@ -4,8 +4,7 @@ use crate::{
         plaintext_store::{PlaintextStore, SharedPlaintextStore},
     },
     hnsw::{
-        graph::neighborhood::{UnsortedNeighborhood, WrappedNeighborhood},
-        searcher::{LayerDistribution, NeighborhoodMode, N_PARAM_LAYERS},
+        searcher::{LayerDistribution, N_PARAM_LAYERS},
         GraphMem, HnswParams, HnswSearcher, SortedNeighborhood,
     },
     utils::serialization::{
@@ -53,8 +52,6 @@ pub struct AnalysisConfig {
     pub mutations: Vec<f64>,
     /// Config for HNSW searcher to use for search during analysis.
     pub search_hnsw_config: HnswConfig,
-    /// Search using sorted or unsorted neighborhoods
-    pub neighborhood_mode: NeighborhoodMode,
     /// Distance ops type: "fhd" (Fractional Hamming) or "nhd" (Normalized Hamming).
     pub distance_ops: String,
 }
@@ -150,30 +147,12 @@ pub async fn run_analysis<D: DistanceOps>(
                 let query_ref = Arc::new(query_code_inner);
                 let analysis_searcher_clone = analysis_searcher.clone();
                 let mut store_clone = store.clone();
-                let nb_mode = config.neighborhood_mode.clone();
                 let graph_clone = Arc::clone(&graph);
 
                 let future = async move {
-                    let neighbors: WrappedNeighborhood<_> = match nb_mode {
-                        NeighborhoodMode::Sorted => analysis_searcher_clone
-                            .search::<_, SortedNeighborhood<_>>(
-                                &mut store_clone,
-                                &graph_clone,
-                                &query_ref,
-                                k_neighbors,
-                            )
-                            .await?
-                            .into(),
-                        NeighborhoodMode::Unsorted => analysis_searcher_clone
-                            .search::<_, UnsortedNeighborhood<_>>(
-                                &mut store_clone,
-                                &graph_clone,
-                                &query_ref,
-                                k_neighbors,
-                            )
-                            .await?
-                            .into(),
-                    };
+                    let neighbors: SortedNeighborhood<_> = analysis_searcher_clone
+                        .search(&mut store_clone, &graph_clone, &query_ref, k_neighbors)
+                        .await?;
 
                     let found = neighbors
                         .as_ref()

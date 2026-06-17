@@ -232,7 +232,6 @@ output_format = "rate"
 output_path = "out.csv"
 rotations = { start = 0, end = 1 }
 mutations = [0.0]
-neighborhood_mode = "Sorted"
 distance_ops = "fhd"
 [analysis.search_hnsw_config]
 ef_construction = 32
@@ -268,7 +267,6 @@ k_neighbors = 1
 output_format = "rate"
 output_path = "out.csv"
 noise_levels = [0.0, 0.05]
-neighborhood_mode = "Sorted"
 [analysis.search_hnsw_config]
 ef_construction = 32
 ef_search = 32

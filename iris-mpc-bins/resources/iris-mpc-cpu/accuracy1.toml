@@ -21,7 +21,6 @@ sample_size = 20
 seed = 123
 distance_ops = "fhd"                  # Must be "fhd" or "nhd"
 distance_fn = "min_rotation"         # Must be "simple" or "min_rotation"
-neighborhood_mode = "Unsorted"  # Must be "Sorted" or "Unsorted"
 k_neighbors = 128
 mutations = [0.33, 0.37, 0.51]
 output_format = "rate"          # Must be "full_csv", "rate" or "histogram"

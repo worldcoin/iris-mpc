@@ -34,10 +34,7 @@ use crate::{
     genesis::{BatchSize, BatchSizeConfig},
     graph_checkpoint::PruningMode,
     hawkers::plaintext_store::PlaintextStore,
-    hnsw::{
-        graph::neighborhood::Neighborhood, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
-        SortedNeighborhood, LINEAR_SCAN_MAX_GRAPH_LAYER,
-    },
+    hnsw::{vector_store::VectorStoreMut, GraphMem, HnswSearcher, LINEAR_SCAN_MAX_GRAPH_LAYER},
 };
 
 /// Represents irises db table, mapping serial ids to version, and left and right iris codes.
@@ -243,12 +240,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                     let insertion_layer = searcher.gen_layer_prf(&prf_key, &identifier)?;
 
                     let (links, update_ep) = searcher
-                        .search_to_insert::<_, SortedNeighborhood<_>>(
-                            store,
-                            graph,
-                            &query,
-                            insertion_layer,
-                        )
+                        .search_to_insert(store, graph, &query, insertion_layer)
                         .await?;
 
                     // Trim and extract unstructured vector lists
@@ -348,12 +340,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                 let insertion_layer = searcher.gen_layer_prf(&prf_key, &identifier)?;
 
                 let (links, update_ep) = searcher
-                    .search_to_insert::<_, SortedNeighborhood<_>>(
-                        store,
-                        graph,
-                        &query,
-                        insertion_layer,
-                    )
+                    .search_to_insert(store, graph, &query, insertion_layer)
                     .await?;
 
                 // Trim and extract unstructured vector lists
