@@ -24,7 +24,6 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
-use iris_mpc_common::vector_id::VectorId;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -41,7 +40,7 @@ pub type GraphMutationId = i64;
 
 /// The graph each materializer produces and each terminal action consumes.
 /// Both eyes together — left then right — matching the rest of Hawk.
-pub type Graph = BothEyes<GraphMem<VectorId>>;
+pub type Graph = BothEyes<GraphMem>;
 
 /// Metadata for the base checkpoint a cycle starts from.
 ///
@@ -229,7 +228,7 @@ pub trait MutationStore {
         &self,
         lo_exclusive: GraphMutationId,
         hi_inclusive: GraphMutationId,
-    ) -> Result<BoxStream<'_, Result<BothEyes<Vec<GraphMutation<VectorId>>>, CycleError>>, CycleError>;
+    ) -> Result<BoxStream<'_, Result<BothEyes<Vec<GraphMutation>>, CycleError>>, CycleError>;
 
     /// Largest `graph_mutation_id` currently visible to this party.
     /// Used for the height-agreement round.

@@ -2,10 +2,7 @@ use std::collections::HashMap;
 
 use aws_sdk_s3::Client;
 use eyre::{bail, eyre, Result};
-use iris_mpc_common::{
-    helpers::sync::{SyncResult, SyncState},
-    IrisVectorId,
-};
+use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use itertools::izip;
 
 use super::{download_graph_checkpoint, GraphCheckpointState};
@@ -139,7 +136,7 @@ pub async fn load_graph_and_roll_forward(
     checkpoint_bucket: &str,
     checkpoint: Option<GraphCheckpointState>,
     wal_rows: Vec<GraphMutationRow>,
-) -> Result<BothEyes<GraphMem<IrisVectorId>>> {
+) -> Result<BothEyes<GraphMem>> {
     let mut both_eyes = if let Some(state) = checkpoint {
         tracing::info!(
             "Loading graph from common S3 checkpoint, hash: {}",
@@ -166,14 +163,14 @@ pub async fn load_graph_and_roll_forward(
 /// Rows must be ordered by `modification_id` ascending (which is the ordering
 /// guaranteed by all `get_hawk_graph_mutations_*` queries).
 pub fn apply_graph_mutations(
-    both_eyes: &mut BothEyes<GraphMem<IrisVectorId>>,
+    both_eyes: &mut BothEyes<GraphMem>,
     mutation_rows: Vec<GraphMutationRow>,
 ) -> Result<()> {
     debug_assert!(mutation_rows
         .windows(2)
         .all(|w| w[0].modification_id < w[1].modification_id));
     for row in mutation_rows {
-        let [left_mutations, right_mutations]: [Vec<GraphMutation<IrisVectorId>>; 2] =
+        let [left_mutations, right_mutations]: [Vec<GraphMutation>; 2] =
             row.deserialize_mutations()?;
         both_eyes[0].insert_apply_all(&left_mutations)?;
         both_eyes[1].insert_apply_all(&right_mutations)?;
@@ -185,23 +182,21 @@ pub fn apply_graph_mutations(
 mod tests {
     use super::*;
     use crate::hnsw::graph::mutation::{MutationOp, UpdateEntryPoint};
+    use iris_mpc_common::IrisVectorId;
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
     /// Serialize a pair of mutation lists into the bincode format expected by
     /// `GraphMutationRow`.
-    fn serialize_mutations(
-        left: Vec<GraphMutation<IrisVectorId>>,
-        right: Vec<GraphMutation<IrisVectorId>>,
-    ) -> Vec<u8> {
-        let both_eyes: [Vec<GraphMutation<IrisVectorId>>; 2] = [left, right];
+    fn serialize_mutations(left: Vec<GraphMutation>, right: Vec<GraphMutation>) -> Vec<u8> {
+        let both_eyes: [Vec<GraphMutation>; 2] = [left, right];
         bincode::serialize(&both_eyes).expect("bincode serialization failed")
     }
 
     fn make_row(
         modification_id: i64,
-        left: Vec<GraphMutation<IrisVectorId>>,
-        right: Vec<GraphMutation<IrisVectorId>>,
+        left: Vec<GraphMutation>,
+        right: Vec<GraphMutation>,
     ) -> GraphMutationRow {
         GraphMutationRow {
             modification_id,
@@ -216,7 +211,7 @@ mod tests {
 
     /// A minimal `AddNode` mutation that adds the node to layer 0 without
     /// updating entry points. Uses a static counter to assign incrementing seq_no.
-    fn add_node(id: IrisVectorId) -> GraphMutation<IrisVectorId> {
+    fn add_node(id: IrisVectorId) -> GraphMutation {
         use std::sync::atomic::{AtomicU64, Ordering};
         static SEQ_COUNTER: AtomicU64 = AtomicU64::new(1);
 

@@ -306,7 +306,7 @@ async fn main() -> Result<()> {
         bucket,
         checkpoint_state.s3_key
     );
-    let mut graphs: BothEyes<GraphMem<VectorId>> =
+    let mut graphs: BothEyes<GraphMem> =
         download_graph_checkpoint(&checkpoint_s3_client, bucket, &checkpoint_state).await?;
     rpt!(rpt, "  Checkpoint loaded and BLAKE3 verified.");
 
@@ -378,7 +378,7 @@ async fn main() -> Result<()> {
     );
     stats.add("checkpoint_blake3_hash", &checkpoint_state.blake3_hash);
 
-    let s3_graphs: Option<BothEyes<GraphMem<VectorId>>> = Some(graphs);
+    let s3_graphs: Option<BothEyes<GraphMem>> = Some(graphs);
 
     rpt!(rpt, "--- Collecting iris IDs ---");
     let iris_ids = collect_iris_ids(&hnsw_store, &mut stats).await?;
@@ -495,7 +495,7 @@ async fn collect_iris_ids(store: &Store, stats: &mut Stats) -> Result<HashSet<i6
 
 #[allow(clippy::too_many_arguments)]
 async fn run_graph_checks(
-    s3_graphs: Option<&BothEyes<GraphMem<VectorId>>>,
+    s3_graphs: Option<&BothEyes<GraphMem>>,
     iris_ids: &HashSet<i64>,
     exclusions: &Option<HashSet<u32>>,
     m: usize,
@@ -557,7 +557,7 @@ async fn run_graph_checks(
 #[allow(clippy::too_many_arguments)]
 fn check_single_graph(
     eye: &str,
-    graph: &GraphMem<VectorId>,
+    graph: &GraphMem,
     iris_ids: &HashSet<i64>,
     exclusions: &Option<HashSet<u32>>,
     m: usize,
@@ -956,7 +956,7 @@ async fn load_checkpoint_state(
 async fn run_persistent_state_checks(
     graph_pg: &GraphPg<Aby3Store>,
     iris_max_serial_id: usize,
-    s3_graphs: Option<&BothEyes<GraphMem<VectorId>>>,
+    s3_graphs: Option<&BothEyes<GraphMem>>,
     checks: &mut Vec<CheckResult>,
     stats: &mut Stats,
 ) -> Result<Option<i64>> {
@@ -1028,7 +1028,7 @@ async fn run_persistent_state_checks(
 /// Returns the maximum serial_id across all nodes in layer 0 of an in-memory
 /// graph, or 0 if the graph is empty. Matches the semantics of
 /// `GraphOps::get_max_serial_id`, which returns 0 when the links table is empty.
-fn graph_mem_max_serial_id(graph: &GraphMem<VectorId>) -> i64 {
+fn graph_mem_max_serial_id(graph: &GraphMem) -> i64 {
     graph
         .layers
         .first()

@@ -9,7 +9,6 @@ use crate::graph_checkpoint::stream_download_and_deserialize_graph_pair;
 use crate::hnsw::{graph::graph_store::GraphPg, VectorStore};
 use crate::utils::serialization::graph::GraphFormat;
 use futures::TryStreamExt;
-use iris_mpc_common::vector_id::VectorId;
 
 /// Rebuilds the graph from an S3 checkpoint plus WAL replay.
 pub struct RebuildFromCheckpoint<'a, V: VectorStore> {
@@ -99,7 +98,7 @@ async fn apply_wal_stream(
     graph: &mut Graph,
     mut stream: futures::stream::BoxStream<
         '_,
-        Result<BothEyes<Vec<crate::hnsw::graph::mutation::GraphMutation<VectorId>>>, CycleError>,
+        Result<BothEyes<Vec<crate::hnsw::graph::mutation::GraphMutation>>, CycleError>,
     >,
 ) -> Result<usize, CycleError> {
     use crate::execution::hawk_main::{LEFT, RIGHT};
@@ -124,15 +123,16 @@ mod tests {
     use crate::hnsw::graph::layered_graph::GraphMem;
     use crate::hnsw::graph::mutation::{GraphMutation, MutationOp, UpdateEntryPoint};
     use futures::{stream, StreamExt};
+    use iris_mpc_common::IrisVectorId;
 
-    fn vid(n: u32) -> VectorId {
-        VectorId::from_serial_id(n)
+    fn vid(n: u32) -> IrisVectorId {
+        IrisVectorId::from_serial_id(n)
     }
 
     // Use `n` itself as the seq_no — every test below picks node ids that
     // are strictly increasing within a given eye, so this satisfies the
     // strict-increase invariant `insert_apply_all` enforces.
-    fn add_node(n: u32) -> GraphMutation<VectorId> {
+    fn add_node(n: u32) -> GraphMutation {
         GraphMutation {
             seq_no: n as u64,
             ops: vec![MutationOp::AddNode {
@@ -143,10 +143,7 @@ mod tests {
         }
     }
 
-    fn row(
-        left: Vec<u32>,
-        right: Vec<u32>,
-    ) -> Result<BothEyes<Vec<GraphMutation<VectorId>>>, CycleError> {
+    fn row(left: Vec<u32>, right: Vec<u32>) -> Result<BothEyes<Vec<GraphMutation>>, CycleError> {
         Ok([
             left.into_iter().map(add_node).collect(),
             right.into_iter().map(add_node).collect(),

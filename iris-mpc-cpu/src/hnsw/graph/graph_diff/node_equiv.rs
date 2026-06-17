@@ -1,19 +1,23 @@
 use std::collections::HashSet;
-use std::fmt::Display;
-use std::str::FromStr;
 
-use crate::hnsw::vector_store::Ref;
 use crate::hnsw::GraphMem;
+use iris_mpc_common::IrisVectorId;
 
 /// Describes how the node and layer structure of two graphs are not equivalent.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NodeEquivalenceError<V> {
+pub enum NodeEquivalenceError {
     /// The graphs have a different number of layers.
     LayerCountMismatch { lhs_count: usize, rhs_count: usize },
     /// A node was found in the left-hand graph's layer that was not in the right's.
-    NodeMissingInRhs { layer_index: usize, node: V },
+    NodeMissingInRhs {
+        layer_index: usize,
+        node: IrisVectorId,
+    },
     /// A node was found in the right-hand graph's layer that was not in the left's.
-    NodeMissingInLhs { layer_index: usize, node: V },
+    NodeMissingInLhs {
+        layer_index: usize,
+        node: IrisVectorId,
+    },
 }
 
 /// Diffs the node and layer structure of two graphs.
@@ -24,10 +28,7 @@ pub enum NodeEquivalenceError<V> {
 /// # Returns
 /// - `Ok(())` if the graphs are equivalent in their node and layer structure.
 /// - `Err(NodeEquivalenceError)` if they are not, with a reason for the failure.
-pub fn ensure_node_equivalence<V: Ref + Display + FromStr + Ord>(
-    lhs: &GraphMem<V>,
-    rhs: &GraphMem<V>,
-) -> Result<(), NodeEquivalenceError<V>> {
+pub fn ensure_node_equivalence(lhs: &GraphMem, rhs: &GraphMem) -> Result<(), NodeEquivalenceError> {
     // First, check if the number of layers is the same.
     if lhs.layers.len() != rhs.layers.len() {
         return Err(NodeEquivalenceError::LayerCountMismatch {
@@ -45,7 +46,7 @@ pub fn ensure_node_equivalence<V: Ref + Display + FromStr + Ord>(
         if let Some(missing_node) = lhs_nodes.difference(&rhs_nodes).next() {
             return Err(NodeEquivalenceError::NodeMissingInRhs {
                 layer_index: i,
-                node: missing_node.clone(),
+                node: *missing_node,
             });
         }
 
@@ -53,7 +54,7 @@ pub fn ensure_node_equivalence<V: Ref + Display + FromStr + Ord>(
         if let Some(missing_node) = rhs_nodes.difference(&lhs_nodes).next() {
             return Err(NodeEquivalenceError::NodeMissingInLhs {
                 layer_index: i,
-                node: missing_node.clone(),
+                node: *missing_node,
             });
         }
     }

@@ -5,14 +5,14 @@ use std::{
 };
 
 use eyre::{bail, eyre, OptionExt, Result};
-use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
+use iris_mpc_common::iris_db::iris::IrisCode;
 use rand::{rngs::StdRng, RngCore, SeedableRng};
 use serde::Deserialize;
 
 use crate::{
     hawkers::plaintext_deep_id_store::Int4Vector,
     hnsw::{
-        searcher::{LayerDistribution, LayerMode, N_PARAM_LAYERS},
+        searcher::{LayerDistribution, N_PARAM_LAYERS},
         GraphMem, HnswParams, HnswSearcher,
     },
     utils::serialization::{
@@ -106,7 +106,7 @@ pub struct LoadGraphConfig {
 }
 
 impl LoadGraphConfig {
-    pub fn read_graph_from_file(&self) -> Result<GraphMem<IrisVectorId>> {
+    pub fn read_graph_from_file(&self) -> Result<GraphMem> {
         let format = self.format.unwrap_or(GraphFormat::Current);
         super::serialization::graph::read_graph_from_file(&self.path, format)
     }
@@ -119,7 +119,7 @@ impl LoadGraphConfig {
 #[allow(non_snake_case)]
 pub struct SearcherConfig {
     pub params: SearcherParams,
-    pub layer_mode: LayerMode,
+    pub max_graph_layer: usize,
     pub layer_distribution: Option<LayerDistribution>,
     #[serde(default)]
     pub fixed_layer_search_batch_size: Option<usize>,
@@ -130,7 +130,6 @@ impl TryFrom<&SearcherConfig> for HnswSearcher {
 
     fn try_from(value: &SearcherConfig) -> Result<Self> {
         let params: HnswParams = (&value.params).try_into()?;
-        let layer_mode = value.layer_mode.clone();
         let layer_distribution = value
             .layer_distribution
             .clone()
@@ -138,7 +137,7 @@ impl TryFrom<&SearcherConfig> for HnswSearcher {
 
         Ok(HnswSearcher {
             params,
-            layer_mode,
+            max_graph_layer: value.max_graph_layer,
             layer_distribution,
             fixed_layer_search_batch_size: value.fixed_layer_search_batch_size,
         })

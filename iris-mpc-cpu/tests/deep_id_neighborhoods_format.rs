@@ -6,7 +6,7 @@ use std::io::Write;
 
 use aes_prng::AesRng;
 use iris_mpc_cpu::hawkers::ideal_knn_engines::{
-    read_knn_results_from_file, EngineChoiceInt4, EngineInt4, KNNResult,
+    read_knn_results_from_file, EngineChoiceInt4, EngineInt4,
 };
 use iris_mpc_cpu::hawkers::plaintext_deep_id_store::Int4Vector;
 use rand::SeedableRng;
@@ -21,7 +21,7 @@ fn int4_neighborhoods_file_is_consumable_and_contiguous() {
 
     // Compute neighborhoods exactly as the binary does (engine path).
     let mut engine = EngineInt4::init(EngineChoiceInt4::NaiveInt4Dot, vectors, k, 1);
-    let results: Vec<KNNResult<u32>> = engine.compute_chunk(n);
+    let results = engine.compute_chunk(n);
 
     // Write a results file: a header line (ignored by the consumer) + body lines.
     let dir = tempdir().unwrap();

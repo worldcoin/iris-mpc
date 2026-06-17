@@ -44,18 +44,7 @@ pub const DEFAULT_STREAMING_PARALLELISM: usize = 8;
 /// no intermediate `Vec<u8>`.
 ///
 /// Pairs with [`stream_serialize_and_upload_with`] when the caller needs
-/// the canonical-bytes hash (e.g. to record into a verification field):
-///
-/// ```ignore
-/// let (hash_tx, hash_rx) = tokio::sync::oneshot::channel();
-/// stream_serialize_and_upload_with(s3, bucket, key, move |w| {
-///     let mut tee = BlakeTeeWriter::new(w);
-///     bincode::serialize_into(&mut tee, &v)?;
-///     let _ = hash_tx.send(tee.finalize());
-///     Ok(())
-/// }, DEFAULT_STREAMING_PART_SIZE, DEFAULT_STREAMING_PARALLELISM).await?;
-/// let hash = hash_rx.await?;
-/// ```
+/// the canonical-bytes hash (e.g. to record into a verification field)
 ///
 /// Kept deliberately outside the upload primitive itself so the primitive
 /// stays content-agnostic: callers that don't need a hash (or want a

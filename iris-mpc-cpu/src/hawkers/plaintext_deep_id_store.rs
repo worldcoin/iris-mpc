@@ -11,7 +11,7 @@ use crate::{
     hnsw::{
         metrics::ops_counter::Operation::{CompareDistance, EvaluateDistance},
         vector_store::VectorStoreMut,
-        GraphMem, HnswSearcher, SortedNeighborhood, VectorStore,
+        GraphMem, HnswSearcher, VectorStore,
     },
 };
 use aes_prng::AesRng;
@@ -213,8 +213,8 @@ impl PlaintextDeepIDStore {
         rng: &mut R,
         graph_size: usize,
         searcher: &HnswSearcher,
-    ) -> Result<GraphMem<VectorId>> {
-        let mut graph: GraphMem<VectorId> = GraphMem::new();
+    ) -> Result<GraphMem> {
+        let mut graph: GraphMem = GraphMem::new();
         let mut rng = AesRng::from_rng(rng.clone())?;
 
         if graph_size > self.len() {
@@ -243,7 +243,7 @@ impl PlaintextDeepIDStore {
                 .unwrap_or_else(|| VectorId::from_serial_id(serial_id));
             let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
             let (neighbors, update_ep) = searcher
-                .search_to_insert::<_, SortedNeighborhood<_>>(self, &graph, &query, insertion_layer)
+                .search_to_insert(self, &graph, &query, insertion_layer)
                 .await?;
             searcher
                 .insert_from_search_results(self, &mut graph, query_id, neighbors, update_ep)
@@ -310,6 +310,14 @@ impl VectorStore for PlaintextDeepIDStore {
     async fn only_valid_vectors(&mut self, mut vectors: Vec<VectorId>) -> Vec<VectorId> {
         vectors.retain(|v| self.storage.contains(v));
         vectors
+    }
+
+    async fn only_valid_entry_points(
+        &mut self,
+        mut entry_points: Vec<(VectorId, usize)>,
+    ) -> Vec<(VectorId, usize)> {
+        entry_points.retain(|(v, _)| self.storage.contains(v));
+        entry_points
     }
 }
 
@@ -435,6 +443,15 @@ impl VectorStore for SharedPlaintextDeepIDStore {
         vectors.retain(|v| store.contains(v));
         vectors
     }
+
+    async fn only_valid_entry_points(
+        &mut self,
+        mut entry_points: Vec<(VectorId, usize)>,
+    ) -> Vec<(VectorId, usize)> {
+        let store = self.storage.read().await;
+        entry_points.retain(|(v, _)| store.contains(v));
+        entry_points
+    }
 }
 
 impl VectorStoreMut for SharedPlaintextDeepIDStore {
@@ -454,6 +471,7 @@ impl VectorStoreMut for SharedPlaintextDeepIDStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hnsw::SortedNeighborhood;
     use tokio::task::JoinSet;
 
     #[test]

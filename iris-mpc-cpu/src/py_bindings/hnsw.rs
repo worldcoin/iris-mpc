@@ -13,7 +13,7 @@ pub fn search(
     query: IrisCode,
     searcher: &HnswSearcher,
     vector: &mut PlaintextStore,
-    graph: &mut GraphMem<VectorId>,
+    graph: &mut GraphMem,
 ) -> (VectorId, f64) {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -34,7 +34,7 @@ pub fn insert(
     iris: IrisCode,
     searcher: &HnswSearcher,
     vector: &mut PlaintextStore,
-    graph: &mut GraphMem<VectorId>,
+    graph: &mut GraphMem,
 ) -> VectorId {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -47,7 +47,7 @@ pub fn insert(
         let query = Arc::new(iris);
         let insertion_layer = searcher.gen_layer_rng(&mut rng).unwrap();
         searcher
-            .insert::<_, SortedNeighborhood<_>>(vector, graph, &query, insertion_layer)
+            .insert(vector, graph, &query, insertion_layer)
             .await
             .unwrap()
     })
@@ -56,7 +56,7 @@ pub fn insert(
 pub fn insert_uniform_random(
     searcher: &HnswSearcher,
     vector: &mut PlaintextStore,
-    graph: &mut GraphMem<VectorId>,
+    graph: &mut GraphMem,
 ) -> VectorId {
     let mut rng = ThreadRng::default();
     let raw_query = IrisCode::random_rng(&mut rng);
@@ -68,7 +68,7 @@ pub fn fill_uniform_random(
     num: usize,
     searcher: &HnswSearcher,
     vector: &mut PlaintextStore,
-    graph: &mut GraphMem<VectorId>,
+    graph: &mut GraphMem,
 ) {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -82,7 +82,7 @@ pub fn fill_uniform_random(
             let query = Arc::new(IrisCode::random_rng(&mut rng));
             let insertion_layer = searcher.gen_layer_rng(&mut rng).unwrap();
             searcher
-                .insert::<_, SortedNeighborhood<_>>(vector, graph, &query, insertion_layer)
+                .insert(vector, graph, &query, insertion_layer)
                 .await
                 .unwrap();
             if idx % 100 == 99 {
@@ -97,7 +97,7 @@ pub fn fill_from_ndjson_file(
     limit: Option<usize>,
     searcher: &HnswSearcher,
     vector: &mut PlaintextStore,
-    graph: &mut GraphMem<VectorId>,
+    graph: &mut GraphMem,
 ) {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -115,7 +115,7 @@ pub fn fill_from_ndjson_file(
             let query = Arc::new(raw_query);
             let insertion_layer = searcher.gen_layer_rng(&mut rng).unwrap();
             searcher
-                .insert::<_, SortedNeighborhood<_>>(vector, graph, &query, insertion_layer)
+                .insert(vector, graph, &query, insertion_layer)
                 .await
                 .unwrap();
         }

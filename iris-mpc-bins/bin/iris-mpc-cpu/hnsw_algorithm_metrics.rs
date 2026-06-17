@@ -10,7 +10,7 @@ use iris_mpc_cpu::{
             OpCountersLayer, Operation, ParamVertexOpeningsCounter, StaticCounter,
         },
         searcher::LayerDistribution,
-        GraphMem, HnswSearcher, SortedNeighborhood,
+        GraphMem, HnswSearcher, LINEAR_SCAN_MAX_GRAPH_LAYER,
     },
 };
 use rand::SeedableRng;
@@ -98,7 +98,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut rng = AesRng::seed_from_u64(42_u64);
     let mut graph = GraphMem::new();
-    let mut searcher = HnswSearcher::new_standard(ef_constr, ef_search, M);
+    let mut searcher =
+        HnswSearcher::new_linear_scan(ef_constr, ef_search, M, LINEAR_SCAN_MAX_GRAPH_LAYER);
     if let Some(q) = layer_probability {
         match &mut searcher.layer_distribution {
             LayerDistribution::Geometric { layer_probability } => *layer_probability = q,
@@ -113,12 +114,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let query = Arc::new(raw_query.clone());
                 let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
                 searcher
-                    .insert::<_, SortedNeighborhood<_>>(
-                        &mut vector,
-                        &mut graph,
-                        &query,
-                        insertion_layer,
-                    )
+                    .insert(&mut vector, &mut graph, &query, insertion_layer)
                     .await?;
 
                 if idx % 1000 == 999 {
@@ -144,12 +140,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 let query = Arc::new(raw_query.clone());
                 let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
                 searcher
-                    .insert::<_, SortedNeighborhood<_>>(
-                        &mut vector,
-                        &mut graph,
-                        &query,
-                        insertion_layer,
-                    )
+                    .insert(&mut vector, &mut graph, &query, insertion_layer)
                     .await?;
 
                 if idx % 1000 == 999 {

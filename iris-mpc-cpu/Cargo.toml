@@ -23,7 +23,6 @@ config.workspace = true
 core_affinity.workspace = true
 crossbeam = "0.8.4"
 csv = "*"
-delegate = "0.13.5"
 hex.workspace = true
 dashmap = "6.1.0"
 eyre.workspace = true

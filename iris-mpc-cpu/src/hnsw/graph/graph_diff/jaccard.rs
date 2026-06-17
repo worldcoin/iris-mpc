@@ -1,6 +1,6 @@
 use super::Differ;
-use crate::hnsw::vector_store::Ref;
-use std::{collections::HashSet, fmt::Display, ops::Add, str::FromStr};
+use iris_mpc_common::IrisVectorId;
+use std::{collections::HashSet, fmt::Display, ops::Add};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct JaccardState {
@@ -56,14 +56,14 @@ impl Display for JaccardState {
 }
 
 /// A differ that computes detailed Jaccard similarity, including the `n` most dissimilar nodes per layer.
-pub struct DetailedJaccardDiffer<V: Ref> {
+pub struct DetailedJaccardDiffer {
     n: usize,
     graph_state: JaccardState,
-    current_layer_details: Vec<(V, JaccardState)>,
-    per_layer_results: Vec<(JaccardState, Vec<(V, JaccardState)>)>,
+    current_layer_details: Vec<(IrisVectorId, JaccardState)>,
+    per_layer_results: Vec<(JaccardState, Vec<(IrisVectorId, JaccardState)>)>,
 }
 
-impl<V: Ref> DetailedJaccardDiffer<V> {
+impl DetailedJaccardDiffer {
     pub fn new(n: usize) -> Self {
         Self {
             n,
@@ -74,12 +74,15 @@ impl<V: Ref> DetailedJaccardDiffer<V> {
     }
 }
 
-pub struct DetailedJaccardReport<V>(
+pub struct DetailedJaccardReport(
     #[allow(clippy::type_complexity)]
-    pub  (JaccardState, Vec<(JaccardState, Vec<(V, JaccardState)>)>),
+    pub  (
+        JaccardState,
+        Vec<(JaccardState, Vec<(IrisVectorId, JaccardState)>)>,
+    ),
 );
 
-impl<V: Ref + Display> Display for DetailedJaccardReport<V> {
+impl Display for DetailedJaccardReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (graph_state, per_layer_results) = &self.0;
         writeln!(f, "GRAPH aggregate: {}", graph_state)?;
@@ -95,20 +98,26 @@ impl<V: Ref + Display> Display for DetailedJaccardReport<V> {
     }
 }
 
-impl<V: Ref + Display + FromStr + Ord> Differ<V> for DetailedJaccardDiffer<V> {
-    type Output = DetailedJaccardReport<V>;
+impl Differ for DetailedJaccardDiffer {
+    type Output = DetailedJaccardReport;
 
     fn start_layer(&mut self, _layer_index: usize) {
         self.current_layer_details.clear();
     }
 
-    fn diff_neighborhood(&mut self, _layer_index: usize, node: &V, lhs: &[V], rhs: &[V]) {
+    fn diff_neighborhood(
+        &mut self,
+        _layer_index: usize,
+        node: &IrisVectorId,
+        lhs: &[IrisVectorId],
+        rhs: &[IrisVectorId],
+    ) {
         let lhs_set: HashSet<_> = lhs.iter().collect();
         let rhs_set: HashSet<_> = rhs.iter().collect();
         let intersection = lhs_set.intersection(&rhs_set).count();
         let union = lhs_set.union(&rhs_set).count();
         let node_state = JaccardState::new(intersection, union);
-        self.current_layer_details.push((node.clone(), node_state));
+        self.current_layer_details.push((*node, node_state));
     }
 
     fn end_layer(&mut self, _layer_index: usize) {

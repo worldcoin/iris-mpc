@@ -584,6 +584,15 @@ where
         vectors
     }
 
+    async fn only_valid_entry_points(
+        &mut self,
+        mut entry_points: Vec<(VectorId, usize)>,
+    ) -> Vec<(VectorId, usize)> {
+        let registry = self.registry.read().await;
+        entry_points.retain(|(v, _)| registry.contains(v));
+        entry_points
+    }
+
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn eval_distance(
         &mut self,
@@ -766,7 +775,7 @@ mod tests {
                 explicit::{ExplicitNeighborhoodDiffer, SortBy},
                 node_equiv::ensure_node_equivalence,
             },
-            GraphMem, HnswSearcher, SortedNeighborhood,
+            GraphMem, HnswSearcher, SortedNeighborhood, LINEAR_SCAN_MAX_GRAPH_LAYER,
         },
         network::mpc::NetworkType,
         protocol::shared_iris::GaloisRingSharedIris,
@@ -809,12 +818,7 @@ mod tests {
                 for query in queries.iter() {
                     let insertion_layer = db.gen_layer_rng(&mut rng).unwrap();
                     let inserted_vector = db
-                        .insert::<_, SortedNeighborhood<_>>(
-                            &mut *store,
-                            &mut aby3_graph,
-                            query,
-                            insertion_layer,
-                        )
+                        .insert(&mut *store, &mut aby3_graph, query, insertion_layer)
                         .await
                         .unwrap();
                     inserted.push(inserted_vector)
@@ -824,7 +828,7 @@ mod tests {
                 for v in inserted.into_iter() {
                     let query = store.cache_query_from_store(&v).await.unwrap();
                     let neighbors = db
-                        .search::<_, SortedNeighborhood<_>>(&mut *store, &aby3_graph, &query, 1)
+                        .search(&mut *store, &aby3_graph, &query, 1)
                         .await
                         .unwrap();
                     tracing::debug!("Finished checking query");
@@ -881,12 +885,7 @@ mod tests {
                 .unwrap()
                 .clone();
             let cleartext_neighbors = hawk_searcher
-                .search::<_, SortedNeighborhood<_>>(
-                    &mut cleartext_data.0,
-                    &cleartext_data.1,
-                    &query,
-                    1,
-                )
+                .search(&mut cleartext_data.0, &cleartext_data.1, &query, 1)
                 .await?;
             assert!(
                 hawk_searcher
@@ -1521,7 +1520,7 @@ mod tests {
         // density bumped to 4 so enough nodes roll onto layer 1 to exercise
         // `linear_search_min_distance` — default (M) gives <1 expected entry
         // point at this size and silently skips the branch.
-        let mut searcher = HnswSearcher::new_linear_scan(64, 32, 32, 1);
+        let mut searcher = HnswSearcher::new_linear_scan(64, 32, 32, LINEAR_SCAN_MAX_GRAPH_LAYER);
         searcher.layer_distribution =
             crate::hnsw::searcher::LayerDistribution::new_geometric_from_M(4);
         let searcher = searcher;
@@ -1540,17 +1539,12 @@ mod tests {
             .collect();
 
         let mut plaintext_store = PlaintextStore::<FhdOps>::new();
-        let mut plaintext_graph: GraphMem<VectorId> = GraphMem::new();
+        let mut plaintext_graph: GraphMem = GraphMem::new();
         let plaintext_span = info_span!("plaintext_insert");
         for (iris, &layer) in cleartext_db.iter().zip(insertion_layers.iter()) {
             let query = Arc::new(iris.clone());
             searcher
-                .insert::<_, SortedNeighborhood<_>>(
-                    &mut plaintext_store,
-                    &mut plaintext_graph,
-                    &query,
-                    layer,
-                )
+                .insert(&mut plaintext_store, &mut plaintext_graph, &query, layer)
                 .instrument(plaintext_span.clone())
                 .await?;
         }
@@ -1569,18 +1563,18 @@ mod tests {
                 let mpc_span = info_span!("mpc_insert", id = idx);
                 let mut store = store.lock().await;
                 let queries = cache_irises(store.workers.as_ref(), irises).await?;
-                let mut graph: GraphMem<VectorId> = GraphMem::new();
+                let mut graph: GraphMem = GraphMem::new();
                 for (query, &layer) in queries.iter().zip(layers.iter()) {
                     searcher
-                        .insert::<_, SortedNeighborhood<_>>(&mut *store, &mut graph, query, layer)
+                        .insert(&mut *store, &mut graph, query, layer)
                         .instrument(mpc_span.clone())
                         .await?;
                 }
-                Ok::<(usize, GraphMem<VectorId>), eyre::Report>((role, graph))
+                Ok::<(usize, GraphMem), eyre::Report>((role, graph))
             });
         }
 
-        let mut mpc_graphs: Vec<Option<GraphMem<VectorId>>> = (0..3).map(|_| None).collect();
+        let mut mpc_graphs: Vec<Option<GraphMem>> = (0..3).map(|_| None).collect();
         while let Some(res) = jobs.join_next().await {
             let (role, graph) = res??;
             mpc_graphs[role] = Some(graph);

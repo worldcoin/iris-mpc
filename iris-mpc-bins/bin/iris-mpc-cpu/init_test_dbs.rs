@@ -11,7 +11,7 @@ use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{
         graph::test_utils::DbContext, searcher::LayerDistribution, vector_store::VectorStoreMut,
-        GraphMem, HnswSearcher, SortedNeighborhood,
+        GraphMem, HnswSearcher, LINEAR_SCAN_MAX_GRAPH_LAYER,
     },
     protocol::shared_iris::{GaloisRingSharedIris, GaloisRingSharedIrisPair},
     utils::{
@@ -185,7 +185,8 @@ impl Args {
 // Convertor: Args -> HnswSearcher.
 impl From<&Args> for HnswSearcher {
     fn from(args: &Args) -> Self {
-        let mut searcher = HnswSearcher::new_standard(args.ef, args.ef, args.M);
+        let mut searcher =
+            HnswSearcher::new_linear_scan(args.ef, args.ef, args.M, LINEAR_SCAN_MAX_GRAPH_LAYER);
         if let Some(q) = args.layer_probability {
             match &mut searcher.layer_distribution {
                 LayerDistribution::Geometric { layer_probability } => {
@@ -397,12 +398,7 @@ async fn main() -> Result<()> {
 
                 let insertion_layer = searcher.gen_layer_prf(&prf_seed, &(inserted_id, side))?;
                 let (neighbors, update_ep) = searcher
-                    .search_to_insert::<_, SortedNeighborhood<_>>(
-                        &mut vector_store,
-                        &graph,
-                        &query,
-                        insertion_layer,
-                    )
+                    .search_to_insert(&mut vector_store, &graph, &query, insertion_layer)
                     .await?;
                 searcher
                     .insert_from_search_results(
@@ -480,7 +476,7 @@ async fn init_dbs(args: &Args) -> Vec<DbContext> {
     dbs
 }
 
-fn get_max_serial_id(graph: &GraphMem<IrisVectorId>) -> Option<u32> {
+fn get_max_serial_id(graph: &GraphMem) -> Option<u32> {
     if let Some(layer) = graph.layers.first() {
         layer
             .get_links_map()

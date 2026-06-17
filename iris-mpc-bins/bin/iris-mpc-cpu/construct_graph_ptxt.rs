@@ -135,9 +135,7 @@ impl Checkpoints {
 
 /// Load an existing graph from `graph_spec` (or initialize a fresh one) and
 /// return it along with its highest layer-0 node serial id.
-fn load_existing_graph(
-    graph_spec: Option<LoadGraphConfig>,
-) -> Result<(GraphMem<IrisVectorId>, u32)> {
+fn load_existing_graph(graph_spec: Option<LoadGraphConfig>) -> Result<(GraphMem, u32)> {
     if let Some(graph_spec) = graph_spec {
         tracing::info!("Loading graph from file");
         let graph = graph_spec.read_graph_from_file()?;
@@ -451,7 +449,7 @@ number = 64
 seed = 1
 
 [searcher]
-layer_mode = { LinearScan = { max_graph_layer = 1 } }
+max_graph_layer = 1
 
 [searcher.params]
 option = "Standard"
@@ -481,7 +479,7 @@ number = 64
 seed = 1
 
 [searcher]
-layer_mode = { LinearScan = { max_graph_layer = 1 } }
+max_graph_layer = 1
 
 [searcher.params]
 option = "Standard"

@@ -16,7 +16,6 @@ use crate::hnsw::{
     VectorStore,
 };
 use crate::utils::serialization::graph::GraphFormat;
-use iris_mpc_common::vector_id::VectorId;
 
 /// Uploads the materialized graph to S3 and inserts a new
 /// `genesis_graph_checkpoint` row.
@@ -161,11 +160,11 @@ impl<V: VectorStore + Send + Sync> TerminalAction for UploadAndRecord<'_, V> {
 
 /// Swaps the materialized graph into the live in-Hawk graph reference.
 pub struct InstallAsServing {
-    pub target: BothEyes<Arc<RwLock<GraphMem<VectorId>>>>,
+    pub target: BothEyes<Arc<RwLock<GraphMem>>>,
 }
 
 impl InstallAsServing {
-    pub fn new(target: BothEyes<Arc<RwLock<GraphMem<VectorId>>>>) -> Self {
+    pub fn new(target: BothEyes<Arc<RwLock<GraphMem>>>) -> Self {
         Self { target }
     }
 }
@@ -190,9 +189,10 @@ impl TerminalAction for InstallAsServing {
 mod tests {
     use super::*;
     use crate::hnsw::graph::mutation::{GraphMutation, MutationOp, UpdateEntryPoint};
+    use iris_mpc_common::IrisVectorId;
 
-    fn vid(n: u32) -> VectorId {
-        VectorId::from_serial_id(n)
+    fn vid(n: u32) -> IrisVectorId {
+        IrisVectorId::from_serial_id(n)
     }
 
     fn cp_meta() -> CheckpointMeta {
@@ -212,7 +212,7 @@ mod tests {
     #[tokio::test]
     async fn install_as_serving_swaps_in_snapshot_graph() {
         // Target holds an existing graph with node 99.
-        let target: BothEyes<Arc<RwLock<GraphMem<VectorId>>>> = [
+        let target: BothEyes<Arc<RwLock<GraphMem>>> = [
             Arc::new(RwLock::new(GraphMem::new())),
             Arc::new(RwLock::new(GraphMem::new())),
         ];
@@ -279,8 +279,8 @@ mod tests {
         use crate::execution::hawk_main::{LEFT, RIGHT};
 
         // Distinct content per eye so any eye-order swap surfaces in the assertion.
-        let mut left = GraphMem::<VectorId>::new();
-        let mut right = GraphMem::<VectorId>::new();
+        let mut left = GraphMem::new();
+        let mut right = GraphMem::new();
         left.insert_apply(&GraphMutation {
             seq_no: 1,
             ops: vec![MutationOp::AddNode {

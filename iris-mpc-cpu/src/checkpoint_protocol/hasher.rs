@@ -45,11 +45,10 @@ mod tests {
     /// Bypasses the planner so tests can pin serializer-level determinism
     /// independently of the planner's sortedness invariant.
     fn graph_from(eyes: [LayerInput; 2]) -> Graph {
-        let build = |layers_in: LayerInput| -> GraphMem<VectorId> {
-            let mut g = GraphMem::<VectorId>::new();
+        let build = |layers_in: LayerInput| -> GraphMem {
+            let mut g = GraphMem::new();
             let max_lc = layers_in.iter().map(|(lc, _)| *lc).max().unwrap_or(0);
-            let mut layers: Vec<Layer<VectorId>> =
-                (0..=max_lc).map(|_| Layer::<VectorId>::new()).collect();
+            let mut layers: Vec<Layer> = (0..=max_lc).map(|_| Layer::new()).collect();
             for (lc, pairs) in layers_in {
                 for (k, v) in pairs {
                     layers[lc].set_links(k, v);
@@ -142,8 +141,8 @@ mod tests {
 
     #[test]
     fn empty_graphs_hash_consistently() {
-        let g1: Graph = [GraphMem::<VectorId>::new(), GraphMem::<VectorId>::new()];
-        let g2: Graph = [GraphMem::<VectorId>::new(), GraphMem::<VectorId>::new()];
+        let g1: Graph = [GraphMem::new(), GraphMem::new()];
+        let g2: Graph = [GraphMem::new(), GraphMem::new()];
         let h = Blake3GraphHasher::new();
         assert_eq!(h.hash_canonical(&g1), h.hash_canonical(&g2));
     }
@@ -151,16 +150,16 @@ mod tests {
     #[test]
     fn left_right_swap_changes_hash() {
         let left = {
-            let mut l = Layer::<VectorId>::new();
+            let mut l = Layer::new();
             l.set_links(vid(1), vec![vid(2)]);
-            let mut g = GraphMem::<VectorId>::new();
+            let mut g = GraphMem::new();
             g.layers = vec![l];
             g
         };
         let right = {
-            let mut l = Layer::<VectorId>::new();
+            let mut l = Layer::new();
             l.set_links(vid(5), vec![vid(6)]);
-            let mut g = GraphMem::<VectorId>::new();
+            let mut g = GraphMem::new();
             g.layers = vec![l];
             g
         };

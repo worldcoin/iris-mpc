@@ -7,7 +7,7 @@ use crate::{
     hnsw::{
         metrics::ops_counter::Operation::{CompareDistance, EvaluateDistance},
         vector_store::VectorStoreMut,
-        GraphMem, HnswSearcher, SortedNeighborhood, VectorStore,
+        GraphMem, HnswSearcher, VectorStore,
     },
 };
 use aes_prng::AesRng;
@@ -107,7 +107,7 @@ impl<D: DistanceOps> PlaintextStore<D> {
         rng: &mut R,
         graph_size: usize,
         searcher: &HnswSearcher,
-    ) -> Result<GraphMem<VectorId>> {
+    ) -> Result<GraphMem> {
         let mut graph = GraphMem::new();
         let mut rng = AesRng::from_rng(rng.clone())?;
 
@@ -128,7 +128,7 @@ impl<D: DistanceOps> PlaintextStore<D> {
             let query_id = VectorId::from_serial_id(serial_id);
             let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
             let (neighbors, update_ep) = searcher
-                .search_to_insert::<_, SortedNeighborhood<_>>(self, &graph, &query, insertion_layer)
+                .search_to_insert(self, &graph, &query, insertion_layer)
                 .await?;
             searcher
                 .insert_from_search_results(self, &mut graph, query_id, neighbors, update_ep)
@@ -195,6 +195,14 @@ impl<D: DistanceOps> VectorStore for PlaintextStore<D> {
     async fn only_valid_vectors(&mut self, mut vectors: Vec<VectorId>) -> Vec<VectorId> {
         vectors.retain(|v| self.storage.contains(v));
         vectors
+    }
+
+    async fn only_valid_entry_points(
+        &mut self,
+        mut entry_points: Vec<(VectorId, usize)>,
+    ) -> Vec<(VectorId, usize)> {
+        entry_points.retain(|(v, _)| self.storage.contains(v));
+        entry_points
     }
 }
 
@@ -339,6 +347,15 @@ impl<D: DistanceOps> VectorStore for SharedPlaintextStore<D> {
         vectors.retain(|v| storage.contains(v));
         vectors
     }
+
+    async fn only_valid_entry_points(
+        &mut self,
+        mut entry_points: Vec<(VectorId, usize)>,
+    ) -> Vec<(VectorId, usize)> {
+        let storage = self.storage.read().await;
+        entry_points.retain(|(v, _)| storage.contains(v));
+        entry_points
+    }
 }
 
 impl<D: DistanceOps> VectorStoreMut for SharedPlaintextStore<D> {
@@ -359,7 +376,7 @@ impl<D: DistanceOps> VectorStoreMut for SharedPlaintextStore<D> {
 mod tests {
     use super::*;
     use crate::hawkers::aby3::aby3_store::FhdOps;
-    use crate::hnsw::HnswSearcher;
+    use crate::hnsw::{HnswSearcher, SortedNeighborhood};
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
     use itertools::Itertools;

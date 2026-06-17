@@ -222,7 +222,7 @@ size = 16
 ef_construction = 32
 ef_search = 32
 M = 16
-layer_mode = { LinearScan = { max_graph_layer = 1 } }
+max_graph_layer = 1
 
 [analysis]
 sample_size = 4
@@ -232,13 +232,12 @@ output_format = "rate"
 output_path = "out.csv"
 rotations = { start = 0, end = 1 }
 mutations = [0.0]
-neighborhood_mode = "Sorted"
 distance_ops = "fhd"
 [analysis.search_hnsw_config]
 ef_construction = 32
 ef_search = 32
 M = 16
-layer_mode = { LinearScan = { max_graph_layer = 1 } }
+max_graph_layer = 1
 "#;
         let cfg: Config = toml::from_str(toml_str).expect("legacy iris accuracy TOML");
         assert!(matches!(cfg, Config::Iris(_)));
@@ -260,7 +259,7 @@ size = 16
 ef_construction = 32
 ef_search = 32
 M = 16
-layer_mode = { LinearScan = { max_graph_layer = 1 } }
+max_graph_layer = 1
 
 [analysis]
 sample_size = 4
@@ -268,12 +267,11 @@ k_neighbors = 1
 output_format = "rate"
 output_path = "out.csv"
 noise_levels = [0.0, 0.05]
-neighborhood_mode = "Sorted"
 [analysis.search_hnsw_config]
 ef_construction = 32
 ef_search = 32
 M = 16
-layer_mode = { LinearScan = { max_graph_layer = 1 } }
+max_graph_layer = 1
 "#;
         let cfg: Config = toml::from_str(toml_str).expect("deepid accuracy TOML");
         assert!(matches!(cfg, Config::DeepID(_)));

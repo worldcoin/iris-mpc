@@ -36,11 +36,9 @@
 //!
 //! ### 1. HNSW Entry Point Strategy
 //!
-//! - **`Standard`**: The HNSW search starts from a single, pre-defined entry point.
-//! - **`LinearScan`**: The HNSW search begins by evaluating a set of entry points
-//!   candidates and choosing the one closest to the query vector.
-//!
-//! The entry point strategy is determined by the `LayerMode` in the `HnswSearcher`.
+//! HNSW search begins by evaluating the set of entry point candidates in the
+//! top graph layer (`HnswSearcher::max_graph_layer`) and choosing the one
+//! closest to the query vector via a linear scan.
 
 //! ### 2. Distance Function and base rotations
 //!
@@ -56,14 +54,6 @@
 //! Finally, the constant `HAWK_BASE_ROTATIONS_MASK` should be set to indicate the set of "base rotations" for which
 //! the HawkActor will trigger independent HNSW searches. In practice, this set must be chosen so that the searches cover (at least)
 //! rotations in the [-15, 15] interval. For example, an example of suitable mask for MinRotation5 encodes the set `{-10, 0, 10}`.
-//!
-//! ### 3. Neighborhood Strategy: `Sorted` vs. `Unsorted`
-//!
-//! This strategy governs how nearest neighbors candidate lists are managed during HNSW graph traversal.
-//! - **`Sorted`**: Maintains a sorted list of candidates.
-//! - **`Unsorted`**: Maintains an unsorted list of candidates.
-//!
-//! It is set by passing `NEIGHBORHOOD_MODE` constant to the search/insertion orchestrator methods.
 
 #[allow(unused_imports)]
 use crate::hawkers::aby3::aby3_store::NhdOps;
@@ -86,8 +76,8 @@ use crate::{
     },
     hnsw::{
         graph::{graph_store, GraphMutation, MutationOp, UpdateEntryPoint},
-        searcher::{LayerDistribution, NeighborhoodMode},
-        GraphMem, HnswSearcher, VectorStore,
+        searcher::LayerDistribution,
+        GraphMem, HnswSearcher, VectorStore, LINEAR_SCAN_MAX_GRAPH_LAYER,
     },
     network::mpc::{build_network_handle, NetworkHandle, NetworkHandleArgs},
     protocol::{
@@ -220,11 +210,6 @@ const _: () = {
 
 /// Rotation support as configured by SearchRotations.
 pub type VecRotations<T> = VecRotationSupport<T, HAWK_BASE_ROTATIONS_MASK>;
-
-/// The choice of HNSW candidate list strategy
-pub const NEIGHBORHOOD_MODE: NeighborhoodMode = NeighborhoodMode::Sorted;
-
-const LINEAR_SCAN_MAX_GRAPH_LAYER: usize = 1;
 
 #[derive(Clone, Parser)]
 pub struct HawkArgs {
@@ -403,8 +388,8 @@ type UseOrRule = bool;
 
 type Aby3Ref = Arc<RwLock<Aby3Store<HawkOps>>>;
 
-pub type GraphRef = Arc<RwLock<GraphMem<VectorId>>>;
-pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<VectorId>>;
+pub type GraphRef = Arc<RwLock<GraphMem>>;
+pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem>;
 
 /// A container for state required to perform parallel MPC operations.
 ///
@@ -458,7 +443,7 @@ pub struct HawkInsertPlan {
 /// A `ConnectPlan` is one finalized step of the HNSW insertion pipeline —
 /// a `GraphMutation` produced by the per-slot insert loop or by the
 /// post-batch `compact_batch` / `prune_invalid_links` helpers.
-pub type ConnectPlan = GraphMutation<VectorId>;
+pub type ConnectPlan = GraphMutation;
 
 /// Build the MPC network handle. Cheap — just TCP listener setup.
 /// Callers that need peer sync before iris load (genesis) call
@@ -489,7 +474,7 @@ impl HawkActor {
         args: HawkArgs,
         networking: Box<dyn NetworkHandle>,
         initialized: worker_pool_initializer::InitializedWorkers,
-        graph: BothEyes<GraphMem<VectorId>>,
+        graph: BothEyes<GraphMem>,
     ) -> Self {
         let party_id = args.party_index;
 
@@ -548,7 +533,7 @@ impl HawkActor {
     pub async fn from_cli_with_graph_and_store(
         args: &HawkArgs,
         shutdown_ct: CancellationToken,
-        graph: BothEyes<GraphMem<VectorId>>,
+        graph: BothEyes<GraphMem>,
         iris_store: BothEyes<Aby3SharedIrises>,
     ) -> Result<Self> {
         use worker_pool_initializer::WorkerPoolInitializer;
@@ -1060,7 +1045,7 @@ pub struct GraphLoader<'a>(BothEyes<GraphMut<'a>>);
 
 #[allow(clippy::needless_lifetimes)]
 impl<'a> GraphLoader<'a> {
-    pub fn load_graphs_from_checkpoint(self, graphs: BothEyes<GraphMem<VectorId>>) {
+    pub fn load_graphs_from_checkpoint(self, graphs: BothEyes<GraphMem>) {
         let [left, right] = graphs;
         let GraphLoader(mut dest_graphs) = self;
         *dest_graphs[LEFT] = left;
@@ -1823,7 +1808,6 @@ impl HawkHandle {
                 search_queries,
                 search_ids,
                 search_params,
-                NEIGHBORHOOD_MODE,
             )
             .await?;
 
