@@ -647,7 +647,7 @@ impl HnswSearcher {
     /// First, as `W` is initially filled up to size `ef`, the entire neighborhoods
     /// of nodes are inserted into `W` via a batched insertion operation
     /// such as a low-depth sorting network. (This functionality is provided
-    /// by `neighborhood::insert_batch`.) This continues
+    /// by `SortedNeighborhood::insert_batch_and_trim`.) This continues
     /// until `W` has reached size `ef`, so that additional insertions will
     /// result in truncation of farthest elements.
     ///

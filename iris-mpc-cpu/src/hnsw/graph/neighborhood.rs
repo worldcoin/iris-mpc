@@ -230,7 +230,8 @@ mod tests {
         Ok(())
     }
 
-    async fn test_neighborhood_generic() -> Result<()> {
+    #[tokio::test]
+    async fn test_sorted_neighborhood() -> Result<()> {
         let mut rng = thread_rng();
         let mut store = PlaintextStore::new();
         let query = Arc::new(IrisCode::random_rng(&mut rng));
@@ -287,10 +288,5 @@ mod tests {
         assert!(nbhd.get_furthest().is_none());
 
         Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_sorted_neighborhood() {
-        test_neighborhood_generic().await.unwrap();
     }
 }
