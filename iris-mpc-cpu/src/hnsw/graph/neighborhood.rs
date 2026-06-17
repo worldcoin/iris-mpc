@@ -156,7 +156,7 @@ impl<V: VectorStore> SortedNeighborhood<V> {
     }
 
     /// Appends `vals` to the neighborhood, applies quicksort and truncates to length `k`.
-    /// Expected bandwitdh: loglinear in `|self.edges| + |vals|`, but `|vals| log |self.edges|` for small `|vals|`.
+    /// Expected bandwidth: loglinear in `|self.edges| + |vals|`, but `|vals| log |self.edges|` for small `|vals|`.
     /// Expected rounds: logarithmic in `|self.edges| + |vals|`.
     /// Consult quicksort implementation for details on performance.
     pub async fn insert_batch_and_trim(
