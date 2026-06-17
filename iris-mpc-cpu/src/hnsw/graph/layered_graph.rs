@@ -20,6 +20,7 @@ use crate::{
 use eyre::Result;
 use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
 use itertools::{izip, Itertools};
+use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::{
     ser::{SerializeMap, SerializeStruct, Serializer},
     Deserialize, Serialize,
@@ -531,6 +532,10 @@ where
         for result in results.iter_mut() {
             result.truncate(searcher.params.get_M_max(0));
         }
+        let results = results
+            .into_par_iter()
+            .map(|result| result.map(IrisVectorId::from_serial_id))
+            .collect::<Vec<_>>();
         Layer::from_knn_results(results, vectors.len())
     };
 
@@ -577,17 +582,8 @@ where
             let results = engine
                 .compute_chunk(n)
                 .into_iter()
-                .map(|result| {
-                    // remap from engine 1-based indices to original vector ids
-                    let node_idx = result.node.serial_id() as usize;
-                    let node = vector_ids[node_idx - 1];
-                    let neighbors: Vec<IrisVectorId> = result
-                        .neighbors
-                        .into_iter()
-                        .map(|neighbor_vid| vector_ids[(neighbor_vid.serial_id() as usize) - 1])
-                        .collect();
-                    KNNResult { node, neighbors }
-                })
+                // remap from engine 1-based indices to original vector ids
+                .map(|result| result.map(|i| vector_ids[(i as usize) - 1]))
                 .collect::<Vec<_>>();
             Layer::from_knn_results(results, n)
         });
@@ -785,7 +781,7 @@ impl Layer {
         &self.links
     }
 
-    fn from_knn_results(results: Vec<KNNResult>, n: usize) -> Self {
+    fn from_knn_results(results: Vec<KNNResult<IrisVectorId>>, n: usize) -> Self {
         let mut ret = Layer::new();
         for KNNResult { node, neighbors } in results.into_iter().take(n) {
             ret.set_links(node, neighbors);
@@ -811,17 +807,8 @@ impl Layer {
         let results = engine
             .compute_chunk(n)
             .into_iter()
-            .map(|result| {
-                // remap from engine 1-based indices to original vector ids
-                let node_idx = result.node.serial_id() as usize;
-                let node = vector_ids[node_idx - 1];
-                let neighbors: Vec<IrisVectorId> = result
-                    .neighbors
-                    .into_iter()
-                    .map(|neighbor_vid| vector_ids[(neighbor_vid.serial_id() as usize) - 1])
-                    .collect();
-                KNNResult { node, neighbors }
-            })
+            // remap from engine 1-based indices to original vector ids
+            .map(|result| result.map(|i| vector_ids[(i as usize) - 1]))
             .collect::<Vec<_>>();
 
         Layer::from_knn_results(results, n)

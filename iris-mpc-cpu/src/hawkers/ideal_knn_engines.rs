@@ -7,7 +7,7 @@ use std::{
 };
 
 use clap::ValueEnum;
-use iris_mpc_common::{iris_db::iris::IrisCode, IrisSerialId, IrisVectorId};
+use iris_mpc_common::{iris_db::iris::IrisCode, IrisSerialId};
 use rayon::{
     iter::{IntoParallelIterator, ParallelIterator},
     ThreadPool, ThreadPoolBuilder,
@@ -20,22 +20,24 @@ use crate::hawkers::{
 };
 
 #[derive(Serialize, Deserialize, Clone, Default)]
-pub struct KNNResult {
-    pub node: IrisVectorId,
-    pub neighbors: Vec<IrisVectorId>,
+pub struct KNNResult<V> {
+    pub node: V,
+    pub neighbors: Vec<V>,
 }
 
-impl KNNResult {
-    pub fn map<F>(self, mut f: F) -> KNNResult
+impl<U> KNNResult<U> {
+    pub fn map<V, F>(self, mut f: F) -> KNNResult<V>
     where
-        F: FnMut(IrisVectorId) -> IrisVectorId,
+        F: FnMut(U) -> V,
     {
         KNNResult {
             node: f(self.node),
             neighbors: self.neighbors.into_iter().map(f).collect(),
         }
     }
+}
 
+impl<V> KNNResult<V> {
     pub fn truncate(&mut self, k: usize) {
         assert!(k <= self.neighbors.len(), "k must be <= neighbors.len()");
         self.neighbors.truncate(k);
@@ -43,41 +45,8 @@ impl KNNResult {
     }
 }
 
-/// The on-disk serialization format for [`KNNResult`]: plain `u32` serial IDs.
-///
-/// This is the stable file format used by both the generator and the reader.
-/// `IrisVectorId` is intentionally not used here so that the file format stays
-/// compact and backward-compatible (no `{id, version}` objects).
-#[derive(Serialize, Deserialize)]
-pub struct KNNResultU32 {
-    pub node: u32,
-    pub neighbors: Vec<u32>,
-}
-
-impl From<&KNNResult> for KNNResultU32 {
-    fn from(r: &KNNResult) -> Self {
-        KNNResultU32 {
-            node: r.node.serial_id(),
-            neighbors: r.neighbors.iter().map(|v| v.serial_id()).collect(),
-        }
-    }
-}
-
-impl From<KNNResultU32> for KNNResult {
-    fn from(r: KNNResultU32) -> Self {
-        KNNResult {
-            node: IrisVectorId::from_serial_id(r.node),
-            neighbors: r
-                .neighbors
-                .into_iter()
-                .map(IrisVectorId::from_serial_id)
-                .collect(),
-        }
-    }
-}
-
-/// Reads a `Vec<KNNResult>` from a file, skipping the first line (header).
-pub fn read_knn_results_from_file(path: PathBuf) -> std::io::Result<Vec<KNNResult>> {
+/// Reads a `Vec<KNNResult<u32>>` from a file, skipping the first line (header).
+pub fn read_knn_results_from_file(path: PathBuf) -> std::io::Result<Vec<KNNResult<u32>>> {
     let file = File::open(path)?;
     let mut lines = BufReader::new(file).lines();
 
@@ -87,9 +56,9 @@ pub fn read_knn_results_from_file(path: PathBuf) -> std::io::Result<Vec<KNNResul
     let mut results = Vec::new();
     for line in lines {
         let line = line?;
-        let knn_result_u32: KNNResultU32 = serde_json::from_str(&line)
+        let knn_result: KNNResult<u32> = serde_json::from_str(&line)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        results.push(knn_result_u32.into());
+        results.push(knn_result);
     }
     Ok(results)
 }
@@ -253,7 +222,7 @@ impl<K: IdealKnn> NaiveKNN<K> {
         self.next_id
     }
 
-    pub fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult> {
+    pub fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult<IrisSerialId>> {
         let start = self.next_id as usize;
         let end = (start + chunk_size).min(self.vectors.len() + 1);
         self.next_id = end as IrisSerialId;
@@ -293,10 +262,10 @@ impl<K: IdealKnn> NaiveKNN<K> {
                     });
 
                     KNNResult {
-                        node: IrisVectorId::from_serial_id(i as IrisSerialId),
+                        node: i as IrisSerialId,
                         neighbors: neighbors
                             .into_iter()
-                            .map(|(j, _)| IrisVectorId::from_serial_id(j as IrisSerialId))
+                            .map(|(j, _)| j as IrisSerialId)
                             .collect(),
                     }
                 })
@@ -337,7 +306,7 @@ impl Engine {
         }
     }
 
-    pub fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult> {
+    pub fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult<IrisSerialId>> {
         match self {
             Self::Fhd(engine) => engine.compute_chunk(chunk_size),
             Self::Nhd(engine) => engine.compute_chunk(chunk_size),
@@ -372,7 +341,7 @@ impl EngineInt4 {
         }
     }
 
-    pub fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult> {
+    pub fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult<IrisSerialId>> {
         match self {
             Self::Int4Dot(engine) => engine.compute_chunk(chunk_size),
         }

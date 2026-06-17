@@ -7,7 +7,7 @@ use std::{
 use clap::Parser;
 use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId};
 use iris_mpc_cpu::{
-    hawkers::ideal_knn_engines::{Engine, EngineInt4, EngineKind, KNNResult, KNNResultU32},
+    hawkers::ideal_knn_engines::{Engine, EngineInt4, EngineKind, KNNResult},
     utils::serialization::{
         int4_ndjson::int4_vectors_from_ndjson,
         iris_ndjson::{irises_from_ndjson_iter, IrisSelection},
@@ -31,7 +31,7 @@ struct ResultsHeader {
 }
 
 /// Dispatch wrapper so the chunk/append loop is written once regardless of
-/// store kind. Both inner engines return `Vec<KNNResult>`.
+/// store kind. Both inner engines return `Vec<KNNResult<SerialId>>`.
 enum AnyEngine {
     Iris(Engine),
     Int4(EngineInt4),
@@ -45,7 +45,7 @@ impl AnyEngine {
         }
     }
 
-    fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult> {
+    fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult<SerialId>> {
         match self {
             AnyEngine::Iris(e) => e.compute_chunk(chunk_size),
             AnyEngine::Int4(e) => e.compute_chunk(chunk_size),
@@ -147,12 +147,10 @@ async fn main() {
             }
 
             // 3. Process the rest of the lines as KNN results
-            let results: Result<Vec<KNNResult>, _> = lines
+            let results: Result<Vec<KNNResult<SerialId>>, _> = lines
                 .map(|line_result| {
                     let line = line_result.map_err(|e| e.to_string())?;
-                    serde_json::from_str::<KNNResultU32>(&line)
-                        .map(KNNResult::from)
-                        .map_err(|e| e.to_string())
+                    serde_json::from_str::<KNNResult<SerialId>>(&line).map_err(|e| e.to_string())
                 })
                 .collect();
 
@@ -172,7 +170,7 @@ async fn main() {
 
             let nodes: Vec<SerialId> = deserialized_results
                 .into_iter()
-                .map(|result| result.node.serial_id())
+                .map(|result| result.node)
                 .collect();
             (nodes.len() as SerialId, nodes)
         }
@@ -276,8 +274,7 @@ async fn main() {
 
         println!("Appending results from {} to {}", start, end - 1);
         for result in &results {
-            let json_line = serde_json::to_string(&KNNResultU32::from(result))
-                .expect("Failed to serialize KNNResult");
+            let json_line = serde_json::to_string(result).expect("Failed to serialize KNNResult");
             writeln!(file, "{}", json_line).expect("Failed to write to results file");
         }
     }
