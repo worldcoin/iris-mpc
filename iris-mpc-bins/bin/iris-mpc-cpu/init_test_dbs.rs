@@ -185,7 +185,7 @@ impl Args {
 // Convertor: Args -> HnswSearcher.
 impl From<&Args> for HnswSearcher {
     fn from(args: &Args) -> Self {
-        let mut searcher = HnswSearcher::new_standard(args.ef, args.ef, args.M);
+        let mut searcher = HnswSearcher::new_linear_scan(args.ef, args.ef, args.M, 1);
         if let Some(q) = args.layer_probability {
             match &mut searcher.layer_distribution {
                 LayerDistribution::Geometric { layer_probability } => {

@@ -7,7 +7,7 @@ threshold = 5000
 sanity_check = false
 
 [searcher]
-layer_mode = { Standard = { max_graph_layer = 4 } }
+max_graph_layer = 4
 layer_distribution = { Geometric = { layer_probability = 0.25 } }
 
 [searcher.params]

@@ -449,7 +449,7 @@ number = 64
 seed = 1
 
 [searcher]
-layer_mode = { LinearScan = { max_graph_layer = 1 } }
+max_graph_layer = 1
 
 [searcher.params]
 option = "Standard"
@@ -479,7 +479,7 @@ number = 64
 seed = 1
 
 [searcher]
-layer_mode = { LinearScan = { max_graph_layer = 1 } }
+max_graph_layer = 1
 
 [searcher.params]
 option = "Standard"

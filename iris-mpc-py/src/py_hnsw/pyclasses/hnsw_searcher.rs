@@ -1,6 +1,6 @@
 use super::{graph_store::PyGraphStore, iris_code::PyIrisCode, plaintext_store::PyPlaintextStore};
 use iris_mpc_cpu::{
-    hnsw::searcher::{HnswParams, HnswSearcher, LayerDistribution, LayerMode, N_PARAM_LAYERS},
+    hnsw::searcher::{HnswParams, HnswSearcher, LayerDistribution, N_PARAM_LAYERS},
     py_bindings,
     utils::serialization::{read_json, write_json},
 };
@@ -21,24 +21,31 @@ impl Default for PyHnswSearcher {
 impl PyHnswSearcher {
     #[new]
     pub fn new(M: usize, ef_constr: usize, ef_search: usize) -> Self {
-        Self::new_standard(ef_constr, ef_search, M)
+        Self::new_linear_scan(M, ef_constr, ef_search, 1)
     }
 
     #[staticmethod]
-    pub fn new_standard(M: usize, ef_constr: usize, ef_search: usize) -> Self {
-        Self(HnswSearcher::new_standard(ef_constr, ef_search, M))
+    pub fn new_linear_scan(
+        M: usize,
+        ef_constr: usize,
+        ef_search: usize,
+        max_graph_layer: usize,
+    ) -> Self {
+        Self(HnswSearcher::new_linear_scan(
+            ef_constr,
+            ef_search,
+            M,
+            max_graph_layer,
+        ))
     }
 
     #[staticmethod]
     pub fn new_uniform(M: usize, ef: usize) -> Self {
         let params = HnswParams::new_uniform(ef, M);
-        let layer_mode = LayerMode::Standard {
-            max_graph_layer: None,
-        };
         let layer_distribution = LayerDistribution::new_geometric_from_M(M);
         Self(HnswSearcher {
             params,
-            layer_mode,
+            max_graph_layer: 1,
             layer_distribution,
             fixed_layer_search_batch_size: None,
         })
@@ -65,13 +72,10 @@ impl PyHnswSearcher {
             ef_constr_insert,
             ef_search,
         };
-        let layer_mode = LayerMode::Standard {
-            max_graph_layer: None,
-        };
         let layer_distribution = LayerDistribution::Geometric { layer_probability };
         Self(HnswSearcher {
             params,
-            layer_mode,
+            max_graph_layer: 1,
             layer_distribution,
             fixed_layer_search_batch_size: None,
         })

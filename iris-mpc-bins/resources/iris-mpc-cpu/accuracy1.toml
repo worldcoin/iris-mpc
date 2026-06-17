@@ -13,7 +13,7 @@ size = 500
 ef_construction = 65
 ef_search = 65
 M = 16
-layer_mode = { LinearScan = { max_graph_layer = 1 } }
+max_graph_layer = 1
 
 
 [analysis]
@@ -36,5 +36,5 @@ end = 4  # End of range is exclusive
 ef_construction = 320
 ef_search = [70, 5]
 M = 256
-layer_mode = { LinearScan = { max_graph_layer = 1} }
+max_graph_layer = 1
 # fixed_layer_search_batch_size = 128

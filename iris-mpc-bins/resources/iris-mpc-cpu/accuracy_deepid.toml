@@ -13,7 +13,7 @@ size = 64
 ef_construction = 64
 ef_search = 64
 M = 32
-layer_mode = { LinearScan = { max_graph_layer = 1 } }
+max_graph_layer = 1
 
 [analysis]
 sample_size = 8
@@ -28,4 +28,4 @@ neighborhood_mode = "Sorted"
 ef_construction = 64
 ef_search = 64
 M = 32
-layer_mode = { LinearScan = { max_graph_layer = 1 } }
+max_graph_layer = 1

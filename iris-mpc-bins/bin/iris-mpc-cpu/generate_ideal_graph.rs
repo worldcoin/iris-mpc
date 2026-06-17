@@ -5,7 +5,6 @@ use iris_mpc_cpu::hawkers::aby3::aby3_store::{DistanceOps, FhdOps, NhdOps};
 use iris_mpc_cpu::hawkers::ideal_knn_engines::{EngineChoice, EngineChoiceInt4};
 use iris_mpc_cpu::hawkers::plaintext_deep_id_store::{Int4Vector, PlaintextDeepIDStore};
 use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
-use iris_mpc_cpu::hnsw::searcher::LayerMode;
 use iris_mpc_cpu::hnsw::GraphMem;
 use iris_mpc_cpu::hnsw::{HnswSearcher, VectorStore};
 use iris_mpc_cpu::utils::serialization::check_store_kind_unambiguous;
@@ -87,16 +86,8 @@ async fn run_sanity_check_iris<D: DistanceOps>(
         }
     }
 
-    // Check layers and entry points are valid for layer mode
-    match searcher.layer_mode {
-        LayerMode::Standard { max_graph_layer } => {
-            assert!(!graph.entry_points.is_empty() || graph.num_layers() == 0);
-            assert!(graph.num_layers() <= max_graph_layer.map(|val| val + 1).unwrap_or(usize::MAX));
-        }
-        LayerMode::LinearScan { max_graph_layer } => {
-            assert!(graph.num_layers() <= max_graph_layer + 1);
-        }
-    }
+    // Check layers are valid for the max graph layer
+    assert!(graph.num_layers() <= searcher.max_graph_layer + 1);
 
     // All entry points should exist in the top graph layer as well
     let last_graph_layer = graph.layers.last().unwrap();
@@ -179,15 +170,7 @@ async fn run_sanity_check_deep_id(
         }
     }
 
-    match searcher.layer_mode {
-        LayerMode::Standard { max_graph_layer } => {
-            assert!(!graph.entry_points.is_empty() || graph.num_layers() == 0);
-            assert!(graph.num_layers() <= max_graph_layer.map(|val| val + 1).unwrap_or(usize::MAX));
-        }
-        LayerMode::LinearScan { max_graph_layer } => {
-            assert!(graph.num_layers() <= max_graph_layer + 1);
-        }
-    }
+    assert!(graph.num_layers() <= searcher.max_graph_layer + 1);
 
     let last_graph_layer = graph.layers.last().unwrap();
     for entry in &graph.entry_points {
@@ -344,7 +327,7 @@ echoice = "NaiveFHD"
 sanity_check = false
 
 [searcher]
-layer_mode = { Standard = { max_graph_layer = 4 } }
+max_graph_layer = 4
 layer_distribution = { Geometric = { layer_probability = 0.25 } }
 [searcher.params]
 M = [10, 10, 10, 10, 10]
@@ -372,7 +355,7 @@ threshold = 1000
 sanity_check = false
 
 [searcher]
-layer_mode = { Standard = { max_graph_layer = 4 } }
+max_graph_layer = 4
 layer_distribution = { Geometric = { layer_probability = 0.25 } }
 [searcher.params]
 M = [10, 10, 10, 10, 10]
