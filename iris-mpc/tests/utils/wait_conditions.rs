@@ -37,6 +37,7 @@ pub async fn wait_for_all_ready(
             heartbeat_interval_secs: 2,
             heartbeat_initial_retries: 10,
             http_query_retry_delay_ms: 1000,
+            http_query_timeout_ms: 10000,
             startup_sync_timeout_secs: 300,
         };
         async move { wait_for_others_ready(&coord).await }
