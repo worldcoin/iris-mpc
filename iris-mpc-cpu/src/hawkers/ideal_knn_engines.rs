@@ -412,18 +412,13 @@ mod int4_engine_tests {
         assert_eq!(results.len(), n);
         for KNNResult { node, neighbors } in results {
             // Brute-force expected top-k by descending dot (excluding self).
-            let node_serial = node.serial_id();
-            let me = &vectors[node_serial as usize - 1];
+            let me = &vectors[node as usize - 1];
             let mut dists: Vec<(IrisSerialId, i32)> = (1..=n as IrisSerialId)
-                .filter(|j| *j != node_serial)
+                .filter(|j| *j != node)
                 .map(|j| (j, me.dot(&vectors[j as usize - 1])))
                 .collect();
             dists.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-            let expected: Vec<IrisVectorId> = dists
-                .into_iter()
-                .take(k)
-                .map(|(j, _)| IrisVectorId::from_serial_id(j))
-                .collect();
+            let expected: Vec<IrisSerialId> = dists.into_iter().take(k).map(|(j, _)| j).collect();
             assert_eq!(neighbors, expected, "node {} top-{}", node, k);
         }
     }
