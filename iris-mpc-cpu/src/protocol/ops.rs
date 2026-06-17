@@ -120,7 +120,7 @@ where
 }
 
 /// Row-major prerotated query for L1 cache efficiency.
-/// Layout: [row0_rot0..rot30][row1_rot0..rot30]...
+/// Layout: `[row0_rot0..rot30][row1_rot0..rot30]...`
 pub struct PrerotatedQueryRowMajor {
     /// code: 16 rows × 31 rotations × 800 elements = 396,800 u16s (~793KB)
     code_data: Vec<u16>,

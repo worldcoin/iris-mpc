@@ -9,7 +9,13 @@ use super::{
     vector_store::VectorStoreMut,
 };
 use crate::hnsw::{
-    graph::neighborhood::Neighborhood, metrics::ops_counter::Operation, VectorStore,
+    graph::{
+        mutation::{EdgeType, GraphMutation, UnstampedMutation},
+        neighborhood::Neighborhood,
+        MutationOp, UpdateEntryPoint,
+    },
+    metrics::ops_counter::Operation,
+    VectorStore,
 };
 
 use crate::hnsw::GraphMem;
@@ -23,7 +29,7 @@ use rand_distr::{Distribution, Geometric};
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher13;
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     hash::{Hash, Hasher},
     iter::once,
 };
@@ -286,22 +292,10 @@ pub struct HnswSearcher {
     pub fixed_layer_search_batch_size: Option<usize>,
 }
 
+/// A list of graph mutations representing state updates for insertion of new nodes
+/// into the HNSW graph.
+pub type ConnectPlan<Vector> = GraphMutation<Vector>;
 pub type ConnectPlanV<V> = ConnectPlan<<V as VectorStore>::VectorRef>;
-
-/// Represents the state updates required for insertion of a new node into an HNSW
-/// hierarchical graph.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ConnectPlan<Vector: Ord> {
-    /// The new vector to insert
-    pub inserted_vector: Vector,
-
-    /// List of neighborhood updates to apply
-    pub updates: BTreeMap<(Vector, usize), Vec<Vector>>,
-
-    // TODO change to "entrypoints_update", and type `Option<EntryPointsUpdate>`
-    /// Whether this update sets the entry point of the HNSW graph to the inserted vector
-    pub update_ep: UpdateEntryPoint,
-}
 
 /// Represents a graph update of a single node's neighborhood in a graph, given
 /// by a tuple `(update_layer, update_vector, new_neighborhood)`.
@@ -319,18 +313,6 @@ pub fn build_layer_updates<V: Clone + Ord>(
     once(((inserted_vector, layer), neighbors.clone()))
         .chain(izip!(neighbors, nb_links).map(|(nb, nb_nbs)| ((nb, layer), nb_nbs)))
         .collect()
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum UpdateEntryPoint {
-    /// Do not update entry points based on inserted vector
-    False,
-
-    /// Set a new unique entry point
-    SetUnique { layer: usize },
-
-    /// Add a new item to the set of entry points
-    Append { layer: usize },
 }
 
 #[allow(non_snake_case)]
@@ -1547,207 +1529,120 @@ impl HnswSearcher {
         Ok((links, update_ep))
     }
 
-    /// Prepare a `ConnectPlan` representing the updates required to insert
-    /// `inserted_vector` into `graph` with the specified neighbors `links` and
-    /// to update the entry point according to the `update_ep` argument. The
-    /// `links` vector contains the neighbor lists for the newly inserted node
-    /// in different graph layers in which it is to be inserted, starting with
-    /// layer 0. Specified links are inserted as-is, without additional
-    /// truncation.
+    /// Computes RemoveEdges ops for any of the `candidates` neighborhoods that
+    /// currently exceed `M_limit(layer)`. Calls
+    /// `store.compact_neighborhood_batch(...)` once with the oversized set
+    /// (target size = `M_max(layer)`). Returns the resulting ops, with ordering
+    /// from the iteration order of the input candidates list; the caller wraps
+    /// them into a `GraphMutation`, stamps a sequence number, and applies.
     ///
-    /// This function call does *not* update `graph`.
-    pub async fn insert_prepare<V: VectorStore>(
+    /// Note: `compact_neighborhood_batch` does top-K-by-distance selection
+    /// without validity filtering. Callers should run `prune_invalid_links` on
+    /// a superset of these candidates first so that the input neighborhoods are
+    /// free of stale references.
+    pub async fn compact_batch<V: VectorStore>(
         &self,
-        // this may be used in the future to trim l_links
         store: &mut V,
-        graph: &mut GraphMem<V::VectorRef>,
-        inserted_vector: V::VectorRef,
-        links: Vec<Vec<V::VectorRef>>,
-        update_ep: UpdateEntryPoint,
-    ) -> Result<ConnectPlanV<V>> {
-        let updates = vec![(inserted_vector, links, update_ep)];
-        let mut r = self.insert_prepare_batch(store, graph, updates).await?;
-        let first = r.pop();
-        first.ok_or(eyre!("insert_prepare produced no connect plans"))
-    }
+        graph: &GraphMem<V::VectorRef>,
+        candidates: &BTreeSet<(V::VectorRef, usize)>,
+    ) -> Result<Vec<MutationOp<V::VectorRef>>> {
+        // Read the current neighborhood for each candidate; keep only those
+        // exceeding M_limit on their layer.
+        let mut oversized: Vec<(V::VectorRef, usize, Vec<V::VectorRef>)> = Vec::new();
+        for (id, layer) in candidates {
+            let nbhd = graph.get_links(id, *layer).await.to_vec();
+            if nbhd.len() > self.params.get_M_limit(*layer) {
+                oversized.push((id.clone(), *layer, nbhd));
+            }
+        }
 
-    /// Prepare connect plans for a batch of graph updates.
-    ///
-    /// Given a collection of updates, generates a sequence of `ConnectPlan`
-    /// structs representing the individual sequential updates from applying the
-    /// input updates one after another.  This involves computing the
-    /// intermediate state of neighborhoods modified by insertions, and
-    /// collecting this intermediate state in corresponding updates.
-    ///
-    /// After the `ConnectPlan` structs are created, the final state of all
-    /// updated neighborhoods is inspected to see if any are too large and need
-    /// to be compacted.  All such neighborhoods are compacted in one step at
-    /// the end of the function call.
-    ///
-    /// TODO: finalize batched operation of compaction to minimize latency.
-    ///
-    /// This function call does *not* update `graph`.
-    #[allow(clippy::type_complexity)]
-    pub async fn insert_prepare_batch<V: VectorStore>(
-        &self,
-        store: &mut V,
-        graph: &mut GraphMem<V::VectorRef>,
-        mut updates: Vec<(V::VectorRef, Vec<Vec<V::VectorRef>>, UpdateEntryPoint)>,
-    ) -> Result<Vec<ConnectPlanV<V>>> {
-        if updates.is_empty() {
+        metrics::histogram!("neighborhooods_compacted").record(oversized.len() as f64);
+        tracing::info!(
+            "Batch compacting {} oversized neighborhoods",
+            oversized.len()
+        );
+
+        if oversized.is_empty() {
             return Ok(Vec::new());
         }
 
-        // Sort all neighborhoods by index
-        for (_, links, _) in updates.iter_mut() {
-            for l in links.iter_mut() {
-                l.sort();
-            }
-        }
-
-        // Output connect plans
-        let mut output_plans: Vec<ConnectPlanV<V>> = Vec::new();
-        // Map from vector ids to output connect plan indices
-        let mut query_idxs: HashMap<<V as VectorStore>::VectorRef, usize> = HashMap::new();
-
-        // Map `(vector_id, layer) -> Vec<query_id>` recording the query ids
-        // which are to be inserted into neighborhoods of nodes, and in what
-        // order.  Note input `vector_id` can be a `query_id` if the
-        // neighborhood of a subsequent query has been extended to include a
-        // previous query in the batch.  `BTreeMap` is used for deterministic
-        // iteration order.
-        let mut nbhd_updates: BTreeMap<
-            (<V as VectorStore>::VectorRef, usize),
-            Vec<<V as VectorStore>::VectorRef>,
-        > = BTreeMap::new();
-
-        // Final updated neighborhood associated with each modified `(vector_id, layer)`
-        let mut final_nbhds: BTreeMap<
-            (<V as VectorStore>::VectorRef, usize),
-            Vec<<V as VectorStore>::VectorRef>,
-        > = BTreeMap::new();
-
-        for (idx, (vec, links, update_ep)) in updates.iter().enumerate() {
-            // Initialize connect plan for output
-            output_plans.push(ConnectPlan {
-                inserted_vector: vec.clone(),
-                updates: BTreeMap::new(),
-                update_ep: update_ep.clone(),
-            });
-            // Record index of associated vector id
-            query_idxs.insert(vec.clone(), idx);
-
-            for (layer, neighbors) in links.iter().enumerate() {
-                // Add update for inserting node with outgoing edges in this layer
-                output_plans[idx]
-                    .updates
-                    .insert((vec.clone(), layer), neighbors.clone());
-
-                // Record neighborhood of new node as potential final neighborhood.
-                // (May be overwritten later if updated during batch.)
-                final_nbhds.insert((vec.clone(), layer), neighbors.clone());
-
-                // Record connections to existing nodes, organized by existing node
-                for nb in neighbors.iter() {
-                    nbhd_updates
-                        .entry((nb.clone(), layer))
-                        .or_default()
-                        .push(vec.clone());
-                }
-            }
-        }
-
-        for ((nb, layer), query_ids) in nbhd_updates {
-            // Identify the graph neighborhood of `nb` in layer `layer` prior to
-            // any updates in the batch
-            let mut nb_nbhd = if let Some(idx) = query_idxs.get(&nb) {
-                // `nb`` is a query id from the current batch
-                let update_entry = updates
-                    .get(*idx)
-                    .ok_or_eyre("Could not find associated update entry")?;
-                let nbhd = update_entry
-                    .1
-                    .get(layer)
-                    .ok_or_eyre("Update entry layer not present")?;
-                nbhd.clone()
-            } else {
-                let links = graph.get_links(&nb, layer).await.to_vec();
-                store.only_valid_vectors(links).await
-            };
-
-            // For each individual update, in order, extend the neighborhood and
-            // add as update in the corresopnding connect plan
-            for query_id in query_ids {
-                // Get the output connect plan associated with `query_id`
-                let connect_plan_idx = *query_idxs
-                    .get(&query_id)
-                    .ok_or_eyre("Could not find associated connect plan index")?;
-                let connect_plan = output_plans
-                    .get_mut(connect_plan_idx)
-                    .ok_or_eyre("Could not find associated connect plan")?;
-
-                // Insert `query_id` into the existing index-sorted neighborhood.
-                // A duplicate here means the freshly allocated `query_id` already
-                // appears in `nb`'s neighborhood — i.e. the registry handed out a
-                // VectorId that the graph already knows about. That's a hard
-                // invariant violation (see refresh_registries() in load paths)
-                // and silently continuing leaves the graph in an inconsistent
-                // state, so fail the batch.
-                match nb_nbhd.binary_search(&query_id) {
-                    Err(i) => nb_nbhd.insert(i, query_id),
-                    Ok(_) => bail!(
-                        "Attempted to add graph edge which was already present: \
-                         {nb:?} -> {query_id:?} (layer {layer}) — registry/graph drift"
-                    ),
-                }
-
-                // Add update reflecting change to the existing neighborhood
-                connect_plan
-                    .updates
-                    .insert((nb.clone(), layer), nb_nbhd.clone());
-            }
-
-            final_nbhds.insert((nb, layer), nb_nbhd);
-        }
-
-        // Initial updates without compaction are complete.  Now see if any
-        // modified neighborhoods are too large.
-
-        let needs_compaction: BTreeMap<_, _> = final_nbhds
-            .into_iter()
-            .filter(|((_nb, layer), nb_nbhd)| nb_nbhd.len() > self.params.get_M_limit(*layer))
+        // Build parallel slices for the batched MPC compaction call.
+        let base_nodes: Vec<_> = oversized.iter().map(|(id, _, _)| id.clone()).collect();
+        let neighborhoods: Vec<_> = oversized.iter().map(|(_, _, nbhd)| nbhd.clone()).collect();
+        let max_sizes: Vec<_> = oversized
+            .iter()
+            .map(|(_, layer, _)| self.params.get_M_max(*layer))
             .collect();
+        let layers: Vec<_> = oversized.iter().map(|(_, layer, _)| *layer).collect();
 
-        metrics::histogram!("neighborhooods_compacted").record(needs_compaction.len() as f64);
-        tracing::info!(
-            "Batch compacting {} oversized neighborhoods",
-            needs_compaction.len()
-        );
+        let compacted_nbhds = store
+            .compact_neighborhood_batch(&base_nodes, &neighborhoods, &max_sizes)
+            .await?;
 
-        if !needs_compaction.is_empty() {
-            // Apply batch compaction
-            let (base_nodes, neighborhoods, max_sizes, layers): (Vec<_>, Vec<_>, Vec<_>, Vec<_>) =
-                needs_compaction
-                    .into_iter()
-                    .map(|((nb, layer), nb_nbhd)| {
-                        (nb, nb_nbhd, self.params.get_M_max(layer), layer)
-                    })
-                    .multiunzip();
-            let compacted_nbhds = store
-                .compact_neighborhood_batch(&base_nodes, &neighborhoods, &max_sizes)
-                .await?;
-
-            // Add updates for neighborhood compaction to last connect plan
-            let last_plan = output_plans
-                .last_mut()
-                .ok_or_eyre("Output plans unexpectedly empty")?;
-            for (id, layer, mut compacted_nbhd) in izip!(base_nodes, layers, compacted_nbhds) {
-                compacted_nbhd.sort();
-                last_plan.updates.insert((id, layer), compacted_nbhd);
+        // Diff each (original, compacted) to derive RemoveEdges ops.
+        let mut ops = Vec::with_capacity(compacted_nbhds.len());
+        for (id, layer, original, compacted) in
+            izip!(&base_nodes, &layers, &neighborhoods, compacted_nbhds)
+        {
+            let compacted_set: HashSet<_> = compacted.iter().collect();
+            let to_remove: Vec<V::VectorRef> = original
+                .iter()
+                .filter(|v| !compacted_set.contains(v))
+                .cloned()
+                .collect();
+            if !to_remove.is_empty() {
+                ops.push(MutationOp::RemoveEdges {
+                    base: id.clone(),
+                    layer: *layer,
+                    neighbors: to_remove,
+                    edge_type: EdgeType::Base,
+                });
             }
         }
 
-        Ok(output_plans)
+        Ok(ops)
+    }
+
+    /// Computes RemoveEdges ops for any of the `candidates` neighborhoods that
+    /// contain references to vectors no longer present in `store`. Returns
+    /// the ops; the caller wraps them into a `GraphMutation`, stamps a
+    /// sequence number, and applies.  Ordering of the returned ops is the
+    /// same as the ordering of associated input candidates.
+    ///
+    /// TODO: remove once neighborhood-versioning lands. With per-edge
+    /// sequence numbers, stale-edge filtering becomes implicit in
+    /// `insert_apply` and this step is unnecessary.
+    pub async fn prune_invalid_links<V: VectorStore>(
+        &self,
+        store: &mut V,
+        graph: &GraphMem<V::VectorRef>,
+        candidates: &BTreeSet<(V::VectorRef, usize)>,
+    ) -> Result<Vec<MutationOp<V::VectorRef>>> {
+        let mut ops = Vec::new();
+        for (id, layer) in candidates {
+            let current_links = graph.get_links(id, *layer).await.to_vec();
+            if current_links.is_empty() {
+                continue;
+            }
+            let valid_links = store.only_valid_vectors(current_links.clone()).await;
+            if valid_links.len() == current_links.len() {
+                continue;
+            }
+            let valid_set: HashSet<_> = valid_links.iter().collect();
+            let to_remove: Vec<V::VectorRef> = current_links
+                .into_iter()
+                .filter(|v| !valid_set.contains(v))
+                .collect();
+            if !to_remove.is_empty() {
+                ops.push(MutationOp::RemoveEdges {
+                    base: id.clone(),
+                    layer: *layer,
+                    neighbors: to_remove,
+                    edge_type: EdgeType::Base,
+                });
+            }
+        }
+        Ok(ops)
     }
 
     /// Insert a vector using the search results from `search_to_insert`,
@@ -1766,18 +1661,52 @@ impl HnswSearcher {
         links: Vec<N>,
         update_ep: UpdateEntryPoint,
     ) -> Result<()> {
-        // Trim and extract unstructured vector lists
-        let mut links_unstructured = Vec::new();
+        // Trim and extract unstructured vector lists.
+        let mut links_unstructured: Vec<Vec<V::VectorRef>> = Vec::new();
         for (lc, mut l) in links.iter().cloned().enumerate() {
             let m = self.params.get_M(lc);
             l.trim(store, m).await?;
-            links_unstructured.push(l.edge_ids())
+            links_unstructured.push(l.edge_ids());
         }
 
-        let plan = self
-            .insert_prepare(store, graph, inserted_vector, links_unstructured, update_ep)
-            .await?;
-        graph.insert_apply(plan).await;
+        // Build the AddNode + per-layer AddEdges mutation, apply it, then run
+        // the same post-apply prune + compaction the batched path uses.
+        let height = links_unstructured.len();
+        let mut ops: Vec<MutationOp<V::VectorRef>> = vec![MutationOp::AddNode {
+            id: inserted_vector.clone(),
+            height,
+            update_ep,
+        }];
+        for (layer_idx, layer_links) in links_unstructured.into_iter().enumerate() {
+            ops.push(MutationOp::AddEdges {
+                base: inserted_vector.clone(),
+                layer: layer_idx,
+                neighbors: layer_links,
+                edge_type: EdgeType::All,
+            });
+        }
+        let plan = UnstampedMutation { ops };
+        let updated: BTreeSet<_> = plan.updated_neighborhoods().into_iter().collect();
+        let expanded: BTreeSet<_> = plan.expanded_neighborhoods().into_iter().collect();
+        graph.apply_new(plan)?;
+
+        // Per-slot invalid-link prune (single-slot here). To be removed once
+        // neighborhood-versioning makes this implicit.
+        if !updated.is_empty() {
+            let ops = self.prune_invalid_links(store, graph, &updated).await?;
+            if !ops.is_empty() {
+                graph.apply_new(UnstampedMutation { ops })?;
+            }
+        }
+
+        // Single-insert compaction.
+        if !expanded.is_empty() {
+            let ops = self.compact_batch(store, graph, &expanded).await?;
+            if !ops.is_empty() {
+                graph.apply_new(UnstampedMutation { ops })?;
+            }
+        }
+
         Ok(())
     }
 
@@ -1817,8 +1746,10 @@ mod tests {
         hnsw::{GraphMem, SortedNeighborhood},
     };
     use aes_prng::AesRng;
-    use iris_mpc_common::iris_db::db::IrisDB;
-    use itertools::chain;
+    use iris_mpc_common::{
+        iris_db::{db::IrisDB, iris::IrisCode},
+        vector_id::VectorId,
+    };
     use rand::SeedableRng;
     use tokio;
 
@@ -1998,73 +1929,219 @@ mod tests {
         Ok(())
     }
 
+    /// `prune_invalid_links` returns RemoveEdges ops for any neighborhood that
+    /// contains references to vectors no longer present in the store. The
+    /// stale id here is constructed directly (never inserted) so the test
+    /// doesn't depend on a "remove vector" API.
     #[tokio::test]
-    async fn test_insert_prepare_batch() -> Result<()> {
-        // Default mode
-        let searcher = HnswSearcher::new_linear_scan(64, 32, 2, 1);
-        let vector_store = &mut PlaintextStore::<FhdOps>::new();
-        let graph_store = &mut GraphMem::new();
+    async fn prune_invalid_links_emits_remove_edges_for_stale_refs() -> Result<()> {
+        let mut store = PlaintextStore::<FhdOps>::new();
+        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let searcher = HnswSearcher::new_with_test_parameters();
 
-        let mut ids = vec![];
+        // Real, inserted vector.
+        let a = store.insert(&Arc::new(IrisCode::default())).await;
+        // Stale id — never inserted into the store.
+        let stale = VectorId::from_serial_id(999_999);
 
-        let mut rng = AesRng::seed_from_u64(42);
-        let iris_db = IrisDB::new_random_rng(10, &mut rng);
+        // Wire a → [stale] directly into the graph.
+        let setup = GraphMutation {
+            seq_no: graph.next_sequence_number(),
+            ops: vec![
+                MutationOp::AddNode {
+                    id: a,
+                    height: 1,
+                    update_ep: UpdateEntryPoint::False,
+                },
+                MutationOp::AddEdges {
+                    base: a,
+                    neighbors: vec![stale],
+                    layer: 0,
+                    edge_type: EdgeType::Base,
+                },
+            ],
+        };
+        graph.insert_apply(&setup)?;
 
-        // Insert queries into the vector store
-        let queries = iris_db.db.into_iter().map(Arc::new);
-        for query in queries {
-            let id = vector_store.insert(&query).await;
-            ids.push(id);
-        }
+        let mut candidates: BTreeSet<(<PlaintextStore as VectorStore>::VectorRef, usize)> =
+            BTreeSet::new();
+        candidates.insert((a, 0));
 
-        // For vectors ids 1 to 5, insert into the graph with each other as neighbors
-        for (i, &vector_id) in ids[0..5].iter().enumerate() {
-            // Add all other vectors as neighbors (excluding self)
-            let nbs = Vec::from_iter(chain!(ids[0..i].iter(), ids[i + 1..5].iter()).cloned());
-
-            // Set entry point for first item
-            let update_ep = if i == 0 {
-                UpdateEntryPoint::SetUnique { layer: 0 }
-            } else {
-                UpdateEntryPoint::False
-            };
-
-            // Create connect plan for this vector at layer 0
-            let connect_plan = ConnectPlan {
-                inserted_vector: vector_id,
-                updates: BTreeMap::from_iter([((vector_id, 0), nbs)]),
-                update_ep,
-            };
-
-            // Apply the connect plan to the graph
-            graph_store.insert_apply(connect_plan).await;
-        }
-
-        // Create an update for inserting vector id 6
-        let next_id = ids[5];
-        let neighbors = vec![ids[0..5].to_vec()];
-        let updates = vec![(next_id, neighbors, UpdateEntryPoint::False)];
-
-        // Prepare the batch insertion
-        let connect_plans = searcher
-            .insert_prepare_batch(vector_store, graph_store, updates)
+        let ops = searcher
+            .prune_invalid_links(&mut store, &graph, &candidates)
             .await?;
 
-        // Verify the connect plan was created correctly
-        assert_eq!(connect_plans.len(), 1);
-        let plan = &connect_plans[0];
-        assert_eq!(plan.update_ep, UpdateEntryPoint::False);
-        assert_eq!(plan.updates.len(), 6); // 1 for vector id 6, and 5 others for its neighbors
-
-        // Verify that each neighbor's updated neighborhood has exactly 4
-        // elements (the original 4 neighbors plus the newly inserted vector,
-        // trimmed to M_max=4 in layer 0)
-        for ((id, _lc), nbhd) in &plan.updates {
-            if *id != next_id {
-                assert_eq!(nbhd.len(), 4);
+        assert_eq!(ops.len(), 1, "exactly one RemoveEdges expected");
+        match &ops[0] {
+            MutationOp::RemoveEdges {
+                base,
+                layer,
+                neighbors,
+                edge_type,
+            } => {
+                assert_eq!(*base, a);
+                assert_eq!(layer, &0);
+                assert_eq!(edge_type, &EdgeType::Base);
+                assert_eq!(neighbors, &vec![stale]);
             }
+            other => panic!("expected RemoveEdges, got {:?}", other),
         }
 
+        Ok(())
+    }
+
+    /// When every reference in the candidate neighborhoods is valid,
+    /// `prune_invalid_links` returns an empty Vec.
+    #[tokio::test]
+    async fn prune_invalid_links_noop_when_all_valid() -> Result<()> {
+        let mut store = PlaintextStore::<FhdOps>::new();
+        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let searcher = HnswSearcher::new_with_test_parameters();
+
+        let a = store.insert(&Arc::new(IrisCode::default())).await;
+        let b = store.insert(&Arc::new(IrisCode::default())).await;
+
+        let setup = GraphMutation {
+            seq_no: graph.next_sequence_number(),
+            ops: vec![
+                MutationOp::AddNode {
+                    id: a,
+                    height: 1,
+                    update_ep: UpdateEntryPoint::False,
+                },
+                MutationOp::AddEdges {
+                    base: a,
+                    neighbors: vec![b],
+                    layer: 0,
+                    edge_type: EdgeType::Base,
+                },
+            ],
+        };
+        graph.insert_apply(&setup)?;
+
+        let mut candidates = BTreeSet::new();
+        candidates.insert((a, 0));
+
+        let ops = searcher
+            .prune_invalid_links(&mut store, &graph, &candidates)
+            .await?;
+        assert!(ops.is_empty(), "expected no RemoveEdges, got {:?}", ops);
+        Ok(())
+    }
+
+    /// `compact_batch` returns RemoveEdges for any candidate neighborhood
+    /// whose size exceeds M_limit on its layer.
+    #[tokio::test]
+    async fn compact_batch_emits_remove_edges_for_oversized() -> Result<()> {
+        let mut store = PlaintextStore::<FhdOps>::new();
+        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let searcher = HnswSearcher::new_with_test_parameters();
+
+        // Seed a base vector and enough neighbors to exceed M_limit at layer 0.
+        let base = store.insert(&Arc::new(IrisCode::default())).await;
+        let mut nbrs = Vec::new();
+        let oversized_count = searcher.params.get_M_limit(0) + 5;
+        for _ in 0..oversized_count {
+            nbrs.push(store.insert(&Arc::new(IrisCode::default())).await);
+        }
+
+        let setup = GraphMutation {
+            seq_no: graph.next_sequence_number(),
+            ops: vec![
+                MutationOp::AddNode {
+                    id: base,
+                    height: 1,
+                    update_ep: UpdateEntryPoint::False,
+                },
+                MutationOp::AddEdges {
+                    base,
+                    neighbors: nbrs.clone(),
+                    layer: 0,
+                    edge_type: EdgeType::Base,
+                },
+            ],
+        };
+        graph.insert_apply(&setup)?;
+
+        let mut candidates = BTreeSet::new();
+        candidates.insert((base, 0));
+
+        let ops = searcher
+            .compact_batch(&mut store, &graph, &candidates)
+            .await?;
+
+        assert_eq!(ops.len(), 1, "exactly one RemoveEdges expected");
+        match &ops[0] {
+            MutationOp::RemoveEdges {
+                base: b,
+                layer,
+                neighbors,
+                edge_type,
+            } => {
+                assert_eq!(*b, base);
+                assert_eq!(layer, &0);
+                assert_eq!(edge_type, &EdgeType::Base);
+                let expected_trim = oversized_count - searcher.params.get_M_max(0);
+                assert_eq!(neighbors.len(), expected_trim);
+                // Every removed neighbor came from the original set.
+                let orig: HashSet<_> = nbrs.iter().collect();
+                for n in neighbors {
+                    assert!(
+                        orig.contains(n),
+                        "removed neighbor {:?} not in original set",
+                        n
+                    );
+                }
+            }
+            other => panic!("expected RemoveEdges, got {:?}", other),
+        }
+
+        Ok(())
+    }
+
+    /// `compact_batch` returns an empty Vec when no candidate exceeds M_limit.
+    #[tokio::test]
+    async fn compact_batch_noop_for_undersized() -> Result<()> {
+        use crate::hawkers::plaintext_store::PlaintextStore;
+        use crate::hnsw::graph::mutation::EdgeType;
+        use crate::hnsw::GraphMem;
+        use crate::hnsw::VectorStore;
+        use iris_mpc_common::iris_db::iris::IrisCode;
+        use std::collections::BTreeSet;
+        use std::sync::Arc;
+
+        let mut store = PlaintextStore::<FhdOps>::new();
+        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let searcher = HnswSearcher::new_with_test_parameters();
+
+        let a = store.insert(&Arc::new(IrisCode::default())).await;
+        let b = store.insert(&Arc::new(IrisCode::default())).await;
+
+        let setup = GraphMutation {
+            seq_no: graph.next_sequence_number(),
+            ops: vec![
+                MutationOp::AddNode {
+                    id: a,
+                    height: 1,
+                    update_ep: UpdateEntryPoint::False,
+                },
+                MutationOp::AddEdges {
+                    base: a,
+                    neighbors: vec![b],
+                    layer: 0,
+                    edge_type: EdgeType::Base,
+                },
+            ],
+        };
+        graph.insert_apply(&setup)?;
+
+        let mut candidates = BTreeSet::new();
+        candidates.insert((a, 0));
+
+        let ops = searcher
+            .compact_batch(&mut store, &graph, &candidates)
+            .await?;
+        assert!(ops.is_empty());
         Ok(())
     }
 }

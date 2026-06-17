@@ -15,7 +15,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     execution::local::get_free_local_addresses,
-    hnsw::searcher::{build_layer_updates, ConnectPlan, LayerMode, UpdateEntryPoint},
+    hnsw::{
+        graph::{mutation::EdgeType, GraphMutation, MutationOp, UpdateEntryPoint},
+        searcher::LayerMode,
+    },
     protocol::shared_iris::GaloisRingSharedIris,
     utils::constants::N_PARTIES,
 };
@@ -89,19 +92,33 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
     for side in [LEFT, RIGHT] {
         let mut graph = actor.graph_store[side].write().await;
         for i in 0..db_size {
-            let plan = ConnectPlan {
-                inserted_vector: id(i),
-                updates: build_layer_updates(id(i), edges(i), vec![edges(next(i))], 0),
-                update_ep: if i == 0 {
-                    match layer_mode {
-                        LayerMode::Standard { .. } => UpdateEntryPoint::SetUnique { layer: 0 },
-                        LayerMode::LinearScan { .. } => UpdateEntryPoint::False,
-                    }
-                } else {
-                    UpdateEntryPoint::False
-                },
+            let update_ep = if i == 0 {
+                match layer_mode {
+                    LayerMode::Standard { .. } => UpdateEntryPoint::SetUnique { layer: 0 },
+                    LayerMode::LinearScan { .. } => UpdateEntryPoint::False,
+                }
+            } else {
+                UpdateEntryPoint::False
             };
-            graph.insert_apply(plan).await;
+            let mutations = vec![
+                MutationOp::AddNode {
+                    id: id(i),
+                    height: 1,
+                    update_ep,
+                },
+                MutationOp::AddEdges {
+                    base: id(i),
+                    layer: 0,
+                    neighbors: edges(i),
+                    edge_type: EdgeType::All,
+                },
+            ];
+            graph
+                .insert_apply(&GraphMutation {
+                    seq_no: (i as u64) + 1,
+                    ops: mutations,
+                })
+                .unwrap();
         }
     }
 

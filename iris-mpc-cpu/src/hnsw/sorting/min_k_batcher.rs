@@ -2,7 +2,7 @@
 //! the smallest K values (in arbitrary order).
 //!
 //! Based on the following paper:
-//! - (<https://eprint.iacr.org/2023/852.pdf>) [1]
+//! - <https://eprint.iacr.org/2023/852.pdf>
 
 use cached::proc_macro::cached;
 use eyre::{bail, OptionExt, Result};

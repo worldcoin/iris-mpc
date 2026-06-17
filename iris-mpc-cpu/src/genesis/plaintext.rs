@@ -271,6 +271,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                         &searcher,
                         vec![Some(insert_plan)],
                         &vec![Some(vector_id)],
+                        &vec![None],
                     )
                     .await?;
                 }
@@ -379,7 +380,8 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
             &mut state.dst_db.graphs,
             [left_insert_plans, right_insert_plans]
         ) {
-            insert::insert(store, graph, &searcher, plans, &ids).await?;
+            let replace_ids = vec![None; plans.len()];
+            insert::insert(store, graph, &searcher, plans, &ids, &replace_ids).await?;
         }
 
         // 3. Copy all irises to destination db

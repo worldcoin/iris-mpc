@@ -45,7 +45,7 @@ impl<V> KNNResult<V> {
     }
 }
 
-/// Reads a Vec<KNNResult<u32>> from a file, skipping the first line (header).
+/// Reads a `Vec<KNNResult<u32>>` from a file, skipping the first line (header).
 pub fn read_knn_results_from_file(path: PathBuf) -> std::io::Result<Vec<KNNResult<u32>>> {
     let file = File::open(path)?;
     let mut lines = BufReader::new(file).lines();

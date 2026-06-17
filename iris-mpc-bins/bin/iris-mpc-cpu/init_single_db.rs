@@ -136,5 +136,5 @@ async fn main() -> Result<()> {
 }
 
 async fn init_db(args: &Args) -> DbContext {
-    DbContext::new(&args.db_url, &args.db_schema).await
+    DbContext::new_without_s3(&args.db_url, &args.db_schema, args.party_id).await
 }

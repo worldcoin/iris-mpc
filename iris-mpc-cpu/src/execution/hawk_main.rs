@@ -85,8 +85,8 @@ use crate::{
         shared_irises::SharedIrises,
     },
     hnsw::{
-        graph::graph_store,
-        searcher::{ConnectPlanV, LayerDistribution, NeighborhoodMode, UpdateEntryPoint},
+        graph::{graph_store, GraphMutation, MutationOp, UpdateEntryPoint},
+        searcher::{LayerDistribution, NeighborhoodMode},
         GraphMem, HnswSearcher, VectorStore,
     },
     network::mpc::{build_network_handle, NetworkHandle, NetworkHandleArgs},
@@ -101,7 +101,7 @@ use ampc_anon_stats::{
     AnonStatsContext, AnonStatsOperation, AnonStatsOrientation, AnonStatsOrigin, AnonStatsStore,
 };
 use clap::Parser;
-use eyre::{eyre, Report, Result};
+use eyre::{bail, eyre, Report, Result};
 use futures::try_join;
 use identity_update::{
     apply_deletions, search_to_identity_update, IdentityUpdatePlan, IdentityUpdateRequests,
@@ -114,7 +114,10 @@ use iris_mpc_common::{
     },
     vector_id::VectorId,
 };
-use iris_mpc_common::{helpers::sync::ModificationKey, job::RequestIndex};
+use iris_mpc_common::{
+    helpers::sync::{Modification, ModificationKey},
+    job::RequestIndex,
+};
 use iris_mpc_common::{
     job::{BatchQuery, JobSubmissionHandle},
     ROTATIONS,
@@ -140,10 +143,7 @@ use std::{
     time::Instant,
     vec,
 };
-use tokio::{
-    join,
-    sync::{mpsc, oneshot, RwLock, RwLockWriteGuard},
-};
+use tokio::sync::{mpsc, oneshot, RwLock, RwLockWriteGuard};
 use tokio_util::sync::CancellationToken;
 use tracing::{Instrument, Span};
 
@@ -461,14 +461,10 @@ pub struct HawkInsertPlan {
     pub classified: ClassifiedMatches,
 }
 
-/// A concrete plan detailing the exact modifications to connect a new node into the HNSW graph.
-///
-/// A `ConnectPlan` is the final output of the insertion preparation phase (`HnswSearcher::insert_prepare_batch`).
-/// Unlike `InsertPlanV`, which specifies the *desired* neighbors for the new node, `ConnectPlan`
-/// represents the full set of atomic graph updates required. This includes not only the new
-/// node's neighbors but also the reciprocal (bilateral) connections from existing nodes back to the
-/// new one. It is the definitive set of changes that will be applied to the graph storage.
-pub type ConnectPlan = ConnectPlanV<Aby3Store<HawkOps>>;
+/// A `ConnectPlan` is one finalized step of the HNSW insertion pipeline —
+/// a `GraphMutation` produced by the per-slot insert loop or by the
+/// post-batch `compact_batch` / `prune_invalid_links` helpers.
+pub type ConnectPlan = GraphMutation<VectorId>;
 
 /// Build the MPC network handle. Cheap — just TCP listener setup.
 /// Callers that need peer sync before iris load (genesis) call
@@ -749,7 +745,11 @@ impl HawkActor {
         sessions: &[HawkSession],
         plans: VecRequests<Option<HawkInsertPlan>>,
         update_ids: &VecRequests<Option<VectorId>>,
-    ) -> Result<VecRequests<Option<ConnectPlan>>> {
+        replace_ids: &VecRequests<Option<VectorId>>,
+    ) -> Result<(VecRequests<Vec<ConnectPlan>>, VecRequests<Option<VectorId>>)> {
+        assert_eq!(plans.len(), replace_ids.len());
+        assert_eq!(plans.len(), update_ids.len());
+
         // Plans are to be inserted at the next version of non-None entries in `update_ids`
         let insertion_ids = update_ids
             .iter()
@@ -762,26 +762,45 @@ impl HawkActor {
             // so that downstream result derivation (merged_results / inserted_id)
             // still sees the correct serial IDs.
             let mut next_serial_id = self.registry[LEFT].read().await.next_id;
-            return Ok(plans
-                .into_iter()
-                .zip(insertion_ids.iter())
-                .map(|(plan, id)| {
-                    plan.map(|_| {
-                        let inserted_vector = if let Some(id) = id {
-                            *id
-                        } else {
-                            let vid = VectorId::from_serial_id(next_serial_id);
-                            next_serial_id += 1;
-                            vid
-                        };
-                        crate::hnsw::searcher::ConnectPlan {
-                            inserted_vector,
-                            updates: BTreeMap::new(),
+            let mut connect_plans: Vec<Vec<ConnectPlan>> = Vec::with_capacity(plans.len());
+            let mut slot_inserted_ids: Vec<Option<VectorId>> = Vec::with_capacity(plans.len());
+            for (plan, insertion_id, replace_id) in
+                izip!(plans, insertion_ids.iter(), replace_ids.iter())
+            {
+                let mut slot_mutations: Vec<ConnectPlan> = Vec::new();
+                let mut inserted_id: Option<VectorId> = None;
+
+                // Delete-then-add ordering, each in its own GraphMutation.
+                if let Some(rid) = replace_id {
+                    slot_mutations.push(GraphMutation {
+                        seq_no: 0,
+                        ops: vec![MutationOp::RemoveNode { id: *rid }],
+                    });
+                }
+
+                if let Some(plan) = plan {
+                    let inserted_vector = if let Some(id) = insertion_id {
+                        *id
+                    } else {
+                        let vid = VectorId::from_serial_id(next_serial_id);
+                        next_serial_id += 1;
+                        vid
+                    };
+                    slot_mutations.push(GraphMutation {
+                        seq_no: 0,
+                        ops: vec![MutationOp::AddNode {
+                            id: inserted_vector,
+                            height: plan.plan.links.len(),
                             update_ep: UpdateEntryPoint::False,
-                        }
-                    })
-                })
-                .collect_vec());
+                        }],
+                    });
+                    inserted_id = Some(inserted_vector);
+                }
+
+                connect_plans.push(slot_mutations);
+                slot_inserted_ids.push(inserted_id);
+            }
+            return Ok((connect_plans, slot_inserted_ids));
         }
 
         // Map insertion plans to inner InsertionPlanV
@@ -798,6 +817,7 @@ impl HawkActor {
             &self.searcher,
             plans,
             &insertion_ids,
+            replace_ids,
         )
         .await
     }
@@ -1044,51 +1064,13 @@ pub type Aby3SharedIrisesMut<'a> = RwLockWriteGuard<'a, Aby3SharedIrises>;
 
 pub struct GraphLoader<'a>(BothEyes<GraphMut<'a>>);
 
-/// Load both eyes' graphs from PG in parallel. Returns the in-memory
-/// graphs so callers can overlap this with the iris load before
-/// constructing a `HawkActor`.
-pub async fn load_graphs_from_pg(
-    graph_store: &GraphStore,
-    parallelism: usize,
-) -> Result<BothEyes<GraphMem<VectorId>>> {
-    let now = Instant::now();
-    let (graph_left, graph_right) = join!(
-        async {
-            let mut graph_tx = graph_store.tx().await?;
-            graph_tx
-                .with_graph(StoreId::Left)
-                .load_to_mem(graph_store.pool(), parallelism)
-                .await
-        },
-        async {
-            let mut graph_tx = graph_store.tx().await?;
-            graph_tx
-                .with_graph(StoreId::Right)
-                .load_to_mem(graph_store.pool(), parallelism)
-                .await
-        }
-    );
-    let graph_left = graph_left?;
-    let graph_right = graph_right?;
-    tracing::info!(
-        "GraphLoader: Loaded left and right graphs in {:?}",
-        now.elapsed()
-    );
-    Ok([graph_left, graph_right])
-}
-
 #[allow(clippy::needless_lifetimes)]
 impl<'a> GraphLoader<'a> {
-    pub async fn load_graph_store(
-        self,
-        graph_store: &GraphStore,
-        parallelism: usize,
-    ) -> Result<()> {
-        let [graph_left, graph_right] = load_graphs_from_pg(graph_store, parallelism).await?;
-        let GraphLoader(mut graphs) = self;
-        *graphs[LEFT] = graph_left;
-        *graphs[RIGHT] = graph_right;
-        Ok(())
+    pub fn load_graphs_from_checkpoint(self, graphs: BothEyes<GraphMem<VectorId>>) {
+        let [left, right] = graphs;
+        let GraphLoader(mut dest_graphs) = self;
+        *dest_graphs[LEFT] = left;
+        *dest_graphs[RIGHT] = right;
     }
 }
 
@@ -1355,7 +1337,7 @@ impl HawkRequest {
                     let query = Aby3Query::new(query_id);
                     VecRotationSupport::new_center_only(query)
                 })
-                .collect_vec()
+                .collect()
         });
         (
             IdentityUpdateRequests {
@@ -1417,12 +1399,7 @@ impl HawkResult {
     fn inserted_id(&self, request_i: usize) -> Option<VectorId> {
         self.connect_plans
             .get_by_request_index(RequestIndex::UniqueReauthResetCheck(request_i))
-            .and_then(|mutation| {
-                mutation.plans[LEFT]
-                    .as_ref()
-                    .or(mutation.plans[RIGHT].as_ref())
-                    .map(|plan| plan.inserted_vector)
-            })
+            .and_then(|mutation| mutation.inserted_id)
     }
 
     fn select(&self, filter: Filter) -> (VecRequests<Vec<u32>>, VecRequests<usize>) {
@@ -1620,13 +1597,17 @@ pub struct HawkMutation(pub Vec<SingleHawkMutation>);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SingleHawkMutation {
-    pub plans: BothEyes<Option<ConnectPlan>>,
+    pub plans: BothEyes<Vec<ConnectPlan>>,
 
     #[serde(skip)]
     pub modification_key: Option<ModificationKey>,
 
     #[serde(skip)]
     pub request_index: Option<RequestIndex>,
+
+    /// The `VectorId` newly inserted by this request, if any.
+    #[serde(skip)]
+    pub inserted_id: Option<VectorId>,
 }
 
 impl SingleHawkMutation {
@@ -1656,51 +1637,46 @@ impl HawkMutation {
             .find(|mutation| mutation.request_index == Some(req_index))
     }
 
-    pub async fn persist(self, graph_tx: &mut GraphTx<'_>) -> Result<()> {
+    /// Persist graph mutations to the database.
+    ///
+    /// For each SingleHawkMutation:
+    /// 1. Serializes the mutation plans and inserts into hawk_graph_mutations table
+    ///    (modification_id is the natural key — no separate id returned)
+    /// 2. Updates last_indexed_modification_id in persistent_state
+    pub async fn persist(
+        self,
+        graph_tx: &mut GraphTx<'_>,
+        modifications: &mut HashMap<ModificationKey, Modification>,
+    ) -> Result<()> {
         tracing::info!("Hawk Main :: Persisting Hawk mutations");
-        // Group updates by side: side -> (key -> neighbors)
-        // Key: (serial_id, version_id, layer)
-        let mut updates_by_side: BothEyes<BTreeMap<(i64, i16, i16), Vec<_>>> = Default::default();
+
+        // for persistent_state
+        let max_modification_id: Option<i64> = modifications.values().map(|x| x.id).max();
 
         for mutation in self.0 {
-            for (side, updates_map, plan_opt) in
-                izip!(STORE_IDS, updates_by_side.iter_mut(), mutation.plans)
-            {
-                if let Some(plan) = plan_opt {
-                    let mut graph = graph_tx.with_graph(side);
-                    // Updating entry points sequentially is fine in practice
-                    match plan.update_ep {
-                        UpdateEntryPoint::False => {}
-                        UpdateEntryPoint::SetUnique { layer } => {
-                            graph.set_entry_point(plan.inserted_vector, layer).await?;
-                        }
-                        UpdateEntryPoint::Append { layer } => {
-                            graph.add_entry_point(plan.inserted_vector, layer).await?;
-                        }
-                    }
+            // Insert graph mutation into hawk_graph_mutations and link to modification
+            // note that not all mutations modify the graph. mutation.modification_key = None is a valid option.
+            // for reference, see the end of handle_mutations()
+            if let Some(ref modification_key) = mutation.modification_key {
+                if let Some(modification) = modifications.get_mut(modification_key) {
+                    let serialized = bincode::serialize(&mutation.plans)
+                        .map_err(|e| eyre::eyre!("Failed to serialize graph mutation: {}", e))?;
 
-                    // Buffer link updates by side
-                    for ((inserted_vector, lc), neighbors) in plan.updates {
-                        let key = (
-                            inserted_vector.serial_id() as i64,
-                            inserted_vector.version_id(),
-                            lc as i16,
-                        );
-                        // Deduplicate: If multiple updates for the same node exist, the last one wins
-                        updates_map.insert(key, neighbors);
-                    }
+                    graph_tx
+                        .upsert_hawk_graph_mutations(modification.id, &serialized)
+                        .await?;
+                } else {
+                    tracing::warn!(
+                        "modification_key {:?} not found in modifications",
+                        modification_key
+                    );
                 }
             }
         }
 
-        // Execute one batch per side
-        for (side, batch_updates) in izip!(STORE_IDS, updates_by_side) {
-            if !batch_updates.is_empty() {
-                graph_tx
-                    .with_graph(side)
-                    .batch_set_links(batch_updates)
-                    .await?;
-            }
+        // Update last_indexed_modification_id in persistent_state
+        if let Some(max_id) = max_modification_id {
+            graph_tx.set_last_indexed_modification_id(max_id).await?;
         }
 
         Ok(())
@@ -1828,7 +1804,7 @@ impl HawkHandle {
                 // The "b" (raw) operand always uses Normal queries to get the
                 // same-eye iris, even when comparing in Mirror orientation.
                 let raw_queries = request.queries(Orientation::Normal);
-                scheduler::spawn_with_span(async move {
+                scheduler::spawn_with_span(Span::current(), async move {
                     Ok(intra_batch_is_match(&sessions_intra, &search_queries, &raw_queries).await)
                 })
             };
@@ -1989,9 +1965,32 @@ impl HawkHandle {
 
         tracing::info!("Updated decisions (reset + reauth): {:?}", update_ids);
 
+        // Get deleted vector IDs for RemoveNode mutations.
+        let deleted_ids = request.deletion_ids(&*hawk_actor.registry[LEFT].read().await);
+
+        // Build replace_ids covering both reauth/identity-update targets (which
+        // pair with an InsertPlan in the same slot) and pure deletions (which
+        // have None as their InsertPlan).
+        let replace_ids = requests_order
+            .iter()
+            .enumerate()
+            .map(|(i, req_index)| match req_index {
+                RequestIndex::UniqueReauthResetCheck(_) | RequestIndex::IdentityUpdate(_) => {
+                    update_ids[i]
+                }
+                RequestIndex::Deletion(j) => Some(deleted_ids[*j]),
+            })
+            .collect_vec();
+
         // Store plans for both sides using BothEyes structure
-        let mut plans_both_sides: Vec<BothEyes<Option<ConnectPlan>>> =
-            vec![[None, None]; requests_order.len()];
+        let mut plans_both_sides: Vec<BothEyes<Vec<ConnectPlan>>> = (0..requests_order.len())
+            .map(|_| [Vec::new(), Vec::new()])
+            .collect();
+
+        // Track the per-request inserted VectorIds surfaced from `HawkActor::insert`.
+        // Left and right sides insert at the same VectorIds, so we capture the
+        // whole vec from the first side and assert equality on subsequent sides.
+        let mut inserted_ids_per_request: Option<VecRequests<Option<VectorId>>> = None;
 
         // For both eyes.
         for (side, sessions, search_results, reset_results) in izip!(
@@ -2024,7 +2023,7 @@ impl HawkHandle {
                 unique_insertions_persistence_skipped.len()
             );
 
-            // Collect the HNSW insertion plans for all mutating decisions
+            // Collect the HNSW insertion plans for all mutating decisions.
             let insert_plans = requests_order
                 .iter()
                 .map(|req_index| match req_index {
@@ -2044,26 +2043,45 @@ impl HawkHandle {
                             .then(|| search_results[*i].center().clone()),
                     },
                     RequestIndex::IdentityUpdate(i) => Some(reset_results[*i].center().clone()),
-                    // Deletions were handled earlier in handle_job
                     RequestIndex::Deletion(_) => None,
                 })
                 .collect_vec();
 
-            // Insert in memory, and return the plans to update the persistent database.
-            let plans = hawk_actor
-                .insert(sessions, insert_plans, &update_ids)
+            let (plans, side_inserted_ids) = hawk_actor
+                .insert(sessions, insert_plans, &update_ids, &replace_ids)
                 .await?;
 
-            // Store plans for this side
-            for (plan, both_sides) in izip!(plans, &mut plans_both_sides) {
-                both_sides[*side as usize] = plan;
+            // Store plans for this side. Each slot's Vec is extended onto
+            // the per-side aggregator, preserving per-slot association via
+            // the outer izip.
+            for (plan_vec, both_sides) in izip!(plans, &mut plans_both_sides) {
+                both_sides[*side as usize].extend(plan_vec);
+            }
+
+            // Inserted ids must be the same on both sides. Capture the whole
+            // vec on the first side and check agreement against it on the
+            // others; a mismatch indicates a real inconsistency between the
+            // left and right HNSW insertion pipelines.
+            match &inserted_ids_per_request {
+                None => inserted_ids_per_request = Some(side_inserted_ids),
+                Some(existing) => {
+                    if *existing != side_inserted_ids {
+                        bail!(
+                            "inserted_id mismatch across sides: {:?} vs {:?}",
+                            existing,
+                            side_inserted_ids
+                        );
+                    }
+                }
             }
         }
+        let inserted_ids_per_request = inserted_ids_per_request.unwrap_or_default();
 
         // Combine ModificationKey and ConnectPlan into into SingleHawkMutation objects.
         let mut mutations = Vec::new();
 
-        for (req_index, modif_plan) in izip!(requests_order, plans_both_sides) {
+        for (slot_i, (req_index, modif_plan)) in izip!(requests_order, plans_both_sides).enumerate()
+        {
             let modification_key = match *req_index {
                 RequestIndex::UniqueReauthResetCheck(i) => {
                     // This is a batch request mutation
@@ -2088,19 +2106,33 @@ impl HawkHandle {
                 }
                 RequestIndex::IdentityUpdate(i) => {
                     // This is a reset update mutation.
+                    // Note: A missing vector_id here means the target was not found, which is a
+                    // legitimate "no graph change" case (e.g., recovery update on non-existent
+                    // identity) — no hawk_graph_mutations row is written.
                     if let Some(&vector_id) = identity_updates.vector_ids.get(i) {
                         Some(ModificationKey::RequestSerialId(vector_id.serial_id()))
                     } else {
                         None
                     }
                 }
-                RequestIndex::Deletion(_) => None,
+                RequestIndex::Deletion(i) => {
+                    let serial_id = deleted_ids[i].serial_id();
+                    Some(ModificationKey::RequestSerialId(serial_id))
+                }
             };
+
+            // `inserted_ids_per_request` is aligned with `requests_order` (the
+            // batch slot order), not with the inner request_index.
+            let inserted_id = inserted_ids_per_request
+                .get(slot_i)
+                .copied()
+                .unwrap_or(None);
 
             mutations.push(SingleHawkMutation {
                 plans: modif_plan,
                 modification_key,
                 request_index: Some(*req_index),
+                inserted_id,
             });
         }
 
@@ -2476,123 +2508,27 @@ mod tests {
 }
 
 #[cfg(test)]
-#[cfg(feature = "db_dependent")]
-mod tests_db {
-    use super::*;
-    use crate::hnsw::{
-        graph::graph_store::test_utils::TestGraphPg,
-        searcher::{build_layer_updates, UpdateEntryPoint},
-    };
-
-    #[tokio::test]
-    async fn test_graph_load() -> Result<()> {
-        // The test data is a sequence of mutations on the graph.
-        let vectors = (0..5).map(VectorId::from_0_index).collect_vec();
-
-        let make_plans = |side| {
-            let side = side as usize; // Make some difference between sides.
-
-            vectors
-                .iter()
-                .enumerate()
-                .map(|(i, vector)| ConnectPlan {
-                    inserted_vector: *vector,
-                    updates: build_layer_updates(
-                        *vector,
-                        vec![vectors[side]],
-                        vec![vec![*vector]],
-                        0,
-                    ),
-                    update_ep: if i == side {
-                        UpdateEntryPoint::SetUnique { layer: 0 }
-                    } else {
-                        UpdateEntryPoint::False
-                    },
-                })
-                .map(Some)
-                .collect_vec()
-        };
-
-        // Populate the SQL store with test data.
-        let graph_store = TestGraphPg::<Aby3Store<HawkOps>>::new().await.unwrap();
-        {
-            let plans_left = make_plans(StoreId::Left);
-            let plans_right = make_plans(StoreId::Right);
-
-            let mutations = plans_left
-                .into_iter()
-                .zip(plans_right.into_iter())
-                .map(|(left_plan, right_plan)| SingleHawkMutation {
-                    plans: [left_plan, right_plan],
-                    modification_key: None,
-                    request_index: None,
-                })
-                .collect();
-
-            let mutation = HawkMutation(mutations);
-            let mut graph_tx = graph_store.tx().await?;
-            mutation.persist(&mut graph_tx).await?;
-            graph_tx.tx.commit().await?;
-        }
-
-        let addresses = vec![
-            "0.0.0.0:1234".to_string(),
-            "0.0.0.0:1235".to_string(),
-            "0.0.0.0:1236".to_string(),
-        ];
-        // Start an actor and load the graph from SQL to memory.
-        let args = HawkArgs {
-            party_index: 0,
-            addresses: addresses.clone(),
-            outbound_addrs: addresses,
-            request_parallelism: 4,
-            connection_parallelism: 2,
-            hnsw_param_ef_constr: 320,
-            hnsw_param_m: 256,
-            hnsw_param_ef_search: 256,
-            hnsw_param_ef_supermatch: 4000,
-            hnsw_param_ef_saturation_margin: 0,
-            hnsw_layer_density: None,
-            hnsw_fixed_layer_search_batch_size: None,
-            hnsw_prf_key: None,
-            numa: true,
-            disable_persistence: false,
-            hnsw_disable_memory_persistence: false,
-            tls: None,
-        };
-        let mut hawk_actor = HawkActor::from_cli(&args, CancellationToken::new()).await?;
-        let graph_loader = hawk_actor.as_graph_loader().await;
-        graph_loader.load_graph_store(&graph_store, 2).await?;
-
-        // Check the loaded graph.
-        for (side, graph) in izip!(STORE_IDS, &hawk_actor.graph_store) {
-            let side = side as usize; // Find some difference between sides.
-
-            let ep = graph.read().await.get_first_entry_point().await;
-            let expected_ep = vectors[side];
-            assert_eq!(ep, Some((expected_ep, 0)), "Entry point is set");
-
-            let graph_guard = graph.read().await;
-            let links = graph_guard.get_links(&vectors[2], 0).await;
-            assert_eq!(links, [expected_ep], "vec_2 connects to the entry point");
-        }
-
-        graph_store.cleanup().await.unwrap();
-        Ok(())
-    }
-}
-
-#[cfg(test)]
 mod hawk_mutation_tests {
     use super::*;
-    use crate::hnsw::searcher::{build_layer_updates, UpdateEntryPoint};
+    use crate::hnsw::graph::{mutation::EdgeType, UpdateEntryPoint};
     use iris_mpc_common::helpers::sync::ModificationKey;
 
     fn create_test_connect_plan(vector_id: VectorId) -> ConnectPlan {
-        ConnectPlan {
-            inserted_vector: vector_id,
-            updates: build_layer_updates(vector_id, vec![vector_id], vec![vec![vector_id]], 0),
-            update_ep: UpdateEntryPoint::False,
+        GraphMutation {
+            seq_no: 0,
+            ops: vec![
+                MutationOp::AddNode {
+                    id: vector_id,
+                    height: 1,
+                    update_ep: UpdateEntryPoint::False,
+                },
+                MutationOp::AddEdges {
+                    base: vector_id,
+                    layer: 0,
+                    neighbors: vec![vector_id],
+                    edge_type: EdgeType::Base,
+                },
+            ],
         }
     }
 
@@ -2603,11 +2539,12 @@ mod hawk_mutation_tests {
 
         let mutation = SingleHawkMutation {
             plans: [
-                Some(create_test_connect_plan(VectorId::from_serial_id(1))),
-                None,
+                vec![create_test_connect_plan(VectorId::from_serial_id(1))],
+                Vec::new(),
             ],
             modification_key: Some(modification_key.clone()),
             request_index: Some(RequestIndex::UniqueReauthResetCheck(0)),
+            inserted_id: Some(VectorId::from_serial_id(1)),
         };
 
         let hawk_mutation = HawkMutation(vec![mutation.clone()]);
@@ -2647,29 +2584,32 @@ mod hawk_mutation_tests {
 
         let mutation1 = SingleHawkMutation {
             plans: [
-                Some(create_test_connect_plan(VectorId::from_serial_id(1))),
-                None,
+                vec![create_test_connect_plan(VectorId::from_serial_id(1))],
+                Vec::new(),
             ],
             modification_key: Some(key1.clone()),
             request_index: Some(index1),
+            inserted_id: Some(VectorId::from_serial_id(1)),
         };
 
         let mutation2 = SingleHawkMutation {
             plans: [
-                None,
-                Some(create_test_connect_plan(VectorId::from_serial_id(2))),
+                Vec::new(),
+                vec![create_test_connect_plan(VectorId::from_serial_id(2))],
             ],
             modification_key: Some(key2.clone()),
             request_index: Some(index2),
+            inserted_id: Some(VectorId::from_serial_id(2)),
         };
 
         let mutation3 = SingleHawkMutation {
             plans: [
-                Some(create_test_connect_plan(VectorId::from_serial_id(3))),
-                Some(create_test_connect_plan(VectorId::from_serial_id(3))),
+                vec![create_test_connect_plan(VectorId::from_serial_id(3))],
+                vec![create_test_connect_plan(VectorId::from_serial_id(3))],
             ],
             modification_key: Some(key3.clone()),
             request_index: Some(index3),
+            inserted_id: Some(VectorId::from_serial_id(3)),
         };
 
         let hawk_mutation = HawkMutation(vec![
@@ -2706,20 +2646,22 @@ mod hawk_mutation_tests {
     fn test_mutation_without_modification_key() {
         let mutation_with_key = SingleHawkMutation {
             plans: [
-                Some(create_test_connect_plan(VectorId::from_serial_id(1))),
-                None,
+                vec![create_test_connect_plan(VectorId::from_serial_id(1))],
+                Vec::new(),
             ],
             modification_key: Some(ModificationKey::RequestId("test".to_string())),
             request_index: Some(RequestIndex::UniqueReauthResetCheck(0)),
+            inserted_id: Some(VectorId::from_serial_id(1)),
         };
 
         let mutation_without_key = SingleHawkMutation {
             plans: [
-                None,
-                Some(create_test_connect_plan(VectorId::from_serial_id(2))),
+                Vec::new(),
+                vec![create_test_connect_plan(VectorId::from_serial_id(2))],
             ],
             modification_key: None,
             request_index: None,
+            inserted_id: None,
         };
 
         let hawk_mutation = HawkMutation(vec![mutation_with_key.clone(), mutation_without_key]);
@@ -2739,11 +2681,12 @@ mod hawk_mutation_tests {
     fn test_single_hawk_mutation_serialization() {
         let mutation = SingleHawkMutation {
             plans: [
-                Some(create_test_connect_plan(VectorId::from_serial_id(1))),
-                None,
+                vec![create_test_connect_plan(VectorId::from_serial_id(1))],
+                Vec::new(),
             ],
             modification_key: Some(ModificationKey::RequestId("test".to_string())),
             request_index: Some(RequestIndex::UniqueReauthResetCheck(0)),
+            inserted_id: Some(VectorId::from_serial_id(1)),
         };
 
         // Test serialization
@@ -2756,5 +2699,37 @@ mod hawk_mutation_tests {
         // modification_key is skipped during serialization, so it should be None
         assert_eq!(deserialized.plans, mutation.plans);
         assert_eq!(deserialized.modification_key, None);
+    }
+
+    #[test]
+    fn single_hawk_mutation_per_side_vec_round_trips() {
+        let plan_a = GraphMutation {
+            seq_no: 5,
+            ops: vec![MutationOp::AddNode {
+                id: VectorId::from_serial_id(1),
+                height: 1,
+                update_ep: UpdateEntryPoint::False,
+            }],
+        };
+        let plan_b = GraphMutation {
+            seq_no: 6,
+            ops: vec![MutationOp::RemoveNode {
+                id: VectorId::from_serial_id(2),
+            }],
+        };
+        let mutation = SingleHawkMutation {
+            plans: [vec![plan_a.clone()], vec![plan_b.clone()]],
+            modification_key: None,
+            request_index: None,
+            inserted_id: Some(VectorId::from_serial_id(1)),
+        };
+        let bytes = mutation.serialize().expect("serialize");
+        let back: SingleHawkMutation = bincode::deserialize(&bytes).expect("deserialize");
+        assert_eq!(back.plans[0].len(), 1);
+        assert_eq!(back.plans[0][0].seq_no, 5);
+        assert_eq!(back.plans[1].len(), 1);
+        assert_eq!(back.plans[1][0].seq_no, 6);
+        // inserted_id is #[serde(skip)] — round-tripped value is None.
+        assert_eq!(back.inserted_id, None);
     }
 }

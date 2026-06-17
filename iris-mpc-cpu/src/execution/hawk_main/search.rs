@@ -14,7 +14,8 @@ use crate::{
     },
     hnsw::{
         graph::neighborhood::{Neighborhood, UnsortedNeighborhood},
-        searcher::{NeighborhoodMode, UpdateEntryPoint},
+        graph::UpdateEntryPoint,
+        searcher::NeighborhoodMode,
         GraphMem, HnswSearcher, SortedNeighborhood,
     },
 };

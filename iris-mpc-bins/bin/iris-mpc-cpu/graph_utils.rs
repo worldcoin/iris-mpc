@@ -15,7 +15,7 @@ use iris_mpc_cpu::{
     utils::serialization::graph::{
         check_valid_graph_formats, check_valid_graph_pair_formats, read_graph,
         read_graph_from_file, read_graph_pair, read_graph_pair_from_file, write_graph_pair_to_file,
-        write_graph_to_file, GraphFormat, GRAPH_FORMAT_CURRENT,
+        write_graph_to_file, GraphFormat,
     },
 };
 
@@ -246,7 +246,7 @@ fn upgrade_format(
 
         println!(
             "Writing graph pair to file using current stable graph format {}: {}",
-            GRAPH_FORMAT_CURRENT,
+            GraphFormat::Current,
             path_string(&dst_file)
         );
         write_graph_pair_to_file(dst_file, graph_pair)
@@ -265,7 +265,7 @@ fn upgrade_format(
 
         println!(
             "Writing graph to file using current stable graph format {}: {}",
-            GRAPH_FORMAT_CURRENT,
+            GraphFormat::Current,
             path_string(&dst_file)
         );
         write_graph_to_file(dst_file, graph)
@@ -369,7 +369,7 @@ fn graph_statistics(src_file: PathBuf, src_format: GraphFormat) -> Result<()> {
     println!("=== Graph Statistics ===");
 
     if matches!(src_format, GraphFormat::Current) {
-        println!("File format: {}", GRAPH_FORMAT_CURRENT);
+        println!("File format: {}", GraphFormat::Current);
     } else {
         println!("File format: {}", src_format);
     }

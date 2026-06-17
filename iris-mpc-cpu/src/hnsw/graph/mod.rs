@@ -6,4 +6,4 @@ pub mod mutation;
 pub mod neighborhood;
 pub mod test_utils;
 
-pub use mutation::{GraphMutation, UpdateEntryPoint};
+pub use mutation::{GraphMutation, MutationOp, UpdateEntryPoint};

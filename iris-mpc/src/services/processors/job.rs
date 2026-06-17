@@ -13,14 +13,12 @@ use iris_mpc_common::helpers::smpc_response::{
     UniquenessResult,
 };
 
-use iris_mpc_common::helpers::sync::ModificationKey;
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
 use iris_mpc_common::iris_db::get_dummy_shares_for_deletion;
 use iris_mpc_common::job::ServerJobResult;
 use iris_mpc_cpu::execution::hawk_main::{GraphStore, HawkMutation};
 use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::{izip, Itertools};
-use sqlx::{Postgres, Transaction};
 use std::{collections::HashMap, time::Instant};
 
 /// Processes a ServerJobResult, storing data in the database and sending result messages
@@ -137,7 +135,6 @@ pub async fn process_job_result(
                 .wrap_err("failed to serialize uniqueness result")?;
 
             let modification_key = RequestId(result_event.signup_id);
-            let graph_mutation = hawk_mutation.get_serialized_mutation_by_key(&modification_key);
             modifications
                 .get_mut(&modification_key)
                 .unwrap()
@@ -145,7 +142,6 @@ pub async fn process_job_result(
                     !result_event.is_match,
                     &result_string,
                     result_event.serial_id,
-                    graph_mutation,
                 );
 
             Ok(result_string)
@@ -196,16 +192,11 @@ pub async fn process_job_result(
                 .wrap_err("failed to serialize reauth result")?;
 
             let modification_key = RequestSerialId(serial_id);
-            let (persisted, graph_mutation) = reauth_modification_persistence(
-                success,
-                skip_persistence.get(i).copied().unwrap_or(false),
-                &modification_key,
-                &hawk_mutation,
-            );
+            let persisted = success && !skip_persistence.get(i).copied().unwrap_or(false);
             modifications
                 .get_mut(&modification_key)
                 .unwrap()
-                .mark_completed(persisted, &result_string, None, graph_mutation);
+                .mark_completed(persisted, &result_string, None);
 
             Ok(result_string)
         })
@@ -221,11 +212,10 @@ pub async fn process_job_result(
                 .wrap_err("failed to serialize identity deletion result")?;
 
             let modification_key = RequestSerialId(serial_id);
-            let graph_mutation = hawk_mutation.get_serialized_mutation_by_key(&modification_key);
             modifications
                 .get_mut(&modification_key)
                 .unwrap()
-                .mark_completed(true, &result_string, None, graph_mutation);
+                .mark_completed(true, &result_string, None);
 
             Ok(result_string)
         })
@@ -272,7 +262,7 @@ pub async fn process_job_result(
             modifications
                 .get_mut(&modification_key)
                 .unwrap()
-                .mark_completed(false, &result_string, None, None);
+                .mark_completed(false, &result_string, None);
 
             Ok((request_type.clone(), result_string))
         })
@@ -295,7 +285,7 @@ pub async fn process_job_result(
             modifications
                 .get_mut(&RequestSerialId(serial_id))
                 .unwrap()
-                .mark_completed(true, &result_string, None, None);
+                .mark_completed(true, &result_string, None);
             Ok((request_type, result_string))
         })
         .collect::<Result<Vec<(String, String)>>>()?
@@ -327,10 +317,23 @@ pub async fn process_job_result(
     }
 
     if !config.disable_persistence {
-        // update modification results in db
+        // Wrap transaction for graph operations
+        let mut graph_tx = graph_store.tx_wrap(iris_tx);
+
+        // Persist graph mutations to hawk_graph_mutations table
+        let step_start = Instant::now();
+        hawk_mutation
+            .persist(&mut graph_tx, &mut modifications)
+            .await?;
+        metrics::histogram!("persist_graph_mutations_duration")
+            .record(step_start.elapsed().as_secs_f64());
+
         let step_start = Instant::now();
         store
-            .update_modifications(&mut iris_tx, &modifications.values().collect::<Vec<_>>())
+            .update_modifications(
+                &mut graph_tx.tx,
+                &modifications.values().collect::<Vec<_>>(),
+            )
             .await?;
         metrics::histogram!("persist_update_modifications_duration")
             .record(step_start.elapsed().as_secs_f64());
@@ -357,7 +360,7 @@ pub async fn process_job_result(
             );
             store
                 .update_iris(
-                    Some(&mut iris_tx),
+                    Some(&mut graph_tx.tx),
                     serial_id as i64,
                     &left_iris_requests.code[i],
                     &left_iris_requests.mask[i],
@@ -378,7 +381,7 @@ pub async fn process_job_result(
             );
             store
                 .update_iris(
-                    Some(&mut iris_tx),
+                    Some(&mut graph_tx.tx),
                     serial_id as i64,
                     &shares.code_left,
                     &shares.mask_left,
@@ -399,7 +402,7 @@ pub async fn process_job_result(
             );
             store
                 .update_iris(
-                    Some(&mut iris_tx),
+                    Some(&mut graph_tx.tx),
                     serial_id as i64,
                     &dummy_deletion_shares.0,
                     &dummy_deletion_shares.1,
@@ -409,8 +412,9 @@ pub async fn process_job_result(
                 .await?;
         }
 
+        // Commit transaction
         let step_start = Instant::now();
-        persist(iris_tx, graph_store, hawk_mutation, config).await?;
+        graph_tx.tx.commit().await?;
         metrics::histogram!("persist_commit_duration").record(step_start.elapsed().as_secs_f64());
         metrics::histogram!("persist_total_duration")
             .record(persist_total_start.elapsed().as_secs_f64());
@@ -542,90 +546,4 @@ pub async fn process_job_result(
     shutdown_handler.decrement_batches_pending_completion();
 
     Ok(())
-}
-
-async fn persist(
-    iris_tx: Transaction<'_, Postgres>,
-    graph_store: &GraphStore,
-    hawk_mutation: HawkMutation,
-    config: &Config,
-) -> Result<()> {
-    // simply persist or not both iris and graph changes
-    if !config.disable_persistence {
-        let mut graph_tx = graph_store.tx_wrap(iris_tx);
-        hawk_mutation.persist(&mut graph_tx).await?;
-        graph_tx.tx.commit().await?;
-    }
-
-    Ok(())
-}
-
-fn reauth_modification_persistence(
-    success: bool,
-    skip_persistence: bool,
-    modification_key: &ModificationKey,
-    hawk_mutation: &HawkMutation,
-) -> (bool, Option<Vec<u8>>) {
-    let persisted = success && !skip_persistence;
-    let graph_mutation = if persisted {
-        hawk_mutation.get_serialized_mutation_by_key(modification_key)
-    } else {
-        None
-    };
-
-    (persisted, graph_mutation)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use iris_mpc_cpu::execution::hawk_main::SingleHawkMutation;
-
-    #[test]
-    fn successful_reauth_with_skip_persistence_is_not_persisted() {
-        let modification_key = RequestSerialId(7);
-        let hawk_mutation = HawkMutation(vec![SingleHawkMutation {
-            plans: [None, None],
-            modification_key: Some(modification_key.clone()),
-            request_index: None,
-        }]);
-
-        let (persisted, graph_mutation) =
-            reauth_modification_persistence(true, true, &modification_key, &hawk_mutation);
-
-        assert!(!persisted);
-        assert!(graph_mutation.is_none());
-    }
-
-    #[test]
-    fn successful_reauth_without_skip_persistence_keeps_graph_mutation() {
-        let modification_key = RequestSerialId(7);
-        let hawk_mutation = HawkMutation(vec![SingleHawkMutation {
-            plans: [None, None],
-            modification_key: Some(modification_key.clone()),
-            request_index: None,
-        }]);
-
-        let (persisted, graph_mutation) =
-            reauth_modification_persistence(true, false, &modification_key, &hawk_mutation);
-
-        assert!(persisted);
-        assert!(graph_mutation.is_some());
-    }
-
-    #[test]
-    fn failed_reauth_is_not_persisted() {
-        let modification_key = RequestSerialId(7);
-        let hawk_mutation = HawkMutation(vec![SingleHawkMutation {
-            plans: [None, None],
-            modification_key: Some(modification_key.clone()),
-            request_index: None,
-        }]);
-
-        let (persisted, graph_mutation) =
-            reauth_modification_persistence(false, false, &modification_key, &hawk_mutation);
-
-        assert!(!persisted);
-        assert!(graph_mutation.is_none());
-    }
 }

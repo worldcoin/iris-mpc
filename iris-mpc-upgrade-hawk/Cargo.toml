@@ -23,6 +23,8 @@ rand.workspace = true
 iris-mpc = { path = "../iris-mpc" }
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
+iris-mpc-utils = { path = "../iris-mpc-utils" }
+uuid.workspace = true
 itertools.workspace = true
 metrics.workspace = true
 serde = { version = "1.0.214", features = ["derive"] }
@@ -34,7 +36,8 @@ ampc-server-utils.workspace = true
 
 [dev-dependencies]
 thiserror.workspace = true
-serial_test = "3.2.0"
+serial_test.workspace = true
+bincode.workspace = true
 
 [features]
 default = []

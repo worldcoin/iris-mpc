@@ -19,10 +19,12 @@ bytes = "1.7"
 bytemuck.workspace = true
 cached = "0.56.0"
 clap.workspace = true
+config.workspace = true
 core_affinity.workspace = true
 crossbeam = "0.8.4"
 csv = "*"
 delegate = "0.13.5"
+hex.workspace = true
 dashmap = "6.1.0"
 eyre.workspace = true
 futures.workspace = true
@@ -37,6 +39,7 @@ rstest = "0.23.0"
 serde.workspace = true
 serde-big-array.workspace = true
 serde_json.workspace = true
+serde_with.workspace = true
 serde_path_to_error = "*"
 siphasher = "1"
 socket2 = { version = "0.6.0", features = ["all"] }
@@ -47,7 +50,7 @@ thiserror.workspace = true
 toml.workspace = true
 tokio.workspace = true
 tokio-stream = "0.1"
-tokio-util.workspace = true
+tokio-util = { workspace = true, features = ["io-util"] }
 metrics.workspace = true
 tracing.workspace = true
 tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", rev = "5683eba", features = [
