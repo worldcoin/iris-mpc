@@ -11,7 +11,7 @@ use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{
         graph::test_utils::DbContext, searcher::LayerDistribution, vector_store::VectorStoreMut,
-        GraphMem, HnswSearcher, SortedNeighborhood,
+        GraphMem, HnswSearcher, SortedNeighborhood, LINEAR_SCAN_MAX_GRAPH_LAYER,
     },
     protocol::shared_iris::{GaloisRingSharedIris, GaloisRingSharedIrisPair},
     utils::{
@@ -185,7 +185,8 @@ impl Args {
 // Convertor: Args -> HnswSearcher.
 impl From<&Args> for HnswSearcher {
     fn from(args: &Args) -> Self {
-        let mut searcher = HnswSearcher::new_linear_scan(args.ef, args.ef, args.M, 1);
+        let mut searcher =
+            HnswSearcher::new_linear_scan(args.ef, args.ef, args.M, LINEAR_SCAN_MAX_GRAPH_LAYER);
         if let Some(q) = args.layer_probability {
             match &mut searcher.layer_distribution {
                 LayerDistribution::Geometric { layer_probability } => {

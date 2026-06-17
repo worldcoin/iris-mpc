@@ -36,7 +36,7 @@ use crate::{
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{
         graph::neighborhood::Neighborhood, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
-        SortedNeighborhood,
+        SortedNeighborhood, LINEAR_SCAN_MAX_GRAPH_LAYER,
     },
 };
 
@@ -178,7 +178,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
         state.config.hnsw_ef_constr,
         state.config.hnsw_ef_search,
         state.config.hnsw_m,
-        1, // should match the constant LINEAR_SCAN_MAX_GRAPH_LAYER
+        LINEAR_SCAN_MAX_GRAPH_LAYER,
     );
 
     let prf_key: [u8; 16] = state

@@ -40,6 +40,13 @@ use tracing::{debug, instrument, trace_span, Instrument};
 /// search, used by the `HnswParams` struct.
 pub const N_PARAM_LAYERS: usize = 5;
 
+/// Maximum graph layer for node insertion used by Hawk Main's HNSW searcher.
+/// Entry points live in this top layer and search begins with a linear scan
+/// over them. Shared by every searcher that mirrors Hawk Main — genesis, the
+/// e2e bootstrap, the test-parameter constructor, and the tooling defaults —
+/// so they stay in lockstep with the live path.
+pub const LINEAR_SCAN_MAX_GRAPH_LAYER: usize = 1;
+
 /// Scaling parameter to determine the frequency of neighborhood compaction
 /// operations for large graph neighborhoods.  When a neighborhood reaches
 /// size greater than M_limit in some layer, the neighborhood is trimmed
@@ -321,7 +328,7 @@ impl HnswSearcher {
     /// applicable" default value.
     pub fn new_with_test_parameters() -> Self {
         let (ef_constr, ef_search, M) = (64, 32, 32);
-        Self::new_linear_scan(ef_constr, ef_search, M, 1)
+        Self::new_linear_scan(ef_constr, ef_search, M, LINEAR_SCAN_MAX_GRAPH_LAYER)
     }
 
     /// Choose a random insertion layer from the configured distribution,
@@ -1757,14 +1764,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_hnsw_db_linear_scan() -> Result<()> {
-        let db = HnswSearcher::new_linear_scan(64, 32, 32, 1);
+        let db = HnswSearcher::new_linear_scan(64, 32, 32, LINEAR_SCAN_MAX_GRAPH_LAYER);
 
         hnsw_db_helper(db, 0).await
     }
 
     #[tokio::test]
     async fn test_hnsw_db_linear_scan_m() -> Result<()> {
-        let mut db = HnswSearcher::new_linear_scan(64, 32, 32, 1);
+        let mut db = HnswSearcher::new_linear_scan(64, 32, 32, LINEAR_SCAN_MAX_GRAPH_LAYER);
         // Ensure upper layers get exercised well
         db.layer_distribution = LayerDistribution::new_geometric_from_M(4);
 

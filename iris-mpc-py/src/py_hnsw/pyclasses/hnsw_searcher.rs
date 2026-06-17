@@ -1,6 +1,8 @@
 use super::{graph_store::PyGraphStore, iris_code::PyIrisCode, plaintext_store::PyPlaintextStore};
 use iris_mpc_cpu::{
-    hnsw::searcher::{HnswParams, HnswSearcher, LayerDistribution, N_PARAM_LAYERS},
+    hnsw::searcher::{
+        HnswParams, HnswSearcher, LayerDistribution, LINEAR_SCAN_MAX_GRAPH_LAYER, N_PARAM_LAYERS,
+    },
     py_bindings,
     utils::serialization::{read_json, write_json},
 };
@@ -21,7 +23,7 @@ impl Default for PyHnswSearcher {
 impl PyHnswSearcher {
     #[new]
     pub fn new(M: usize, ef_constr: usize, ef_search: usize) -> Self {
-        Self::new_linear_scan(M, ef_constr, ef_search, 1)
+        Self::new_linear_scan(M, ef_constr, ef_search, LINEAR_SCAN_MAX_GRAPH_LAYER)
     }
 
     #[staticmethod]
@@ -45,7 +47,7 @@ impl PyHnswSearcher {
         let layer_distribution = LayerDistribution::new_geometric_from_M(M);
         Self(HnswSearcher {
             params,
-            max_graph_layer: 1,
+            max_graph_layer: LINEAR_SCAN_MAX_GRAPH_LAYER,
             layer_distribution,
             fixed_layer_search_batch_size: None,
         })
@@ -75,7 +77,7 @@ impl PyHnswSearcher {
         let layer_distribution = LayerDistribution::Geometric { layer_probability };
         Self(HnswSearcher {
             params,
-            max_graph_layer: 1,
+            max_graph_layer: LINEAR_SCAN_MAX_GRAPH_LAYER,
             layer_distribution,
             fixed_layer_search_batch_size: None,
         })

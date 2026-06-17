@@ -85,7 +85,7 @@ use crate::{
     hnsw::{
         graph::{graph_store, GraphMutation, MutationOp, UpdateEntryPoint},
         searcher::{LayerDistribution, NeighborhoodMode},
-        GraphMem, HnswSearcher, VectorStore,
+        GraphMem, HnswSearcher, VectorStore, LINEAR_SCAN_MAX_GRAPH_LAYER,
     },
     network::mpc::{build_network_handle, NetworkHandle, NetworkHandleArgs},
     protocol::{
@@ -221,8 +221,6 @@ pub type VecRotations<T> = VecRotationSupport<T, HAWK_BASE_ROTATIONS_MASK>;
 
 /// The choice of HNSW candidate list strategy
 pub const NEIGHBORHOOD_MODE: NeighborhoodMode = NeighborhoodMode::Sorted;
-
-const LINEAR_SCAN_MAX_GRAPH_LAYER: usize = 1;
 
 #[derive(Clone, Parser)]
 pub struct HawkArgs {
