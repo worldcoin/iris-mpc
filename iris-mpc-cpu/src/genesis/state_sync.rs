@@ -1,6 +1,6 @@
 use super::BatchSizeConfig;
 use eyre::{ensure, Result};
-use iris_mpc_common::{config::CommonConfig, helpers::sync::Modification, IrisSerialId};
+use iris_mpc_common::{config::CommonConfig, helpers::sync::Modification, SerialId};
 use serde::{Deserialize, Serialize};
 
 /// Encapsulates common Genesis specific configuration information. This is a network level type.
@@ -10,13 +10,13 @@ pub struct Config {
     pub batch_size_config: BatchSizeConfig,
 
     // Set of identifiers of Iris's to be excluded from indexation.
-    pub excluded_serial_ids: Vec<IrisSerialId>,
+    pub excluded_serial_ids: Vec<SerialId>,
 
     // Identifier of last Iris serial ID to have been indexed.
-    pub last_indexed_id: IrisSerialId,
+    pub last_indexed_id: SerialId,
 
     // Identifier of the last Iris serial ID to be indexed.
-    pub max_indexation_id: IrisSerialId,
+    pub max_indexation_id: SerialId,
 
     // Identifier of the last modification ID to be indexed.
     pub max_modification_id: i64,
@@ -33,9 +33,9 @@ impl Config {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         batch_size_config: BatchSizeConfig,
-        excluded_serial_ids: Vec<IrisSerialId>,
-        last_indexed_id: IrisSerialId,
-        max_indexation_id: IrisSerialId,
+        excluded_serial_ids: Vec<SerialId>,
+        last_indexed_id: SerialId,
+        max_indexation_id: SerialId,
         max_modification_id: i64,
         max_modification_persisted_id: i64,
         modifications: Vec<Modification>,

@@ -76,7 +76,7 @@ mod tests {
         mutation::{GraphMutation, MutationOp},
     };
     use futures::TryStreamExt;
-    use iris_mpc_common::vector_id::VectorId;
+    use iris_mpc_common::VectorId;
 
     fn vid(n: u32) -> VectorId {
         VectorId::from_serial_id(n)

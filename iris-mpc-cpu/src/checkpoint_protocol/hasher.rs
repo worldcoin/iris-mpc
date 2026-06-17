@@ -34,7 +34,7 @@ impl GraphHasher for Blake3GraphHasher {
 mod tests {
     use super::*;
     use crate::hnsw::graph::layered_graph::{EntryPoint, GraphMem, Layer};
-    use iris_mpc_common::vector_id::VectorId;
+    use iris_mpc_common::VectorId;
 
     fn vid(i: u32) -> VectorId {
         VectorId::from_0_index(i)

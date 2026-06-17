@@ -10,7 +10,7 @@ use eyre::{bail, Result};
 use iris_mpc_common::{
     config::Config,
     postgres::{AccessMode, PostgresClient},
-    IrisSerialId, IrisVectorId,
+    SerialId, VectorId,
 };
 use iris_mpc_cpu::{
     execution::hawk_main::BothEyes,
@@ -285,7 +285,7 @@ impl MpcNode {
         let dummy_code = vec![0u16; IRIS_CODE_LENGTH];
         let dummy_mask = vec![0u16; MASK_CODE_LENGTH];
 
-        let (irises, vector_ids): (Vec<StoredIrisRef>, Vec<IrisVectorId>) = (1..=count)
+        let (irises, vector_ids): (Vec<StoredIrisRef>, Vec<VectorId>) = (1..=count)
             .map(|i| {
                 let iris_id = starting_id + i;
                 (
@@ -296,7 +296,7 @@ impl MpcNode {
                         right_code: &dummy_code,
                         right_mask: &dummy_mask,
                     },
-                    IrisVectorId::new(iris_id as u32, 500),
+                    VectorId::new(iris_id as u32, 500),
                 )
             })
             .collect();
@@ -325,7 +325,7 @@ impl MpcNode {
     /// Deletes the most recent  genesis graph checkpoint from this node's CPU store only.
     pub async fn delete_cpu_checkpoint(&self) -> Result<()> {
         sqlx::query(
-            "DELETE FROM genesis_graph_checkpoint 
+            "DELETE FROM genesis_graph_checkpoint
          WHERE id = (SELECT id FROM genesis_graph_checkpoint ORDER BY id DESC LIMIT 1)",
         )
         .execute(self.cpu_stores.graph.pool())
@@ -407,9 +407,9 @@ impl MpcNode {
 #[derive(Default, Clone)]
 pub struct DbAssertions {
     pub num_irises: Option<usize>,
-    pub vector_ids: Option<Vec<IrisVectorId>>,
+    pub vector_ids: Option<Vec<VectorId>>,
     pub num_modifications: Option<usize>,
-    pub last_indexed_iris_id: Option<IrisSerialId>,
+    pub last_indexed_iris_id: Option<SerialId>,
     pub last_indexed_modification_id: Option<i64>,
 }
 
@@ -423,7 +423,7 @@ impl DbAssertions {
         self
     }
 
-    pub fn assert_vector_ids(mut self, vector_ids: Vec<IrisVectorId>) -> Self {
+    pub fn assert_vector_ids(mut self, vector_ids: Vec<VectorId>) -> Self {
         self.vector_ids = Some(vector_ids);
         self
     }
@@ -433,7 +433,7 @@ impl DbAssertions {
         self
     }
 
-    pub fn assert_last_indexed_iris_id(mut self, id: IrisSerialId) -> Self {
+    pub fn assert_last_indexed_iris_id(mut self, id: SerialId) -> Self {
         self.last_indexed_iris_id = Some(id);
         self
     }
@@ -494,7 +494,7 @@ pub mod db_ops {
     use std::ops::DerefMut;
 
     use eyre::Result;
-    use iris_mpc_common::{helpers::sync::Modification, IrisVectorId};
+    use iris_mpc_common::{helpers::sync::Modification, VectorId};
     use iris_mpc_store::Store;
     use sqlx::{Postgres, Transaction};
 
@@ -516,7 +516,7 @@ pub mod db_ops {
         Ok(())
     }
 
-    pub async fn get_iris_vector_ids(store: &Store) -> Result<Vec<IrisVectorId>> {
+    pub async fn get_iris_vector_ids(store: &Store) -> Result<Vec<VectorId>> {
         let ids: Vec<(i64, i16)> = sqlx::query_as(
             r#"
             SELECT
@@ -531,7 +531,7 @@ pub mod db_ops {
 
         let ids = ids
             .into_iter()
-            .map(|(serial_id, version)| IrisVectorId::new(serial_id as u32, version))
+            .map(|(serial_id, version)| VectorId::new(serial_id as u32, version))
             .collect();
 
         Ok(ids)

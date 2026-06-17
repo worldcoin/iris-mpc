@@ -1,4 +1,4 @@
-use iris_mpc_common::IrisVectorId;
+use iris_mpc_common::VectorId;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,24 +32,24 @@ pub struct UnstampedMutation {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum MutationOp {
     AddNode {
-        id: IrisVectorId,
+        id: VectorId,
         /// Number of real graph layers this node is included in. The node will
         /// be present in layers `0..height`.
         height: usize,
         update_ep: UpdateEntryPoint,
     },
     RemoveNode {
-        id: IrisVectorId,
+        id: VectorId,
     },
     AddEdges {
-        base: IrisVectorId,
-        neighbors: Vec<IrisVectorId>,
+        base: VectorId,
+        neighbors: Vec<VectorId>,
         layer: usize,
         edge_type: EdgeType,
     },
     RemoveEdges {
-        base: IrisVectorId,
-        neighbors: Vec<IrisVectorId>,
+        base: VectorId,
+        neighbors: Vec<VectorId>,
         layer: usize,
         edge_type: EdgeType,
     },
@@ -101,7 +101,7 @@ impl UnstampedMutation {
     /// mutation. Used as the candidate set for batch compaction. The
     /// returned Vec is the raw walk and may contain duplicates; callers
     /// fold into a set to dedup.
-    pub fn expanded_neighborhoods(&self) -> Vec<(IrisVectorId, usize)> {
+    pub fn expanded_neighborhoods(&self) -> Vec<(VectorId, usize)> {
         let mut out = Vec::new();
         for op in &self.ops {
             if let MutationOp::AddEdges {
@@ -129,7 +129,7 @@ impl UnstampedMutation {
     /// edge set was modified is a candidate for stale-reference cleanup.
     /// The returned Vec is the raw walk and may contain duplicates; callers
     /// fold into a set to dedup.
-    pub fn updated_neighborhoods(&self) -> Vec<(IrisVectorId, usize)> {
+    pub fn updated_neighborhoods(&self) -> Vec<(VectorId, usize)> {
         let mut out = Vec::new();
         for op in &self.ops {
             match op {
@@ -196,10 +196,10 @@ pub enum UpdateEntryPoint {
 #[cfg(test)]
 mod tests {
     use crate::hnsw::graph::layered_graph::Layer;
-    use iris_mpc_common::IrisVectorId;
+    use iris_mpc_common::VectorId;
 
-    fn vid(n: u32) -> IrisVectorId {
-        IrisVectorId::from_serial_id(n)
+    fn vid(n: u32) -> VectorId {
+        VectorId::from_serial_id(n)
     }
 
     // ── InsertNode ────────────────────────────────────────────────────────────
@@ -365,8 +365,8 @@ mod tests {
 
     use super::{EdgeType, MutationOp, UnstampedMutation, UpdateEntryPoint};
 
-    fn mk_vector_id(id: u32) -> IrisVectorId {
-        IrisVectorId::from_serial_id(id)
+    fn mk_vector_id(id: u32) -> VectorId {
+        VectorId::from_serial_id(id)
     }
 
     fn mk_add_edges(

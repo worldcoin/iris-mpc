@@ -6,7 +6,7 @@ use crate::{
     protocol::shared_iris::ArcIris,
 };
 use eyre::Result;
-use iris_mpc_common::{helpers::sync::Modification, IrisSerialId, IrisVectorId};
+use iris_mpc_common::{helpers::sync::Modification, SerialId, VectorId};
 use std::{
     fmt,
     sync::{atomic::AtomicU8, Arc},
@@ -42,10 +42,10 @@ pub enum JobRequest {
         batch_id: usize,
 
         // Incoming batch of iris identifiers for subsequent correlation.
-        vector_ids: Vec<IrisVectorId>,
+        vector_ids: Vec<VectorId>,
 
         /// Iris data for persistence.
-        vector_ids_to_persist: Vec<IrisVectorId>,
+        vector_ids_to_persist: Vec<VectorId>,
 
         /// HNSW indexation queries over both eyes.
         queries: Aby3BatchQueryRef,
@@ -91,15 +91,15 @@ pub enum JobResult {
         batch_id: usize,
 
         /// Set of Iris identifiers being indexed.
-        vector_ids: Vec<IrisVectorId>,
+        vector_ids: Vec<VectorId>,
 
         /// Vector ids for persistence
-        vector_ids_to_persist: Vec<IrisVectorId>,
+        vector_ids_to_persist: Vec<VectorId>,
 
         /// Iris serial id of batch's first element.
-        first_serial_id: IrisSerialId,
+        first_serial_id: SerialId,
         /// Iris serial id of batch's last element.
-        last_serial_id: IrisSerialId,
+        last_serial_id: SerialId,
         done_tx: sync::oneshot::Sender<()>,
     },
     Modification {
@@ -107,7 +107,7 @@ pub enum JobResult {
         modification_id: i64,
 
         /// Vector id for persistence.
-        vector_id_to_persist: IrisVectorId,
+        vector_id_to_persist: VectorId,
 
         done_tx: sync::oneshot::Sender<()>,
     },
@@ -127,8 +127,8 @@ pub enum JobResult {
 impl JobResult {
     pub(crate) fn new_batch_result(
         batch_id: usize,
-        vector_ids: Vec<IrisVectorId>,
-        vector_ids_to_persist: Vec<IrisVectorId>,
+        vector_ids: Vec<VectorId>,
+        vector_ids_to_persist: Vec<VectorId>,
         done_tx: sync::oneshot::Sender<()>,
     ) -> Self {
         let first_serial_id = vector_ids_to_persist.first().unwrap().serial_id();
@@ -146,7 +146,7 @@ impl JobResult {
 
     pub(crate) fn new_modification_result(
         modification_id: i64,
-        vector_id_to_persist: IrisVectorId,
+        vector_id_to_persist: VectorId,
         done_tx: sync::oneshot::Sender<()>,
     ) -> Self {
         Self::Modification {

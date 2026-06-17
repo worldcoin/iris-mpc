@@ -4,7 +4,7 @@ use crate::{
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{GraphMem, HnswSearcher},
 };
-use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::VectorId};
+use iris_mpc_common::{iris_db::iris::IrisCode, VectorId};
 use rand::rngs::ThreadRng;
 use std::path::Path;
 use std::sync::Arc;

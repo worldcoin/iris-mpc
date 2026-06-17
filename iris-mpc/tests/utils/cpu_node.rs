@@ -5,7 +5,7 @@ use super::CpuConfigs;
 use eyre::eyre;
 use iris_mpc_common::{
     postgres::{AccessMode, PostgresClient},
-    IrisVectorId, MASK_CODE_LENGTH,
+    VectorId, MASK_CODE_LENGTH,
 };
 use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 use iris_mpc_cpu::hnsw::graph::graph_store::{GraphCheckpointRow, GraphPg};
@@ -394,7 +394,7 @@ impl CpuNode {
                 // Convert GraphMem → GraphV3 by copying entry_points and layers,
                 // dropping the seq_no field that is absent in the V3 format.
                 let to_v3 = |g: GraphMem| -> graph_v3::GraphV3 {
-                    let vec_id = |v: &IrisVectorId| graph_v3::VectorId {
+                    let vec_id = |v: &VectorId| graph_v3::VectorId {
                         id: v.serial_id(),
                         version: v.version_id(),
                     };

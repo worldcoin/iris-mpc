@@ -6,7 +6,7 @@ use serde::{
     Deserialize, Serialize,
 };
 
-use iris_mpc_common::IrisSerialId;
+use iris_mpc_common::SerialId;
 use iris_mpc_cpu::utils::serialization::iris_ndjson::IrisSelection;
 use uuid::Uuid;
 
@@ -77,7 +77,7 @@ pub enum Parent {
     /// A label referring to a Uniqueness request whose serial ID is not yet known.
     Label(String),
     /// A known Iris serial ID; no dependency resolution needed.
-    Id(IrisSerialId),
+    Id(SerialId),
 }
 
 impl Serialize for Parent {
@@ -149,7 +149,7 @@ pub enum RequestBatchOptions {
         batch_size: usize,
 
         // A known serial identifier that allows response correlation to be bypassed.
-        known_iris_serial_id: Option<IrisSerialId>,
+        known_iris_serial_id: Option<SerialId>,
     },
     /// Used to make large heterogenerous batches with minimal configuration
     Random {
@@ -175,7 +175,7 @@ impl RequestBatchOptions {
         batch_kind: &str,
         batch_count: usize,
         batch_size: usize,
-        known_iris_serial_id: Option<IrisSerialId>,
+        known_iris_serial_id: Option<SerialId>,
     ) -> Self {
         Self::Simple {
             batch_count,
@@ -366,7 +366,7 @@ impl RequestOptions {
     pub fn make_request(
         &self,
         info: RequestInfo,
-        parent_serial_id: Option<IrisSerialId>,
+        parent_serial_id: Option<SerialId>,
     ) -> Result<Request, String> {
         let corr_uuid = Uuid::new_v4();
 

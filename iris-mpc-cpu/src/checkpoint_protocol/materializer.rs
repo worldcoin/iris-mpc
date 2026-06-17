@@ -123,10 +123,10 @@ mod tests {
     use crate::hnsw::graph::layered_graph::GraphMem;
     use crate::hnsw::graph::mutation::{GraphMutation, MutationOp, UpdateEntryPoint};
     use futures::{stream, StreamExt};
-    use iris_mpc_common::IrisVectorId;
+    use iris_mpc_common::VectorId;
 
-    fn vid(n: u32) -> IrisVectorId {
-        IrisVectorId::from_serial_id(n)
+    fn vid(n: u32) -> VectorId {
+        VectorId::from_serial_id(n)
     }
 
     // Use `n` itself as the seq_no — every test below picks node ids that

@@ -1,5 +1,5 @@
 use eyre::{bail, OptionExt, Result};
-use iris_mpc_common::vector_id::VectorId;
+use iris_mpc_common::VectorId;
 use itertools::izip;
 
 use crate::hnsw::VectorStore;

@@ -16,7 +16,7 @@ use crate::{
 };
 use aes_prng::AesRng;
 use eyre::{bail, Result};
-use iris_mpc_common::vector_id::VectorId;
+use iris_mpc_common::VectorId;
 use rand::{CryptoRng, Rng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;

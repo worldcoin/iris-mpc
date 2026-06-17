@@ -11,7 +11,7 @@ use crate::hnsw::{
     VectorStore,
 };
 use eyre::Result;
-use iris_mpc_common::vector_id::VectorId;
+use iris_mpc_common::VectorId;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
@@ -208,7 +208,7 @@ mod tests {
 
     use super::*;
     use crate::{hawkers::plaintext_store::PlaintextStore, hnsw::vector_store::VectorStoreMut};
-    use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
+    use iris_mpc_common::{iris_db::iris::IrisCode, VectorId};
     use rand::thread_rng;
 
     async fn insert_batch_store_and_nbhd(
@@ -278,7 +278,7 @@ mod tests {
 
         // The furthest element should be the earliest inserted match
         let furthest = nbhd.get_furthest().unwrap();
-        assert_eq!(furthest.0, IrisVectorId::from_serial_id(4));
+        assert_eq!(furthest.0, VectorId::from_serial_id(4));
 
         // This should clear
         nbhd.insert_batch_and_trim(&mut store, &[], 0).await?;

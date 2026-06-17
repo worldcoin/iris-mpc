@@ -1,12 +1,12 @@
 use aws_sdk_s3::{primitives::ByteStream as S3_ByteStream, Client as S3_Client};
 use eyre::{eyre, Result};
 use iris_mpc::services::aws::clients::AwsClients;
-use iris_mpc_common::{config::Config, IrisSerialId};
+use iris_mpc_common::{config::Config, SerialId};
 use serde::Serialize;
 
 /// Uploads to an AWS S3 bucket a set of serial identifiers marked as deleted.
 pub async fn upload_iris_deletions(
-    data: &Vec<IrisSerialId>,
+    data: &Vec<SerialId>,
     s3: &S3_Client,
     environment: &str,
 ) -> Result<()> {
@@ -54,7 +54,7 @@ pub async fn get_aws_clients(config: &Config) -> Result<AwsClients> {
 // Struct for S3 serialization.
 #[derive(Serialize, Debug, Clone)]
 pub struct IrisDeletionsForS3 {
-    pub deleted_serial_ids: Vec<IrisSerialId>,
+    pub deleted_serial_ids: Vec<SerialId>,
 }
 
 /// AWS S3 bucket for iris deletions.

@@ -50,7 +50,7 @@ use iris_mpc_common::{
     },
     iris_db::get_dummy_shares_for_deletion,
     job::{JobSubmissionHandle, ServerJobResult},
-    vector_id::VectorId,
+    VectorId,
 };
 use iris_mpc_cpu::shares::{
     share::{DistanceShare, Share},

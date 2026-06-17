@@ -5,7 +5,7 @@ use crate::{
 };
 use ampc_secret_sharing::shares::{bit::Bit, vecshare_bittranspose::Transpose64, VecShare};
 use eyre::{eyre, Result};
-use iris_mpc_common::vector_id::VectorId;
+use iris_mpc_common::VectorId;
 use itertools::{EitherOrBoth, Itertools};
 use rand_distr::{Distribution, Standard};
 

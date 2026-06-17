@@ -2,9 +2,7 @@
 
 use clap::Parser;
 use eyre::{bail, Result};
-use iris_mpc_common::{
-    config::Config, helpers::numactl, tracing::initialize_tracing, IrisSerialId,
-};
+use iris_mpc_common::{config::Config, helpers::numactl, tracing::initialize_tracing, SerialId};
 use iris_mpc_cpu::{genesis::BatchSizeConfig, graph_checkpoint::PruningMode};
 use iris_mpc_upgrade_hawk::genesis::{exec, ExecutionArgs};
 
@@ -123,7 +121,7 @@ fn parse_args() -> Result<ExecutionArgs> {
         bail!("--max-height argument is required.");
     }
     let max_indexation_height_arg = args.max_indexation_height.as_ref().unwrap();
-    let max_indexation_id: IrisSerialId = max_indexation_height_arg.parse().map_err(|_| {
+    let max_indexation_id: SerialId = max_indexation_height_arg.parse().map_err(|_| {
         eprintln!(
             "Error: --max-height argument must be a valid u32. Value: {}",
             max_indexation_height_arg

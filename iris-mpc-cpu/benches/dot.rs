@@ -6,7 +6,7 @@ use iris_mpc_common::galois_engine::degree4::{rotation_aware_trick_dot_padded, I
 use iris_mpc_common::{
     iris_db::iris::IrisCode, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, PRE_PROC_IRIS_CODE_LENGTH,
 };
-use iris_mpc_common::{IrisVectorId, ROTATIONS};
+use iris_mpc_common::{VectorId, ROTATIONS};
 use iris_mpc_cpu::execution::hawk_main::iris_worker::init_workers;
 use iris_mpc_cpu::hawkers::shared_irises::SharedIrises;
 use iris_mpc_cpu::protocol::{
@@ -632,7 +632,7 @@ pub fn bench_worker_pool(c: &mut Criterion) {
     let num_iris_codes = iris_codes.len();
     let dist = Uniform::new(0, num_iris_codes);
 
-    let points_map: HashMap<IrisVectorId, Arc<GaloisRingSharedIris>> = HashMap::new();
+    let points_map: HashMap<VectorId, Arc<GaloisRingSharedIris>> = HashMap::new();
     let shared_irises = SharedIrises::new(
         points_map,
         Arc::new(GaloisRingSharedIris::default_for_party(0)),
@@ -642,7 +642,7 @@ pub fn bench_worker_pool(c: &mut Criterion) {
 
     // similar to numa_realloc
     for (idx, iris) in iris_codes.iter().enumerate() {
-        pool.insert(IrisVectorId::from_0_index(idx as u32), iris.clone())
+        pool.insert(VectorId::from_0_index(idx as u32), iris.clone())
             .unwrap();
     }
 
@@ -665,7 +665,7 @@ pub fn bench_worker_pool(c: &mut Criterion) {
                         let mut b = vec![];
                         for _ in 0..nearest_neighbors {
                             let idx = dist.sample(rng);
-                            b.push(IrisVectorId::from_0_index(idx as u32));
+                            b.push(VectorId::from_0_index(idx as u32));
                         }
                         (iris_codes[a].clone(), b)
                     },

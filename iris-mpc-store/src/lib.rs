@@ -20,7 +20,7 @@ use iris_mpc_common::{
     },
     iris_db::iris::IrisCode,
     postgres::PostgresClient,
-    vector_id::{SerialId, VectorId},
+    SerialId, VectorId,
 };
 use itertools::izip;
 use rand::{rngs::StdRng, Rng, SeedableRng};

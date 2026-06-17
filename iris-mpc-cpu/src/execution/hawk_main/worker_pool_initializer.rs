@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use eyre::Result;
 use iris_mpc_common::config::Config;
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
-use iris_mpc_common::vector_id::VectorId;
+use iris_mpc_common::VectorId;
 use iris_mpc_store::loader::load_iris_db;
 use iris_mpc_store::Store;
 use itertools::izip;

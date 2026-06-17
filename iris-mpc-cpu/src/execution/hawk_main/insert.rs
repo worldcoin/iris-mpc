@@ -11,7 +11,7 @@ use crate::hnsw::{
 use super::VecRequests;
 
 use eyre::{bail, Result};
-use iris_mpc_common::vector_id::VectorId;
+use iris_mpc_common::VectorId;
 use itertools::izip;
 use std::collections::BTreeSet;
 

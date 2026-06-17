@@ -3,9 +3,7 @@ use crate::utils::{
     IrisCodePair,
 };
 use eyre::{bail, OptionExt, Result};
-use iris_mpc_common::{
-    config::Config, iris_db::iris::IrisCode, IrisSerialId, IrisVectorId, IrisVersionId,
-};
+use iris_mpc_common::{config::Config, iris_db::iris::IrisCode, SerialId, VectorId, VersionId};
 use iris_mpc_cpu::{
     genesis::plaintext::{
         run_plaintext_genesis, GenesisArgs, GenesisConfig, GenesisDstDbState, GenesisSrcDbState,
@@ -70,7 +68,7 @@ async fn simulate_genesis(
 fn construct_initial_genesis_state(
     genesis_config: GenesisConfig,
     genesis_args: GenesisArgs,
-    input: HashMap<IrisSerialId, (IrisVersionId, IrisCode, IrisCode)>,
+    input: HashMap<SerialId, (VersionId, IrisCode, IrisCode)>,
     s3_deletions: Vec<u32>,
 ) -> GenesisState {
     GenesisState {
@@ -153,10 +151,10 @@ pub fn init_plaintext_config(config: &Config) -> GenesisConfig {
     }
 }
 
-pub fn get_vector_ids(irises: &IrisesTable) -> Vec<IrisVectorId> {
+pub fn get_vector_ids(irises: &IrisesTable) -> Vec<VectorId> {
     let mut ids: Vec<_> = irises
         .iter()
-        .map(|(serial_id, data)| IrisVectorId::new(*serial_id, data.0))
+        .map(|(serial_id, data)| VectorId::new(*serial_id, data.0))
         .collect();
     ids.sort_by_key(|id| id.serial_id());
     ids

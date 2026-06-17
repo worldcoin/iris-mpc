@@ -102,7 +102,7 @@ use iris_mpc_common::{
         REAUTH_MESSAGE_TYPE, RECOVERY_CHECK_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
         UNIQUENESS_MESSAGE_TYPE,
     },
-    vector_id::VectorId,
+    VectorId,
 };
 use iris_mpc_common::{
     helpers::sync::{Modification, ModificationKey},

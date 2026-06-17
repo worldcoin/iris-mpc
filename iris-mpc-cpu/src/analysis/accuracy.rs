@@ -15,7 +15,7 @@ use crate::{
 use eyre::{bail, eyre, Result};
 use iris_mpc_common::{
     iris_db::iris::{IrisCode, IrisMutationFamily},
-    IrisSerialId, IrisVectorId as VectorId,
+    SerialId, VectorId,
 };
 use itertools::{izip, Itertools};
 use rand::{rngs::StdRng, seq::SliceRandom};
@@ -69,7 +69,7 @@ impl AnalysisConfig {
 /// Struct to hold a single search result for analysis.
 #[derive(Debug, Serialize)]
 pub struct AnalysisResult {
-    id: IrisSerialId,
+    id: SerialId,
     mutation: f64,
     rotation: isize,
     found: bool,
@@ -230,7 +230,7 @@ pub fn process_results(config: &AnalysisConfig, results: Vec<AnalysisResult>) ->
         }
         "histogram" => {
             // Option 2: For each rotation amount, output a histogram of "minimum mutation amount for which match was not found in search results"
-            let mut min_failure_map: HashMap<(IrisSerialId, isize), usize> = HashMap::new();
+            let mut min_failure_map: HashMap<(SerialId, isize), usize> = HashMap::new();
 
             for res in results.iter() {
                 let mutation_key = (res.mutation * PRECISION).floor() as usize;

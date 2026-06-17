@@ -1,4 +1,4 @@
-use crate::vector_id::VectorId;
+use crate::VectorId;
 
 /// A helper trait encapsulating the functionality to add iris codes to some
 /// form of in-memory store.

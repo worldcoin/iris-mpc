@@ -23,7 +23,7 @@ use crate::hnsw::GraphMem;
 use aes_prng::AesRng;
 use ampc_actor_utils::fast_metrics::FastHistogram;
 use eyre::{bail, eyre, OptionExt, Result};
-use iris_mpc_common::vector_id::VectorId;
+use iris_mpc_common::VectorId;
 use itertools::{izip, Itertools};
 use rand::{RngCore, SeedableRng};
 use rand_distr::{Distribution, Geometric};
@@ -1687,7 +1687,7 @@ mod tests {
     use aes_prng::AesRng;
     use iris_mpc_common::{
         iris_db::{db::IrisDB, iris::IrisCode},
-        vector_id::VectorId,
+        VectorId,
     };
     use rand::SeedableRng;
     use tokio;
