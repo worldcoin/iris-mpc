@@ -101,6 +101,7 @@ pub fn make_hawk_config(
             heartbeat_interval_secs: 2,
             heartbeat_initial_retries: 10,
             http_query_retry_delay_ms: 1000,
+            http_query_timeout_ms: 10000,
             startup_sync_timeout_secs: 300,
         }),
         service_ports,

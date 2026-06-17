@@ -12,7 +12,7 @@
 ///   3. Add DELTA_NODES new mutations after the checkpoint to exercise the
 ///      roll-forward path (graph compaction pipeline + WAL write).
 ///   4. Run hawk_main; assert it reaches "ready" — confirming V3 load works.
-///   5. sidecar cycle: rollthe DELTA_NODES into a GraphFormat::Current checkpoint
+///   5. sidecar cycle: roll the DELTA_NODES into a GraphFormat::Current checkpoint
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
