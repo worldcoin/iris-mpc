@@ -168,17 +168,13 @@ impl GraphMem {
             .iter()
             .enumerate()
             .rfind(|(_lc, layer)| !layer.links.is_empty())
-            .and_then(|(lc, layer)| layer.links.keys().min().map(|x| (x.clone(), lc)))
+            .and_then(|(lc, layer)| layer.links.keys().min().map(|x| (*x, lc)))
     }
 
     /// Gets the list of entry points.
     /// If this list is empty in LinearScan mode, `get_temporary_entry_point` may be used instead.
     pub fn get_entry_points(&self) -> Option<Vec<IrisVectorId>> {
-        let v: Vec<_> = self
-            .entry_points
-            .iter()
-            .map(|ep| ep.point.clone())
-            .collect();
+        let v: Vec<_> = self.entry_points.iter().map(|ep| ep.point).collect();
         if v.is_empty() {
             None
         } else {
@@ -225,13 +221,13 @@ impl GraphMem {
                                 self.layers.resize(*layer + 1, Layer::new());
                             }
                             self.entry_points = vec![EntryPoint {
-                                point: id.clone(),
+                                point: *id,
                                 layer: *layer,
                             }];
                         }
                         UpdateEntryPoint::Append { layer } => {
                             self.entry_points.push(EntryPoint {
-                                point: id.clone(),
+                                point: *id,
                                 layer: *layer,
                             });
                         }
@@ -399,9 +395,7 @@ impl GraphMem {
     }
 
     pub async fn get_first_entry_point(&self) -> Option<(IrisVectorId, usize)> {
-        self.entry_points
-            .first()
-            .map(|ep| (ep.point.clone(), ep.layer))
+        self.entry_points.first().map(|ep| (ep.point, ep.layer))
     }
 
     pub async fn init_entry_points(&mut self, points: Vec<IrisVectorId>, layer: usize) {
@@ -696,7 +690,7 @@ impl Layer {
     }
 
     pub fn insert_node(&mut self, id: &IrisVectorId, neighbors: Vec<IrisVectorId>) {
-        self.set_links(id.clone(), neighbors.clone());
+        self.set_links(*id, neighbors.clone());
     }
 
     /// Insert `id` as an incoming edge into each target's neighbor list,
@@ -710,7 +704,7 @@ impl Layer {
                 if let Err(pos) = target_links.binary_search(node) {
                     self.set_hash
                         .remove_unordered_set(target, target_links.iter());
-                    target_links.insert(pos, node.clone());
+                    target_links.insert(pos, *node);
                     self.set_hash.add_unordered_set(target, target_links.iter());
                 }
             }
@@ -748,10 +742,10 @@ impl Layer {
             for neighbor in neighbors {
                 if let Some(neighbor_links) = self.links.get_mut(&neighbor) {
                     self.set_hash
-                        .remove_unordered_set(&neighbor, neighbor_links.iter());
+                        .remove_unordered_set(neighbor, neighbor_links.iter());
                     neighbor_links.retain(|x| x != id);
                     self.set_hash
-                        .add_unordered_set(&neighbor, neighbor_links.iter());
+                        .add_unordered_set(neighbor, neighbor_links.iter());
                 }
             }
         }
@@ -913,7 +907,7 @@ where
         .entry_points
         .iter()
         .map(|ep| EntryPoint {
-            point: vector_map(ep.point.clone()),
+            point: vector_map(ep.point),
             layer: ep.layer,
         })
         .collect();
