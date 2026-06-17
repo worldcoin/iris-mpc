@@ -43,14 +43,41 @@ impl KNNResult {
     }
 }
 
+/// The on-disk serialization format for [`KNNResult`]: plain `u32` serial IDs.
+///
+/// This is the stable file format used by both the generator and the reader.
+/// `IrisVectorId` is intentionally not used here so that the file format stays
+/// compact and backward-compatible (no `{id, version}` objects).
+#[derive(Serialize, Deserialize)]
+pub struct KNNResultU32 {
+    pub node: u32,
+    pub neighbors: Vec<u32>,
+}
+
+impl From<&KNNResult> for KNNResultU32 {
+    fn from(r: &KNNResult) -> Self {
+        KNNResultU32 {
+            node: r.node.serial_id(),
+            neighbors: r.neighbors.iter().map(|v| v.serial_id()).collect(),
+        }
+    }
+}
+
+impl From<KNNResultU32> for KNNResult {
+    fn from(r: KNNResultU32) -> Self {
+        KNNResult {
+            node: IrisVectorId::from_serial_id(r.node),
+            neighbors: r
+                .neighbors
+                .into_iter()
+                .map(IrisVectorId::from_serial_id)
+                .collect(),
+        }
+    }
+}
+
 /// Reads a `Vec<KNNResult>` from a file, skipping the first line (header).
 pub fn read_knn_results_from_file(path: PathBuf) -> std::io::Result<Vec<KNNResult>> {
-    #[derive(Deserialize)]
-    struct KNNResultU32 {
-        node: u32,
-        neighbors: Vec<u32>,
-    }
-
     let file = File::open(path)?;
     let mut lines = BufReader::new(file).lines();
 
@@ -62,15 +89,7 @@ pub fn read_knn_results_from_file(path: PathBuf) -> std::io::Result<Vec<KNNResul
         let line = line?;
         let knn_result_u32: KNNResultU32 = serde_json::from_str(&line)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        let knn_result = KNNResult {
-            node: IrisVectorId::from_serial_id(knn_result_u32.node),
-            neighbors: knn_result_u32
-                .neighbors
-                .into_iter()
-                .map(IrisVectorId::from_serial_id)
-                .collect(),
-        };
-        results.push(knn_result);
+        results.push(knn_result_u32.into());
     }
     Ok(results)
 }

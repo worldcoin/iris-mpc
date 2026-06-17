@@ -7,7 +7,7 @@ use std::{
 use clap::Parser;
 use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId};
 use iris_mpc_cpu::{
-    hawkers::ideal_knn_engines::{Engine, EngineInt4, EngineKind, KNNResult},
+    hawkers::ideal_knn_engines::{Engine, EngineInt4, EngineKind, KNNResult, KNNResultU32},
     utils::serialization::{
         int4_ndjson::int4_vectors_from_ndjson,
         iris_ndjson::{irises_from_ndjson_iter, IrisSelection},
@@ -150,7 +150,9 @@ async fn main() {
             let results: Result<Vec<KNNResult>, _> = lines
                 .map(|line_result| {
                     let line = line_result.map_err(|e| e.to_string())?;
-                    serde_json::from_str::<KNNResult>(&line).map_err(|e| e.to_string())
+                    serde_json::from_str::<KNNResultU32>(&line)
+                        .map(KNNResult::from)
+                        .map_err(|e| e.to_string())
                 })
                 .collect();
 
@@ -274,7 +276,8 @@ async fn main() {
 
         println!("Appending results from {} to {}", start, end - 1);
         for result in &results {
-            let json_line = serde_json::to_string(result).expect("Failed to serialize KNNResult");
+            let json_line = serde_json::to_string(&KNNResultU32::from(result))
+                .expect("Failed to serialize KNNResult");
             writeln!(file, "{}", json_line).expect("Failed to write to results file");
         }
     }
