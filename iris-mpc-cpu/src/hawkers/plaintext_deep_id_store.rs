@@ -213,8 +213,8 @@ impl PlaintextDeepIDStore {
         rng: &mut R,
         graph_size: usize,
         searcher: &HnswSearcher,
-    ) -> Result<GraphMem<<Self as VectorStore>::VectorRef>> {
-        let mut graph = GraphMem::new();
+    ) -> Result<GraphMem<VectorId>> {
+        let mut graph: GraphMem<VectorId> = GraphMem::new();
         let mut rng = AesRng::from_rng(rng.clone())?;
 
         if graph_size > self.len() {
@@ -256,13 +256,9 @@ impl PlaintextDeepIDStore {
 
 impl VectorStore for PlaintextDeepIDStore {
     type QueryRef = Arc<Int4Vector>;
-    type VectorRef = VectorId;
     type DistanceRef = i32;
 
-    async fn vectors_as_queries(
-        &mut self,
-        vectors: Vec<Self::VectorRef>,
-    ) -> Result<Vec<Self::QueryRef>> {
+    async fn vectors_as_queries(&mut self, vectors: Vec<VectorId>) -> Result<Vec<Self::QueryRef>> {
         let queries = vectors
             .into_iter()
             .map(|id| {
@@ -277,7 +273,7 @@ impl VectorStore for PlaintextDeepIDStore {
     async fn eval_distance(
         &mut self,
         query: &Self::QueryRef,
-        vector: &Self::VectorRef,
+        vector: &VectorId,
     ) -> Result<Self::DistanceRef> {
         debug!(event_type = EvaluateDistance.id());
         let stored = self.storage.get_vector(vector).ok_or_else(|| {
@@ -311,25 +307,22 @@ impl VectorStore for PlaintextDeepIDStore {
         Ok(results)
     }
 
-    async fn only_valid_vectors(
-        &mut self,
-        mut vectors: Vec<Self::VectorRef>,
-    ) -> Vec<Self::VectorRef> {
+    async fn only_valid_vectors(&mut self, mut vectors: Vec<VectorId>) -> Vec<VectorId> {
         vectors.retain(|v| self.storage.contains(v));
         vectors
     }
 }
 
 impl VectorStoreMut for PlaintextDeepIDStore {
-    async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
+    async fn insert(&mut self, query: &Self::QueryRef) -> VectorId {
         self.storage.append(query.clone())
     }
 
     async fn insert_at(
         &mut self,
-        vector_ref: &Self::VectorRef,
+        vector_ref: &VectorId,
         query: &Self::QueryRef,
-    ) -> Result<Self::VectorRef> {
+    ) -> Result<VectorId> {
         Ok(self.storage.insert(*vector_ref, query.clone()))
     }
 }
@@ -369,13 +362,9 @@ impl From<PlaintextDeepIDStore> for SharedPlaintextDeepIDStore {
 
 impl VectorStore for SharedPlaintextDeepIDStore {
     type QueryRef = Arc<Int4Vector>;
-    type VectorRef = VectorId;
     type DistanceRef = i32;
 
-    async fn vectors_as_queries(
-        &mut self,
-        vectors: Vec<Self::VectorRef>,
-    ) -> Result<Vec<Self::QueryRef>> {
+    async fn vectors_as_queries(&mut self, vectors: Vec<VectorId>) -> Result<Vec<Self::QueryRef>> {
         let store = self.storage.read().await;
         let queries = vectors
             .into_iter()
@@ -391,7 +380,7 @@ impl VectorStore for SharedPlaintextDeepIDStore {
     async fn eval_distance(
         &mut self,
         query: &Self::QueryRef,
-        vector: &Self::VectorRef,
+        vector: &VectorId,
     ) -> Result<Self::DistanceRef> {
         let distances = self.eval_distance_batch(query, &[*vector]).await?;
         Ok(distances[0])
@@ -400,7 +389,7 @@ impl VectorStore for SharedPlaintextDeepIDStore {
     async fn eval_distance_batch(
         &mut self,
         query: &Self::QueryRef,
-        vectors: &[Self::VectorRef],
+        vectors: &[VectorId],
     ) -> Result<Vec<Self::DistanceRef>> {
         debug!(event_type = EvaluateDistance.id());
         // Snapshot Arc handles under the read lock, drop the guard, then
@@ -441,10 +430,7 @@ impl VectorStore for SharedPlaintextDeepIDStore {
         Ok(results)
     }
 
-    async fn only_valid_vectors(
-        &mut self,
-        mut vectors: Vec<Self::VectorRef>,
-    ) -> Vec<Self::VectorRef> {
+    async fn only_valid_vectors(&mut self, mut vectors: Vec<VectorId>) -> Vec<VectorId> {
         let store = self.storage.read().await;
         vectors.retain(|v| store.contains(v));
         vectors
@@ -452,15 +438,15 @@ impl VectorStore for SharedPlaintextDeepIDStore {
 }
 
 impl VectorStoreMut for SharedPlaintextDeepIDStore {
-    async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
+    async fn insert(&mut self, query: &Self::QueryRef) -> VectorId {
         self.storage.append(query).await
     }
 
     async fn insert_at(
         &mut self,
-        vector_ref: &Self::VectorRef,
+        vector_ref: &VectorId,
         query: &Self::QueryRef,
-    ) -> Result<Self::VectorRef> {
+    ) -> Result<VectorId> {
         Ok(self.storage.insert(*vector_ref, query).await)
     }
 }

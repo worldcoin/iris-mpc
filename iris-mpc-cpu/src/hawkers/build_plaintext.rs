@@ -37,10 +37,7 @@ use tracing::info;
 use crate::hawkers::plaintext_deep_id_store::{Int4Vector, SharedPlaintextDeepIDStore};
 use crate::{
     execution::hawk_main::insert::{self, InsertPlanV},
-    hawkers::{
-        aby3::aby3_store::DistanceOps,
-        plaintext_store::{PlaintextVectorRef, SharedPlaintextStore},
-    },
+    hawkers::{aby3::aby3_store::DistanceOps, plaintext_store::SharedPlaintextStore},
     hnsw::{graph::neighborhood::Neighborhood, GraphMem, HnswSearcher, SortedNeighborhood},
 };
 
@@ -48,13 +45,13 @@ use crate::{
 const REPORTING_INTERVAL: usize = 1000;
 
 pub async fn plaintext_parallel_batch_insert<D: DistanceOps>(
-    graph: GraphMem<PlaintextVectorRef>,
+    graph: GraphMem<IrisVectorId>,
     mut store: SharedPlaintextStore<D>,
     irises: Vec<(IrisVectorId, IrisCode)>,
     searcher: &HnswSearcher,
     batch_size: usize,
     prf_seed: &[u8; 16],
-) -> Result<(GraphMem<PlaintextVectorRef>, SharedPlaintextStore<D>)> {
+) -> Result<(GraphMem<IrisVectorId>, SharedPlaintextStore<D>)> {
     let mut graph = Arc::new(graph);
 
     let mut inserted_count: usize = 0;
@@ -240,7 +237,7 @@ mod tests {
         to_insert: usize,
     ) -> Result<(
         HnswSearcher,
-        GraphMem<PlaintextVectorRef>,
+        GraphMem<IrisVectorId>,
         SharedPlaintextStore,
         Vec<(IrisVectorId, IrisCode)>,
         [u8; 16],
@@ -275,7 +272,7 @@ mod tests {
 
     async fn check_results(
         mut store: SharedPlaintextStore,
-        graph: GraphMem<PlaintextVectorRef>,
+        graph: GraphMem<IrisVectorId>,
         irises: Vec<(IrisVectorId, IrisCode)>,
         searcher: &HnswSearcher,
         expected_total_size: usize,

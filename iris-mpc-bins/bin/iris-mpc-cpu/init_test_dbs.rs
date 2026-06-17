@@ -8,7 +8,7 @@ use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId, IrisVectorId
 use iris_mpc_cpu::{
     execution::hawk_main::STORE_IDS,
     hawkers::aby3::aby3_store::FhdOps,
-    hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
+    hawkers::plaintext_store::PlaintextStore,
     hnsw::{
         graph::test_utils::DbContext, searcher::LayerDistribution, vector_store::VectorStoreMut,
         GraphMem, HnswSearcher, SortedNeighborhood,
@@ -480,7 +480,7 @@ async fn init_dbs(args: &Args) -> Vec<DbContext> {
     dbs
 }
 
-fn get_max_serial_id(graph: &GraphMem<PlaintextVectorRef>) -> Option<u32> {
+fn get_max_serial_id(graph: &GraphMem<IrisVectorId>) -> Option<u32> {
     if let Some(layer) = graph.layers.first() {
         layer
             .get_links_map()

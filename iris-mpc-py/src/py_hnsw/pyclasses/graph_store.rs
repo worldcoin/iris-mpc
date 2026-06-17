@@ -1,13 +1,10 @@
 use iris_mpc_common::IrisVectorId;
-use iris_mpc_cpu::{
-    hawkers::plaintext_store::PlaintextVectorRef, hnsw::graph::layered_graph::GraphMem,
-    utils::serialization::graph,
-};
+use iris_mpc_cpu::{hnsw::graph::layered_graph::GraphMem, utils::serialization::graph};
 use pyo3::{exceptions::PyIOError, prelude::*};
 
 #[pyclass]
 #[derive(Clone, Default)]
-pub struct PyGraphStore(pub GraphMem<PlaintextVectorRef>);
+pub struct PyGraphStore(pub GraphMem<IrisVectorId>);
 
 #[pymethods]
 impl PyGraphStore {

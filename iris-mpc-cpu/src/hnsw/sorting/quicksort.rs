@@ -1,4 +1,5 @@
 use eyre::{bail, OptionExt, Result};
+use iris_mpc_common::vector_id::VectorId;
 use itertools::izip;
 
 use crate::hnsw::VectorStore;
@@ -195,8 +196,8 @@ impl PartialQuickSort {
 /// intermediate behaviour between full quicksort and quickselect.
 pub async fn apply_quicksort<V: VectorStore>(
     store: &mut V,
-    list: &mut [(V::VectorRef, V::DistanceRef)],
-    buffer: &mut [(V::VectorRef, V::DistanceRef)],
+    list: &mut [(VectorId, V::DistanceRef)],
+    buffer: &mut [(VectorId, V::DistanceRef)],
     sorted_len: usize,
     truncate_k: Option<usize>,
 ) -> Result<()> {

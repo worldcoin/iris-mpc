@@ -1,11 +1,8 @@
 use eyre::{bail, OptionExt, Result};
+use iris_mpc_common::IrisVectorId as VectorId;
 use itertools::izip;
 use serde::Serialize;
-use std::{
-    fmt::{Debug, Display},
-    hash::Hash,
-    str::FromStr,
-};
+use std::{fmt::Debug, hash::Hash};
 
 use crate::hnsw::sorting::quickselect::run_quickselect_with_store;
 
@@ -41,11 +38,6 @@ pub trait VectorStore: Debug {
     /// evaluations.
     type QueryRef: TransientRef;
 
-    /// Opaque reference to a stored vector.
-    ///
-    /// Example: a vector ID.
-    type VectorRef: Ref + Display + FromStr + Ord;
-
     /// Opaque reference to a distance metric.
     ///
     /// Example: an encrypted distance.
@@ -55,7 +47,7 @@ pub trait VectorStore: Debug {
     async fn eval_distance(
         &mut self,
         query: &Self::QueryRef,
-        vector: &Self::VectorRef,
+        vector: &VectorId,
     ) -> Result<Self::DistanceRef>;
 
     /// Check whether a distance is a match, meaning the query is considered
@@ -73,13 +65,10 @@ pub trait VectorStore: Debug {
 
     /// Prepare queries from vectors. The query form may include some precomputation
     /// to help comparison to other vectors.
-    async fn vectors_as_queries(
-        &mut self,
-        vectors: Vec<Self::VectorRef>,
-    ) -> Result<Vec<Self::QueryRef>>;
+    async fn vectors_as_queries(&mut self, vectors: Vec<VectorId>) -> Result<Vec<Self::QueryRef>>;
 
     /// Retain only vectors that are valid and currently usable by other methods.
-    async fn only_valid_vectors(&mut self, vectors: Vec<Self::VectorRef>) -> Vec<Self::VectorRef> {
+    async fn only_valid_vectors(&mut self, vectors: Vec<VectorId>) -> Vec<VectorId> {
         vectors
     }
 
@@ -88,7 +77,7 @@ pub trait VectorStore: Debug {
     /// Override for more efficient batch distance evaluations.
     async fn eval_distance_pairs(
         &mut self,
-        pairs: &[(Self::QueryRef, Self::VectorRef)],
+        pairs: &[(Self::QueryRef, VectorId)],
     ) -> Result<Vec<Self::DistanceRef>> {
         let mut results = Vec::with_capacity(pairs.len());
         for (query, vector) in pairs {
@@ -103,7 +92,7 @@ pub trait VectorStore: Debug {
     async fn eval_distance_batch(
         &mut self,
         query: &Self::QueryRef,
-        vectors: &[Self::VectorRef],
+        vectors: &[VectorId],
     ) -> Result<Vec<Self::DistanceRef>> {
         let mut results = Vec::with_capacity(vectors.len());
         for vector in vectors {
@@ -140,8 +129,8 @@ pub trait VectorStore: Debug {
 
     async fn get_argmin_distance(
         &mut self,
-        distances: &[(Self::VectorRef, Self::DistanceRef)],
-    ) -> Result<(Self::VectorRef, Self::DistanceRef)> {
+        distances: &[(VectorId, Self::DistanceRef)],
+    ) -> Result<(VectorId, Self::DistanceRef)> {
         let mut min_dist = distances
             .first()
             .ok_or_eyre("Cannot get min of empty list")
@@ -149,7 +138,7 @@ pub trait VectorStore: Debug {
 
         for (id, dist) in distances.iter().skip(1) {
             if self.less_than(dist, &min_dist.1).await? {
-                min_dist = (id.clone(), dist.clone());
+                min_dist = (*id, dist.clone());
             }
         }
         Ok(min_dist)
@@ -160,10 +149,10 @@ pub trait VectorStore: Debug {
     /// unsorted.
     async fn compact_neighborhood(
         &mut self,
-        base_node: Self::VectorRef,
-        neighborhood: &[Self::VectorRef],
+        base_node: VectorId,
+        neighborhood: &[VectorId],
         max_size: usize,
-    ) -> Result<Vec<Self::VectorRef>> {
+    ) -> Result<Vec<VectorId>> {
         if neighborhood.len() <= max_size {
             return Ok(neighborhood.to_vec());
         }
@@ -179,7 +168,7 @@ pub trait VectorStore: Debug {
         let trimmed = trimmed_idxs
             .into_iter()
             .take(max_size)
-            .map(|idx| neighborhood[idx].clone())
+            .map(|idx| neighborhood[idx])
             .collect();
 
         Ok(trimmed)
@@ -194,10 +183,10 @@ pub trait VectorStore: Debug {
     /// Override this for more efficient batch compaction.
     async fn compact_neighborhood_batch(
         &mut self,
-        base_nodes: &[Self::VectorRef],
-        neighborhoods: &[Vec<Self::VectorRef>],
+        base_nodes: &[VectorId],
+        neighborhoods: &[Vec<VectorId>],
         max_sizes: &[usize],
-    ) -> Result<Vec<Vec<Self::VectorRef>>> {
+    ) -> Result<Vec<Vec<VectorId>>> {
         if base_nodes.len() != neighborhoods.len() || base_nodes.len() != max_sizes.len() {
             bail!("Lists of base nodes, neighborhoods, and max sizes must have equal sizes");
         }
@@ -221,14 +210,14 @@ pub trait VectorStore: Debug {
 #[allow(async_fn_in_trait)]
 pub trait VectorStoreMut: VectorStore {
     /// Persist a query as a new vector in the store, and return a reference to it.
-    async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef;
+    async fn insert(&mut self, query: &Self::QueryRef) -> VectorId;
 
     /// Persist a query as a vector in the store with specified vector reference.
     ///
     /// Returns an Err output when a specified insertion is not supported.
     async fn insert_at(
         &mut self,
-        vector_ref: &Self::VectorRef,
+        vector_ref: &VectorId,
         query: &Self::QueryRef,
-    ) -> Result<Self::VectorRef>;
+    ) -> Result<VectorId>;
 }

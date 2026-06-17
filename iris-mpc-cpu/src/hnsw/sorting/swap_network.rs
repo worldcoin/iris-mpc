@@ -5,6 +5,7 @@ use crate::{
 };
 use ampc_secret_sharing::shares::{bit::Bit, vecshare_bittranspose::Transpose64, VecShare};
 use eyre::{eyre, Result};
+use iris_mpc_common::vector_id::VectorId;
 use itertools::{EitherOrBoth, Itertools};
 use rand_distr::{Distribution, Standard};
 
@@ -144,7 +145,7 @@ impl SwapNetwork {
 /// execute comparisons for each layer in batches.
 pub async fn apply_swap_network<V: VectorStore>(
     store: &mut V,
-    list: &mut [(V::VectorRef, V::DistanceRef)],
+    list: &mut [(VectorId, V::DistanceRef)],
     network: &SwapNetwork,
 ) -> Result<()> {
     for layer in network.layers.iter() {

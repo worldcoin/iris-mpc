@@ -57,7 +57,6 @@ const_assert!(MIN_ROUND_ROBIN_SIZE >= 1);
 /// a specific preprocessed rotation from the cache.
 pub type Aby3Query = QuerySpec;
 
-pub type Aby3VectorRef = VectorId;
 pub type Aby3DistanceRef<T = u32> = DistanceShare<T>;
 
 pub type Aby3SharedIrises = SharedIrises<ArcIris>;
@@ -163,10 +162,7 @@ where
 
     /// Fetch a stored vector's iris from the worker pool and cache it as a query.
     /// Returns a query handle (center rotation, non-mirrored).
-    pub async fn cache_query_from_store(
-        &self,
-        vector: &<Self as VectorStore>::VectorRef,
-    ) -> Result<Aby3Query> {
+    pub async fn cache_query_from_store(&self, vector: &VectorId) -> Result<Aby3Query> {
         let irises = self.workers.fetch_irises(vec![*vector]).await?;
         let iris = irises
             .into_iter()
@@ -255,8 +251,8 @@ where
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
     pub async fn oblivious_argmin_distance(
         &mut self,
-        distances: &[(Aby3VectorRef, DistanceShare<D::Ring>)],
-    ) -> Result<(Aby3VectorRef, DistanceShare<D::Ring>)> {
+        distances: &[(VectorId, DistanceShare<D::Ring>)],
+    ) -> Result<(VectorId, DistanceShare<D::Ring>)> {
         if distances.is_empty() {
             eyre::bail!("Cannot compute minimum of empty list");
         }
@@ -391,10 +387,10 @@ where
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn compact_neighborhood_batch(
         &mut self,
-        base_nodes: &[Aby3VectorRef],
-        neighborhoods: &[Vec<Aby3VectorRef>],
+        base_nodes: &[VectorId],
+        neighborhoods: &[Vec<VectorId>],
         max_sizes: &[usize],
-    ) -> Result<Vec<Vec<Aby3VectorRef>>> {
+    ) -> Result<Vec<Vec<VectorId>>> {
         if base_nodes.len() != neighborhoods.len() || base_nodes.len() != max_sizes.len() {
             bail!("Lists of base nodes, neighborhoods, and max sizes must have equal sizes");
         }
@@ -568,15 +564,10 @@ where
 {
     /// Arc ref to a query.
     type QueryRef = Aby3Query;
-    /// Point ID of an inserted iris.
-    type VectorRef = Aby3VectorRef;
     /// Distance represented as a pair of Ring-typed shares.
     type DistanceRef = Aby3DistanceRef<D::Ring>;
 
-    async fn vectors_as_queries(
-        &mut self,
-        vectors: Vec<Self::VectorRef>,
-    ) -> Result<Vec<Self::QueryRef>> {
+    async fn vectors_as_queries(&mut self, vectors: Vec<VectorId>) -> Result<Vec<Self::QueryRef>> {
         let irises = self.workers.fetch_irises(vectors).await?;
         let to_cache: Vec<_> = irises
             .into_iter()
@@ -587,10 +578,7 @@ where
         Ok(query_ids.into_iter().map(Aby3Query::new).collect_vec())
     }
 
-    async fn only_valid_vectors(
-        &mut self,
-        mut vectors: Vec<Self::VectorRef>,
-    ) -> Vec<Self::VectorRef> {
+    async fn only_valid_vectors(&mut self, mut vectors: Vec<VectorId>) -> Vec<VectorId> {
         let registry = self.registry.read().await;
         vectors.retain(|v| registry.contains(v));
         vectors
@@ -600,7 +588,7 @@ where
     async fn eval_distance(
         &mut self,
         query: &Self::QueryRef,
-        vector: &Self::VectorRef,
+        vector: &VectorId,
     ) -> Result<Self::DistanceRef> {
         let mut d = self.eval_distance_batch(query, &[*vector]).await?;
         d.pop()
@@ -610,7 +598,7 @@ where
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(queries = pairs.len(), batch_size = pairs.len()))]
     async fn eval_distance_pairs(
         &mut self,
-        pairs: &[(Self::QueryRef, Self::VectorRef)],
+        pairs: &[(Self::QueryRef, VectorId)],
     ) -> Result<Vec<Self::DistanceRef>> {
         if pairs.is_empty() {
             return Ok(vec![]);
@@ -622,7 +610,7 @@ where
     async fn eval_distance_batch(
         &mut self,
         query: &Self::QueryRef,
-        vectors: &[Self::VectorRef],
+        vectors: &[VectorId],
     ) -> Result<Vec<Self::DistanceRef>> {
         if vectors.is_empty() {
             return Ok(vec![]);
@@ -641,8 +629,8 @@ where
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
     async fn get_argmin_distance(
         &mut self,
-        distances: &[(Self::VectorRef, Self::DistanceRef)],
-    ) -> Result<(Self::VectorRef, Self::DistanceRef)> {
+        distances: &[(VectorId, Self::DistanceRef)],
+    ) -> Result<(VectorId, Self::DistanceRef)> {
         if distances.is_empty() {
             return Err(eyre::eyre!("Cannot get min of empty list"));
         }
@@ -692,10 +680,10 @@ where
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn compact_neighborhood(
         &mut self,
-        base_node: Self::VectorRef,
-        neighborhood: &[Self::VectorRef],
+        base_node: VectorId,
+        neighborhood: &[VectorId],
         max_size: usize,
-    ) -> Result<Vec<Self::VectorRef>> {
+    ) -> Result<Vec<VectorId>> {
         let compaction_list = self
             .compact_neighborhood_batch(&[base_node], &[neighborhood.to_vec()], &[max_size])
             .await?;
@@ -707,10 +695,10 @@ where
 
     async fn compact_neighborhood_batch(
         &mut self,
-        base_nodes: &[Self::VectorRef],
-        neighborhoods: &[Vec<Self::VectorRef>],
+        base_nodes: &[VectorId],
+        neighborhoods: &[Vec<VectorId>],
         max_sizes: &[usize],
-    ) -> Result<Vec<Vec<Self::VectorRef>>> {
+    ) -> Result<Vec<Vec<VectorId>>> {
         self.compact_neighborhood_batch(base_nodes, neighborhoods, max_sizes)
             .await
     }
@@ -721,7 +709,7 @@ where
     Standard: Distribution<D::Ring>,
     VecShare<D::Ring>: Transpose64,
 {
-    async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
+    async fn insert(&mut self, query: &Self::QueryRef) -> VectorId {
         // Allocate next ID and register it in the registry (metadata only).
         let vector_id = {
             let mut reg = self.registry.write().await;
@@ -739,9 +727,9 @@ where
 
     async fn insert_at(
         &mut self,
-        vector_ref: &Self::VectorRef,
+        vector_ref: &VectorId,
         query: &Self::QueryRef,
-    ) -> Result<Self::VectorRef> {
+    ) -> Result<VectorId> {
         // Register in the metadata registry.
         self.registry.write().await.insert(*vector_ref, ());
         // Insert the actual iris data into the worker's store.

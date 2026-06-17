@@ -11,6 +11,7 @@ use crate::hnsw::{
 use super::VecRequests;
 
 use eyre::{bail, Result};
+use iris_mpc_common::vector_id::VectorId;
 use itertools::izip;
 use std::collections::BTreeSet;
 
@@ -32,7 +33,7 @@ use std::collections::BTreeSet;
 #[derive(Debug)]
 pub struct InsertPlanV<V: VectorStore> {
     pub query: V::QueryRef,
-    pub links: Vec<Vec<V::VectorRef>>,
+    pub links: Vec<Vec<VectorId>>,
     pub update_ep: UpdateEntryPoint,
 }
 
@@ -63,21 +64,21 @@ impl<V: VectorStore> Clone for InsertPlanV<V> {
 /// ("delete-then-add"), each in its own `GraphMutation`.
 ///
 /// Returns a parallel pair of `VecRequests`:
-/// - the per-slot `Vec<ConnectPlanV<V>>` carrying the graph mutations to persist (a slot
+/// - the per-slot `Vec<ConnectPlanV>` carrying the graph mutations to persist (a slot
 ///   may produce 0 to 3 mutations from the per-slot steps, and the last non-empty slot may
 ///   additionally carry the batch's single global compaction mutation);
-/// - the per-slot `Option<V::VectorRef>` identifying the newly inserted vector, or `None`
+/// - the per-slot `Option<VectorId>` identifying the newly inserted vector, or `None`
 ///   for pure deletions and no-op slots.
 pub async fn insert<V: VectorStoreMut>(
     store: &mut V,
-    graph: &mut GraphMem<<V as VectorStore>::VectorRef>,
+    graph: &mut GraphMem<VectorId>,
     searcher: &HnswSearcher,
     plans: VecRequests<Option<InsertPlanV<V>>>,
-    insert_ids: &VecRequests<Option<V::VectorRef>>,
-    replace_ids: &VecRequests<Option<V::VectorRef>>,
+    insert_ids: &VecRequests<Option<VectorId>>,
+    replace_ids: &VecRequests<Option<VectorId>>,
 ) -> Result<(
-    VecRequests<Vec<ConnectPlanV<V>>>,
-    VecRequests<Option<V::VectorRef>>,
+    VecRequests<Vec<ConnectPlanV>>,
+    VecRequests<Option<VectorId>>,
 )> {
     tracing::debug!("Inserting {} InsertPlans into store", plans.len());
 
@@ -98,19 +99,19 @@ pub async fn insert<V: VectorStoreMut>(
     let mut intra_batch_inserted = vec![];
     let m = searcher.params.get_M(0);
 
-    let mut slot_outputs: Vec<Vec<ConnectPlanV<V>>> = vec![vec![]; insert_plans.len()];
-    let mut slot_inserted_ids: Vec<Option<V::VectorRef>> = vec![None; insert_plans.len()];
-    let mut batch_expanded: BTreeSet<(V::VectorRef, usize)> = BTreeSet::new();
+    let mut slot_outputs: Vec<Vec<ConnectPlanV>> = vec![vec![]; insert_plans.len()];
+    let mut slot_inserted_ids: Vec<Option<VectorId>> = vec![None; insert_plans.len()];
+    let mut batch_expanded: BTreeSet<(VectorId, usize)> = BTreeSet::new();
 
     for (idx, (plan, insert_id, replace_id)) in
         izip!(insert_plans, insert_ids, replace_ids).enumerate()
     {
-        let mut slot_updated: BTreeSet<(V::VectorRef, usize)> = BTreeSet::new();
+        let mut slot_updated: BTreeSet<(VectorId, usize)> = BTreeSet::new();
 
         // (a) Delete first: own GraphMutation with the lower seq_no.
         if let Some(rid) = replace_id {
             let mutation = graph.apply_new(UnstampedMutation {
-                ops: vec![MutationOp::RemoveNode { id: rid.clone() }],
+                ops: vec![MutationOp::RemoveNode { id: *rid }],
             })?;
             slot_outputs[idx].push(mutation);
         }
@@ -135,17 +136,17 @@ pub async fn insert<V: VectorStoreMut>(
                 None => store.insert(&query).await,
                 Some(id) => store.insert_at(id, &query).await?,
             };
-            intra_batch_inserted.push(inserted_id.clone());
-            slot_inserted_ids[idx] = Some(inserted_id.clone());
+            intra_batch_inserted.push(inserted_id);
+            slot_inserted_ids[idx] = Some(inserted_id);
 
-            let mut ops: Vec<MutationOp<V::VectorRef>> = vec![MutationOp::AddNode {
-                id: inserted_id.clone(),
+            let mut ops: Vec<MutationOp<VectorId>> = vec![MutationOp::AddNode {
+                id: inserted_id,
                 height: links.len(),
                 update_ep,
             }];
             for (layer_idx, layer_links) in links.into_iter().enumerate() {
                 ops.push(MutationOp::AddEdges {
-                    base: inserted_id.clone(),
+                    base: inserted_id,
                     layer: layer_idx,
                     neighbors: layer_links,
                     edge_type: EdgeType::All,
@@ -333,7 +334,7 @@ mod tests {
     /// Lets tests construct insertions that produce real `AddEdges` ops.
     fn dummy_insert_plan_with_links(
         ep_update: UpdateEntryPoint,
-        links: Vec<Vec<<PlaintextStore as VectorStore>::VectorRef>>,
+        links: Vec<Vec<VectorId>>,
     ) -> InsertPlanV<PlaintextStore> {
         InsertPlanV {
             query: Arc::new(IrisCode::default()),
@@ -720,7 +721,7 @@ mod tests {
     #[tokio::test]
     async fn test_insert_with_pure_deletion_preserves_slot_order() {
         let mut store = PlaintextStore::default();
-        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let mut graph: GraphMem<VectorId> = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
 
         // Seed the store/graph with two existing vectors A and B so we have something
@@ -737,10 +738,8 @@ mod tests {
             None,
             None,
         ];
-        let insert_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
-            vec![None, None, None];
-        let replace_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
-            vec![None, Some(a), Some(b)];
+        let insert_ids: VecRequests<Option<VectorId>> = vec![None, None, None];
+        let replace_ids: VecRequests<Option<VectorId>> = vec![None, Some(a), Some(b)];
 
         let (grouped, inserted_ids) = insert(
             &mut store,
@@ -799,7 +798,7 @@ mod tests {
     #[tokio::test]
     async fn test_insert_with_combined_replace_emits_removenode_then_addnode() {
         let mut store = PlaintextStore::default();
-        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let mut graph: GraphMem<VectorId> = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
 
         let old = store.insert(&Arc::new(IrisCode::default())).await;
@@ -807,10 +806,8 @@ mod tests {
         let plans = vec![Some(dummy_insert_plan(UpdateEntryPoint::SetUnique {
             layer: 0,
         }))];
-        let insert_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
-            vec![None];
-        let replace_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
-            vec![Some(old)];
+        let insert_ids: VecRequests<Option<VectorId>> = vec![None];
+        let replace_ids: VecRequests<Option<VectorId>> = vec![Some(old)];
 
         let (grouped, inserted_ids) = insert(
             &mut store,
@@ -866,14 +863,12 @@ mod tests {
     #[tokio::test]
     async fn test_insert_with_none_slot_yields_empty_vec() {
         let mut store = PlaintextStore::default();
-        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let mut graph: GraphMem<VectorId> = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
 
         let plans: VecRequests<Option<InsertPlanV<PlaintextStore>>> = vec![None];
-        let insert_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
-            vec![None];
-        let replace_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
-            vec![None];
+        let insert_ids: VecRequests<Option<VectorId>> = vec![None];
+        let replace_ids: VecRequests<Option<VectorId>> = vec![None];
 
         let (grouped, inserted_ids) = insert(
             &mut store,
@@ -899,7 +894,7 @@ mod tests {
     #[tokio::test]
     async fn test_insert_stamps_strictly_increasing_seq_nos_per_slot() {
         let mut store = PlaintextStore::default();
-        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let mut graph: GraphMem<VectorId> = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
 
         let expected_start = graph.next_sequence_number();
@@ -909,10 +904,8 @@ mod tests {
             None,
             Some(dummy_insert_plan(UpdateEntryPoint::False)),
         ];
-        let insert_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
-            vec![None, None, None];
-        let replace_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
-            vec![None, None, None];
+        let insert_ids: VecRequests<Option<VectorId>> = vec![None, None, None];
+        let replace_ids: VecRequests<Option<VectorId>> = vec![None, None, None];
 
         let (grouped, inserted_ids) = insert(
             &mut store,
@@ -982,7 +975,7 @@ mod tests {
     #[tokio::test]
     async fn test_insert_appends_global_compaction_to_last_nonempty_slot() {
         let mut store = PlaintextStore::default();
-        let mut graph: GraphMem<<PlaintextStore as VectorStore>::VectorRef> = GraphMem::new();
+        let mut graph: GraphMem<VectorId> = GraphMem::new();
         let searcher = HnswSearcher::new_with_test_parameters();
         let m_limit = searcher.params.get_M_limit(0);
 
@@ -1001,8 +994,7 @@ mod tests {
         //     nodes (size m_limit, since there are m_limit + 1 seeds total).
         // EdgeType::Base ensures the back-edges aren't auto-created — keeps
         // each neighborhood exactly at m_limit.
-        let mut setup_ops: Vec<MutationOp<<PlaintextStore as VectorStore>::VectorRef>> =
-            Vec::with_capacity(seed_count * 2);
+        let mut setup_ops: Vec<MutationOp<VectorId>> = Vec::with_capacity(seed_count * 2);
         for (i, &id) in seed_ids.iter().enumerate() {
             setup_ops.push(MutationOp::AddNode {
                 id,
@@ -1042,10 +1034,8 @@ mod tests {
         let new_plan =
             dummy_insert_plan_with_links(UpdateEntryPoint::False, vec![seed_ids.clone()]);
         let plans = vec![Some(new_plan), None];
-        let insert_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
-            vec![None, None];
-        let replace_ids: VecRequests<Option<<PlaintextStore as VectorStore>::VectorRef>> =
-            vec![None, None];
+        let insert_ids: VecRequests<Option<VectorId>> = vec![None, None];
+        let replace_ids: VecRequests<Option<VectorId>> = vec![None, None];
 
         let (grouped, _) = insert(
             &mut store,

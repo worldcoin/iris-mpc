@@ -10,7 +10,6 @@ use eyre::{bail, eyre, Result};
 
 use crate::{
     execution::hawk_main::{BothEyes, GraphRef, LEFT, RIGHT},
-    hawkers::plaintext_store::PlaintextVectorRef,
     hnsw::{
         graph::{
             graph_store::{self, GraphPg},
@@ -71,7 +70,7 @@ pub async fn upload_graph_checkpoint(
 pub async fn upload_graph_checkpoint_plaintext(
     bucket: &str,
     party_id: usize,
-    graph_mem: &BothEyes<GraphMem<PlaintextVectorRef>>,
+    graph_mem: &BothEyes<GraphMem<IrisVectorId>>,
     s3_client: &S3Client,
     last_indexed_iris_id: IrisSerialId,
     last_indexed_modification_id: i64,
@@ -204,7 +203,7 @@ pub async fn download_genesis_checkpoint_plaintext(
     s3_client: &S3Client,
     bucket: &str,
     state: &GraphCheckpointState,
-) -> Result<BothEyes<GraphMem<PlaintextVectorRef>>> {
+) -> Result<BothEyes<GraphMem<IrisVectorId>>> {
     if state.graph_version != GraphFormat::Current.version() {
         bail!("unexpected graph version: {}", state.graph_version);
     }

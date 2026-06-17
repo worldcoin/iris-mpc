@@ -79,8 +79,8 @@ use crate::{
     },
     hawkers::{
         aby3::aby3_store::{
-            Aby3DistanceRef, Aby3Query, Aby3SharedIrises, Aby3Store, Aby3VectorRef, DistanceMode,
-            DistanceOps, FhdOps, VectorIdRegistryRef,
+            Aby3DistanceRef, Aby3Query, Aby3SharedIrises, Aby3Store, DistanceMode, DistanceOps,
+            FhdOps, VectorIdRegistryRef,
         },
         shared_irises::SharedIrises,
     },
@@ -403,8 +403,8 @@ type UseOrRule = bool;
 
 type Aby3Ref = Arc<RwLock<Aby3Store<HawkOps>>>;
 
-pub type GraphRef = Arc<RwLock<GraphMem<Aby3VectorRef>>>;
-pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<Aby3VectorRef>>;
+pub type GraphRef = Arc<RwLock<GraphMem<VectorId>>>;
+pub type GraphMut<'a> = RwLockWriteGuard<'a, GraphMem<VectorId>>;
 
 /// A container for state required to perform parallel MPC operations.
 ///
@@ -422,18 +422,12 @@ pub struct HawkSession {
     pub hnsw_prf_key: Arc<[u8; 16]>,
 }
 
-pub type SearchResult = (
-    Aby3VectorRef,
-    <Aby3Store<HawkOps> as VectorStore>::DistanceRef,
-);
+pub type SearchResult = (VectorId, <Aby3Store<HawkOps> as VectorStore>::DistanceRef);
 
 /// A list of matches paired with a saturation flag.
 #[derive(Debug, Clone, Default)]
 pub struct SaturableMatches {
-    pub results: Vec<(
-        Aby3VectorRef,
-        Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>,
-    )>,
+    pub results: Vec<(VectorId, Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>)>,
     /// True if more matches likely exist.
     /// This is detected when most or all `ef` search results are matches. See saturation_margin to make it more sensitive.
     pub saturated: bool,
@@ -495,7 +489,7 @@ impl HawkActor {
         args: HawkArgs,
         networking: Box<dyn NetworkHandle>,
         initialized: worker_pool_initializer::InitializedWorkers,
-        graph: BothEyes<GraphMem<Aby3VectorRef>>,
+        graph: BothEyes<GraphMem<VectorId>>,
     ) -> Self {
         let party_id = args.party_index;
 
@@ -554,7 +548,7 @@ impl HawkActor {
     pub async fn from_cli_with_graph_and_store(
         args: &HawkArgs,
         shutdown_ct: CancellationToken,
-        graph: BothEyes<GraphMem<Aby3VectorRef>>,
+        graph: BothEyes<GraphMem<VectorId>>,
         iris_store: BothEyes<Aby3SharedIrises>,
     ) -> Result<Self> {
         use worker_pool_initializer::WorkerPoolInitializer;
@@ -813,7 +807,7 @@ impl HawkActor {
 
         insert::insert(
             &mut *store,
-            &mut *graph,
+            &mut graph,
             &self.searcher,
             plans,
             &insertion_ids,
