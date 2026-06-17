@@ -76,9 +76,7 @@ pub trait VectorStore: Debug {
     async fn only_valid_entry_points(
         &mut self,
         entry_points: Vec<(VectorId, usize)>,
-    ) -> Vec<(VectorId, usize)> {
-        entry_points
-    }
+    ) -> Vec<(VectorId, usize)>;
 
     /// Evaluate the distance between pairs of (query, vector), in batch.
     /// The default implementation is a loop over `eval_distance`.

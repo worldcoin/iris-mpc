@@ -443,6 +443,15 @@ impl VectorStore for SharedPlaintextDeepIDStore {
         vectors.retain(|v| store.contains(v));
         vectors
     }
+
+    async fn only_valid_entry_points(
+        &mut self,
+        mut entry_points: Vec<(VectorId, usize)>,
+    ) -> Vec<(VectorId, usize)> {
+        let store = self.storage.read().await;
+        entry_points.retain(|(v, _)| store.contains(v));
+        entry_points
+    }
 }
 
 impl VectorStoreMut for SharedPlaintextDeepIDStore {
