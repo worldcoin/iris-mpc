@@ -130,7 +130,7 @@ impl Differ for ExplicitNeighborhoodDiffer {
             jaccard_state,
         };
 
-        self.current_layer_diffs.push((node.clone(), diff));
+        self.current_layer_diffs.push((*node, diff));
     }
 
     fn end_layer(&mut self, layer_index: usize) {
@@ -141,7 +141,7 @@ impl Differ for ExplicitNeighborhoodDiffer {
                         .sort_by(|a, b| a.1.jaccard_state.compare_as_fractions(&b.1.jaccard_state));
                 }
                 SortBy::Index => {
-                    self.current_layer_diffs.sort_by(|a, b| a.0.cmp(&b.0));
+                    self.current_layer_diffs.sort_by_key(|a| a.0);
                 }
             }
             self.per_layer_results.push(LayerDiffResult {

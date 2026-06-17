@@ -56,14 +56,6 @@
 //! Finally, the constant `HAWK_BASE_ROTATIONS_MASK` should be set to indicate the set of "base rotations" for which
 //! the HawkActor will trigger independent HNSW searches. In practice, this set must be chosen so that the searches cover (at least)
 //! rotations in the [-15, 15] interval. For example, an example of suitable mask for MinRotation5 encodes the set `{-10, 0, 10}`.
-//!
-//! ### 3. Neighborhood Strategy: `Sorted` vs. `Unsorted`
-//!
-//! This strategy governs how nearest neighbors candidate lists are managed during HNSW graph traversal.
-//! - **`Sorted`**: Maintains a sorted list of candidates.
-//! - **`Unsorted`**: Maintains an unsorted list of candidates.
-//!
-//! It is set by passing `NEIGHBORHOOD_MODE` constant to the search/insertion orchestrator methods.
 
 #[allow(unused_imports)]
 use crate::hawkers::aby3::aby3_store::NhdOps;
@@ -86,7 +78,7 @@ use crate::{
     },
     hnsw::{
         graph::{graph_store, GraphMutation, MutationOp, UpdateEntryPoint},
-        searcher::{LayerDistribution, NeighborhoodMode},
+        searcher::LayerDistribution,
         GraphMem, HnswSearcher, VectorStore,
     },
     network::mpc::{build_network_handle, NetworkHandle, NetworkHandleArgs},
@@ -220,9 +212,6 @@ const _: () = {
 
 /// Rotation support as configured by SearchRotations.
 pub type VecRotations<T> = VecRotationSupport<T, HAWK_BASE_ROTATIONS_MASK>;
-
-/// The choice of HNSW candidate list strategy
-pub const NEIGHBORHOOD_MODE: NeighborhoodMode = NeighborhoodMode::Sorted;
 
 const LINEAR_SCAN_MAX_GRAPH_LAYER: usize = 1;
 
@@ -1823,7 +1812,6 @@ impl HawkHandle {
                 search_queries,
                 search_ids,
                 search_params,
-                NEIGHBORHOOD_MODE,
             )
             .await?;
 

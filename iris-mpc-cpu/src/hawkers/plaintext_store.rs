@@ -7,7 +7,7 @@ use crate::{
     hnsw::{
         metrics::ops_counter::Operation::{CompareDistance, EvaluateDistance},
         vector_store::VectorStoreMut,
-        GraphMem, HnswSearcher, SortedNeighborhood, VectorStore,
+        GraphMem, HnswSearcher, VectorStore,
     },
 };
 use aes_prng::AesRng;
@@ -128,7 +128,7 @@ impl<D: DistanceOps> PlaintextStore<D> {
             let query_id = VectorId::from_serial_id(serial_id);
             let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
             let (neighbors, update_ep) = searcher
-                .search_to_insert::<_, SortedNeighborhood<_>>(self, &graph, &query, insertion_layer)
+                .search_to_insert(self, &graph, &query, insertion_layer)
                 .await?;
             searcher
                 .insert_from_search_results(self, &mut graph, query_id, neighbors, update_ep)
@@ -359,7 +359,7 @@ impl<D: DistanceOps> VectorStoreMut for SharedPlaintextStore<D> {
 mod tests {
     use super::*;
     use crate::hawkers::aby3::aby3_store::FhdOps;
-    use crate::hnsw::HnswSearcher;
+    use crate::hnsw::{HnswSearcher, SortedNeighborhood};
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
     use itertools::Itertools;

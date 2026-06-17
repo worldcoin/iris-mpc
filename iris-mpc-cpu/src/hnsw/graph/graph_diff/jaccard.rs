@@ -117,7 +117,7 @@ impl Differ for DetailedJaccardDiffer {
         let intersection = lhs_set.intersection(&rhs_set).count();
         let union = lhs_set.union(&rhs_set).count();
         let node_state = JaccardState::new(intersection, union);
-        self.current_layer_details.push((node.clone(), node_state));
+        self.current_layer_details.push((*node, node_state));
     }
 
     fn end_layer(&mut self, _layer_index: usize) {

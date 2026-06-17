@@ -22,7 +22,6 @@ k_neighbors = 1
 output_format = "rate"
 output_path = "data/accuracy_deepid_results.csv"
 noise_levels = [0.0, 0.05, 0.1, 0.2]
-neighborhood_mode = "Sorted"
 
 [analysis.search_hnsw_config]
 ef_construction = 64

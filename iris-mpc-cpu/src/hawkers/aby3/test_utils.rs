@@ -16,7 +16,7 @@ use crate::{
     hawkers::{
         aby3::aby3_store::Aby3SharedIrisesRef, plaintext_store::PlaintextStore, TEST_DISTANCE_MODE,
     },
-    hnsw::{GraphMem, HnswSearcher, SortedNeighborhood, VectorStore},
+    hnsw::{GraphMem, HnswSearcher, VectorStore},
     network::mpc::NetworkType,
     protocol::shared_iris::{ArcIris, GaloisRingSharedIris},
     shares::{RingElement, Share},
@@ -332,12 +332,7 @@ pub async fn shared_random_setup<R: RngCore + Clone + CryptoRng>(
             for query in queries.iter() {
                 let insertion_layer = searcher.gen_layer_rng(&mut rng_searcher)?;
                 searcher
-                    .insert::<_, SortedNeighborhood<_>>(
-                        &mut *store_lock,
-                        &mut graph_store,
-                        query,
-                        insertion_layer,
-                    )
+                    .insert(&mut *store_lock, &mut graph_store, query, insertion_layer)
                     .await?;
             }
             let qids = queries.iter().map(|q| q.query_id).collect();

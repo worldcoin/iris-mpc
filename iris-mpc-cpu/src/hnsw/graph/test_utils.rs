@@ -18,7 +18,6 @@ use crate::{
                 run_diff,
             },
             mutation::EdgeType,
-            neighborhood::Neighborhood,
             GraphMutation, MutationOp, UpdateEntryPoint,
         },
         vector_store::{VectorStore, VectorStoreMut},
