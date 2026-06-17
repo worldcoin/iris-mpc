@@ -111,15 +111,10 @@ pub async fn get_others_graph_hashes(
     let responses = try_get_endpoint_other_nodes(config, GRAPH_CHECKPOINT_ENDPOINT).await?;
 
     let mut graph_checkpoints = Vec::with_capacity(responses.len());
-    for response in responses.into_iter() {
-        let status_code = response.status();
+    for (status_code, bytes) in responses.into_iter() {
         if !status_code.is_success() {
             bail!("failed to get graph checkpoint: {:?}", status_code);
         }
-        let bytes = response
-            .bytes()
-            .await
-            .wrap_err("Failed to get graph checkpoint http response")?;
         let cp = serde_json::from_slice(&bytes)
             .wrap_err("Failed to deserialize graph checkpoint hashes")?;
         graph_checkpoints.push(cp);
