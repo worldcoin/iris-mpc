@@ -573,19 +573,11 @@ where
         .into_iter()
         .enumerate()
         .map(|(i, layer_data)| {
-            let (vector_ids, vectors): (Vec<IrisVectorId>, Vec<K::Vector>) =
-                layer_data.into_iter().unzip();
-            let n = vectors.len();
-            let k = searcher.params.get_M_max(i + 1).min(n - 1);
-
-            let mut engine = NaiveKNN::<K>::init(knn_proto.clone(), vectors, k, 1);
-            let results = engine
-                .compute_chunk(n)
-                .into_iter()
-                // remap from engine 1-based indices to original vector ids
-                .map(|result| result.map(|i| vector_ids[(i as usize) - 1]))
-                .collect::<Vec<_>>();
-            Layer::from_knn_results(results, n)
+            Layer::ideal_from_data::<K>(
+                layer_data,
+                searcher.params.get_M_max(i + 1),
+                knn_proto.clone(),
+            )
         });
 
     Ok(GraphMem::from_precomputed(
@@ -968,6 +960,13 @@ mod tests {
             distance2: &Self::DistanceRef,
         ) -> Result<bool> {
             Ok(*distance1 < *distance2)
+        }
+
+        async fn only_valid_entry_points(
+            &mut self,
+            entry_points: Vec<(VectorId, usize)>,
+        ) -> Vec<(VectorId, usize)> {
+            entry_points
         }
     }
 
