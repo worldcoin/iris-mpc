@@ -766,7 +766,7 @@ mod tests {
                 explicit::{ExplicitNeighborhoodDiffer, SortBy},
                 node_equiv::ensure_node_equivalence,
             },
-            GraphMem, HnswSearcher, SortedNeighborhood,
+            GraphMem, HnswSearcher, SortedNeighborhood, LINEAR_SCAN_MAX_GRAPH_LAYER,
         },
         network::mpc::NetworkType,
         protocol::shared_iris::GaloisRingSharedIris,
@@ -1511,7 +1511,7 @@ mod tests {
         // density bumped to 4 so enough nodes roll onto layer 1 to exercise
         // `linear_search_min_distance` — default (M) gives <1 expected entry
         // point at this size and silently skips the branch.
-        let mut searcher = HnswSearcher::new_linear_scan(64, 32, 32, 1);
+        let mut searcher = HnswSearcher::new_linear_scan(64, 32, 32, LINEAR_SCAN_MAX_GRAPH_LAYER);
         searcher.layer_distribution =
             crate::hnsw::searcher::LayerDistribution::new_geometric_from_M(4);
         let searcher = searcher;

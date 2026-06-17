@@ -222,7 +222,7 @@ size = 16
 ef_construction = 32
 ef_search = 32
 M = 16
-layer_mode = { LinearScan = { max_graph_layer = 1 } }
+max_graph_layer = 1
 
 [analysis]
 sample_size = 4
@@ -237,7 +237,7 @@ distance_ops = "fhd"
 ef_construction = 32
 ef_search = 32
 M = 16
-layer_mode = { LinearScan = { max_graph_layer = 1 } }
+max_graph_layer = 1
 "#;
         let cfg: Config = toml::from_str(toml_str).expect("legacy iris accuracy TOML");
         assert!(matches!(cfg, Config::Iris(_)));
@@ -259,7 +259,7 @@ size = 16
 ef_construction = 32
 ef_search = 32
 M = 16
-layer_mode = { LinearScan = { max_graph_layer = 1 } }
+max_graph_layer = 1
 
 [analysis]
 sample_size = 4
@@ -271,7 +271,7 @@ noise_levels = [0.0, 0.05]
 ef_construction = 32
 ef_search = 32
 M = 16
-layer_mode = { LinearScan = { max_graph_layer = 1 } }
+max_graph_layer = 1
 "#;
         let cfg: Config = toml::from_str(toml_str).expect("deepid accuracy TOML");
         assert!(matches!(cfg, Config::DeepID(_)));

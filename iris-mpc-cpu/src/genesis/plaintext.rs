@@ -34,7 +34,7 @@ use crate::{
     genesis::{BatchSize, BatchSizeConfig},
     graph_checkpoint::PruningMode,
     hawkers::plaintext_store::PlaintextStore,
-    hnsw::{vector_store::VectorStoreMut, GraphMem, HnswSearcher},
+    hnsw::{vector_store::VectorStoreMut, GraphMem, HnswSearcher, LINEAR_SCAN_MAX_GRAPH_LAYER},
 };
 
 /// Represents irises db table, mapping serial ids to version, and left and right iris codes.
@@ -175,7 +175,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
         state.config.hnsw_ef_constr,
         state.config.hnsw_ef_search,
         state.config.hnsw_m,
-        1, // should match the constant LINEAR_SCAN_MAX_GRAPH_LAYER
+        LINEAR_SCAN_MAX_GRAPH_LAYER,
     );
 
     let prf_key: [u8; 16] = state

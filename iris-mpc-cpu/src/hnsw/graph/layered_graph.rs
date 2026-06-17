@@ -13,7 +13,6 @@ use crate::{
             mutation::{EdgeType, UnstampedMutation},
             GraphMutation, MutationOp, UpdateEntryPoint,
         },
-        searcher::LayerMode,
         HnswSearcher,
     },
 };
@@ -52,13 +51,8 @@ pub struct EntryPoint {
 pub struct GraphMem {
     /// Entry points for HNSW search.
     ///
-    /// If the graph is built by a searcher in `LinearScan` mode, this list will contain all nodes assigned
-    /// to an `insertion_level >= max_graph_layer`. The searcher uses `get_temporary_entry_point`
-    /// while no such node exists.
-    ///
-    /// If the graph is built by a searcher in `Standard` or `Bounded` mode this list
-    /// will contain a single entry point at any given time, which corresponds to a node
-    /// in the highest layer of the graph.
+    /// This list contains all nodes assigned to an `insertion_level >= max_graph_layer`.
+    /// The searcher uses `get_temporary_entry_point` while no such node exists.
     pub entry_points: Vec<EntryPoint>,
 
     /// The layers of the hierarchical graph. The nodes of each layer are a
@@ -561,30 +555,14 @@ where
     let mut nodes_for_nonzero_layers: Vec<Vec<(IrisVectorId, K::Vector)>> =
         nonzero_layers_map.into_values().collect();
 
-    let entry_points = match searcher.layer_mode {
-        LayerMode::Standard { max_graph_layer } => {
-            if let Some(max_layer) = max_graph_layer {
-                nodes_for_nonzero_layers.truncate(max_layer);
-            }
-            once(&vectors_with_ids)
-                .chain(nodes_for_nonzero_layers.iter())
-                .last()
-                .unwrap_or(&vec![])
-                .first()
-                .map(|(v, _)| vec![(*v, nodes_for_nonzero_layers.len())])
-                .unwrap_or_default()
-        }
-        LayerMode::LinearScan { max_graph_layer } => {
-            let entry_points = nodes_for_nonzero_layers
-                .get(max_graph_layer)
-                .unwrap_or(&vec![])
-                .iter()
-                .map(|(v, _)| (*v, max_graph_layer))
-                .collect();
-            nodes_for_nonzero_layers.truncate(max_graph_layer);
-            entry_points
-        }
-    };
+    let max_graph_layer = searcher.max_graph_layer;
+    let entry_points = nodes_for_nonzero_layers
+        .get(max_graph_layer)
+        .unwrap_or(&vec![])
+        .iter()
+        .map(|(v, _)| (*v, max_graph_layer))
+        .collect();
+    nodes_for_nonzero_layers.truncate(max_graph_layer);
 
     let nonzero_layers = nodes_for_nonzero_layers
         .into_iter()
@@ -1084,7 +1062,11 @@ mod tests {
     async fn test_from_another() -> Result<()> {
         let mut vector_store = PlaintextStore::<FhdOps>::new();
         let mut graph_store = GraphMem::new();
-        let searcher = HnswSearcher::new_with_test_parameters();
+        let mut searcher = HnswSearcher::new_with_test_parameters();
+        // Bump layer density so enough nodes roll onto the entry-point layer
+        // (max_graph_layer + 1) for the entry-point migration checks below.
+        searcher.layer_distribution =
+            crate::hnsw::searcher::LayerDistribution::new_geometric_from_M(2);
         let mut rng = AesRng::seed_from_u64(0_u64);
 
         let mut point_ids_map: HashMap<IrisVectorId, IrisVectorId> = HashMap::new();

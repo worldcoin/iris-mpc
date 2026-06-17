@@ -11,7 +11,7 @@ selection = "All"
 # path = "data/starting-graph.dat"
 
 [searcher]
-layer_mode = { LinearScan = { max_graph_layer = 1 } }
+max_graph_layer = 1
 
 [searcher.params]
 option = "Standard"

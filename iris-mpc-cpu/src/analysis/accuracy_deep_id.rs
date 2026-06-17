@@ -9,7 +9,7 @@ use crate::{
         Int4Vector, PlaintextDeepIDStore, SharedPlaintextDeepIDStore, INT4_DIM,
     },
     hnsw::{
-        searcher::{LayerDistribution, LayerMode, N_PARAM_LAYERS},
+        searcher::{LayerDistribution, N_PARAM_LAYERS},
         GraphMem, HnswParams, HnswSearcher, SortedNeighborhood,
     },
     utils::serialization::{
@@ -103,7 +103,7 @@ pub struct HnswConfig {
     pub ef_construction: usize,
     pub ef_search: LayerValue<usize>,
     pub M: usize,
-    pub layer_mode: LayerMode,
+    pub max_graph_layer: usize,
     #[serde(default)]
     pub fixed_layer_search_batch_size: Option<usize>,
 }
@@ -127,12 +127,11 @@ impl From<&HnswConfig> for HnswSearcher {
             params.ef_constr_search = vals.try_into().unwrap();
         }
 
-        let layer_mode = value.layer_mode.clone();
         let layer_distribution = LayerDistribution::new_geometric_from_M(value.M);
 
         HnswSearcher {
             params,
-            layer_mode,
+            max_graph_layer: value.max_graph_layer,
             layer_distribution,
             fixed_layer_search_batch_size: value.fixed_layer_search_batch_size,
         }
@@ -394,7 +393,6 @@ pub fn process_results(config: &AnalysisConfig, results: Vec<AnalysisResult>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hnsw::searcher::LayerMode;
     use aes_prng::AesRng;
     use rand::SeedableRng;
 
@@ -403,7 +401,7 @@ mod tests {
             ef_construction: 32,
             ef_search: LayerValue::Single(32),
             M: 16,
-            layer_mode: LayerMode::LinearScan { max_graph_layer: 1 },
+            max_graph_layer: 1,
             fixed_layer_search_batch_size: None,
         }
     }

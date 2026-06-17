@@ -40,6 +40,13 @@ use tracing::{debug, instrument, trace_span, Instrument};
 /// search, used by the `HnswParams` struct.
 pub const N_PARAM_LAYERS: usize = 5;
 
+/// Maximum graph layer for node insertion used by Hawk Main's HNSW searcher.
+/// Entry points live in this top layer and search begins with a linear scan
+/// over them. Shared by every searcher that mirrors Hawk Main — genesis, the
+/// e2e bootstrap, the test-parameter constructor, and the tooling defaults —
+/// so they stay in lockstep with the live path.
+pub const LINEAR_SCAN_MAX_GRAPH_LAYER: usize = 1;
+
 /// Scaling parameter to determine the frequency of neighborhood compaction
 /// operations for large graph neighborhoods.  When a neighborhood reaches
 /// size greater than M_limit in some layer, the neighborhood is trimmed
@@ -184,30 +191,6 @@ impl HnswParams {
     }
 }
 
-/// Struct specifies how layers are handled by an `HnswSearcher`.`
-#[derive(PartialEq, Clone, Debug, Serialize, Deserialize)]
-pub enum LayerMode {
-    /// Standard operation: maintains single entry point and updates it when a
-    /// new node is inserted as the first item in a new highest layer.
-    ///
-    /// Graph search starts at the unique entry point.
-    Standard {
-        /// Maximum layer for node insertion, if any
-        max_graph_layer: Option<usize>,
-    },
-    /// Nodes are inserted at up to a maximum layer height, and any node which
-    /// would be inserted at a higher layer than this is added to an ongoing
-    /// list of entry points.
-    ///
-    /// Graph search starts in the top layer, at a node of minimal distance from
-    /// the query among the entry points, calculated by a direct linear scan of
-    /// the entry points list.
-    LinearScan {
-        /// Maximum layer for node insertion
-        max_graph_layer: usize,
-    },
-}
-
 /// Struct specifies the probability distribution used to generate insertion
 /// layers for new nodes in an HNSW graph.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -276,8 +259,10 @@ pub struct HnswSearcher {
     /// Parameters specifying the behavior of HNSW search in different layers.
     pub params: HnswParams,
 
-    /// Operation mode for managing construction and search of graph layers.
-    pub layer_mode: LayerMode,
+    /// Maximum layer for node insertion. Nodes that would be inserted at a
+    /// higher layer are instead added to the entry point list; graph search
+    /// begins with a linear scan over those entry points in this top layer.
+    pub max_graph_layer: usize,
 
     /// Statistical distribution for layer selection
     pub layer_distribution: LayerDistribution,
@@ -313,19 +298,6 @@ pub fn build_layer_updates<V: Clone + Ord>(
 #[allow(non_snake_case)]
 impl HnswSearcher {
     /// Construct an HnswSearcher with specified parameters, constructed to use
-    /// a unique graph entry point in the dynamic top graph layer.
-    pub fn new_standard(ef_constr: usize, ef_search: usize, M: usize) -> Self {
-        Self {
-            params: HnswParams::new(ef_constr, ef_search, M),
-            layer_mode: LayerMode::Standard {
-                max_graph_layer: None,
-            },
-            layer_distribution: LayerDistribution::new_geometric_from_M(M),
-            fixed_layer_search_batch_size: None,
-        }
-    }
-
-    /// Construct an HnswSearcher with specified parameters, constructed to use
     /// linear scan over a set of entry points at a capped maximum graph layer.
     pub fn new_linear_scan(
         ef_constr: usize,
@@ -335,7 +307,7 @@ impl HnswSearcher {
     ) -> Self {
         Self {
             params: HnswParams::new(ef_constr, ef_search, M),
-            layer_mode: LayerMode::LinearScan { max_graph_layer },
+            max_graph_layer,
             layer_distribution: LayerDistribution::new_geometric_from_M(M),
             fixed_layer_search_batch_size: None,
         }
@@ -350,7 +322,7 @@ impl HnswSearcher {
     /// applicable" default value.
     pub fn new_with_test_parameters() -> Self {
         let (ef_constr, ef_search, M) = (64, 32, 32);
-        Self::new_standard(ef_constr, ef_search, M)
+        Self::new_linear_scan(ef_constr, ef_search, M, LINEAR_SCAN_MAX_GRAPH_LAYER)
     }
 
     /// Choose a random insertion layer from the configured distribution,
@@ -404,82 +376,56 @@ impl HnswSearcher {
         query: &V::QueryRef,
         insertion_layer: usize,
     ) -> Result<(SortedNeighborhood<V>, usize, usize, UpdateEntryPoint)> {
-        match self.layer_mode {
-            LayerMode::Standard { max_graph_layer } => {
-                let ep = graph.get_first_entry_point().await;
-                let (W, layer) = self.init_nbhd_from_ep(store, ep, query).await?;
+        let max_graph_layer = self.max_graph_layer;
 
-                // Layers are 0-indexed, so number of graph layers is one greater than the entry point layer
-                // if an entry point is present, and otherwise 0.
-                let n_layers = layer.map(|l| l + 1).unwrap_or(0);
+        // Get all valid entry points
+        let (ep_vectors, ep_layers): (Vec<_>, Vec<_>) = graph
+            .entry_points
+            .iter()
+            .map(|ep| (ep.point, ep.layer))
+            .unzip();
+        let ep_vectors = store.only_valid_vectors(ep_vectors).await;
+        metrics::gauge!("entry_points_count").set(ep_vectors.len() as f64);
 
-                // If maximum graph layer is specified, truncate insertion layer
-                let bounded_insertion_layer =
-                    insertion_layer.min(max_graph_layer.unwrap_or(usize::MAX));
+        // TODO when updating entry points, should check for invalid vectors and remove
 
-                // Set new entry point if layer is greater than entry point layer, or no entry point available.
-                let update_ep = if layer.map(|l| bounded_insertion_layer > l).unwrap_or(true) {
-                    UpdateEntryPoint::SetUnique {
-                        layer: bounded_insertion_layer,
-                    }
-                } else {
-                    UpdateEntryPoint::False
-                };
-
-                Ok((W, n_layers, bounded_insertion_layer, update_ep))
-            }
-            LayerMode::LinearScan { max_graph_layer } => {
-                // Get all valid entry points
-                let (ep_vectors, ep_layers): (Vec<_>, Vec<_>) = graph
-                    .entry_points
-                    .iter()
-                    .map(|ep| (ep.point, ep.layer))
-                    .unzip();
-                let ep_vectors = store.only_valid_vectors(ep_vectors).await;
-                metrics::gauge!("entry_points_count").set(ep_vectors.len() as f64);
-
-                // TODO when updating entry points, should check for invalid vectors and remove
-
-                // Verify all entry points are at the max graph layer
-                if !ep_layers.into_iter().all(|l| l == max_graph_layer) {
-                    bail!("Found entry point in invalid graph layer for linear scan functionality");
-                }
-
-                let (W, n_layers) = if ep_vectors.is_empty() {
-                    let ep = graph.get_temporary_entry_point();
-                    let (W, layer) = self.init_nbhd_from_ep(store, ep, query).await?;
-
-                    // Layers are 0-indexed, so number of graph layers is one greater than the entry point layer
-                    // if an entry point is present, and otherwise 0.
-                    let n_layers = layer.map(|l| l + 1).unwrap_or(0);
-
-                    (W, n_layers)
-                } else {
-                    let nearest_point =
-                        Self::linear_search_min_distance(store, query, ep_vectors).await?;
-                    let W = SortedNeighborhood::from_singleton(nearest_point);
-
-                    // Entry points are in layer `max_graph_layer`, so number of layers is one more since layers are 0-indexed.
-                    let n_layers = max_graph_layer + 1;
-
-                    (W, n_layers)
-                };
-
-                // Truncate insertion layer at max graph layer.
-                let bounded_insertion_layer = insertion_layer.min(max_graph_layer);
-
-                // Add query to entry points set if target insertion layer is greater than the max graph layer
-                let update_ep = if insertion_layer > max_graph_layer {
-                    UpdateEntryPoint::Append {
-                        layer: max_graph_layer,
-                    }
-                } else {
-                    UpdateEntryPoint::False
-                };
-
-                Ok((W, n_layers, bounded_insertion_layer, update_ep))
-            }
+        // Verify all entry points are at the max graph layer
+        if !ep_layers.into_iter().all(|l| l == max_graph_layer) {
+            bail!("Found entry point in invalid graph layer for linear scan functionality");
         }
+
+        let (W, n_layers) = if ep_vectors.is_empty() {
+            let ep = graph.get_temporary_entry_point();
+            let (W, layer) = self.init_nbhd_from_ep(store, ep, query).await?;
+
+            // Layers are 0-indexed, so number of graph layers is one greater than the entry point layer
+            // if an entry point is present, and otherwise 0.
+            let n_layers = layer.map(|l| l + 1).unwrap_or(0);
+
+            (W, n_layers)
+        } else {
+            let nearest_point = Self::linear_search_min_distance(store, query, ep_vectors).await?;
+            let W = SortedNeighborhood::from_singleton(nearest_point);
+
+            // Entry points are in layer `max_graph_layer`, so number of layers is one more since layers are 0-indexed.
+            let n_layers = max_graph_layer + 1;
+
+            (W, n_layers)
+        };
+
+        // Truncate insertion layer at max graph layer.
+        let bounded_insertion_layer = insertion_layer.min(max_graph_layer);
+
+        // Add query to entry points set if target insertion layer is greater than the max graph layer
+        let update_ep = if insertion_layer > max_graph_layer {
+            UpdateEntryPoint::Append {
+                layer: max_graph_layer,
+            }
+        } else {
+            UpdateEntryPoint::False
+        };
+
+        Ok((W, n_layers, bounded_insertion_layer, update_ep))
     }
 
     /// For a specified entry point, returns an initialized singleton candidate
@@ -1452,9 +1398,9 @@ impl HnswSearcher {
     /// set `query` as the index entry point.
     ///
     /// Note that the `insertion_layer` input does not have any pre-conditions
-    /// on it. The `layer_mode` field of `HnswSearcher` may modify the insertion
-    /// layer before operation, e.g. by truncating to a maximum layer height.
-    /// This step is handled internally.
+    /// on it. The `max_graph_layer` field of `HnswSearcher` may modify the
+    /// insertion layer before operation, by truncating to the maximum layer
+    /// height. This step is handled internally.
     #[instrument(
         level = "trace",
         target = "searcher::network",
@@ -1799,22 +1745,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_hnsw_db_default() -> Result<()> {
-        let db = HnswSearcher::new_standard(64, 32, 32);
-
-        hnsw_db_helper(db, 0).await
-    }
-
-    #[tokio::test]
     async fn test_hnsw_db_linear_scan() -> Result<()> {
-        let db = HnswSearcher::new_linear_scan(64, 32, 32, 1);
+        let db = HnswSearcher::new_linear_scan(64, 32, 32, LINEAR_SCAN_MAX_GRAPH_LAYER);
 
         hnsw_db_helper(db, 0).await
     }
 
     #[tokio::test]
     async fn test_hnsw_db_linear_scan_m() -> Result<()> {
-        let mut db = HnswSearcher::new_linear_scan(64, 32, 32, 1);
+        let mut db = HnswSearcher::new_linear_scan(64, 32, 32, LINEAR_SCAN_MAX_GRAPH_LAYER);
         // Ensure upper layers get exercised well
         db.layer_distribution = LayerDistribution::new_geometric_from_M(4);
 
@@ -1826,50 +1765,10 @@ mod tests {
         let mut rng = AesRng::seed_from_u64(42);
         let iris_db = IrisDB::new_random_rng(10, &mut rng);
 
-        let mut queries = iris_db.db.into_iter().map(Arc::new);
-        // Duplicate queries for the linear mode tests
-        let mut queries_copy = queries.clone();
-
-        // Default mode
-        let searcher_default = HnswSearcher::new_with_test_parameters();
-        let vector_store_default = &mut PlaintextStore::<FhdOps>::new();
-        let graph_store_default = &mut GraphMem::new();
-
-        for (insertion_layer, expected_nb_len, expected_update_ep) in [
-            (0, 1, UpdateEntryPoint::SetUnique { layer: 0 }),
-            (0, 1, UpdateEntryPoint::False),
-            (1, 2, UpdateEntryPoint::SetUnique { layer: 1 }),
-            (1, 2, UpdateEntryPoint::False),
-            (2, 3, UpdateEntryPoint::SetUnique { layer: 2 }),
-            (2, 3, UpdateEntryPoint::False),
-        ] {
-            let query = queries.next().unwrap();
-
-            let (neighbors, update_ep) = searcher_default
-                .search_to_insert(
-                    vector_store_default,
-                    graph_store_default,
-                    &query,
-                    insertion_layer,
-                )
-                .await?;
-
-            assert_eq!(neighbors.len(), expected_nb_len);
-            assert_eq!(update_ep, expected_update_ep);
-
-            searcher_default
-                .insert(
-                    vector_store_default,
-                    graph_store_default,
-                    &query,
-                    insertion_layer,
-                )
-                .await?;
-        }
+        let mut queries_copy = iris_db.db.into_iter().map(Arc::new);
 
         // Linear-scan mode
-        let mut searcher_linear = HnswSearcher::new_with_test_parameters();
-        searcher_linear.layer_mode = LayerMode::LinearScan { max_graph_layer: 1 };
+        let searcher_linear = HnswSearcher::new_with_test_parameters();
         let vector_store_linear = &mut PlaintextStore::<FhdOps>::new();
         let graph_store_linear = &mut GraphMem::new();
 

@@ -36,11 +36,9 @@
 //!
 //! ### 1. HNSW Entry Point Strategy
 //!
-//! - **`Standard`**: The HNSW search starts from a single, pre-defined entry point.
-//! - **`LinearScan`**: The HNSW search begins by evaluating a set of entry points
-//!   candidates and choosing the one closest to the query vector.
-//!
-//! The entry point strategy is determined by the `LayerMode` in the `HnswSearcher`.
+//! HNSW search begins by evaluating the set of entry point candidates in the
+//! top graph layer (`HnswSearcher::max_graph_layer`) and choosing the one
+//! closest to the query vector via a linear scan.
 
 //! ### 2. Distance Function and base rotations
 //!
@@ -79,7 +77,7 @@ use crate::{
     hnsw::{
         graph::{graph_store, GraphMutation, MutationOp, UpdateEntryPoint},
         searcher::LayerDistribution,
-        GraphMem, HnswSearcher, VectorStore,
+        GraphMem, HnswSearcher, VectorStore, LINEAR_SCAN_MAX_GRAPH_LAYER,
     },
     network::mpc::{build_network_handle, NetworkHandle, NetworkHandleArgs},
     protocol::{
@@ -212,8 +210,6 @@ const _: () = {
 
 /// Rotation support as configured by SearchRotations.
 pub type VecRotations<T> = VecRotationSupport<T, HAWK_BASE_ROTATIONS_MASK>;
-
-const LINEAR_SCAN_MAX_GRAPH_LAYER: usize = 1;
 
 #[derive(Clone, Parser)]
 pub struct HawkArgs {

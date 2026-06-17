@@ -10,7 +10,7 @@ use iris_mpc_cpu::{
             OpCountersLayer, Operation, ParamVertexOpeningsCounter, StaticCounter,
         },
         searcher::LayerDistribution,
-        GraphMem, HnswSearcher,
+        GraphMem, HnswSearcher, LINEAR_SCAN_MAX_GRAPH_LAYER,
     },
 };
 use rand::SeedableRng;
@@ -98,7 +98,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut rng = AesRng::seed_from_u64(42_u64);
     let mut graph = GraphMem::new();
-    let mut searcher = HnswSearcher::new_standard(ef_constr, ef_search, M);
+    let mut searcher =
+        HnswSearcher::new_linear_scan(ef_constr, ef_search, M, LINEAR_SCAN_MAX_GRAPH_LAYER);
     if let Some(q) = layer_probability {
         match &mut searcher.layer_distribution {
             LayerDistribution::Geometric { layer_probability } => *layer_probability = q,
