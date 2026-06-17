@@ -72,6 +72,14 @@ pub trait VectorStore: Debug {
         vectors
     }
 
+    /// Retain entrypoints (vector id, layer) whose vector id is valid
+    async fn only_valid_entry_points(
+        &mut self,
+        entry_points: Vec<(VectorId, usize)>,
+    ) -> Vec<(VectorId, usize)> {
+        entry_points
+    }
+
     /// Evaluate the distance between pairs of (query, vector), in batch.
     /// The default implementation is a loop over `eval_distance`.
     /// Override for more efficient batch distance evaluations.

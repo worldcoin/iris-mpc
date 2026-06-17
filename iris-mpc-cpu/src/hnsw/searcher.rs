@@ -379,12 +379,13 @@ impl HnswSearcher {
         let max_graph_layer = self.max_graph_layer;
 
         // Get all valid entry points
-        let (ep_vectors, ep_layers): (Vec<_>, Vec<_>) = graph
+        let entry_points: Vec<_> = graph
             .entry_points
             .iter()
             .map(|ep| (ep.point, ep.layer))
-            .unzip();
-        let ep_vectors = store.only_valid_vectors(ep_vectors).await;
+            .collect();
+        let entry_points = store.only_valid_entry_points(entry_points).await;
+        let (ep_vectors, ep_layers): (Vec<VectorId>, Vec<usize>) = entry_points.into_iter().unzip();
         metrics::gauge!("entry_points_count").set(ep_vectors.len() as f64);
 
         // TODO when updating entry points, should check for invalid vectors and remove

@@ -339,6 +339,15 @@ impl<D: DistanceOps> VectorStore for SharedPlaintextStore<D> {
         vectors.retain(|v| storage.contains(v));
         vectors
     }
+
+    async fn only_valid_entry_points(
+        &mut self,
+        mut entry_points: Vec<(VectorId, usize)>,
+    ) -> Vec<(VectorId, usize)> {
+        let storage = self.storage.read().await;
+        entry_points.retain(|(v, _)| storage.contains(v));
+        entry_points
+    }
 }
 
 impl<D: DistanceOps> VectorStoreMut for SharedPlaintextStore<D> {
