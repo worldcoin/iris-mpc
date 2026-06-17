@@ -10,12 +10,7 @@ use crate::{
         InsertPlanV, StoreId,
     },
     hawkers::aby3::aby3_store::{Aby3DistanceRef, Aby3Query, Aby3Store, DistanceOps},
-    hnsw::{
-        graph::neighborhood::{Neighborhood, UnsortedNeighborhood},
-        graph::UpdateEntryPoint,
-        searcher::NeighborhoodMode,
-        GraphMem, HnswSearcher, SortedNeighborhood,
-    },
+    hnsw::{graph::UpdateEntryPoint, GraphMem, HnswSearcher},
 };
 use eyre::{OptionExt, Result};
 use iris_mpc_common::iris_db::iris::Threshold;
@@ -99,7 +94,6 @@ pub async fn search<const ROTMASK: u32>(
     search_queries: &SearchQueries<ROTMASK>,
     search_ids: &SearchIds,
     search_params: SearchParams,
-    mode: NeighborhoodMode,
 ) -> Result<SearchResults<ROTMASK>> {
     let n_sessions = sessions[LEFT].len();
     assert_eq!(n_sessions, sessions[RIGHT].len());
@@ -114,33 +108,17 @@ pub async fn search<const ROTMASK: u32>(
         let search_ids = search_ids.clone();
         let search_params = search_params.clone();
         let tx = tx.clone();
-        let mode = mode.clone();
 
         async move {
-            match mode {
-                NeighborhoodMode::Sorted => {
-                    per_session::<_, SortedNeighborhood<_>>(
-                        &session,
-                        &search_queries,
-                        &search_ids,
-                        &search_params,
-                        tx,
-                        batch,
-                    )
-                    .await
-                }
-                NeighborhoodMode::Unsorted => {
-                    per_session::<_, UnsortedNeighborhood<_>>(
-                        &session,
-                        &search_queries,
-                        &search_ids,
-                        &search_params,
-                        tx,
-                        batch,
-                    )
-                    .await
-                }
-            }
+            per_session(
+                &session,
+                &search_queries,
+                &search_ids,
+                &search_params,
+                tx,
+                batch,
+            )
+            .await
         }
     };
 
@@ -154,7 +132,7 @@ pub async fn search<const ROTMASK: u32>(
 }
 
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
-async fn per_session<const ROTMASK: u32, N: Neighborhood<Aby3Store<HawkOps>>>(
+async fn per_session<const ROTMASK: u32>(
     session: &HawkSession,
     search_queries: &SearchQueries<ROTMASK>,
     search_ids: &SearchIds,
@@ -179,7 +157,7 @@ async fn per_session<const ROTMASK: u32, N: Neighborhood<Aby3Store<HawkOps>>>(
                 let insertion_layer = search_params
                     .hnsw
                     .gen_layer_prf(&session.hnsw_prf_key, &layer_selection_value)?;
-                per_insert_query::<N>(
+                per_insert_query(
                     query,
                     search_params,
                     &mut vector_store,
@@ -254,7 +232,7 @@ async fn classify_and_extend(
         metrics::counter!("supermatcher_extended_searches").increment(1);
 
         let supermatch_neighbors = hnsw_supermatch
-            .search::<_, SortedNeighborhood<_>>(aby3_store, graph_store, query, ef_supermatch)
+            .search(aby3_store, graph_store, query, ef_supermatch)
             .await?;
 
         let supermatch_classified = classify_edges(
@@ -334,7 +312,7 @@ async fn classify_edges(
     })
 }
 
-async fn per_insert_query<N: Neighborhood<Aby3Store<HawkOps>>>(
+async fn per_insert_query(
     query: Aby3Query,
     search_params: &SearchParams,
     aby3_store: &mut Aby3Store<HawkOps>,
@@ -345,7 +323,7 @@ async fn per_insert_query<N: Neighborhood<Aby3Store<HawkOps>>>(
 
     let (links, update_ep) = search_params
         .hnsw
-        .search_to_insert::<_, N>(aby3_store, graph_store, &query, insertion_layer)
+        .search_to_insert(aby3_store, graph_store, &query, insertion_layer)
         .await?;
 
     let classified = if search_params.do_match {
@@ -399,7 +377,7 @@ async fn per_search_query(
     let ef_search = search_params.hnsw.params.get_ef_search(0);
     let layer_0_neighbors = search_params
         .hnsw
-        .search::<_, SortedNeighborhood<_>>(aby3_store, graph_store, &query, ef_search)
+        .search(aby3_store, graph_store, &query, ef_search)
         .await?;
 
     let links_unstructured = vec![layer_0_neighbors.edge_ids()];
@@ -447,7 +425,7 @@ pub async fn search_single_query_no_match_count<H: std::hash::Hash>(
     let insertion_layer = searcher.gen_layer_prf(&session.hnsw_prf_key, identifier)?;
 
     let (links, update_ep) = searcher
-        .search_to_insert::<_, SortedNeighborhood<_>>(&mut *store, &graph, &query, insertion_layer)
+        .search_to_insert(&mut *store, &graph, &query, insertion_layer)
         .await?;
 
     // Trim and extract unstructured vector lists
@@ -513,14 +491,7 @@ mod tests {
             'T',
         );
 
-        let result = search(
-            &sessions,
-            search_queries,
-            &request.ids,
-            search_params,
-            NeighborhoodMode::Sorted,
-        )
-        .await?;
+        let result = search(&sessions, search_queries, &request.ids, search_params).await?;
 
         for side in result {
             assert_eq!(side.len(), batch_size);

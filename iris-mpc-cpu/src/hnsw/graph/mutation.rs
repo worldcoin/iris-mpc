@@ -112,11 +112,11 @@ impl UnstampedMutation {
             } = op
             {
                 if matches!(edge_type, EdgeType::Base | EdgeType::All) {
-                    out.push((base.clone(), *layer));
+                    out.push((*base, *layer));
                 }
                 if matches!(edge_type, EdgeType::Neighbors | EdgeType::All) {
                     for n in neighbors {
-                        out.push((n.clone(), *layer));
+                        out.push((*n, *layer));
                     }
                 }
             }
@@ -146,11 +146,11 @@ impl UnstampedMutation {
                     edge_type,
                 } => {
                     if matches!(edge_type, EdgeType::Base | EdgeType::All) {
-                        out.push((base.clone(), *layer));
+                        out.push((*base, *layer));
                     }
                     if matches!(edge_type, EdgeType::Neighbors | EdgeType::All) {
                         for n in neighbors {
-                            out.push((n.clone(), *layer));
+                            out.push((*n, *layer));
                         }
                     }
                 }

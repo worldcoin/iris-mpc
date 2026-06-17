@@ -11,7 +11,7 @@ use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{
         graph::test_utils::DbContext, searcher::LayerDistribution, vector_store::VectorStoreMut,
-        GraphMem, HnswSearcher, SortedNeighborhood,
+        GraphMem, HnswSearcher,
     },
     protocol::shared_iris::{GaloisRingSharedIris, GaloisRingSharedIrisPair},
     utils::{
@@ -397,12 +397,7 @@ async fn main() -> Result<()> {
 
                 let insertion_layer = searcher.gen_layer_prf(&prf_seed, &(inserted_id, side))?;
                 let (neighbors, update_ep) = searcher
-                    .search_to_insert::<_, SortedNeighborhood<_>>(
-                        &mut vector_store,
-                        &graph,
-                        &query,
-                        insertion_layer,
-                    )
+                    .search_to_insert(&mut vector_store, &graph, &query, insertion_layer)
                     .await?;
                 searcher
                     .insert_from_search_results(
