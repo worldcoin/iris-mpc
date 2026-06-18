@@ -33,7 +33,7 @@ impl GraphMutationFormat {
     /// Integer stored in `mutation_format_version` DB column.
     pub fn version(&self) -> i16 {
         match self {
-            GraphMutationFormat::Current | GraphMutationFormat::V0 => 1,
+            GraphMutationFormat::Current | GraphMutationFormat::V0 => 0,
         }
     }
 }
@@ -43,7 +43,7 @@ impl TryFrom<i16> for GraphMutationFormat {
 
     fn try_from(v: i16) -> Result<Self> {
         match v {
-            1 => Ok(GraphMutationFormat::V0),
+            0 => Ok(GraphMutationFormat::V0),
             _ => Err(eyre::eyre!(
                 "unsupported GraphMutation format version: {}",
                 v

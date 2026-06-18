@@ -192,22 +192,22 @@ mod tests {
 
     /// Serialize a pair of mutation lists into the bincode format expected by
     /// `GraphMutationRow`.
-    fn serialize_mutations(left: Vec<GraphMutation>, right: Vec<GraphMutation>) -> Result<Vec<u8>> {
+    fn serialize_mutations(left: Vec<GraphMutation>, right: Vec<GraphMutation>) -> Vec<u8> {
         let both_eyes: [Vec<GraphMutation>; 2] = [left, right];
-        serialize_mutations_current(&both_eyes)
+        serialize_mutations_current(&both_eyes).expect("bincode serialization failed")
     }
 
     fn make_row(
         modification_id: i64,
         left: Vec<GraphMutation>,
         right: Vec<GraphMutation>,
-    ) -> Result<GraphMutationRow> {
-        let serialized_mutations = serialize_mutations(left, right)?;
-        Ok(GraphMutationRow {
+    ) -> GraphMutationRow {
+        let serialized_mutations = serialize_mutations(left, right);
+        GraphMutationRow {
             modification_id,
             mutation_format_version: GraphMutationFormat::Current.version(),
             serialized_mutations,
-        })
+        }
     }
 
     /// Construct a `VectorId` from a plain serial id for use in tests.
@@ -248,7 +248,7 @@ mod tests {
     fn add_node_appears_in_correct_eye() {
         let mut both_eyes = [GraphMem::new(), GraphMem::new()];
         // Left eye gets node 1; right eye gets nothing.
-        let row = make_row(1, vec![add_node(vid(1))], vec![]).unwrap();
+        let row = make_row(1, vec![add_node(vid(1))], vec![]);
         apply_graph_mutations(&mut both_eyes, vec![row]).unwrap();
 
         assert_eq!(
@@ -270,7 +270,7 @@ mod tests {
     #[test]
     fn mutations_applied_to_both_eyes_independently() {
         let mut both_eyes = [GraphMem::new(), GraphMem::new()];
-        let row = make_row(1, vec![add_node(vid(1))], vec![add_node(vid(10))]).unwrap();
+        let row = make_row(1, vec![add_node(vid(1))], vec![add_node(vid(10))]);
         apply_graph_mutations(&mut both_eyes, vec![row]).unwrap();
 
         assert_eq!(
@@ -290,9 +290,9 @@ mod tests {
     fn multiple_rows_applied_in_order() {
         let mut both_eyes = [GraphMem::new(), GraphMem::new()];
         let rows = vec![
-            make_row(1, vec![add_node(vid(1))], vec![add_node(vid(10))]).unwrap(),
-            make_row(2, vec![add_node(vid(2))], vec![add_node(vid(20))]).unwrap(),
-            make_row(3, vec![add_node(vid(3))], vec![add_node(vid(30))]).unwrap(),
+            make_row(1, vec![add_node(vid(1))], vec![add_node(vid(10))]),
+            make_row(2, vec![add_node(vid(2))], vec![add_node(vid(20))]),
+            make_row(3, vec![add_node(vid(3))], vec![add_node(vid(30))]),
         ];
         apply_graph_mutations(&mut both_eyes, rows).unwrap();
 
@@ -317,7 +317,7 @@ mod tests {
         let mut both_eyes = [GraphMem::new(), GraphMem::new()];
         let bad_row = GraphMutationRow {
             modification_id: 99,
-            mutation_format_version: 1,
+            mutation_format_version: GraphMutationFormat::Current,
             serialized_mutations: vec![0xFF, 0xFE, 0xFD], // not valid bincode
         };
         assert!(
