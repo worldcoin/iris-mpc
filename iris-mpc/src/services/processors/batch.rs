@@ -1228,13 +1228,30 @@ impl<'a> BatchProcessor<'a> {
                 sqs_message.message_id
             ))
         })?;
-        self.client
-            .delete_message()
-            .queue_url(&self.config.requests_queue_url)
-            .receipt_handle(receipt_handle)
-            .send()
-            .await
-            .map_err(ReceiveRequestError::from)?;
+        // DeleteMessage is idempotent, so a transient blip here is safe to
+        // retry. The crash-to-recover contract above is preserved: if the ack
+        // still fails after the attempts are exhausted, the error propagates
+        // and the restart path (orphan-row GC + SQS redelivery) runs.
+        retry_transient(
+            "SQS delete_message",
+            SQS_RETRY_MAX_ATTEMPTS,
+            SQS_RETRY_INITIAL_BACKOFF,
+            || {
+                let client = self.client.clone();
+                let queue_url = self.config.requests_queue_url.clone();
+                let receipt_handle = receipt_handle.to_owned();
+                async move {
+                    client
+                        .delete_message()
+                        .queue_url(queue_url)
+                        .receipt_handle(receipt_handle)
+                        .send()
+                        .await
+                }
+            },
+        )
+        .await
+        .map_err(ReceiveRequestError::from)?;
         tracing::debug!("Deleted message: {:?}", sqs_message.message_id);
         Ok(())
     }
