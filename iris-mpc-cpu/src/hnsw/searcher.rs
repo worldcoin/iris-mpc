@@ -159,6 +159,22 @@ impl HnswParams {
         }
     }
 
+    /// Fully replace the per-layer search `ef` (both live search and
+    /// search-during-construction) from a slice indexed from layer 0 upward.
+    /// This overrides every layer, including layer 0, ignoring the scalar
+    /// `ef_search` set at construction. Layers beyond the slice reuse its last
+    /// value; entries past `N_PARAM_LAYERS` are ignored (mirrors `get_val`'s
+    /// clamping). An empty slice leaves the parameters unchanged.
+    pub fn override_ef_search_layers(&mut self, ef_layers: &[usize]) {
+        if let Some(&last) = ef_layers.last() {
+            for lc in 0..N_PARAM_LAYERS {
+                let ef = ef_layers.get(lc).copied().unwrap_or(last);
+                self.ef_search[lc] = ef;
+                self.ef_constr_search[lc] = ef;
+            }
+        }
+    }
+
     pub fn get_M(&self, lc: usize) -> usize {
         Self::get_val(&self.M, lc)
     }

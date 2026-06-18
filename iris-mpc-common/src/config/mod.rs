@@ -223,6 +223,16 @@ pub struct Config {
     #[serde(default = "default_hnsw_param_ef_search")]
     pub hnsw_param_ef_search: usize,
 
+    /// Optional per-layer search `ef` override, indexed from layer 0 upward.
+    /// When set, fully replaces `hnsw_param_ef_search` (every layer, including
+    /// layer 0) and the default greedy (ef=1) upper-layer traversal, for both
+    /// live search and search-during-construction. Values beyond the last entry
+    /// reuse the last value (e.g. `[256, 8]` → layer 0 = 256, layers 1+ = 8;
+    /// use `[256, 1]` to keep upper layers greedy). Must agree across all
+    /// parties (part of the common-config hash).
+    #[serde(default)]
+    pub hnsw_param_ef_search_layers_override: Option<Vec<usize>>,
+
     #[serde(default = "default_hnsw_param_ef_supermatch")]
     pub hnsw_param_ef_supermatch: usize,
 
@@ -680,6 +690,8 @@ pub struct CommonConfig {
     hnsw_param_ef_constr: usize,
     hnsw_param_m: usize,
     hnsw_param_ef_search: usize,
+    #[serde(default)]
+    hnsw_param_ef_search_layers_override: Option<Vec<usize>>,
     hnsw_param_ef_supermatch: usize,
     hnsw_param_ef_saturation_margin: usize,
     hnsw_layer_density: Option<usize>,
@@ -764,6 +776,7 @@ impl From<Config> for CommonConfig {
             hnsw_param_ef_constr,
             hnsw_param_m,
             hnsw_param_ef_search,
+            hnsw_param_ef_search_layers_override,
             hnsw_param_ef_supermatch,
             hnsw_param_ef_saturation_margin,
             hnsw_layer_density,
@@ -837,6 +850,7 @@ impl From<Config> for CommonConfig {
             hnsw_param_ef_constr,
             hnsw_param_m,
             hnsw_param_ef_search,
+            hnsw_param_ef_search_layers_override,
             hnsw_param_ef_supermatch,
             hnsw_param_ef_saturation_margin,
             hnsw_layer_density,
