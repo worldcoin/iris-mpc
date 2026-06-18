@@ -7,13 +7,13 @@ pub struct GraphMutationV0 {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct VectorId {
-    id: u32,
-    version: i16,
+pub struct VectorId {
+    pub id: u32,
+    pub version: i16,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-enum EdgeType {
+pub enum EdgeType {
     /// Affects forward edges from the base node
     Base,
 
@@ -25,19 +25,16 @@ enum EdgeType {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-enum UpdateEntryPoint {
+pub enum UpdateEntryPoint {
     /// Do not update entry points based on inserted vector.
     False,
-
-    /// Set a new unique entry point.
-    SetUnique { layer: usize },
 
     /// Append a new entry point to the current list.
     Append { layer: usize },
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-enum MutationOp {
+pub enum MutationOp {
     AddNode {
         id: VectorId,
         /// Number of real graph layers this node is included in. The node will

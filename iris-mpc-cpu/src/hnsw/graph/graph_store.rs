@@ -834,7 +834,7 @@ mod tests {
             ops: vec![MutationOp::AddNode {
                 id: VectorId::from_serial_id(1),
                 height: 1,
-                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+                update_ep: UpdateEntryPoint::Append { layer: 0 },
             }],
         };
         let plan_right = GraphMutation {
@@ -842,7 +842,7 @@ mod tests {
             ops: vec![MutationOp::AddNode {
                 id: VectorId::from_serial_id(2),
                 height: 1,
-                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+                update_ep: UpdateEntryPoint::Append { layer: 0 },
             }],
         };
         let both: BothEyes<Vec<GraphMutation>> =

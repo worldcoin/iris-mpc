@@ -186,9 +186,6 @@ pub enum UpdateEntryPoint {
     /// Do not update entry points based on inserted vector.
     False,
 
-    /// Set a new unique entry point.
-    SetUnique { layer: usize },
-
     /// Append a new entry point to the current list.
     Append { layer: usize },
 }
