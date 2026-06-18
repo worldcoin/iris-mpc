@@ -148,7 +148,7 @@ impl IrisDiffSearch {
     /// Returns `None` when the search is complete (worklist empty, sample
     /// cap reached, or round limit hit).  On `Some`, returns the ranges
     /// to split and this party's left-half hashes — pass both to
-    /// [`complete_round`] after exchanging hashes with neighbours.
+    /// `complete_round` after exchanging hashes with neighbours.
     pub fn prepare_round(
         &mut self,
         range_hash: impl Fn(u32, u32) -> u64,

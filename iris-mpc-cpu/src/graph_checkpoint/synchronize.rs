@@ -317,7 +317,7 @@ mod tests {
         let mut both_eyes = [GraphMem::new(), GraphMem::new()];
         let bad_row = GraphMutationRow {
             modification_id: 99,
-            mutation_format_version: GraphMutationFormat::Current,
+            mutation_format_version: GraphMutationFormat::Current.version(),
             serialized_mutations: vec![0xFF, 0xFE, 0xFD], // not valid bincode
         };
         assert!(

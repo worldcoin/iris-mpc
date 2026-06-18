@@ -81,7 +81,7 @@ impl Int4Vector {
     /// `{-8..=7}`.
     ///
     /// Out-of-range values follow the same masking behavior as
-    /// [`Self::encode_nibble`]: silently masked in release, debug-asserted.
+    /// `encode_nibble`: silently masked in release, debug-asserted.
     pub fn set(&mut self, i: usize, value: i8) {
         let byte = &mut self.packed[i / 2];
         let nibble = Self::encode_nibble(value);
