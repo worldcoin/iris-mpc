@@ -14,18 +14,18 @@ pub enum GraphMutationFormat {
     /// Designated current stable format — resolves to `V1`.
     Current,
 
-    /// V1: plain `bincode::serialize(BothEyes<Vec<GraphMutation>>)`.
+    /// V0: plain `bincode::serialize(BothEyes<Vec<GraphMutation>>)`.
     ///
     /// This is the format that existed before versioning was introduced.
-    /// All previously-written rows are implicitly V1.
-    V1,
+    /// All previously-written rows are implicitly V0.
+    V0,
 }
 
 impl GraphMutationFormat {
     /// Integer stored in `mutation_format_version` DB column.
     pub fn version(&self) -> i16 {
         match self {
-            GraphMutationFormat::Current | GraphMutationFormat::V1 => 1,
+            GraphMutationFormat::Current | GraphMutationFormat::V0 => 1,
         }
     }
 }
@@ -35,7 +35,7 @@ impl TryFrom<i16> for GraphMutationFormat {
 
     fn try_from(v: i16) -> Result<Self> {
         match v {
-            1 => Ok(GraphMutationFormat::V1),
+            1 => Ok(GraphMutationFormat::V0),
             _ => Err(eyre::eyre!(
                 "unsupported GraphMutation format version: {}",
                 v
@@ -63,8 +63,9 @@ pub fn deserialize_mutations(
     bytes: &[u8],
 ) -> Result<BothEyes<Vec<GraphMutation>>> {
     match format {
-        GraphMutationFormat::Current | GraphMutationFormat::V1 => Ok(bincode::deserialize(bytes)?), // When a V2 is added: add arm here, define a types/graph_mutation_v2.rs
-                                                                                                    // intermediate struct with From<GraphMutationV2> → BothEyes<Vec<GraphMutation>>,
-                                                                                                    // and call bincode::deserialize::<GraphMutationV2>(bytes)?.into()
+        GraphMutationFormat::Current | GraphMutationFormat::V0 => Ok(bincode::deserialize(bytes)?),
+        // When a V2 is added: add arm here, define a types/graph_mutation_v2.rs
+        // intermediate struct with From<GraphMutationV2> → BothEyes<Vec<GraphMutation>>,
+        // and call bincode::deserialize::<GraphMutationV2>(bytes)?.into()
     }
 }
