@@ -130,7 +130,7 @@ use std::{
     future::Future,
     hash::{Hash, Hasher},
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
     vec,
 };
 use tokio::sync::{mpsc, oneshot, RwLock, RwLockWriteGuard};
@@ -2126,7 +2126,35 @@ impl HawkHandle {
         if job_failed {
             tracing::error!("job failed. recreating sessions");
             // There is some error so the sessions may be somehow invalid. Make new ones.
-            *sessions = hawk_actor.new_session_groups().await?;
+            //
+            // Retried because otherwise a single transient blip during the rebuild
+            // returns Err -> stop=true in the run loop -> the actor halts
+            // permanently. Safe to retry here: the PRF key is already initialized
+            // (get_or_init_prf_key is a no-op), so only the inter-party network is
+            // re-established, and all parties enter this path together. A
+            // persistent failure still surfaces once attempts are exhausted.
+            const MAX_ATTEMPTS: u32 = 5;
+            const MAX_BACKOFF: Duration = Duration::from_secs(5);
+            let mut attempt = 0u32;
+            let mut backoff = Duration::from_millis(200);
+            *sessions = loop {
+                attempt += 1;
+                match hawk_actor.new_session_groups().await {
+                    Ok(new_sessions) => break new_sessions,
+                    Err(e) if attempt >= MAX_ATTEMPTS => return Err(e),
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to recreate sessions (attempt {}/{}): {:?}. Retrying in {:?}...",
+                            attempt,
+                            MAX_ATTEMPTS,
+                            e,
+                            backoff
+                        );
+                        tokio::time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(MAX_BACKOFF);
+                    }
+                }
+            };
         }
 
         // Validate the common state after processing the requests.
