@@ -6,7 +6,7 @@ use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
 use aws_sdk_s3::{primitives::ByteStream, Client};
 use eyre::{bail, eyre, Result};
 use futures::{stream, StreamExt};
-use iris_mpc_common::{vector_id::VectorId, IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
+use iris_mpc_common::{VectorId, IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
 use std::{mem, sync::Arc, time::Duration};
 use tokio::{io::AsyncReadExt, sync::mpsc::Sender};
 

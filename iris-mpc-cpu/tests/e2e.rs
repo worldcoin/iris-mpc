@@ -6,7 +6,7 @@ use iris_mpc_common::{
     iris_db::{db::IrisDB, iris::IrisCode},
     job::{BatchMetadata, BatchQuery, JobSubmissionHandle, ServerJobResult},
     test::{generate_full_test_db, prepare_batch, E2ETemplate, TestCaseGenerator},
-    vector_id::VectorId,
+    VectorId,
 };
 use iris_mpc_cpu::{
     execution::hawk_main::{HawkActor, HawkArgs, HawkHandle, HawkMutation},

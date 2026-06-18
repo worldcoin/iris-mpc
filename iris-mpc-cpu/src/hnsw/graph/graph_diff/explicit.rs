@@ -4,7 +4,7 @@ use std::{
 };
 
 use clap::ValueEnum;
-use iris_mpc_common::IrisVectorId;
+use iris_mpc_common::VectorId;
 
 use super::{jaccard::JaccardState, Differ};
 
@@ -29,8 +29,8 @@ impl Display for SortBy {
 /// Contains the explicit differences between two neighborhoods for a single node.
 #[derive(Debug, Clone)]
 pub struct NeighborhoodDiff {
-    pub only_in_lhs: HashSet<IrisVectorId>,
-    pub only_in_rhs: HashSet<IrisVectorId>,
+    pub only_in_lhs: HashSet<VectorId>,
+    pub only_in_rhs: HashSet<VectorId>,
     pub jaccard_state: JaccardState,
 }
 
@@ -40,7 +40,7 @@ pub struct ExplicitDiff(pub Vec<LayerDiffResult>);
 #[derive(Debug, Clone)]
 pub struct LayerDiffResult {
     pub layer_index: usize,
-    pub diffs: Vec<(IrisVectorId, NeighborhoodDiff)>,
+    pub diffs: Vec<(VectorId, NeighborhoodDiff)>,
 }
 
 impl Display for ExplicitDiff {
@@ -87,7 +87,7 @@ impl Display for ExplicitDiff {
 pub struct ExplicitNeighborhoodDiffer {
     sort_by: SortBy,
     per_layer_results: Vec<LayerDiffResult>,
-    current_layer_diffs: Vec<(IrisVectorId, NeighborhoodDiff)>,
+    current_layer_diffs: Vec<(VectorId, NeighborhoodDiff)>,
 }
 
 impl ExplicitNeighborhoodDiffer {
@@ -110,9 +110,9 @@ impl Differ for ExplicitNeighborhoodDiffer {
     fn diff_neighborhood(
         &mut self,
         _layer_index: usize,
-        node: &IrisVectorId,
-        lhs: &[IrisVectorId],
-        rhs: &[IrisVectorId],
+        node: &VectorId,
+        lhs: &[VectorId],
+        rhs: &[VectorId],
     ) {
         let lhs_set: HashSet<_> = lhs.iter().cloned().collect();
         let rhs_set: HashSet<_> = rhs.iter().cloned().collect();

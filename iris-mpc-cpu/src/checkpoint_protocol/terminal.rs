@@ -189,10 +189,10 @@ impl TerminalAction for InstallAsServing {
 mod tests {
     use super::*;
     use crate::hnsw::graph::mutation::{GraphMutation, MutationOp, UpdateEntryPoint};
-    use iris_mpc_common::IrisVectorId;
+    use iris_mpc_common::VectorId;
 
-    fn vid(n: u32) -> IrisVectorId {
-        IrisVectorId::from_serial_id(n)
+    fn vid(n: u32) -> VectorId {
+        VectorId::from_serial_id(n)
     }
 
     fn cp_meta() -> CheckpointMeta {

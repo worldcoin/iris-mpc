@@ -1,4 +1,4 @@
-use iris_mpc_common::IrisVectorId;
+use iris_mpc_common::VectorId;
 use iris_mpc_cpu::{
     execution::hawk_main::BothEyes,
     hawkers::plaintext_store::PlaintextStore,
@@ -73,10 +73,10 @@ impl WalMutationBuilder {
         for idx in starting_idx..new_len {
             let node_id = idx + 1;
             // All nodes added before this one become neighbors.
-            let neighbors: Vec<IrisVectorId> = (1..=node_id)
+            let neighbors: Vec<VectorId> = (1..=node_id)
                 .filter(|x| x != &node_id)
                 .map(|x| x as u32)
-                .map(IrisVectorId::from_serial_id)
+                .map(VectorId::from_serial_id)
                 .collect();
 
             let mut mutation = GraphMutation {
@@ -84,14 +84,14 @@ impl WalMutationBuilder {
                 ops: vec![],
             };
             mutation.ops.push(MutationOp::AddNode {
-                id: IrisVectorId::from_serial_id(node_id as _),
+                id: VectorId::from_serial_id(node_id as _),
                 height: 1,
                 update_ep: UpdateEntryPoint::False,
             });
 
             if !neighbors.is_empty() {
                 mutation.ops.push(MutationOp::AddEdges {
-                    base: IrisVectorId::from_serial_id(node_id as _),
+                    base: VectorId::from_serial_id(node_id as _),
                     neighbors,
                     layer: 0,
                     edge_type: EdgeType::All,
@@ -128,18 +128,18 @@ impl WalMutationBuilder {
     pub fn add_node_with_neighbors(&mut self, neighbor_ids: &[u32]) -> &mut Self {
         let node_id = (self.entries.len() + 1) as u32;
         let modification_id = node_id as i64;
-        let neighbors: Vec<IrisVectorId> = neighbor_ids
+        let neighbors: Vec<VectorId> = neighbor_ids
             .iter()
-            .map(|&id| IrisVectorId::from_serial_id(id))
+            .map(|&id| VectorId::from_serial_id(id))
             .collect();
         let mut ops = vec![MutationOp::AddNode {
-            id: IrisVectorId::from_serial_id(node_id),
+            id: VectorId::from_serial_id(node_id),
             height: 1,
             update_ep: UpdateEntryPoint::False,
         }];
         if !neighbors.is_empty() {
             ops.push(MutationOp::AddEdges {
-                base: IrisVectorId::from_serial_id(node_id),
+                base: VectorId::from_serial_id(node_id),
                 neighbors,
                 layer: 0,
                 edge_type: EdgeType::All,

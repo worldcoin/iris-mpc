@@ -77,7 +77,7 @@ for del_id in del_ids {
 ## Serial ID Mapping Summary
 
 ```
-Client IrisSerialId (1-based)
+Client SerialId (1-based)
   ↓ request_enqueuer: IdentityDeletionRequest { serial_id }
 Server process_identity_deletion:
   ↓ push_deletion_request(serial_id - 1)   →  0-based index
@@ -88,5 +88,5 @@ ServerJobResult.deleted_ids = [0-based indices]
   ↓ job.rs: serial_id = idx + 1
 IdentityDeletionResult { serial_id }   →  back to 1-based
   ↓ SNS → SQS
-Client is_correlation: parent.IrisSerialId == result.serial_id
+Client is_correlation: parent.SerialId == result.serial_id
 ```

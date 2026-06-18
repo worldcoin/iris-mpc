@@ -46,7 +46,7 @@ use ampc_actor_utils::{
 use async_trait::async_trait;
 use clap::Parser;
 use eyre::Result;
-use iris_mpc_common::{job::JobSubmissionHandle, vector_id::VectorId};
+use iris_mpc_common::{job::JobSubmissionHandle, VectorId};
 use iris_mpc_cpu::{
     execution::{
         hawk_main::{

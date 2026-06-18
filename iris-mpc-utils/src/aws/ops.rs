@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use iris_mpc_common::IrisSerialId;
+use iris_mpc_common::SerialId;
 use iris_mpc_cpu::execution::hawk_main::BothEyes;
 
 use super::{
@@ -13,13 +13,10 @@ use crate::{constants::N_PARTIES, irises::GaloisRingSharedIrisForUpload};
 
 impl AwsClient {
     /// Uploads Iris serial identifiers marked for deletion.
-    pub async fn s3_upload_iris_deletions(
-        &self,
-        data: &[IrisSerialId],
-    ) -> Result<(), AwsClientError> {
+    pub async fn s3_upload_iris_deletions(&self, data: &[SerialId]) -> Result<(), AwsClientError> {
         #[derive(Serialize)]
         struct S3Data<'a> {
-            deleted_serial_ids: &'a [IrisSerialId],
+            deleted_serial_ids: &'a [SerialId],
         }
 
         let data = S3Data {

@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use iris_mpc_common::vector_id::{SerialId, VectorId, VersionId};
+use iris_mpc_common::{SerialId, VectorId, VersionId};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};

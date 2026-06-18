@@ -8,7 +8,7 @@ use futures::StreamExt;
 use iris_mpc_cpu::execution::hawk_main::BothEyes;
 use rand::rngs::StdRng;
 
-use iris_mpc_common::{helpers::smpc_request, IrisSerialId};
+use iris_mpc_common::{helpers::smpc_request, SerialId};
 use tokio::time::{sleep, timeout, Instant};
 use uuid::Uuid;
 
@@ -209,7 +209,7 @@ impl ServiceClient {
 
         for (item_idx, opts) in batch.iter().enumerate() {
             // Resolve parent serial ID from labels or use provided ID.
-            let parent_serial_id: Option<IrisSerialId> = match opts.get_parent() {
+            let parent_serial_id: Option<SerialId> = match opts.get_parent() {
                 Some(Parent::Id(id)) => Some(id),
                 Some(Parent::Label(label)) => {
                     if let Some(&serial_id) = self.state.uniqueness_labels.get(label.as_str()) {
@@ -428,11 +428,11 @@ impl std::fmt::Display for ErrorBits {
 
 // Holds the cross-batch state needed while processing requests and responses.
 struct ExecState {
-    uniqueness_labels: HashMap<String, IrisSerialId>,
+    uniqueness_labels: HashMap<String, SerialId>,
     signup_id_to_labels: HashMap<Uuid, String>,
     outstanding_requests: HashMap<Uuid, typeset::RequestInfo>,
-    outstanding_deletions: HashMap<IrisSerialId, typeset::RequestInfo>,
-    live_serial_ids: HashSet<IrisSerialId>,
+    outstanding_deletions: HashMap<SerialId, typeset::RequestInfo>,
+    live_serial_ids: HashSet<SerialId>,
     error_bits: ErrorBits,
 }
 

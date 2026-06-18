@@ -5,7 +5,7 @@ use crate::{
 };
 use aws_sdk_s3::Client as S3_Client;
 use eyre::Result;
-use iris_mpc_common::{config::Config, helpers::sync::Modification, IrisSerialId};
+use iris_mpc_common::{config::Config, helpers::sync::Modification, SerialId};
 use iris_mpc_store::Store;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
@@ -37,12 +37,12 @@ pub const STATE_KEY_LAST_INDEXED_MODIFICATION_ID: &str = "last_indexed_modificat
 pub async fn get_iris_deletions(
     config: &Config,
     s3_client: &S3_Client,
-    max_indexation_id: IrisSerialId,
-) -> Result<Vec<IrisSerialId>, IndexationError> {
+    max_indexation_id: SerialId,
+) -> Result<Vec<SerialId>, IndexationError> {
     // Struct for deserialization.
     #[derive(Serialize, Deserialize, Debug, Clone)]
     struct S3Object {
-        deleted_serial_ids: Vec<IrisSerialId>,
+        deleted_serial_ids: Vec<SerialId>,
     }
 
     // Set bucket and key based on environment
@@ -132,7 +132,7 @@ pub async fn get_iris_modifications(
 ///
 pub async fn get_last_indexed_iris_id(
     graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
-) -> Result<IrisSerialId> {
+) -> Result<SerialId> {
     get_state_element(graph_store, STATE_KEY_LAST_INDEXED_IRIS_ID).await
 }
 
@@ -180,7 +180,7 @@ async fn get_state_element<T: DeserializeOwned + Default>(
 ///
 pub async fn set_last_indexed_iris_id(
     tx: &mut Transaction<'_, Postgres>,
-    value: IrisSerialId,
+    value: SerialId,
 ) -> Result<(), IndexationError> {
     set_state_element(tx, STATE_KEY_LAST_INDEXED_IRIS_ID, &value).await
 }

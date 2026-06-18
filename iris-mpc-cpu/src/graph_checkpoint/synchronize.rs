@@ -182,7 +182,7 @@ pub fn apply_graph_mutations(
 mod tests {
     use super::*;
     use crate::hnsw::graph::mutation::{MutationOp, UpdateEntryPoint};
-    use iris_mpc_common::IrisVectorId;
+    use iris_mpc_common::VectorId;
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
@@ -205,13 +205,13 @@ mod tests {
     }
 
     /// Construct a `VectorId` from a plain serial id for use in tests.
-    fn vid(id: u32) -> IrisVectorId {
-        IrisVectorId::from_serial_id(id)
+    fn vid(id: u32) -> VectorId {
+        VectorId::from_serial_id(id)
     }
 
     /// A minimal `AddNode` mutation that adds the node to layer 0 without
     /// updating entry points. Uses a static counter to assign incrementing seq_no.
-    fn add_node(id: IrisVectorId) -> GraphMutation {
+    fn add_node(id: VectorId) -> GraphMutation {
         use std::sync::atomic::{AtomicU64, Ordering};
         static SEQ_COUNTER: AtomicU64 = AtomicU64::new(1);
 

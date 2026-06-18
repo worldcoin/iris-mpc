@@ -9,7 +9,7 @@ use clap::ValueEnum;
 use eyre::Result;
 use iris_mpc_common::{
     iris_db::iris::{IrisCode, IrisCodeArray},
-    IrisVectorId,
+    VectorId,
 };
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -118,7 +118,7 @@ impl PlaintextStore {
         // Iterate over each deserialized object
         let mut vector = PlaintextStore::new();
         for (idx, iris) in stream_iterator.enumerate() {
-            let id = IrisVectorId::from_0_index(idx as u32);
+            let id = VectorId::from_0_index(idx as u32);
             vector.insert_with_id(id, Arc::new(iris));
         }
 

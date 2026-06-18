@@ -29,7 +29,7 @@
 use std::sync::Arc;
 
 use eyre::Result;
-use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
+use iris_mpc_common::{iris_db::iris::IrisCode, VectorId};
 use itertools::Itertools;
 use tokio::task::JoinSet;
 use tracing::info;
@@ -47,7 +47,7 @@ const REPORTING_INTERVAL: usize = 1000;
 pub async fn plaintext_parallel_batch_insert<D: DistanceOps>(
     graph: GraphMem,
     mut store: SharedPlaintextStore<D>,
-    irises: Vec<(IrisVectorId, IrisCode)>,
+    irises: Vec<(VectorId, IrisCode)>,
     searcher: &HnswSearcher,
     batch_size: usize,
     prf_seed: &[u8; 16],
@@ -132,7 +132,7 @@ pub async fn plaintext_parallel_batch_insert<D: DistanceOps>(
 pub async fn deep_id_parallel_batch_insert(
     graph: GraphMem,
     mut store: SharedPlaintextDeepIDStore,
-    vectors: Vec<(IrisVectorId, Int4Vector)>,
+    vectors: Vec<(VectorId, Int4Vector)>,
     searcher: &HnswSearcher,
     batch_size: usize,
     prf_seed: &[u8; 16],
@@ -232,7 +232,7 @@ mod tests {
         HnswSearcher,
         GraphMem,
         SharedPlaintextStore,
-        Vec<(IrisVectorId, IrisCode)>,
+        Vec<(VectorId, IrisCode)>,
         [u8; 16],
     )> {
         let mut rng = AesRng::seed_from_u64(0_u64);
@@ -249,12 +249,12 @@ mod tests {
 
         let irises_to_insert = IrisDB::new_random_rng(to_insert, &mut rng).db;
 
-        let irises: Vec<(IrisVectorId, IrisCode)> = irises_to_insert
+        let irises: Vec<(VectorId, IrisCode)> = irises_to_insert
             .into_iter()
             .enumerate()
             .map(|(id, iris_code)| {
                 (
-                    IrisVectorId::from_serial_id((id + database_size + 1).try_into().unwrap()),
+                    VectorId::from_serial_id((id + database_size + 1).try_into().unwrap()),
                     iris_code,
                 )
             })
@@ -266,7 +266,7 @@ mod tests {
     async fn check_results(
         mut store: SharedPlaintextStore,
         graph: GraphMem,
-        irises: Vec<(IrisVectorId, IrisCode)>,
+        irises: Vec<(VectorId, IrisCode)>,
         searcher: &HnswSearcher,
         expected_total_size: usize,
     ) -> Result<()> {
@@ -345,10 +345,10 @@ mod tests {
         let shared_store: SharedPlaintextDeepIDStore = store.into();
 
         // Build the to-insert batch with explicit ids past the seeded range.
-        let to_insert_vectors: Vec<(IrisVectorId, Int4Vector)> = (0..to_insert)
+        let to_insert_vectors: Vec<(VectorId, Int4Vector)> = (0..to_insert)
             .map(|i| {
                 (
-                    IrisVectorId::from_serial_id((i + database_size + 1).try_into().unwrap()),
+                    VectorId::from_serial_id((i + database_size + 1).try_into().unwrap()),
                     Int4Vector::random(&mut rng),
                 )
             })

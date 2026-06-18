@@ -14,7 +14,7 @@ use crate::{
 };
 use eyre::{OptionExt, Result};
 use iris_mpc_common::iris_db::iris::Threshold;
-use iris_mpc_common::vector_id::VectorId;
+use iris_mpc_common::VectorId;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};

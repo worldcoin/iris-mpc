@@ -7,7 +7,7 @@ use super::{
 };
 use crate::execution::hawk_main::{iris_worker::QueryId, search::SearchIds};
 use eyre::Result;
-use iris_mpc_common::vector_id::VectorId;
+use iris_mpc_common::VectorId;
 
 pub struct IdentityUpdateRequests {
     pub vector_ids: Vec<VectorId>,

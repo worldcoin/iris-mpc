@@ -14,8 +14,7 @@ use crate::{
         iris::{IrisCode, IrisCodeArray},
     },
     job::{BatchQuery, JobSubmissionHandle, ServerJobResult},
-    vector_id::VectorId,
-    IRIS_CODE_LENGTH,
+    VectorId, IRIS_CODE_LENGTH,
 };
 use eyre::Result;
 use itertools::izip;

@@ -1,7 +1,7 @@
 use ampc_secret_sharing::RingElement;
 use eyre::{bail, eyre, Result};
 use futures::join;
-use iris_mpc_common::vector_id::VectorId;
+use iris_mpc_common::VectorId;
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher13;
 use std::{

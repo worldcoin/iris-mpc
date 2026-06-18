@@ -8,7 +8,7 @@ use iris_mpc_common::{
         REAUTH_MESSAGE_TYPE, RECOVERY_UPDATE_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
     },
     postgres::{AccessMode, PostgresClient},
-    vector_id::VectorId,
+    VectorId,
 };
 use iris_mpc_cpu::{
     execution::hawk_main::{BothEyes, LEFT, RIGHT},

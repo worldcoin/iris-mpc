@@ -7,7 +7,7 @@ use std::{
 
 use clap::ValueEnum;
 use eyre::{bail, Result};
-use iris_mpc_common::IrisVectorId;
+use iris_mpc_common::VectorId;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -385,10 +385,10 @@ pub fn write_graph_pair_to_file<P: AsRef<Path>>(path: P, data: [GraphMem; 2]) ->
 
 /* --------------- Conversion GraphV0 -> GraphMem ------------------- */
 
-impl From<graph_v0::PointId> for IrisVectorId {
+impl From<graph_v0::PointId> for VectorId {
     fn from(value: graph_v0::PointId) -> Self {
         // The V0 format only stores a u32 ID. We assume version 0.
-        IrisVectorId::new(value.0, 0)
+        VectorId::new(value.0, 0)
     }
 }
 
@@ -430,9 +430,9 @@ impl From<graph_v0::GraphV0> for GraphMem {
 
 /* --------------- Conversion GraphV1 -> GraphMem ------------------- */
 
-impl From<graph_v1::VectorId> for IrisVectorId {
+impl From<graph_v1::VectorId> for VectorId {
     fn from(value: graph_v1::VectorId) -> Self {
-        IrisVectorId::new(value.0, 0)
+        VectorId::new(value.0, 0)
     }
 }
 
@@ -450,10 +450,8 @@ impl From<graph_v1::Layer> for Layer {
         let mut layer = Layer::new();
         for (v, nb) in value.links.into_iter() {
             layer.set_links(
-                IrisVectorId::new(v.0, 1),
-                nb.0.into_iter()
-                    .map(|x| IrisVectorId::new(x.0, 1))
-                    .collect(),
+                VectorId::new(v.0, 1),
+                nb.0.into_iter().map(|x| VectorId::new(x.0, 1)).collect(),
             );
         }
         layer
@@ -476,9 +474,9 @@ impl From<graph_v1::GraphV1> for GraphMem {
 
 /* --------------- Conversion GraphV2 -> GraphMem ------------------- */
 
-impl From<graph_v2::VectorId> for IrisVectorId {
+impl From<graph_v2::VectorId> for VectorId {
     fn from(value: graph_v2::VectorId) -> Self {
-        IrisVectorId::new(value.id, value.version)
+        VectorId::new(value.id, value.version)
     }
 }
 
@@ -521,9 +519,9 @@ impl From<graph_v2::GraphV2> for GraphMem {
 
 /* --------------- Conversion GraphV3 -> GraphMem ------------------- */
 
-impl From<graph_v3::VectorId> for IrisVectorId {
+impl From<graph_v3::VectorId> for VectorId {
     fn from(value: graph_v3::VectorId) -> Self {
-        IrisVectorId::new(value.id, value.version)
+        VectorId::new(value.id, value.version)
     }
 }
 
@@ -559,9 +557,9 @@ impl From<graph_v3::GraphV3> for GraphMem {
 
 /* --------------- Conversion GraphV4 -> GraphMem ------------------- */
 
-impl From<graph_v4::VectorId> for IrisVectorId {
+impl From<graph_v4::VectorId> for VectorId {
     fn from(value: graph_v4::VectorId) -> Self {
-        IrisVectorId::new(value.id, value.version)
+        VectorId::new(value.id, value.version)
     }
 }
 
@@ -596,8 +594,8 @@ impl From<graph_v4::GraphV4> for GraphMem {
 
 /* --------------- Conversion GraphMem -> GraphV4 ------------------- */
 
-impl From<IrisVectorId> for graph_v4::VectorId {
-    fn from(value: IrisVectorId) -> Self {
+impl From<VectorId> for graph_v4::VectorId {
+    fn from(value: VectorId) -> Self {
         graph_v4::VectorId {
             id: value.serial_id(),
             version: value.version_id(),
@@ -783,7 +781,7 @@ mod tests {
     /// is overwhelmingly unlikely to coincide with sorted order — i.e. the test
     /// actually exercises the link sorting.
     fn sample_graph() -> GraphMem {
-        let v = IrisVectorId::from_serial_id;
+        let v = VectorId::from_serial_id;
         let mut layer = Layer::new();
         for &n in &[7u32, 3, 9, 1, 5, 8, 2, 6, 4] {
             layer.set_links(v(n), vec![v(n + 1), v(n + 2)]);

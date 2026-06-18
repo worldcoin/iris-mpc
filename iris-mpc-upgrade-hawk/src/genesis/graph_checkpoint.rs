@@ -1,6 +1,6 @@
 use aws_sdk_s3::Client as S3Client;
 use eyre::{bail, Result};
-use iris_mpc_common::IrisSerialId;
+use iris_mpc_common::SerialId;
 use iris_mpc_cpu::execution::hawk_main::{BothEyes, GraphRef, HawkOps};
 use iris_mpc_cpu::genesis::state_accessor::set_last_indexed_iris_id;
 use iris_mpc_cpu::graph_checkpoint::{upload_graph_checkpoint, GraphCheckpointState};
@@ -61,7 +61,7 @@ pub async fn maybe_rollback_iris_db(
     graph_checkpoint: &GraphCheckpointState,
     graph_store: &GraphPg<Aby3Store<HawkOps>>,
     iris_store: &IrisStore,
-    last_indexed_id: IrisSerialId,
+    last_indexed_id: SerialId,
     last_indexed_modification_id: i64,
 ) -> Result<()> {
     if last_indexed_modification_id != graph_checkpoint.last_indexed_modification_id {

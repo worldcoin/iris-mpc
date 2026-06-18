@@ -1,6 +1,6 @@
 use crate::hnsw::graph::graph_store::GraphCheckpointRow;
 use eyre::eyre;
-use iris_mpc_common::IrisSerialId;
+use iris_mpc_common::SerialId;
 use serde::{Deserialize, Serialize};
 use std::{fmt::Display, str::FromStr};
 
@@ -54,7 +54,7 @@ pub struct GraphCheckpointState {
     /// S3 key where the checkpoint is stored
     pub s3_key: String,
     /// Last iris serial ID included in this checkpoint
-    pub last_indexed_iris_id: IrisSerialId,
+    pub last_indexed_iris_id: SerialId,
     /// Last modification ID included in this checkpoint
     pub last_indexed_modification_id: i64,
     /// Last graph mutation ID included in this checkpoint (optional)
@@ -82,7 +82,7 @@ impl GraphCheckpointState {
 impl TryFrom<GraphCheckpointRow> for GraphCheckpointState {
     type Error = eyre::Error;
     fn try_from(value: GraphCheckpointRow) -> Result<Self, Self::Error> {
-        let last_indexed_iris_id: IrisSerialId =
+        let last_indexed_iris_id: SerialId =
             value.last_indexed_iris_id.try_into().map_err(|_| {
                 eyre!(
                     "Invalid last_indexed_iris_id for checkpoint: {}",

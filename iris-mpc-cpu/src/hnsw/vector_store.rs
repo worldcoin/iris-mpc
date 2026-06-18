@@ -1,5 +1,5 @@
 use eyre::{bail, OptionExt, Result};
-use iris_mpc_common::IrisVectorId as VectorId;
+use iris_mpc_common::VectorId;
 use itertools::izip;
 use serde::Serialize;
 use std::{fmt::Debug, hash::Hash};

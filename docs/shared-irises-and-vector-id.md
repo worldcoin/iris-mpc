@@ -5,7 +5,7 @@
 **File:** `iris-mpc-common/src/vector_id.rs`
 
 ```rust
-pub type SerialId = u32;    // re-exported as IrisSerialId
+pub type SerialId = u32;
 pub type VersionId = i16;
 
 pub struct VectorId {
@@ -19,8 +19,6 @@ Key methods:
 - `from_0_index(index: u32)` — serial_id = index + 1, version = 0
 - `next_version()` — same serial_id, version + 1
 - `serial_id()` → u32, `version_id()` → i16, `index()` → u32 (serial_id)
-
-**Important:** `IrisSerialId = SerialId = u32` (re-exported in `iris-mpc-common/src/lib.rs:33`).
 
 The 0-based index used in `BatchQuery.deletion_requests_indices` maps to serial_id via `index + 1`.
 

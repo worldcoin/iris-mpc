@@ -13,7 +13,7 @@ use crate::{
 use aes_prng::AesRng;
 use iris_mpc_common::{
     iris_db::{db::IrisDB, iris::IrisCode},
-    vector_id::VectorId,
+    VectorId,
 };
 use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};

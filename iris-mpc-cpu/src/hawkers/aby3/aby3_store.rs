@@ -29,7 +29,7 @@ use crate::{
 };
 use ampc_secret_sharing::shares::{vecshare_bittranspose::Transpose64, VecShare};
 use eyre::{bail, OptionExt, Result};
-use iris_mpc_common::{iris_db::iris::Threshold, vector_id::VectorId};
+use iris_mpc_common::{iris_db::iris::Threshold, VectorId};
 use itertools::{izip, Itertools};
 use rand_distr::{Distribution, Standard};
 use static_assertions::const_assert;

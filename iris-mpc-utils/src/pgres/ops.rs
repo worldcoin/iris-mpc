@@ -1,5 +1,5 @@
 use eyre::Result;
-use iris_mpc_common::{helpers::sync::Modification, IrisVectorId};
+use iris_mpc_common::{helpers::sync::Modification, VectorId};
 use iris_mpc_store::Store;
 use sqlx::{Postgres, Transaction};
 use std::ops::DerefMut;
@@ -23,7 +23,7 @@ pub async fn increment_iris_version(
 }
 
 /// Returns set of an Iris's versions - historical plus present.
-pub async fn get_iris_vector_ids(store: &Store) -> Result<Vec<IrisVectorId>> {
+pub async fn get_iris_vector_ids(store: &Store) -> Result<Vec<VectorId>> {
     let ids: Vec<(i64, i16)> = sqlx::query_as(
         r#"
             SELECT
@@ -38,7 +38,7 @@ pub async fn get_iris_vector_ids(store: &Store) -> Result<Vec<IrisVectorId>> {
 
     let ids = ids
         .into_iter()
-        .map(|(serial_id, version)| IrisVectorId::new(serial_id as u32, version))
+        .map(|(serial_id, version)| VectorId::new(serial_id as u32, version))
         .collect();
 
     Ok(ids)

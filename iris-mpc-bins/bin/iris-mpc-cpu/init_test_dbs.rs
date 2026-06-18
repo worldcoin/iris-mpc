@@ -4,7 +4,7 @@ use aws_sdk_s3::config::Region as S3Region;
 use aws_sdk_s3::Client as S3Client;
 use clap::Parser;
 use eyre::Result;
-use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId, IrisVectorId};
+use iris_mpc_common::{iris_db::iris::IrisCode, SerialId, VectorId};
 use iris_mpc_cpu::{
     execution::hawk_main::STORE_IDS,
     hawkers::aby3::aby3_store::FhdOps,
@@ -393,7 +393,7 @@ async fn main() -> Result<()> {
                 }
                 let query = Arc::new(raw_query.iris_code);
 
-                let inserted_id = IrisVectorId::from_serial_id(serial_id);
+                let inserted_id = VectorId::from_serial_id(serial_id);
                 vector_store.insert_with_id(inserted_id, query.clone());
 
                 let insertion_layer = searcher.gen_layer_prf(&prf_seed, &(inserted_id, side))?;

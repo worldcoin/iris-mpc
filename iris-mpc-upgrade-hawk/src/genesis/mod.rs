@@ -19,7 +19,7 @@ use iris_mpc_common::{
     config::{CommonConfig, Config, ENV_PROD, ENV_STAGE},
     helpers::{smpc_request, sync::Modification},
     postgres::{AccessMode, PostgresClient},
-    IrisSerialId,
+    SerialId,
 };
 pub use iris_mpc_cpu::genesis::BatchSizeConfig;
 use iris_mpc_cpu::{
@@ -72,7 +72,7 @@ const DEFAULT_REGION: &str = "eu-north-1";
 #[derive(Debug, Clone)]
 pub struct ExecutionArgs {
     // Serial identifier of maximum indexed Iris.
-    pub max_indexation_id: IrisSerialId,
+    pub max_indexation_id: SerialId,
 
     // Batch size configuration (static or dynamic with cap).
     pub batch_size_config: BatchSizeConfig,
@@ -112,10 +112,10 @@ struct ExecutionContextInfo {
     config: Config,
 
     // Serial idenitifer of last indexed Iris.
-    last_indexed_id: IrisSerialId,
+    last_indexed_id: SerialId,
 
     // Set identifiers of Iris's to be excluded from indexation.
-    excluded_serial_ids: Vec<IrisSerialId>,
+    excluded_serial_ids: Vec<SerialId>,
 
     // Set of modifications to be applied.
     modifications: Vec<Modification>,
@@ -133,8 +133,8 @@ impl ExecutionContextInfo {
     fn new(
         args: &ExecutionArgs,
         config: &Config,
-        last_indexed_id: IrisSerialId,
-        excluded_serial_ids: Vec<IrisSerialId>,
+        last_indexed_id: SerialId,
+        excluded_serial_ids: Vec<SerialId>,
         modifications: Vec<Modification>,
         max_modification_indexed_id: i64,
         max_modification_persist_id: i64,
@@ -1498,8 +1498,8 @@ fn validate_config(config: &Config) -> Result<()> {
 async fn validate_consistency_of_stores(
     config: &Config,
     iris_store: &IrisStore,
-    max_indexation_id: IrisSerialId,
-    last_indexed_id: IrisSerialId,
+    max_indexation_id: SerialId,
+    last_indexed_id: SerialId,
 ) -> Result<()> {
     // Bail if last indexed id exceeds max indexation id
     if last_indexed_id > max_indexation_id {

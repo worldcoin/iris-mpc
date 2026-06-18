@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use crate::hnsw::GraphMem;
-use iris_mpc_common::IrisVectorId;
+use iris_mpc_common::VectorId;
 
 /// Describes how the node and layer structure of two graphs are not equivalent.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -9,15 +9,9 @@ pub enum NodeEquivalenceError {
     /// The graphs have a different number of layers.
     LayerCountMismatch { lhs_count: usize, rhs_count: usize },
     /// A node was found in the left-hand graph's layer that was not in the right's.
-    NodeMissingInRhs {
-        layer_index: usize,
-        node: IrisVectorId,
-    },
+    NodeMissingInRhs { layer_index: usize, node: VectorId },
     /// A node was found in the right-hand graph's layer that was not in the left's.
-    NodeMissingInLhs {
-        layer_index: usize,
-        node: IrisVectorId,
-    },
+    NodeMissingInLhs { layer_index: usize, node: VectorId },
 }
 
 /// Diffs the node and layer structure of two graphs.

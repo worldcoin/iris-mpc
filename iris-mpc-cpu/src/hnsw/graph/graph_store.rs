@@ -559,7 +559,7 @@ pub mod test_utils {
 mod tests {
     use super::{test_utils::TestGraphPg, *};
     use crate::hawkers::plaintext_store::PlaintextStore;
-    use iris_mpc_common::IrisVectorId;
+    use iris_mpc_common::VectorId;
     use tokio;
 
     #[tokio::test]
@@ -827,7 +827,7 @@ mod tests {
         let plan_left = GraphMutation {
             seq_no: 1,
             ops: vec![MutationOp::AddNode {
-                id: IrisVectorId::from_serial_id(1),
+                id: VectorId::from_serial_id(1),
                 height: 1,
                 update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
             }],
@@ -835,7 +835,7 @@ mod tests {
         let plan_right = GraphMutation {
             seq_no: 1,
             ops: vec![MutationOp::AddNode {
-                id: IrisVectorId::from_serial_id(2),
+                id: VectorId::from_serial_id(2),
                 height: 1,
                 update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
             }],

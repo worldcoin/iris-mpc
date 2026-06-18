@@ -18,7 +18,7 @@ use crate::{
     },
 };
 use eyre::{bail, eyre, Result};
-use iris_mpc_common::{IrisSerialId, IrisVectorId as VectorId};
+use iris_mpc_common::{SerialId, VectorId};
 use itertools::Itertools;
 use rand::{rngs::StdRng, seq::SliceRandom, Rng};
 use serde::{Deserialize, Serialize};
@@ -214,7 +214,7 @@ pub fn perturb_nibbles<R: Rng>(v: &Int4Vector, p: f64, rng: &mut R) -> Int4Vecto
 
 #[derive(Debug, Serialize)]
 pub struct AnalysisResult {
-    id: IrisSerialId,
+    id: SerialId,
     noise_level: f64,
     found: bool,
 }
@@ -360,7 +360,7 @@ pub fn process_results(config: &AnalysisConfig, results: Vec<AnalysisResult>) ->
             }
         }
         "histogram" => {
-            let mut min_failure_map: HashMap<IrisSerialId, usize> = HashMap::new();
+            let mut min_failure_map: HashMap<SerialId, usize> = HashMap::new();
             for res in results.iter() {
                 let key = (res.noise_level * PRECISION).floor() as usize;
                 if !res.found {

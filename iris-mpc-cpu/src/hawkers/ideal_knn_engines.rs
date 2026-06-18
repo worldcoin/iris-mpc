@@ -7,7 +7,7 @@ use std::{
 };
 
 use clap::ValueEnum;
-use iris_mpc_common::{iris_db::iris::IrisCode, IrisSerialId};
+use iris_mpc_common::{iris_db::iris::IrisCode, SerialId};
 use rayon::{
     iter::{IntoParallelIterator, ParallelIterator},
     ThreadPool, ThreadPoolBuilder,
@@ -200,12 +200,12 @@ pub struct NaiveKNN<K: IdealKnn> {
     knn: K,
     vectors: Vec<K::Vector>,
     k: usize,
-    next_id: IrisSerialId,
+    next_id: SerialId,
     pool: ThreadPool,
 }
 
 impl<K: IdealKnn> NaiveKNN<K> {
-    pub fn init(knn: K, vectors: Vec<K::Vector>, k: usize, next_id: IrisSerialId) -> Self {
+    pub fn init(knn: K, vectors: Vec<K::Vector>, k: usize, next_id: SerialId) -> Self {
         // The chunk loop indexes `self.vectors[i - 1]` for `i in next_id..end`,
         // so a starting id of 0 would underflow.
         assert!(next_id >= 1, "next_id must be >= 1 (1-based serial ids)");
@@ -218,14 +218,14 @@ impl<K: IdealKnn> NaiveKNN<K> {
         }
     }
 
-    pub fn next_id(&self) -> IrisSerialId {
+    pub fn next_id(&self) -> SerialId {
         self.next_id
     }
 
-    pub fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult<IrisSerialId>> {
+    pub fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult<SerialId>> {
         let start = self.next_id as usize;
         let end = (start + chunk_size).min(self.vectors.len() + 1);
-        self.next_id = end as IrisSerialId;
+        self.next_id = end as SerialId;
 
         let k = self.k;
         let knn = &self.knn;
@@ -262,11 +262,8 @@ impl<K: IdealKnn> NaiveKNN<K> {
                     });
 
                     KNNResult {
-                        node: i as IrisSerialId,
-                        neighbors: neighbors
-                            .into_iter()
-                            .map(|(j, _)| j as IrisSerialId)
-                            .collect(),
+                        node: i as SerialId,
+                        neighbors: neighbors.into_iter().map(|(j, _)| j as SerialId).collect(),
                     }
                 })
                 .collect::<Vec<_>>()
@@ -282,12 +279,7 @@ pub enum Engine {
 }
 
 impl Engine {
-    pub fn init(
-        which: EngineChoice,
-        irises: Vec<IrisCode>,
-        k: usize,
-        next_id: IrisSerialId,
-    ) -> Self {
+    pub fn init(which: EngineChoice, irises: Vec<IrisCode>, k: usize, next_id: SerialId) -> Self {
         assert!(k < irises.len());
         let distance_mode = which.distance_mode();
         match which {
@@ -306,7 +298,7 @@ impl Engine {
         }
     }
 
-    pub fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult<IrisSerialId>> {
+    pub fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult<SerialId>> {
         match self {
             Self::Fhd(engine) => engine.compute_chunk(chunk_size),
             Self::Nhd(engine) => engine.compute_chunk(chunk_size),
@@ -314,7 +306,7 @@ impl Engine {
     }
 
     /// Next id to process
-    pub fn next_id(&self) -> IrisSerialId {
+    pub fn next_id(&self) -> SerialId {
         match self {
             Self::Fhd(engine) => engine.next_id(),
             Self::Nhd(engine) => engine.next_id(),
@@ -331,7 +323,7 @@ impl EngineInt4 {
         which: EngineChoiceInt4,
         vectors: Vec<Int4Vector>,
         k: usize,
-        next_id: IrisSerialId,
+        next_id: SerialId,
     ) -> Self {
         assert!(k < vectors.len());
         match which {
@@ -341,13 +333,13 @@ impl EngineInt4 {
         }
     }
 
-    pub fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult<IrisSerialId>> {
+    pub fn compute_chunk(&mut self, chunk_size: usize) -> Vec<KNNResult<SerialId>> {
         match self {
             Self::Int4Dot(engine) => engine.compute_chunk(chunk_size),
         }
     }
 
-    pub fn next_id(&self) -> IrisSerialId {
+    pub fn next_id(&self) -> SerialId {
         match self {
             Self::Int4Dot(engine) => engine.next_id(),
         }
@@ -413,12 +405,12 @@ mod int4_engine_tests {
         for KNNResult { node, neighbors } in results {
             // Brute-force expected top-k by descending dot (excluding self).
             let me = &vectors[node as usize - 1];
-            let mut dists: Vec<(IrisSerialId, i32)> = (1..=n as IrisSerialId)
+            let mut dists: Vec<(SerialId, i32)> = (1..=n as SerialId)
                 .filter(|j| *j != node)
                 .map(|j| (j, me.dot(&vectors[j as usize - 1])))
                 .collect();
             dists.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-            let expected: Vec<IrisSerialId> = dists.into_iter().take(k).map(|(j, _)| j).collect();
+            let expected: Vec<SerialId> = dists.into_iter().take(k).map(|(j, _)| j).collect();
             assert_eq!(neighbors, expected, "node {} top-{}", node, k);
         }
     }

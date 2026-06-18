@@ -21,7 +21,7 @@ use crate::{
 };
 
 use crate::graph_checkpoint::data::*;
-use iris_mpc_common::IrisSerialId;
+use iris_mpc_common::SerialId;
 pub use multipart::*;
 pub use streaming::*;
 pub use streaming_download::*;
@@ -33,7 +33,7 @@ pub async fn upload_graph_checkpoint(
     party_id: usize,
     graph_mem: &BothEyes<GraphRef>,
     s3_client: &S3Client,
-    last_indexed_iris_id: IrisSerialId,
+    last_indexed_iris_id: SerialId,
     last_indexed_modification_id: i64,
     graph_mutation_id: Option<i64>,
     is_archival: bool,
@@ -72,7 +72,7 @@ pub async fn upload_graph_checkpoint_plaintext(
     party_id: usize,
     graph_mem: &BothEyes<GraphMem>,
     s3_client: &S3Client,
-    last_indexed_iris_id: IrisSerialId,
+    last_indexed_iris_id: SerialId,
     last_indexed_modification_id: i64,
     graph_mutation_id: Option<i64>,
     is_archival: bool,
@@ -107,7 +107,7 @@ async fn _upload_graph_checkpoint(
     bucket: &str,
     party_id: usize,
     s3_client: &S3Client,
-    last_indexed_iris_id: IrisSerialId,
+    last_indexed_iris_id: SerialId,
     last_indexed_modification_id: i64,
     graph_mutation_id: Option<i64>,
     is_archival: bool,
