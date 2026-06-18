@@ -163,3 +163,125 @@ impl From<GraphMutationV0> for GraphMutation {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_v0_deserialize() {
+        // Create test vector IDs
+        let vid1 = graph_mutation_v0::VectorId { id: 42, version: 1 };
+        let vid2 = graph_mutation_v0::VectorId { id: 99, version: 2 };
+        let vid3 = graph_mutation_v0::VectorId {
+            id: 100,
+            version: 3,
+        };
+
+        // Create test mutation operations
+        let ops = vec![
+            graph_mutation_v0::MutationOp::AddNode {
+                id: vid1.clone(),
+                height: 3,
+                update_ep: graph_mutation_v0::UpdateEntryPoint::Append { layer: 2 },
+            },
+            graph_mutation_v0::MutationOp::AddEdges {
+                base: vid2.clone(),
+                neighbors: vec![vid1.clone(), vid3.clone()],
+                layer: 1,
+                edge_type: graph_mutation_v0::EdgeType::All,
+            },
+            graph_mutation_v0::MutationOp::RemoveNode { id: vid3.clone() },
+        ];
+
+        // Create GraphMutationV0
+        let v0_mutation = graph_mutation_v0::GraphMutationV0 { seq_no: 12345, ops };
+
+        // Create BothEyes structure (array of 2)
+        let both_eyes: BothEyes<Vec<graph_mutation_v0::GraphMutationV0>> =
+            [vec![v0_mutation.clone()], vec![]];
+
+        // Serialize using bincode
+        let serialized = bincode::serialize(&both_eyes).expect("serialization failed");
+
+        // Deserialize using the public deserialize_mutations function
+        let deserialized = deserialize_mutations(GraphMutationFormat::V0, &serialized)
+            .expect("deserialization failed");
+
+        // Validate the deserialized data
+        assert_eq!(deserialized.len(), 2, "should have 2 eyes");
+        assert_eq!(deserialized[0].len(), 1, "first eye should have 1 mutation");
+        assert_eq!(
+            deserialized[1].len(),
+            0,
+            "second eye should have 0 mutations"
+        );
+
+        let converted_mutation = &deserialized[0][0];
+        assert_eq!(
+            converted_mutation.seq_no, 12345,
+            "seq_no should be preserved"
+        );
+        assert_eq!(converted_mutation.ops.len(), 3, "should have 3 ops");
+
+        // Validate first op (AddNode)
+        match &converted_mutation.ops[0] {
+            MutationOp::AddNode {
+                id,
+                height,
+                update_ep,
+            } => {
+                assert_eq!(id.serial_id(), 42, "first op: node id should be 42");
+                assert_eq!(id.version_id(), 1, "first op: node version should be 1");
+                assert_eq!(*height, 3, "first op: height should be 3");
+                match update_ep {
+                    UpdateEntryPoint::Append { layer } => {
+                        assert_eq!(*layer, 2, "first op: layer should be 2");
+                    }
+                    _ => panic!("expected Append update entry point"),
+                }
+            }
+            _ => panic!("expected AddNode op"),
+        }
+
+        // Validate second op (AddEdges)
+        match &converted_mutation.ops[1] {
+            MutationOp::AddEdges {
+                base,
+                neighbors,
+                layer,
+                edge_type,
+            } => {
+                assert_eq!(base.serial_id(), 99, "second op: base id should be 99");
+                assert_eq!(base.version_id(), 2, "second op: base version should be 2");
+                assert_eq!(*layer, 1, "second op: layer should be 1");
+                assert_eq!(neighbors.len(), 2, "second op: should have 2 neighbors");
+                assert_eq!(
+                    neighbors[0].serial_id(),
+                    42,
+                    "second op: first neighbor id should be 42"
+                );
+                assert_eq!(
+                    neighbors[1].serial_id(),
+                    100,
+                    "second op: second neighbor id should be 100"
+                );
+                assert_eq!(
+                    *edge_type,
+                    EdgeType::All,
+                    "second op: edge type should be All"
+                );
+            }
+            _ => panic!("expected AddEdges op"),
+        }
+
+        // Validate third op (RemoveNode)
+        match &converted_mutation.ops[2] {
+            MutationOp::RemoveNode { id } => {
+                assert_eq!(id.serial_id(), 100, "third op: node id should be 100");
+                assert_eq!(id.version_id(), 3, "third op: node version should be 3");
+            }
+            _ => panic!("expected RemoveNode op"),
+        }
+    }
+}
