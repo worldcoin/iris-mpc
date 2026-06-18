@@ -281,6 +281,8 @@ impl<V: VectorStore> GraphPg<V> {
         Ok(())
     }
 
+    /// INVARIANT: this function is only given GraphMutaionFormat::Current mutations.
+    /// Do not serialize into an old mutation format.
     pub async fn upsert_hawk_graph_mutations(
         &self,
         tx: &mut Transaction<'_, Postgres>,
