@@ -1,0 +1,66 @@
+image: "ghcr.io/worldcoin/iris-mpc-cpu:12ae100fc211b89295db2aa2cf23ffec6d27aecf-arm64"
+
+environment: dev
+schedule: "0 0 * * *"
+
+env:
+  ENV: "dev"
+  AWS_REGION: "eu-central-1"
+  RUST_LOG: "info"
+  RUST_BACKTRACE: "full"
+  SMPC__CPU_DATABASE__URL:
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
+        name: application
+  SMPC__TLS__PRIVATE_KEY: "/etc/ssl/private/key.pem"
+  SMPC__TLS__LEAF_CERT: "/etc/ssl/private/certificate.crt"
+  SMPC__TLS__ROOT_CERTS: '["/usr/local/share/ca-certificates/ca_party_dev_0.crt", "/usr/local/share/ca-certificates/ca_party_dev_1.crt", "/usr/local/share/ca-certificates/ca_party_dev_2.crt"]'
+
+backoffLimit: 0
+concurrencyPolicy: Forbid
+activeDeadlineSeconds: 1800
+ttlSecondsAfterFinished: 3600
+restartPolicy: Never
+
+command: ["/bin/wal-sidecar"]
+
+imagePullSecrets:
+  - name: github-secret
+
+ports:
+  - containerPort: 5000
+    name: tcp-5000
+    protocol: TCP
+  - containerPort: 5001
+    name: tcp-5001
+    protocol: TCP
+  - containerPort: 5002
+    name: tcp-5002
+    protocol: TCP
+
+resources:
+  limits:
+    cpu: 15
+    memory: 245Gi
+  requests:
+    cpu: 12
+    memory: 220Gi
+
+podAnnotations:
+  karpenter.sh/do-not-disrupt: "true"
+
+nodeSelector:
+  kubernetes.io/arch: arm64
+  karpenter.sh/capacity-type: on-demand
+  node.kubernetes.io/instance-type: "x8g.4xlarge"
+
+podSecurityContext:
+  runAsUser: 65534
+  runAsGroup: 65534
+
+terminationGracePeriodSeconds: 120
+
+mountSSLCerts:
+  enabled: true
+  mountPath: /etc/ssl/private
