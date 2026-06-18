@@ -5,7 +5,10 @@
 //! `exchange` issues both sends before either receive — matches
 //! `ControlChannel::sync`'s deadlock-avoidance pattern. With enough channel
 //! buffering for one proposal, all parties' sends finish before any blocks
-//! on a recv.
+//! on a recv. `liveness_barrier` follows the same sends-before-recvs shape
+//! across two rounds, so it needs buffering for two small messages per leg —
+//! trivially satisfied by TCP socket buffers (production `ControlChannel`
+//! sends block only until flushed, not until the peer consumes).
 
 use std::time::Duration;
 

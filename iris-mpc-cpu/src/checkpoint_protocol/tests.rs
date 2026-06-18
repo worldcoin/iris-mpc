@@ -123,6 +123,8 @@ struct MockTransport {
     calls: Arc<Mutex<Vec<ExchangeCall>>>,
     // FIFO queue of canned peer responses; each phase pops one entry.
     canned: Arc<Mutex<Vec<Vec<ConsensusMessage>>>>,
+    // When set, `liveness_barrier` fails transiently with this message.
+    barrier_err: Option<String>,
 }
 
 impl MockTransport {
@@ -130,6 +132,14 @@ impl MockTransport {
         Self {
             calls: Arc::new(Mutex::new(vec![])),
             canned: Arc::new(Mutex::new(canned)),
+            barrier_err: None,
+        }
+    }
+
+    fn with_barrier_err(canned: Vec<Vec<ConsensusMessage>>, msg: &str) -> Self {
+        Self {
+            barrier_err: Some(msg.to_string()),
+            ..Self::new(canned)
         }
     }
 }
@@ -180,7 +190,10 @@ impl ConsensusTransport for MockTransport {
     }
 
     async fn liveness_barrier(&self, _timeout: Duration) -> Result<(), CycleError> {
-        Ok(())
+        match &self.barrier_err {
+            Some(msg) => Err(CycleError::Transient(msg.clone())),
+            None => Ok(()),
+        }
     }
 }
 
@@ -261,6 +274,45 @@ fn hash_b() -> Blake3Hash {
 }
 
 // ── happy path ───────────────────────────────────────────────────────────
+
+/// A failing liveness barrier aborts the cycle before any agreement round or
+/// graph work — no exchange, no materialize, no finalize.
+#[tokio::test]
+async fn barrier_failure_short_circuits_before_side_effects() {
+    let mut mat = MockMaterializer::new();
+    let mut fin = MockFinalizer::new();
+    let store = MockStore::with_latest(meta(1, Some(0)), 100);
+    // Empty canned: reaching any exchange would itself error, so a clean
+    // Transient from the barrier proves it short-circuited first.
+    let transport = MockTransport::with_barrier_err(vec![], "peer down");
+    let hasher = ConstHasher(hash_a());
+
+    let err = run_cycle(
+        &mut mat,
+        &mut fin,
+        &transport,
+        &store,
+        &hasher,
+        &StrictLatest,
+        &cfg(10),
+    )
+    .await
+    .expect_err("barrier failure must abort the cycle");
+
+    assert!(matches!(err, CycleError::Transient(_)), "got {err:?}");
+    assert!(
+        transport.calls.lock().unwrap().is_empty(),
+        "no agreement round should run"
+    );
+    assert!(
+        mat.freezes.lock().unwrap().is_empty(),
+        "materializer must not run"
+    );
+    assert!(
+        fin.calls.lock().unwrap().is_empty(),
+        "finalizer must not run"
+    );
+}
 
 #[tokio::test]
 async fn happy_path_finalizes() {
