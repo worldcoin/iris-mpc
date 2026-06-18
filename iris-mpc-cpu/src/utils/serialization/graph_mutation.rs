@@ -14,7 +14,7 @@ pub enum GraphMutationFormat {
     /// Designated current stable format — resolves to `V1`.
     Current,
 
-    /// V1: plain `bincode::serialize(BothEyes<Vec<GraphMutation<IrisVectorId>>>)`.
+    /// V1: plain `bincode::serialize(BothEyes<Vec<GraphMutation>>)`.
     ///
     /// This is the format that existed before versioning was introduced.
     /// All previously-written rows are implicitly V1.

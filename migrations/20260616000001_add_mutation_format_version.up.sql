@@ -5,4 +5,4 @@
 -- New writes set this column explicitly via serialize_mutations_current().
 
 ALTER TABLE hawk_graph_mutations
-  ADD COLUMN mutation_format_version SMALLINT NOT NULL DEFAULT 1;
+  ADD COLUMN mutation_format_version SMALLINT NOT NULL DEFAULT 1 CHECK (mutation_format_version >= 1);

@@ -25,7 +25,7 @@ pub struct GraphCheckpointRow {
 #[derive(sqlx::FromRow, Debug, Clone, PartialEq, Eq)]
 pub struct GraphMutationRow {
     pub modification_id: i64,
-    /// Bincode-serialized `BothEyes<Vec<GraphMutation<VectorId>>>` (mutations for both eyes)
+    /// Bincode-serialized `BothEyes<Vec<GraphMutation>>` (mutations for both eyes)
     pub serialized_mutations: Vec<u8>,
     pub mutation_format_version: i16,
 }
