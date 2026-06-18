@@ -1,4 +1,7 @@
-use crate::{execution::hawk_main::BothEyes, hnsw::graph::GraphMutation};
+use crate::{
+    execution::hawk_main::BothEyes, hnsw::graph::GraphMutation,
+    utils::serialization::types::graph_mutation_v0::GraphMutationV0,
+};
 use eyre::Result;
 use serde::{Deserialize, Serialize};
 
@@ -63,9 +66,15 @@ pub fn deserialize_mutations(
     bytes: &[u8],
 ) -> Result<BothEyes<Vec<GraphMutation>>> {
     match format {
-        GraphMutationFormat::Current | GraphMutationFormat::V0 => Ok(bincode::deserialize(bytes)?),
+        GraphMutationFormat::Current | GraphMutationFormat::V0 => deserialize_v0_to_current(bytes),
         // When a V2 is added: add arm here, define a types/graph_mutation_v2.rs
         // intermediate struct with From<GraphMutationV2> → BothEyes<Vec<GraphMutation>>,
         // and call bincode::deserialize::<GraphMutationV2>(bytes)?.into()
     }
+}
+
+/* ------------- Private Helpers ------------- */
+
+fn deserialize_v0_to_current(bytes: &[u8]) -> Result<BothEyes<Vec<GraphMutation>>> {
+    let v0: BothEyes<Vec<GraphMutationV0>> = bincode::deserialize(bytes)?;
 }
