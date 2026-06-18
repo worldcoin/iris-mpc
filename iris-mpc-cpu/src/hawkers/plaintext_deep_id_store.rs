@@ -11,12 +11,12 @@ use crate::{
     hnsw::{
         metrics::ops_counter::Operation::{CompareDistance, EvaluateDistance},
         vector_store::VectorStoreMut,
-        GraphMem, HnswSearcher, SortedNeighborhood, VectorStore,
+        GraphMem, HnswSearcher, VectorStore,
     },
 };
 use aes_prng::AesRng;
 use eyre::{bail, Result};
-use iris_mpc_common::vector_id::VectorId;
+use iris_mpc_common::VectorId;
 use rand::{CryptoRng, Rng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
@@ -213,8 +213,8 @@ impl PlaintextDeepIDStore {
         rng: &mut R,
         graph_size: usize,
         searcher: &HnswSearcher,
-    ) -> Result<GraphMem<<Self as VectorStore>::VectorRef>> {
-        let mut graph = GraphMem::new();
+    ) -> Result<GraphMem> {
+        let mut graph: GraphMem = GraphMem::new();
         let mut rng = AesRng::from_rng(rng.clone())?;
 
         if graph_size > self.len() {
@@ -243,7 +243,7 @@ impl PlaintextDeepIDStore {
                 .unwrap_or_else(|| VectorId::from_serial_id(serial_id));
             let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
             let (neighbors, update_ep) = searcher
-                .search_to_insert::<_, SortedNeighborhood<_>>(self, &graph, &query, insertion_layer)
+                .search_to_insert(self, &graph, &query, insertion_layer)
                 .await?;
             searcher
                 .insert_from_search_results(self, &mut graph, query_id, neighbors, update_ep)
@@ -256,13 +256,9 @@ impl PlaintextDeepIDStore {
 
 impl VectorStore for PlaintextDeepIDStore {
     type QueryRef = Arc<Int4Vector>;
-    type VectorRef = VectorId;
     type DistanceRef = i32;
 
-    async fn vectors_as_queries(
-        &mut self,
-        vectors: Vec<Self::VectorRef>,
-    ) -> Result<Vec<Self::QueryRef>> {
+    async fn vectors_as_queries(&mut self, vectors: Vec<VectorId>) -> Result<Vec<Self::QueryRef>> {
         let queries = vectors
             .into_iter()
             .map(|id| {
@@ -277,7 +273,7 @@ impl VectorStore for PlaintextDeepIDStore {
     async fn eval_distance(
         &mut self,
         query: &Self::QueryRef,
-        vector: &Self::VectorRef,
+        vector: &VectorId,
     ) -> Result<Self::DistanceRef> {
         debug!(event_type = EvaluateDistance.id());
         let stored = self.storage.get_vector(vector).ok_or_else(|| {
@@ -311,25 +307,30 @@ impl VectorStore for PlaintextDeepIDStore {
         Ok(results)
     }
 
-    async fn only_valid_vectors(
-        &mut self,
-        mut vectors: Vec<Self::VectorRef>,
-    ) -> Vec<Self::VectorRef> {
+    async fn only_valid_vectors(&mut self, mut vectors: Vec<VectorId>) -> Vec<VectorId> {
         vectors.retain(|v| self.storage.contains(v));
         vectors
+    }
+
+    async fn only_valid_entry_points(
+        &mut self,
+        mut entry_points: Vec<(VectorId, usize)>,
+    ) -> Vec<(VectorId, usize)> {
+        entry_points.retain(|(v, _)| self.storage.contains(v));
+        entry_points
     }
 }
 
 impl VectorStoreMut for PlaintextDeepIDStore {
-    async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
+    async fn insert(&mut self, query: &Self::QueryRef) -> VectorId {
         self.storage.append(query.clone())
     }
 
     async fn insert_at(
         &mut self,
-        vector_ref: &Self::VectorRef,
+        vector_ref: &VectorId,
         query: &Self::QueryRef,
-    ) -> Result<Self::VectorRef> {
+    ) -> Result<VectorId> {
         Ok(self.storage.insert(*vector_ref, query.clone()))
     }
 }
@@ -369,13 +370,9 @@ impl From<PlaintextDeepIDStore> for SharedPlaintextDeepIDStore {
 
 impl VectorStore for SharedPlaintextDeepIDStore {
     type QueryRef = Arc<Int4Vector>;
-    type VectorRef = VectorId;
     type DistanceRef = i32;
 
-    async fn vectors_as_queries(
-        &mut self,
-        vectors: Vec<Self::VectorRef>,
-    ) -> Result<Vec<Self::QueryRef>> {
+    async fn vectors_as_queries(&mut self, vectors: Vec<VectorId>) -> Result<Vec<Self::QueryRef>> {
         let store = self.storage.read().await;
         let queries = vectors
             .into_iter()
@@ -391,7 +388,7 @@ impl VectorStore for SharedPlaintextDeepIDStore {
     async fn eval_distance(
         &mut self,
         query: &Self::QueryRef,
-        vector: &Self::VectorRef,
+        vector: &VectorId,
     ) -> Result<Self::DistanceRef> {
         let distances = self.eval_distance_batch(query, &[*vector]).await?;
         Ok(distances[0])
@@ -400,7 +397,7 @@ impl VectorStore for SharedPlaintextDeepIDStore {
     async fn eval_distance_batch(
         &mut self,
         query: &Self::QueryRef,
-        vectors: &[Self::VectorRef],
+        vectors: &[VectorId],
     ) -> Result<Vec<Self::DistanceRef>> {
         debug!(event_type = EvaluateDistance.id());
         // Snapshot Arc handles under the read lock, drop the guard, then
@@ -441,26 +438,32 @@ impl VectorStore for SharedPlaintextDeepIDStore {
         Ok(results)
     }
 
-    async fn only_valid_vectors(
-        &mut self,
-        mut vectors: Vec<Self::VectorRef>,
-    ) -> Vec<Self::VectorRef> {
+    async fn only_valid_vectors(&mut self, mut vectors: Vec<VectorId>) -> Vec<VectorId> {
         let store = self.storage.read().await;
         vectors.retain(|v| store.contains(v));
         vectors
     }
+
+    async fn only_valid_entry_points(
+        &mut self,
+        mut entry_points: Vec<(VectorId, usize)>,
+    ) -> Vec<(VectorId, usize)> {
+        let store = self.storage.read().await;
+        entry_points.retain(|(v, _)| store.contains(v));
+        entry_points
+    }
 }
 
 impl VectorStoreMut for SharedPlaintextDeepIDStore {
-    async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
+    async fn insert(&mut self, query: &Self::QueryRef) -> VectorId {
         self.storage.append(query).await
     }
 
     async fn insert_at(
         &mut self,
-        vector_ref: &Self::VectorRef,
+        vector_ref: &VectorId,
         query: &Self::QueryRef,
-    ) -> Result<Self::VectorRef> {
+    ) -> Result<VectorId> {
         Ok(self.storage.insert(*vector_ref, query).await)
     }
 }
@@ -468,6 +471,7 @@ impl VectorStoreMut for SharedPlaintextDeepIDStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hnsw::SortedNeighborhood;
     use tokio::task::JoinSet;
 
     #[test]

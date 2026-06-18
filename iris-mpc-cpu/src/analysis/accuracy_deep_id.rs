@@ -9,8 +9,7 @@ use crate::{
         Int4Vector, PlaintextDeepIDStore, SharedPlaintextDeepIDStore, INT4_DIM,
     },
     hnsw::{
-        graph::neighborhood::{UnsortedNeighborhood, WrappedNeighborhood},
-        searcher::{LayerDistribution, LayerMode, NeighborhoodMode, N_PARAM_LAYERS},
+        searcher::{LayerDistribution, N_PARAM_LAYERS},
         GraphMem, HnswParams, HnswSearcher, SortedNeighborhood,
     },
     utils::serialization::{
@@ -19,7 +18,7 @@ use crate::{
     },
 };
 use eyre::{bail, eyre, Result};
-use iris_mpc_common::{IrisSerialId, IrisVectorId as VectorId};
+use iris_mpc_common::{SerialId, VectorId};
 use itertools::Itertools;
 use rand::{rngs::StdRng, seq::SliceRandom, Rng};
 use serde::{Deserialize, Serialize};
@@ -71,7 +70,6 @@ pub struct AnalysisConfig {
     pub metrics_path: Option<PathBuf>,
     pub noise_levels: Vec<f64>,
     pub search_hnsw_config: HnswConfig,
-    pub neighborhood_mode: NeighborhoodMode,
 }
 
 impl AnalysisConfig {
@@ -105,7 +103,7 @@ pub struct HnswConfig {
     pub ef_construction: usize,
     pub ef_search: LayerValue<usize>,
     pub M: usize,
-    pub layer_mode: LayerMode,
+    pub max_graph_layer: usize,
     #[serde(default)]
     pub fixed_layer_search_batch_size: Option<usize>,
 }
@@ -129,12 +127,11 @@ impl From<&HnswConfig> for HnswSearcher {
             params.ef_constr_search = vals.try_into().unwrap();
         }
 
-        let layer_mode = value.layer_mode.clone();
         let layer_distribution = LayerDistribution::new_geometric_from_M(value.M);
 
         HnswSearcher {
             params,
-            layer_mode,
+            max_graph_layer: value.max_graph_layer,
             layer_distribution,
             fixed_layer_search_batch_size: value.fixed_layer_search_batch_size,
         }
@@ -173,7 +170,7 @@ pub async fn load_graph(
     config: &GraphInit,
     store: &mut PlaintextDeepIDStore,
     rng: &mut StdRng,
-) -> Result<GraphMem<VectorId>> {
+) -> Result<GraphMem> {
     match config {
         GraphInit::BinFile { path, format } => {
             println!("Loading graph from binary file: {}", path.display());
@@ -217,7 +214,7 @@ pub fn perturb_nibbles<R: Rng>(v: &Int4Vector, p: f64, rng: &mut R) -> Int4Vecto
 
 #[derive(Debug, Serialize)]
 pub struct AnalysisResult {
-    id: IrisSerialId,
+    id: SerialId,
     noise_level: f64,
     found: bool,
 }
@@ -239,7 +236,7 @@ where
 pub async fn run_analysis(
     config: AnalysisConfig,
     store: PlaintextDeepIDStore,
-    graph: GraphMem<VectorId>,
+    graph: GraphMem,
     rng: &mut StdRng,
 ) -> Result<Vec<AnalysisResult>> {
     config.validate()?;
@@ -292,30 +289,12 @@ pub async fn run_analysis(
 
             let analysis_searcher_clone = analysis_searcher.clone();
             let mut store_clone = store.clone();
-            let nb_mode = config.neighborhood_mode.clone();
             let graph_clone = Arc::clone(&graph);
 
             let future = async move {
-                let neighbors: WrappedNeighborhood<_> = match nb_mode {
-                    NeighborhoodMode::Sorted => analysis_searcher_clone
-                        .search::<_, SortedNeighborhood<_>>(
-                            &mut store_clone,
-                            &graph_clone,
-                            &query_ref,
-                            k_neighbors,
-                        )
-                        .await?
-                        .into(),
-                    NeighborhoodMode::Unsorted => analysis_searcher_clone
-                        .search::<_, UnsortedNeighborhood<_>>(
-                            &mut store_clone,
-                            &graph_clone,
-                            &query_ref,
-                            k_neighbors,
-                        )
-                        .await?
-                        .into(),
-                };
+                let neighbors: SortedNeighborhood<_> = analysis_searcher_clone
+                    .search(&mut store_clone, &graph_clone, &query_ref, k_neighbors)
+                    .await?;
 
                 let found = neighbors
                     .as_ref()
@@ -381,7 +360,7 @@ pub fn process_results(config: &AnalysisConfig, results: Vec<AnalysisResult>) ->
             }
         }
         "histogram" => {
-            let mut min_failure_map: HashMap<IrisSerialId, usize> = HashMap::new();
+            let mut min_failure_map: HashMap<SerialId, usize> = HashMap::new();
             for res in results.iter() {
                 let key = (res.noise_level * PRECISION).floor() as usize;
                 if !res.found {
@@ -414,7 +393,6 @@ pub fn process_results(config: &AnalysisConfig, results: Vec<AnalysisResult>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hnsw::searcher::LayerMode;
     use aes_prng::AesRng;
     use rand::SeedableRng;
 
@@ -423,7 +401,7 @@ mod tests {
             ef_construction: 32,
             ef_search: LayerValue::Single(32),
             M: 16,
-            layer_mode: LayerMode::LinearScan { max_graph_layer: 1 },
+            max_graph_layer: 1,
             fixed_layer_search_batch_size: None,
         }
     }
@@ -456,7 +434,6 @@ mod tests {
             metrics_path: None,
             noise_levels: vec![0.0],
             search_hnsw_config: small_hnsw_config(),
-            neighborhood_mode: NeighborhoodMode::Sorted,
         };
 
         let mut analysis_rng: StdRng = SeedableRng::seed_from_u64(0);

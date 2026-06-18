@@ -14,8 +14,7 @@ use crate::{
         iris::{IrisCode, IrisCodeArray},
     },
     job::{BatchQuery, JobSubmissionHandle, ServerJobResult},
-    vector_id::VectorId,
-    IRIS_CODE_LENGTH,
+    VectorId, IRIS_CODE_LENGTH,
 };
 use eyre::Result;
 use itertools::izip;
@@ -29,6 +28,7 @@ use std::{
     collections::{HashMap, HashSet},
     ops::Range,
 };
+use tracing::{info_span, Instrument};
 use uuid::Uuid;
 
 const THRESHOLD_ABSOLUTE: usize = IRIS_CODE_LENGTH * 345 / 1000; // 0.345 * 12800
@@ -1402,10 +1402,10 @@ impl TestCaseGenerator {
                 // First party processing this insertion
                 // Bounds check: new insertion idx must be >= initial_db_len
                 if idx < initial_db_len {
-                    tracing::warn!(
+                    panic!(
+                        "new insertion index is before initial database length (insertions should be after initial DB). idx {}, db_len: {}",
                         idx,
                         initial_db_len,
-                        "new insertion index is before initial database length (insertions should be after initial DB)"
                     );
                 }
                 let request = requests.get(req_id).unwrap().clone();
@@ -1462,9 +1462,21 @@ impl TestCaseGenerator {
 
             // send batches to servers
             let (res0_fut, res1_fut, res2_fut) = tokio::join!(
-                handle0.submit_batch_query(batch0),
-                handle1.submit_batch_query(batch1),
-                handle2.submit_batch_query(batch2)
+                {
+                    let idx = 0;
+                    let span = info_span!("mpc_node", idx = idx);
+                    handle0.submit_batch_query(batch0).instrument(span)
+                },
+                {
+                    let idx = 1;
+                    let span = info_span!("mpc_node", idx = idx);
+                    handle1.submit_batch_query(batch1).instrument(span)
+                },
+                {
+                    let idx = 2;
+                    let span = info_span!("mpc_node", idx = idx);
+                    handle2.submit_batch_query(batch2).instrument(span)
+                }
             );
 
             let res0 = res0_fut.await?;
@@ -1475,6 +1487,20 @@ impl TestCaseGenerator {
             for req in requests.keys() {
                 resp_counters.insert(req, 0);
             }
+
+            // Count expected insertions for this batch
+            let expected_insertions_this_batch = requests
+                .keys()
+                .filter_map(|req_id| self.expected_results.get(req_id))
+                .filter(|r| {
+                    r.db_index.is_none()
+                        && !r.is_skip_persistence_request
+                        && !r.is_reset_check
+                        && !r.is_full_face_mirror_attack
+                        && r.is_reauth_successful.is_none()
+                })
+                .count();
+            let inserted_before = self.inserted_responses.len();
 
             let results = [&res0, &res1, &res2];
             for res in results.iter() {
@@ -1535,6 +1561,14 @@ impl TestCaseGenerator {
             for (&id, &count) in resp_counters.iter() {
                 assert_eq!(count, 3, "Received {} responses for {}", count, id);
             }
+
+            // Verify that actual insertions match expected insertions
+            let actual_insertions = self.inserted_responses.len() - inserted_before;
+            assert_eq!(
+                actual_insertions, expected_insertions_this_batch,
+                "Expected {} insertions this batch, but got {}",
+                expected_insertions_this_batch, actual_insertions
+            );
         }
         Ok(())
     }

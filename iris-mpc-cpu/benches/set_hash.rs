@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use iris_mpc_common::vector_id::VectorId;
+use iris_mpc_common::VectorId;
 use iris_mpc_cpu::execution::hawk_main::state_check::SetHash;
 
 /// Benchmark that repeatedly calls insert on SharedIrises.

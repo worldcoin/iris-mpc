@@ -21,7 +21,7 @@ use iris_mpc_common::{
         RESET_UPDATE_MESSAGE_TYPE,
     },
     iris_db::iris::IrisCode,
-    IrisSerialId, IrisVectorId, IrisVersionId,
+    SerialId, VectorId, VersionId,
 };
 use itertools::izip;
 use rand::{thread_rng, Rng};
@@ -33,25 +33,22 @@ use crate::{
     },
     genesis::{BatchSize, BatchSizeConfig},
     graph_checkpoint::PruningMode,
-    hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
-    hnsw::{
-        graph::neighborhood::Neighborhood, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
-        SortedNeighborhood,
-    },
+    hawkers::plaintext_store::PlaintextStore,
+    hnsw::{vector_store::VectorStoreMut, GraphMem, HnswSearcher, LINEAR_SCAN_MAX_GRAPH_LAYER},
 };
 
 /// Represents irises db table, mapping serial ids to version, and left and right iris codes.
-pub type IrisesTable = HashMap<IrisSerialId, (IrisVersionId, IrisCode, IrisCode)>;
+pub type IrisesTable = HashMap<SerialId, (VersionId, IrisCode, IrisCode)>;
 
 /// Represents modifications db table, mapping modification ids to tuples of serial id,
 /// request type, completion flag, and persisted flag.
-pub type ModificationsTable = HashMap<i64, (IrisSerialId, String, bool, bool)>;
+pub type ModificationsTable = HashMap<i64, (SerialId, String, bool, bool)>;
 
 /// Represents a left/right pair of plaintext in-memory HNSW graphs.
-pub type PlaintextGraphs = BothEyes<GraphMem<PlaintextVectorRef>>;
+pub type PlaintextGraphs = BothEyes<GraphMem>;
 
 /// List of serial ids to treat as deleted enrollments in the source iris database.
-pub type GenesisDeletions = Vec<IrisSerialId>;
+pub type GenesisDeletions = Vec<SerialId>;
 
 /// Plaintext representation of global state of genesis indexer.
 #[derive(Default, Clone)]
@@ -88,7 +85,7 @@ pub struct GenesisDstDbState {
 /// Database entries for the PersistentState table.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct PersistentState {
-    pub last_indexed_iris_id: Option<IrisSerialId>,
+    pub last_indexed_iris_id: Option<SerialId>,
 
     pub last_indexed_modification_id: Option<i64>,
 }
@@ -108,7 +105,7 @@ pub struct GenesisConfig {
 /// Logical CLI arguments for genesis process.
 #[derive(Debug, Clone)]
 pub struct GenesisArgs {
-    pub max_indexation_id: IrisSerialId,
+    pub max_indexation_id: SerialId,
 
     pub batch_size_config: BatchSizeConfig,
 
@@ -165,7 +162,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
         reason = "HashMap keys are primary key for insertion, so result is independent of insertion ordering."
     )]
     for (serial_id, (version, left_iris, right_iris)) in state.src_db.irises.iter() {
-        let vector_id = IrisVectorId::new(*serial_id, *version);
+        let vector_id = VectorId::new(*serial_id, *version);
         left_store
             .insert_at(&vector_id, &Arc::new(left_iris.clone()))
             .await?;
@@ -178,7 +175,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
         state.config.hnsw_ef_constr,
         state.config.hnsw_ef_search,
         state.config.hnsw_m,
-        1, // should match the constant LINEAR_SCAN_MAX_GRAPH_LAYER
+        LINEAR_SCAN_MAX_GRAPH_LAYER,
     );
 
     let prf_key: [u8; 16] = state
@@ -222,7 +219,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                     .get(&serial_id)
                     .map(|(version, left_iris, right_iris)| {
                         (
-                            IrisVectorId::new(serial_id, *version),
+                            VectorId::new(serial_id, *version),
                             left_iris.clone(),
                             right_iris.clone(),
                         )
@@ -243,12 +240,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                     let insertion_layer = searcher.gen_layer_prf(&prf_key, &identifier)?;
 
                     let (links, update_ep) = searcher
-                        .search_to_insert::<_, SortedNeighborhood<_>>(
-                            store,
-                            graph,
-                            &query,
-                            insertion_layer,
-                        )
+                        .search_to_insert(store, graph, &query, insertion_layer)
                         .await?;
 
                     // Trim and extract unstructured vector lists
@@ -271,6 +263,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                         &searcher,
                         vec![Some(insert_plan)],
                         &vec![Some(vector_id)],
+                        &vec![None],
                     )
                     .await?;
                 }
@@ -305,7 +298,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
     // Generate and process batches until we've reached the target indexation id
     while id < target_id {
         // 1. Generate new batch
-        let mut batch: Vec<(IrisSerialId, bool)> = Vec::new(); // Iris serial id, whether it should be indexed
+        let mut batch: Vec<(SerialId, bool)> = Vec::new(); // Iris serial id, whether it should be indexed
         let mut n_to_index = 0;
         while n_to_index < batch_size && id < target_id {
             id += 1;
@@ -331,7 +324,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                 .get(cur_id)
                 .ok_or_eyre("Expected iris id missing")?
                 .clone();
-            let vector_id = IrisVectorId::new(*cur_id, version);
+            let vector_id = VectorId::new(*cur_id, version);
             ids.push(Some(vector_id));
 
             // Initial search and construct insert plans
@@ -347,12 +340,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                 let insertion_layer = searcher.gen_layer_prf(&prf_key, &identifier)?;
 
                 let (links, update_ep) = searcher
-                    .search_to_insert::<_, SortedNeighborhood<_>>(
-                        store,
-                        graph,
-                        &query,
-                        insertion_layer,
-                    )
+                    .search_to_insert(store, graph, &query, insertion_layer)
                     .await?;
 
                 // Trim and extract unstructured vector lists
@@ -379,7 +367,8 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
             &mut state.dst_db.graphs,
             [left_insert_plans, right_insert_plans]
         ) {
-            insert::insert(store, graph, &searcher, plans, &ids).await?;
+            let replace_ids = vec![None; plans.len()];
+            insert::insert(store, graph, &searcher, plans, &ids, &replace_ids).await?;
         }
 
         // 3. Copy all irises to destination db
@@ -409,7 +398,7 @@ mod tests {
         let irises_right = IrisDB::new_random_rng(n_src_enrollments, &mut rng).db;
         let src_db_irises: HashMap<_, _> = izip!(irises_left, irises_right)
             .enumerate()
-            .map(|(id, (left, right))| (id as IrisSerialId, (0, left, right)))
+            .map(|(id, (left, right))| (id as SerialId, (0, left, right)))
             .collect();
 
         GenesisState {
@@ -446,7 +435,7 @@ mod tests {
     fn apply_modification(
         state: &mut GenesisState,
         id: i64,
-        serial_id: IrisSerialId,
+        serial_id: SerialId,
         request_type: &str,
     ) {
         let mut rng = thread_rng();
@@ -465,7 +454,7 @@ mod tests {
     fn add_modification(
         state: &mut GenesisState,
         id: i64,
-        serial_id: IrisSerialId,
+        serial_id: SerialId,
         request_type: &str,
         completed: bool,
         persisted: bool,

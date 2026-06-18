@@ -5,7 +5,7 @@ use std::{
 };
 
 use clap::Parser;
-use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId};
+use iris_mpc_common::{iris_db::iris::IrisCode, SerialId};
 use iris_mpc_cpu::{
     hawkers::ideal_knn_engines::{Engine, EngineInt4, EngineKind, KNNResult},
     utils::serialization::{

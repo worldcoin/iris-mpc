@@ -1,13 +1,12 @@
 use std::{
     collections::HashSet,
     fmt::{Display, Formatter, Result},
-    str::FromStr,
 };
 
 use clap::ValueEnum;
+use iris_mpc_common::VectorId;
 
 use super::{jaccard::JaccardState, Differ};
-use crate::hnsw::vector_store::Ref;
 
 #[derive(Debug, Clone, ValueEnum)]
 pub enum SortBy {
@@ -29,22 +28,22 @@ impl Display for SortBy {
 
 /// Contains the explicit differences between two neighborhoods for a single node.
 #[derive(Debug, Clone)]
-pub struct NeighborhoodDiff<V: Ref> {
-    pub only_in_lhs: HashSet<V>,
-    pub only_in_rhs: HashSet<V>,
+pub struct NeighborhoodDiff {
+    pub only_in_lhs: HashSet<VectorId>,
+    pub only_in_rhs: HashSet<VectorId>,
     pub jaccard_state: JaccardState,
 }
 
 #[derive(Debug, Clone)]
-pub struct ExplicitDiff<V: Ref>(pub Vec<LayerDiffResult<V>>);
+pub struct ExplicitDiff(pub Vec<LayerDiffResult>);
 
 #[derive(Debug, Clone)]
-pub struct LayerDiffResult<V: Ref> {
+pub struct LayerDiffResult {
     pub layer_index: usize,
-    pub diffs: Vec<(V, NeighborhoodDiff<V>)>,
+    pub diffs: Vec<(VectorId, NeighborhoodDiff)>,
 }
 
-impl<V: Ref + Display> Display for ExplicitDiff<V> {
+impl Display for ExplicitDiff {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         for layer_result in &self.0 {
             let nonempty_diffs: Vec<_> = layer_result
@@ -85,13 +84,13 @@ impl<V: Ref + Display> Display for ExplicitDiff<V> {
 }
 
 /// A differ that returns the explicit lists of node differences between neighborhoods.
-pub struct ExplicitNeighborhoodDiffer<V: Ref> {
+pub struct ExplicitNeighborhoodDiffer {
     sort_by: SortBy,
-    per_layer_results: Vec<LayerDiffResult<V>>,
-    current_layer_diffs: Vec<(V, NeighborhoodDiff<V>)>,
+    per_layer_results: Vec<LayerDiffResult>,
+    current_layer_diffs: Vec<(VectorId, NeighborhoodDiff)>,
 }
 
-impl<V: Ref> ExplicitNeighborhoodDiffer<V> {
+impl ExplicitNeighborhoodDiffer {
     pub fn new(sort_by: SortBy) -> Self {
         Self {
             sort_by,
@@ -101,14 +100,20 @@ impl<V: Ref> ExplicitNeighborhoodDiffer<V> {
     }
 }
 
-impl<V: Ref + Display + FromStr + Ord> Differ<V> for ExplicitNeighborhoodDiffer<V> {
-    type Output = ExplicitDiff<V>;
+impl Differ for ExplicitNeighborhoodDiffer {
+    type Output = ExplicitDiff;
 
     fn start_layer(&mut self, _layer_index: usize) {
         self.current_layer_diffs.clear();
     }
 
-    fn diff_neighborhood(&mut self, _layer_index: usize, node: &V, lhs: &[V], rhs: &[V]) {
+    fn diff_neighborhood(
+        &mut self,
+        _layer_index: usize,
+        node: &VectorId,
+        lhs: &[VectorId],
+        rhs: &[VectorId],
+    ) {
         let lhs_set: HashSet<_> = lhs.iter().cloned().collect();
         let rhs_set: HashSet<_> = rhs.iter().cloned().collect();
 
@@ -125,7 +130,7 @@ impl<V: Ref + Display + FromStr + Ord> Differ<V> for ExplicitNeighborhoodDiffer<
             jaccard_state,
         };
 
-        self.current_layer_diffs.push((node.clone(), diff));
+        self.current_layer_diffs.push((*node, diff));
     }
 
     fn end_layer(&mut self, layer_index: usize) {
@@ -136,7 +141,7 @@ impl<V: Ref + Display + FromStr + Ord> Differ<V> for ExplicitNeighborhoodDiffer<
                         .sort_by(|a, b| a.1.jaccard_state.compare_as_fractions(&b.1.jaccard_state));
                 }
                 SortBy::Index => {
-                    self.current_layer_diffs.sort_by(|a, b| a.0.cmp(&b.0));
+                    self.current_layer_diffs.sort_by_key(|a| a.0);
                 }
             }
             self.per_layer_results.push(LayerDiffResult {

@@ -13,7 +13,7 @@
 //! `parallel_batch_insert<V: VectorStoreMut>` is because the per-query search
 //! is spawned onto a multi-threaded [`JoinSet`], which requires the spawned
 //! future to be `Send`. The `VectorStore`/`VectorStoreMut` operations (and the
-//! `DistanceOps`/`Neighborhood` methods they call) are `async fn`s in traits,
+//! `DistanceOps` methods they call) are `async fn`s in traits,
 //! which carry no `Send` bound. For a *concrete* store the compiler still
 //! proves each future `Send` by auto-trait leakage, so each function below
 //! compiles; for a *generic* `V` that guarantee is unavailable and the spawn is
@@ -21,7 +21,7 @@
 //!
 //! Plausible upgrade path: add `+ Send` to those trait methods (desugaring the
 //! `async fn`s to `-> impl Future<..> + Send`, which cascades through
-//! `VectorStore`/`VectorStoreMut` into `DistanceOps` and `Neighborhood`), or
+//! `VectorStore`/`VectorStoreMut` into `DistanceOps`), or
 //! push the spawned work behind a higher-order closure whose concrete future is
 //! `Send` at each call site. Either then collapses these two routines into one
 //! generic `parallel_batch_insert<V>`.
@@ -29,7 +29,7 @@
 use std::sync::Arc;
 
 use eyre::Result;
-use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
+use iris_mpc_common::{iris_db::iris::IrisCode, VectorId};
 use itertools::Itertools;
 use tokio::task::JoinSet;
 use tracing::info;
@@ -37,24 +37,21 @@ use tracing::info;
 use crate::hawkers::plaintext_deep_id_store::{Int4Vector, SharedPlaintextDeepIDStore};
 use crate::{
     execution::hawk_main::insert::{self, InsertPlanV},
-    hawkers::{
-        aby3::aby3_store::DistanceOps,
-        plaintext_store::{PlaintextVectorRef, SharedPlaintextStore},
-    },
-    hnsw::{graph::neighborhood::Neighborhood, GraphMem, HnswSearcher, SortedNeighborhood},
+    hawkers::{aby3::aby3_store::DistanceOps, plaintext_store::SharedPlaintextStore},
+    hnsw::{GraphMem, HnswSearcher},
 };
 
 /// Number of entries to insert before reporting a new info log entry
 const REPORTING_INTERVAL: usize = 1000;
 
 pub async fn plaintext_parallel_batch_insert<D: DistanceOps>(
-    graph: GraphMem<PlaintextVectorRef>,
+    graph: GraphMem,
     mut store: SharedPlaintextStore<D>,
-    irises: Vec<(IrisVectorId, IrisCode)>,
+    irises: Vec<(VectorId, IrisCode)>,
     searcher: &HnswSearcher,
     batch_size: usize,
     prf_seed: &[u8; 16],
-) -> Result<(GraphMem<PlaintextVectorRef>, SharedPlaintextStore<D>)> {
+) -> Result<(GraphMem, SharedPlaintextStore<D>)> {
     let mut graph = Arc::new(graph);
 
     let mut inserted_count: usize = 0;
@@ -75,12 +72,7 @@ pub async fn plaintext_parallel_batch_insert<D: DistanceOps>(
                 let insertion_layer = searcher.gen_layer_prf(&prf_seed, &(vector_id))?;
 
                 let (links, update_ep) = searcher
-                    .search_to_insert::<_, SortedNeighborhood<_>>(
-                        &mut store,
-                        &graph,
-                        &query,
-                        insertion_layer,
-                    )
+                    .search_to_insert(&mut store, &graph, &query, insertion_layer)
                     .await?;
 
                 // Trim and extract unstructured vector lists
@@ -116,7 +108,16 @@ pub async fn plaintext_parallel_batch_insert<D: DistanceOps>(
 
         // Unwrap Arc while inserting, then wrap again for the next batch
         let mut graph_temp = Arc::try_unwrap(graph).unwrap();
-        insert::insert(&mut store, &mut graph_temp, searcher, plans, &ids).await?;
+        let replace_ids = vec![None; plans.len()];
+        insert::insert(
+            &mut store,
+            &mut graph_temp,
+            searcher,
+            plans,
+            &ids,
+            &replace_ids,
+        )
+        .await?;
         graph = Arc::new(graph_temp);
 
         if inserted_count.saturating_sub(reported_count) >= REPORTING_INTERVAL {
@@ -129,13 +130,13 @@ pub async fn plaintext_parallel_batch_insert<D: DistanceOps>(
 }
 
 pub async fn deep_id_parallel_batch_insert(
-    graph: GraphMem<IrisVectorId>,
+    graph: GraphMem,
     mut store: SharedPlaintextDeepIDStore,
-    vectors: Vec<(IrisVectorId, Int4Vector)>,
+    vectors: Vec<(VectorId, Int4Vector)>,
     searcher: &HnswSearcher,
     batch_size: usize,
     prf_seed: &[u8; 16],
-) -> Result<(GraphMem<IrisVectorId>, SharedPlaintextDeepIDStore)> {
+) -> Result<(GraphMem, SharedPlaintextDeepIDStore)> {
     let mut graph = Arc::new(graph);
 
     let mut inserted_count: usize = 0;
@@ -156,12 +157,7 @@ pub async fn deep_id_parallel_batch_insert(
                 let insertion_layer = searcher.gen_layer_prf(&prf_seed, &(vector_id))?;
 
                 let (links, update_ep) = searcher
-                    .search_to_insert::<_, SortedNeighborhood<_>>(
-                        &mut store,
-                        &graph,
-                        &query,
-                        insertion_layer,
-                    )
+                    .search_to_insert(&mut store, &graph, &query, insertion_layer)
                     .await?;
 
                 // Trim and extract unstructured vector lists
@@ -197,7 +193,16 @@ pub async fn deep_id_parallel_batch_insert(
 
         // Unwrap Arc while inserting, then wrap again for the next batch
         let mut graph_temp = Arc::try_unwrap(graph).unwrap();
-        insert::insert(&mut store, &mut graph_temp, searcher, plans, &ids).await?;
+        let replace_ids = vec![None; plans.len()];
+        insert::insert(
+            &mut store,
+            &mut graph_temp,
+            searcher,
+            plans,
+            &ids,
+            &replace_ids,
+        )
+        .await?;
         graph = Arc::new(graph_temp);
 
         if inserted_count.saturating_sub(reported_count) >= REPORTING_INTERVAL {
@@ -212,7 +217,10 @@ pub async fn deep_id_parallel_batch_insert(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{hawkers::plaintext_store::PlaintextStore, hnsw::HnswSearcher};
+    use crate::{
+        hawkers::plaintext_store::PlaintextStore,
+        hnsw::{HnswSearcher, SortedNeighborhood},
+    };
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
     use rand::SeedableRng;
@@ -222,9 +230,9 @@ mod tests {
         to_insert: usize,
     ) -> Result<(
         HnswSearcher,
-        GraphMem<PlaintextVectorRef>,
+        GraphMem,
         SharedPlaintextStore,
-        Vec<(IrisVectorId, IrisCode)>,
+        Vec<(VectorId, IrisCode)>,
         [u8; 16],
     )> {
         let mut rng = AesRng::seed_from_u64(0_u64);
@@ -241,12 +249,12 @@ mod tests {
 
         let irises_to_insert = IrisDB::new_random_rng(to_insert, &mut rng).db;
 
-        let irises: Vec<(IrisVectorId, IrisCode)> = irises_to_insert
+        let irises: Vec<(VectorId, IrisCode)> = irises_to_insert
             .into_iter()
             .enumerate()
             .map(|(id, iris_code)| {
                 (
-                    IrisVectorId::from_serial_id((id + database_size + 1).try_into().unwrap()),
+                    VectorId::from_serial_id((id + database_size + 1).try_into().unwrap()),
                     iris_code,
                 )
             })
@@ -257,8 +265,8 @@ mod tests {
 
     async fn check_results(
         mut store: SharedPlaintextStore,
-        graph: GraphMem<PlaintextVectorRef>,
-        irises: Vec<(IrisVectorId, IrisCode)>,
+        graph: GraphMem,
+        irises: Vec<(VectorId, IrisCode)>,
         searcher: &HnswSearcher,
         expected_total_size: usize,
     ) -> Result<()> {
@@ -271,9 +279,7 @@ mod tests {
         // Check if each inserted iris can be found and matched correctly
         for (_vector_id, iris_code) in irises {
             let query = Arc::new(iris_code);
-            let result = searcher
-                .search::<_, SortedNeighborhood<_>>(&mut store, &graph, &query, 1)
-                .await?;
+            let result = searcher.search(&mut store, &graph, &query, 1).await?;
             assert!(
                 searcher.is_match(&mut store, &[result]).await?,
                 "Match verification failed for an inserted iris"
@@ -339,10 +345,10 @@ mod tests {
         let shared_store: SharedPlaintextDeepIDStore = store.into();
 
         // Build the to-insert batch with explicit ids past the seeded range.
-        let to_insert_vectors: Vec<(IrisVectorId, Int4Vector)> = (0..to_insert)
+        let to_insert_vectors: Vec<(VectorId, Int4Vector)> = (0..to_insert)
             .map(|i| {
                 (
-                    IrisVectorId::from_serial_id((i + database_size + 1).try_into().unwrap()),
+                    VectorId::from_serial_id((i + database_size + 1).try_into().unwrap()),
                     Int4Vector::random(&mut rng),
                 )
             })

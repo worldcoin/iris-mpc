@@ -29,7 +29,7 @@ use crate::{
 };
 use ampc_secret_sharing::shares::{vecshare_bittranspose::Transpose64, VecShare};
 use eyre::{bail, OptionExt, Result};
-use iris_mpc_common::{iris_db::iris::Threshold, vector_id::VectorId};
+use iris_mpc_common::{iris_db::iris::Threshold, VectorId};
 use itertools::{izip, Itertools};
 use rand_distr::{Distribution, Standard};
 use static_assertions::const_assert;
@@ -57,7 +57,6 @@ const_assert!(MIN_ROUND_ROBIN_SIZE >= 1);
 /// a specific preprocessed rotation from the cache.
 pub type Aby3Query = QuerySpec;
 
-pub type Aby3VectorRef = VectorId;
 pub type Aby3DistanceRef<T = u32> = DistanceShare<T>;
 
 pub type Aby3SharedIrises = SharedIrises<ArcIris>;
@@ -163,10 +162,7 @@ where
 
     /// Fetch a stored vector's iris from the worker pool and cache it as a query.
     /// Returns a query handle (center rotation, non-mirrored).
-    pub async fn cache_query_from_store(
-        &self,
-        vector: &<Self as VectorStore>::VectorRef,
-    ) -> Result<Aby3Query> {
+    pub async fn cache_query_from_store(&self, vector: &VectorId) -> Result<Aby3Query> {
         let irises = self.workers.fetch_irises(vec![*vector]).await?;
         let iris = irises
             .into_iter()
@@ -255,8 +251,8 @@ where
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
     pub async fn oblivious_argmin_distance(
         &mut self,
-        distances: &[(Aby3VectorRef, DistanceShare<D::Ring>)],
-    ) -> Result<(Aby3VectorRef, DistanceShare<D::Ring>)> {
+        distances: &[(VectorId, DistanceShare<D::Ring>)],
+    ) -> Result<(VectorId, DistanceShare<D::Ring>)> {
         if distances.is_empty() {
             eyre::bail!("Cannot compute minimum of empty list");
         }
@@ -391,10 +387,10 @@ where
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn compact_neighborhood_batch(
         &mut self,
-        base_nodes: &[Aby3VectorRef],
-        neighborhoods: &[Vec<Aby3VectorRef>],
+        base_nodes: &[VectorId],
+        neighborhoods: &[Vec<VectorId>],
         max_sizes: &[usize],
-    ) -> Result<Vec<Vec<Aby3VectorRef>>> {
+    ) -> Result<Vec<Vec<VectorId>>> {
         if base_nodes.len() != neighborhoods.len() || base_nodes.len() != max_sizes.len() {
             bail!("Lists of base nodes, neighborhoods, and max sizes must have equal sizes");
         }
@@ -568,15 +564,10 @@ where
 {
     /// Arc ref to a query.
     type QueryRef = Aby3Query;
-    /// Point ID of an inserted iris.
-    type VectorRef = Aby3VectorRef;
     /// Distance represented as a pair of Ring-typed shares.
     type DistanceRef = Aby3DistanceRef<D::Ring>;
 
-    async fn vectors_as_queries(
-        &mut self,
-        vectors: Vec<Self::VectorRef>,
-    ) -> Result<Vec<Self::QueryRef>> {
+    async fn vectors_as_queries(&mut self, vectors: Vec<VectorId>) -> Result<Vec<Self::QueryRef>> {
         let irises = self.workers.fetch_irises(vectors).await?;
         let to_cache: Vec<_> = irises
             .into_iter()
@@ -587,20 +578,26 @@ where
         Ok(query_ids.into_iter().map(Aby3Query::new).collect_vec())
     }
 
-    async fn only_valid_vectors(
-        &mut self,
-        mut vectors: Vec<Self::VectorRef>,
-    ) -> Vec<Self::VectorRef> {
+    async fn only_valid_vectors(&mut self, mut vectors: Vec<VectorId>) -> Vec<VectorId> {
         let registry = self.registry.read().await;
         vectors.retain(|v| registry.contains(v));
         vectors
+    }
+
+    async fn only_valid_entry_points(
+        &mut self,
+        mut entry_points: Vec<(VectorId, usize)>,
+    ) -> Vec<(VectorId, usize)> {
+        let registry = self.registry.read().await;
+        entry_points.retain(|(v, _)| registry.contains(v));
+        entry_points
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn eval_distance(
         &mut self,
         query: &Self::QueryRef,
-        vector: &Self::VectorRef,
+        vector: &VectorId,
     ) -> Result<Self::DistanceRef> {
         let mut d = self.eval_distance_batch(query, &[*vector]).await?;
         d.pop()
@@ -610,7 +607,7 @@ where
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(queries = pairs.len(), batch_size = pairs.len()))]
     async fn eval_distance_pairs(
         &mut self,
-        pairs: &[(Self::QueryRef, Self::VectorRef)],
+        pairs: &[(Self::QueryRef, VectorId)],
     ) -> Result<Vec<Self::DistanceRef>> {
         if pairs.is_empty() {
             return Ok(vec![]);
@@ -622,7 +619,7 @@ where
     async fn eval_distance_batch(
         &mut self,
         query: &Self::QueryRef,
-        vectors: &[Self::VectorRef],
+        vectors: &[VectorId],
     ) -> Result<Vec<Self::DistanceRef>> {
         if vectors.is_empty() {
             return Ok(vec![]);
@@ -641,8 +638,8 @@ where
     #[instrument(level = "trace", target = "searcher::network", skip_all, fields(batch_size = distances.len()))]
     async fn get_argmin_distance(
         &mut self,
-        distances: &[(Self::VectorRef, Self::DistanceRef)],
-    ) -> Result<(Self::VectorRef, Self::DistanceRef)> {
+        distances: &[(VectorId, Self::DistanceRef)],
+    ) -> Result<(VectorId, Self::DistanceRef)> {
         if distances.is_empty() {
             return Err(eyre::eyre!("Cannot get min of empty list"));
         }
@@ -692,10 +689,10 @@ where
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn compact_neighborhood(
         &mut self,
-        base_node: Self::VectorRef,
-        neighborhood: &[Self::VectorRef],
+        base_node: VectorId,
+        neighborhood: &[VectorId],
         max_size: usize,
-    ) -> Result<Vec<Self::VectorRef>> {
+    ) -> Result<Vec<VectorId>> {
         let compaction_list = self
             .compact_neighborhood_batch(&[base_node], &[neighborhood.to_vec()], &[max_size])
             .await?;
@@ -707,10 +704,10 @@ where
 
     async fn compact_neighborhood_batch(
         &mut self,
-        base_nodes: &[Self::VectorRef],
-        neighborhoods: &[Vec<Self::VectorRef>],
+        base_nodes: &[VectorId],
+        neighborhoods: &[Vec<VectorId>],
         max_sizes: &[usize],
-    ) -> Result<Vec<Vec<Self::VectorRef>>> {
+    ) -> Result<Vec<Vec<VectorId>>> {
         self.compact_neighborhood_batch(base_nodes, neighborhoods, max_sizes)
             .await
     }
@@ -721,7 +718,7 @@ where
     Standard: Distribution<D::Ring>,
     VecShare<D::Ring>: Transpose64,
 {
-    async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
+    async fn insert(&mut self, query: &Self::QueryRef) -> VectorId {
         // Allocate next ID and register it in the registry (metadata only).
         let vector_id = {
             let mut reg = self.registry.write().await;
@@ -739,9 +736,9 @@ where
 
     async fn insert_at(
         &mut self,
-        vector_ref: &Self::VectorRef,
+        vector_ref: &VectorId,
         query: &Self::QueryRef,
-    ) -> Result<Self::VectorRef> {
+    ) -> Result<VectorId> {
         // Register in the metadata registry.
         self.registry.write().await.insert(*vector_ref, ());
         // Insert the actual iris data into the worker's store.
@@ -772,7 +769,14 @@ mod tests {
             },
             plaintext_store::PlaintextStore,
         },
-        hnsw::{GraphMem, HnswSearcher, SortedNeighborhood},
+        hnsw::{
+            graph::graph_diff::{
+                self,
+                explicit::{ExplicitNeighborhoodDiffer, SortBy},
+                node_equiv::ensure_node_equivalence,
+            },
+            GraphMem, HnswSearcher, SortedNeighborhood, LINEAR_SCAN_MAX_GRAPH_LAYER,
+        },
         network::mpc::NetworkType,
         protocol::shared_iris::GaloisRingSharedIris,
     };
@@ -814,12 +818,7 @@ mod tests {
                 for query in queries.iter() {
                     let insertion_layer = db.gen_layer_rng(&mut rng).unwrap();
                     let inserted_vector = db
-                        .insert::<_, SortedNeighborhood<_>>(
-                            &mut *store,
-                            &mut aby3_graph,
-                            query,
-                            insertion_layer,
-                        )
+                        .insert(&mut *store, &mut aby3_graph, query, insertion_layer)
                         .await
                         .unwrap();
                     inserted.push(inserted_vector)
@@ -829,7 +828,7 @@ mod tests {
                 for v in inserted.into_iter() {
                     let query = store.cache_query_from_store(&v).await.unwrap();
                     let neighbors = db
-                        .search::<_, SortedNeighborhood<_>>(&mut *store, &aby3_graph, &query, 1)
+                        .search(&mut *store, &aby3_graph, &query, 1)
                         .await
                         .unwrap();
                     tracing::debug!("Finished checking query");
@@ -886,12 +885,7 @@ mod tests {
                 .unwrap()
                 .clone();
             let cleartext_neighbors = hawk_searcher
-                .search::<_, SortedNeighborhood<_>>(
-                    &mut cleartext_data.0,
-                    &cleartext_data.1,
-                    &query,
-                    1,
-                )
+                .search(&mut cleartext_data.0, &cleartext_data.1, &query, 1)
                 .await?;
             assert!(
                 hawk_searcher
@@ -1526,7 +1520,7 @@ mod tests {
         // density bumped to 4 so enough nodes roll onto layer 1 to exercise
         // `linear_search_min_distance` — default (M) gives <1 expected entry
         // point at this size and silently skips the branch.
-        let mut searcher = HnswSearcher::new_linear_scan(64, 32, 32, 1);
+        let mut searcher = HnswSearcher::new_linear_scan(64, 32, 32, LINEAR_SCAN_MAX_GRAPH_LAYER);
         searcher.layer_distribution =
             crate::hnsw::searcher::LayerDistribution::new_geometric_from_M(4);
         let searcher = searcher;
@@ -1545,17 +1539,12 @@ mod tests {
             .collect();
 
         let mut plaintext_store = PlaintextStore::<FhdOps>::new();
-        let mut plaintext_graph: GraphMem<VectorId> = GraphMem::new();
+        let mut plaintext_graph: GraphMem = GraphMem::new();
         let plaintext_span = info_span!("plaintext_insert");
         for (iris, &layer) in cleartext_db.iter().zip(insertion_layers.iter()) {
             let query = Arc::new(iris.clone());
             searcher
-                .insert::<_, SortedNeighborhood<_>>(
-                    &mut plaintext_store,
-                    &mut plaintext_graph,
-                    &query,
-                    layer,
-                )
+                .insert(&mut plaintext_store, &mut plaintext_graph, &query, layer)
                 .instrument(plaintext_span.clone())
                 .await?;
         }
@@ -1574,18 +1563,18 @@ mod tests {
                 let mpc_span = info_span!("mpc_insert", id = idx);
                 let mut store = store.lock().await;
                 let queries = cache_irises(store.workers.as_ref(), irises).await?;
-                let mut graph: GraphMem<VectorId> = GraphMem::new();
+                let mut graph: GraphMem = GraphMem::new();
                 for (query, &layer) in queries.iter().zip(layers.iter()) {
                     searcher
-                        .insert::<_, SortedNeighborhood<_>>(&mut *store, &mut graph, query, layer)
+                        .insert(&mut *store, &mut graph, query, layer)
                         .instrument(mpc_span.clone())
                         .await?;
                 }
-                Ok::<(usize, GraphMem<VectorId>), eyre::Report>((role, graph))
+                Ok::<(usize, GraphMem), eyre::Report>((role, graph))
             });
         }
 
-        let mut mpc_graphs: Vec<Option<GraphMem<VectorId>>> = (0..3).map(|_| None).collect();
+        let mut mpc_graphs: Vec<Option<GraphMem>> = (0..3).map(|_| None).collect();
         while let Some(res) = jobs.join_next().await {
             let (role, graph) = res??;
             mpc_graphs[role] = Some(graph);
@@ -1593,7 +1582,20 @@ mod tests {
 
         for (role, mpc_graph) in mpc_graphs.into_iter().enumerate() {
             let mpc_graph = mpc_graph.unwrap_or_else(|| panic!("party {role} did not finish"));
-            verify_graph_consistency(role, &mpc_graph, &plaintext_graph)?;
+            if let Err(e) = ensure_node_equivalence(&mpc_graph, &plaintext_graph) {
+                panic!("graph mismatch: {:?}", e);
+            }
+            if mpc_graph != plaintext_graph {
+                let diff_output = graph_diff::run_diff(
+                    &mpc_graph,
+                    &plaintext_graph,
+                    ExplicitNeighborhoodDiffer::new(SortBy::Index),
+                );
+                panic!(
+                    "[Role {}] graphs are not equal. Diff: {}",
+                    role, diff_output
+                );
+            }
         }
 
         // If either assert fails the parameters no longer exercise the
@@ -1601,114 +1603,6 @@ mod tests {
         assert_eq!(plaintext_graph.get_num_layers(), 2);
         assert!(plaintext_graph.entry_points.len() >= 2);
 
-        Ok(())
-    }
-
-    /// Verifies that an MPC graph matches the plaintext reference graph.
-    /// Logs detailed comparison information and panics on mismatches.
-    fn verify_graph_consistency(
-        role: usize,
-        mpc_graph: &GraphMem<VectorId>,
-        plaintext_graph: &GraphMem<VectorId>,
-    ) -> eyre::Result<()> {
-        use std::collections::BTreeSet;
-
-        // Check layer count
-        let num_layers_mpc = mpc_graph.layers.len();
-        let num_layers_pt = plaintext_graph.layers.len();
-        tracing::debug!(
-            role,
-            num_layers_mpc,
-            num_layers_pt,
-            "Comparing layer counts"
-        );
-
-        if num_layers_mpc != num_layers_pt {
-            panic!(
-                "[Role {}] Layer count mismatch: MPC={} vs plaintext={}",
-                role, num_layers_mpc, num_layers_pt
-            );
-        }
-
-        // Compare each layer
-        for (layer_idx, (mpc_layer, pt_layer)) in mpc_graph
-            .layers
-            .iter()
-            .zip(plaintext_graph.layers.iter())
-            .enumerate()
-        {
-            // Check if layers contain the same elements
-            let mpc_keys: BTreeSet<_> = mpc_layer.links.keys().collect();
-            let pt_keys: BTreeSet<_> = pt_layer.links.keys().collect();
-
-            if mpc_keys != pt_keys {
-                tracing::error!(
-                    role,
-                    layer_idx,
-                    mpc_count = mpc_keys.len(),
-                    pt_count = pt_keys.len(),
-                    "Layer elements differ"
-                );
-                panic!(
-                    "[Role {}] Layer {} elements mismatch: MPC={} nodes, plaintext={} nodes",
-                    role,
-                    layer_idx,
-                    mpc_keys.len(),
-                    pt_keys.len()
-                );
-            }
-            tracing::debug!(
-                role,
-                layer_idx,
-                node_count = mpc_keys.len(),
-                "Layer elements verified"
-            );
-
-            // Compare ordering by checking neighbors for each node
-            for node_id in mpc_keys.iter() {
-                let mpc_neighbors = mpc_layer
-                    .links
-                    .get(node_id)
-                    .map(|v| v.as_slice())
-                    .unwrap_or(&[]);
-                let pt_neighbors = pt_layer
-                    .links
-                    .get(node_id)
-                    .map(|v| v.as_slice())
-                    .unwrap_or(&[]);
-
-                if mpc_neighbors != pt_neighbors {
-                    tracing::error!(
-                        role,
-                        layer_idx,
-                        node_id = %node_id,
-                        mpc_neighbor_count = mpc_neighbors.len(),
-                        pt_neighbor_count = pt_neighbors.len(),
-                        "Node neighbor list differs"
-                    );
-                    panic!(
-                    "[Role {}] Layer {} node {} neighbor mismatch: MPC={} neighbors, plaintext={} neighbors",
-                    role,
-                    layer_idx,
-                    node_id,
-                    mpc_neighbors.len(),
-                    pt_neighbors.len()
-                );
-                }
-            }
-            tracing::debug!(
-                role,
-                layer_idx,
-                "Layer node orderings verified for all nodes"
-            );
-        }
-
-        // Compare entry points
-        if mpc_graph.entry_points != plaintext_graph.entry_points {
-            tracing::error!(role, "Entry points mismatch");
-            panic!("[Role {}] Entry points differ", role);
-        }
-        tracing::info!(role, "Graph consistency verified");
         Ok(())
     }
 }

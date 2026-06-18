@@ -11,7 +11,7 @@ use tracing::{
     span::{Attributes, Id},
     Event, Subscriber,
 };
-use tracing_subscriber::layer::{Context, Layer};
+use tracing_subscriber::layer::Context;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Operation {
@@ -79,7 +79,7 @@ impl OpCountersLayer {
     }
 }
 
-impl<S: Subscriber> Layer<S> for OpCountersLayer {
+impl<S: Subscriber> tracing_subscriber::Layer<S> for OpCountersLayer {
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
         let mut visitor = OpVisitor::default();
         event.record(&mut visitor);

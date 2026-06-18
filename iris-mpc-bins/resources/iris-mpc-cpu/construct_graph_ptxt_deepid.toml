@@ -7,7 +7,7 @@ path = "iris-mpc-bins/resources/iris-mpc-cpu/deepid_sample.ndjson"
 limit = 64
 
 [searcher]
-layer_mode = { LinearScan = { max_graph_layer = 1 } }
+max_graph_layer = 1
 
 [searcher.params]
 option = "Standard"

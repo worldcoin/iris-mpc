@@ -3,14 +3,11 @@ use crate::services::processors::batch::receive_batch_stream;
 use crate::services::processors::job::process_job_result;
 use aws_sdk_s3::Client;
 use aws_sdk_sns::types::MessageAttributeValue;
-use axum::routing::get;
-use axum::Router;
-use iris_mpc_cpu::graph_checkpoint::download_graph_checkpoint;
-use iris_mpc_cpu::graph_checkpoint::get_common_checkpoint;
-use iris_mpc_cpu::graph_checkpoint::get_most_recent_checkpoints;
-use iris_mpc_cpu::graph_checkpoint::s3_key_exists;
-use iris_mpc_cpu::graph_checkpoint::GraphCheckpointState;
-use iris_mpc_cpu::graph_checkpoint::GRAPH_CHECKPOINT_ROUTE;
+use iris_mpc_cpu::checkpoint_protocol::{restart_from_checkpoint, sidecar_main, RestartOutcome};
+use iris_mpc_cpu::graph_checkpoint::sync_graph_mutations;
+use iris_mpc_cpu::hnsw::GraphMem;
+use iris_mpc_cpu::network::mpc::{build_network_handle, NetworkHandleArgs};
+use tokio_util::sync::CancellationToken;
 
 use crate::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,
@@ -27,7 +24,7 @@ use ampc_server_utils::{
     wait_for_others_ready, wait_for_others_unready, BatchSyncSharedState, TaskMonitor,
 };
 use chrono::Utc;
-use eyre::{bail, eyre, Report, Result};
+use eyre::{bail, eyre, Report, Result, WrapErr};
 use iris_mpc_common::config::{CommonConfig, Config};
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::sha256::sha256_bytes;
@@ -41,12 +38,13 @@ use iris_mpc_common::helpers::sqs_s3_helper::upload_file_to_s3;
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::job::JobSubmissionHandle;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_cpu::checkpoint_protocol::runner::SidecarConfigWrapper;
 use iris_mpc_cpu::execution::hawk_main::worker_pool_initializer::{
     DbLoadParams, LocalWorkerPoolInitializer, WorkerPoolInitializer,
 };
 use iris_mpc_cpu::execution::hawk_main::{
-    build_hawk_network_handle, load_graphs_from_pg, GraphStore, HawkActor, HawkArgs, HawkHandle,
-    HawkOps, ServerJobResult, HAWK_DISTANCE_MODE,
+    build_hawk_network_handle, GraphStore, HawkActor, HawkArgs, HawkHandle, HawkOps,
+    ServerJobResult, HAWK_DISTANCE_MODE,
 };
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
@@ -61,11 +59,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
+use tokio::sync::RwLock;
 use tokio::time::timeout;
 
 const RNG_SEED_INIT_DB: u64 = 42;
 pub const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
 pub const MAX_CONCURRENT_REQUESTS: usize = 32;
+const PEER_ROUND_TIMEOUT: Duration = Duration::from_secs(10);
+const CHECKPOINT_WINDOW: usize = 10;
 
 /// Main logic for initialization and execution of AMPC iris uniqueness server
 /// nodes.
@@ -83,7 +84,7 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     maybe_seed_random_shares(&config, &iris_store).await?;
     check_store_consistency(&config, &iris_store).await?;
-    let my_state = build_sync_state(&config, &aws_clients, &iris_store).await?;
+    let my_state = build_sync_state(&config, &aws_clients, &iris_store, &graph_store).await?;
 
     let mut background_tasks = TaskMonitor::new();
 
@@ -105,24 +106,13 @@ pub async fn server_main(config: Config) -> Result<()> {
         server_coord_config.healthcheck_ports
     );
 
-    let (graph_checkpoints, hashes) = get_most_recent_checkpoints(&graph_store).await?;
-
-    // Start coordination server
-    let extra_routes = Router::new().route(
-        GRAPH_CHECKPOINT_ROUTE,
-        get({
-            let hashes_json = serde_json::to_string(&hashes).unwrap();
-            move || async move { hashes_json }
-        }),
-    );
-
     let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server_with_extra_routes(
         &server_coord_config,
         &mut background_tasks,
         &shutdown_handler,
         &my_state,
         Some(batch_sync_shared_state.clone()),
-        Some(extra_routes),
+        None,
     )
     .await;
     tracing::info!("Coordination server started");
@@ -135,47 +125,19 @@ pub async fn server_main(config: Config) -> Result<()> {
     let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
 
-    let graph_checkpoint =
-        get_common_checkpoint(&server_coord_config, hashes, graph_checkpoints).await?;
-    tracing::info!("common graph checkpoint: {:?}", graph_checkpoint);
-
-    if let Some(cp) = graph_checkpoint.as_ref() {
-        // Stop if the checkpoint can not be found
-        if !s3_key_exists(
-            &aws_clients.checkpoint_s3_client,
-            &config.graph_checkpoint_bucket_name,
-            &cp.s3_key,
-        )
-        .await?
-        {
-            bail!(
-                "s3 checkpoint not found on AWS: s3://{}/{}",
-                config.graph_checkpoint_bucket_name,
-                cp.s3_key
-            );
-        }
-
-        // Validate checkpoint vs Iris DB consistency
-        let db_count = iris_store.count_irises().await?;
-        if cp.last_indexed_iris_id as usize != db_count {
-            tracing::warn!(
-                "Graph checkpoint last_indexed_iris_id={} differs from iris_db count={}. Shadow mode may produce mismatches.",
-                cp.last_indexed_iris_id, db_count
-            );
-        }
-    }
-
     // Handle modifications sync
     if config.enable_modifications_sync {
         sync_modifications(
             &config,
             &iris_store,
-            Some(&graph_store),
             &aws_clients,
             &shares_encryption_key_pair,
             sync_result.clone(),
         )
         .await?;
+        // insert the WAL entries so that init_hawk_actor rolls the graph forward to
+        // the correct height.
+        sync_graph_mutations(&sync_result, &graph_store).await?;
     }
 
     if config.enable_modifications_replay {
@@ -205,7 +167,6 @@ pub async fn server_main(config: Config) -> Result<()> {
         &config.graph_checkpoint_bucket_name,
         &iris_store,
         &graph_store,
-        graph_checkpoint,
         &shutdown_handler,
     )
     .await?;
@@ -248,20 +209,89 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     background_tasks.check_tasks();
 
-    run_main_server_loop(
-        &config,
-        &iris_store,
-        &aws_clients,
-        shares_encryption_key_pair,
-        background_tasks,
-        &shutdown_handler,
-        hawk_actor,
-        tx_results,
-        current_batch_id_atomic.clone(),
-        batch_sync_shared_state,
-    )
-    .await?;
+    // ensure sidecar doesn't outlive main
+    let sidecar_ct = CancellationToken::new();
+    let main_finished = sidecar_ct.clone();
+    let config = Arc::new(RwLock::new(config));
+    let config2 = config.clone();
 
+    let main_future = async move {
+        let config = config2.read().await;
+        let r = run_main_server_loop(
+            &config,
+            &iris_store,
+            &aws_clients,
+            shares_encryption_key_pair,
+            background_tasks,
+            &shutdown_handler,
+            hawk_actor,
+            tx_results,
+            current_batch_id_atomic.clone(),
+            batch_sync_shared_state,
+        )
+        .await;
+        main_finished.cancel();
+        r
+    };
+
+    let sidecar_future = async move {
+        let config = config.read().await;
+        // ensure the sidecar specific setup code only runs if sidecar is enabled in the config
+        // if sidecar returns an error, log it and return Ok so that it doesn't interfere with server_main()
+        let sidecar_config = match SidecarConfigWrapper::load_config("SIDECAR") {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::error!("failed to parse sidecar config: {e}");
+                return Ok(());
+            }
+        };
+        let Some(mut sc_config) = sidecar_config.config else {
+            return Ok(());
+        };
+
+        // Keep S3 prefix / metric labels aligned with the network identity.
+        sc_config.party_id = config.party_id;
+
+        let result: Result<()> = async {
+            let aws_clients = AwsClients::new(&config)
+                .await
+                .wrap_err("failed to create AWS clients")?;
+            // the sidecar needs its own graph store and this function transforms config to the
+            // appropriate schema name when creating the pg client
+            let (_iris_store, graph_store) = prepare_stores(&config)
+                .await
+                .wrap_err("failed to prepare stores")?;
+            let network_args = NetworkHandleArgs {
+                party_index: config.party_id,
+                addresses: sidecar_config.addresses.clone(),
+                outbound_addresses: sidecar_config.addresses,
+                connection_parallelism: sidecar_config.connection_parallelism,
+                request_parallelism: sidecar_config.request_parallelism,
+                sessions_per_request: 1, // these aren't used by the sidecar
+                tls: config.tls.clone(),
+            };
+            let mut network_handle = build_network_handle(network_args, sidecar_ct.clone())
+                .await
+                .wrap_err("failed to build network handle")?;
+            sidecar_main(
+                sc_config,
+                &graph_store,
+                &aws_clients.checkpoint_s3_client,
+                &mut network_handle,
+                sidecar_ct,
+            )
+            .await
+            .wrap_err("sidecar_main exited with error")?;
+            Ok(())
+        }
+        .await;
+        if let Err(e) = result {
+            tracing::error!("sidecar: {e:#}");
+        }
+        Ok(())
+    };
+
+    tokio::try_join!(main_future, sidecar_future)?;
     Ok(())
 }
 
@@ -432,6 +462,7 @@ async fn build_sync_state(
     config: &Config,
     aws_clients: &AwsClients,
     store: &Store,
+    graph_store: &GraphPg<Aby3Store<HawkOps>>,
 ) -> Result<SyncState> {
     let db_len = store.count_irises().await? as u64;
     let modifications = store
@@ -445,6 +476,24 @@ async fn build_sync_state(
     .await?;
     let common_config = CommonConfig::from(config.clone());
 
+    // Fetch graph mutations for all modifications in the lookback window so
+    // they can be exchanged with the other parties via the SyncState payload.
+    // We only need mutations starting from the oldest modification we track.
+    let graph_mutation_bytes = if let Some(min_id) = modifications.iter().map(|m| m.id).min() {
+        let mutation_map: HashMap<i64, Vec<u8>> = graph_store
+            .get_hawk_graph_mutations_from(min_id)
+            .await?
+            .into_iter()
+            .map(|row| (row.modification_id, row.serialized_mutations))
+            .collect();
+        modifications
+            .iter()
+            .map(|m| mutation_map.get(&m.id).cloned())
+            .collect()
+    } else {
+        vec![]
+    };
+
     tracing::info!("Database store length is: {}", db_len);
 
     Ok(SyncState {
@@ -452,6 +501,7 @@ async fn build_sync_state(
         modifications,
         next_sns_sequence_num,
         common_config,
+        graph_mutation_bytes,
     })
 }
 
@@ -534,7 +584,6 @@ async fn init_hawk_actor(
     checkpoint_bucket: &str,
     iris_store: &Store,
     graph_store: &GraphPg<Aby3Store<HawkOps>>,
-    checkpoint: Option<GraphCheckpointState>,
     shutdown_handler: &Arc<ShutdownHandler>,
 ) -> Result<HawkActor> {
     let (hawk_args, inbound, outbound) = build_hawk_args(config)?;
@@ -581,33 +630,69 @@ async fn init_hawk_actor(
 
     let now = Instant::now();
     let ct = shutdown_handler.get_network_cancellation_token();
+    let mut networking = build_hawk_network_handle(&hawk_args, ct).await?;
 
-    // Network handle built up-front; iris and graph load in parallel.
-    let networking = build_hawk_network_handle(&hawk_args, ct).await?;
-
-    let graph_parallelism = config
-        .cpu_database
-        .as_ref()
-        .ok_or_else(|| eyre!("Missing database config"))?
-        .load_parallelism;
-
-    // Try to load graph from S3 checkpoint first, then fall back to
-    // Postgres graph representation for temporary legacy compatibility.
-    // TODO simplify this logic once graph DB tables are removed.
     let graph_load_future = async move {
-        if let Some(state) = checkpoint {
-            tracing::info!(
-                "Loading graph from common S3 checkpoint, hash: {}",
-                state.blake3_hash
-            );
-            download_graph_checkpoint(s3_client, checkpoint_bucket, &state).await
-        } else {
-            tracing::info!("No S3 checkpoint found, loading from PostgreSQL");
-            load_graphs_from_pg(graph_store, graph_parallelism).await
-        }
+        // Install the graph via the WAL-based consensus checkpoint protocol.
+        // Falls back to an empty graph when no checkpoint row exists yet
+        // (fresh deployment or pre-checkpoint migration path).
+        let graph_target = [
+            Arc::new(RwLock::new(GraphMem::new())),
+            Arc::new(RwLock::new(GraphMem::new())),
+        ];
+        let r = match restart_from_checkpoint(
+            graph_store,
+            s3_client,
+            checkpoint_bucket.to_string(),
+            &mut networking,
+            graph_target.clone(),
+            PEER_ROUND_TIMEOUT,
+            CHECKPOINT_WINDOW,
+        )
+        .await?
+        {
+            RestartOutcome::Installed { height } => {
+                // Validate checkpoint vs Iris DB consistency
+                let db_count = iris_store.count_irises().await?;
+                if height as usize != db_count {
+                    tracing::warn!(
+                        "Graph checkpoint last_indexed_iris_id={} differs from iris_db count={}. Shadow mode may produce mismatches.",
+                        height, db_count
+                    );
+                }
+                tracing::info!(height, "restart: installed graph from checkpoint");
+                graph_target.map(|arc| {
+                    Arc::try_unwrap(arc)
+                        .expect("graph Arc has exactly one owner after restart")
+                        .into_inner()
+                })
+            }
+            RestartOutcome::NoCheckpoint => {
+                let db_count = iris_store.count_irises().await?;
+                if db_count != 0 {
+                    tracing::warn!(
+                        "Graph checkpoint was not found but iris store contains {db_count} entries"
+                    );
+                }
+                tracing::info!("no checkpoint found, starting with empty graph");
+                [GraphMem::new(), GraphMem::new()]
+            }
+            RestartOutcome::PeerBehindBase { freeze, base } => {
+                return Err(eyre!(
+                    "restart_from_checkpoint: peer behind base (freeze={freeze}, base={base})"
+                ));
+            }
+            RestartOutcome::NoCommonBase => {
+                return Err(eyre!(
+                    "restart_from_checkpoint: no checkpoint common to all peers"
+                ));
+            }
+        };
+        Ok((r, networking))
     };
 
-    let (initialized, graph) = tokio::try_join!(initializer.initialize(), graph_load_future)?;
+    let (initialized, (graph, networking)) =
+        tokio::try_join!(initializer.initialize(), graph_load_future)?;
     tracing::info!(
         "Loaded both iris and graph DBs into memory in {:?}",
         now.elapsed()

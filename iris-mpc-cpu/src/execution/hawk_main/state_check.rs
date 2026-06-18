@@ -1,7 +1,7 @@
 use ampc_secret_sharing::RingElement;
 use eyre::{bail, eyre, Result};
 use futures::join;
-use iris_mpc_common::vector_id::VectorId;
+use iris_mpc_common::VectorId;
 use serde::{Deserialize, Serialize};
 use siphasher::sip::SipHasher13;
 use std::{
@@ -27,12 +27,70 @@ pub struct SetHash {
 }
 
 impl SetHash {
+    /// Fold a single value into the accumulator via wrapping addition.
+    /// Addition is commutative and associative, so the accumulator is
+    /// order-agnostic over the stream of `add_unordered` / `remove` calls.
+    ///
+    /// Unlike XOR, wrapping addition preserves multiset semantics: adding
+    /// the same value twice does **not** cancel out, so duplicate-element
+    /// bugs surface as a mismatch instead of being silently masked.
     pub fn add_unordered(&mut self, value: impl Hash) {
         self.accumulator = self.accumulator.wrapping_add(Self::hash(value));
     }
 
+    /// Inverse of [`Self::add_unordered`]. Subtracts the value's hash from the
+    /// accumulator using wrapping subtraction, so a balanced add+remove
+    /// pair returns the accumulator to its prior state exactly.
     pub fn remove(&mut self, value: impl Hash) {
         self.accumulator = self.accumulator.wrapping_sub(Self::hash(value));
+    }
+
+    /// Add a `(key, set-of-items)` pair to the accumulator without any
+    /// dependence on the iteration order of `items`. Each `(key, item)` pair
+    /// is hashed and folded in individually via wrapping addition, and a
+    /// one-shot key marker is added so that an empty `items` collection is
+    /// still distinguishable from the key being absent altogether.
+    pub fn add_unordered_set<K, I, T>(&mut self, key: K, items: I)
+    where
+        K: Hash,
+        I: IntoIterator<Item = T>,
+        T: Hash,
+    {
+        self.fold_unordered_set(key, items, u64::wrapping_add);
+    }
+
+    /// Inverse of [`Self::add_unordered_set`]: removes a `(key, set-of-items)`
+    /// pair previously added, using wrapping subtraction. Must be called
+    /// with the same `(key, items)` content that was added, otherwise the
+    /// accumulator drifts.
+    pub fn remove_unordered_set<K, I, T>(&mut self, key: K, items: I)
+    where
+        K: Hash,
+        I: IntoIterator<Item = T>,
+        T: Hash,
+    {
+        self.fold_unordered_set(key, items, u64::wrapping_sub);
+    }
+
+    fn fold_unordered_set<K, I, T>(&mut self, key: K, items: I, op: fn(u64, u64) -> u64)
+    where
+        K: Hash,
+        I: IntoIterator<Item = T>,
+        T: Hash,
+    {
+        // Hash the key once so we don't pay for re-hashing it per element,
+        // and so per-element hashes can fold in a fixed-size key fingerprint.
+        let key_hash = Self::hash(&key);
+        // Key-existence marker: ensures an empty `items` still mutates the
+        // accumulator. Use a tagged tuple so it can never collide with a
+        // legitimate (key_hash, item) per-element contribution below.
+        self.accumulator = op(
+            self.accumulator,
+            Self::hash(("set_hash::key_marker", key_hash)),
+        );
+        for item in items {
+            self.accumulator = op(self.accumulator, Self::hash((key_hash, item)));
+        }
     }
 
     pub fn checksum(&self) -> u64 {
@@ -773,5 +831,62 @@ mod test {
 
         let found = run_diff(&stores, 64);
         assert_eq!(found, vec![10]);
+    }
+
+    #[test]
+    fn test_unordered_set_order_independence() {
+        // Items folded in different orders must produce the same checksum.
+        let mut a = SetHash::default();
+        a.add_unordered_set("key", [1u64, 2, 3]);
+
+        let mut b = SetHash::default();
+        b.add_unordered_set("key", [3u64, 1, 2]);
+
+        assert_eq!(a.checksum(), b.checksum());
+    }
+
+    #[test]
+    fn test_unordered_set_empty_vs_absent() {
+        // Adding an empty set must still mutate the accumulator: the
+        // key-existence marker is the whole point of the design.
+        let absent = SetHash::default();
+
+        let mut empty_set = SetHash::default();
+        empty_set.add_unordered_set("key", [] as [u64; 0]);
+
+        assert_ne!(
+            absent.checksum(),
+            empty_set.checksum(),
+            "empty set present must be distinguishable from key being absent"
+        );
+    }
+
+    #[test]
+    fn test_unordered_set_add_remove_identity() {
+        // remove_unordered_set is the exact inverse of add_unordered_set:
+        // a round-trip with identical (key, items) must be a no-op.
+        let baseline = SetHash::default();
+
+        let mut h = SetHash::default();
+        h.add_unordered_set("key", [10u64, 20, 30]);
+        h.remove_unordered_set("key", [10u64, 20, 30]);
+
+        assert_eq!(baseline.checksum(), h.checksum());
+    }
+
+    #[test]
+    fn test_unordered_set_multiset_semantics() {
+        // Duplicates are counted separately; [a, a] must differ from [a].
+        let mut once = SetHash::default();
+        once.add_unordered_set("key", [42u64]);
+
+        let mut twice = SetHash::default();
+        twice.add_unordered_set("key", [42u64, 42]);
+
+        assert_ne!(
+            once.checksum(),
+            twice.checksum(),
+            "duplicate items must produce a different hash (multiset, not set)"
+        );
     }
 }

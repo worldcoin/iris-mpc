@@ -7,13 +7,13 @@ use crate::{
     hnsw::{
         metrics::ops_counter::Operation::{CompareDistance, EvaluateDistance},
         vector_store::VectorStoreMut,
-        GraphMem, HnswSearcher, SortedNeighborhood, VectorStore,
+        GraphMem, HnswSearcher, VectorStore,
     },
 };
 use aes_prng::AesRng;
 use iris_mpc_common::{
     iris_db::{db::IrisDB, iris::IrisCode},
-    vector_id::VectorId,
+    VectorId,
 };
 use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
@@ -22,7 +22,6 @@ use tracing::debug;
 
 use eyre::{bail, Result};
 
-pub type PlaintextVectorRef = <PlaintextStore as VectorStore>::VectorRef;
 pub type PlaintextStoredIris = Arc<IrisCode>;
 
 pub type PlaintextSharedIrises = SharedIrises<PlaintextStoredIris>;
@@ -86,7 +85,7 @@ impl<D: DistanceOps> PlaintextStore<D> {
         &mut self,
         id: VectorId,
         query: <Self as VectorStore>::QueryRef,
-    ) -> <Self as VectorStore>::VectorRef {
+    ) -> VectorId {
         self.storage.insert(id, query)
     }
 
@@ -108,7 +107,7 @@ impl<D: DistanceOps> PlaintextStore<D> {
         rng: &mut R,
         graph_size: usize,
         searcher: &HnswSearcher,
-    ) -> Result<GraphMem<<Self as VectorStore>::VectorRef>> {
+    ) -> Result<GraphMem> {
         let mut graph = GraphMem::new();
         let mut rng = AesRng::from_rng(rng.clone())?;
 
@@ -129,7 +128,7 @@ impl<D: DistanceOps> PlaintextStore<D> {
             let query_id = VectorId::from_serial_id(serial_id);
             let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
             let (neighbors, update_ep) = searcher
-                .search_to_insert::<_, SortedNeighborhood<_>>(self, &graph, &query, insertion_layer)
+                .search_to_insert(self, &graph, &query, insertion_layer)
                 .await?;
             searcher
                 .insert_from_search_results(self, &mut graph, query_id, neighbors, update_ep)
@@ -142,13 +141,9 @@ impl<D: DistanceOps> PlaintextStore<D> {
 
 impl<D: DistanceOps> VectorStore for PlaintextStore<D> {
     type QueryRef = Arc<IrisCode>;
-    type VectorRef = VectorId;
     type DistanceRef = (u16, u16);
 
-    async fn vectors_as_queries(
-        &mut self,
-        vectors: Vec<Self::VectorRef>,
-    ) -> Result<Vec<Self::QueryRef>> {
+    async fn vectors_as_queries(&mut self, vectors: Vec<VectorId>) -> Result<Vec<Self::QueryRef>> {
         Ok(vectors
             .iter()
             .map(|id| self.storage.get_vector(id).unwrap().clone())
@@ -158,7 +153,7 @@ impl<D: DistanceOps> VectorStore for PlaintextStore<D> {
     async fn eval_distance(
         &mut self,
         query: &Self::QueryRef,
-        vector: &Self::VectorRef,
+        vector: &VectorId,
     ) -> Result<Self::DistanceRef> {
         debug!(event_type = EvaluateDistance.id());
         let vector_code = self.storage.get_vector(vector).ok_or_else(|| {
@@ -197,25 +192,30 @@ impl<D: DistanceOps> VectorStore for PlaintextStore<D> {
         Ok(results)
     }
 
-    async fn only_valid_vectors(
-        &mut self,
-        mut vectors: Vec<Self::VectorRef>,
-    ) -> Vec<Self::VectorRef> {
+    async fn only_valid_vectors(&mut self, mut vectors: Vec<VectorId>) -> Vec<VectorId> {
         vectors.retain(|v| self.storage.contains(v));
         vectors
+    }
+
+    async fn only_valid_entry_points(
+        &mut self,
+        mut entry_points: Vec<(VectorId, usize)>,
+    ) -> Vec<(VectorId, usize)> {
+        entry_points.retain(|(v, _)| self.storage.contains(v));
+        entry_points
     }
 }
 
 impl<D: DistanceOps> VectorStoreMut for PlaintextStore<D> {
-    async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
+    async fn insert(&mut self, query: &Self::QueryRef) -> VectorId {
         self.storage.append(query.clone())
     }
 
     async fn insert_at(
         &mut self,
-        vector_ref: &Self::VectorRef,
+        vector_ref: &VectorId,
         query: &Self::QueryRef,
-    ) -> Result<Self::VectorRef> {
+    ) -> Result<VectorId> {
         Ok(self.storage.insert(*vector_ref, query.clone()))
     }
 }
@@ -275,13 +275,9 @@ impl<D: DistanceOps> From<PlaintextStore<D>> for SharedPlaintextStore<D> {
 
 impl<D: DistanceOps> VectorStore for SharedPlaintextStore<D> {
     type QueryRef = Arc<IrisCode>;
-    type VectorRef = VectorId;
     type DistanceRef = (u16, u16);
 
-    async fn vectors_as_queries(
-        &mut self,
-        vectors: Vec<Self::VectorRef>,
-    ) -> Result<Vec<Self::QueryRef>> {
+    async fn vectors_as_queries(&mut self, vectors: Vec<VectorId>) -> Result<Vec<Self::QueryRef>> {
         let store = self.storage.read().await;
         Ok(vectors
             .iter()
@@ -292,7 +288,7 @@ impl<D: DistanceOps> VectorStore for SharedPlaintextStore<D> {
     async fn eval_distance(
         &mut self,
         query: &Self::QueryRef,
-        vector: &Self::VectorRef,
+        vector: &VectorId,
     ) -> Result<Self::DistanceRef> {
         let distances = self.eval_distance_batch(query, &[*vector]).await?;
         Ok(distances[0])
@@ -301,7 +297,7 @@ impl<D: DistanceOps> VectorStore for SharedPlaintextStore<D> {
     async fn eval_distance_batch(
         &mut self,
         query: &Self::QueryRef,
-        vectors: &[Self::VectorRef],
+        vectors: &[VectorId],
     ) -> Result<Vec<Self::DistanceRef>> {
         debug!(event_type = EvaluateDistance.id());
         let store = self.storage.read().await;
@@ -346,26 +342,32 @@ impl<D: DistanceOps> VectorStore for SharedPlaintextStore<D> {
         Ok(results)
     }
 
-    async fn only_valid_vectors(
-        &mut self,
-        mut vectors: Vec<Self::VectorRef>,
-    ) -> Vec<Self::VectorRef> {
+    async fn only_valid_vectors(&mut self, mut vectors: Vec<VectorId>) -> Vec<VectorId> {
         let storage = self.storage.read().await;
         vectors.retain(|v| storage.contains(v));
         vectors
     }
+
+    async fn only_valid_entry_points(
+        &mut self,
+        mut entry_points: Vec<(VectorId, usize)>,
+    ) -> Vec<(VectorId, usize)> {
+        let storage = self.storage.read().await;
+        entry_points.retain(|(v, _)| storage.contains(v));
+        entry_points
+    }
 }
 
 impl<D: DistanceOps> VectorStoreMut for SharedPlaintextStore<D> {
-    async fn insert(&mut self, query: &Self::QueryRef) -> Self::VectorRef {
+    async fn insert(&mut self, query: &Self::QueryRef) -> VectorId {
         self.storage.append(query).await
     }
 
     async fn insert_at(
         &mut self,
-        vector_ref: &Self::VectorRef,
+        vector_ref: &VectorId,
         query: &Self::QueryRef,
-    ) -> Result<Self::VectorRef> {
+    ) -> Result<VectorId> {
         Ok(self.storage.insert(*vector_ref, query).await)
     }
 }
@@ -374,7 +376,7 @@ impl<D: DistanceOps> VectorStoreMut for SharedPlaintextStore<D> {
 mod tests {
     use super::*;
     use crate::hawkers::aby3::aby3_store::FhdOps;
-    use crate::hnsw::HnswSearcher;
+    use crate::hnsw::{HnswSearcher, SortedNeighborhood};
     use aes_prng::AesRng;
     use iris_mpc_common::iris_db::db::IrisDB;
     use itertools::Itertools;

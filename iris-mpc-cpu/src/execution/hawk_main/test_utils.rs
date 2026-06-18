@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     execution::local::get_free_local_addresses,
-    hnsw::searcher::{build_layer_updates, ConnectPlan, LayerMode, UpdateEntryPoint},
+    hnsw::graph::{mutation::EdgeType, GraphMutation, MutationOp, UpdateEntryPoint},
     protocol::shared_iris::GaloisRingSharedIris,
     utils::constants::N_PARTIES,
 };
@@ -81,7 +81,6 @@ pub async fn init_iris_db(actor: &mut HawkActor) -> Result<()> {
 /// Populate the graphs such that all vectors are reachable.
 pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
     let db_size = 5;
-    let layer_mode = actor.searcher().layer_mode.clone();
     let id = |i: usize| VectorId::from_0_index(i as u32);
     let next = |i: usize| (i + 1) % db_size;
     let edges = |i: usize| vec![id(next(i))];
@@ -89,19 +88,26 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
     for side in [LEFT, RIGHT] {
         let mut graph = actor.graph_store[side].write().await;
         for i in 0..db_size {
-            let plan = ConnectPlan {
-                inserted_vector: id(i),
-                updates: build_layer_updates(id(i), edges(i), vec![edges(next(i))], 0),
-                update_ep: if i == 0 {
-                    match layer_mode {
-                        LayerMode::Standard { .. } => UpdateEntryPoint::SetUnique { layer: 0 },
-                        LayerMode::LinearScan { .. } => UpdateEntryPoint::False,
-                    }
-                } else {
-                    UpdateEntryPoint::False
+            let update_ep = UpdateEntryPoint::False;
+            let mutations = vec![
+                MutationOp::AddNode {
+                    id: id(i),
+                    height: 1,
+                    update_ep,
                 },
-            };
-            graph.insert_apply(plan).await;
+                MutationOp::AddEdges {
+                    base: id(i),
+                    layer: 0,
+                    neighbors: edges(i),
+                    edge_type: EdgeType::All,
+                },
+            ];
+            graph
+                .insert_apply(&GraphMutation {
+                    seq_no: (i as u64) + 1,
+                    ops: mutations,
+                })
+                .unwrap();
         }
     }
 

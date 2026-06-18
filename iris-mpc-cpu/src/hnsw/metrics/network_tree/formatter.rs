@@ -22,7 +22,7 @@ const MIN_NAME_WIDTH: usize = 20;
 /// `tracing_forest`.
 ///
 /// Implements the `tracing_forest::Formatter` trait: each time a tracing span
-/// tree is completed, `fmt()` converts it into a [`NetworkTree`] (deduplicating
+/// tree is completed, `fmt()` converts it into a `NetworkTree` (deduplicating
 /// repeated children) and accumulates per-function byte/message counters into an
 /// internal [`StatsTreeNode`] forest.
 ///
@@ -89,7 +89,7 @@ const MIN_NAME_WIDTH: usize = 20;
 ///
 /// Both tables can be sorted by total bytes (default) or total messages via
 /// [`SortBy`].  When `tracing_output` is enabled, `fmt()` additionally returns
-/// a per-call tree string (the [`NetworkTree`] rendering with `x N` call
+/// a per-call tree string (the `NetworkTree` rendering with `x N` call
 /// counts and per-call byte budgets); otherwise it returns an empty string for
 /// efficiency.
 pub struct NetworkFormatter {

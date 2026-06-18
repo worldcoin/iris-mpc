@@ -8,7 +8,7 @@ use crate::{
     protocol::shared_iris::ArcIris,
 };
 use eyre::Result;
-use iris_mpc_common::{vector_id::VectorId, IrisSerialId};
+use iris_mpc_common::{SerialId, VectorId};
 use std::{fmt, future::Future, iter::Peekable, ops::RangeInclusive};
 
 /// A batch for upstream indexation.
@@ -78,22 +78,22 @@ pub struct BatchGenerator {
     batch_size: BatchSize,
 
     // Set of Iris serial identifiers to exclude from indexing.
-    exclusions: Vec<IrisSerialId>,
+    exclusions: Vec<SerialId>,
 
     // Range of Iris serial identifiers to be indexed.
-    range: RangeInclusive<IrisSerialId>,
+    range: RangeInclusive<SerialId>,
 
     // Iterator over range of Iris serial identifiers to be indexed.
-    range_iter: Peekable<RangeInclusive<IrisSerialId>>,
+    range_iter: Peekable<RangeInclusive<SerialId>>,
 }
 
 /// Constructor.
 impl BatchGenerator {
     pub fn new(
-        start_id: IrisSerialId,
-        end_id: IrisSerialId,
+        start_id: SerialId,
+        end_id: SerialId,
         batch_size: BatchSize,
-        exclusions: Vec<IrisSerialId>,
+        exclusions: Vec<SerialId>,
     ) -> Self {
         let range = start_id..=end_id;
 
@@ -140,7 +140,7 @@ pub trait BatchIterator {
     ///
     fn next_batch(
         &mut self,
-        last_indexed_id: IrisSerialId,
+        last_indexed_id: SerialId,
         registries: &BothEyes<VectorIdRegistryRef>,
         worker_pools: &BothEyes<impl IrisWorkerPool>,
     ) -> impl Future<Output = Result<Option<Batch>, IndexationError>> + Send;
@@ -207,7 +207,7 @@ impl fmt::Display for BatchSize {
 /// Methods.
 impl Batch {
     // Returns Iris serial id of batch's last element.
-    pub fn id_end(&self) -> IrisSerialId {
+    pub fn id_end(&self) -> SerialId {
         self.vector_ids_to_persist
             .last()
             .map(|id| id.serial_id())
@@ -215,7 +215,7 @@ impl Batch {
     }
 
     // Returns Iris serial id of batch's first element.
-    pub fn id_start(&self) -> IrisSerialId {
+    pub fn id_start(&self) -> SerialId {
         self.vector_ids_to_persist
             .first()
             .map(|id| id.serial_id())
@@ -223,7 +223,7 @@ impl Batch {
     }
 
     // Returns serial identifiers within batch.
-    pub fn serial_ids(&self) -> Vec<IrisSerialId> {
+    pub fn serial_ids(&self) -> Vec<SerialId> {
         self.vector_ids.iter().map(|id| id.serial_id()).collect()
     }
 
@@ -238,8 +238,8 @@ impl BatchGenerator {
     /// Returns next batch of Iris serial identifiers to be indexed.
     fn next_identifiers(
         &mut self,
-        last_indexed_id: IrisSerialId,
-    ) -> Option<(Vec<IrisSerialId>, Vec<IrisSerialId>)> {
+        last_indexed_id: SerialId,
+    ) -> Option<(Vec<SerialId>, Vec<SerialId>)> {
         // Escape if exhausted.
         if self.range_iter.peek().is_none() {
             tracing::info!(
@@ -253,8 +253,8 @@ impl BatchGenerator {
         let batch_size_max = self.batch_size.next_max(last_indexed_id);
 
         // Construct next batch.
-        let mut identifiers = Vec::<IrisSerialId>::new();
-        let mut identifiers_for_copying = Vec::<IrisSerialId>::new();
+        let mut identifiers = Vec::<SerialId>::new();
+        let mut identifiers_for_copying = Vec::<SerialId>::new();
         while self.range_iter.peek().is_some() && identifiers.len() < batch_size_max {
             let next_id = self.range_iter.by_ref().next().unwrap();
             identifiers_for_copying.push(next_id);
@@ -283,7 +283,7 @@ impl BatchIterator for BatchGenerator {
     // Returns next batch of Iris data to be indexed or None if exhausted.
     async fn next_batch(
         &mut self,
-        last_indexed_id: IrisSerialId,
+        last_indexed_id: SerialId,
         registries: &BothEyes<VectorIdRegistryRef>,
         worker_pools: &BothEyes<impl IrisWorkerPool>,
     ) -> Result<Option<Batch>, IndexationError> {
@@ -355,7 +355,7 @@ impl BatchSize {
     /// Dynamically computes size of next batch to be indexed.
     #[allow(non_snake_case)]
     pub fn get_dynamic_size(
-        last_indexed_id: IrisSerialId,
+        last_indexed_id: SerialId,
         error_correction: usize,
         hnsw_M: usize,
     ) -> usize {
@@ -376,7 +376,7 @@ impl BatchSize {
 
     /// Calculates maximum size of next batch to be indexed.
     #[allow(non_snake_case)]
-    fn next_max(&self, last_indexed_id: IrisSerialId) -> usize {
+    fn next_max(&self, last_indexed_id: SerialId) -> usize {
         match self {
             BatchSize::Static(size) => {
                 tracing::info!(
@@ -419,12 +419,12 @@ mod tests {
     use rand::{Rng, SeedableRng};
 
     const BATCH_SIZE_ERROR_RATE: usize = 128;
-    const EXCLUSIONS: [IrisSerialId; 9] = [3, 7, 12, 15, 22, 30, 70, 84, 92];
+    const EXCLUSIONS: [SerialId; 9] = [3, 7, 12, 15, 22, 30, 70, 84, 92];
     const HNSW_PARAM_M: usize = 256;
-    const INDEXATION_END_ID: IrisSerialId = 100;
-    const INDEXATION_END_ID_MAX: IrisSerialId = 15_000_000;
-    const INDEXATION_START_ID: IrisSerialId = 1;
-    const LAST_INDEXED_IDS: [(IrisSerialId, usize); 10] = [
+    const INDEXATION_END_ID: SerialId = 100;
+    const INDEXATION_END_ID_MAX: SerialId = 15_000_000;
+    const INDEXATION_START_ID: SerialId = 1;
+    const LAST_INDEXED_IDS: [(SerialId, usize); 10] = [
         (0, 1),
         (2312177, 71),
         (6983790, 214),
@@ -456,7 +456,7 @@ mod tests {
     }
 
     impl BatchGenerator {
-        fn new_0(batch_size: BatchSize, exclusions: Vec<IrisSerialId>) -> Self {
+        fn new_0(batch_size: BatchSize, exclusions: Vec<SerialId>) -> Self {
             Self::new(
                 INDEXATION_START_ID,
                 INDEXATION_END_ID,
@@ -505,10 +505,10 @@ mod tests {
     }
 
     // Returns a random ordered set of last indexed identifiers.
-    fn get_last_indexed_identifiers() -> Vec<IrisSerialId> {
+    fn get_last_indexed_identifiers() -> Vec<SerialId> {
         let mut rng = rand::thread_rng();
         let mut random_vec: Vec<u32> = (0..10)
-            .map(|_| rng.gen_range(2 as IrisSerialId..=INDEXATION_END_ID_MAX as IrisSerialId))
+            .map(|_| rng.gen_range(2 as SerialId..=INDEXATION_END_ID_MAX as SerialId))
             .collect();
         random_vec.sort();
         random_vec.insert(0, 0);
@@ -567,7 +567,7 @@ mod tests {
     fn test_next_identifiers_1() {
         let mut batch_id: usize = 0;
         let mut generator = BatchGenerator::new_1();
-        let mut last_indexed_id = 0 as IrisSerialId;
+        let mut last_indexed_id = 0 as SerialId;
 
         while let Some((identifiers, identifiers_for_indexation)) =
             generator.next_identifiers(last_indexed_id)
@@ -575,7 +575,7 @@ mod tests {
             batch_id += 1;
             assert_eq!(identifiers.len(), STATIC_BATCH_SIZE_10);
             assert_eq!(identifiers_for_indexation.len(), STATIC_BATCH_SIZE_10);
-            last_indexed_id += identifiers.len() as IrisSerialId;
+            last_indexed_id += identifiers.len() as SerialId;
         }
         assert_eq!(batch_id, 10);
     }
@@ -585,7 +585,7 @@ mod tests {
     fn test_next_identifiers_2() {
         let mut batch_id: usize = 0;
         let mut generator = BatchGenerator::new_2();
-        let mut last_indexed_id = 0 as IrisSerialId;
+        let mut last_indexed_id = 0 as SerialId;
 
         while let Some((identifiers, identifiers_for_indexation)) =
             generator.next_identifiers(last_indexed_id)
@@ -603,10 +603,10 @@ mod tests {
     fn test_next_identifiers_for_indexation_with_exclusions() {
         let mut batch_id: usize = 0;
         let mut generator = BatchGenerator::new_4();
-        let mut last_indexed_id = 0 as IrisSerialId;
+        let mut last_indexed_id = 0 as SerialId;
 
-        let mut all_identifiers: Vec<IrisSerialId> = vec![];
-        let mut all_identifiers_for_indexation: Vec<IrisSerialId> = vec![];
+        let mut all_identifiers: Vec<SerialId> = vec![];
+        let mut all_identifiers_for_indexation: Vec<SerialId> = vec![];
 
         while let Some((identifiers, identifiers_for_indexation)) =
             generator.next_identifiers(last_indexed_id)
@@ -630,14 +630,14 @@ mod tests {
     async fn test_next_batch_1() -> Result<()> {
         let mut generator = BatchGenerator::new_1();
         let (registries, workers, _) = get_test_stores();
-        let mut last_indexed_id = 0 as IrisSerialId;
+        let mut last_indexed_id = 0 as SerialId;
 
         while let Some(batch) = generator
             .next_batch(last_indexed_id, &registries, &workers)
             .await?
         {
             assert_eq!(batch.size(), 10);
-            last_indexed_id += batch.size() as IrisSerialId;
+            last_indexed_id += batch.size() as SerialId;
         }
 
         Ok(())
@@ -650,7 +650,7 @@ mod tests {
         let mut batch_id = 0;
         let mut generator = BatchGenerator::new_2();
         let (registries, workers, _) = get_test_stores();
-        let mut last_indexed_id = 0 as IrisSerialId;
+        let mut last_indexed_id = 0 as SerialId;
 
         while let Some(batch) = generator
             .next_batch(last_indexed_id, &registries, &workers)
@@ -670,7 +670,7 @@ mod tests {
         let mut batches = Vec::new();
         let mut generator = BatchGenerator::new_4();
         let (registries, workers, _) = get_test_stores();
-        let mut last_indexed_id = 0 as IrisSerialId;
+        let mut last_indexed_id = 0 as SerialId;
 
         while let Some(batch) = generator
             .next_batch(last_indexed_id, &registries, &workers)

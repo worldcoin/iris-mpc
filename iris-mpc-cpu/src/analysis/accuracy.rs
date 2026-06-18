@@ -4,8 +4,7 @@ use crate::{
         plaintext_store::{PlaintextStore, SharedPlaintextStore},
     },
     hnsw::{
-        graph::neighborhood::{UnsortedNeighborhood, WrappedNeighborhood},
-        searcher::{LayerDistribution, LayerMode, NeighborhoodMode, N_PARAM_LAYERS},
+        searcher::{LayerDistribution, N_PARAM_LAYERS},
         GraphMem, HnswParams, HnswSearcher, SortedNeighborhood,
     },
     utils::serialization::{
@@ -16,7 +15,7 @@ use crate::{
 use eyre::{bail, eyre, Result};
 use iris_mpc_common::{
     iris_db::iris::{IrisCode, IrisMutationFamily},
-    IrisSerialId, IrisVectorId as VectorId,
+    SerialId, VectorId,
 };
 use itertools::{izip, Itertools};
 use rand::{rngs::StdRng, seq::SliceRandom};
@@ -53,8 +52,6 @@ pub struct AnalysisConfig {
     pub mutations: Vec<f64>,
     /// Config for HNSW searcher to use for search during analysis.
     pub search_hnsw_config: HnswConfig,
-    /// Search using sorted or unsorted neighborhoods
-    pub neighborhood_mode: NeighborhoodMode,
     /// Distance ops type: "fhd" (Fractional Hamming) or "nhd" (Normalized Hamming).
     pub distance_ops: String,
 }
@@ -72,7 +69,7 @@ impl AnalysisConfig {
 /// Struct to hold a single search result for analysis.
 #[derive(Debug, Serialize)]
 pub struct AnalysisResult {
-    id: IrisSerialId,
+    id: SerialId,
     mutation: f64,
     rotation: isize,
     found: bool,
@@ -96,7 +93,7 @@ where
 pub async fn run_analysis<D: DistanceOps>(
     config: AnalysisConfig,
     store: PlaintextStore<D>,
-    graph: GraphMem<VectorId>,
+    graph: GraphMem,
     rng: &mut StdRng,
 ) -> Result<Vec<AnalysisResult>> {
     // Get all valid VectorIds from the store.
@@ -150,30 +147,12 @@ pub async fn run_analysis<D: DistanceOps>(
                 let query_ref = Arc::new(query_code_inner);
                 let analysis_searcher_clone = analysis_searcher.clone();
                 let mut store_clone = store.clone();
-                let nb_mode = config.neighborhood_mode.clone();
                 let graph_clone = Arc::clone(&graph);
 
                 let future = async move {
-                    let neighbors: WrappedNeighborhood<_> = match nb_mode {
-                        NeighborhoodMode::Sorted => analysis_searcher_clone
-                            .search::<_, SortedNeighborhood<_>>(
-                                &mut store_clone,
-                                &graph_clone,
-                                &query_ref,
-                                k_neighbors,
-                            )
-                            .await?
-                            .into(),
-                        NeighborhoodMode::Unsorted => analysis_searcher_clone
-                            .search::<_, UnsortedNeighborhood<_>>(
-                                &mut store_clone,
-                                &graph_clone,
-                                &query_ref,
-                                k_neighbors,
-                            )
-                            .await?
-                            .into(),
-                    };
+                    let neighbors: SortedNeighborhood<_> = analysis_searcher_clone
+                        .search(&mut store_clone, &graph_clone, &query_ref, k_neighbors)
+                        .await?;
 
                     let found = neighbors
                         .as_ref()
@@ -251,7 +230,7 @@ pub fn process_results(config: &AnalysisConfig, results: Vec<AnalysisResult>) ->
         }
         "histogram" => {
             // Option 2: For each rotation amount, output a histogram of "minimum mutation amount for which match was not found in search results"
-            let mut min_failure_map: HashMap<(IrisSerialId, isize), usize> = HashMap::new();
+            let mut min_failure_map: HashMap<(SerialId, isize), usize> = HashMap::new();
 
             for res in results.iter() {
                 let mutation_key = (res.mutation * PRECISION).floor() as usize;
@@ -343,7 +322,7 @@ pub struct HnswConfig {
     pub ef_construction: usize,
     pub ef_search: LayerValue<usize>,
     pub M: usize,
-    pub layer_mode: LayerMode,
+    pub max_graph_layer: usize,
     #[serde(default)]
     pub fixed_layer_search_batch_size: Option<usize>,
 }
@@ -369,12 +348,11 @@ impl From<&HnswConfig> for HnswSearcher {
             params.ef_constr_search = vals.try_into().unwrap();
         }
 
-        let layer_mode = value.layer_mode.clone();
         let layer_distribution = LayerDistribution::new_geometric_from_M(value.M);
 
         HnswSearcher {
             params,
-            layer_mode,
+            max_graph_layer: value.max_graph_layer,
             layer_distribution,
             fixed_layer_search_batch_size: value.fixed_layer_search_batch_size,
         }
@@ -421,7 +399,7 @@ pub async fn load_graph<D: DistanceOps>(
     config: &GraphInit,
     store: &mut PlaintextStore<D>,
     rng: &mut StdRng,
-) -> Result<GraphMem<VectorId>> {
+) -> Result<GraphMem> {
     match config {
         GraphInit::BinFile { path, format } => {
             println!("Loading graph from binary file: {}", path.display());

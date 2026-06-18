@@ -3,7 +3,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use uuid;
 
-use iris_mpc_common::IrisSerialId;
+use iris_mpc_common::SerialId;
 
 use super::{IrisPairDescriptor, RequestInfo};
 
@@ -14,7 +14,7 @@ pub enum Request {
         // Standard request information.
         info: RequestInfo,
         // Serial ID of associated uniqueness request (always known at creation).
-        parent: IrisSerialId,
+        parent: SerialId,
     },
     Reauthorization {
         // Standard request information.
@@ -22,7 +22,7 @@ pub enum Request {
         // Associated Iris pair descriptor ... used to build deterministic graphs.
         iris_pair: Option<IrisPairDescriptor>,
         // Serial ID of associated uniqueness request (always known at creation).
-        parent: IrisSerialId,
+        parent: SerialId,
         // Operation identifier.
         reauth_id: uuid::Uuid,
     },
@@ -48,7 +48,7 @@ pub enum Request {
         // Associated Iris pair descriptor ... used to build deterministic graphs.
         iris_pair: Option<IrisPairDescriptor>,
         // Serial ID of associated uniqueness request (always known at creation).
-        parent: IrisSerialId,
+        parent: SerialId,
         // Operation identifier.
         reset_id: uuid::Uuid,
     },
@@ -58,7 +58,7 @@ pub enum Request {
         // Associated Iris pair descriptor ... used to build deterministic graphs.
         iris_pair: Option<IrisPairDescriptor>,
         // Serial ID of associated uniqueness request (always known at creation).
-        parent: IrisSerialId,
+        parent: SerialId,
         // Operation identifier.
         recovery_id: uuid::Uuid,
     },
@@ -133,7 +133,7 @@ impl Request {
             Self::Uniqueness { .. } => "Uniqueness",
         };
         let label = self.info().label();
-        let serial_id: Option<IrisSerialId> = match self {
+        let serial_id: Option<SerialId> = match self {
             Self::IdentityDeletion { parent, .. }
             | Self::Reauthorization { parent, .. }
             | Self::ResetUpdate { parent, .. }

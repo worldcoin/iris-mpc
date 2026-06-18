@@ -10,13 +10,13 @@ use eyre::{bail, Result};
 use iris_mpc_common::{
     config::Config,
     postgres::{AccessMode, PostgresClient},
-    IrisSerialId, IrisVectorId,
+    SerialId, VectorId,
 };
 use iris_mpc_cpu::{
-    execution::hawk_main::{BothEyes, StoreId},
+    execution::hawk_main::BothEyes,
     genesis::state_accessor::{unset_last_indexed_iris_id, unset_last_indexed_modification_id},
     graph_checkpoint::{delete_graph, download_graph_checkpoint, get_latest_checkpoint_state},
-    hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
+    hawkers::plaintext_store::PlaintextStore,
     hnsw::{graph::graph_store::GraphPg as GraphStore, GraphMem},
 };
 use iris_mpc_store::{Store, StoredIrisRef};
@@ -105,14 +105,14 @@ impl MpcNodes {
     pub async fn assert_s3_checkpoint_graphs(
         &self,
         configs: &HawkConfigs,
-        expected_graphs: &BothEyes<GraphMem<PlaintextVectorRef>>,
+        expected_graphs: &BothEyes<GraphMem>,
     ) -> Result<()> {
         for (i, (node, config)) in self.nodes.iter().zip(configs.iter()).enumerate() {
             let aws_clients = get_aws_clients(config).await?;
             let checkpoint_state = get_latest_checkpoint_state(&node.cpu_stores.graph)
                 .await?
                 .ok_or_else(|| eyre::eyre!("No checkpoint found for node {}", i))?;
-            let s3_graphs: BothEyes<GraphMem<PlaintextVectorRef>> = download_graph_checkpoint(
+            let s3_graphs: BothEyes<GraphMem> = download_graph_checkpoint(
                 &aws_clients.checkpoint_s3_client,
                 &config.graph_checkpoint_bucket_name,
                 &checkpoint_state,
@@ -285,7 +285,7 @@ impl MpcNode {
         let dummy_code = vec![0u16; IRIS_CODE_LENGTH];
         let dummy_mask = vec![0u16; MASK_CODE_LENGTH];
 
-        let (irises, vector_ids): (Vec<StoredIrisRef>, Vec<IrisVectorId>) = (1..=count)
+        let (irises, vector_ids): (Vec<StoredIrisRef>, Vec<VectorId>) = (1..=count)
             .map(|i| {
                 let iris_id = starting_id + i;
                 (
@@ -296,7 +296,7 @@ impl MpcNode {
                         right_code: &dummy_code,
                         right_mask: &dummy_mask,
                     },
-                    IrisVectorId::new(iris_id as u32, 500),
+                    VectorId::new(iris_id as u32, 500),
                 )
             })
             .collect();
@@ -325,7 +325,7 @@ impl MpcNode {
     /// Deletes the most recent  genesis graph checkpoint from this node's CPU store only.
     pub async fn delete_cpu_checkpoint(&self) -> Result<()> {
         sqlx::query(
-            "DELETE FROM genesis_graph_checkpoint 
+            "DELETE FROM genesis_graph_checkpoint
          WHERE id = (SELECT id FROM genesis_graph_checkpoint ORDER BY id DESC LIMIT 1)",
         )
         .execute(self.cpu_stores.graph.pool())
@@ -338,20 +338,7 @@ impl MpcNode {
             // delete irises
             stores.iris.delete_irises_after_id(0).await?;
 
-            let mut graph_tx = stores.graph.tx().await?;
-
-            // clear graphs
-            graph_tx
-                .with_graph(StoreId::Left)
-                .clear_tables()
-                .await
-                .expect("Could not clear left graph");
-            graph_tx
-                .with_graph(StoreId::Right)
-                .clear_tables()
-                .await
-                .expect("Could not clear right graph");
-
+            let graph_tx = stores.graph.tx().await?;
             let mut tx = graph_tx.tx;
 
             // clear modifications tables
@@ -361,8 +348,11 @@ impl MpcNode {
             unset_last_indexed_iris_id(&mut tx).await?;
             unset_last_indexed_modification_id(&mut tx).await?;
 
-            // clear genesis graph checkpoint table
+            // clear genesis graph checkpoint table and the WAL
             sqlx::query("DELETE FROM genesis_graph_checkpoint")
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM hawk_graph_mutations")
                 .execute(&mut *tx)
                 .await?;
 
@@ -417,9 +407,9 @@ impl MpcNode {
 #[derive(Default, Clone)]
 pub struct DbAssertions {
     pub num_irises: Option<usize>,
-    pub vector_ids: Option<Vec<IrisVectorId>>,
+    pub vector_ids: Option<Vec<VectorId>>,
     pub num_modifications: Option<usize>,
-    pub last_indexed_iris_id: Option<IrisSerialId>,
+    pub last_indexed_iris_id: Option<SerialId>,
     pub last_indexed_modification_id: Option<i64>,
 }
 
@@ -433,7 +423,7 @@ impl DbAssertions {
         self
     }
 
-    pub fn assert_vector_ids(mut self, vector_ids: Vec<IrisVectorId>) -> Self {
+    pub fn assert_vector_ids(mut self, vector_ids: Vec<VectorId>) -> Self {
         self.vector_ids = Some(vector_ids);
         self
     }
@@ -443,7 +433,7 @@ impl DbAssertions {
         self
     }
 
-    pub fn assert_last_indexed_iris_id(mut self, id: IrisSerialId) -> Self {
+    pub fn assert_last_indexed_iris_id(mut self, id: SerialId) -> Self {
         self.last_indexed_iris_id = Some(id);
         self
     }
@@ -500,11 +490,11 @@ impl DbAssertions {
     }
 }
 
-mod db_ops {
+pub mod db_ops {
     use std::ops::DerefMut;
 
     use eyre::Result;
-    use iris_mpc_common::{helpers::sync::Modification, IrisVectorId};
+    use iris_mpc_common::{helpers::sync::Modification, VectorId};
     use iris_mpc_store::Store;
     use sqlx::{Postgres, Transaction};
 
@@ -526,7 +516,7 @@ mod db_ops {
         Ok(())
     }
 
-    pub async fn get_iris_vector_ids(store: &Store) -> Result<Vec<IrisVectorId>> {
+    pub async fn get_iris_vector_ids(store: &Store) -> Result<Vec<VectorId>> {
         let ids: Vec<(i64, i16)> = sqlx::query_as(
             r#"
             SELECT
@@ -541,7 +531,7 @@ mod db_ops {
 
         let ids = ids
             .into_iter()
-            .map(|(serial_id, version)| IrisVectorId::new(serial_id as u32, version))
+            .map(|(serial_id, version)| VectorId::new(serial_id as u32, version))
             .collect();
 
         Ok(ids)
@@ -571,13 +561,14 @@ mod db_ops {
     ) -> Result<()> {
         let query = sqlx::query(
             r#"
-            INSERT INTO modifications (id, serial_id, request_type, s3_url, status, persisted)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO modifications (id, serial_id, request_type, s3_url, status, result_message_body, persisted)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             ON CONFLICT (id) DO UPDATE
             SET serial_id = EXCLUDED.serial_id,
                 request_type = EXCLUDED.request_type,
                 s3_url = EXCLUDED.s3_url,
                 status = EXCLUDED.status,
+                result_message_body = EXCLUDED.result_message_body,
                 persisted = EXCLUDED.persisted;
             "#,
         )
@@ -586,6 +577,7 @@ mod db_ops {
         .bind(m.request_type.as_str())
         .bind(m.s3_url.as_ref())
         .bind(m.status.as_str())
+        .bind(m.result_message_body.clone())
         .bind(m.persisted);
         query.execute(tx.deref_mut()).await?;
 

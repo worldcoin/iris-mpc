@@ -1,4 +1,4 @@
-use iris_mpc_common::IrisSerialId;
+use iris_mpc_common::SerialId;
 use thiserror::Error;
 
 // Encpasulates a non-exhaustive set of errors raised during indexation.
@@ -32,7 +32,7 @@ pub enum IndexationError {
     IndexationHeightMismatch,
 
     #[error("Failed to fetch Iris with given serial ID: {0}")]
-    MissingSerialId(IrisSerialId),
+    MissingSerialId(SerialId),
 
     #[error("Failed to persist genesis Graph indexation state element {0} to PostgreSQL dB: {1}")]
     PersistIndexationStateElement(String, String),

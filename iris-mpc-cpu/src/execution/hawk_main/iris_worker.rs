@@ -18,7 +18,7 @@ use eyre::Result;
 use futures::future::{try_join_all, BoxFuture};
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
-    vector_id::VectorId,
+    VectorId,
 };
 use itertools::{izip, Itertools};
 use std::{

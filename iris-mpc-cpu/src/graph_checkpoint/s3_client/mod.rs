@@ -1,5 +1,7 @@
 mod multipart;
-use std::{fmt::Display, io::Cursor, str::FromStr, time::Instant};
+mod streaming;
+mod streaming_download;
+use std::{io::Cursor, time::Instant};
 
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client as S3Client;
@@ -8,21 +10,21 @@ use eyre::{bail, eyre, Result};
 
 use crate::{
     execution::hawk_main::{BothEyes, GraphRef, LEFT, RIGHT},
-    hawkers::plaintext_store::PlaintextVectorRef,
     hnsw::{
         graph::{
             graph_store::{self, GraphPg},
             layered_graph::GraphMem,
         },
-        vector_store::Ref,
         VectorStore,
     },
     utils::serialization::graph::GraphFormat,
 };
 
 use crate::graph_checkpoint::data::*;
-use iris_mpc_common::IrisSerialId;
+use iris_mpc_common::SerialId;
 pub use multipart::*;
+pub use streaming::*;
+pub use streaming_download::*;
 
 /// Creates an S3 graph checkpoint.
 #[allow(clippy::too_many_arguments)]
@@ -31,7 +33,7 @@ pub async fn upload_graph_checkpoint(
     party_id: usize,
     graph_mem: &BothEyes<GraphRef>,
     s3_client: &S3Client,
-    last_indexed_iris_id: IrisSerialId,
+    last_indexed_iris_id: SerialId,
     last_indexed_modification_id: i64,
     graph_mutation_id: Option<i64>,
     is_archival: bool,
@@ -47,6 +49,73 @@ pub async fn upload_graph_checkpoint(
     let left_graph = graph_mem[LEFT].read().await;
     let right_graph = graph_mem[RIGHT].read().await;
     let data = Bytes::from(bincode::serialize(&[&*left_graph, &*right_graph])?);
+    _upload_graph_checkpoint(
+        bucket,
+        party_id,
+        s3_client,
+        last_indexed_iris_id,
+        last_indexed_modification_id,
+        graph_mutation_id,
+        is_archival,
+        data,
+        "genesis",
+        "graph",
+        start,
+    )
+    .await
+}
+
+/// Creates an S3 graph checkpoint from plaintext graphs (for testing).
+#[allow(clippy::too_many_arguments)]
+pub async fn upload_graph_checkpoint_plaintext(
+    bucket: &str,
+    party_id: usize,
+    graph_mem: &BothEyes<GraphMem>,
+    s3_client: &S3Client,
+    last_indexed_iris_id: SerialId,
+    last_indexed_modification_id: i64,
+    graph_mutation_id: Option<i64>,
+    is_archival: bool,
+) -> Result<GraphCheckpointState> {
+    let start = Instant::now();
+    tracing::info!(
+        "Creating S3 plaintext graph checkpoint: last_indexed_iris_id={}, last_indexed_modification_id={}, is_archival={}",
+        last_indexed_iris_id,
+        last_indexed_modification_id,
+        is_archival,
+    );
+
+    let data = Bytes::from(bincode::serialize(graph_mem)?);
+    _upload_graph_checkpoint(
+        bucket,
+        party_id,
+        s3_client,
+        last_indexed_iris_id,
+        last_indexed_modification_id,
+        graph_mutation_id,
+        is_archival,
+        data,
+        "plaintext",
+        "plaintext graph",
+        start,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn _upload_graph_checkpoint(
+    bucket: &str,
+    party_id: usize,
+    s3_client: &S3Client,
+    last_indexed_iris_id: SerialId,
+    last_indexed_modification_id: i64,
+    graph_mutation_id: Option<i64>,
+    is_archival: bool,
+    data: Bytes,
+    s3_prefix: &str,
+    log_label: &str,
+    start: Instant,
+) -> Result<GraphCheckpointState> {
     let data_len = data.len();
     tracing::info!(
         "Serialized graphs to {} bytes in {:?}",
@@ -64,7 +133,8 @@ pub async fn upload_graph_checkpoint(
     );
 
     let s3_key = format!(
-        "genesis/{}/checkpoint_{}.bin",
+        "{}/{}/checkpoint_{}.bin",
+        s3_prefix,
         party_id,
         uuid::Uuid::new_v4()
     );
@@ -82,7 +152,8 @@ pub async fn upload_graph_checkpoint(
     };
 
     tracing::info!(
-        "S3 graph checkpoint created successfully: s3_key={}, is_archival={}, duration={:?}",
+        "S3 {} checkpoint created successfully: s3_key={}, is_archival={}, duration={:?}",
+        log_label,
         s3_key,
         is_archival,
         start.elapsed()
@@ -97,24 +168,32 @@ pub async fn upload_graph_checkpoint(
     Ok(checkpoint)
 }
 
-pub async fn download_graph_checkpoint<T: Ref + Display + FromStr + Ord + 'static>(
+pub async fn download_graph_checkpoint(
     s3_client: &S3Client,
     bucket: &str,
     state: &GraphCheckpointState,
-) -> Result<BothEyes<GraphMem<T>>> {
-    if state.graph_version != GraphFormat::Current.version() {
-        bail!("unexpected graph version: {}", state.graph_version);
+) -> Result<BothEyes<GraphMem>> {
+    let format = GraphFormat::try_from(state.graph_version)?;
+    if format == GraphFormat::Raw {
+        bail!("Unexpected graph checkpoint format: Raw");
     }
+    let start = Instant::now();
+    let (graphs, hash_bytes) =
+        stream_download_and_deserialize_graph_pair(s3_client, bucket, &state.s3_key, format)
+            .await?;
+    metrics::histogram!("genesis_checkpoint_download_duration")
+        .record(start.elapsed().as_secs_f64());
 
-    let binary_graph = download_and_hash(s3_client, bucket, state).await?;
-
-    // todo: deserialize in a way that does not require holding 2 graphs in memory at once.
-    // currently binary_graph and graphs make two graphs in RAM at once
-    let graphs: BothEyes<GraphMem<_>> = tokio::task::spawn_blocking(move || {
-        let mut cursor = Cursor::new(&binary_graph);
-        bincode::deserialize_from(&mut cursor)
-    })
-    .await??;
+    // Verify BLAKE3 hash after download
+    let computed_hash = blake3::Hash::from_bytes(hash_bytes).to_hex().to_string();
+    if computed_hash != state.blake3_hash {
+        return Err(eyre!(
+            "BLAKE3 hash mismatch: expected {}, got {}",
+            state.blake3_hash,
+            computed_hash
+        ));
+    }
+    tracing::info!("BLAKE3 hash verified successfully: {}", computed_hash);
     Ok(graphs)
 }
 
@@ -124,13 +203,13 @@ pub async fn download_genesis_checkpoint_plaintext(
     s3_client: &S3Client,
     bucket: &str,
     state: &GraphCheckpointState,
-) -> Result<BothEyes<GraphMem<PlaintextVectorRef>>> {
+) -> Result<BothEyes<GraphMem>> {
     if state.graph_version != GraphFormat::Current.version() {
         bail!("unexpected graph version: {}", state.graph_version);
     }
     let binary_graph = download_and_hash(s3_client, bucket, state).await?;
     let mut cursor = Cursor::new(&binary_graph);
-    let graphs: BothEyes<GraphMem<_>> = bincode::deserialize_from(&mut cursor)?;
+    let graphs: BothEyes<GraphMem> = bincode::deserialize_from(&mut cursor)?;
     Ok(graphs)
 }
 
@@ -190,10 +269,20 @@ pub async fn save_checkpoint_state<V: VectorStore>(
 /// reached consensus on a common checkpoint.
 /// if the parties have not reached agreement, then
 /// calling this function could make rollback impossible
+///
+/// `retain_from_id`: local row-id watermark; rows with `id >= retain_from_id`
+/// are kept regardless of pruning mode. Callers pruning right after recording
+/// a checkpoint that peers have NOT yet confirmed durable (the sidecar's
+/// `UploadAndRecord`) must pass the cycle's agreed base id here: the base was
+/// advertised by every party in Phase 1, so retaining it guarantees a common
+/// checkpoint survives even if a peer crashes before recording the new one.
+/// `None` is only safe when `current_state` itself is known to be durably
+/// recorded by all parties (the startup-agreed common checkpoint).
 pub async fn cleanup_checkpoints<V: VectorStore>(
     bucket: &str,
     s3_client: &S3Client,
     current_state: &GraphCheckpointState,
+    retain_from_id: Option<i64>,
     graph_store: &GraphPg<V>,
     pruning_mode: PruningMode,
 ) -> Result<()> {
@@ -218,14 +307,15 @@ pub async fn cleanup_checkpoints<V: VectorStore>(
     for checkpoint in all_checkpoints
         .into_iter()
         .filter(|x| x.s3_key != current_state.s3_key)
+        .filter(|x| retain_from_id.is_none_or(|min_id| x.id < min_id))
         .filter(|x| match pruning_mode {
             PruningMode::AllOlder => true,
             PruningMode::OlderNonArchival => !x.is_archival,
             PruningMode::None => unreachable!(),
         })
     {
-        delete_graph(s3_client, bucket, &checkpoint.s3_key).await?;
         graph_store.delete_genesis_checkpoint(checkpoint.id).await?;
+        delete_graph(s3_client, bucket, &checkpoint.s3_key).await?;
     }
     Ok(())
 }

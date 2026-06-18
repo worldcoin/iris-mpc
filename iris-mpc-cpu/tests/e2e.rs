@@ -6,16 +6,16 @@ use iris_mpc_common::{
     iris_db::{db::IrisDB, iris::IrisCode},
     job::{BatchMetadata, BatchQuery, JobSubmissionHandle, ServerJobResult},
     test::{generate_full_test_db, prepare_batch, E2ETemplate, TestCaseGenerator},
-    vector_id::VectorId,
+    VectorId,
 };
 use iris_mpc_cpu::{
     execution::hawk_main::{HawkActor, HawkArgs, HawkHandle, HawkMutation},
     hawkers::{
-        aby3::aby3_store::{Aby3SharedIrises, Aby3Store, Aby3VectorRef, FhdOps},
+        aby3::aby3_store::{Aby3SharedIrises, Aby3Store, FhdOps},
         plaintext_store::PlaintextStore,
         shared_irises::SharedIrises,
     },
-    hnsw::{GraphMem, HnswSearcher, LayerDistribution},
+    hnsw::{GraphMem, HnswSearcher, LayerDistribution, LINEAR_SCAN_MAX_GRAPH_LAYER},
     protocol::shared_iris::GaloisRingSharedIris,
 };
 use rand::{rngs::StdRng, SeedableRng};
@@ -38,8 +38,6 @@ const MAX_RESET_UPDATES_PER_BATCH: usize = 3;
 const HNSW_EF_CONSTR: usize = 320;
 const HNSW_M: usize = 256;
 const HNSW_EF_SEARCH: usize = 256;
-// Must match HawkActor's LINEAR_SCAN_MAX_GRAPH_LAYER (hawk_main.rs).
-const LINEAR_SCAN_MAX_GRAPH_LAYER: usize = 1;
 const HNSW_LAYER_DENSITY: usize = 20;
 
 const UNIQUENESS_REQUEST_PARALLELISM: usize = 4;
@@ -60,7 +58,7 @@ async fn create_graph_from_plain_dbs(
     left_db: &IrisDB,
     right_db: &IrisDB,
     searcher: &HnswSearcher,
-) -> Result<([GraphMem<Aby3VectorRef>; 2], [Aby3SharedIrises; 2])> {
+) -> Result<([GraphMem; 2], [Aby3SharedIrises; 2])> {
     let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
     let left_points: HashMap<VectorId, Arc<IrisCode>> = left_db
         .db
@@ -103,8 +101,8 @@ async fn create_graph_from_plain_dbs(
     assert_eq!(Some(DB_SIZE), left_graph_max_id);
     assert_eq!(Some(DB_SIZE), right_graph_max_id);
 
-    let left_mpc_graph: GraphMem<Aby3VectorRef> = left_graph;
-    let right_mpc_graph: GraphMem<Aby3VectorRef> = right_graph;
+    let left_mpc_graph: GraphMem = left_graph;
+    let right_mpc_graph: GraphMem = right_graph;
 
     let mut left_shared_irises = HashMap::new();
     let mut right_shared_irises = HashMap::new();

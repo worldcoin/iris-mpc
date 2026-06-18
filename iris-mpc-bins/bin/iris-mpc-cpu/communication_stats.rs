@@ -46,7 +46,7 @@ use ampc_actor_utils::{
 use async_trait::async_trait;
 use clap::Parser;
 use eyre::Result;
-use iris_mpc_common::{job::JobSubmissionHandle, vector_id::VectorId};
+use iris_mpc_common::{job::JobSubmissionHandle, VectorId};
 use iris_mpc_cpu::{
     execution::{
         hawk_main::{
@@ -331,7 +331,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // 2. Build per-party secret-shared iris stores and graphs
     tracing::info!("Secret-sharing iris data for {} parties...", N_PARTIES);
     let party_iris_stores = build_party_iris_stores(&plain_store);
-    let party_graphs: Vec<BothEyes<GraphMem<_>>> = (0..N_PARTIES)
+    let party_graphs: Vec<BothEyes<GraphMem>> = (0..N_PARTIES)
         .map(|_| [plain_graph.clone(), plain_graph.clone()])
         .collect();
     tracing::info!("Secret sharing done.");

@@ -12,3 +12,6 @@ DROP TABLE IF EXISTS modifications;
 DROP TRIGGER IF EXISTS before_insert_modifications ON modifications;
 
 DROP FUNCTION IF EXISTS assign_modification_id();
+
+ALTER TABLE hawk_graph_mutations
+    ADD COLUMN IF NOT EXISTS mutation_version INT NOT NULL DEFAULT 1

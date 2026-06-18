@@ -1,15 +1,17 @@
 #![recursion_limit = "256"]
 
+use aws_sdk_s3::config::Region as S3Region;
+use aws_sdk_s3::Client as S3Client;
 use clap::Parser;
 use eyre::Result;
-use iris_mpc_common::{iris_db::iris::IrisCode, vector_id::SerialId, IrisVectorId};
+use iris_mpc_common::{iris_db::iris::IrisCode, SerialId, VectorId};
 use iris_mpc_cpu::{
-    execution::hawk_main::{StoreId, STORE_IDS},
+    execution::hawk_main::STORE_IDS,
     hawkers::aby3::aby3_store::FhdOps,
-    hawkers::plaintext_store::{PlaintextStore, PlaintextVectorRef},
+    hawkers::plaintext_store::PlaintextStore,
     hnsw::{
         graph::test_utils::DbContext, searcher::LayerDistribution, vector_store::VectorStoreMut,
-        GraphMem, HnswSearcher, SortedNeighborhood,
+        GraphMem, HnswSearcher, LINEAR_SCAN_MAX_GRAPH_LAYER,
     },
     protocol::shared_iris::{GaloisRingSharedIris, GaloisRingSharedIrisPair},
     utils::{
@@ -150,6 +152,14 @@ struct Args {
     /// Skip insertion of specific serial IDs ... used primarily in genesis testing.
     #[clap(long, num_args = 1..)]
     skip_insert_serial_ids: Vec<u32>,
+
+    /// S3 bucket for graph checkpoints.
+    #[clap(long)]
+    s3_bucket: String,
+
+    /// AWS region for the S3 checkpoint client (defaults to env/instance metadata)
+    #[clap(long)]
+    aws_region: Option<String>,
 }
 
 impl Args {
@@ -175,7 +185,8 @@ impl Args {
 // Convertor: Args -> HnswSearcher.
 impl From<&Args> for HnswSearcher {
     fn from(args: &Args) -> Self {
-        let mut searcher = HnswSearcher::new_standard(args.ef, args.ef, args.M);
+        let mut searcher =
+            HnswSearcher::new_linear_scan(args.ef, args.ef, args.M, LINEAR_SCAN_MAX_GRAPH_LAYER);
         if let Some(q) = args.layer_probability {
             match &mut searcher.layer_distribution {
                 LayerDistribution::Geometric { layer_probability } => {
@@ -276,16 +287,10 @@ async fn main() -> Result<()> {
 
     tracing::info!("⚓ ANCHOR: Constructing HNSW graph databases");
 
-    tracing::info!("Initializing in-memory graphs from databases");
+    tracing::info!("Initializing in-memory graphs from S3 checkpoint");
     let graphs = if n_existing_irises > 0 {
-        // read graph store from party 0
-        let graph_l = dbs[DEFAULT_PARTY_IDX]
-            .load_graph_to_mem(StoreId::Left)
-            .await?;
-        let graph_r = dbs[DEFAULT_PARTY_IDX]
-            .load_graph_to_mem(StoreId::Right)
-            .await?;
-        [graph_l, graph_r]
+        // Load from S3 checkpoint, then replay mutations recorded after it
+        dbs[DEFAULT_PARTY_IDX].get_both_eyes().await?
     } else {
         // new graphs
         [GraphMem::new(), GraphMem::new()]
@@ -388,17 +393,12 @@ async fn main() -> Result<()> {
                 }
                 let query = Arc::new(raw_query.iris_code);
 
-                let inserted_id = IrisVectorId::from_serial_id(serial_id);
+                let inserted_id = VectorId::from_serial_id(serial_id);
                 vector_store.insert_with_id(inserted_id, query.clone());
 
                 let insertion_layer = searcher.gen_layer_prf(&prf_seed, &(inserted_id, side))?;
                 let (neighbors, update_ep) = searcher
-                    .search_to_insert::<_, SortedNeighborhood<_>>(
-                        &mut vector_store,
-                        &graph,
-                        &query,
-                        insertion_layer,
-                    )
+                    .search_to_insert(&mut vector_store, &graph, &query, insertion_layer)
                     .await?;
                 searcher
                     .insert_from_search_results(
@@ -438,11 +438,10 @@ async fn main() -> Result<()> {
 
     let [(.., graph_l), (.., graph_r)] = results.try_into().unwrap();
 
+    let graphs = [graph_l, graph_r];
     for (party, db) in dbs.iter().enumerate() {
-        for (graph, side) in [(&graph_l, StoreId::Left), (&graph_r, StoreId::Right)] {
-            tracing::info!("Persisting {} graph for party {}", side, party);
-            db.persist_graph_db(graph.clone(), side).await?;
-        }
+        tracing::info!("Persisting graph checkpoint for party {}", party);
+        db.make_checkpoint_from_graph(&graphs).await?;
     }
 
     tracing::info!("Exited successfully! 🎉");
@@ -451,14 +450,33 @@ async fn main() -> Result<()> {
 }
 
 async fn init_dbs(args: &Args) -> Vec<DbContext> {
+    let mut builder = aws_config::from_env();
+    if let Some(aws_region) = args.aws_region.clone() {
+        builder = builder.region(S3Region::new(aws_region));
+    }
+    let shared_config = builder.load().await;
+    let s3_client = S3Client::new(&shared_config);
+
     let mut dbs = Vec::new();
-    for (url, schema) in izip!(args.db_urls().iter(), args.db_schemas().iter()).take(N_PARTIES) {
-        dbs.push(DbContext::new(url, schema).await);
+    for (party_id, (url, schema)) in izip!(args.db_urls().iter(), args.db_schemas().iter())
+        .take(N_PARTIES)
+        .enumerate()
+    {
+        dbs.push(
+            DbContext::new(
+                url,
+                schema,
+                s3_client.clone(),
+                args.s3_bucket.clone(),
+                party_id,
+            )
+            .await,
+        );
     }
     dbs
 }
 
-fn get_max_serial_id(graph: &GraphMem<PlaintextVectorRef>) -> Option<u32> {
+fn get_max_serial_id(graph: &GraphMem) -> Option<u32> {
     if let Some(layer) = graph.layers.first() {
         layer
             .get_links_map()

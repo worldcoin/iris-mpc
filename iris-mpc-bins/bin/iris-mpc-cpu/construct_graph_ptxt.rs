@@ -2,7 +2,7 @@ use std::{iter::once, path::PathBuf, sync::Arc};
 
 use clap::Parser;
 use eyre::{bail, Result};
-use iris_mpc_common::{iris_db::iris::IrisCode, IrisVectorId};
+use iris_mpc_common::{iris_db::iris::IrisCode, VectorId};
 use itertools::{chain, Itertools};
 use serde::Deserialize;
 
@@ -135,9 +135,7 @@ impl Checkpoints {
 
 /// Load an existing graph from `graph_spec` (or initialize a fresh one) and
 /// return it along with its highest layer-0 node serial id.
-fn load_existing_graph(
-    graph_spec: Option<LoadGraphConfig>,
-) -> Result<(GraphMem<IrisVectorId>, u32)> {
+fn load_existing_graph(graph_spec: Option<LoadGraphConfig>) -> Result<(GraphMem, u32)> {
     if let Some(graph_spec) = graph_spec {
         tracing::info!("Loading graph from file");
         let graph = graph_spec.read_graph_from_file()?;
@@ -163,7 +161,7 @@ fn load_existing_graph(
 
 #[allow(non_snake_case)]
 async fn build_iris_graph<D: DistanceOps>(
-    irises: Vec<(IrisVectorId, IrisCode)>,
+    irises: Vec<(VectorId, IrisCode)>,
     graph_spec: Option<LoadGraphConfig>,
     distance_fn: DistanceMode,
     searcher: &HnswSearcher,
@@ -257,7 +255,7 @@ async fn build_iris_graph<D: DistanceOps>(
 }
 
 async fn build_deep_id_graph(
-    vectors: Vec<(IrisVectorId, Int4Vector)>,
+    vectors: Vec<(VectorId, Int4Vector)>,
     threshold: i32,
     graph_spec: Option<LoadGraphConfig>,
     searcher: &HnswSearcher,
@@ -372,7 +370,7 @@ async fn main() -> Result<()> {
             let irises: Vec<_> = irises_
                 .into_iter()
                 .enumerate()
-                .map(|(idx, code)| (IrisVectorId::from_0_index(idx as u32), code))
+                .map(|(idx, code)| (VectorId::from_0_index(idx as u32), code))
                 .collect();
             if irises.is_empty() {
                 bail!("Iris DB is empty");
@@ -411,7 +409,7 @@ async fn main() -> Result<()> {
             let vectors: Vec<_> = vectors_
                 .into_iter()
                 .enumerate()
-                .map(|(idx, v)| (IrisVectorId::from_0_index(idx as u32), v))
+                .map(|(idx, v)| (VectorId::from_0_index(idx as u32), v))
                 .collect();
             if vectors.is_empty() {
                 bail!("Deep-ID DB is empty");
@@ -451,7 +449,7 @@ number = 64
 seed = 1
 
 [searcher]
-layer_mode = { LinearScan = { max_graph_layer = 1 } }
+max_graph_layer = 1
 
 [searcher.params]
 option = "Standard"
@@ -481,7 +479,7 @@ number = 64
 seed = 1
 
 [searcher]
-layer_mode = { LinearScan = { max_graph_layer = 1 } }
+max_graph_layer = 1
 
 [searcher.params]
 option = "Standard"
