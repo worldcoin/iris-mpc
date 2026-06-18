@@ -1,3 +1,4 @@
+use crate::services::aws::retry::retry_transient;
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use eyre::Result;
 use iris_mpc_common::{
@@ -5,6 +6,10 @@ use iris_mpc_common::{
 };
 
 use std::collections::HashMap;
+use std::time::Duration;
+
+const SNS_RETRY_MAX_ATTEMPTS: u32 = 8;
+const SNS_RETRY_INITIAL_BACKOFF: Duration = Duration::from_millis(200);
 
 async fn send_message(
     results_topic_arn: String,
@@ -14,14 +19,33 @@ async fn send_message(
     message_attributes: HashMap<String, MessageAttributeValue>,
     metrics_message_type: String,
 ) -> Result<()> {
-    sns_client
-        .publish()
-        .topic_arn(results_topic_arn)
-        .message(message)
-        .message_group_id(message_group_id)
-        .set_message_attributes(Some(message_attributes))
-        .send()
-        .await?;
+    // Retry transient SNS failures rather than letting them bubble to the
+    // result-sender's `exit(1)`. The results topic is FIFO with content-based
+    // deduplication (no MessageDeduplicationId is set), so re-publishing an
+    // identical message is dedup-safe within the SNS dedup window.
+    retry_transient(
+        "SNS publish",
+        SNS_RETRY_MAX_ATTEMPTS,
+        SNS_RETRY_INITIAL_BACKOFF,
+        || {
+            let sns_client = sns_client.clone();
+            let results_topic_arn = results_topic_arn.clone();
+            let message = message.clone();
+            let message_group_id = message_group_id.clone();
+            let message_attributes = message_attributes.clone();
+            async move {
+                sns_client
+                    .publish()
+                    .topic_arn(results_topic_arn)
+                    .message(message)
+                    .message_group_id(message_group_id)
+                    .set_message_attributes(Some(message_attributes))
+                    .send()
+                    .await
+            }
+        },
+    )
+    .await?;
     metrics::counter!("result.sent", "type" => metrics_message_type).increment(1);
     Ok(())
 }

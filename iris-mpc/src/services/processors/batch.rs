@@ -1,4 +1,5 @@
 use crate::server::MAX_CONCURRENT_REQUESTS;
+use crate::services::aws::retry::retry_transient;
 use crate::services::processors::get_iris_shares_parse_task;
 use crate::services::processors::result_message::send_error_results_to_sns;
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
@@ -45,6 +46,13 @@ use std::sync::Arc;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinHandle;
+
+// Bounded app-level retry for the SQS calls on the batch-receive hot path, so a
+// transient blip (DNS/connection) that outlasts the SDK's own retry window is
+// absorbed instead of crashing the process. A persistent failure still surfaces
+// after the attempts are exhausted.
+const SQS_RETRY_MAX_ATTEMPTS: u32 = 5;
+const SQS_RETRY_INITIAL_BACKOFF: std::time::Duration = std::time::Duration::from_millis(200);
 
 #[allow(clippy::too_many_arguments)]
 pub fn receive_batch_stream(
@@ -358,17 +366,28 @@ impl<'a> BatchProcessor<'a> {
                 return Ok(()); // Exit if shutdown is signaled
             }
 
-            let rcv_message_output = self
-                .client
-                .receive_message()
-                // Set a short wait time to avoid busy-looping when the queue is temporarily empty
-                // but we still expect more messages for the current batch.
-                .wait_time_seconds(1) // Short poll to quickly check for messages
-                .max_number_of_messages(1) // Process one message at a time to respect num_to_poll accurately
-                .queue_url(queue_url)
-                .send()
-                .await
-                .map_err(ReceiveRequestError::from)?;
+            let rcv_message_output = retry_transient(
+                "SQS receive_message",
+                SQS_RETRY_MAX_ATTEMPTS,
+                SQS_RETRY_INITIAL_BACKOFF,
+                || {
+                    let client = self.client.clone();
+                    let queue_url = queue_url.clone();
+                    async move {
+                        client
+                            .receive_message()
+                            // Set a short wait time to avoid busy-looping when the queue is temporarily empty
+                            // but we still expect more messages for the current batch.
+                            .wait_time_seconds(1) // Short poll to quickly check for messages
+                            .max_number_of_messages(1) // Process one message at a time to respect num_to_poll accurately
+                            .queue_url(queue_url)
+                            .send()
+                            .await
+                    }
+                },
+            )
+            .await
+            .map_err(ReceiveRequestError::from)?;
 
             if let Some(messages) = rcv_message_output.messages {
                 if messages.is_empty() {
@@ -1304,8 +1323,15 @@ pub async fn get_own_batch_sync_state(
     sqs_client: &Client,
     current_batch_id: u64,
 ) -> Result<BatchSyncState> {
-    let approximate_visible_messages =
-        get_approximate_number_of_messages(&sqs_client.clone(), &config.requests_queue_url).await?;
+    let approximate_visible_messages = retry_transient(
+        "SQS get_approximate_number_of_messages",
+        SQS_RETRY_MAX_ATTEMPTS,
+        SQS_RETRY_INITIAL_BACKOFF,
+        move || async move {
+            get_approximate_number_of_messages(sqs_client, &config.requests_queue_url).await
+        },
+    )
+    .await?;
     tracing::info!(
         "fetching approximate_visible_messages: {}",
         approximate_visible_messages
