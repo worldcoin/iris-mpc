@@ -178,6 +178,10 @@ impl ConsensusTransport for MockTransport {
         }
         Ok(projected)
     }
+
+    async fn liveness_barrier(&self, _timeout: Duration) -> Result<(), CycleError> {
+        Ok(())
+    }
 }
 
 // ── mock Materializer ────────────────────────────────────────────────────

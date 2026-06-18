@@ -98,6 +98,62 @@ impl ConsensusTransport for RingConsensusTransport {
 
         Ok(vec![parse(next_bytes)?, parse(prev_bytes)?])
     }
+
+    async fn liveness_barrier(&self, timeout: Duration) -> Result<(), CycleError> {
+        let my_nonce: u128 = rand::random();
+        let mut ch = self.channel.lock().await;
+        let result = tokio::time::timeout(timeout, async {
+            // Round 1 (challenge): send our fresh nonce to both neighbours.
+            // Sends precede receives — same deadlock-avoidance as `exchange`.
+            let challenge = NetworkValue::Bytes(my_nonce.to_le_bytes().to_vec());
+            ch.send_next(challenge.clone())
+                .await
+                .map_err(|e| CycleError::Transient(format!("liveness send_next: {e}")))?;
+            ch.send_prev(challenge)
+                .await
+                .map_err(|e| CycleError::Transient(format!("liveness send_prev: {e}")))?;
+            let next_nonce = recv_nonce("liveness recv_next", ch.recv_next().await)?;
+            let prev_nonce = recv_nonce("liveness recv_prev", ch.recv_prev().await)?;
+
+            // Round 2 (response): echo each neighbour's nonce back to it, and
+            // expect our own nonce echoed in return. A peer that is dead — or
+            // whose round-1 nonce merely sat buffered — cannot complete this
+            // round, because it never received this call's challenge.
+            ch.send_next(NetworkValue::Bytes(next_nonce.to_le_bytes().to_vec()))
+                .await
+                .map_err(|e| CycleError::Transient(format!("liveness echo_next: {e}")))?;
+            ch.send_prev(NetworkValue::Bytes(prev_nonce.to_le_bytes().to_vec()))
+                .await
+                .map_err(|e| CycleError::Transient(format!("liveness echo_prev: {e}")))?;
+            let echo_next = recv_nonce("liveness echo recv_next", ch.recv_next().await)?;
+            let echo_prev = recv_nonce("liveness echo recv_prev", ch.recv_prev().await)?;
+            Ok::<(u128, u128), CycleError>((echo_next, echo_prev))
+        })
+        .await;
+
+        let (echo_next, echo_prev) = match result {
+            Ok(Ok(pair)) => pair,
+            Ok(Err(e)) => return Err(e),
+            Err(_elapsed) => {
+                return Err(CycleError::Transient(format!(
+                    "liveness barrier timed out after {timeout:?}"
+                )))
+            }
+        };
+        // A wrong echo means a neighbour never saw this call's nonce — crossed
+        // wires or a buggy peer, not mere lateness; treat as fatal.
+        if echo_next != my_nonce {
+            return Err(CycleError::Fatal(
+                "liveness barrier: next neighbour echoed wrong nonce".into(),
+            ));
+        }
+        if echo_prev != my_nonce {
+            return Err(CycleError::Fatal(
+                "liveness barrier: prev neighbour echoed wrong nonce".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Map a `ControlChannel` recv result to a payload byte vector. A non-Bytes
@@ -114,6 +170,25 @@ async fn recv_bytes(
         Err(e) => Err(CycleError::Transient(format!(
             "control_channel.{label}: {e}"
         ))),
+    }
+}
+
+/// Parse a 16-byte little-endian `u128` nonce from a control-channel receive.
+fn recv_nonce(label: &str, result: eyre::Result<NetworkValue>) -> Result<u128, CycleError> {
+    match result {
+        Ok(NetworkValue::Bytes(b)) => {
+            let arr: [u8; 16] = b.as_slice().try_into().map_err(|_| {
+                CycleError::Fatal(format!(
+                    "{label}: expected 16-byte nonce, got {} bytes",
+                    b.len()
+                ))
+            })?;
+            Ok(u128::from_le_bytes(arr))
+        }
+        Ok(other) => Err(CycleError::Fatal(format!(
+            "{label}: expected NetworkValue::Bytes, got {other:?}"
+        ))),
+        Err(e) => Err(CycleError::Transient(format!("{label}: {e}"))),
     }
 }
 
@@ -454,5 +529,53 @@ mod tests {
             any_transient,
             "expected at least one transient; got r0={r0:?}, r1={r1:?}"
         );
+    }
+
+    /// All three parties live → every barrier completes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn liveness_barrier_passes_when_all_live() {
+        let [p0, p1, p2] = triangle(8);
+        let t0 = xport(p0);
+        let t1 = xport(p1);
+        let t2 = xport(p2);
+        let timeout = Duration::from_secs(2);
+
+        let h0 = tokio::spawn(async move { t0.liveness_barrier(timeout).await });
+        let h1 = tokio::spawn(async move { t1.liveness_barrier(timeout).await });
+        let h2 = tokio::spawn(async move { t2.liveness_barrier(timeout).await });
+
+        assert!(h0.await.unwrap().is_ok());
+        assert!(h1.await.unwrap().is_ok());
+        assert!(h2.await.unwrap().is_ok());
+    }
+
+    /// A peer whose round-1 challenge is buffered for its neighbours but which
+    /// never performs the round-2 echo must NOT let either neighbour pass — the
+    /// whole point of the challenge/response. `p2` is kept alive (so the peers'
+    /// sends still succeed and buffer) but stays silent after round 1.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn liveness_barrier_rejects_buffered_but_dead_peer() {
+        let [p0, p1, mut p2] = triangle(8);
+        let t0 = xport(p0);
+        let t1 = xport(p1);
+        let timeout = Duration::from_millis(300);
+
+        // p2's round-1 traffic only: lands buffered in each neighbour's channel.
+        let nonce = NetworkValue::Bytes(0u128.to_le_bytes().to_vec());
+        p2.send_next(nonce.clone()).await.unwrap();
+        p2.send_prev(nonce).await.unwrap();
+
+        let h0 = tokio::spawn(async move { t0.liveness_barrier(timeout).await });
+        let h1 = tokio::spawn(async move { t1.liveness_barrier(timeout).await });
+        let r0 = h0.await.unwrap();
+        let r1 = h1.await.unwrap();
+
+        // Neither neighbour may report success: p2 never echoed their nonces.
+        assert!(r0.is_err(), "p0 should not pass against a dead p2: {r0:?}");
+        assert!(r1.is_err(), "p1 should not pass against a dead p2: {r1:?}");
+
+        // Keep p2's receivers open until the peers have finished, so the failure
+        // is the round-2 echo timeout — not a closed-channel send error.
+        drop(p2);
     }
 }

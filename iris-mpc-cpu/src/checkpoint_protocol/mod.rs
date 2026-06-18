@@ -211,6 +211,14 @@ pub trait ConsensusTransport {
         cycle_nonce: u128,
         timeout: Duration,
     ) -> Result<Vec<T>, CycleError>;
+
+    /// Confirm both ring neighbours are live *right now* before any agreement
+    /// round runs. A fresh random nonce is challenged to each neighbour and
+    /// must be echoed back this call; a peer that has since died — or whose
+    /// earlier traffic merely sat buffered in the socket — cannot produce the
+    /// echo, so a party never proceeds on a partial ring. Run once at the top
+    /// of [`run_cycle`].
+    async fn liveness_barrier(&self, timeout: Duration) -> Result<(), CycleError>;
 }
 
 #[async_trait]
@@ -265,6 +273,11 @@ where
     H: GraphHasher,
     Sel: BaseSelector,
 {
+    // Liveness barrier — fail fast unless both neighbours are live this cycle,
+    // so no party agrees a base, materializes, or hashes against a partial ring
+    // or a since-dead peer's buffered traffic.
+    transport.liveness_barrier(cfg.peer_round_timeout).await?;
+
     // Phase 1 — base agreement.
     let my_recent = store.recent_checkpoints(cfg.checkpoint_window).await?;
     tracing::info!(
