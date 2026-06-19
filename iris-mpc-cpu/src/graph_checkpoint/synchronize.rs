@@ -180,9 +180,13 @@ pub fn apply_graph_mutations(
 
 #[cfg(test)]
 mod tests {
+    use iris_mpc_common::VectorId;
+
     use super::*;
     use crate::hnsw::graph::mutation::{MutationOp, UpdateEntryPoint};
-    use iris_mpc_common::VectorId;
+    use crate::utils::serialization::graph_mutation::{
+        serialize_mutations_current, GraphMutationFormat,
+    };
 
     // ── helpers ───────────────────────────────────────────────────────────────
 
@@ -190,7 +194,7 @@ mod tests {
     /// `GraphMutationRow`.
     fn serialize_mutations(left: Vec<GraphMutation>, right: Vec<GraphMutation>) -> Vec<u8> {
         let both_eyes: [Vec<GraphMutation>; 2] = [left, right];
-        bincode::serialize(&both_eyes).expect("bincode serialization failed")
+        serialize_mutations_current(&both_eyes).expect("bincode serialization failed")
     }
 
     fn make_row(
@@ -198,9 +202,11 @@ mod tests {
         left: Vec<GraphMutation>,
         right: Vec<GraphMutation>,
     ) -> GraphMutationRow {
+        let serialized_mutations = serialize_mutations(left, right);
         GraphMutationRow {
             modification_id,
-            serialized_mutations: serialize_mutations(left, right),
+            mutation_format_version: GraphMutationFormat::CURRENT.version(),
+            serialized_mutations,
         }
     }
 
@@ -311,6 +317,7 @@ mod tests {
         let mut both_eyes = [GraphMem::new(), GraphMem::new()];
         let bad_row = GraphMutationRow {
             modification_id: 99,
+            mutation_format_version: GraphMutationFormat::CURRENT.version(),
             serialized_mutations: vec![0xFF, 0xFE, 0xFD], // not valid bincode
         };
         assert!(

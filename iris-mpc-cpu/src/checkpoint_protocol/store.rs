@@ -75,6 +75,7 @@ mod tests {
         graph_store::test_utils::TestGraphPg,
         mutation::{GraphMutation, MutationOp},
     };
+    use crate::utils::serialization::graph_mutation::serialize_mutations_current;
     use futures::TryStreamExt;
     use iris_mpc_common::VectorId;
 
@@ -97,7 +98,7 @@ mod tests {
         modification_id: i64,
         payload: &BothEyes<Vec<GraphMutation>>,
     ) -> eyre::Result<()> {
-        let bytes = bincode::serialize(payload)?;
+        let bytes = serialize_mutations_current(payload)?;
         let mut graph_tx = store.tx().await?;
         store
             .upsert_hawk_graph_mutations(&mut graph_tx.tx, modification_id, &bytes)
