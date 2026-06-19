@@ -579,7 +579,10 @@ where
     }
 
     fn serial_to_vector_id(&self, serial_id: SerialId) -> VectorId {
-        let version = self.registry.get_current_version_sync(serial_id).unwrap_or(0);
+        let version = self
+            .registry
+            .get_current_version_sync(serial_id)
+            .unwrap_or(0);
         VectorId::new(serial_id, version)
     }
 
