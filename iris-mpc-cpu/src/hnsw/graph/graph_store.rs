@@ -1,6 +1,7 @@
 use crate::{
     execution::hawk_main::BothEyes,
     hnsw::{graph::GraphMutation, VectorStore},
+    utils::serialization::graph_mutation::{deserialize_mutations, GraphMutationFormat},
 };
 use eyre::{eyre, Result};
 use iris_mpc_common::postgres::PostgresClient;
@@ -26,6 +27,7 @@ pub struct GraphMutationRow {
     pub modification_id: i64,
     /// Bincode-serialized `BothEyes<Vec<GraphMutation>>` (mutations for both eyes)
     pub serialized_mutations: Vec<u8>,
+    pub mutation_format_version: i16,
 }
 
 pub struct GraphPg<V: VectorStore> {
@@ -36,9 +38,8 @@ pub struct GraphPg<V: VectorStore> {
 
 impl GraphMutationRow {
     pub fn deserialize_mutations(&self) -> Result<BothEyes<Vec<GraphMutation>>> {
-        let both_eyes: BothEyes<Vec<GraphMutation>> =
-            bincode::deserialize(&self.serialized_mutations)?;
-        Ok(both_eyes)
+        let format = GraphMutationFormat::try_from(self.mutation_format_version)?;
+        deserialize_mutations(format, &self.serialized_mutations)
     }
 }
 
@@ -280,6 +281,8 @@ impl<V: VectorStore> GraphPg<V> {
         Ok(())
     }
 
+    /// INVARIANT: this function is only given GraphMutaionFormat::Current mutations.
+    /// Do not serialize into an old mutation format.
     pub async fn upsert_hawk_graph_mutations(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -288,15 +291,17 @@ impl<V: VectorStore> GraphPg<V> {
     ) -> Result<Vec<GraphMutationRow>> {
         let rows = sqlx::query_as::<_, GraphMutationRow>(
             r#"
-            INSERT INTO hawk_graph_mutations (modification_id, serialized_mutations)
-            VALUES ($1, $2)
+            INSERT INTO hawk_graph_mutations (modification_id, serialized_mutations, mutation_format_version)
+            VALUES ($1, $2, $3)
             ON CONFLICT (modification_id) DO UPDATE
-            SET serialized_mutations = EXCLUDED.serialized_mutations
-            RETURNING modification_id, serialized_mutations
+            SET serialized_mutations = EXCLUDED.serialized_mutations,
+                mutation_format_version = EXCLUDED.mutation_format_version
+            RETURNING modification_id, mutation_format_version, serialized_mutations
             "#,
         )
         .bind(modification_id)
         .bind(serialized_mutations)
+        .bind(GraphMutationFormat::CURRENT.version())
         .fetch_all(tx.deref_mut())
         .await?;
 
@@ -309,7 +314,7 @@ impl<V: VectorStore> GraphPg<V> {
     ) -> Result<Vec<GraphMutationRow>> {
         let rows = sqlx::query_as::<_, GraphMutationRow>(
             r#"
-            SELECT modification_id, serialized_mutations
+            SELECT modification_id, mutation_format_version, serialized_mutations
             FROM hawk_graph_mutations
             WHERE $1::bigint IS NULL OR modification_id <= $1
             ORDER BY modification_id ASC
@@ -328,7 +333,7 @@ impl<V: VectorStore> GraphPg<V> {
     ) -> Result<Vec<GraphMutationRow>> {
         let rows = sqlx::query_as::<_, GraphMutationRow>(
             r#"
-            SELECT modification_id, serialized_mutations
+            SELECT modification_id, mutation_format_version, serialized_mutations
             FROM hawk_graph_mutations
             WHERE $1::bigint IS NULL OR modification_id > $1
             ORDER BY modification_id ASC
@@ -361,7 +366,7 @@ impl<V: VectorStore> GraphPg<V> {
         use futures::StreamExt;
         sqlx::query_as::<_, GraphMutationRow>(
             r#"
-            SELECT modification_id, serialized_mutations
+            SELECT modification_id, mutation_format_version, serialized_mutations
             FROM hawk_graph_mutations
             WHERE modification_id > $1 AND modification_id <= $2
             ORDER BY modification_id ASC
@@ -382,7 +387,7 @@ impl<V: VectorStore> GraphPg<V> {
     ) -> Result<Vec<GraphMutationRow>> {
         let rows = sqlx::query_as::<_, GraphMutationRow>(
             r#"
-            SELECT modification_id, serialized_mutations
+            SELECT modification_id, mutation_format_version, serialized_mutations
             FROM hawk_graph_mutations
             WHERE modification_id >= $1
             ORDER BY modification_id ASC
@@ -462,14 +467,16 @@ impl<'b, V: VectorStore> GraphTx<'b, V> {
     ) -> Result<()> {
         sqlx::query(
             r#"
-            INSERT INTO hawk_graph_mutations (modification_id, serialized_mutations)
-            VALUES ($1, $2)
+            INSERT INTO hawk_graph_mutations (modification_id, serialized_mutations, mutation_format_version)
+            VALUES ($1, $2, $3)
             ON CONFLICT (modification_id) DO UPDATE
-            SET serialized_mutations = EXCLUDED.serialized_mutations
+            SET serialized_mutations = EXCLUDED.serialized_mutations,
+                mutation_format_version = EXCLUDED.mutation_format_version
             "#,
         )
         .bind(modification_id)
         .bind(serialized_mutations)
+        .bind(GraphMutationFormat::CURRENT.version())
         .execute(self.tx.deref_mut())
         .await?;
 
@@ -829,7 +836,7 @@ mod tests {
             ops: vec![MutationOp::AddNode {
                 id: VectorId::from_serial_id(1),
                 height: 1,
-                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+                update_ep: UpdateEntryPoint::Append { layer: 0 },
             }],
         };
         let plan_right = GraphMutation {
@@ -837,7 +844,7 @@ mod tests {
             ops: vec![MutationOp::AddNode {
                 id: VectorId::from_serial_id(2),
                 height: 1,
-                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+                update_ep: UpdateEntryPoint::Append { layer: 0 },
             }],
         };
         let both: BothEyes<Vec<GraphMutation>> =

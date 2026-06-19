@@ -2,7 +2,7 @@
 //!
 //! Records enter/exit timestamps for each phase per session, outputting
 //! Chrome Trace Event Format JSON that can be loaded into Perfetto UI
-//! (https://ui.perfetto.dev/) or `chrome://tracing`.
+//! (<https://ui.perfetto.dev/>) or `chrome://tracing`.
 //!
 //! Enabled at compile time via the `phase_trace` Cargo feature.
 //! Traces are flushed to `/tmp/hawk_phase_trace_party{N}_batch{B}.json`

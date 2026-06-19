@@ -371,11 +371,11 @@ impl DbContext {
         // Build the graph topology as mutations, then apply to an in-memory graph
         let mut left_graph = GraphMem::new();
 
-        // Set entry point via InsertNode with SetUnique
+        // Set entry point via InsertNode with Append
         let ep_mutation = MutationOp::AddNode {
             id: vectors[0],
             height: 1,
-            update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+            update_ep: UpdateEntryPoint::Append { layer: 0 },
         };
         left_graph
             .insert_apply(&GraphMutation {

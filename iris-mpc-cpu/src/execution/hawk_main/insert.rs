@@ -217,9 +217,6 @@ fn validate_ep_updates<V: VectorStore>(
         let Some(plan) = plan else { continue };
 
         match plan.update_ep {
-            UpdateEntryPoint::SetUnique { .. } => {
-                bail!("SetUnique entry point update encountered during LinearScan layer mode");
-            }
             UpdateEntryPoint::Append { layer } => {
                 if layer != max_graph_layer {
                     bail!("InsertPlan adds entry point at different layer than max graph layer during LinearScan layer mode")
@@ -243,9 +240,7 @@ mod tests {
     use super::*;
 
     fn dummy_insert_plan(ep_update: UpdateEntryPoint) -> InsertPlanV<PlaintextStore> {
-        let ins_layer = if let UpdateEntryPoint::SetUnique { layer }
-        | UpdateEntryPoint::Append { layer } = ep_update
-        {
+        let ins_layer = if let UpdateEntryPoint::Append { layer } = ep_update {
             layer
         } else {
             0
@@ -367,17 +362,6 @@ mod tests {
     #[test]
     fn test_ep_updates_validator_linear_scan() {
         let max_graph_layer = 3;
-
-        // LinearScan mode cannot have SetUnique updates
-        test_validate_ep_updates_helper(
-            &[
-                UpdateEntryPoint::Append { layer: 3 },
-                UpdateEntryPoint::Append { layer: 3 },
-                UpdateEntryPoint::SetUnique { layer: 3 },
-            ],
-            false,
-            max_graph_layer,
-        );
 
         // LinearScan mode cannot append entry points at layers besides the max graph layer
         test_validate_ep_updates_helper(
@@ -699,7 +683,7 @@ mod tests {
                 id,
                 height: 1,
                 update_ep: if i == 0 {
-                    UpdateEntryPoint::SetUnique { layer: 0 }
+                    UpdateEntryPoint::Append { layer: 0 }
                 } else {
                     UpdateEntryPoint::False
                 },

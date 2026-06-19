@@ -5,6 +5,7 @@
 //! possible exceptions for lower-level data types related to serialization
 //! formats of external libraries.
 
+pub mod graph_mutation_v0;
 pub mod graph_v0;
 pub mod graph_v1;
 pub mod graph_v2;

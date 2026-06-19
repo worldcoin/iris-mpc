@@ -38,7 +38,7 @@
 //! cause the tee task to fail with `BrokenPipe` (the deserializer drops
 //! its end of the duplex once bincode is done), which surfaces as an
 //! error from the function. For S3 objects produced by
-//! [`super::stream_serialize_and_upload`] this is automatic; callers
+//! `stream_serialize_and_upload` this is automatic; callers
 //! wiring up other sources must respect the contract.
 
 use std::time::Duration;
@@ -137,7 +137,7 @@ where
 /// Unlike `stream_download_and_deserialize::<[GraphVN; 2]>` followed by
 /// `.into()`, this never holds a full intermediate `GraphVN` alongside the
 /// destination `GraphMem` — it reads one set of links at a time and calls
-/// [`Layer::set_links`] immediately.  For `Current`/V4 and V3 the peak
+/// `Layer::set_links` immediately.  For `Current`/V4 and V3 the peak
 /// transient allocation above the final `GraphMem` is roughly one layer's
 /// link data; older formats fall back to the standard path.
 pub async fn stream_download_and_deserialize_graph_pair(
