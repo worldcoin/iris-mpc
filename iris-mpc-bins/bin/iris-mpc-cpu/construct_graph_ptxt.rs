@@ -2,7 +2,7 @@ use std::{iter::once, path::PathBuf, sync::Arc};
 
 use clap::Parser;
 use eyre::{bail, Result};
-use iris_mpc_common::{iris_db::iris::IrisCode, VectorId};
+use iris_mpc_common::{iris_db::iris::IrisCode, SerialId, VectorId};
 use itertools::{chain, Itertools};
 use serde::Deserialize;
 
@@ -135,7 +135,7 @@ impl Checkpoints {
 
 /// Load an existing graph from `graph_spec` (or initialize a fresh one) and
 /// return it along with its highest layer-0 node serial id.
-fn load_existing_graph(graph_spec: Option<LoadGraphConfig>) -> Result<(GraphMem, u32)> {
+fn load_existing_graph(graph_spec: Option<LoadGraphConfig>) -> Result<(GraphMem, SerialId)> {
     if let Some(graph_spec) = graph_spec {
         tracing::info!("Loading graph from file");
         let graph = graph_spec.read_graph_from_file()?;

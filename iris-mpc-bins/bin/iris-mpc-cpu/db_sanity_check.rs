@@ -8,6 +8,7 @@ use iris_mpc_common::{
         REAUTH_MESSAGE_TYPE, RECOVERY_UPDATE_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
     },
     postgres::{AccessMode, PostgresClient},
+    SerialId,
 };
 use iris_mpc_cpu::{
     execution::hawk_main::{BothEyes, LEFT, RIGHT},
@@ -386,9 +387,9 @@ async fn main() -> Result<()> {
     // Genesis filters deletions to <= max_indexation_id; the S3 file may
     // contain IDs beyond this snapshot's range.
     let iris_max = iris_ids.iter().copied().max().unwrap_or(0) as u32;
-    let exclusions: Option<HashSet<u32>> = raw_exclusions.map(|raw| {
+    let exclusions: Option<HashSet<SerialId>> = raw_exclusions.map(|raw| {
         let before = raw.len();
-        let filtered: HashSet<u32> = raw.into_iter().filter(|&id| id <= iris_max).collect();
+        let filtered: HashSet<SerialId> = raw.into_iter().filter(|&id| id <= iris_max).collect();
         rpt!(
             rpt,
             "  Exclusions: {} total in file, {} after filtering to id <= {iris_max}",
@@ -496,7 +497,7 @@ async fn collect_iris_ids(store: &Store, stats: &mut Stats) -> Result<HashSet<i6
 async fn run_graph_checks(
     s3_graphs: Option<&BothEyes<GraphMem>>,
     iris_ids: &HashSet<i64>,
-    exclusions: &Option<HashSet<u32>>,
+    exclusions: &Option<HashSet<SerialId>>,
     m: usize,
     layer_probability: f64,
     checks: &mut Vec<CheckResult>,
@@ -504,7 +505,7 @@ async fn run_graph_checks(
     stats: &mut Stats,
     rpt: &mut Report,
 ) -> Result<()> {
-    let mut l0_id_sets: Vec<(&str, HashSet<u32>)> = Vec::new();
+    let mut l0_id_sets: Vec<(&str, HashSet<SerialId>)> = Vec::new();
 
     if let Some(graphs) = s3_graphs {
         for (eye, idx) in [("left", LEFT), ("right", RIGHT)] {
@@ -558,14 +559,14 @@ fn check_single_graph(
     eye: &str,
     graph: &GraphMem,
     iris_ids: &HashSet<i64>,
-    exclusions: &Option<HashSet<u32>>,
+    exclusions: &Option<HashSet<SerialId>>,
     m: usize,
     layer_probability: f64,
     checks: &mut Vec<CheckResult>,
     degree_hist: &mut Vec<DegreeHistEntry>,
     stats: &mut Stats,
     rpt: &mut Report,
-) -> HashSet<u32> {
+) -> HashSet<SerialId> {
     // ef values are irrelevant
     let params = HnswParams::new(1, 1, m);
 
@@ -635,12 +636,12 @@ fn check_single_graph(
     ));
 
     // -- 1b: Node coverage --
-    let layer0_ids: HashSet<u32> = graph
+    let layer0_ids: HashSet<SerialId> = graph
         .layers
         .first()
         .map(|l| l.links.keys().copied().collect())
         .unwrap_or_default();
-    let uncovered: HashSet<u32> = iris_ids
+    let uncovered: HashSet<SerialId> = iris_ids
         .iter()
         .map(|&id| id as u32)
         .filter(|id| !layer0_ids.contains(id))
@@ -720,7 +721,7 @@ fn check_single_graph(
         .layers
         .iter()
         .map(|layer| {
-            let nodes: HashSet<&u32> = layer.links.keys().collect();
+            let nodes: HashSet<&SerialId> = layer.links.keys().collect();
             layer
                 .links
                 .values()
@@ -764,7 +765,7 @@ fn check_single_graph(
         .iter()
         .flat_map(|l| l.links.values())
         .map(|nbs| {
-            let unique: HashSet<&u32> = nbs.neighbors.iter().collect();
+            let unique: HashSet<&SerialId> = nbs.neighbors.iter().collect();
             (nbs.neighbors.len() - unique.len()) as u64
         })
         .sum();
