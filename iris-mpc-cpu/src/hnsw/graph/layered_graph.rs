@@ -20,7 +20,6 @@ use crate::{
 use eyre::Result;
 use iris_mpc_common::{iris_db::iris::IrisCode, SerialId, VectorId};
 use itertools::{izip, Itertools};
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use serde::{
     ser::{SerializeMap, SerializeStruct, Serializer},
     Deserialize, Serialize,
@@ -588,39 +587,28 @@ where
         for result in results.iter_mut() {
             result.truncate(searcher.params.get_M_max(0));
         }
-        let results = results
-            .into_par_iter()
-            .map(|result| result.map(VectorId::from_serial_id))
-            .collect::<Vec<_>>();
         Layer::from_knn_results(results, vectors.len())
     };
 
-    // Keys are SerialId; map back to VectorId so the rest of the function
-    // (gen_layer_prf, ideal_from_data) continues to work with VectorId.
-    let vectors_with_ids: Vec<(VectorId, K::Vector)> = izip!(
-        zero_layer
-            .links
-            .keys()
-            .cloned()
-            .sorted()
-            .map(VectorId::from_serial_id),
+    let vectors_with_ids: Vec<(SerialId, K::Vector)> = izip!(
+        zero_layer.links.keys().cloned().sorted(),
         vectors.into_iter(),
     )
     .collect();
 
     // Collect nodes into layers they are inserted into (for layers > 0)
-    let mut nonzero_layers_map: BTreeMap<usize, Vec<(VectorId, K::Vector)>> = BTreeMap::new();
-    for (vector_id, v) in vectors_with_ids.iter() {
-        let layer = searcher.gen_layer_prf(&prf_seed, vector_id)?;
+    let mut nonzero_layers_map: BTreeMap<usize, Vec<(SerialId, K::Vector)>> = BTreeMap::new();
+    for (serial_id, v) in vectors_with_ids.iter() {
+        let layer = searcher.gen_layer_prf(&prf_seed, serial_id)?;
         for l in 1..=layer {
             nonzero_layers_map
                 .entry(l)
                 .or_default()
-                .push((*vector_id, v.clone()));
+                .push((*serial_id, v.clone()));
         }
     }
 
-    let mut nodes_for_nonzero_layers: Vec<Vec<(VectorId, K::Vector)>> =
+    let mut nodes_for_nonzero_layers: Vec<Vec<(SerialId, K::Vector)>> =
         nonzero_layers_map.into_values().collect();
 
     let max_graph_layer = searcher.max_graph_layer;
@@ -628,7 +616,7 @@ where
         .get(max_graph_layer)
         .unwrap_or(&vec![])
         .iter()
-        .map(|(v, _)| (v.serial_id(), max_graph_layer))
+        .map(|(v, _)| (*v, max_graph_layer))
         .collect();
     nodes_for_nonzero_layers.truncate(max_graph_layer);
 
@@ -860,26 +848,22 @@ impl Layer {
         &self.links
     }
 
-    fn from_knn_results(results: Vec<KNNResult<VectorId>>, n: usize) -> Self {
+    fn from_knn_results(results: Vec<KNNResult<SerialId>>, n: usize) -> Self {
         let mut ret = Layer::new();
         for KNNResult { node, neighbors } in results.into_iter().take(n) {
-            ret.set_links(
-                node.serial_id(),
-                neighbors.into_iter().map(|v| v.serial_id()).collect(),
-                0,
-            );
+            ret.set_links(node, neighbors, 0);
         }
         ret
     }
 
-    /// Constructs a Layer from `(vector_id, K::Vector)` pairs by brute-force
+    /// Constructs a Layer from `(serial_id, K::Vector)` pairs by brute-force
     /// top-k KNN using the supplied [`IdealKnn`] implementation.
     pub fn ideal_from_data<K: IdealKnn>(
-        data: Vec<(VectorId, K::Vector)>,
+        data: Vec<(SerialId, K::Vector)>,
         k: usize,
         knn: K,
     ) -> Self {
-        let (vector_ids, vectors): (Vec<VectorId>, Vec<K::Vector>) = data.into_iter().unzip();
+        let (serial_ids, vectors): (Vec<SerialId>, Vec<K::Vector>) = data.into_iter().unzip();
         let n = vectors.len();
         if n == 0 {
             return Layer::new();
@@ -890,8 +874,8 @@ impl Layer {
         let results = engine
             .compute_chunk(n)
             .into_iter()
-            // remap from engine 1-based indices to original vector ids
-            .map(|result| result.map(|i| vector_ids[(i as usize) - 1]))
+            // remap from engine 1-based indices to original serial ids
+            .map(|result| result.map(|i| serial_ids[(i as usize) - 1]))
             .collect::<Vec<_>>();
 
         Layer::from_knn_results(results, n)
@@ -900,7 +884,7 @@ impl Layer {
     /// Layer constructor for iris codes — kept for backward compatibility;
     /// delegates to [`Layer::ideal_from_data`].
     pub fn ideal_from_irises(
-        iris_data: Vec<(VectorId, IrisCode)>,
+        iris_data: Vec<(SerialId, IrisCode)>,
         k: usize,
         echoice: EngineChoice,
     ) -> Self {
@@ -923,7 +907,7 @@ impl Layer {
     /// compatibility; delegates to [`Layer::ideal_from_data`].
     pub fn ideal_from_int4_vectors(
         data: Vec<(
-            VectorId,
+            SerialId,
             crate::hawkers::plaintext_deep_id_store::Int4Vector,
         )>,
         k: usize,
@@ -1575,10 +1559,10 @@ mod int4_layer_tests {
         let k = 3_usize;
         let vectors: Vec<Int4Vector> = (0..n).map(|_| Int4Vector::random(&mut rng)).collect();
 
-        let data: Vec<(VectorId, Int4Vector)> = vectors
+        let data: Vec<(SerialId, Int4Vector)> = vectors
             .iter()
             .enumerate()
-            .map(|(i, v)| (VectorId::from_serial_id((i + 1) as u32), v.clone()))
+            .map(|(i, v)| ((i + 1) as u32, v.clone()))
             .collect();
 
         let layer = Layer::ideal_from_int4_vectors(data, k, EngineChoiceInt4::NaiveInt4Dot);
