@@ -350,4 +350,8 @@ impl<I: Clone> SharedIrisesRef<I> {
             Ok(lock) => Ok(lock.into_inner()),
         }
     }
+
+    pub fn get_current_version_sync(&self, serial_id: SerialId) -> Option<VersionId> {
+        self.data.try_read().ok().and_then(|g| g.get_current_version(serial_id))
+    }
 }

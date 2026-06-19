@@ -1,5 +1,5 @@
 use eyre::{bail, OptionExt, Result};
-use iris_mpc_common::VectorId;
+use iris_mpc_common::{SerialId, VectorId};
 use itertools::izip;
 use serde::Serialize;
 use std::{fmt::Debug, hash::Hash};
@@ -210,6 +210,8 @@ pub trait VectorStore: Debug {
 
         Ok(results)
     }
+
+    fn serial_to_vector_id(&self, serial_id: SerialId) -> VectorId;
 }
 
 /// The operations exposed by a vector store, including mutations.
