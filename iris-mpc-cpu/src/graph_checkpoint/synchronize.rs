@@ -257,8 +257,8 @@ mod tests {
             "left eye should have one layer"
         );
         assert_eq!(
-            both_eyes[0].layers[0].get_links(&vid(1)),
-            Some([].as_slice()),
+            both_eyes[0].layers[0].get_links(&1).map(|n| &n.neighbors),
+            Some(&vec![]),
             "node 1 should exist in left eye layer 0"
         );
         assert!(
@@ -274,16 +274,16 @@ mod tests {
         apply_graph_mutations(&mut both_eyes, vec![row]).unwrap();
 
         assert_eq!(
-            both_eyes[0].layers[0].get_links(&vid(1)),
-            Some([].as_slice())
+            both_eyes[0].layers[0].get_links(&1).map(|n| &n.neighbors),
+            Some(&vec![])
         );
         assert_eq!(
-            both_eyes[1].layers[0].get_links(&vid(10)),
-            Some([].as_slice())
+            both_eyes[1].layers[0].get_links(&10).map(|n| &n.neighbors),
+            Some(&vec![])
         );
         // Cross-check: node from one eye must not appear in the other.
-        assert!(both_eyes[0].layers[0].get_links(&vid(10)).is_none());
-        assert!(both_eyes[1].layers[0].get_links(&vid(1)).is_none());
+        assert!(both_eyes[0].layers[0].get_links(&10).is_none());
+        assert!(both_eyes[1].layers[0].get_links(&1).is_none());
     }
 
     #[test]
@@ -298,15 +298,19 @@ mod tests {
 
         for node in [1u32, 2, 3] {
             assert_eq!(
-                both_eyes[0].layers[0].get_links(&vid(node)),
-                Some([].as_slice()),
+                both_eyes[0].layers[0]
+                    .get_links(&node)
+                    .map(|n| &n.neighbors),
+                Some(&vec![]),
                 "node {node} missing from left eye"
             );
         }
         for node in [10u32, 20, 30] {
             assert_eq!(
-                both_eyes[1].layers[0].get_links(&vid(node)),
-                Some([].as_slice()),
+                both_eyes[1].layers[0]
+                    .get_links(&node)
+                    .map(|n| &n.neighbors),
+                Some(&vec![]),
                 "node {node} missing from right eye"
             );
         }

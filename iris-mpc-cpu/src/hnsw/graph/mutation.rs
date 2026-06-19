@@ -205,10 +205,10 @@ mod tests {
     #[test]
     fn insert_node_sets_exact_links() {
         let mut layer = Layer::new();
-        layer.insert_node(&vid(1), vec![vid(2), vid(3), vid(4)], 0);
+        layer.insert_node(&1, vec![2, 3, 4], 0);
         assert_eq!(
-            layer.get_links(&vid(1)),
-            Some([vid(2), vid(3), vid(4)].as_slice())
+            layer.get_links(&1).map(|n| &n.neighbors),
+            Some(&vec![2, 3, 4])
         );
     }
 
@@ -216,9 +216,9 @@ mod tests {
     #[test]
     fn insert_node_replaces_existing_links() {
         let mut layer = Layer::new();
-        layer.insert_node(&vid(1), vec![vid(2), vid(3)], 0);
-        layer.insert_node(&vid(1), vec![vid(4), vid(5)], 0);
-        assert_eq!(layer.get_links(&vid(1)), Some([vid(4), vid(5)].as_slice()));
+        layer.insert_node(&1, vec![2, 3], 0);
+        layer.insert_node(&1, vec![4, 5], 0);
+        assert_eq!(layer.get_links(&1).map(|n| &n.neighbors), Some(&vec![4, 5]));
     }
 
     // ── AddNeighbors ─────────────────────────────────────────────────────────
@@ -227,11 +227,11 @@ mod tests {
     #[test]
     fn add_neighbors_inserts_id_into_existing_nodes() {
         let mut layer = Layer::new();
-        layer.insert_node(&vid(10), vec![], 0);
-        layer.insert_node(&vid(20), vec![], 0);
-        layer.link_node_to_neighbors(&vid(5), vec![vid(10), vid(20)], 0);
-        assert_eq!(layer.get_links(&vid(10)), Some([vid(5)].as_slice()));
-        assert_eq!(layer.get_links(&vid(20)), Some([vid(5)].as_slice()));
+        layer.insert_node(&10, vec![], 0);
+        layer.insert_node(&20, vec![], 0);
+        layer.link_node_to_neighbors(&5, vec![10, 20], 0);
+        assert_eq!(layer.get_links(&10).map(|n| &n.neighbors), Some(&vec![5]));
+        assert_eq!(layer.get_links(&20).map(|n| &n.neighbors), Some(&vec![5]));
     }
 
     /// Repeated calls with the same id are idempotent — no duplicate links.
@@ -239,10 +239,10 @@ mod tests {
     #[test]
     fn add_neighbors_is_idempotent() {
         let mut layer = Layer::new();
-        layer.insert_node(&vid(10), vec![], 0);
-        layer.link_node_to_neighbors(&vid(5), vec![vid(10)], 0);
-        layer.link_node_to_neighbors(&vid(5), vec![vid(10)], 0);
-        assert_eq!(layer.get_links(&vid(10)), Some([vid(5)].as_slice()));
+        layer.insert_node(&10, vec![], 0);
+        layer.link_node_to_neighbors(&5, vec![10], 0);
+        layer.link_node_to_neighbors(&5, vec![10], 0);
+        assert_eq!(layer.get_links(&10).map(|n| &n.neighbors), Some(&vec![5]));
     }
 
     /// Links remain sorted after multiple add_neighbor calls in arbitrary order.
@@ -251,13 +251,13 @@ mod tests {
     #[test]
     fn add_neighbors_maintains_sorted_order() {
         let mut layer = Layer::new();
-        layer.insert_node(&vid(10), vec![], 0);
-        layer.link_node_to_neighbors(&vid(7), vec![vid(10)], 0);
-        layer.link_node_to_neighbors(&vid(3), vec![vid(10)], 0);
-        layer.link_node_to_neighbors(&vid(5), vec![vid(10)], 0);
+        layer.insert_node(&10, vec![], 0);
+        layer.link_node_to_neighbors(&7, vec![10], 0);
+        layer.link_node_to_neighbors(&3, vec![10], 0);
+        layer.link_node_to_neighbors(&5, vec![10], 0);
         assert_eq!(
-            layer.get_links(&vid(10)),
-            Some([vid(3), vid(5), vid(7)].as_slice())
+            layer.get_links(&10).map(|n| &n.neighbors),
+            Some(&vec![3, 5, 7])
         );
     }
 
@@ -266,8 +266,8 @@ mod tests {
     #[test]
     fn add_neighbors_skips_nonexistent_nodes() {
         let mut layer = Layer::new();
-        layer.link_node_to_neighbors(&vid(1), vec![vid(99)], 0); // node 99 was never inserted
-        assert!(layer.get_links(&vid(99)).is_none());
+        layer.link_node_to_neighbors(&1, vec![99], 0); // node 99 was never inserted
+        assert!(layer.get_links(&99).is_none());
     }
 
     // ── RemoveNeighbors ───────────────────────────────────────────────────────
@@ -276,9 +276,9 @@ mod tests {
     #[test]
     fn remove_neighbors_removes_specified_only() {
         let mut layer = Layer::new();
-        layer.insert_node(&vid(1), vec![vid(2), vid(3), vid(4), vid(5)], 0);
-        layer.unlink_neighbors_from_node(&vid(1), vec![vid(2), vid(4)], 0);
-        assert_eq!(layer.get_links(&vid(1)), Some([vid(3), vid(5)].as_slice()));
+        layer.insert_node(&1, vec![2, 3, 4, 5], 0);
+        layer.unlink_neighbors_from_node(&1, vec![2, 4], 0);
+        assert_eq!(layer.get_links(&1).map(|n| &n.neighbors), Some(&vec![3, 5]));
     }
 
     /// Removal is unidirectional: only the target node's list is modified.
@@ -287,18 +287,18 @@ mod tests {
     #[test]
     fn remove_neighbors_is_unidirectional() {
         let mut layer = Layer::new();
-        layer.insert_node(&vid(1), vec![vid(2), vid(3)], 0);
-        layer.insert_node(&vid(2), vec![vid(1), vid(3)], 0);
-        layer.unlink_neighbors_from_node(&vid(1), vec![vid(2)], 0);
-        assert_eq!(layer.get_links(&vid(1)), Some([vid(3)].as_slice()));
-        assert_eq!(layer.get_links(&vid(2)), Some([vid(1), vid(3)].as_slice()));
+        layer.insert_node(&1, vec![2, 3], 0);
+        layer.insert_node(&2, vec![1, 3], 0);
+        layer.unlink_neighbors_from_node(&1, vec![2], 0);
+        assert_eq!(layer.get_links(&1).map(|n| &n.neighbors), Some(&vec![3]));
+        assert_eq!(layer.get_links(&2).map(|n| &n.neighbors), Some(&vec![1, 3]));
     }
 
     /// remove_neighbors on a node that doesn't exist is a no-op, not a panic.
     #[test]
     fn remove_neighbors_on_nonexistent_node_is_noop() {
         let mut layer = Layer::new();
-        layer.unlink_neighbors_from_node(&vid(99), vec![vid(1), vid(2)], 0); // should not panic
+        layer.unlink_neighbors_from_node(&99, vec![1, 2], 0); // should not panic
     }
 
     // ── WAL replay sequences ──────────────────────────────────────────────────
@@ -310,29 +310,23 @@ mod tests {
     #[test]
     fn wal_replay_insert_then_backlinks() {
         let mut layer = Layer::new();
-        layer.insert_node(&vid(10), vec![vid(20), vid(30)], 0);
-        layer.insert_node(&vid(20), vec![vid(10), vid(30)], 0);
-        layer.insert_node(&vid(30), vec![vid(10), vid(20)], 0);
+        layer.insert_node(&10, vec![20, 30], 0);
+        layer.insert_node(&20, vec![10, 30], 0);
+        layer.insert_node(&30, vec![10, 20], 0);
 
         // New node 40 inserted with forward links to 10 and 20
-        layer.insert_node(&vid(40), vec![vid(10), vid(20)], 0);
+        layer.insert_node(&40, vec![10, 20], 0);
         // Backlinks: 10 and 20 each gain 40 as a neighbor
-        layer.link_node_to_neighbors(&vid(40), vec![vid(10), vid(20)], 0);
+        layer.link_node_to_neighbors(&40, vec![10, 20], 0);
 
         assert_eq!(
-            layer.get_links(&vid(40)),
-            Some([vid(10), vid(20)].as_slice())
+            layer.get_links(&40).map(|n| &n.neighbors),
+            Some(&vec![10, 20])
         );
-        assert_eq!(
-            layer.get_links(&vid(10)).unwrap(),
-            &[vid(20), vid(30), vid(40)]
-        );
-        assert_eq!(
-            layer.get_links(&vid(20)).unwrap(),
-            &[vid(10), vid(30), vid(40)]
-        );
+        assert_eq!(&layer.get_links(&10).unwrap().neighbors, &vec![20, 30, 40]);
+        assert_eq!(&layer.get_links(&20).unwrap().neighbors, &vec![10, 30, 40]);
         // 30 was not in the backlink set — untouched
-        assert_eq!(layer.get_links(&vid(30)).unwrap(), &[vid(10), vid(20)]);
+        assert_eq!(&layer.get_links(&30).unwrap().neighbors, &vec![10, 20]);
     }
 
     /// Replays a full mutation group: insert + backlinks + compaction (RemoveNeighbors).
@@ -340,22 +334,22 @@ mod tests {
     #[test]
     fn wal_replay_insert_backlinks_then_compact() {
         let mut layer = Layer::new();
-        layer.insert_node(&vid(1), vec![vid(2), vid(3)], 0);
-        layer.insert_node(&vid(2), vec![vid(1), vid(3)], 0);
-        layer.insert_node(&vid(3), vec![vid(1), vid(2)], 0);
+        layer.insert_node(&1, vec![2, 3], 0);
+        layer.insert_node(&2, vec![1, 3], 0);
+        layer.insert_node(&3, vec![1, 2], 0);
 
         // Insert node 4 with forward links [1, 2]
-        layer.insert_node(&vid(4), vec![vid(1), vid(2)], 0);
+        layer.insert_node(&4, vec![1, 2], 0);
         // Backlinks into 1 and 2
-        layer.link_node_to_neighbors(&vid(4), vec![vid(1), vid(2)], 0);
+        layer.link_node_to_neighbors(&4, vec![1, 2], 0);
         // Compaction: node 2 now exceeds link limit, prune neighbor 3
-        layer.unlink_neighbors_from_node(&vid(2), vec![vid(3)], 0);
+        layer.unlink_neighbors_from_node(&2, vec![3], 0);
 
-        assert_eq!(layer.get_links(&vid(4)), Some([vid(1), vid(2)].as_slice()));
-        assert_eq!(layer.get_links(&vid(1)).unwrap(), &[vid(2), vid(3), vid(4)]);
-        assert_eq!(layer.get_links(&vid(2)).unwrap(), &[vid(1), vid(4)]);
+        assert_eq!(layer.get_links(&4).map(|n| &n.neighbors), Some(&vec![1, 2]));
+        assert_eq!(&layer.get_links(&1).unwrap().neighbors, &vec![2, 3, 4]);
+        assert_eq!(&layer.get_links(&2).unwrap().neighbors, &vec![1, 4]);
         // unidirectional pruning — 3 still links back to 2
-        assert_eq!(layer.get_links(&vid(3)).unwrap(), &[vid(1), vid(2)]);
+        assert_eq!(&layer.get_links(&3).unwrap().neighbors, &vec![1, 2]);
     }
 
     // ── expanded_neighborhoods ────────────────────────────────────────────────

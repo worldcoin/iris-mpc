@@ -255,14 +255,8 @@ mod tests {
         // After finalize, the target has node 1 and no longer has node 99.
         for eye in &target {
             let g = eye.read().await;
-            let has_1 = g
-                .get_layers()
-                .iter()
-                .any(|l| l.get_links(&1).is_some());
-            let has_99 = g
-                .get_layers()
-                .iter()
-                .any(|l| l.get_links(&99).is_some());
+            let has_1 = g.get_layers().iter().any(|l| l.get_links(&1).is_some());
+            let has_99 = g.get_layers().iter().any(|l| l.get_links(&99).is_some());
             assert!(has_1, "snapshot's vid(1) should be installed");
             assert!(!has_99, "target's prior vid(99) should be gone");
         }

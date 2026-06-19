@@ -48,7 +48,12 @@ mod tests {
             .map(|(lc, pairs)| {
                 let converted_pairs = pairs
                     .into_iter()
-                    .map(|(k, v)| (k.serial_id(), v.into_iter().map(|vid| vid.serial_id()).collect()))
+                    .map(|(k, v)| {
+                        (
+                            k.serial_id(),
+                            v.into_iter().map(|vid| vid.serial_id()).collect(),
+                        )
+                    })
                     .collect();
                 (lc, converted_pairs)
             })
@@ -69,10 +74,7 @@ mod tests {
                 }
             }
             g.layers = layers;
-            g.entry_points = vec![EntryPoint {
-                point: 0,
-                layer: 0,
-            }];
+            g.entry_points = vec![EntryPoint { point: 0, layer: 0 }];
             g
         };
         [build(eyes[0].clone()), build(eyes[1].clone())]
