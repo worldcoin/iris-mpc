@@ -728,7 +728,7 @@ impl From<Layer> for graph_v5::Layer {
                 .into_iter()
                 .map(|(v, neighbors)| {
                     (
-                        v.serial_id(),
+                        v,
                         graph_v5::Neighborhood {
                             neighbors: neighbors.into_iter().map(|x| x.serial_id()).collect(),
                             updated_seq_no: 0,
@@ -746,7 +746,7 @@ impl From<GraphMem> for graph_v5::GraphV5 {
         graph_v5::GraphV5 {
             entry_points: value.entry_points.into_iter().map(|ep| ep.into()).collect(),
             layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
-            node_init_seq_no: HashMap::new(),
+            node_init_seq_no: value.node_init_seq_no,
             last_update_seq_no: value.last_update_seq_no,
         }
     }
@@ -812,9 +812,10 @@ fn read_graph_v4_streaming<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<
         .map_err(|e| eyre::eyre!("v4 streaming last_update_seq_no: {e}"))?;
 
     Ok(GraphMem {
-        entry_points: entry_points.into_iter().map(|e| e.into()).collect(),
+        entry_points: todo!(),
         layers,
         last_update_seq_no,
+        node_init_seq_no: todo!(),
     })
 }
 
@@ -843,9 +844,10 @@ fn read_graph_v3_streaming<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<
 
     // V3 has no `last_update_seq_no`; default to 0.
     Ok(GraphMem {
-        entry_points: entry_points.into_iter().map(|e| e.into()).collect(),
+        entry_points: todo!(),
         layers,
         last_update_seq_no: 0,
+        node_init_seq_no: todo!(),
     })
 }
 
