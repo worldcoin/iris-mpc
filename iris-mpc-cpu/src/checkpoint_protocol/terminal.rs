@@ -223,7 +223,7 @@ mod tests {
                 ops: vec![MutationOp::AddNode {
                     id: vid(99),
                     height: 1,
-                    update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+                    update_ep: UpdateEntryPoint::Append { layer: 0 },
                 }],
             })
             .unwrap();
@@ -239,7 +239,7 @@ mod tests {
                     ops: vec![MutationOp::AddNode {
                         id: vid(1),
                         height: 1,
-                        update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+                        update_ep: UpdateEntryPoint::Append { layer: 0 },
                     }],
                 })
                 .unwrap();
@@ -286,7 +286,7 @@ mod tests {
             ops: vec![MutationOp::AddNode {
                 id: vid(7),
                 height: 2,
-                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+                update_ep: UpdateEntryPoint::Append { layer: 0 },
             }],
         })
         .unwrap();
@@ -296,7 +296,7 @@ mod tests {
                 ops: vec![MutationOp::AddNode {
                     id: vid(11),
                     height: 1,
-                    update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+                    update_ep: UpdateEntryPoint::Append { layer: 0 },
                 }],
             })
             .unwrap();

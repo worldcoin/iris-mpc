@@ -211,15 +211,6 @@ impl GraphMem {
                     update_ep,
                 } => {
                     match update_ep {
-                        UpdateEntryPoint::SetUnique { layer } => {
-                            if self.layers.len() < *layer + 1 {
-                                self.layers.resize(*layer + 1, Layer::new());
-                            }
-                            self.entry_points = vec![EntryPoint {
-                                point: *id,
-                                layer: *layer,
-                            }];
-                        }
                         UpdateEntryPoint::Append { layer } => {
                             self.entry_points.push(EntryPoint {
                                 point: *id,
@@ -1117,7 +1108,7 @@ mod tests {
                     MutationOp::AddNode {
                         id: a,
                         height: 1,
-                        update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
+                        update_ep: UpdateEntryPoint::Append { layer: 1 },
                     },
                     MutationOp::AddNode {
                         id: b,
@@ -1161,7 +1152,7 @@ mod tests {
                     MutationOp::AddNode {
                         id: a,
                         height: 1,
-                        update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
+                        update_ep: UpdateEntryPoint::Append { layer: 1 },
                     },
                     MutationOp::AddNode {
                         id: b,
@@ -1205,7 +1196,7 @@ mod tests {
                     MutationOp::AddNode {
                         id: a,
                         height: 1,
-                        update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
+                        update_ep: UpdateEntryPoint::Append { layer: 1 },
                     },
                     MutationOp::AddNode {
                         id: b,
@@ -1249,7 +1240,7 @@ mod tests {
                     MutationOp::AddNode {
                         id: a,
                         height: 1,
-                        update_ep: UpdateEntryPoint::SetUnique { layer: 1 },
+                        update_ep: UpdateEntryPoint::Append { layer: 1 },
                     },
                     MutationOp::AddEdges {
                         base: a,
@@ -1320,7 +1311,7 @@ mod tests {
                     MutationOp::AddNode {
                         id: a,
                         height: 1,
-                        update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+                        update_ep: UpdateEntryPoint::Append { layer: 0 },
                     },
                     MutationOp::AddNode {
                         id: b,
@@ -1356,7 +1347,7 @@ mod tests {
             ops: vec![MutationOp::AddNode {
                 id: a,
                 height: 1,
-                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+                update_ep: UpdateEntryPoint::Append { layer: 0 },
             }],
         };
         graph
@@ -1374,7 +1365,7 @@ mod tests {
             ops: vec![MutationOp::AddNode {
                 id: VectorId::from_serial_id(1),
                 height: 1,
-                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+                update_ep: UpdateEntryPoint::Append { layer: 0 },
             }],
         };
         let res = graph.insert_apply(&mutation);
@@ -1395,7 +1386,7 @@ mod tests {
             ops: vec![MutationOp::AddNode {
                 id: VectorId::from_serial_id(1),
                 height: 1,
-                update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+                update_ep: UpdateEntryPoint::Append { layer: 0 },
             }],
         };
         let res = graph.insert_apply(&mutation);
@@ -1414,7 +1405,7 @@ mod tests {
                 ops: vec![MutationOp::AddNode {
                     id: a,
                     height: 1,
-                    update_ep: UpdateEntryPoint::SetUnique { layer: 0 },
+                    update_ep: UpdateEntryPoint::Append { layer: 0 },
                 }],
             },
             // Equal seq_no — should fail.

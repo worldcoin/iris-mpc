@@ -6,6 +6,7 @@ use std::io::{BufReader, BufWriter};
 use std::path::Path;
 
 pub mod graph;
+pub mod graph_mutation;
 pub mod int4_ndjson;
 pub mod iris_ndjson;
 pub mod types;

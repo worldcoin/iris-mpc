@@ -84,6 +84,7 @@ use crate::{
         ops::{setup_replicated_prf, setup_shared_seed},
         shared_iris::{ArcIris, GaloisRingSharedIris},
     },
+    utils::serialization::graph_mutation::serialize_mutations_current,
 };
 use ampc_actor_utils::network::tcp::TlsConfig;
 use ampc_anon_stats::types::Eye;
@@ -1638,8 +1639,8 @@ impl HawkMutation {
             // for reference, see the end of handle_mutations()
             if let Some(ref modification_key) = mutation.modification_key {
                 if let Some(modification) = modifications.get_mut(modification_key) {
-                    let serialized = bincode::serialize(&mutation.plans)
-                        .map_err(|e| eyre::eyre!("Failed to serialize graph mutation: {}", e))?;
+                    let serialized = serialize_mutations_current(&mutation.plans)
+                        .map_err(|e| eyre::eyre!("Failed to serialize graph mutation: {e}"))?;
 
                     graph_tx
                         .upsert_hawk_graph_mutations(modification.id, &serialized)

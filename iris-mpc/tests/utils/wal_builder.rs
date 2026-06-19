@@ -6,6 +6,7 @@ use iris_mpc_cpu::{
         graph_store::GraphPg,
         mutation::{EdgeType, GraphMutation, MutationOp, UpdateEntryPoint},
     },
+    utils::serialization::graph_mutation::serialize_mutations_current,
 };
 use std::collections::HashMap;
 
@@ -169,7 +170,7 @@ impl WalMutationBuilder {
             let modification_id = m.seq_no as _;
             let m = vec![m];
             let both_eyes: BothEyes<Vec<GraphMutation>> = [m.clone(), m];
-            let bytes = bincode::serialize(&both_eyes)?;
+            let bytes = serialize_mutations_current(&both_eyes)?;
             graph
                 .upsert_hawk_graph_mutations(&mut tx, modification_id, &bytes)
                 .await?;

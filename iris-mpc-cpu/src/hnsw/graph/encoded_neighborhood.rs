@@ -336,7 +336,7 @@ impl<'a> BitReader<'a> {
 /// `b ≈ floor(log2(μ · ln 2))`, which we approximate here as `floor(log2(μ))`
 /// (about half a bit too high on average — at most one extra bit per symbol).
 ///
-/// `μ` is the mean of the `k` values actually Rice-coded by [`encode`]: the
+/// `μ` is the mean of the `k` values actually Rice-coded by the encode operation: the
 /// absolute first id plus the `(k-1)` inter-element gaps `ids[i] - ids[i-1] - 1`,
 /// which sum to `ids[k-1] - (k-1)`.
 fn compute_b(ids: &[u32]) -> u8 {

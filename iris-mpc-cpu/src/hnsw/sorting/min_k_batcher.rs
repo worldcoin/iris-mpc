@@ -83,7 +83,7 @@ fn chunk_size(d: usize, k: usize) -> usize {
     }
 }
 
-/// - See Algorithm 2 in [1]
+/// - See Algorithm 2 in \[1\]
 /// - Append layers which merge sequences `x` and `y`, assuming that these correspond to sorted values. Note that `x` and `y` are sequences of indices.
 /// - `start_layer` points to the layer in the global network on top of which this method should build.
 /// - Returns (indices which form the result, total depth of the built network)
@@ -195,7 +195,7 @@ fn alekseev_merge(
     (res_perm, 1)
 }
 
-/// - Algorithm 3 in [1]
+/// - Algorithm 3 in \[1\]
 /// - Builds a network that selects the `k` smallest values corresponding to `x_indices`.
 /// - `start_layer` points to the layer in the global network on top of which this method should build.
 /// - `is_top_level` is tracked so that we can apply Alekseev's merge as an optimization.
