@@ -171,13 +171,13 @@ mod tests {
             graph[LEFT]
                 .get_layers()
                 .iter()
-                .any(|l| l.get_links(&vid(n)).is_some())
+                .any(|l| l.get_links(&n).is_some())
         };
         let right_has = |n| {
             graph[RIGHT]
                 .get_layers()
                 .iter()
-                .any(|l| l.get_links(&vid(n)).is_some())
+                .any(|l| l.get_links(&n).is_some())
         };
 
         assert!(left_has(10));
@@ -211,7 +211,7 @@ mod tests {
             graph[LEFT]
                 .get_layers()
                 .iter()
-                .any(|l| l.get_links(&vid(n)).is_some())
+                .any(|l| l.get_links(&n).is_some())
         };
         assert!(left_has(1), "row before the error should have applied");
         assert!(!left_has(3), "row after the error should not have applied");

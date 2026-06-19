@@ -18,7 +18,7 @@ use crate::{
 };
 
 use eyre::Result;
-use iris_mpc_common::{iris_db::iris::IrisCode, SerialId, VectorId, VersionId};
+use iris_mpc_common::{iris_db::iris::IrisCode, SerialId, VectorId};
 use itertools::{izip, Itertools};
 use serde::{
     ser::{SerializeMap, SerializeStruct, Serializer},
@@ -1067,6 +1067,10 @@ mod tests {
             entry_points: Vec<(VectorId, usize)>,
         ) -> Vec<(VectorId, usize)> {
             entry_points
+        }
+
+        fn serial_to_vector_id(&self, serial_id: SerialId) -> VectorId {
+            VectorId::from_serial_id(serial_id)
         }
     }
 
