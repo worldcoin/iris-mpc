@@ -301,7 +301,7 @@ impl<V: VectorStore> GraphPg<V> {
         )
         .bind(modification_id)
         .bind(serialized_mutations)
-        .bind(GraphMutationFormat::Current.version())
+        .bind(GraphMutationFormat::CURRENT.version())
         .fetch_all(tx.deref_mut())
         .await?;
 
@@ -476,7 +476,7 @@ impl<'b, V: VectorStore> GraphTx<'b, V> {
         )
         .bind(modification_id)
         .bind(serialized_mutations)
-        .bind(GraphMutationFormat::Current.version())
+        .bind(GraphMutationFormat::CURRENT.version())
         .execute(self.tx.deref_mut())
         .await?;
 

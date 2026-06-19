@@ -205,7 +205,7 @@ mod tests {
         let serialized_mutations = serialize_mutations(left, right);
         GraphMutationRow {
             modification_id,
-            mutation_format_version: GraphMutationFormat::Current.version(),
+            mutation_format_version: GraphMutationFormat::CURRENT.version(),
             serialized_mutations,
         }
     }
@@ -317,7 +317,7 @@ mod tests {
         let mut both_eyes = [GraphMem::new(), GraphMem::new()];
         let bad_row = GraphMutationRow {
             modification_id: 99,
-            mutation_format_version: GraphMutationFormat::Current.version(),
+            mutation_format_version: GraphMutationFormat::CURRENT.version(),
             serialized_mutations: vec![0xFF, 0xFE, 0xFD], // not valid bincode
         };
         assert!(

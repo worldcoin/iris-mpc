@@ -6,7 +6,7 @@ use crate::{
     },
     utils::serialization::types::graph_mutation_v0::{self, GraphMutationV0},
 };
-use eyre::Result;
+use eyre::{Result, WrapErr};
 use iris_mpc_common::VectorId;
 use serde::{Deserialize, Serialize};
 
@@ -19,9 +19,6 @@ use serde::{Deserialize, Serialize};
 /// so that the deserializer can dispatch without inspecting the blob bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GraphMutationFormat {
-    /// Designated current stable format — resolves to `V0`.
-    Current,
-
     /// V0: plain `bincode::serialize(BothEyes<Vec<GraphMutation>>)`.
     ///
     /// This is the format that existed before versioning was introduced.
@@ -30,10 +27,13 @@ pub enum GraphMutationFormat {
 }
 
 impl GraphMutationFormat {
+    /// The format new writes are emitted in.
+    pub const CURRENT: Self = Self::V0;
+
     /// Integer stored in `mutation_format_version` DB column.
     pub fn version(&self) -> i16 {
         match self {
-            GraphMutationFormat::Current | GraphMutationFormat::V0 => 0,
+            GraphMutationFormat::V0 => 0,
         }
     }
 }
@@ -71,7 +71,7 @@ pub fn deserialize_mutations(
     bytes: &[u8],
 ) -> Result<BothEyes<Vec<GraphMutation>>> {
     match format {
-        GraphMutationFormat::Current | GraphMutationFormat::V0 => deserialize_v0_to_current(bytes),
+        GraphMutationFormat::V0 => deserialize_v0_to_current(bytes),
         // When a V1 is added: add arm here, define a types/graph_mutation_v1.rs
         // intermediate struct with From<GraphMutationV1> → BothEyes<Vec<GraphMutation>>,
         // and call bincode::deserialize::<GraphMutationV1>(bytes)?.into()
@@ -81,7 +81,12 @@ pub fn deserialize_mutations(
 /* ------------- Deserialize Helpers ------------- */
 
 fn deserialize_v0_to_current(bytes: &[u8]) -> Result<BothEyes<Vec<GraphMutation>>> {
-    let v0: BothEyes<Vec<GraphMutationV0>> = bincode::deserialize(bytes)?;
+    let v0: BothEyes<Vec<GraphMutationV0>> = bincode::deserialize(bytes).wrap_err_with(|| {
+        format!(
+            "deserializing GraphMutation V0 blob ({} bytes)",
+            bytes.len()
+        )
+    })?;
     Ok(v0.map(|eye| eye.into_iter().map(|m| m.into()).collect()))
 }
 
