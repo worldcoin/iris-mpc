@@ -430,7 +430,7 @@ impl From<graph_v0::Layer> for Layer {
     fn from(value: graph_v0::Layer) -> Self {
         let mut layer = Layer::new();
         for (point_id, edges) in value.links.into_iter() {
-            layer.set_links(point_id.0, edges.0.into_iter().map(|x| x.0).collect(), 0);
+            layer.set_links(point_id.0, edges.0.into_iter().map(|x| x.0 .0).collect(), 0);
         }
         layer
     }
