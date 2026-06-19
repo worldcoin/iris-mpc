@@ -468,13 +468,6 @@ impl GraphMem {
         self.entry_points = vec![EntryPoint { point, layer }];
     }
 
-    /// Convert a `SerialId` to a `VectorId` by looking up the sequence number
-    /// at which the node was initialized, casting it to `VersionId`.
-    pub fn serial_to_vector_id(&self, serial_id: SerialId) -> VectorId {
-        let version = self.node_init_seq_no.get(&serial_id).copied().unwrap_or(0) as VersionId;
-        VectorId::new(serial_id, version)
-    }
-
     pub async fn get_links(&self, base: &SerialId, lc: usize) -> &[SerialId] {
         let layer = &self.layers[lc];
         layer

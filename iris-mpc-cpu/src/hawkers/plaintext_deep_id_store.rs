@@ -16,7 +16,7 @@ use crate::{
 };
 use aes_prng::AesRng;
 use eyre::{bail, Result};
-use iris_mpc_common::VectorId;
+use iris_mpc_common::{SerialId, VectorId};
 use rand::{CryptoRng, Rng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
@@ -319,6 +319,11 @@ impl VectorStore for PlaintextDeepIDStore {
         entry_points.retain(|(v, _)| self.storage.contains(v));
         entry_points
     }
+
+    fn serial_to_vector_id(&self, serial_id: SerialId) -> VectorId {
+        let version = self.storage.get_current_version(serial_id).unwrap_or(0);
+        VectorId::new(serial_id, version)
+    }
 }
 
 impl VectorStoreMut for PlaintextDeepIDStore {
@@ -451,6 +456,11 @@ impl VectorStore for SharedPlaintextDeepIDStore {
         let store = self.storage.read().await;
         entry_points.retain(|(v, _)| store.contains(v));
         entry_points
+    }
+
+    fn serial_to_vector_id(&self, serial_id: SerialId) -> VectorId {
+        let version = self.storage.get_current_version_sync(serial_id).unwrap_or(0);
+        VectorId::new(serial_id, version)
     }
 }
 

@@ -383,7 +383,7 @@ impl HnswSearcher {
         let entry_points: Vec<_> = graph
             .entry_points
             .iter()
-            .map(|ep| (graph.serial_to_vector_id(ep.point), ep.layer))
+            .map(|ep| (store.serial_to_vector_id(ep.point), ep.layer))
             .collect();
         let entry_points = store.only_valid_entry_points(entry_points).await;
         let (ep_vectors, ep_layers): (Vec<VectorId>, Vec<usize>) = entry_points.into_iter().unzip();
@@ -974,7 +974,7 @@ impl HnswSearcher {
                 .get_links(&init_nodes[open_idx].serial_id(), lc)
                 .await
                 .iter()
-                .map(|&sid| graph.serial_to_vector_id(sid))
+                .map(|&sid| store.serial_to_vector_id(sid))
                 .filter(|x| !init_nodes.contains(x))
                 .collect();
             let nbhd = store.only_valid_vectors(nbhd).await;
@@ -1298,7 +1298,7 @@ impl HnswSearcher {
 
             let unvisited_neighbors: Vec<VectorId> = neighbors
                 .iter()
-                .map(|&sid| graph.serial_to_vector_id(sid))
+                .map(|&sid| store.serial_to_vector_id(sid))
                 .filter(|e| visited.insert(*e))
                 .collect();
 
@@ -1494,7 +1494,7 @@ impl HnswSearcher {
                 .get_links(&id.serial_id(), *layer)
                 .await
                 .iter()
-                .map(|&sid| graph.serial_to_vector_id(sid))
+                .map(|&sid| store.serial_to_vector_id(sid))
                 .collect();
             if nbhd.len() > self.params.get_M_limit(*layer) {
                 oversized.push((*id, *layer, nbhd));
@@ -1569,7 +1569,7 @@ impl HnswSearcher {
                 .get_links(&id.serial_id(), *layer)
                 .await
                 .iter()
-                .map(|&sid| graph.serial_to_vector_id(sid))
+                .map(|&sid| store.serial_to_vector_id(sid))
                 .collect();
             if current_links.is_empty() {
                 continue;
