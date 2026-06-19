@@ -55,7 +55,7 @@ pub struct EntryPoint {
 }
 
 /// An in-memory implementation of an HNSW hierarchical graph.
-#[derive(Default, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Default, PartialEq, Eq, Debug, Deserialize)]
 pub struct GraphMem {
     /// Entry points for HNSW search.
     ///
@@ -674,6 +674,21 @@ impl Serialize for Layer {
         let mut state = serializer.serialize_struct("Layer", 2)?;
         state.serialize_field("links", &SortedLinks { links: &self.links })?;
         state.serialize_field("set_hash", &self.set_hash)?;
+        state.end()
+    }
+}
+
+impl Serialize for GraphMem {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("GraphMem", 4)?;
+        state.serialize_field("entry_points", &self.entry_points)?;
+        state.serialize_field("layers", &self.layers)?;
+        state.serialize_field("last_update_seq_no", &self.last_update_seq_no)?;
+        let sorted_node_init: BTreeMap<_, _> = self.node_init_seq_no.iter().collect();
+        state.serialize_field("node_init_seq_no", &sorted_node_init)?;
         state.end()
     }
 }
