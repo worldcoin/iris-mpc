@@ -7,4 +7,16 @@ dev-pg-down:
 lint:
   cargo fmt --all -- --check
   cargo clippy --workspace --all-targets --all-features -q -- -D warnings
-  RUSTDOCFLAGS='-D warnings' cargo doc --workspace -q --no-deps
+  RUSTDOCFLAGS='-D warnings' cargo doc --all-features --no-deps --document-private-items
+unit-tests:
+	cargo test --release
+build-tests:
+	cargo build --release --all-features --tests
+build-all:
+	cargo build --release --all-features --workspace --lib --bins --benches --examples
+all:
+    just -f {{justfile()}} lint
+    just -f {{justfile()}} build-tests
+    just -f {{justfile()}} build-all
+    just -f {{justfile()}} unit-tests
+    
