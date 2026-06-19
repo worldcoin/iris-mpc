@@ -1,6 +1,6 @@
 use clap::Parser;
 use eyre::Result;
-use iris_mpc_common::{SerialId, VectorId};
+use iris_mpc_common::VectorId;
 use iris_mpc_cpu::hawkers::aby3::aby3_store::{DistanceOps, FhdOps, NhdOps};
 use iris_mpc_cpu::hawkers::ideal_knn_engines::{EngineChoice, EngineChoiceInt4};
 use iris_mpc_cpu::hawkers::plaintext_deep_id_store::{Int4Vector, PlaintextDeepIDStore};
