@@ -54,7 +54,7 @@ where
         )]
         for (node, lhs_nbhd) in lhs_layer.links.iter() {
             if let Some(rhs_nbhd) = rhs_layer.links.get(node) {
-                differ.diff_neighborhood(i, node, lhs_nbhd, rhs_nbhd);
+                differ.diff_neighborhood(i, node, &lhs_nbhd.neighbors, &rhs_nbhd.neighbors);
             }
         }
         differ.end_layer(i);

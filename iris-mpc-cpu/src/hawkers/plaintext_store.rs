@@ -13,7 +13,7 @@ use crate::{
 use aes_prng::AesRng;
 use iris_mpc_common::{
     iris_db::{db::IrisDB, iris::IrisCode},
-    VectorId,
+    SerialId, VectorId,
 };
 use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
@@ -192,6 +192,11 @@ impl<D: DistanceOps> VectorStore for PlaintextStore<D> {
         Ok(results)
     }
 
+    fn serial_to_vector_id(&self, serial_id: SerialId) -> VectorId {
+        let version = self.storage.get_current_version(serial_id).unwrap_or(0);
+        VectorId::new(serial_id, version)
+    }
+
     async fn only_valid_vectors(&mut self, mut vectors: Vec<VectorId>) -> Vec<VectorId> {
         vectors.retain(|v| self.storage.contains(v));
         vectors
@@ -340,6 +345,11 @@ impl<D: DistanceOps> VectorStore for SharedPlaintextStore<D> {
         }
         metrics::counter!("less_than").increment(distances.len() as u64);
         Ok(results)
+    }
+
+    fn serial_to_vector_id(&self, serial_id: SerialId) -> VectorId {
+        let version = self.storage.get_current_version_sync(serial_id).unwrap_or(0);
+        VectorId::new(serial_id, version)
     }
 
     async fn only_valid_vectors(&mut self, mut vectors: Vec<VectorId>) -> Vec<VectorId> {
