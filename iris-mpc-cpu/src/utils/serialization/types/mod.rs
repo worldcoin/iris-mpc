@@ -11,5 +11,6 @@ pub mod graph_v1;
 pub mod graph_v2;
 pub mod graph_v3;
 pub mod graph_v4;
+pub mod graph_v5;
 pub mod int4_base64;
 pub mod iris_base64;
