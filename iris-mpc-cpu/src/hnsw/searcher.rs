@@ -382,7 +382,7 @@ impl HnswSearcher {
         let entry_points: Vec<_> = graph
             .entry_points
             .iter()
-            .map(|ep| (ep.point, ep.layer))
+            .map(|ep| (graph.serial_to_vector_id(ep.point), ep.layer))
             .collect();
         let entry_points = store.only_valid_entry_points(entry_points).await;
         let (ep_vectors, ep_layers): (Vec<VectorId>, Vec<usize>) = entry_points.into_iter().unzip();
@@ -969,12 +969,12 @@ impl HnswSearcher {
         let mut open_idx = 0;
         while open_idx < init_nodes.len() && init_nodes.len() < ef {
             // get valid, unvisited neighbors of current node at `open_idx`
-            let nbhd: Vec<_> = graph
-                .get_links(&init_nodes[open_idx], lc)
+            let nbhd: Vec<VectorId> = graph
+                .get_links(&init_nodes[open_idx].serial_id(), lc)
                 .await
                 .iter()
+                .map(|&sid| graph.serial_to_vector_id(sid))
                 .filter(|x| !init_nodes.contains(x))
-                .cloned()
                 .collect();
             let nbhd = store.only_valid_vectors(nbhd).await;
 
@@ -1252,12 +1252,12 @@ impl HnswSearcher {
         query: &V::QueryRef,
         visited: &mut HashSet<VectorId>,
     ) -> Result<Vec<(VectorId, V::DistanceRef)>> {
-        let neighbors = graph.get_links(node, lc).await;
+        let neighbors = graph.get_links(&node.serial_id(), lc).await;
 
-        let unvisited_neighbors: Vec<_> = neighbors
+        let unvisited_neighbors: Vec<VectorId> = neighbors
             .iter()
-            .filter(|e| visited.insert(*(*e)))
-            .cloned()
+            .map(|&sid| VectorId::from_serial_id(sid))
+            .filter(|e| visited.insert(*e))
             .collect();
 
         let valid_neighbors = store.only_valid_vectors(unvisited_neighbors).await;
@@ -1293,12 +1293,12 @@ impl HnswSearcher {
         let mut opened_nodes = Vec::with_capacity(nodes.len());
 
         for node in nodes {
-            let neighbors = graph.get_links(node, lc).await;
+            let neighbors = graph.get_links(&node.serial_id(), lc).await;
 
-            let unvisited_neighbors: Vec<_> = neighbors
+            let unvisited_neighbors: Vec<VectorId> = neighbors
                 .iter()
-                .filter(|e| visited.insert(*(*e)))
-                .cloned()
+                .map(|&sid| graph.serial_to_vector_id(sid))
+                .filter(|e| visited.insert(*e))
                 .collect();
 
             valid_neighbors.extend(store.only_valid_vectors(unvisited_neighbors).await);
@@ -1489,7 +1489,12 @@ impl HnswSearcher {
         // exceeding M_limit on their layer.
         let mut oversized: Vec<(VectorId, usize, Vec<VectorId>)> = Vec::new();
         for (id, layer) in candidates {
-            let nbhd = graph.get_links(id, *layer).await.to_vec();
+            let nbhd: Vec<VectorId> = graph
+                .get_links(&id.serial_id(), *layer)
+                .await
+                .iter()
+                .map(|&sid| graph.serial_to_vector_id(sid))
+                .collect();
             if nbhd.len() > self.params.get_M_limit(*layer) {
                 oversized.push((*id, *layer, nbhd));
             }
@@ -1559,7 +1564,12 @@ impl HnswSearcher {
     ) -> Result<Vec<MutationOp>> {
         let mut ops = Vec::new();
         for (id, layer) in candidates {
-            let current_links = graph.get_links(id, *layer).await.to_vec();
+            let current_links: Vec<VectorId> = graph
+                .get_links(&id.serial_id(), *layer)
+                .await
+                .iter()
+                .map(|&sid| graph.serial_to_vector_id(sid))
+                .collect();
             if current_links.is_empty() {
                 continue;
             }
