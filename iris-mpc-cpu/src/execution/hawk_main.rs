@@ -258,7 +258,7 @@ pub struct HawkArgs {
     pub hnsw_layer_density: Option<usize>,
 
     #[clap(long)]
-    pub hnsw_fixed_layer_search_batch_size: Option<usize>,
+    pub hnsw_min_layer_search_batch_size: Option<usize>,
 
     #[clap(long)]
     pub hnsw_prf_key: Option<u64>,
@@ -506,7 +506,7 @@ impl HawkActor {
                 searcher_.params.override_ef_search_layers(ef_layers);
             }
 
-            searcher_.fixed_layer_search_batch_size = args.hnsw_fixed_layer_search_batch_size;
+            searcher_.min_layer_search_batch_size = args.hnsw_min_layer_search_batch_size;
 
             Arc::new(searcher_)
         };
@@ -2204,7 +2204,7 @@ mod tests {
             hnsw_param_ef_supermatch: 4000,
             hnsw_param_ef_saturation_margin: 0,
             hnsw_layer_density: None,
-            hnsw_fixed_layer_search_batch_size: None,
+            hnsw_min_layer_search_batch_size: None,
             hnsw_prf_key: None,
             numa: false,
             disable_persistence: true,

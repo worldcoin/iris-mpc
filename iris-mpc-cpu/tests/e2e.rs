@@ -219,7 +219,7 @@ fn make_args(party_index: usize, addresses: Vec<String>, request_parallelism: us
         hnsw_param_ef_supermatch: 4000,
         hnsw_param_ef_saturation_margin: 0,
         hnsw_layer_density: Some(HNSW_LAYER_DENSITY),
-        hnsw_fixed_layer_search_batch_size: None,
+        hnsw_min_layer_search_batch_size: None,
         hnsw_prf_key: None,
         disable_persistence: false,
         hnsw_disable_memory_persistence: false,

@@ -242,10 +242,11 @@ pub struct Config {
     #[serde(default)]
     pub hnsw_layer_density: Option<usize>,
 
-    /// If set, fixes the batch size used in `layer_search_batched_v2` instead
-    /// of using the adaptive insertion-rate estimator.
+    /// If set, a lower bound on the per-iteration target batch size in
+    /// `layer_search_batched_v2`. The adaptive insertion-rate estimator still
+    /// drives sizing once its estimate exceeds this floor.
     #[serde(default)]
-    pub hnsw_fixed_layer_search_batch_size: Option<usize>,
+    pub hnsw_min_layer_search_batch_size: Option<usize>,
 
     #[serde(default)]
     pub hawk_prf_key: Option<u64>,
@@ -780,7 +781,7 @@ impl From<Config> for CommonConfig {
             hnsw_param_ef_supermatch,
             hnsw_param_ef_saturation_margin,
             hnsw_layer_density,
-            hnsw_fixed_layer_search_batch_size: _, // per-party tuning knob
+            hnsw_min_layer_search_batch_size: _, // per-party tuning knob
             hawk_prf_key,
             hawk_numa: _, // could be different for each server
             max_deletions_per_batch,
