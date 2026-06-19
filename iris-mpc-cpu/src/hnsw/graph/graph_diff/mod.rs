@@ -1,5 +1,5 @@
 use crate::hnsw::GraphMem;
-use iris_mpc_common::VectorId;
+use iris_mpc_common::SerialId;
 use std::fmt::Display;
 
 pub mod explicit;
@@ -24,9 +24,9 @@ pub trait Differ {
     fn diff_neighborhood(
         &mut self,
         layer_index: usize,
-        node: &VectorId,
-        lhs: &[VectorId],
-        rhs: &[VectorId],
+        node: &SerialId,
+        lhs: &[SerialId],
+        rhs: &[SerialId],
     );
 
     /// Called after traversing each layer.

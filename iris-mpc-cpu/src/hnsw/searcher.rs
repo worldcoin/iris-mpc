@@ -17,6 +17,7 @@ use crate::hnsw::{
     metrics::ops_counter::Operation,
     VectorStore,
 };
+use iris_mpc_common::SerialId;
 
 use crate::hnsw::GraphMem;
 
@@ -438,7 +439,7 @@ impl HnswSearcher {
     async fn init_nbhd_from_ep<V: VectorStore>(
         &self,
         store: &mut V,
-        ep: Option<(VectorId, usize)>,
+        ep: Option<(SerialId, usize)>,
         query: &V::QueryRef,
     ) -> Result<(SortedNeighborhood<V>, Option<usize>)> {
         if let Some((entry_point, layer)) = ep {
