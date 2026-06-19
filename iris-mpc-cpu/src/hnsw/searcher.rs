@@ -443,9 +443,10 @@ impl HnswSearcher {
         query: &V::QueryRef,
     ) -> Result<(SortedNeighborhood<V>, Option<usize>)> {
         if let Some((entry_point, layer)) = ep {
-            let distance = store.eval_distance(query, &entry_point).await?;
+            let vector_id = store.serial_to_vector_id(entry_point);
+            let distance = store.eval_distance(query, &vector_id).await?;
 
-            let W = SortedNeighborhood::from_singleton((entry_point, distance));
+            let W = SortedNeighborhood::from_singleton((vector_id, distance));
             Ok((W, Some(layer)))
         } else {
             Ok((SortedNeighborhood::new(), None))
