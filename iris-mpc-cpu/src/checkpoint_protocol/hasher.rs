@@ -42,6 +42,7 @@ mod tests {
 
     type LayerInput = Vec<(usize, Vec<(VectorId, Vec<VectorId>)>)>;
 
+    #[allow(clippy::type_complexity)]
     fn convert_layer_input(layers_in: LayerInput) -> Vec<(usize, Vec<(SerialId, Vec<SerialId>)>)> {
         layers_in
             .into_iter()

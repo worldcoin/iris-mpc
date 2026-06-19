@@ -1,4 +1,3 @@
-use iris_mpc_common::VectorId;
 use iris_mpc_cpu::{hnsw::graph::layered_graph::GraphMem, utils::serialization::graph};
 use pyo3::{exceptions::PyIOError, prelude::*};
 
@@ -34,11 +33,11 @@ impl PyGraphStore {
         self.0
             .layers
             .get(layer_index)
-            .map(|layer| layer.links.keys().map(|k| k.serial_id()).collect())
+            .map(|layer| layer.links.keys().copied().collect())
     }
 
     pub fn get_links(&self, vector_id: u32, layer_index: usize) -> PyResult<Option<Vec<u32>>> {
-        let raw_ret = self.0.layers[layer_index].get_links(&VectorId::from_serial_id(vector_id));
-        Ok(raw_ret.map(|neighborhood| neighborhood.iter().map(|nb| nb.serial_id()).collect()))
+        let raw_ret = self.0.layers[layer_index].get_links(&vector_id);
+        Ok(raw_ret.map(|neighborhood| neighborhood.neighbors.to_vec()))
     }
 }

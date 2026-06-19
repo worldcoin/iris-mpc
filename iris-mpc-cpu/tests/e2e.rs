@@ -91,13 +91,13 @@ async fn create_graph_from_plain_dbs(
         .iter()
         .filter_map(|x| x.links.keys().max())
         .max()
-        .map(|x| x.serial_id() as usize);
+        .map(|x| *x as usize);
     let right_graph_max_id = right_graph
         .layers
         .iter()
         .filter_map(|x| x.links.keys().max())
         .max()
-        .map(|x| x.serial_id() as usize);
+        .map(|x| *x as usize);
     assert_eq!(Some(DB_SIZE), left_graph_max_id);
     assert_eq!(Some(DB_SIZE), right_graph_max_id);
 

@@ -195,17 +195,13 @@ mod tests {
     use crate::hnsw::graph::layered_graph::Layer;
     use iris_mpc_common::VectorId;
 
-    fn vid(n: u32) -> VectorId {
-        VectorId::from_serial_id(n)
-    }
-
     // ── InsertNode ────────────────────────────────────────────────────────────
 
     /// Links are set to exactly the neighbors provided — no more, no less.
     #[test]
     fn insert_node_sets_exact_links() {
         let mut layer = Layer::new();
-        layer.insert_node(&1, vec![2, 3, 4], 0);
+        layer.insert_node(1, vec![2, 3, 4], 0);
         assert_eq!(
             layer.get_links(&1).map(|n| &n.neighbors),
             Some(&vec![2, 3, 4])
@@ -216,8 +212,8 @@ mod tests {
     #[test]
     fn insert_node_replaces_existing_links() {
         let mut layer = Layer::new();
-        layer.insert_node(&1, vec![2, 3], 0);
-        layer.insert_node(&1, vec![4, 5], 0);
+        layer.insert_node(1, vec![2, 3], 0);
+        layer.insert_node(1, vec![4, 5], 0);
         assert_eq!(layer.get_links(&1).map(|n| &n.neighbors), Some(&vec![4, 5]));
     }
 
@@ -227,9 +223,9 @@ mod tests {
     #[test]
     fn add_neighbors_inserts_id_into_existing_nodes() {
         let mut layer = Layer::new();
-        layer.insert_node(&10, vec![], 0);
-        layer.insert_node(&20, vec![], 0);
-        layer.link_node_to_neighbors(&5, vec![10, 20], 0);
+        layer.insert_node(10, vec![], 0);
+        layer.insert_node(20, vec![], 0);
+        layer.link_node_to_neighbors(5, vec![10, 20], 0);
         assert_eq!(layer.get_links(&10).map(|n| &n.neighbors), Some(&vec![5]));
         assert_eq!(layer.get_links(&20).map(|n| &n.neighbors), Some(&vec![5]));
     }
@@ -239,9 +235,9 @@ mod tests {
     #[test]
     fn add_neighbors_is_idempotent() {
         let mut layer = Layer::new();
-        layer.insert_node(&10, vec![], 0);
-        layer.link_node_to_neighbors(&5, vec![10], 0);
-        layer.link_node_to_neighbors(&5, vec![10], 0);
+        layer.insert_node(10, vec![], 0);
+        layer.link_node_to_neighbors(5, vec![10], 0);
+        layer.link_node_to_neighbors(5, vec![10], 0);
         assert_eq!(layer.get_links(&10).map(|n| &n.neighbors), Some(&vec![5]));
     }
 
@@ -251,10 +247,10 @@ mod tests {
     #[test]
     fn add_neighbors_maintains_sorted_order() {
         let mut layer = Layer::new();
-        layer.insert_node(&10, vec![], 0);
-        layer.link_node_to_neighbors(&7, vec![10], 0);
-        layer.link_node_to_neighbors(&3, vec![10], 0);
-        layer.link_node_to_neighbors(&5, vec![10], 0);
+        layer.insert_node(10, vec![], 0);
+        layer.link_node_to_neighbors(7, vec![10], 0);
+        layer.link_node_to_neighbors(3, vec![10], 0);
+        layer.link_node_to_neighbors(5, vec![10], 0);
         assert_eq!(
             layer.get_links(&10).map(|n| &n.neighbors),
             Some(&vec![3, 5, 7])
@@ -266,7 +262,7 @@ mod tests {
     #[test]
     fn add_neighbors_skips_nonexistent_nodes() {
         let mut layer = Layer::new();
-        layer.link_node_to_neighbors(&1, vec![99], 0); // node 99 was never inserted
+        layer.link_node_to_neighbors(1, vec![99], 0); // node 99 was never inserted
         assert!(layer.get_links(&99).is_none());
     }
 
@@ -276,8 +272,8 @@ mod tests {
     #[test]
     fn remove_neighbors_removes_specified_only() {
         let mut layer = Layer::new();
-        layer.insert_node(&1, vec![2, 3, 4, 5], 0);
-        layer.unlink_neighbors_from_node(&1, vec![2, 4], 0);
+        layer.insert_node(1, vec![2, 3, 4, 5], 0);
+        layer.unlink_neighbors_from_node(1, vec![2, 4], 0);
         assert_eq!(layer.get_links(&1).map(|n| &n.neighbors), Some(&vec![3, 5]));
     }
 
@@ -287,9 +283,9 @@ mod tests {
     #[test]
     fn remove_neighbors_is_unidirectional() {
         let mut layer = Layer::new();
-        layer.insert_node(&1, vec![2, 3], 0);
-        layer.insert_node(&2, vec![1, 3], 0);
-        layer.unlink_neighbors_from_node(&1, vec![2], 0);
+        layer.insert_node(1, vec![2, 3], 0);
+        layer.insert_node(2, vec![1, 3], 0);
+        layer.unlink_neighbors_from_node(1, vec![2], 0);
         assert_eq!(layer.get_links(&1).map(|n| &n.neighbors), Some(&vec![3]));
         assert_eq!(layer.get_links(&2).map(|n| &n.neighbors), Some(&vec![1, 3]));
     }
@@ -298,7 +294,7 @@ mod tests {
     #[test]
     fn remove_neighbors_on_nonexistent_node_is_noop() {
         let mut layer = Layer::new();
-        layer.unlink_neighbors_from_node(&99, vec![1, 2], 0); // should not panic
+        layer.unlink_neighbors_from_node(99, vec![1, 2], 0); // should not panic
     }
 
     // ── WAL replay sequences ──────────────────────────────────────────────────
@@ -310,14 +306,14 @@ mod tests {
     #[test]
     fn wal_replay_insert_then_backlinks() {
         let mut layer = Layer::new();
-        layer.insert_node(&10, vec![20, 30], 0);
-        layer.insert_node(&20, vec![10, 30], 0);
-        layer.insert_node(&30, vec![10, 20], 0);
+        layer.insert_node(10, vec![20, 30], 0);
+        layer.insert_node(20, vec![10, 30], 0);
+        layer.insert_node(30, vec![10, 20], 0);
 
         // New node 40 inserted with forward links to 10 and 20
-        layer.insert_node(&40, vec![10, 20], 0);
+        layer.insert_node(40, vec![10, 20], 0);
         // Backlinks: 10 and 20 each gain 40 as a neighbor
-        layer.link_node_to_neighbors(&40, vec![10, 20], 0);
+        layer.link_node_to_neighbors(40, vec![10, 20], 0);
 
         assert_eq!(
             layer.get_links(&40).map(|n| &n.neighbors),
@@ -334,16 +330,16 @@ mod tests {
     #[test]
     fn wal_replay_insert_backlinks_then_compact() {
         let mut layer = Layer::new();
-        layer.insert_node(&1, vec![2, 3], 0);
-        layer.insert_node(&2, vec![1, 3], 0);
-        layer.insert_node(&3, vec![1, 2], 0);
+        layer.insert_node(1, vec![2, 3], 0);
+        layer.insert_node(2, vec![1, 3], 0);
+        layer.insert_node(3, vec![1, 2], 0);
 
         // Insert node 4 with forward links [1, 2]
-        layer.insert_node(&4, vec![1, 2], 0);
+        layer.insert_node(4, vec![1, 2], 0);
         // Backlinks into 1 and 2
-        layer.link_node_to_neighbors(&4, vec![1, 2], 0);
+        layer.link_node_to_neighbors(4, vec![1, 2], 0);
         // Compaction: node 2 now exceeds link limit, prune neighbor 3
-        layer.unlink_neighbors_from_node(&2, vec![3], 0);
+        layer.unlink_neighbors_from_node(2, vec![3], 0);
 
         assert_eq!(layer.get_links(&4).map(|n| &n.neighbors), Some(&vec![1, 2]));
         assert_eq!(&layer.get_links(&1).unwrap().neighbors, &vec![2, 3, 4]);
@@ -356,6 +352,7 @@ mod tests {
 
     use super::{EdgeType, MutationOp, UnstampedMutation, UpdateEntryPoint};
 
+    #[allow(dead_code)]
     fn mk_vector_id(id: u32) -> VectorId {
         VectorId::from_serial_id(id)
     }

@@ -142,14 +142,7 @@ fn load_existing_graph(graph_spec: Option<LoadGraphConfig>) -> Result<(GraphMem,
         let graph_max_id = graph
             .get_layers()
             .first()
-            .map(|layer_0| {
-                layer_0
-                    .links
-                    .keys()
-                    .map(|id| id.serial_id())
-                    .max()
-                    .unwrap_or(0)
-            })
+            .map(|layer_0| layer_0.links.keys().copied().max().unwrap_or(0))
             .unwrap_or(0);
         tracing::info!("Loaded graph has max node id {graph_max_id}");
         Ok((graph, graph_max_id))

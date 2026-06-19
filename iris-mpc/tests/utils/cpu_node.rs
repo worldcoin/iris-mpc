@@ -5,7 +5,7 @@ use super::CpuConfigs;
 use eyre::eyre;
 use iris_mpc_common::{
     postgres::{AccessMode, PostgresClient},
-    VectorId, MASK_CODE_LENGTH,
+    MASK_CODE_LENGTH,
 };
 use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
 use iris_mpc_cpu::hnsw::graph::graph_store::{GraphCheckpointRow, GraphPg};
@@ -394,16 +394,13 @@ impl CpuNode {
                 // Convert GraphMem → GraphV3 by copying entry_points and layers,
                 // dropping the seq_no field that is absent in the V3 format.
                 let to_v3 = |g: GraphMem| -> graph_v3::GraphV3 {
-                    let vec_id = |v: &VectorId| graph_v3::VectorId {
-                        id: v.serial_id(),
-                        version: v.version_id(),
-                    };
+                    let vec_id = |v: u32| graph_v3::VectorId { id: v, version: 0 };
                     graph_v3::GraphV3 {
                         entry_point: g
                             .entry_points
                             .iter()
                             .map(|ep| graph_v3::EntryPoint {
-                                point: vec_id(&ep.point),
+                                point: vec_id(ep.point),
                                 layer: ep.layer,
                             })
                             .collect(),
@@ -416,8 +413,10 @@ impl CpuNode {
                                     .iter()
                                     .map(|(k, vs)| {
                                         (
-                                            vec_id(k),
-                                            graph_v3::EdgeIds(vs.iter().map(&vec_id).collect()),
+                                            vec_id(*k),
+                                            graph_v3::EdgeIds(
+                                                vs.neighbors.iter().map(|&n| vec_id(n)).collect(),
+                                            ),
                                         )
                                     })
                                     .collect(),

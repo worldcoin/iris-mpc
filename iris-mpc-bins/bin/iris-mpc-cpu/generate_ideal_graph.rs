@@ -82,7 +82,7 @@ async fn run_sanity_check_iris<D: DistanceOps>(
             .get_M_max(lc)
             .min(layer.links.len().saturating_sub(1));
         for (_, value) in layer.links.iter() {
-            assert_eq!(value.len(), expected_nb_size);
+            assert_eq!(value.neighbors.len(), expected_nb_size);
         }
     }
 
@@ -117,7 +117,8 @@ async fn run_sanity_check_iris<D: DistanceOps>(
         store.insert_with_id(VectorId::from_serial_id((i as u32) + 1), Arc::new(iris));
     }
 
-    let sample_iris = store.storage.get_vector(&sample).cloned().unwrap();
+    let sample_vid = VectorId::from_serial_id(sample);
+    let sample_iris = store.storage.get_vector(&sample_vid).cloned().unwrap();
 
     for lc in 0..graph.layers.len() {
         let neighbors = graph.layers[lc]
@@ -127,22 +128,25 @@ async fn run_sanity_check_iris<D: DistanceOps>(
         let mut dists = Vec::new();
         for k in graph.layers[lc].links.keys() {
             if *k != sample {
-                let dist = store.eval_distance(&sample_iris, k).await.unwrap();
+                let k_vid = VectorId::from_serial_id(*k);
+                let dist = store.eval_distance(&sample_iris, &k_vid).await.unwrap();
                 dists.push((*k, dist));
             }
         }
 
         if !dists.is_empty() {
             dists.sort_by(|a, b| D::plaintext_ordering(&a.1, &b.1));
-            dists.truncate(neighbors.len());
+            dists.truncate(neighbors.neighbors.len());
             let kth_dist = dists.last().unwrap().1;
 
             let count_greater = neighbors
+                .neighbors
                 .iter()
                 .filter(|n| {
+                    let n_vid = VectorId::from_serial_id(**n);
                     let d = D::plaintext_distance(
                         &sample_iris,
-                        store.storage.get_vector(n).unwrap(),
+                        store.storage.get_vector(&n_vid).unwrap(),
                         store.distance_mode,
                     );
                     matches!(D::plaintext_ordering(&d, &kth_dist), Ordering::Greater)
@@ -166,7 +170,7 @@ async fn run_sanity_check_deep_id(
             .get_M_max(lc)
             .min(layer.links.len().saturating_sub(1));
         for (_, value) in layer.links.iter() {
-            assert_eq!(value.len(), expected_nb_size);
+            assert_eq!(value.neighbors.len(), expected_nb_size);
         }
     }
 
@@ -195,7 +199,8 @@ async fn run_sanity_check_deep_id(
         store.insert_with_id(VectorId::from_serial_id((i as u32) + 1), Arc::new(v));
     }
 
-    let sample_vec = Arc::new(store.storage.get_vector(&sample).cloned().unwrap());
+    let sample_vid = VectorId::from_serial_id(sample);
+    let sample_vec = Arc::new(store.storage.get_vector(&sample_vid).cloned().unwrap());
 
     for lc in 0..graph.layers.len() {
         let neighbors = graph.layers[lc]
@@ -205,8 +210,9 @@ async fn run_sanity_check_deep_id(
         let mut dists: Vec<(VectorId, i32)> = Vec::new();
         for k in graph.layers[lc].links.keys() {
             if *k != sample {
-                let dist = store.eval_distance(&sample_vec, k).await.unwrap();
-                dists.push((*k, dist));
+                let k_vid = VectorId::from_serial_id(*k);
+                let dist = store.eval_distance(&sample_vec, &k_vid).await.unwrap();
+                dists.push((k_vid, dist));
             }
         }
         if dists.is_empty() {
@@ -215,13 +221,15 @@ async fn run_sanity_check_deep_id(
 
         // Larger dot = closer. Sort descending by dot, ascending by id on ties.
         dists.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.serial_id().cmp(&b.0.serial_id())));
-        dists.truncate(neighbors.len());
+        dists.truncate(neighbors.neighbors.len());
         let kth_dot = dists.last().unwrap().1;
 
         let count_closer_outside = neighbors
+            .neighbors
             .iter()
             .filter(|n| {
-                let other = store.storage.get_vector(n).unwrap();
+                let n_vid = VectorId::from_serial_id(**n);
+                let other = store.storage.get_vector(&n_vid).unwrap();
                 matches!(kth_dot.cmp(&sample_vec.dot(other)), Ordering::Greater)
             })
             .count();

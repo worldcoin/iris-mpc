@@ -18,7 +18,7 @@ use crate::{
 };
 
 use eyre::Result;
-use iris_mpc_common::{iris_db::iris::IrisCode, SerialId, VectorId};
+use iris_mpc_common::{iris_db::iris::IrisCode, SerialId};
 use itertools::{izip, Itertools};
 use serde::{
     ser::{SerializeMap, SerializeStruct, Serializer},
