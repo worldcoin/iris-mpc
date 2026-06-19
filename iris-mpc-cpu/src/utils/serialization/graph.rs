@@ -443,6 +443,11 @@ impl From<graph_v0::Layer> for Layer {
 impl From<graph_v0::GraphV0> for GraphMem {
     fn from(value: GraphV0) -> Self {
         let layers: Vec<Layer> = value.layers.into_iter().map(|layer| layer.into()).collect();
+        let node_init_seq_no = layers
+            .iter()
+            .flat_map(|l| l.links.keys())
+            .map(|v| (v.serial_id(), 0u64))
+            .collect();
         GraphMem {
             entry_points: value
                 .entry_point
@@ -451,6 +456,7 @@ impl From<graph_v0::GraphV0> for GraphMem {
                 .collect::<Vec<_>>(),
             layers,
             last_update_seq_no: 0,
+            node_init_seq_no,
         }
     }
 }
@@ -485,6 +491,11 @@ impl From<graph_v1::Layer> for Layer {
 impl From<graph_v1::GraphV1> for GraphMem {
     fn from(value: GraphV1) -> Self {
         let layers: Vec<Layer> = value.layers.into_iter().map(|layer| layer.into()).collect();
+        let node_init_seq_no = layers
+            .iter()
+            .flat_map(|l| l.links.keys())
+            .map(|v| (v.serial_id(), 0u64))
+            .collect();
         GraphMem {
             entry_points: value
                 .entry_point
@@ -493,6 +504,7 @@ impl From<graph_v1::GraphV1> for GraphMem {
                 .collect::<Vec<_>>(),
             layers,
             last_update_seq_no: 0,
+            node_init_seq_no,
         }
     }
 }
@@ -530,6 +542,11 @@ impl From<graph_v2::Layer> for Layer {
 impl From<graph_v2::GraphV2> for GraphMem {
     fn from(value: graph_v2::GraphV2) -> Self {
         let layers: Vec<Layer> = value.layers.into_iter().map(|layer| layer.into()).collect();
+        let node_init_seq_no = layers
+            .iter()
+            .flat_map(|l| l.links.keys())
+            .map(|v| (v.serial_id(), 0u64))
+            .collect();
         GraphMem {
             // GraphMem uses a Vec<EntryPoint>, V2 uses Option<EntryPoint>.
             entry_points: value
@@ -539,6 +556,7 @@ impl From<graph_v2::GraphV2> for GraphMem {
                 .collect::<Vec<_>>(),
             layers,
             last_update_seq_no: 0,
+            node_init_seq_no,
         }
     }
 }
@@ -573,11 +591,17 @@ impl From<graph_v3::Layer> for Layer {
 impl From<graph_v3::GraphV3> for GraphMem {
     fn from(value: graph_v3::GraphV3) -> Self {
         let layers: Vec<Layer> = value.layers.into_iter().map(|layer| layer.into()).collect();
+        let node_init_seq_no = layers
+            .iter()
+            .flat_map(|l| l.links.keys())
+            .map(|v| (v.serial_id(), 0u64))
+            .collect();
         GraphMem {
             // V3 uses a Vec<EntryPoint>, which matches GraphMem
             entry_points: value.entry_point.into_iter().map(|e| e.into()).collect(),
             layers,
             last_update_seq_no: 0,
+            node_init_seq_no,
         }
     }
 }
@@ -613,10 +637,16 @@ impl From<graph_v4::Layer> for Layer {
 impl From<graph_v4::GraphV4> for GraphMem {
     fn from(value: graph_v4::GraphV4) -> Self {
         let layers: Vec<Layer> = value.layers.into_iter().map(|layer| layer.into()).collect();
+        let node_init_seq_no = layers
+            .iter()
+            .flat_map(|l| l.links.keys())
+            .map(|v| (v.serial_id(), 0u64))
+            .collect();
         GraphMem {
             entry_points: value.entry_points.into_iter().map(|e| e.into()).collect(),
             layers,
             last_update_seq_no: value.last_update_seq_no,
+            node_init_seq_no,
         }
     }
 }
@@ -704,6 +734,7 @@ impl From<graph_v5::GraphV5> for GraphMem {
             entry_points: value.entry_points.into_iter().map(|e| e.into()).collect(),
             layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
             last_update_seq_no: value.last_update_seq_no,
+            node_init_seq_no: value.node_init_seq_no,
         }
     }
 }
@@ -811,11 +842,17 @@ fn read_graph_v4_streaming<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<
     let last_update_seq_no: u64 = bincode::deserialize_from(&mut *reader)
         .map_err(|e| eyre::eyre!("v4 streaming last_update_seq_no: {e}"))?;
 
+    let node_init_seq_no = layers
+        .iter()
+        .flat_map(|l| l.links.keys())
+        .map(|v| (v.serial_id(), 0u64))
+        .collect();
+
     Ok(GraphMem {
-        entry_points: todo!(),
+        entry_points: entry_points.into_iter().map(|e| e.into()).collect(),
         layers,
         last_update_seq_no,
-        node_init_seq_no: todo!(),
+        node_init_seq_no,
     })
 }
 
@@ -843,11 +880,17 @@ fn read_graph_v3_streaming<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<
     }
 
     // V3 has no `last_update_seq_no`; default to 0.
+    let node_init_seq_no = layers
+        .iter()
+        .flat_map(|l| l.links.keys())
+        .map(|v| (v.serial_id(), 0u64))
+        .collect();
+
     Ok(GraphMem {
-        entry_points: todo!(),
+        entry_points: entry_points.into_iter().map(|e| e.into()).collect(),
         layers,
         last_update_seq_no: 0,
-        node_init_seq_no: todo!(),
+        node_init_seq_no,
     })
 }
 
@@ -894,8 +937,8 @@ fn read_hashed_layer_streaming<R: std::io::Read + ?Sized>(reader: &mut R) -> Res
 ///
 /// V5 differs from V4 in three ways: `VectorId` is a bare `u32` (no version field),
 /// each neighborhood stores `(Vec<u32>, updated_seq_no: u64)` rather than a plain
-/// `Vec`, and a `node_init_seq_no: HashMap<u32, u64>` field follows the layers
-/// (consumed but discarded — `GraphMem` no longer tracks it).  The on-wire order is:
+/// `Vec`, and a `node_init_seq_no: HashMap<u32, u64>` field follows the layers.
+/// The on-wire order is:
 /// `entry_points` → `layers` → `node_init_seq_no` → `last_update_seq_no`.
 fn read_graph_v5_streaming<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<GraphMem> {
     let entry_points: Vec<graph_v5::EntryPoint> = bincode::deserialize_from(&mut *reader)
@@ -914,14 +957,15 @@ fn read_graph_v5_streaming<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<
     }
 
     // node_init_seq_no: HashMap<u32, u64> — bincode layout: u64 count + N × (u32, u64)
-    // This field no longer exists in GraphMem; consume and discard the bytes.
     let init_count: u64 = bincode::deserialize_from(&mut *reader)
         .map_err(|e| eyre::eyre!("v5 streaming node_init_seq_no count: {e}"))?;
+    let mut node_init_seq_no = HashMap::with_capacity(init_count as usize);
     for _ in 0..init_count {
-        let _v: graph_v5::VectorId = bincode::deserialize_from(&mut *reader)
+        let v: graph_v5::VectorId = bincode::deserialize_from(&mut *reader)
             .map_err(|e| eyre::eyre!("v5 streaming node_init key: {e}"))?;
-        let _seq_no: u64 = bincode::deserialize_from(&mut *reader)
+        let seq_no: u64 = bincode::deserialize_from(&mut *reader)
             .map_err(|e| eyre::eyre!("v5 streaming node_init value: {e}"))?;
+        node_init_seq_no.insert(v, seq_no);
     }
 
     let last_update_seq_no: u64 = bincode::deserialize_from(&mut *reader)
@@ -931,6 +975,7 @@ fn read_graph_v5_streaming<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<
         entry_points: entry_points.into_iter().map(|e| e.into()).collect(),
         layers,
         last_update_seq_no,
+        node_init_seq_no,
     })
 }
 
