@@ -420,7 +420,7 @@ impl From<graph_v0::PointId> for VectorId {
 impl From<graph_v0::EntryPoint> for layered_graph::EntryPoint {
     fn from(value: graph_v0::EntryPoint) -> Self {
         layered_graph::EntryPoint {
-            point: value.point.into(),
+            point: value.point.0,
             layer: value.layer,
         }
     }
@@ -430,11 +430,7 @@ impl From<graph_v0::Layer> for Layer {
     fn from(value: graph_v0::Layer) -> Self {
         let mut layer = Layer::new();
         for (point_id, edges) in value.links.into_iter() {
-            layer.set_links(
-                point_id.into(),
-                edges.0.into_iter().map(|x| x.0.into()).collect(),
-                0,
-            );
+            layer.set_links(point_id.0, edges.0.into_iter().map(|x| x.0).collect(), 0);
         }
         layer
     }
@@ -446,7 +442,7 @@ impl From<graph_v0::GraphV0> for GraphMem {
         let node_init_seq_no = layers
             .iter()
             .flat_map(|l| l.links.keys())
-            .map(|v| (v.serial_id(), 0u64))
+            .map(|&v| (v, 0u64))
             .collect();
         GraphMem {
             entry_points: value
@@ -472,7 +468,7 @@ impl From<graph_v1::VectorId> for VectorId {
 impl From<graph_v1::EntryPoint> for layered_graph::EntryPoint {
     fn from(value: graph_v1::EntryPoint) -> Self {
         layered_graph::EntryPoint {
-            point: value.point.into(),
+            point: value.point.0,
             layer: value.layer,
         }
     }
@@ -482,7 +478,7 @@ impl From<graph_v1::Layer> for Layer {
     fn from(value: graph_v1::Layer) -> Self {
         let mut layer = Layer::new();
         for (v, nb) in value.links.into_iter() {
-            layer.set_links(v.into(), nb.0.into_iter().map(|x| x.into()).collect());
+            layer.set_links(v.0, nb.0.into_iter().map(|x| x.0).collect(), 0);
         }
         layer
     }
@@ -494,7 +490,7 @@ impl From<graph_v1::GraphV1> for GraphMem {
         let node_init_seq_no = layers
             .iter()
             .flat_map(|l| l.links.keys())
-            .map(|v| (v.serial_id(), 0u64))
+            .map(|&v| (v, 0u64))
             .collect();
         GraphMem {
             entry_points: value
@@ -520,7 +516,7 @@ impl From<graph_v2::VectorId> for VectorId {
 impl From<graph_v2::EntryPoint> for layered_graph::EntryPoint {
     fn from(value: graph_v2::EntryPoint) -> Self {
         layered_graph::EntryPoint {
-            point: value.point.into(),
+            point: value.point.id,
             layer: value.layer,
         }
     }
@@ -533,7 +529,7 @@ impl From<graph_v2::Layer> for Layer {
         // value.set_hash is ignored;
         // instead the set_hash is recomputed implicitly in the set_links calls
         for (v, nb) in value.links.into_iter() {
-            layer.set_links(v.into(), nb.0.into_iter().map(|x| x.into()).collect());
+            layer.set_links(v.id, nb.0.into_iter().map(|x| x.id).collect(), 0);
         }
         layer
     }
@@ -545,7 +541,7 @@ impl From<graph_v2::GraphV2> for GraphMem {
         let node_init_seq_no = layers
             .iter()
             .flat_map(|l| l.links.keys())
-            .map(|v| (v.serial_id(), 0u64))
+            .map(|&v| (v, 0u64))
             .collect();
         GraphMem {
             // GraphMem uses a Vec<EntryPoint>, V2 uses Option<EntryPoint>.
@@ -572,7 +568,7 @@ impl From<graph_v3::VectorId> for VectorId {
 impl From<graph_v3::EntryPoint> for layered_graph::EntryPoint {
     fn from(value: graph_v3::EntryPoint) -> Self {
         layered_graph::EntryPoint {
-            point: value.point.into(),
+            point: value.point.id,
             layer: value.layer,
         }
     }
@@ -582,7 +578,7 @@ impl From<graph_v3::Layer> for Layer {
     fn from(value: graph_v3::Layer) -> Self {
         let mut layer = Layer::new();
         for (v, nb) in value.links.into_iter() {
-            layer.set_links(v.into(), nb.0.into_iter().map(|x| x.into()).collect());
+            layer.set_links(v.id, nb.0.into_iter().map(|x| x.id).collect(), 0);
         }
         layer
     }
@@ -594,7 +590,7 @@ impl From<graph_v3::GraphV3> for GraphMem {
         let node_init_seq_no = layers
             .iter()
             .flat_map(|l| l.links.keys())
-            .map(|v| (v.serial_id(), 0u64))
+            .map(|&v| (v, 0u64))
             .collect();
         GraphMem {
             // V3 uses a Vec<EntryPoint>, which matches GraphMem
@@ -618,7 +614,7 @@ impl From<graph_v4::VectorId> for VectorId {
 impl From<graph_v4::EntryPoint> for layered_graph::EntryPoint {
     fn from(value: graph_v4::EntryPoint) -> Self {
         layered_graph::EntryPoint {
-            point: value.point.into(),
+            point: value.point.id,
             layer: value.layer,
         }
     }
@@ -628,7 +624,7 @@ impl From<graph_v4::Layer> for Layer {
     fn from(value: graph_v4::Layer) -> Self {
         let mut layer = Layer::new();
         for (v, nb) in value.links.into_iter() {
-            layer.set_links(v.into(), nb.0.into_iter().map(|x| x.into()).collect());
+            layer.set_links(v.id, nb.0.into_iter().map(|x| x.id).collect(), 0);
         }
         layer
     }
@@ -640,7 +636,7 @@ impl From<graph_v4::GraphV4> for GraphMem {
         let node_init_seq_no = layers
             .iter()
             .flat_map(|l| l.links.keys())
-            .map(|v| (v.serial_id(), 0u64))
+            .map(|&v| (v, 0u64))
             .collect();
         GraphMem {
             entry_points: value.entry_points.into_iter().map(|e| e.into()).collect(),
@@ -666,7 +662,10 @@ impl From<VectorId> for graph_v4::VectorId {
 impl From<layered_graph::EntryPoint> for graph_v4::EntryPoint {
     fn from(value: layered_graph::EntryPoint) -> Self {
         graph_v4::EntryPoint {
-            point: value.point.into(),
+            point: graph_v4::VectorId {
+                id: value.point,
+                version: 0,
+            },
             layer: value.layer,
         }
     }
@@ -681,8 +680,13 @@ impl From<Layer> for graph_v4::Layer {
                 .into_iter()
                 .map(|(v, nb)| {
                     (
-                        v.into(),
-                        graph_v4::EdgeIds(nb.neighbors.into_iter().map(|x| x.into()).collect()),
+                        graph_v4::VectorId { id: v, version: 0 },
+                        graph_v4::EdgeIds(
+                            nb.neighbors
+                                .into_iter()
+                                .map(|x| graph_v4::VectorId { id: x, version: 0 })
+                                .collect(),
+                        ),
                     )
                 })
                 .collect(),
@@ -706,7 +710,7 @@ impl From<GraphMem> for graph_v4::GraphV4 {
 impl From<graph_v5::EntryPoint> for layered_graph::EntryPoint {
     fn from(value: graph_v5::EntryPoint) -> Self {
         layered_graph::EntryPoint {
-            point: VectorId::from_serial_id(value.point),
+            point: value.point,
             layer: value.layer,
         }
     }
@@ -716,13 +720,7 @@ impl From<graph_v5::Layer> for Layer {
     fn from(value: graph_v5::Layer) -> Self {
         let mut layer = Layer::new();
         for (v, nb) in value.links.into_iter() {
-            layer.set_links(
-                VectorId::from_serial_id(v),
-                nb.neighbors
-                    .into_iter()
-                    .map(VectorId::from_serial_id)
-                    .collect(),
-            );
+            layer.set_links(v, nb.neighbors, nb.updated_seq_no);
         }
         layer
     }
@@ -744,7 +742,7 @@ impl From<graph_v5::GraphV5> for GraphMem {
 impl From<layered_graph::EntryPoint> for graph_v5::EntryPoint {
     fn from(value: layered_graph::EntryPoint) -> Self {
         graph_v5::EntryPoint {
-            point: value.point.serial_id(),
+            point: value.point,
             layer: value.layer,
         }
     }
@@ -757,12 +755,12 @@ impl From<Layer> for graph_v5::Layer {
             links: value
                 .links
                 .into_iter()
-                .map(|(v, neighbors)| {
+                .map(|(v, nb)| {
                     (
                         v,
                         graph_v5::Neighborhood {
-                            neighbors: neighbors.into_iter().map(|x| x.serial_id()).collect(),
-                            updated_seq_no: 0,
+                            neighbors: nb.neighbors,
+                            updated_seq_no: nb.seq_no,
                         },
                     )
                 })
@@ -845,7 +843,7 @@ fn read_graph_v4_streaming<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<
     let node_init_seq_no = layers
         .iter()
         .flat_map(|l| l.links.keys())
-        .map(|v| (v.serial_id(), 0u64))
+        .map(|&v| (v, 0u64))
         .collect();
 
     Ok(GraphMem {
@@ -883,7 +881,7 @@ fn read_graph_v3_streaming<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<
     let node_init_seq_no = layers
         .iter()
         .flat_map(|l| l.links.keys())
-        .map(|v| (v.serial_id(), 0u64))
+        .map(|&v| (v, 0u64))
         .collect();
 
     Ok(GraphMem {
@@ -917,12 +915,13 @@ fn read_hashed_layer_streaming<R: std::io::Read + ?Sized>(reader: &mut R) -> Res
         let edges: graph_v4::EdgeIds =
             bincode::deserialize_from(&mut *reader).map_err(|e| eyre::eyre!("EdgeIds: {e}"))?;
         layer.set_links(
-            v.into(),
+            v.id,
             edges
                 .0
                 .into_iter()
-                .map(|x: graph_v4::VectorId| x.into())
+                .map(|x: graph_v4::VectorId| x.id)
                 .collect(),
+            0,
         );
     }
 
@@ -996,13 +995,7 @@ fn read_v5_layer_streaming<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<
             bincode::deserialize_from(&mut *reader).map_err(|e| eyre::eyre!("VectorId: {e}"))?;
         let nb: graph_v5::Neighborhood = bincode::deserialize_from(&mut *reader)
             .map_err(|e| eyre::eyre!("Neighborhood: {e}"))?;
-        layer.set_links(
-            VectorId::from_serial_id(v),
-            nb.neighbors
-                .into_iter()
-                .map(VectorId::from_serial_id)
-                .collect(),
-        );
+        layer.set_links(v, nb.neighbors, nb.updated_seq_no);
     }
 
     // Discard the stored set_hash; Layer::set_links already recomputed it.
@@ -1022,19 +1015,10 @@ mod tests {
     fn sample_graph() -> GraphMem {
         let mut layer = Layer::new();
         for &n in &[7u32, 3, 9, 1, 5, 8, 2, 6, 4] {
-            layer.set_links(
-                VectorId::from_serial_id(n),
-                vec![
-                    VectorId::from_serial_id(n + 1),
-                    VectorId::from_serial_id(n + 2),
-                ],
-            );
+            layer.set_links(n, vec![n + 1, n + 2], 0);
         }
         let mut g = GraphMem::new();
-        g.entry_points = vec![layered_graph::EntryPoint {
-            point: VectorId::from_serial_id(1),
-            layer: 0,
-        }];
+        g.entry_points = vec![layered_graph::EntryPoint { point: 1, layer: 0 }];
         g.layers = vec![layer];
         g
     }
