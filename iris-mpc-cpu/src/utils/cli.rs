@@ -122,7 +122,7 @@ pub struct SearcherConfig {
     pub max_graph_layer: usize,
     pub layer_distribution: Option<LayerDistribution>,
     #[serde(default)]
-    pub fixed_layer_search_batch_size: Option<usize>,
+    pub min_layer_search_batch_size: Option<usize>,
 }
 
 impl TryFrom<&SearcherConfig> for HnswSearcher {
@@ -139,7 +139,7 @@ impl TryFrom<&SearcherConfig> for HnswSearcher {
             params,
             max_graph_layer: value.max_graph_layer,
             layer_distribution,
-            fixed_layer_search_batch_size: value.fixed_layer_search_batch_size,
+            min_layer_search_batch_size: value.min_layer_search_batch_size,
         })
     }
 }
