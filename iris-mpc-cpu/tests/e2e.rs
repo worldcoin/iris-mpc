@@ -215,6 +215,7 @@ fn make_args(party_index: usize, addresses: Vec<String>, request_parallelism: us
         hnsw_param_ef_constr: HNSW_EF_CONSTR,
         hnsw_param_m: HNSW_M,
         hnsw_param_ef_search: HNSW_EF_SEARCH,
+        hnsw_param_ef_search_layers_override: None,
         hnsw_param_ef_supermatch: 4000,
         hnsw_param_ef_saturation_margin: 0,
         hnsw_layer_density: Some(HNSW_LAYER_DENSITY),

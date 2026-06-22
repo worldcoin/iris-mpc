@@ -560,6 +560,7 @@ fn build_hawk_args(config: &Config) -> Result<(HawkArgs, Vec<String>, Vec<String
         hnsw_param_ef_constr: config.hnsw_param_ef_constr,
         hnsw_param_m: config.hnsw_param_m,
         hnsw_param_ef_search: config.hnsw_param_ef_search,
+        hnsw_param_ef_search_layers_override: config.hnsw_param_ef_search_layers_override.clone(),
         hnsw_param_ef_supermatch: config.hnsw_param_ef_supermatch,
         hnsw_param_ef_saturation_margin: config.hnsw_param_ef_saturation_margin,
         hnsw_layer_density: config.hnsw_layer_density,
