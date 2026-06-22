@@ -6,6 +6,7 @@ on:
       - "dev"
       - "feat/recovery-update"
       - "pop-3712-reauth-skip-persistence-alias"
+      - "mihai/release-prep-2222"
 
     paths-ignore:
       - "deploy/**"
