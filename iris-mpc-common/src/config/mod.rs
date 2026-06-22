@@ -230,7 +230,7 @@ pub struct Config {
     /// reuse the last value (e.g. `[256, 8]` → layer 0 = 256, layers 1+ = 8;
     /// use `[256, 1]` to keep upper layers greedy). Must agree across all
     /// parties (part of the common-config hash).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_opt_usize_vec")]
     pub hnsw_param_ef_search_layers_override: Option<Vec<usize>>,
 
     #[serde(default = "default_hnsw_param_ef_supermatch")]
@@ -653,6 +653,27 @@ where
 {
     let value: String = Deserialize::deserialize(deserializer)?;
     serde_json::from_str(&value).map_err(serde::de::Error::custom)
+}
+
+/// Env-provided values arrive as strings, so a JSON-encoded array (`"[320,32,1]"`)
+/// must be parsed explicitly; a native sequence (file configs) is taken as-is.
+fn deserialize_opt_usize_vec<'de, D>(deserializer: D) -> Result<Option<Vec<usize>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrVec {
+        String(String),
+        Vec(Vec<usize>),
+    }
+    match Option::<StringOrVec>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(StringOrVec::Vec(v)) => Ok(Some(v)),
+        Some(StringOrVec::String(s)) => serde_json::from_str(&s)
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+    }
 }
 
 /// This struct is used to extract the common configuration for all servers from their respective configs.
