@@ -33,7 +33,7 @@ env:
     value: "32"
 
   - name: SMPC__DISABLE_PERSISTENCE
-    value: "true"
+    value: "false"
 
   - name: SMPC__ENABLE_REAUTH
     value: "true"
