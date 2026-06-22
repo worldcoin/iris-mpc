@@ -69,6 +69,12 @@ env:
   - name: SMPC__HNSW_PARAM_EF_SEARCH
     value: "320"
 
+  - name: SMPC__HNSW_PARAM_EF_SEARCH_LAYERS_OVERRIDE
+    value: '["320","32","1"]'
+
+  - name: SMPC__HNSW_MIN_LAYER_SEARCH_BATCH_SIZE
+    value: "8000"
+
   - name: SMPC__HNSW_PARAM_EF_CONSTR
     value: "320"
 
