@@ -36,4 +36,4 @@ ef_construction = 320
 ef_search = [70, 5]
 M = 256
 max_graph_layer = 1
-# fixed_layer_search_batch_size = 128
+# min_layer_search_batch_size = 128

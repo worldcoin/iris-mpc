@@ -126,7 +126,7 @@ fn hawk_args_from(args: &SidecarArgs, tls: Option<TlsConfig>) -> HawkArgs {
         hnsw_param_ef_supermatch: 0,
         hnsw_param_ef_saturation_margin: 0,
         hnsw_layer_density: None,
-        hnsw_fixed_layer_search_batch_size: None,
+        hnsw_min_layer_search_batch_size: None,
         hnsw_prf_key: None,
         disable_persistence: true,
         hnsw_disable_memory_persistence: true,
