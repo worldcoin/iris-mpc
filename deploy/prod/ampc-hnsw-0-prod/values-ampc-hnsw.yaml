@@ -172,7 +172,7 @@ env:
 
   # HNSW parameter settings
   - name: SMPC__HNSW_PARAM_EF_CONSTR
-    value: "320"
+    value: "480"
 
   - name: SMPC__HNSW_PARAM_EF_SEARCH_LAYERS_OVERRIDE
     value: '[480,32]'
