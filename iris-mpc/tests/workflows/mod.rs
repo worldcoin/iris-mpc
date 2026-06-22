@@ -103,6 +103,7 @@ pub fn run_sidecar(
                 hnsw_param_ef_constr: 0,
                 hnsw_param_m: 0,
                 hnsw_param_ef_search: 0,
+                hnsw_param_ef_search_layers_override: None,
                 hnsw_param_ef_supermatch: 0,
                 hnsw_param_ef_saturation_margin: 0,
                 hnsw_layer_density: None,

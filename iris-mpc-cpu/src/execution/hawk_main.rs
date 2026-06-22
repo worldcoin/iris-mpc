@@ -240,6 +240,14 @@ pub struct HawkArgs {
     #[clap(long, default_value_t = 256)]
     pub hnsw_param_ef_search: usize,
 
+    /// Optional per-layer search `ef` override, indexed from layer 0 upward.
+    /// When set, fully replaces `hnsw_param_ef_search` (every layer, including
+    /// layer 0) and the default greedy (ef=1) upper-layer traversal, for both
+    /// live search and search-during-construction. Values beyond the last entry
+    /// reuse the last value.
+    #[clap(long, value_delimiter = ',')]
+    pub hnsw_param_ef_search_layers_override: Option<Vec<usize>>,
+
     #[clap(long, default_value_t = 4000)]
     pub hnsw_param_ef_supermatch: usize,
 
@@ -492,6 +500,10 @@ impl HawkActor {
                     LayerDistribution::new_geometric_from_M(layer_density);
             } else {
                 // default geometric distribution uses layer_density value of `M`
+            }
+
+            if let Some(ef_layers) = &args.hnsw_param_ef_search_layers_override {
+                searcher_.params.override_ef_search_layers(ef_layers);
             }
 
             searcher_.fixed_layer_search_batch_size = args.hnsw_fixed_layer_search_batch_size;
@@ -2188,6 +2200,7 @@ mod tests {
             hnsw_param_ef_constr: 320,
             hnsw_param_m: 256,
             hnsw_param_ef_search: 256,
+            hnsw_param_ef_search_layers_override: None,
             hnsw_param_ef_supermatch: 4000,
             hnsw_param_ef_saturation_margin: 0,
             hnsw_layer_density: None,
