@@ -132,6 +132,15 @@ struct Args {
     /// when S3 mode is enabled (see `SMPC__GRAPH_CHECKPOINT_BUCKET_NAME` env).
     #[arg(long)]
     checkpoint_s3_key: Option<String>,
+    /// Run single-source BFS from each entry point over the layer-0 graph and
+    /// emit per-bucket hop / unreachability stats (`hops_by_bucket.csv`).
+    /// Off by default — this is an O(entry_points * edges) pass.
+    #[arg(long, default_value_t = false)]
+    bfs_hops: bool,
+    /// Count strongly-connected components per layer (Tarjan). Off by default —
+    /// this is an O(nodes + edges) pass over each layer.
+    #[arg(long, default_value_t = false)]
+    scc: bool,
 }
 
 /// Subset of `iris_mpc_common::config::Config` that the sanity check reads
@@ -226,6 +235,345 @@ struct DegreeHistEntry {
     node_count: usize,
 }
 
+/// Number of consecutive serial IDs per bucket for the per-bucket degree stats.
+const DEGREE_BUCKET_SIZE: u32 = 1_000_000;
+
+/// Sentinel for an absent array slot: serial 0 is never a real node (1-indexed).
+const ABSENT: VectorId = VectorId::from_serial_id(0);
+
+/// Per-(eye, layer, serial-id bucket) degree summary, emitted for both in- and
+/// out-degree. `bucket` is the serial-id range index (serial_id / DEGREE_BUCKET_SIZE).
+#[derive(Serialize)]
+struct DegreeBucketEntry {
+    eye: String,
+    layer: usize,
+    direction: &'static str,
+    bucket: u32,
+    serial_start: u32,
+    serial_end: u32,
+    node_count: usize,
+    min: usize,
+    avg: f64,
+    median: usize,
+    max: usize,
+}
+
+/// min / avg / median / max of a degree list. `degrees` is sorted in place.
+fn degree_summary(degrees: &mut [usize]) -> (usize, f64, usize, usize) {
+    degrees.sort_unstable();
+    let n = degrees.len();
+    let sum: usize = degrees.iter().sum();
+    (
+        degrees[0],
+        sum as f64 / n as f64,
+        degrees[n / 2],
+        degrees[n - 1],
+    )
+}
+
+/// Per-(eye, serial-id bucket) BFS-hop summary over the layer-0 nodes whose
+/// serial ID falls in the bucket, for a single-source search from one entry point.
+///
+/// `hops_*` aggregate over the nodes in the bucket reachable from the entry point;
+/// `reachable_nodes` / `unreachable_nodes` split the bucket by reachability.
+#[derive(Serialize)]
+struct HopBucketEntry {
+    eye: String,
+    bucket: u32,
+    serial_start: u32,
+    serial_end: u32,
+    node_count: u64,
+    reachable_nodes: u64,
+    unreachable_nodes: u64,
+    hops_min: u32,
+    hops_avg: f64,
+    hops_median: u32,
+    hops_max: u32,
+}
+
+/// min / avg / median / max + total count from a value→count slice, where
+/// `counts[v]` is the number of observations equal to `v`. Median is the value
+/// at cumulative index `total / 2` (lower median). All-zero when empty.
+fn hist_stats(counts: &[u64]) -> (u32, f64, u32, u32, u64) {
+    let total: u64 = counts.iter().sum();
+    if total == 0 {
+        return (0, 0.0, 0, 0, 0);
+    }
+    let min = counts.iter().position(|&c| c > 0).unwrap() as u32;
+    let max = counts.iter().rposition(|&c| c > 0).unwrap() as u32;
+    let weighted: u128 = counts
+        .iter()
+        .enumerate()
+        .map(|(v, &c)| v as u128 * c as u128)
+        .sum();
+    let avg = weighted as f64 / total as f64;
+    let target = total / 2;
+    let mut cum = 0u64;
+    let mut median = min;
+    for (v, &c) in counts.iter().enumerate() {
+        cum += c;
+        if cum > target {
+            median = v as u32;
+            break;
+        }
+    }
+    (min, avg, median, max, total)
+}
+
+/// Single-source BFS from one entry point, descending the layers highest → 0,
+/// accumulating per-1M-serial-bucket hop and reachability stats.
+///
+/// The real search linear-scans all entry points (all at the top layer) for the
+/// one nearest the query and descends from it; with ~N/M^2 top-layer nodes and
+/// M ≥ that, the top layer is near-complete, so any single entry point reaches
+/// the whole top layer within ~1 hop. We therefore use a single entry point (the
+/// first live one) — running all ~N/M^2 of them as sources would be O(E) each.
+///
+/// The descent order matters: upper-layer edges are long-range, so a node's hop
+/// count is the shortest *layered* path — traverse a layer's own edges, then
+/// descend (free) to the next layer at any reached node. Because nodes enter a
+/// layer carrying the distance accumulated above, the per-layer relaxation is a
+/// shortest-path with non-uniform sources; we run it with a bucket queue (Dial's
+/// algorithm), exact for unit edge weights.
+///
+/// All per-node state is array-indexed by `VectorId::index()` (no hash/btree maps
+/// over N). Reachability is version-strict — a stale-version edge does not reach
+/// the live node, matching the in-degree definition.
+fn compute_hop_buckets(eye: &str, graph: &GraphMem, out: &mut Vec<HopBucketEntry>) {
+    let Some(l0) = graph.layers.first() else {
+        return;
+    };
+    if l0.links.is_empty() {
+        return;
+    }
+    let num_layers = graph.layers.len();
+    // Layer 0 holds every node, so its max index + 1 sizes all per-node arrays.
+    let n = l0.links.keys().map(|v| v.index() as usize).max().unwrap() + 1;
+
+    // Per-layer adjacency + live key, array-indexed by VectorId::index().
+    let empty: &[VectorId] = &[];
+    let mut adj: Vec<Vec<&[VectorId]>> = vec![vec![empty; n]; num_layers];
+    let mut key: Vec<Vec<VectorId>> = vec![vec![ABSENT; n]; num_layers];
+    let mut nodes0: Vec<u32> = Vec::with_capacity(l0.links.len());
+    for (l, layer) in graph.layers.iter().enumerate() {
+        for (vid, nbs) in layer.links.iter() {
+            let i = vid.index() as usize;
+            adj[l][i] = nbs.as_slice();
+            key[l][i] = *vid;
+            if l == 0 {
+                nodes0.push(i as u32);
+            }
+        }
+    }
+
+    let mut dist: Vec<u32> = vec![u32::MAX; n];
+    let mut reached: Vec<u32> = Vec::new();
+    let mut queue: Vec<Vec<u32>> = Vec::new(); // Dial bucket queue, indexed by distance
+
+    // Use the first live entry point as the single search source.
+    let source = graph.entry_points.iter().find(|ep| {
+        let i = ep.point.index() as usize;
+        let top = ep.layer.min(num_layers - 1);
+        i < n && key[top][i] == ep.point
+    });
+    if let Some(ep) = source {
+        let top = ep.layer.min(num_layers - 1);
+        let start = ep.point.index() as usize;
+        dist[start] = 0;
+        reached.push(start as u32);
+
+        // Descend highest layer → 0. Distances carry down (free descent), so each
+        // layer's relaxation is seeded by every node reached so far.
+        for layer in (0..=top).rev() {
+            let adj_l = &adj[layer];
+            let key_l = &key[layer];
+            let mut max_d = 0u32;
+            for &u in &reached {
+                let d = dist[u as usize];
+                while queue.len() <= d as usize {
+                    queue.push(Vec::new());
+                }
+                queue[d as usize].push(u);
+                max_d = max_d.max(d);
+            }
+            let mut d = 0u32;
+            while d <= max_d {
+                let mut i = 0;
+                while i < queue[d as usize].len() {
+                    let u = queue[d as usize][i] as usize;
+                    i += 1;
+                    if dist[u] != d {
+                        continue; // stale bucket-queue entry
+                    }
+                    let nd = d + 1;
+                    for nb in adj_l[u] {
+                        let v = nb.index() as usize;
+                        // Version-strict: only follow edges into the live node.
+                        if v >= n || key_l[v] != *nb {
+                            continue;
+                        }
+                        if nd < dist[v] {
+                            let first_seen = dist[v] == u32::MAX;
+                            dist[v] = nd;
+                            while queue.len() <= nd as usize {
+                                queue.push(Vec::new());
+                            }
+                            queue[nd as usize].push(v as u32);
+                            max_d = max_d.max(nd);
+                            if first_seen {
+                                reached.push(v as u32);
+                            }
+                        }
+                    }
+                }
+                d += 1;
+            }
+            for b in queue.iter_mut() {
+                b.clear();
+            }
+        }
+    }
+
+    // Aggregate per bucket: hops over reachable nodes, plus reachable/unreachable split.
+    let num_buckets = (n as u32 / DEGREE_BUCKET_SIZE) as usize + 1;
+    let mut hop_counts: Vec<Vec<u64>> = vec![Vec::new(); num_buckets]; // [bucket][hop]
+    let mut node_count: Vec<u64> = vec![0; num_buckets];
+    let mut unreachable: Vec<u64> = vec![0; num_buckets];
+    for &u in &nodes0 {
+        let ui = u as usize;
+        let bucket = ((ui as u32 + 1) / DEGREE_BUCKET_SIZE) as usize;
+        node_count[bucket] += 1;
+        let d = dist[ui];
+        if d == u32::MAX {
+            unreachable[bucket] += 1;
+        } else {
+            let hc = &mut hop_counts[bucket];
+            while hc.len() <= d as usize {
+                hc.push(0);
+            }
+            hc[d as usize] += 1;
+        }
+    }
+
+    for b in 0..num_buckets {
+        if node_count[b] == 0 {
+            continue;
+        }
+        let (hmin, havg, hmed, hmax, reachable) = hist_stats(&hop_counts[b]);
+        out.push(HopBucketEntry {
+            eye: eye.to_string(),
+            bucket: b as u32,
+            serial_start: b as u32 * DEGREE_BUCKET_SIZE,
+            serial_end: (b as u32 + 1) * DEGREE_BUCKET_SIZE - 1,
+            node_count: node_count[b],
+            reachable_nodes: reachable,
+            unreachable_nodes: unreachable[b],
+            hops_min: hmin,
+            hops_avg: havg,
+            hops_median: hmed,
+            hops_max: hmax,
+        });
+    }
+}
+
+/// Count strongly-connected components of one layer's directed graph (iterative
+/// Tarjan — forward edges only, so no reverse adjacency is needed). Edges are
+/// version-strict (a stale-version reference is not an edge), matching the BFS.
+/// Returns (number of SCCs, size of the largest SCC). All state is array-indexed
+/// by `VectorId::index()`.
+fn count_sccs(graph: &GraphMem, layer_idx: usize) -> (u64, u64) {
+    let layer = &graph.layers[layer_idx];
+    if layer.links.is_empty() {
+        return (0, 0);
+    }
+    let n = layer
+        .links
+        .keys()
+        .map(|v| v.index() as usize)
+        .max()
+        .unwrap()
+        + 1;
+    let empty: &[VectorId] = &[];
+    let mut adj: Vec<&[VectorId]> = vec![empty; n];
+    let mut key: Vec<VectorId> = vec![ABSENT; n];
+    let mut nodes: Vec<u32> = Vec::with_capacity(layer.links.len());
+    for (vid, nbs) in layer.links.iter() {
+        let i = vid.index() as usize;
+        adj[i] = nbs.as_slice();
+        key[i] = *vid;
+        nodes.push(i as u32);
+    }
+
+    const UNVISITED: u32 = u32::MAX;
+    let mut idx: Vec<u32> = vec![UNVISITED; n];
+    let mut low: Vec<u32> = vec![0; n];
+    let mut on_stack: Vec<bool> = vec![false; n];
+    let mut comp_stack: Vec<u32> = Vec::new();
+    // Explicit DFS stack of (node, resume position in its neighbor list) so the
+    // recursion depth (up to N) lives on the heap, not the call stack.
+    let mut dfs: Vec<(u32, u32)> = Vec::new();
+    let mut next_index = 0u32;
+    let mut num_sccs = 0u64;
+    let mut largest = 0u64;
+
+    for &s in &nodes {
+        if idx[s as usize] != UNVISITED {
+            continue;
+        }
+        dfs.push((s, 0));
+        while let Some(&(node, edge_pos)) = dfs.last() {
+            let u = node as usize;
+            if edge_pos == 0 {
+                idx[u] = next_index;
+                low[u] = next_index;
+                next_index += 1;
+                comp_stack.push(node);
+                on_stack[u] = true;
+            }
+            let neighbors = adj[u];
+            let mut p = edge_pos as usize;
+            let mut recursed = false;
+            while p < neighbors.len() {
+                let nb = &neighbors[p];
+                p += 1;
+                let v = nb.index() as usize;
+                if v >= n || key[v] != *nb {
+                    continue; // out of range or stale-version: not an edge
+                }
+                if idx[v] == UNVISITED {
+                    dfs.last_mut().unwrap().1 = p as u32; // resume here after the child
+                    dfs.push((v as u32, 0));
+                    recursed = true;
+                    break;
+                } else if on_stack[v] {
+                    low[u] = low[u].min(idx[v]);
+                }
+            }
+            if recursed {
+                continue;
+            }
+            if low[u] == idx[u] {
+                num_sccs += 1;
+                let mut size = 0u64;
+                loop {
+                    let w = comp_stack.pop().unwrap();
+                    on_stack[w as usize] = false;
+                    size += 1;
+                    if w == node {
+                        break;
+                    }
+                }
+                largest = largest.max(size);
+            }
+            dfs.pop();
+            if let Some(&(parent, _)) = dfs.last() {
+                low[parent as usize] = low[parent as usize].min(low[u]);
+            }
+        }
+    }
+    (num_sccs, largest)
+}
+
 struct Stats(Vec<(String, String)>);
 impl Stats {
     fn new() -> Self {
@@ -272,6 +620,8 @@ async fn main() -> Result<()> {
     let mut checks: Vec<CheckResult> = Vec::new();
     let mut stats = Stats::new();
     let mut degree_hist: Vec<DegreeHistEntry> = Vec::new();
+    let mut degree_buckets: Vec<DegreeBucketEntry> = Vec::new();
+    let mut hop_buckets: Vec<HopBucketEntry> = Vec::new();
 
     let raw_exclusions: Option<Vec<u32>> = match &args.exclusions_s3_uri {
         Some(uri) => {
@@ -409,6 +759,10 @@ async fn main() -> Result<()> {
         layer_probability,
         &mut checks,
         &mut degree_hist,
+        &mut degree_buckets,
+        &mut hop_buckets,
+        args.bfs_hops,
+        args.scc,
         &mut stats,
         &mut rpt,
     )
@@ -458,7 +812,14 @@ async fn main() -> Result<()> {
         checks.len()
     );
 
-    let mut output_files = write_json_reports(&args.output_dir, &checks, &stats, &degree_hist)?;
+    let mut output_files = write_json_reports(
+        &args.output_dir,
+        &checks,
+        &stats,
+        &degree_hist,
+        &degree_buckets,
+        &hop_buckets,
+    )?;
     let report_path = rpt.save(&args.output_dir)?;
     println!("Wrote {}", report_path.display());
     output_files.push(report_path);
@@ -502,6 +863,10 @@ async fn run_graph_checks(
     layer_probability: f64,
     checks: &mut Vec<CheckResult>,
     degree_hist: &mut Vec<DegreeHistEntry>,
+    degree_buckets: &mut Vec<DegreeBucketEntry>,
+    hop_buckets: &mut Vec<HopBucketEntry>,
+    bfs_hops: bool,
+    scc: bool,
     stats: &mut Stats,
     rpt: &mut Report,
 ) -> Result<()> {
@@ -522,10 +887,29 @@ async fn run_graph_checks(
                 layer_probability,
                 checks,
                 degree_hist,
+                degree_buckets,
                 stats,
                 rpt,
             );
             l0_id_sets.push((eye, l0_ids));
+            if bfs_hops {
+                rpt!(
+                    rpt,
+                    "  Computing {eye} BFS hop buckets from entry points..."
+                );
+                compute_hop_buckets(eye, &graphs[idx], hop_buckets);
+            }
+            if scc {
+                for lc in 0..graphs[idx].layers.len() {
+                    let (num, largest) = count_sccs(&graphs[idx], lc);
+                    rpt!(rpt, "  {eye} layer {lc}: {num} SCC(s), largest {largest}");
+                    stats.add(format!("{eye} layer {lc} SCC count"), num.to_string());
+                    stats.add(
+                        format!("{eye} layer {lc} largest SCC size"),
+                        largest.to_string(),
+                    );
+                }
+            }
         }
     } else {
         eyre::bail!(
@@ -564,6 +948,7 @@ fn check_single_graph(
     layer_probability: f64,
     checks: &mut Vec<CheckResult>,
     degree_hist: &mut Vec<DegreeHistEntry>,
+    degree_buckets: &mut Vec<DegreeBucketEntry>,
     stats: &mut Stats,
     rpt: &mut Report,
 ) -> HashSet<u32> {
@@ -614,6 +999,64 @@ fn check_single_graph(
                 format!("{eye} layer {lc} degree min/avg/median/max"),
                 format!("{min}/{avg:.1}/{median}/{max}"),
             );
+        }
+
+        // -- Per-1M-serial-id-bucket out- and in-degree summaries --
+        // In-degree is array-indexed by VectorId::index() with the live VectorId
+        // (serial + version) packed alongside the count, so an in-edge counts only
+        // when it lands on the live node identity; stale-version references
+        // (flagged by 1d) contribute zero — yielding a valid-in-degree per bucket.
+        // Packing key+count in one entry keeps the per-edge probe to a single
+        // random memory access over ~M*N edges.
+        let mut out_by_bucket: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+        let in_size = layer
+            .links
+            .keys()
+            .map(|v| v.index() as usize)
+            .max()
+            .map_or(0, |m| m + 1);
+        let mut in_deg: Vec<(VectorId, u32)> = vec![(ABSENT, 0); in_size];
+        for (node, neighbors) in layer.links.iter() {
+            in_deg[node.index() as usize].0 = *node;
+            out_by_bucket
+                .entry(node.serial_id() / DEGREE_BUCKET_SIZE)
+                .or_default()
+                .push(neighbors.len());
+        }
+        for neighbors in layer.links.values() {
+            for nb in neighbors {
+                let v = nb.index() as usize;
+                if v < in_deg.len() && in_deg[v].0 == *nb {
+                    in_deg[v].1 += 1;
+                }
+            }
+        }
+        let mut in_by_bucket: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+        for (key, deg) in &in_deg {
+            if *key != ABSENT {
+                in_by_bucket
+                    .entry(key.serial_id() / DEGREE_BUCKET_SIZE)
+                    .or_default()
+                    .push(*deg as usize);
+            }
+        }
+        for (direction, by_bucket) in [("out", &mut out_by_bucket), ("in", &mut in_by_bucket)] {
+            for (&bucket, degrees) in by_bucket.iter_mut() {
+                let (min, avg, median, max) = degree_summary(degrees);
+                degree_buckets.push(DegreeBucketEntry {
+                    eye: eye.to_string(),
+                    layer: lc,
+                    direction,
+                    bucket,
+                    serial_start: bucket * DEGREE_BUCKET_SIZE,
+                    serial_end: (bucket + 1) * DEGREE_BUCKET_SIZE - 1,
+                    node_count: degrees.len(),
+                    min,
+                    avg,
+                    median,
+                    max,
+                });
+            }
         }
     }
 
@@ -1300,6 +1743,8 @@ fn write_json_reports(
     checks: &[CheckResult],
     stats: &Stats,
     hist: &[DegreeHistEntry],
+    degree_buckets: &[DegreeBucketEntry],
+    hop_buckets: &[HopBucketEntry],
 ) -> Result<Vec<PathBuf>> {
     fs::create_dir_all(dir)?;
     let mut files = Vec::new();
@@ -1332,6 +1777,30 @@ fn write_json_reports(
     }
     println!("Wrote {}", p.display());
     files.push(p);
+
+    let p = dir.join("degree_by_bucket.csv");
+    {
+        let mut wtr = csv::Writer::from_path(&p)?;
+        for entry in degree_buckets {
+            wtr.serialize(entry)?;
+        }
+        wtr.flush()?;
+    }
+    println!("Wrote {}", p.display());
+    files.push(p);
+
+    if !hop_buckets.is_empty() {
+        let p = dir.join("hops_by_bucket.csv");
+        {
+            let mut wtr = csv::Writer::from_path(&p)?;
+            for entry in hop_buckets {
+                wtr.serialize(entry)?;
+            }
+            wtr.flush()?;
+        }
+        println!("Wrote {}", p.display());
+        files.push(p);
+    }
 
     Ok(files)
 }
