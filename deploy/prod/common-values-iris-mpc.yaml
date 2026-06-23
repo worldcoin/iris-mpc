@@ -3,6 +3,87 @@ image: "ghcr.io/worldcoin/iris-mpc:v0.31.8@sha256:0eeee5ba03d9f7e4f954a1e99df8ff
 environment: prod
 replicaCount: 1
 
+# Common environment variables shared across all iris-mpc nodes.
+# Defined as a map so Helm deep-merges with per-node env maps.
+env:
+  RUST_LOG: "info"
+  RUST_BACKTRACE: "1"
+  NCCL_SOCKET_IFNAME: "eth,ens"
+  FI_EFA_USE_DEVICE_RDMA: "1"
+  NCCL_IB_CUDA_SUPPORT: "1"
+  FI_PROVIDER: "efa"
+  NCCL_IB_TIMEOUT: "30"
+  NCCL_COMM_ID: "iris-mpc-node.1.smpcv2.worldcoin.org:4000"
+  SMPC__ENVIRONMENT: "prod"
+  SMPC__SERVICE__SERVICE_NAME: "smpcv2-server-prod"
+  SMPC__SCHEMA_NAME: "SMPC_rerand"
+  SMPC__DATABASE__URL:
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_URL
+        name: application
+  SMPC__DATABASE__MIGRATE: "true"
+  SMPC__DATABASE__CREATE: "true"
+  SMPC__DATABASE__LOAD_PARALLELISM: "8"
+  SMPC__ANON_STATS_DATABASE__URL:
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_URL
+        name: application
+  SMPC__ANON_STATS_DATABASE__MIGRATE: "true"
+  SMPC__ANON_STATS_DATABASE__CREATE: "true"
+  SMPC__ANON_STATS_DATABASE__LOAD_PARALLELISM: "8"
+  SMPC__AWS__REGION: "eu-north-1"
+  SMPC__REQUESTS_QUEUE_URL:
+    valueFrom:
+      secretKeyRef:
+        key: SQS_URL
+        name: application
+  SMPC__RESULTS_TOPIC_ARN:
+    valueFrom:
+      secretKeyRef:
+        key: SNS_RESULTS_ARN
+        name: application
+  SMPC__PROCESSING_TIMEOUT_SECS: "600"
+  SMPC__HEARTBEAT_INTERVAL_SECS: "2"
+  SMPC__HEARTBEAT_INITIAL_RETRIES: "65"
+  SMPC__PATH: "/data/"
+  SMPC__KMS_KEY_ARNS:
+    valueFrom:
+      secretKeyRef:
+        key: KMS_KEYS
+        name: application
+  SMPC__SERVER_COORDINATION__NODE_HOSTNAMES: '["iris-mpc-node.1.smpcv2.worldcoin.org","iris-mpc-node.2.smpcv2.worldcoin.org","iris-mpc-node.3.smpcv2.worldcoin.org"]'
+  SMPC__SERVER_COORDINATION__IMAGE_NAME: $(IMAGE_NAME)
+  SMPC__PUBLIC_KEY_BASE_URL: "https://pki-smpc.worldcoin.org"
+  SMPC__ENABLE_S3_IMPORTER: "true"
+  SMPC__DB_CHUNKS_FOLDER_NAME: "even_odd_with_version_id_output_16k_rerandomized"
+  SMPC__LOAD_CHUNKS_PARALLELISM: "64"
+  SMPC__LOAD_CHUNKS_BUFFER_SIZE: "1024"
+  SMPC__CLEAR_DB_BEFORE_INIT: "true"
+  SMPC__INIT_DB_SIZE: "0"
+  SMPC__MAX_DB_SIZE: "18000000"
+  SMPC__FAKE_DB_SIZE: "0"
+  SMPC__MAX_BATCH_SIZE: "8"
+  SMPC__ENABLE_RESET: "true"
+  SMPC__ENABLE_REAUTH: "true"
+  SMPC__LUC_ENABLED: "true"
+  SMPC__LUC_LOOKBACK_RECORDS: "500"
+  SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST: "true"
+  SMPC__SERVICE__METRICS__HOST:
+    valueFrom:
+      fieldRef:
+        fieldPath: status.hostIP
+  SMPC__SERVICE__METRICS__PORT: "8125"
+  SMPC__SERVICE__METRICS__QUEUE_SIZE: "5000"
+  SMPC__SERVICE__METRICS__BUFFER_SIZE: "1024"
+  SMPC__RETURN_PARTIAL_RESULTS: "true"
+  SMPC__DISABLE_PERSISTENCE: "false"
+  SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT: "50"
+  SMPC__MATCH_DISTANCES_2D_BUFFER_SIZE: "1024"
+  SMPC__ENABLE_MODIFICATIONS_SYNC: "true"
+  SMPC__ENABLE_MODIFICATIONS_REPLAY: "true"
+
 strategy:
   type: Recreate
 
