@@ -6,7 +6,7 @@ use iris_mpc_cpu::{
 };
 use pyo3::{exceptions::PyIOError, prelude::*};
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Default)]
 pub struct PyPlaintextStore(pub PlaintextStore);
 
