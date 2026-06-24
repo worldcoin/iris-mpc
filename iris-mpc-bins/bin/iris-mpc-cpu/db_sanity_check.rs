@@ -141,6 +141,15 @@ struct Args {
     /// this is an O(nodes + edges) pass over each layer.
     #[arg(long, default_value_t = false)]
     scc: bool,
+    /// Number of consecutive serial IDs per bucket for all per-bucket reports
+    /// (degree, hops, neighbor-serial matrix). Required.
+    #[arg(long)]
+    bucket_size: u32,
+    /// Emit an in-depth per-serial reachability dossier (`probe_report.txt` /
+    /// `.json`) for these serial IDs. Comma-separated. Enables the BFS + SCC
+    /// passes needed to populate the dossier.
+    #[arg(long, value_delimiter = ',')]
+    probe_serials: Vec<u32>,
 }
 
 /// Subset of `iris_mpc_common::config::Config` that the sanity check reads
@@ -235,14 +244,11 @@ struct DegreeHistEntry {
     node_count: usize,
 }
 
-/// Number of consecutive serial IDs per bucket for the per-bucket degree stats.
-const DEGREE_BUCKET_SIZE: u32 = 1_000_000;
-
 /// Sentinel for an absent array slot: serial 0 is never a real node (1-indexed).
 const ABSENT: VectorId = VectorId::from_serial_id(0);
 
 /// Per-(eye, layer, serial-id bucket) degree summary, emitted for both in- and
-/// out-degree. `bucket` is the serial-id range index (serial_id / DEGREE_BUCKET_SIZE).
+/// out-degree. `bucket` is the serial-id range index (serial_id / bucket_size).
 #[derive(Serialize)]
 struct DegreeBucketEntry {
     eye: String,
@@ -256,6 +262,19 @@ struct DegreeBucketEntry {
     avg: f64,
     median: usize,
     max: usize,
+}
+
+/// One cell of the per-(eye, layer) bucket->bucket directed-edge count matrix.
+/// `valid_edges` counts version-matched edges; `raw_edges` counts all edges.
+/// Only populated (nonzero) cells are emitted.
+#[derive(Serialize)]
+struct MatrixEntry {
+    eye: String,
+    layer: usize,
+    src_bucket: u32,
+    dst_bucket: u32,
+    valid_edges: u64,
+    raw_edges: u64,
 }
 
 /// min / avg / median / max of a degree list. `degrees` is sorted in place.
@@ -320,6 +339,190 @@ fn hist_stats(counts: &[u64]) -> (u32, f64, u32, u32, u64) {
     (min, avg, median, max, total)
 }
 
+/// Per-layer adjacency (slices into the graph) and live-key arrays, both indexed
+/// by `VectorId::index()`, plus the array length `n`.
+type LayerArrays<'a> = (Vec<Vec<&'a [VectorId]>>, Vec<Vec<VectorId>>, usize);
+
+/// Per-layer adjacency (slices into the graph) and live-key arrays, indexed by
+/// `VectorId::index()`. Sized to layer 0's max index + 1 (layer 0 holds all nodes).
+/// Caller must ensure layer 0 is non-empty. Returns (adj, key, n).
+fn build_layer_arrays(graph: &GraphMem) -> LayerArrays<'_> {
+    let num_layers = graph.layers.len();
+    let n = graph.layers[0]
+        .links
+        .keys()
+        .map(|v| v.index() as usize)
+        .max()
+        .map_or(0, |m| m + 1);
+    let empty: &[VectorId] = &[];
+    let mut adj: Vec<Vec<&[VectorId]>> = vec![vec![empty; n]; num_layers];
+    let mut key: Vec<Vec<VectorId>> = vec![vec![ABSENT; n]; num_layers];
+    for (l, layer) in graph.layers.iter().enumerate() {
+        for (vid, nbs) in layer.links.iter() {
+            let i = vid.index() as usize;
+            adj[l][i] = nbs.as_slice();
+            key[l][i] = *vid;
+        }
+    }
+    (adj, key, n)
+}
+
+/// The single search source: first valid recorded entry point, else the temporary
+/// entry point (LinearScan, no recorded entry points). Returns `(point, top_layer)`
+/// with the layer clamped to existing layers, only if it is a live node.
+fn pick_source(graph: &GraphMem, key: &[Vec<VectorId>], n: usize) -> Option<(VectorId, usize)> {
+    let num_layers = graph.layers.len();
+    let live = |point: &VectorId, layer: usize| {
+        let i = point.index() as usize;
+        i < n && key[layer.min(num_layers - 1)][i] == *point
+    };
+    graph
+        .entry_points
+        .iter()
+        .map(|ep| (ep.point, ep.layer))
+        .find(|(p, l)| live(p, *l))
+        .or_else(|| graph.get_temporary_entry_point())
+        .filter(|(p, l)| live(p, *l))
+        .map(|(p, l)| (p, l.min(num_layers - 1)))
+}
+
+/// Single-source layered BFS (top layer → 0) over version-strict edges, via a
+/// bucket queue (Dial's algorithm). Returns `dist` indexed by `VectorId::index()`
+/// (`u32::MAX` = unreachable). Distances carry down between layers (free descent).
+fn layered_bfs(
+    adj: &[Vec<&[VectorId]>],
+    key: &[Vec<VectorId>],
+    n: usize,
+    source: (VectorId, usize),
+) -> Vec<u32> {
+    let (point, top) = source;
+    let start = point.index() as usize;
+    let mut dist = vec![u32::MAX; n];
+    let mut reached: Vec<u32> = vec![start as u32];
+    dist[start] = 0;
+    let mut queue: Vec<Vec<u32>> = Vec::new();
+    for layer in (0..=top).rev() {
+        let adj_l = &adj[layer];
+        let key_l = &key[layer];
+        let mut max_d = 0u32;
+        for &u in &reached {
+            let d = dist[u as usize];
+            while queue.len() <= d as usize {
+                queue.push(Vec::new());
+            }
+            queue[d as usize].push(u);
+            max_d = max_d.max(d);
+        }
+        let mut d = 0u32;
+        while d <= max_d {
+            let mut i = 0;
+            while i < queue[d as usize].len() {
+                let u = queue[d as usize][i] as usize;
+                i += 1;
+                if dist[u] != d {
+                    continue; // stale bucket-queue entry
+                }
+                let nd = d + 1;
+                for nb in adj_l[u] {
+                    let v = nb.index() as usize;
+                    if v >= n || key_l[v] != *nb {
+                        continue; // version-strict: only follow edges into the live node
+                    }
+                    if nd < dist[v] {
+                        let first_seen = dist[v] == u32::MAX;
+                        dist[v] = nd;
+                        while queue.len() <= nd as usize {
+                            queue.push(Vec::new());
+                        }
+                        queue[nd as usize].push(v as u32);
+                        max_d = max_d.max(nd);
+                        if first_seen {
+                            reached.push(v as u32);
+                        }
+                    }
+                }
+            }
+            d += 1;
+        }
+        for b in queue.iter_mut() {
+            b.clear();
+        }
+    }
+    dist
+}
+
+/// Iterative Tarjan SCC over one layer's version-strict edges. Returns
+/// `(comp_of, sizes)`: `comp_of[i]` = component index of the live node at index `i`
+/// (`u32::MAX` if no live node there), `sizes[c]` = size of component `c`.
+fn scc_layer(adj_l: &[&[VectorId]], key_l: &[VectorId], n: usize) -> (Vec<u32>, Vec<u64>) {
+    const UNVISITED: u32 = u32::MAX;
+    let mut idx = vec![UNVISITED; n];
+    let mut low = vec![0u32; n];
+    let mut on_stack = vec![false; n];
+    let mut comp_of = vec![u32::MAX; n];
+    let mut comp_stack: Vec<u32> = Vec::new();
+    let mut dfs: Vec<(u32, u32)> = Vec::new();
+    let mut sizes: Vec<u64> = Vec::new();
+    let mut next_index = 0u32;
+    for s in 0..n {
+        if key_l[s] == ABSENT || idx[s] != UNVISITED {
+            continue;
+        }
+        dfs.push((s as u32, 0));
+        while let Some(&(node, edge_pos)) = dfs.last() {
+            let u = node as usize;
+            if edge_pos == 0 {
+                idx[u] = next_index;
+                low[u] = next_index;
+                next_index += 1;
+                comp_stack.push(node);
+                on_stack[u] = true;
+            }
+            let neighbors = adj_l[u];
+            let mut p = edge_pos as usize;
+            let mut recursed = false;
+            while p < neighbors.len() {
+                let nb = &neighbors[p];
+                p += 1;
+                let v = nb.index() as usize;
+                if v >= n || key_l[v] != *nb {
+                    continue;
+                }
+                if idx[v] == UNVISITED {
+                    dfs.last_mut().unwrap().1 = p as u32;
+                    dfs.push((v as u32, 0));
+                    recursed = true;
+                    break;
+                } else if on_stack[v] {
+                    low[u] = low[u].min(idx[v]);
+                }
+            }
+            if recursed {
+                continue;
+            }
+            if low[u] == idx[u] {
+                let comp = sizes.len() as u32;
+                let mut size = 0u64;
+                loop {
+                    let w = comp_stack.pop().unwrap();
+                    on_stack[w as usize] = false;
+                    comp_of[w as usize] = comp;
+                    size += 1;
+                    if w == node {
+                        break;
+                    }
+                }
+                sizes.push(size);
+            }
+            dfs.pop();
+            if let Some(&(parent, _)) = dfs.last() {
+                low[parent as usize] = low[parent as usize].min(low[u]);
+            }
+        }
+    }
+    (comp_of, sizes)
+}
+
 /// Single-source BFS from one entry point, descending the layers highest → 0,
 /// accumulating per-1M-serial-bucket hop and reachability stats.
 ///
@@ -339,117 +542,34 @@ fn hist_stats(counts: &[u64]) -> (u32, f64, u32, u32, u64) {
 /// All per-node state is array-indexed by `VectorId::index()` (no hash/btree maps
 /// over N). Reachability is version-strict — a stale-version edge does not reach
 /// the live node, matching the in-degree definition.
-fn compute_hop_buckets(eye: &str, graph: &GraphMem, out: &mut Vec<HopBucketEntry>) {
+fn compute_hop_buckets(
+    eye: &str,
+    graph: &GraphMem,
+    bucket_size: u32,
+    out: &mut Vec<HopBucketEntry>,
+) {
     let Some(l0) = graph.layers.first() else {
         return;
     };
     if l0.links.is_empty() {
         return;
     }
-    let num_layers = graph.layers.len();
-    // Layer 0 holds every node, so its max index + 1 sizes all per-node arrays.
-    let n = l0.links.keys().map(|v| v.index() as usize).max().unwrap() + 1;
-
-    // Per-layer adjacency + live key, array-indexed by VectorId::index().
-    let empty: &[VectorId] = &[];
-    let mut adj: Vec<Vec<&[VectorId]>> = vec![vec![empty; n]; num_layers];
-    let mut key: Vec<Vec<VectorId>> = vec![vec![ABSENT; n]; num_layers];
-    let mut nodes0: Vec<u32> = Vec::with_capacity(l0.links.len());
-    for (l, layer) in graph.layers.iter().enumerate() {
-        for (vid, nbs) in layer.links.iter() {
-            let i = vid.index() as usize;
-            adj[l][i] = nbs.as_slice();
-            key[l][i] = *vid;
-            if l == 0 {
-                nodes0.push(i as u32);
-            }
-        }
-    }
-
-    let mut dist: Vec<u32> = vec![u32::MAX; n];
-    let mut reached: Vec<u32> = Vec::new();
-    let mut queue: Vec<Vec<u32>> = Vec::new(); // Dial bucket queue, indexed by distance
-
-    // Mirror the search's source selection: the first valid recorded entry point,
-    // else (LinearScan with no entry points) the temporary entry point — the
-    // min-VectorId node on the top non-empty layer.
-    let source: Option<(VectorId, usize)> = graph
-        .entry_points
-        .iter()
-        .map(|ep| (ep.point, ep.layer))
-        .find(|(point, layer)| {
-            let i = point.index() as usize;
-            i < n && key[(*layer).min(num_layers - 1)][i] == *point
-        })
-        .or_else(|| graph.get_temporary_entry_point());
-    if let Some((point, layer)) = source {
-        let top = layer.min(num_layers - 1);
-        let start = point.index() as usize;
-        if start < n && key[top][start] == point {
-            dist[start] = 0;
-            reached.push(start as u32);
-
-            // Descend highest layer → 0. Distances carry down (free descent), so
-            // each layer's relaxation is seeded by every node reached so far.
-            for layer in (0..=top).rev() {
-                let adj_l = &adj[layer];
-                let key_l = &key[layer];
-                let mut max_d = 0u32;
-                for &u in &reached {
-                    let d = dist[u as usize];
-                    while queue.len() <= d as usize {
-                        queue.push(Vec::new());
-                    }
-                    queue[d as usize].push(u);
-                    max_d = max_d.max(d);
-                }
-                let mut d = 0u32;
-                while d <= max_d {
-                    let mut i = 0;
-                    while i < queue[d as usize].len() {
-                        let u = queue[d as usize][i] as usize;
-                        i += 1;
-                        if dist[u] != d {
-                            continue; // stale bucket-queue entry
-                        }
-                        let nd = d + 1;
-                        for nb in adj_l[u] {
-                            let v = nb.index() as usize;
-                            // Version-strict: only follow edges into the live node.
-                            if v >= n || key_l[v] != *nb {
-                                continue;
-                            }
-                            if nd < dist[v] {
-                                let first_seen = dist[v] == u32::MAX;
-                                dist[v] = nd;
-                                while queue.len() <= nd as usize {
-                                    queue.push(Vec::new());
-                                }
-                                queue[nd as usize].push(v as u32);
-                                max_d = max_d.max(nd);
-                                if first_seen {
-                                    reached.push(v as u32);
-                                }
-                            }
-                        }
-                    }
-                    d += 1;
-                }
-                for b in queue.iter_mut() {
-                    b.clear();
-                }
-            }
-        }
-    }
+    let (adj, key, n) = build_layer_arrays(graph);
+    let dist = match pick_source(graph, &key, n) {
+        Some(src) => layered_bfs(&adj, &key, n, src),
+        None => vec![u32::MAX; n],
+    };
 
     // Aggregate per bucket: hops over reachable nodes, plus reachable/unreachable split.
-    let num_buckets = (n as u32 / DEGREE_BUCKET_SIZE) as usize + 1;
+    let num_buckets = (n as u32 / bucket_size) as usize + 1;
     let mut hop_counts: Vec<Vec<u64>> = vec![Vec::new(); num_buckets]; // [bucket][hop]
     let mut node_count: Vec<u64> = vec![0; num_buckets];
     let mut unreachable: Vec<u64> = vec![0; num_buckets];
-    for &u in &nodes0 {
-        let ui = u as usize;
-        let bucket = ((ui as u32 + 1) / DEGREE_BUCKET_SIZE) as usize;
+    for ui in 0..n {
+        if key[0][ui] == ABSENT {
+            continue;
+        }
+        let bucket = ((ui as u32 + 1) / bucket_size) as usize;
         node_count[bucket] += 1;
         let d = dist[ui];
         if d == u32::MAX {
@@ -471,8 +591,8 @@ fn compute_hop_buckets(eye: &str, graph: &GraphMem, out: &mut Vec<HopBucketEntry
         out.push(HopBucketEntry {
             eye: eye.to_string(),
             bucket: b as u32,
-            serial_start: b as u32 * DEGREE_BUCKET_SIZE,
-            serial_end: (b as u32 + 1) * DEGREE_BUCKET_SIZE - 1,
+            serial_start: b as u32 * bucket_size,
+            serial_end: (b as u32 + 1) * bucket_size - 1,
             node_count: node_count[b],
             reachable_nodes: reachable,
             unreachable_nodes: unreachable[b],
@@ -504,82 +624,13 @@ fn count_sccs(graph: &GraphMem, layer_idx: usize) -> (u64, u64) {
     let empty: &[VectorId] = &[];
     let mut adj: Vec<&[VectorId]> = vec![empty; n];
     let mut key: Vec<VectorId> = vec![ABSENT; n];
-    let mut nodes: Vec<u32> = Vec::with_capacity(layer.links.len());
     for (vid, nbs) in layer.links.iter() {
         let i = vid.index() as usize;
         adj[i] = nbs.as_slice();
         key[i] = *vid;
-        nodes.push(i as u32);
     }
-
-    const UNVISITED: u32 = u32::MAX;
-    let mut idx: Vec<u32> = vec![UNVISITED; n];
-    let mut low: Vec<u32> = vec![0; n];
-    let mut on_stack: Vec<bool> = vec![false; n];
-    let mut comp_stack: Vec<u32> = Vec::new();
-    // Explicit DFS stack of (node, resume position in its neighbor list) so the
-    // recursion depth (up to N) lives on the heap, not the call stack.
-    let mut dfs: Vec<(u32, u32)> = Vec::new();
-    let mut next_index = 0u32;
-    let mut num_sccs = 0u64;
-    let mut largest = 0u64;
-
-    for &s in &nodes {
-        if idx[s as usize] != UNVISITED {
-            continue;
-        }
-        dfs.push((s, 0));
-        while let Some(&(node, edge_pos)) = dfs.last() {
-            let u = node as usize;
-            if edge_pos == 0 {
-                idx[u] = next_index;
-                low[u] = next_index;
-                next_index += 1;
-                comp_stack.push(node);
-                on_stack[u] = true;
-            }
-            let neighbors = adj[u];
-            let mut p = edge_pos as usize;
-            let mut recursed = false;
-            while p < neighbors.len() {
-                let nb = &neighbors[p];
-                p += 1;
-                let v = nb.index() as usize;
-                if v >= n || key[v] != *nb {
-                    continue; // out of range or stale-version: not an edge
-                }
-                if idx[v] == UNVISITED {
-                    dfs.last_mut().unwrap().1 = p as u32; // resume here after the child
-                    dfs.push((v as u32, 0));
-                    recursed = true;
-                    break;
-                } else if on_stack[v] {
-                    low[u] = low[u].min(idx[v]);
-                }
-            }
-            if recursed {
-                continue;
-            }
-            if low[u] == idx[u] {
-                num_sccs += 1;
-                let mut size = 0u64;
-                loop {
-                    let w = comp_stack.pop().unwrap();
-                    on_stack[w as usize] = false;
-                    size += 1;
-                    if w == node {
-                        break;
-                    }
-                }
-                largest = largest.max(size);
-            }
-            dfs.pop();
-            if let Some(&(parent, _)) = dfs.last() {
-                low[parent as usize] = low[parent as usize].min(low[u]);
-            }
-        }
-    }
-    (num_sccs, largest)
+    let (_, sizes) = scc_layer(&adj, &key, n);
+    (sizes.len() as u64, sizes.iter().copied().max().unwrap_or(0))
 }
 
 struct Stats(Vec<(String, String)>);
@@ -590,6 +641,285 @@ impl Stats {
     fn add(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.0.push((key.into(), value.into()));
     }
+}
+
+#[derive(Serialize, Clone)]
+struct ProbeNeighbor {
+    serial: u32,
+    version: i16,
+    reachable: bool,
+    hop: Option<u32>,
+}
+
+/// In-depth per-(eye, serial) reachability dossier for a probed node.
+#[derive(Serialize)]
+struct ProbeReport {
+    eye: String,
+    serial: u32,
+    exists_in_graph: bool,
+    in_irises_table: bool,
+    graph_version: Option<i16>,
+    layers_present: Vec<usize>,
+    reachable: bool,
+    hop: Option<u32>,
+    scc_id: Option<u32>,
+    scc_size: Option<u64>,
+    same_scc_as_entry: Option<bool>,
+    self_loop: bool,
+    in_degree_raw: u32,
+    in_degree_valid: u32,
+    stale_in_edges: u32,
+    out_degree: u32,
+    in_neighbors_valid: Vec<ProbeNeighbor>,
+    in_neighbors_raw: Vec<ProbeNeighbor>,
+    out_neighbors: Vec<ProbeNeighbor>,
+    pending_modifications: Vec<String>,
+    gpu_byte_match: Option<bool>,
+    verdict: String,
+}
+
+/// Build a per-(eye, serial) dossier explaining whether/why each probed serial is
+/// reachable by the search. Topology (reachability, SCC, neighbor lists) reuses the
+/// shared BFS/SCC/array helpers; version/modification/GPU-byte facts come from the DB.
+async fn run_probe_reports(
+    probes: &[u32],
+    graphs: &BothEyes<GraphMem>,
+    iris_ids: &HashSet<i64>,
+    hnsw_pool: &sqlx::PgPool,
+    gpu_pool: &sqlx::PgPool,
+) -> Result<Vec<ProbeReport>> {
+    // --- DB facts (serial-specific, eye-independent) ---
+    let probe_i64: Vec<i64> = probes.iter().map(|&s| s as i64).collect();
+    let mods: Vec<(i64, i64, String)> = sqlx::query_as(
+        "SELECT serial_id, id, request_type FROM modifications \
+         WHERE serial_id = ANY($1) ORDER BY id",
+    )
+    .bind(&probe_i64)
+    .fetch_all(gpu_pool)
+    .await
+    .unwrap_or_default();
+    let mut mods_by_serial: HashMap<u32, Vec<String>> = HashMap::new();
+    for (sid, id, rt) in mods {
+        mods_by_serial
+            .entry(sid as u32)
+            .or_default()
+            .push(format!("{rt}#{id}"));
+    }
+    let sql = "SELECT id, left_code, left_mask, right_code, right_mask \
+               FROM irises WHERE id = ANY($1)";
+    let hnsw_rows: Vec<IrisRow> = sqlx::query_as(sql)
+        .bind(&probe_i64)
+        .fetch_all(hnsw_pool)
+        .await
+        .unwrap_or_default();
+    let gpu_rows: Vec<IrisRow> = sqlx::query_as(sql)
+        .bind(&probe_i64)
+        .fetch_all(gpu_pool)
+        .await
+        .unwrap_or_default();
+    let to_map = |rows: Vec<IrisRow>| -> HashMap<i64, IrisData> {
+        rows.into_iter()
+            .map(|(id, lc, lm, rc, rm)| (id, (lc, lm, rc, rm)))
+            .collect()
+    };
+    let hnsw_map = to_map(hnsw_rows);
+    let gpu_map = to_map(gpu_rows);
+
+    // --- Per-eye topology ---
+    let probe_set: HashSet<u32> = probes.iter().copied().collect();
+    let mut out: Vec<ProbeReport> = Vec::new();
+    for (eye, idx) in [("left", LEFT), ("right", RIGHT)] {
+        let graph = &graphs[idx];
+        if graph.layers.first().is_none_or(|l| l.links.is_empty()) {
+            continue;
+        }
+        let (adj, key, n) = build_layer_arrays(graph);
+        let source = pick_source(graph, &key, n);
+        let dist = match source {
+            Some(src) => layered_bfs(&adj, &key, n, src),
+            None => vec![u32::MAX; n],
+        };
+        let (comp_of, sizes) = scc_layer(&adj[0], &key[0], n);
+        let entry_comp = source.map(|(p, _)| comp_of[p.index() as usize]);
+
+        // One edge sweep collects in-neighbors (raw + valid) for the probe set.
+        let mut in_raw: HashMap<u32, Vec<ProbeNeighbor>> = HashMap::new();
+        let mut in_valid: HashMap<u32, Vec<ProbeNeighbor>> = HashMap::new();
+        for (node, neighbors) in graph.layers[0].links.iter() {
+            let si = node.index() as usize;
+            let reachable = dist[si] != u32::MAX;
+            for nb in neighbors {
+                let target = nb.serial_id();
+                if !probe_set.contains(&target) {
+                    continue;
+                }
+                let ti = nb.index() as usize;
+                let valid = ti < n && key[0][ti] == *nb; // edge targets the live probe identity
+                let pn = ProbeNeighbor {
+                    serial: node.serial_id(),
+                    version: node.version_id(),
+                    reachable,
+                    hop: reachable.then(|| dist[si]),
+                };
+                if valid {
+                    in_valid.entry(target).or_default().push(pn.clone());
+                }
+                in_raw.entry(target).or_default().push(pn);
+            }
+        }
+
+        for &serial in probes {
+            let pidx = if serial >= 1 {
+                (serial - 1) as usize
+            } else {
+                usize::MAX
+            };
+            let exists = pidx < n && key[0][pidx] != ABSENT;
+            let live_vid = exists.then(|| key[0][pidx]);
+            let layers_present: Vec<usize> = (0..graph.layers.len())
+                .filter(|&l| {
+                    pidx < n && key[l][pidx].serial_id() == serial && key[l][pidx] != ABSENT
+                })
+                .collect();
+            let reachable = exists && dist[pidx] != u32::MAX;
+            let hop = reachable.then(|| dist[pidx]);
+            let scc_id = exists.then(|| comp_of[pidx]);
+            let scc_size = scc_id.map(|c| sizes[c as usize]);
+            let same_scc_as_entry = match (scc_id, entry_comp) {
+                (Some(a), Some(b)) => Some(a == b),
+                _ => None,
+            };
+            let out_slice: &[VectorId] = if exists { adj[0][pidx] } else { &[] };
+            let self_loop = live_vid.is_some_and(|lv| out_slice.contains(&lv));
+            let out_neighbors: Vec<ProbeNeighbor> = out_slice
+                .iter()
+                .map(|nb| {
+                    let i = nb.index() as usize;
+                    let r = i < n && dist[i] != u32::MAX;
+                    ProbeNeighbor {
+                        serial: nb.serial_id(),
+                        version: nb.version_id(),
+                        reachable: r,
+                        hop: r.then(|| dist[i]),
+                    }
+                })
+                .collect();
+            let in_neighbors_raw = in_raw.remove(&serial).unwrap_or_default();
+            let in_neighbors_valid = in_valid.remove(&serial).unwrap_or_default();
+            let in_degree_raw = in_neighbors_raw.len() as u32;
+            let in_degree_valid = in_neighbors_valid.len() as u32;
+            let valid_non_self = in_neighbors_valid
+                .iter()
+                .filter(|nbn| nbn.serial != serial)
+                .count();
+
+            let verdict = if !exists {
+                "ABSENT (not a layer-0 node)".to_string()
+            } else if reachable {
+                format!("REACHABLE@hop {}", hop.unwrap())
+            } else if in_degree_raw == 0 {
+                "ORPHAN (never linked: zero in-edges)".to_string()
+            } else if valid_non_self == 0 && self_loop {
+                "ORPHAN (self-loop only)".to_string()
+            } else if in_degree_valid == 0 {
+                "ORPHAN (severed: in-links reference stale versions)".to_string()
+            } else {
+                "CUT-OFF (valid in-neighbors all unreachable)".to_string()
+            };
+
+            let byte = hnsw_map.get(&(serial as i64));
+            let gpu = gpu_map.get(&(serial as i64));
+            out.push(ProbeReport {
+                eye: eye.to_string(),
+                serial,
+                exists_in_graph: exists,
+                in_irises_table: iris_ids.contains(&(serial as i64)),
+                graph_version: live_vid.map(|v| v.version_id()),
+                layers_present,
+                reachable,
+                hop,
+                scc_id,
+                scc_size,
+                same_scc_as_entry,
+                self_loop,
+                in_degree_raw,
+                in_degree_valid,
+                stale_in_edges: in_degree_raw - in_degree_valid,
+                out_degree: out_neighbors.len() as u32,
+                in_neighbors_valid,
+                in_neighbors_raw,
+                out_neighbors,
+                pending_modifications: mods_by_serial.get(&serial).cloned().unwrap_or_default(),
+                gpu_byte_match: match (byte, gpu) {
+                    (Some(h), Some(g)) => Some(h == g),
+                    _ => None,
+                },
+                verdict,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// Render a probe neighbor list (capped) as `serial:version@hop` / `…/unreach`.
+fn fmt_nbrs(nbrs: &[ProbeNeighbor], cap: usize) -> String {
+    let shown: Vec<String> = nbrs
+        .iter()
+        .take(cap)
+        .map(|n| match n.hop {
+            Some(h) => format!("{}:{}@{}", n.serial, n.version, h),
+            None => format!("{}:{}/unreach", n.serial, n.version),
+        })
+        .collect();
+    let extra = if nbrs.len() > cap {
+        format!(" …(+{} more)", nbrs.len() - cap)
+    } else {
+        String::new()
+    };
+    format!("[{}]{}", shown.join(", "), extra)
+}
+
+/// Human-readable multi-line rendering of one probe dossier.
+fn format_probe(r: &ProbeReport) -> String {
+    let mut s = String::new();
+    let _ = writeln!(s, "[{}] serial {}", r.eye, r.serial);
+    let _ = writeln!(s, "  VERDICT: {}", r.verdict);
+    let _ = writeln!(
+        s,
+        "  exists={} in_irises={} version={:?} layers={:?}",
+        r.exists_in_graph, r.in_irises_table, r.graph_version, r.layers_present
+    );
+    let _ = writeln!(
+        s,
+        "  reachable={} hop={:?} scc=#{:?} scc_size={:?} same_scc_as_entry={:?} self_loop={}",
+        r.reachable, r.hop, r.scc_id, r.scc_size, r.same_scc_as_entry, r.self_loop
+    );
+    let _ = writeln!(
+        s,
+        "  in_degree raw={} valid={} stale={}  out_degree={}",
+        r.in_degree_raw, r.in_degree_valid, r.stale_in_edges, r.out_degree
+    );
+    let _ = writeln!(
+        s,
+        "  gpu_byte_match={:?}  modifications={:?}",
+        r.gpu_byte_match, r.pending_modifications
+    );
+    let _ = writeln!(
+        s,
+        "  in_neighbors_valid: {}",
+        fmt_nbrs(&r.in_neighbors_valid, 25)
+    );
+    let _ = writeln!(
+        s,
+        "  in_neighbors_raw:   {}",
+        fmt_nbrs(&r.in_neighbors_raw, 25)
+    );
+    let _ = writeln!(
+        s,
+        "  out_neighbors:      {}",
+        fmt_nbrs(&r.out_neighbors, 25)
+    );
+    s
 }
 
 #[tokio::main]
@@ -629,6 +959,7 @@ async fn main() -> Result<()> {
     let mut stats = Stats::new();
     let mut degree_hist: Vec<DegreeHistEntry> = Vec::new();
     let mut degree_buckets: Vec<DegreeBucketEntry> = Vec::new();
+    let mut matrix_entries: Vec<MatrixEntry> = Vec::new();
     let mut hop_buckets: Vec<HopBucketEntry> = Vec::new();
 
     let raw_exclusions: Option<Vec<u32>> = match &args.exclusions_s3_uri {
@@ -768,7 +1099,9 @@ async fn main() -> Result<()> {
         &mut checks,
         &mut degree_hist,
         &mut degree_buckets,
+        &mut matrix_entries,
         &mut hop_buckets,
+        args.bucket_size,
         args.bfs_hops,
         args.scc,
         &mut stats,
@@ -802,6 +1135,38 @@ async fn main() -> Result<()> {
     )
     .await?;
 
+    // --- Probe reports (in-depth per-serial reachability dossier) ---
+    if !args.probe_serials.is_empty() {
+        if let Some(graphs) = s3_graphs.as_ref() {
+            rpt!(
+                rpt,
+                "\n--- Probe reports for serials {:?} ---",
+                args.probe_serials
+            );
+            let reports = run_probe_reports(
+                &args.probe_serials,
+                graphs,
+                &iris_ids,
+                &hnsw_store.pool,
+                &gpu_pg.pool,
+            )
+            .await?;
+            let mut txt = String::new();
+            for r in &reports {
+                let block = format_probe(r);
+                rpt!(rpt, "{}", block.trim_end());
+                txt.push_str(&block);
+                txt.push('\n');
+            }
+            let p = args.output_dir.join("probe_report.txt");
+            fs::write(&p, &txt)?;
+            println!("Wrote {}", p.display());
+            let p = args.output_dir.join("probe_report.json");
+            fs::write(&p, serde_json::to_string_pretty(&reports)?)?;
+            println!("Wrote {}", p.display());
+        }
+    }
+
     // --- Report ---
     rpt!(rpt, "\n--- Checks ---");
     let pass_count = checks.iter().filter(|c| c.passed).count();
@@ -826,6 +1191,7 @@ async fn main() -> Result<()> {
         &stats,
         &degree_hist,
         &degree_buckets,
+        &matrix_entries,
         &hop_buckets,
     )?;
     let report_path = rpt.save(&args.output_dir)?;
@@ -872,7 +1238,9 @@ async fn run_graph_checks(
     checks: &mut Vec<CheckResult>,
     degree_hist: &mut Vec<DegreeHistEntry>,
     degree_buckets: &mut Vec<DegreeBucketEntry>,
+    matrix_entries: &mut Vec<MatrixEntry>,
     hop_buckets: &mut Vec<HopBucketEntry>,
+    bucket_size: u32,
     bfs_hops: bool,
     scc: bool,
     stats: &mut Stats,
@@ -893,9 +1261,11 @@ async fn run_graph_checks(
                 exclusions,
                 m,
                 layer_probability,
+                bucket_size,
                 checks,
                 degree_hist,
                 degree_buckets,
+                matrix_entries,
                 stats,
                 rpt,
             );
@@ -905,7 +1275,7 @@ async fn run_graph_checks(
                     rpt,
                     "  Computing {eye} BFS hop buckets from entry points..."
                 );
-                compute_hop_buckets(eye, &graphs[idx], hop_buckets);
+                compute_hop_buckets(eye, &graphs[idx], bucket_size, hop_buckets);
             }
             if scc {
                 for lc in 0..graphs[idx].layers.len() {
@@ -954,9 +1324,11 @@ fn check_single_graph(
     exclusions: &Option<HashSet<u32>>,
     m: usize,
     layer_probability: f64,
+    bucket_size: u32,
     checks: &mut Vec<CheckResult>,
     degree_hist: &mut Vec<DegreeHistEntry>,
     degree_buckets: &mut Vec<DegreeBucketEntry>,
+    matrix_entries: &mut Vec<MatrixEntry>,
     stats: &mut Stats,
     rpt: &mut Report,
 ) -> HashSet<u32> {
@@ -1027,23 +1399,42 @@ fn check_single_graph(
         for (node, neighbors) in layer.links.iter() {
             in_deg[node.index() as usize].0 = *node;
             out_by_bucket
-                .entry(node.serial_id() / DEGREE_BUCKET_SIZE)
+                .entry(node.serial_id() / bucket_size)
                 .or_default()
                 .push(neighbors.len());
         }
-        for neighbors in layer.links.values() {
+        // Single edge sweep: valid in-degree + the bucket->bucket edge matrix
+        // (valid = version-matched edge, raw = any edge), keyed (src, dst) bucket.
+        let mut matrix: HashMap<(u32, u32), (u64, u64)> = HashMap::new();
+        for (node, neighbors) in layer.links.iter() {
+            let src = node.serial_id() / bucket_size;
             for nb in neighbors {
+                let cell = matrix
+                    .entry((src, nb.serial_id() / bucket_size))
+                    .or_insert((0, 0));
+                cell.1 += 1;
                 let v = nb.index() as usize;
                 if v < in_deg.len() && in_deg[v].0 == *nb {
                     in_deg[v].1 += 1;
+                    cell.0 += 1;
                 }
             }
+        }
+        for (&(src_bucket, dst_bucket), &(valid_edges, raw_edges)) in &matrix {
+            matrix_entries.push(MatrixEntry {
+                eye: eye.to_string(),
+                layer: lc,
+                src_bucket,
+                dst_bucket,
+                valid_edges,
+                raw_edges,
+            });
         }
         let mut in_by_bucket: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
         for (key, deg) in &in_deg {
             if *key != ABSENT {
                 in_by_bucket
-                    .entry(key.serial_id() / DEGREE_BUCKET_SIZE)
+                    .entry(key.serial_id() / bucket_size)
                     .or_default()
                     .push(*deg as usize);
             }
@@ -1056,8 +1447,8 @@ fn check_single_graph(
                     layer: lc,
                     direction,
                     bucket,
-                    serial_start: bucket * DEGREE_BUCKET_SIZE,
-                    serial_end: (bucket + 1) * DEGREE_BUCKET_SIZE - 1,
+                    serial_start: bucket * bucket_size,
+                    serial_end: (bucket + 1) * bucket_size - 1,
                     node_count: degrees.len(),
                     min,
                     avg,
@@ -1752,6 +2143,7 @@ fn write_json_reports(
     stats: &Stats,
     hist: &[DegreeHistEntry],
     degree_buckets: &[DegreeBucketEntry],
+    matrix_entries: &[MatrixEntry],
     hop_buckets: &[HopBucketEntry],
 ) -> Result<Vec<PathBuf>> {
     fs::create_dir_all(dir)?;
@@ -1790,6 +2182,17 @@ fn write_json_reports(
     {
         let mut wtr = csv::Writer::from_path(&p)?;
         for entry in degree_buckets {
+            wtr.serialize(entry)?;
+        }
+        wtr.flush()?;
+    }
+    println!("Wrote {}", p.display());
+    files.push(p);
+
+    let p = dir.join("neighbor_serial_matrix.csv");
+    {
+        let mut wtr = csv::Writer::from_path(&p)?;
+        for entry in matrix_entries {
             wtr.serialize(entry)?;
         }
         wtr.flush()?;
