@@ -143,7 +143,7 @@ struct Args {
     scc: bool,
     /// Number of consecutive serial IDs per bucket for all per-bucket reports
     /// (degree, hops, neighbor-serial matrix). Required.
-    #[arg(long)]
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
     bucket_size: u32,
     /// Emit an in-depth per-serial reachability dossier (`probe_report.txt` /
     /// `.json`) for these serial IDs. Comma-separated. Enables the BFS + SCC
@@ -385,23 +385,31 @@ fn build_layer_arrays(graph: &GraphMem) -> LayerArrays<'_> {
     (adj, key, n)
 }
 
-/// The single search source: first valid recorded entry point, else the temporary
-/// entry point (LinearScan, no recorded entry points). Returns `(point, top_layer)`
-/// with the layer clamped to existing layers, only if it is a live node.
+/// The single search source: first live recorded entry point, else the live node
+/// at the temporary entry point's slot (LinearScan, no recorded entry points).
+/// Returns `(live_point, top_layer)` with the layer clamped to existing layers.
 fn pick_source(graph: &GraphMem, key: &[Vec<VectorId>], n: usize) -> Option<(VectorId, usize)> {
     let num_layers = graph.layers.len();
     let live = |point: &VectorId, layer: usize| {
         let i = point.index() as usize;
         i < n && key[layer.min(num_layers - 1)][i] == *point
     };
-    graph
+    if let Some((p, l)) = graph
         .entry_points
         .iter()
         .map(|ep| (ep.point, ep.layer))
         .find(|(p, l)| live(p, *l))
-        .or_else(|| graph.get_temporary_entry_point())
-        .filter(|(p, l)| live(p, *l))
-        .map(|(p, l)| (p, l.min(num_layers - 1)))
+    {
+        return Some((p, l.min(num_layers - 1)));
+    }
+    // LinearScan fallback. get_temporary_entry_point returns links.keys().min(),
+    // i.e. the *lowest* version of the min serial — which may be stale. Resolve to
+    // the live (max-version) node at that slot so we never start from / reject a
+    // stale source and silently mark everything unreachable.
+    let (tp, tl) = graph.get_temporary_entry_point()?;
+    let top = tl.min(num_layers - 1);
+    let i = tp.index() as usize;
+    (i < n && key[top][i] != ABSENT).then(|| (key[top][i], top))
 }
 
 /// Single-source layered BFS (top layer → 0) over version-strict edges, via a
@@ -758,10 +766,10 @@ async fn run_probe_reports(
         let mut in_valid: HashMap<u32, Vec<ProbeNeighbor>> = HashMap::new();
         for (node, neighbors) in graph.layers[0].links.iter() {
             let si = node.index() as usize;
-            let reachable = dist[si] != u32::MAX;
-            // A valid in-edge requires both endpoints live (max-version) — a stale
-            // source node's edges don't count, matching the search.
+            // A stale source node is never navigated; `dist[si]` tracks the LIVE node
+            // at that slot, so only report reachability/hop for live sources.
             let source_live = si < n && key[0][si] == *node;
+            let reachable = source_live && dist[si] != u32::MAX;
             for nb in neighbors {
                 let target = nb.serial_id();
                 if !probe_set.contains(&target) {
