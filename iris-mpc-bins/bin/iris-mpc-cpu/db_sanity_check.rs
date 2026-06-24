@@ -343,12 +343,29 @@ fn hist_stats(counts: &[u64]) -> (u32, f64, u32, u32, u64) {
 /// by `VectorId::index()`, plus the array length `n`.
 type LayerArrays<'a> = (Vec<Vec<&'a [VectorId]>>, Vec<Vec<VectorId>>, usize);
 
+/// Fill length-`n` adjacency + live-key arrays (indexed by `VectorId::index()`)
+/// from one layer's links. A serial may have several versions present; only the
+/// most recent (highest `version_id`) is live and carries valid edges, so each
+/// slot keeps the max-version node — the one the search actually navigates.
+fn fill_layer_arrays(
+    links: &HashMap<VectorId, Vec<VectorId>>,
+    n: usize,
+) -> (Vec<&[VectorId]>, Vec<VectorId>) {
+    let empty: &[VectorId] = &[];
+    let mut adj: Vec<&[VectorId]> = vec![empty; n];
+    let mut key: Vec<VectorId> = vec![ABSENT; n];
+    for (vid, nbs) in links.iter() {
+        let i = vid.index() as usize;
+        if i < n && (key[i] == ABSENT || vid.version_id() > key[i].version_id()) {
+            adj[i] = nbs.as_slice();
+            key[i] = *vid;
+        }
+    }
+    (adj, key)
+}
+
 /// Per-layer adjacency (slices into the graph) and live-key arrays, indexed by
 /// `VectorId::index()`. Sized to layer 0's max index + 1 (layer 0 holds all nodes).
-///
-/// A serial may have several versions present in the graph; only the most recent
-/// (highest `version_id`) is live and carries valid edges. So each index slot holds
-/// the **max-version** node for that serial — the one the search actually navigates.
 /// Caller must ensure layer 0 is non-empty. Returns (adj, key, n).
 fn build_layer_arrays(graph: &GraphMem) -> LayerArrays<'_> {
     let num_layers = graph.layers.len();
@@ -358,17 +375,12 @@ fn build_layer_arrays(graph: &GraphMem) -> LayerArrays<'_> {
         .map(|v| v.index() as usize)
         .max()
         .map_or(0, |m| m + 1);
-    let empty: &[VectorId] = &[];
-    let mut adj: Vec<Vec<&[VectorId]>> = vec![vec![empty; n]; num_layers];
-    let mut key: Vec<Vec<VectorId>> = vec![vec![ABSENT; n]; num_layers];
-    for (l, layer) in graph.layers.iter().enumerate() {
-        for (vid, nbs) in layer.links.iter() {
-            let i = vid.index() as usize;
-            if key[l][i] == ABSENT || vid.version_id() > key[l][i].version_id() {
-                adj[l][i] = nbs.as_slice();
-                key[l][i] = *vid;
-            }
-        }
+    let mut adj: Vec<Vec<&[VectorId]>> = Vec::with_capacity(num_layers);
+    let mut key: Vec<Vec<VectorId>> = Vec::with_capacity(num_layers);
+    for layer in &graph.layers {
+        let (a, k) = fill_layer_arrays(&layer.links, n);
+        adj.push(a);
+        key.push(k);
     }
     (adj, key, n)
 }
@@ -627,17 +639,7 @@ fn count_sccs(graph: &GraphMem, layer_idx: usize) -> (u64, u64) {
         .max()
         .unwrap()
         + 1;
-    let empty: &[VectorId] = &[];
-    let mut adj: Vec<&[VectorId]> = vec![empty; n];
-    let mut key: Vec<VectorId> = vec![ABSENT; n];
-    for (vid, nbs) in layer.links.iter() {
-        let i = vid.index() as usize;
-        // Max-version-wins: only the live node per serial carries valid edges.
-        if key[i] == ABSENT || vid.version_id() > key[i].version_id() {
-            adj[i] = nbs.as_slice();
-            key[i] = *vid;
-        }
-    }
+    let (adj, key) = fill_layer_arrays(&layer.links, n);
     let (_, sizes) = scc_layer(&adj, &key, n);
     (sizes.len() as u64, sizes.iter().copied().max().unwrap_or(0))
 }
