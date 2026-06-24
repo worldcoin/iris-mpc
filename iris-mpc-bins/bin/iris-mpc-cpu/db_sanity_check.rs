@@ -132,9 +132,8 @@ struct Args {
     /// when S3 mode is enabled (see `SMPC__GRAPH_CHECKPOINT_BUCKET_NAME` env).
     #[arg(long)]
     checkpoint_s3_key: Option<String>,
-    /// Run single-source BFS from each entry point over the layer-0 graph and
-    /// emit per-bucket hop / unreachability stats (`hops_by_bucket.csv`).
-    /// Off by default — this is an O(entry_points * edges) pass.
+    /// Single-source layered BFS from the search entry point; emits per-bucket
+    /// hop / reachability stats (`hops_by_bucket.csv`). Off by default; O(edges).
     #[arg(long, default_value_t = false)]
     bfs_hops: bool,
     /// Count strongly-connected components per layer (Tarjan). Off by default —
@@ -403,9 +402,8 @@ fn pick_source(graph: &GraphMem, key: &[Vec<VectorId>], n: usize) -> Option<(Vec
         return Some((p, l.min(num_layers - 1)));
     }
     // LinearScan fallback. get_temporary_entry_point returns links.keys().min(),
-    // i.e. the *lowest* version of the min serial — which may be stale. Resolve to
-    // the live (max-version) node at that slot so we never start from / reject a
-    // stale source and silently mark everything unreachable.
+    // i.e. the lowest version of the min serial, which may be stale; resolve to the
+    // live (max-version) node at that slot.
     let (tp, tl) = graph.get_temporary_entry_point()?;
     let top = tl.min(num_layers - 1);
     let i = tp.index() as usize;
@@ -549,25 +547,16 @@ fn scc_layer(adj_l: &[&[VectorId]], key_l: &[VectorId], n: usize) -> (Vec<u32>, 
     (comp_of, sizes)
 }
 
-/// Single-source BFS from one entry point, descending the layers highest → 0,
-/// accumulating per-1M-serial-bucket hop and reachability stats.
+/// Single-source layered BFS hop/reachability stats, bucketed by serial ID.
 ///
-/// The real search linear-scans all entry points (all at the top layer) for the
-/// one nearest the query and descends from it; with ~N/M^2 top-layer nodes and
-/// M ≥ that, the top layer is near-complete, so any single entry point reaches
-/// the whole top layer within ~1 hop. We therefore use a single entry point (the
-/// first live one) — running all ~N/M^2 of them as sources would be O(E) each.
+/// Uses one entry point: the top layer (~N/M^2 nodes, M ≥ that) is near-complete,
+/// so a single source reaches all of it within ~1 hop — equivalent to seeding from
+/// the whole entry-point set the search picks from.
 ///
-/// The descent order matters: upper-layer edges are long-range, so a node's hop
-/// count is the shortest *layered* path — traverse a layer's own edges, then
-/// descend (free) to the next layer at any reached node. Because nodes enter a
-/// layer carrying the distance accumulated above, the per-layer relaxation is a
-/// shortest-path with non-uniform sources; we run it with a bucket queue (Dial's
-/// algorithm), exact for unit edge weights.
-///
-/// All per-node state is array-indexed by `VectorId::index()` (no hash/btree maps
-/// over N). Reachability is version-strict — a stale-version edge does not reach
-/// the live node, matching the in-degree definition.
+/// Hop count is the shortest *layered* path: traverse a layer's edges, then descend
+/// (free) at any reached node. Since nodes enter a layer carrying the distance from
+/// above, each layer's relaxation is a non-uniform-source shortest path, run with a
+/// bucket queue (Dial's algorithm). Reachability is version-strict.
 fn compute_hop_buckets(
     eye: &str,
     graph: &GraphMem,
@@ -1403,11 +1392,9 @@ fn check_single_graph(
             );
         }
 
-        // -- Per-1M-serial-id-bucket out- and in-degree summaries --
-        // A serial may have several versions present; only the live (max-version)
-        // node carries valid edges. `live[index]` holds that node + its valid
-        // in-degree count. A valid edge requires BOTH endpoints live: we skip
-        // stale source nodes and only credit edges into the live target identity.
+        // Per-bucket out/in-degree. `live[index]` holds the max-version node per
+        // serial plus its valid in-degree count; a valid edge requires both
+        // endpoints live, so stale source nodes are skipped.
         let in_size = layer
             .links
             .keys()
