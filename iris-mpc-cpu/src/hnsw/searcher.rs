@@ -160,6 +160,22 @@ impl HnswParams {
         }
     }
 
+    /// Fully replace the per-layer search `ef` (both live search and
+    /// search-during-construction) from a slice indexed from layer 0 upward.
+    /// This overrides every layer, including layer 0, ignoring the scalar
+    /// `ef_search` set at construction. Layers beyond the slice reuse its last
+    /// value; entries past `N_PARAM_LAYERS` are ignored (mirrors `get_val`'s
+    /// clamping). An empty slice leaves the parameters unchanged.
+    pub fn override_ef_search_layers(&mut self, ef_layers: &[usize]) {
+        if let Some(&last) = ef_layers.last() {
+            for lc in 0..N_PARAM_LAYERS {
+                let ef = ef_layers.get(lc).copied().unwrap_or(last);
+                self.ef_search[lc] = ef;
+                self.ef_constr_search[lc] = ef;
+            }
+        }
+    }
+
     pub fn get_M(&self, lc: usize) -> usize {
         Self::get_val(&self.M, lc)
     }
@@ -268,9 +284,10 @@ pub struct HnswSearcher {
     /// Statistical distribution for layer selection
     pub layer_distribution: LayerDistribution,
 
-    /// If set, fixes the batch size used in `layer_search_batched_v2` instead
-    /// of using the adaptive insertion-rate estimator.
-    pub fixed_layer_search_batch_size: Option<usize>,
+    /// If set, a lower bound on the per-iteration target batch size in
+    /// `layer_search_batched_v2`. The adaptive insertion-rate estimator still
+    /// drives sizing once its estimate exceeds this floor.
+    pub min_layer_search_batch_size: Option<usize>,
 }
 
 /// A list of graph mutations representing state updates for insertion of new nodes
@@ -310,7 +327,7 @@ impl HnswSearcher {
             params: HnswParams::new(ef_constr, ef_search, M),
             max_graph_layer,
             layer_distribution: LayerDistribution::new_geometric_from_M(M),
-            fixed_layer_search_batch_size: None,
+            min_layer_search_batch_size: None,
         }
     }
 
@@ -470,7 +487,7 @@ impl HnswSearcher {
         W: &mut SortedNeighborhood<V>,
         ef: usize,
         lc: usize,
-        fixed_batch_size: Option<usize>,
+        min_batch_size: Option<usize>,
     ) -> Result<()> {
         match ef {
             0 => {
@@ -485,7 +502,7 @@ impl HnswSearcher {
                 Self::layer_search_std(store, graph, q, W, ef, lc).await?;
             }
             _ => {
-                Self::layer_search_batched_v2(store, graph, q, W, ef, lc, fixed_batch_size).await?;
+                Self::layer_search_batched_v2(store, graph, q, W, ef, lc, min_batch_size).await?;
             }
         }
         Ok(())
@@ -943,7 +960,7 @@ impl HnswSearcher {
         W: &mut SortedNeighborhood<V>,
         ef: usize,
         lc: usize,
-        fixed_batch_size: Option<usize>,
+        min_batch_size: Option<usize>,
     ) -> Result<()> {
         // These spans accumulate running time of multiple atomic operations
         let eval_dist_span = trace_span!(target: "searcher::cpu_time", "eval_distance_batch_aggr");
@@ -1047,8 +1064,10 @@ impl HnswSearcher {
 
             // Estimate the number of neighbors to visit which will result in approximately
             // the desired number of new elements to be inserted into the candidate neighborhood.
-            let target_batch_size =
-                fixed_batch_size.unwrap_or(insertion_batch_size * ins_rate_denom / INS_RATE_NUM);
+            // `min_batch_size`, when set, floors the target so each iteration opens at least
+            // that many neighbors; the adaptive estimate takes over once it exceeds the floor.
+            let target_batch_size = (insertion_batch_size * ins_rate_denom / INS_RATE_NUM)
+                .max(min_batch_size.unwrap_or(0));
 
             // Open several candidate nodes, visit unvisited neighbors, and compute distances
             // between the query and neighbors as a batch. Opens nodes until at least
@@ -1354,7 +1373,7 @@ impl HnswSearcher {
                 &mut W,
                 ef,
                 lc,
-                self.fixed_layer_search_batch_size,
+                self.min_layer_search_batch_size,
             )
             .await?;
             metrics::histogram!("search_layer_duration", "layer" => lc.to_string())
@@ -1444,7 +1463,7 @@ impl HnswSearcher {
                 &mut W,
                 ef,
                 lc,
-                self.fixed_layer_search_batch_size,
+                self.min_layer_search_batch_size,
             )
             .await?;
             metrics::histogram!("search_to_insert_layer_duration", "layer" => lc.to_string())

@@ -1,7 +1,7 @@
 use iris_mpc_cpu::{hnsw::graph::layered_graph::GraphMem, utils::serialization::graph};
 use pyo3::{exceptions::PyIOError, prelude::*};
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Default)]
 pub struct PyGraphStore(pub GraphMem);
 

@@ -346,7 +346,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let request_parallelism = config.request_parallelism;
     let connection_parallelism = config.connection_parallelism;
-    let fixed_layer_search_batch_size = config.searcher.fixed_layer_search_batch_size;
+    let min_layer_search_batch_size = config.searcher.min_layer_search_batch_size;
 
     for (i, (iris_stores, graphs)) in izip!(party_iris_stores, party_graphs).enumerate() {
         let addresses = addresses.clone();
@@ -376,8 +376,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 "--disable-persistence".to_string(),
             ];
 
-            if let Some(batch_size) = fixed_layer_search_batch_size {
-                cli_args.push("--hnsw-fixed-layer-search-batch-size".to_string());
+            if let Some(batch_size) = min_layer_search_batch_size {
+                cli_args.push("--hnsw-min-layer-search-batch-size".to_string());
                 cli_args.push(batch_size.to_string());
             }
 

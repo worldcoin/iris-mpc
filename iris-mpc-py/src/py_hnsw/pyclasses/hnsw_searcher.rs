@@ -8,7 +8,7 @@ use iris_mpc_cpu::{
 };
 use pyo3::{exceptions::PyIOError, prelude::*};
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone)]
 pub struct PyHnswSearcher(pub HnswSearcher);
 
@@ -49,7 +49,7 @@ impl PyHnswSearcher {
             params,
             max_graph_layer: LINEAR_SCAN_MAX_GRAPH_LAYER,
             layer_distribution,
-            fixed_layer_search_batch_size: None,
+            min_layer_search_batch_size: None,
         })
     }
 
@@ -79,7 +79,7 @@ impl PyHnswSearcher {
             params,
             max_graph_layer: LINEAR_SCAN_MAX_GRAPH_LAYER,
             layer_distribution,
-            fixed_layer_search_batch_size: None,
+            min_layer_search_batch_size: None,
         })
     }
 

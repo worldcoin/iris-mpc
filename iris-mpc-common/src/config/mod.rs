@@ -223,6 +223,16 @@ pub struct Config {
     #[serde(default = "default_hnsw_param_ef_search")]
     pub hnsw_param_ef_search: usize,
 
+    /// Optional per-layer search `ef` override, indexed from layer 0 upward.
+    /// When set, fully replaces `hnsw_param_ef_search` (every layer, including
+    /// layer 0) and the default greedy (ef=1) upper-layer traversal, for both
+    /// live search and search-during-construction. Values beyond the last entry
+    /// reuse the last value (e.g. `[256, 8]` → layer 0 = 256, layers 1+ = 8;
+    /// use `[256, 1]` to keep upper layers greedy). Must agree across all
+    /// parties (part of the common-config hash).
+    #[serde(default, deserialize_with = "deserialize_opt_usize_vec")]
+    pub hnsw_param_ef_search_layers_override: Option<Vec<usize>>,
+
     #[serde(default = "default_hnsw_param_ef_supermatch")]
     pub hnsw_param_ef_supermatch: usize,
 
@@ -232,10 +242,12 @@ pub struct Config {
     #[serde(default)]
     pub hnsw_layer_density: Option<usize>,
 
-    /// If set, fixes the batch size used in `layer_search_batched_v2` instead
-    /// of using the adaptive insertion-rate estimator.
+    /// If set, a lower bound on the per-iteration target batch size in
+    /// `layer_search_batched_v2`. The adaptive insertion-rate estimator still
+    /// drives sizing once its estimate exceeds this floor. Must agree across all
+    /// parties (part of the common-config hash).
     #[serde(default)]
-    pub hnsw_fixed_layer_search_batch_size: Option<usize>,
+    pub hnsw_min_layer_search_batch_size: Option<usize>,
 
     #[serde(default)]
     pub hawk_prf_key: Option<u64>,
@@ -643,6 +655,27 @@ where
     serde_json::from_str(&value).map_err(serde::de::Error::custom)
 }
 
+/// Env-provided values arrive as strings, so a JSON-encoded array (`"[320,32,1]"`)
+/// must be parsed explicitly; a native sequence (file configs) is taken as-is.
+fn deserialize_opt_usize_vec<'de, D>(deserializer: D) -> Result<Option<Vec<usize>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum StringOrVec {
+        String(String),
+        Vec(Vec<usize>),
+    }
+    match Option::<StringOrVec>::deserialize(deserializer)? {
+        None => Ok(None),
+        Some(StringOrVec::Vec(v)) => Ok(Some(v)),
+        Some(StringOrVec::String(s)) => serde_json::from_str(&s)
+            .map(Some)
+            .map_err(serde::de::Error::custom),
+    }
+}
+
 /// This struct is used to extract the common configuration for all servers from their respective configs.
 /// It is later used to to hash the config and check if it is the same across all servers as a basic sanity check during startup.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -680,9 +713,12 @@ pub struct CommonConfig {
     hnsw_param_ef_constr: usize,
     hnsw_param_m: usize,
     hnsw_param_ef_search: usize,
+    #[serde(default)]
+    hnsw_param_ef_search_layers_override: Option<Vec<usize>>,
     hnsw_param_ef_supermatch: usize,
     hnsw_param_ef_saturation_margin: usize,
     hnsw_layer_density: Option<usize>,
+    hnsw_min_layer_search_batch_size: Option<usize>,
     hawk_prf_key: Option<u64>,
     max_deletions_per_batch: usize,
     max_modifications_lookback: usize,
@@ -764,10 +800,11 @@ impl From<Config> for CommonConfig {
             hnsw_param_ef_constr,
             hnsw_param_m,
             hnsw_param_ef_search,
+            hnsw_param_ef_search_layers_override,
             hnsw_param_ef_supermatch,
             hnsw_param_ef_saturation_margin,
             hnsw_layer_density,
-            hnsw_fixed_layer_search_batch_size: _, // per-party tuning knob
+            hnsw_min_layer_search_batch_size,
             hawk_prf_key,
             hawk_numa: _, // could be different for each server
             max_deletions_per_batch,
@@ -837,9 +874,11 @@ impl From<Config> for CommonConfig {
             hnsw_param_ef_constr,
             hnsw_param_m,
             hnsw_param_ef_search,
+            hnsw_param_ef_search_layers_override,
             hnsw_param_ef_supermatch,
             hnsw_param_ef_saturation_margin,
             hnsw_layer_density,
+            hnsw_min_layer_search_batch_size,
             hawk_prf_key,
             max_deletions_per_batch,
             max_modifications_lookback,

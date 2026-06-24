@@ -710,6 +710,15 @@ impl Layer {
         }
     }
 
+    /// Empty layer with the link map pre-sized for `n` nodes, avoiding repeated
+    /// rehashing when bulk-loading a known-size layer.
+    pub fn with_capacity(n: usize) -> Self {
+        Layer {
+            links: HashMap::with_capacity(n),
+            set_hash: SetHash::default(),
+        }
+    }
+
     pub fn get_links(&self, from: &SerialId) -> Option<&Neighborhood> {
         self.links.get(from)
     }

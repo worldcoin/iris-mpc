@@ -282,11 +282,21 @@ fn read_pair<R: std::io::Read + ?Sized, G: for<'a> Deserialize<'a>>(
     Ok(data)
 }
 
+/// Convert a decoded wire-format pair into `GraphMem`s, running the two eyes'
+/// (independent) conversions concurrently. The preceding bincode decode is serial.
+fn convert_pair_parallel<G>(pair: [G; 2]) -> [GraphMem; 2]
+where
+    G: Into<GraphMem> + Send,
+{
+    let [left, right] = pair;
+    let (left, right) = rayon::join(|| left.into(), || right.into());
+    [left, right]
+}
+
 /// Designated method for reading a pair of `GraphMem` structs. Currently goes
 /// through the `GraphV5` serialization type.
 pub fn read_graph_pair_current<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<[GraphMem; 2]> {
-    let data = read_pair::<_, GraphV5>(reader)?.map(|graph| graph.into());
-    Ok(data)
+    Ok(convert_pair_parallel(read_pair::<_, GraphV5>(reader)?))
 }
 
 /// Designated method for writing a pair of `GraphMem` structs. Currently goes
@@ -327,18 +337,9 @@ pub fn read_graph_pair<R: std::io::Read + ?Sized>(
 ) -> Result<[GraphMem; 2]> {
     match format {
         GraphFormat::Current => read_graph_pair_current(reader),
-        GraphFormat::V5 => {
-            let graphs = read_pair::<_, GraphV5>(reader)?;
-            Ok(graphs.map(|graph| graph.into()))
-        }
-        GraphFormat::V4 => {
-            let graphs = read_pair::<_, GraphV4>(reader)?;
-            Ok(graphs.map(|graph| graph.into()))
-        }
-        GraphFormat::V3 => {
-            let graphs = read_pair::<_, GraphV3>(reader)?;
-            Ok(graphs.map(|graph| graph.into()))
-        }
+        GraphFormat::V5 => Ok(convert_pair_parallel(read_pair::<_, GraphV5>(reader)?)),
+        GraphFormat::V4 => Ok(convert_pair_parallel(read_pair::<_, GraphV4>(reader)?)),
+        GraphFormat::V3 => Ok(convert_pair_parallel(read_pair::<_, GraphV3>(reader)?)),
         GraphFormat::V2 => {
             let graphs = read_pair::<_, GraphV2>(reader)?;
             Ok(graphs.map(|graph| graph.into()))
@@ -576,7 +577,10 @@ impl From<graph_v3::EntryPoint> for layered_graph::EntryPoint {
 
 impl From<graph_v3::Layer> for Layer {
     fn from(value: graph_v3::Layer) -> Self {
-        let mut layer = Layer::new();
+        // Recompute set_hash via set_links rather than trusting the stored
+        // value: older checkpoints carry a set_hash from a prior fold algorithm.
+        // Pre-size the map so the bulk insert doesn't rehash.
+        let mut layer = Layer::with_capacity(value.links.len());
         for (v, nb) in value.links.into_iter() {
             layer.set_links(v.id, nb.0.into_iter().map(|x| x.id).collect(), 0);
         }
@@ -622,7 +626,8 @@ impl From<graph_v4::EntryPoint> for layered_graph::EntryPoint {
 
 impl From<graph_v4::Layer> for Layer {
     fn from(value: graph_v4::Layer) -> Self {
-        let mut layer = Layer::new();
+        // See `From<graph_v3::Layer>`: recompute set_hash, pre-sized map.
+        let mut layer = Layer::with_capacity(value.links.len());
         for (v, nb) in value.links.into_iter() {
             layer.set_links(v.id, nb.0.into_iter().map(|x| x.id).collect(), 0);
         }
@@ -1034,6 +1039,72 @@ mod tests {
         assert_eq!(
             g, g2,
             "GraphV5/Current round-trip produced a different graph"
+        );
+    }
+
+    /// Per-layer checksum and links survive a write→read round trip: the
+    /// recomputed `set_hash` matches the source graph's.
+    #[test]
+    fn read_graph_pair_preserves_set_hash() {
+        let g = sample_graph();
+        let mut buf = Vec::new();
+        write_graph_pair_current(&mut buf, [g.clone(), g.clone()]).unwrap();
+
+        for fmt in [GraphFormat::Current, GraphFormat::V5] {
+            let pair = read_graph_pair(&mut Cursor::new(&buf), fmt).unwrap();
+            for restored in pair {
+                assert_eq!(restored.layers.len(), g.layers.len());
+                for (orig, got) in g.layers.iter().zip(restored.layers.iter()) {
+                    assert_eq!(
+                        orig.checksum(),
+                        got.checksum(),
+                        "set_hash drifted on read ({fmt:?})"
+                    );
+                    assert_eq!(
+                        orig.get_links_map(),
+                        got.get_links_map(),
+                        "links drifted on read ({fmt:?})"
+                    );
+                }
+            }
+        }
+    }
+
+    /// `From<graph_v3::Layer>` recomputes `set_hash` from links and ignores the
+    /// stored value (prod checkpoints carry an older-algorithm `set_hash`). Feed
+    /// a deliberately wrong stored value and assert it's ignored.
+    #[test]
+    fn from_graph_v3_layer_recomputes_ignoring_stored_set_hash() {
+        use crate::utils::serialization::types::graph_v3;
+        let wire = |id: u32| graph_v3::VectorId { id, version: 0 };
+        // Ordered slice (not HashMap iteration) per the iter_over_hash_type lint.
+        let entries: [(u32, Vec<u32>); 3] = [(7, vec![8, 9]), (3, vec![4]), (5, vec![])];
+        let mut links: std::collections::HashMap<graph_v3::VectorId, graph_v3::EdgeIds> =
+            std::collections::HashMap::new();
+        let mut reference = Layer::new();
+        for (n, nbs) in &entries {
+            let wnbs: Vec<graph_v3::VectorId> = nbs.iter().map(|&x| wire(x)).collect();
+            reference.set_links(wire(*n).id, wnbs.iter().map(|x| x.id).collect(), 0);
+            links.insert(wire(*n), graph_v3::EdgeIds(wnbs));
+        }
+        let recomputed = reference.checksum();
+
+        let got: Layer = graph_v3::Layer {
+            links,
+            // Deliberately wrong stored value; the conversion must ignore it.
+            set_hash: recomputed.wrapping_add(0xDEAD_BEEF),
+        }
+        .into();
+
+        assert_eq!(
+            got.checksum(),
+            recomputed,
+            "V3 conversion must recompute set_hash, not trust the stored value"
+        );
+        assert_eq!(
+            got.get_links_map(),
+            reference.get_links_map(),
+            "V3 conversion must preserve links"
         );
     }
 }

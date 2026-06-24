@@ -2,7 +2,7 @@ use iris_mpc_common::iris_db::iris::IrisCodeArray;
 use pyo3::prelude::*;
 use rand::rngs::ThreadRng;
 
-#[pyclass]
+#[pyclass(from_py_object)]
 #[derive(Clone, Default)]
 pub struct PyIrisCodeArray(pub IrisCodeArray);
 

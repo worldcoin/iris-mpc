@@ -240,6 +240,14 @@ pub struct HawkArgs {
     #[clap(long, default_value_t = 256)]
     pub hnsw_param_ef_search: usize,
 
+    /// Optional per-layer search `ef` override, indexed from layer 0 upward.
+    /// When set, fully replaces `hnsw_param_ef_search` (every layer, including
+    /// layer 0) and the default greedy (ef=1) upper-layer traversal, for both
+    /// live search and search-during-construction. Values beyond the last entry
+    /// reuse the last value.
+    #[clap(long, value_delimiter = ',')]
+    pub hnsw_param_ef_search_layers_override: Option<Vec<usize>>,
+
     #[clap(long, default_value_t = 4000)]
     pub hnsw_param_ef_supermatch: usize,
 
@@ -250,7 +258,7 @@ pub struct HawkArgs {
     pub hnsw_layer_density: Option<usize>,
 
     #[clap(long)]
-    pub hnsw_fixed_layer_search_batch_size: Option<usize>,
+    pub hnsw_min_layer_search_batch_size: Option<usize>,
 
     #[clap(long)]
     pub hnsw_prf_key: Option<u64>,
@@ -494,7 +502,11 @@ impl HawkActor {
                 // default geometric distribution uses layer_density value of `M`
             }
 
-            searcher_.fixed_layer_search_batch_size = args.hnsw_fixed_layer_search_batch_size;
+            if let Some(ef_layers) = &args.hnsw_param_ef_search_layers_override {
+                searcher_.params.override_ef_search_layers(ef_layers);
+            }
+
+            searcher_.min_layer_search_batch_size = args.hnsw_min_layer_search_batch_size;
 
             Arc::new(searcher_)
         };
@@ -2188,10 +2200,11 @@ mod tests {
             hnsw_param_ef_constr: 320,
             hnsw_param_m: 256,
             hnsw_param_ef_search: 256,
+            hnsw_param_ef_search_layers_override: None,
             hnsw_param_ef_supermatch: 4000,
             hnsw_param_ef_saturation_margin: 0,
             hnsw_layer_density: None,
-            hnsw_fixed_layer_search_batch_size: None,
+            hnsw_min_layer_search_batch_size: None,
             hnsw_prf_key: None,
             numa: false,
             disable_persistence: true,
