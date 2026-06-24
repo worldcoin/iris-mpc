@@ -370,66 +370,74 @@ fn compute_hop_buckets(eye: &str, graph: &GraphMem, out: &mut Vec<HopBucketEntry
     let mut reached: Vec<u32> = Vec::new();
     let mut queue: Vec<Vec<u32>> = Vec::new(); // Dial bucket queue, indexed by distance
 
-    // Use the first live entry point as the single search source.
-    let source = graph.entry_points.iter().find(|ep| {
-        let i = ep.point.index() as usize;
-        let top = ep.layer.min(num_layers - 1);
-        i < n && key[top][i] == ep.point
-    });
-    if let Some(ep) = source {
-        let top = ep.layer.min(num_layers - 1);
-        let start = ep.point.index() as usize;
-        dist[start] = 0;
-        reached.push(start as u32);
+    // Mirror the search's source selection: the first valid recorded entry point,
+    // else (LinearScan with no entry points) the temporary entry point — the
+    // min-VectorId node on the top non-empty layer.
+    let source: Option<(VectorId, usize)> = graph
+        .entry_points
+        .iter()
+        .map(|ep| (ep.point, ep.layer))
+        .find(|(point, layer)| {
+            let i = point.index() as usize;
+            i < n && key[(*layer).min(num_layers - 1)][i] == *point
+        })
+        .or_else(|| graph.get_temporary_entry_point());
+    if let Some((point, layer)) = source {
+        let top = layer.min(num_layers - 1);
+        let start = point.index() as usize;
+        if start < n && key[top][start] == point {
+            dist[start] = 0;
+            reached.push(start as u32);
 
-        // Descend highest layer → 0. Distances carry down (free descent), so each
-        // layer's relaxation is seeded by every node reached so far.
-        for layer in (0..=top).rev() {
-            let adj_l = &adj[layer];
-            let key_l = &key[layer];
-            let mut max_d = 0u32;
-            for &u in &reached {
-                let d = dist[u as usize];
-                while queue.len() <= d as usize {
-                    queue.push(Vec::new());
-                }
-                queue[d as usize].push(u);
-                max_d = max_d.max(d);
-            }
-            let mut d = 0u32;
-            while d <= max_d {
-                let mut i = 0;
-                while i < queue[d as usize].len() {
-                    let u = queue[d as usize][i] as usize;
-                    i += 1;
-                    if dist[u] != d {
-                        continue; // stale bucket-queue entry
+            // Descend highest layer → 0. Distances carry down (free descent), so
+            // each layer's relaxation is seeded by every node reached so far.
+            for layer in (0..=top).rev() {
+                let adj_l = &adj[layer];
+                let key_l = &key[layer];
+                let mut max_d = 0u32;
+                for &u in &reached {
+                    let d = dist[u as usize];
+                    while queue.len() <= d as usize {
+                        queue.push(Vec::new());
                     }
-                    let nd = d + 1;
-                    for nb in adj_l[u] {
-                        let v = nb.index() as usize;
-                        // Version-strict: only follow edges into the live node.
-                        if v >= n || key_l[v] != *nb {
-                            continue;
+                    queue[d as usize].push(u);
+                    max_d = max_d.max(d);
+                }
+                let mut d = 0u32;
+                while d <= max_d {
+                    let mut i = 0;
+                    while i < queue[d as usize].len() {
+                        let u = queue[d as usize][i] as usize;
+                        i += 1;
+                        if dist[u] != d {
+                            continue; // stale bucket-queue entry
                         }
-                        if nd < dist[v] {
-                            let first_seen = dist[v] == u32::MAX;
-                            dist[v] = nd;
-                            while queue.len() <= nd as usize {
-                                queue.push(Vec::new());
+                        let nd = d + 1;
+                        for nb in adj_l[u] {
+                            let v = nb.index() as usize;
+                            // Version-strict: only follow edges into the live node.
+                            if v >= n || key_l[v] != *nb {
+                                continue;
                             }
-                            queue[nd as usize].push(v as u32);
-                            max_d = max_d.max(nd);
-                            if first_seen {
-                                reached.push(v as u32);
+                            if nd < dist[v] {
+                                let first_seen = dist[v] == u32::MAX;
+                                dist[v] = nd;
+                                while queue.len() <= nd as usize {
+                                    queue.push(Vec::new());
+                                }
+                                queue[nd as usize].push(v as u32);
+                                max_d = max_d.max(nd);
+                                if first_seen {
+                                    reached.push(v as u32);
+                                }
                             }
                         }
                     }
+                    d += 1;
                 }
-                d += 1;
-            }
-            for b in queue.iter_mut() {
-                b.clear();
+                for b in queue.iter_mut() {
+                    b.clear();
+                }
             }
         }
     }
