@@ -345,6 +345,10 @@ type LayerArrays<'a> = (Vec<Vec<&'a [VectorId]>>, Vec<Vec<VectorId>>, usize);
 
 /// Per-layer adjacency (slices into the graph) and live-key arrays, indexed by
 /// `VectorId::index()`. Sized to layer 0's max index + 1 (layer 0 holds all nodes).
+///
+/// A serial may have several versions present in the graph; only the most recent
+/// (highest `version_id`) is live and carries valid edges. So each index slot holds
+/// the **max-version** node for that serial — the one the search actually navigates.
 /// Caller must ensure layer 0 is non-empty. Returns (adj, key, n).
 fn build_layer_arrays(graph: &GraphMem) -> LayerArrays<'_> {
     let num_layers = graph.layers.len();
@@ -360,8 +364,10 @@ fn build_layer_arrays(graph: &GraphMem) -> LayerArrays<'_> {
     for (l, layer) in graph.layers.iter().enumerate() {
         for (vid, nbs) in layer.links.iter() {
             let i = vid.index() as usize;
-            adj[l][i] = nbs.as_slice();
-            key[l][i] = *vid;
+            if key[l][i] == ABSENT || vid.version_id() > key[l][i].version_id() {
+                adj[l][i] = nbs.as_slice();
+                key[l][i] = *vid;
+            }
         }
     }
     (adj, key, n)
@@ -626,8 +632,11 @@ fn count_sccs(graph: &GraphMem, layer_idx: usize) -> (u64, u64) {
     let mut key: Vec<VectorId> = vec![ABSENT; n];
     for (vid, nbs) in layer.links.iter() {
         let i = vid.index() as usize;
-        adj[i] = nbs.as_slice();
-        key[i] = *vid;
+        // Max-version-wins: only the live node per serial carries valid edges.
+        if key[i] == ABSENT || vid.version_id() > key[i].version_id() {
+            adj[i] = nbs.as_slice();
+            key[i] = *vid;
+        }
     }
     let (_, sizes) = scc_layer(&adj, &key, n);
     (sizes.len() as u64, sizes.iter().copied().max().unwrap_or(0))
@@ -748,13 +757,16 @@ async fn run_probe_reports(
         for (node, neighbors) in graph.layers[0].links.iter() {
             let si = node.index() as usize;
             let reachable = dist[si] != u32::MAX;
+            // A valid in-edge requires both endpoints live (max-version) — a stale
+            // source node's edges don't count, matching the search.
+            let source_live = si < n && key[0][si] == *node;
             for nb in neighbors {
                 let target = nb.serial_id();
                 if !probe_set.contains(&target) {
                     continue;
                 }
                 let ti = nb.index() as usize;
-                let valid = ti < n && key[0][ti] == *nb; // edge targets the live probe identity
+                let valid = source_live && ti < n && key[0][ti] == *nb;
                 let pn = ProbeNeighbor {
                     serial: node.serial_id(),
                     version: node.version_id(),
@@ -1382,40 +1394,41 @@ fn check_single_graph(
         }
 
         // -- Per-1M-serial-id-bucket out- and in-degree summaries --
-        // In-degree is array-indexed by VectorId::index() with the live VectorId
-        // (serial + version) packed alongside the count, so an in-edge counts only
-        // when it lands on the live node identity; stale-version references
-        // (flagged by 1d) contribute zero — yielding a valid-in-degree per bucket.
-        // Packing key+count in one entry keeps the per-edge probe to a single
-        // random memory access over ~M*N edges.
-        let mut out_by_bucket: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+        // A serial may have several versions present; only the live (max-version)
+        // node carries valid edges. `live[index]` holds that node + its valid
+        // in-degree count. A valid edge requires BOTH endpoints live: we skip
+        // stale source nodes and only credit edges into the live target identity.
         let in_size = layer
             .links
             .keys()
             .map(|v| v.index() as usize)
             .max()
             .map_or(0, |m| m + 1);
-        let mut in_deg: Vec<(VectorId, u32)> = vec![(ABSENT, 0); in_size];
-        for (node, neighbors) in layer.links.iter() {
-            in_deg[node.index() as usize].0 = *node;
-            out_by_bucket
-                .entry(node.serial_id() / bucket_size)
-                .or_default()
-                .push(neighbors.len());
+        let mut live: Vec<(VectorId, u32)> = vec![(ABSENT, 0); in_size];
+        for node in layer.links.keys() {
+            let i = node.index() as usize;
+            if live[i].0 == ABSENT || node.version_id() > live[i].0.version_id() {
+                live[i].0 = *node;
+            }
         }
-        // Single edge sweep: valid in-degree + the bucket->bucket edge matrix
-        // (valid = version-matched edge, raw = any edge), keyed (src, dst) bucket.
+        // Single edge sweep over live source nodes: out-degree, valid in-degree,
+        // and the bucket->bucket edge matrix (valid = live→live, raw = live→any).
+        let mut out_by_bucket: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
         let mut matrix: HashMap<(u32, u32), (u64, u64)> = HashMap::new();
         for (node, neighbors) in layer.links.iter() {
+            if live[node.index() as usize].0 != *node {
+                continue; // stale source node: not part of the live graph
+            }
             let src = node.serial_id() / bucket_size;
+            out_by_bucket.entry(src).or_default().push(neighbors.len());
             for nb in neighbors {
                 let cell = matrix
                     .entry((src, nb.serial_id() / bucket_size))
                     .or_insert((0, 0));
                 cell.1 += 1;
                 let v = nb.index() as usize;
-                if v < in_deg.len() && in_deg[v].0 == *nb {
-                    in_deg[v].1 += 1;
+                if v < live.len() && live[v].0 == *nb {
+                    live[v].1 += 1;
                     cell.0 += 1;
                 }
             }
@@ -1431,7 +1444,7 @@ fn check_single_graph(
             });
         }
         let mut in_by_bucket: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
-        for (key, deg) in &in_deg {
+        for (key, deg) in &live {
             if *key != ABSENT {
                 in_by_bucket
                     .entry(key.serial_id() / bucket_size)
