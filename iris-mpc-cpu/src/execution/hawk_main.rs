@@ -1998,20 +1998,18 @@ impl HawkHandle {
                 side
             );
 
-            let unique_insertions_count = decisions
+            let n_unique = decisions
                 .iter()
                 .filter(|decision| matches!(decision, UniqueInsert))
                 .count();
 
-            let unique_insertions_persistence_skipped_count = decisions
+            let n_unique_skipped = decisions
                 .iter()
                 .filter(|decision| matches!(decision, UniqueInsertSkipped))
                 .count();
 
             tracing::info!(
-                "Unique insertions: {}, persistence skipped: {}",
-                unique_insertions_count,
-                unique_insertions_persistence_skipped_count,
+                "Unique insertions: {n_unique}, persistence skipped: {n_unique_skipped}"
             );
 
             // Collect the HNSW insertion plans for all mutating decisions.
