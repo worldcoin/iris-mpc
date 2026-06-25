@@ -1,7 +1,7 @@
-image: "ghcr.io/worldcoin/iris-mpc-cpu:v0.32.3@sha256:TO_BE_PROVIDED"
+image: "ghcr.io/worldcoin/iris-mpc-cpu:v0.32.4@sha256:1ad6908f0a49e16ed082afabf19cfef0d2d301766517b6f09ff3dac7f727cedc"
 
 environment: prod
-replicaCount: 0
+replicaCount: 1
 
 # Common environment variables shared across all hnsw nodes.
 # Defined as a map (keyed by variable name) so Helm deep-merges these with the
