@@ -178,6 +178,11 @@ impl ConsensusTransport for MockTransport {
         }
         Ok(projected)
     }
+
+    // No-op: peer replies come from the canned queue, which barrier doesn't touch.
+    async fn barrier(&self) -> Result<(), CycleError> {
+        Ok(())
+    }
 }
 
 // ── mock Materializer ────────────────────────────────────────────────────

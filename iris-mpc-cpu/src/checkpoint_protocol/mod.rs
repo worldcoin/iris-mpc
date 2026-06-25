@@ -211,6 +211,10 @@ pub trait ConsensusTransport {
         cycle_nonce: u128,
         timeout: Duration,
     ) -> Result<Vec<T>, CycleError>;
+
+    /// Ring rendezvous: blocks (no per-round timeout) until all three parties
+    /// arrive. Absorbs cross-party arrival skew that a timed `exchange` can't.
+    async fn barrier(&self) -> Result<(), CycleError>;
 }
 
 #[async_trait]
@@ -363,6 +367,11 @@ where
 
     // Phase 4 — hash the materialized graph.
     let local_hash = hasher.hash_canonical(&graph);
+
+    // Align after the variable-time materialize so the timed hash exchange below
+    // isn't tripped by a party still materializing.
+    transport.barrier().await?;
+
     tracing::info!(
         local_hash = %hex::encode(local_hash),
         "checkpoint cycle: phase 5 — exchanging graph hashes"
@@ -390,6 +399,10 @@ where
             )));
         }
     }
+
+    // Commit barrier: don't run the terminal action until all parties agree, so
+    // none finalizes while a peer is still in the exchange.
+    transport.barrier().await?;
 
     tracing::info!(
         height = freeze.0,
