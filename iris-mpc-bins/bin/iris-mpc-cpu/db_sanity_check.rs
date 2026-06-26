@@ -605,7 +605,8 @@ fn check_single_graph(
             });
         }
         if !layer.links.is_empty() {
-            let mut degrees: Vec<usize> = layer.links.values().map(|n| n.neighbors().len()).collect();
+            let mut degrees: Vec<usize> =
+                layer.links.values().map(|n| n.neighbors().len()).collect();
             degrees.sort();
             let (min, max) = (degrees[0], degrees[degrees.len() - 1]);
             let avg = degrees.iter().sum::<usize>() as f64 / degrees.len() as f64;
