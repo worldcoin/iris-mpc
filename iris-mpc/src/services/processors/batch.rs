@@ -269,19 +269,15 @@ impl<'a> BatchProcessor<'a> {
                     // we have already set this for this batch, so it might have gone out to other parties, so we need to update our own state to match what we already sent out
                     own_state.messages_to_poll = shared_state.messages_to_poll;
                 }
-                if shared_state.messages_to_poll == 0 {
-                    tracing::debug!(
-                        "Updated shared batch sync state: batch_id={}, messages_to_poll={}",
-                        shared_state.batch_id,
-                        shared_state.messages_to_poll,
-                    );
-                } else {
-                    tracing::info!(
-                        "Updated shared batch sync state: batch_id={}, messages_to_poll={}",
-                        shared_state.batch_id,
-                        shared_state.messages_to_poll,
-                    );
-                }
+
+                let log_msg = format!(
+                    "Updated shared batch sync state: batch_id={}, messages_to_poll={}",
+                    shared_state.batch_id, shared_state.messages_to_poll,
+                );
+                match shared_state.messages_to_poll {
+                    0 => tracing::debug!(log_msg),
+                    _ => tracing::info!(log_msg),
+                };
             }
 
             let server_coord_config = self.config.server_coordination.as_ref().ok_or(
@@ -301,21 +297,14 @@ impl<'a> BatchProcessor<'a> {
             let batch_sync_result = BatchSyncResult::new(own_state, all_states);
             let messages_to_poll = batch_sync_result.messages_to_poll();
 
-            if messages_to_poll == 0 {
-                tracing::debug!(
-                    "Batch ID: {}. Agreed to poll {} messages (max_batch_size: {}).",
-                    current_batch_id,
-                    messages_to_poll,
-                    self.config.max_batch_size
-                );
-            } else {
-                tracing::info!(
-                    "Batch ID: {}. Agreed to poll {} messages (max_batch_size: {}).",
-                    current_batch_id,
-                    messages_to_poll,
-                    self.config.max_batch_size
-                );
-            }
+            let log_msg = format!(
+                "Batch ID: {}. Agreed to poll {} messages (max_batch_size: {}).",
+                current_batch_id, messages_to_poll, self.config.max_batch_size
+            );
+            match messages_to_poll {
+                0 => tracing::debug!(log_msg),
+                _ => tracing::info!(log_msg),
+            };
 
             // Poll the determined number of messages
             if messages_to_poll > 0 {
