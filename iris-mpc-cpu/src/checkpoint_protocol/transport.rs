@@ -98,6 +98,16 @@ impl ConsensusTransport for RingConsensusTransport {
 
         Ok(vec![parse(next_bytes)?, parse(prev_bytes)?])
     }
+
+    async fn barrier(&self) -> Result<(), CycleError> {
+        // `sync` is a no-timeout ring rendezvous; map its failures to transient.
+        self.channel
+            .lock()
+            .await
+            .sync()
+            .await
+            .map_err(|e| CycleError::Transient(format!("ring barrier (sync): {e}")))
+    }
 }
 
 /// Map a `ControlChannel` recv result to a payload byte vector. A non-Bytes
@@ -167,6 +177,12 @@ pub(crate) mod test_ring {
                 .ok_or_else(|| eyre::eyre!("recv_prev: channel closed"))
         }
         async fn sync(&mut self) -> Result<()> {
+            // Mirror the real ring barrier: send a token both ways, recv from each.
+            let token = NetworkValue::Bytes(vec![0x5e]);
+            self.send_next(token.clone()).await?;
+            self.send_prev(token).await?;
+            self.recv_next().await?;
+            self.recv_prev().await?;
             Ok(())
         }
     }
@@ -454,5 +470,30 @@ mod tests {
             any_transient,
             "expected at least one transient; got r0={r0:?}, r1={r1:?}"
         );
+    }
+
+    /// `barrier` blocks (no per-round timeout) until all three parties arrive,
+    /// then all complete — this is what absorbs cross-party arrival skew.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn ring_barrier_blocks_until_all_arrive() {
+        let [p0, p1, p2] = triangle(8);
+        let t0 = xport(p0);
+        let t1 = xport(p1);
+        let t2 = xport(p2);
+
+        // Two parties present: the barrier must not complete.
+        let h0 = tokio::spawn(async move { t0.barrier().await });
+        let h1 = tokio::spawn(async move { t1.barrier().await });
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        assert!(
+            !h0.is_finished() && !h1.is_finished(),
+            "barrier completed without the third party"
+        );
+
+        // Third party arrives → all three rendezvous and return Ok.
+        let h2 = tokio::spawn(async move { t2.barrier().await });
+        h0.await.expect("p0 join").expect("p0 barrier");
+        h1.await.expect("p1 join").expect("p1 barrier");
+        h2.await.expect("p2 join").expect("p2 barrier");
     }
 }
