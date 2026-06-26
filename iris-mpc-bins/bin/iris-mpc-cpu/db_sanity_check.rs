@@ -247,7 +247,7 @@ struct DegreeHistEntry {
 const ABSENT: VectorId = VectorId::from_serial_id(0);
 
 /// Per-(eye, layer, serial-id bucket) degree summary, emitted for both in- and
-/// out-degree. `bucket` is the serial-id range index (serial_id / bucket_size).
+/// out-degree. `bucket` is the 0-based serial-id range index ((serial_id - 1) / bucket_size).
 #[derive(Serialize)]
 struct DegreeBucketEntry {
     eye: String,
@@ -576,7 +576,7 @@ fn compute_hop_buckets(
     };
 
     // Aggregate per bucket: hops over reachable nodes, plus reachable/unreachable split.
-    let num_buckets = (n as u32 / bucket_size) as usize + 1;
+    let num_buckets = n.div_ceil(bucket_size as usize);
     let mut hop_counts: Vec<Vec<u64>> = vec![Vec::new(); num_buckets]; // [bucket][hop]
     let mut node_count: Vec<u64> = vec![0; num_buckets];
     let mut unreachable: Vec<u64> = vec![0; num_buckets];
@@ -584,7 +584,7 @@ fn compute_hop_buckets(
         if key[0][ui] == ABSENT {
             continue;
         }
-        let bucket = ((ui as u32 + 1) / bucket_size) as usize;
+        let bucket = ui / bucket_size as usize;
         node_count[bucket] += 1;
         let d = dist[ui];
         if d == u32::MAX {
@@ -606,8 +606,8 @@ fn compute_hop_buckets(
         out.push(HopBucketEntry {
             eye: eye.to_string(),
             bucket: b as u32,
-            serial_start: b as u32 * bucket_size,
-            serial_end: (b as u32 + 1) * bucket_size - 1,
+            serial_start: b as u32 * bucket_size + 1,
+            serial_end: (b as u32 + 1) * bucket_size,
             node_count: node_count[b],
             reachable_nodes: reachable,
             unreachable_nodes: unreachable[b],
@@ -1416,11 +1416,11 @@ fn check_single_graph(
             if live[node.index() as usize].0 != *node {
                 continue; // stale source node: not part of the live graph
             }
-            let src = node.serial_id() / bucket_size;
+            let src = node.index() / bucket_size;
             out_by_bucket.entry(src).or_default().push(neighbors.len());
             for nb in neighbors {
                 let cell = matrix
-                    .entry((src, nb.serial_id() / bucket_size))
+                    .entry((src, nb.index() / bucket_size))
                     .or_insert((0, 0));
                 cell.1 += 1;
                 let v = nb.index() as usize;
@@ -1444,7 +1444,7 @@ fn check_single_graph(
         for (key, deg) in &live {
             if *key != ABSENT {
                 in_by_bucket
-                    .entry(key.serial_id() / bucket_size)
+                    .entry(key.index() / bucket_size)
                     .or_default()
                     .push(*deg as usize);
             }
@@ -1457,8 +1457,8 @@ fn check_single_graph(
                     layer: lc,
                     direction,
                     bucket,
-                    serial_start: bucket * bucket_size,
-                    serial_end: (bucket + 1) * bucket_size - 1,
+                    serial_start: bucket * bucket_size + 1,
+                    serial_end: (bucket + 1) * bucket_size,
                     node_count: degrees.len(),
                     min,
                     avg,
