@@ -515,7 +515,7 @@ WHERE id = $1;
         .fetch_one(&self.pool)
         .await?;
 
-        tracing::info!(
+        tracing::debug!(
             "Inserted {} modification: id={:?}, serial_id={:?}, request_type={}",
             MOD_STATUS_IN_PROGRESS,
             inserted.id,

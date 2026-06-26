@@ -200,10 +200,11 @@ async fn load_iris_db_internal(
                     None => break,
                 },
             };
+
             time_waiting_for_stream += load_summary_ts.elapsed();
             load_summary_ts = Instant::now();
-            let serial_id = iris.serial_id();
 
+            let serial_id = iris.serial_id();
             if serial_id == 0 {
                 tracing::error!("Invalid iris serial_id {}", serial_id);
                 bail!("Invalid iris serial_id {}", serial_id);
@@ -215,7 +216,7 @@ async fn load_iris_db_internal(
                 );
                 continue;
             } else if !all_serial_ids.contains(&(serial_id as i64)) {
-                tracing::warn!("Skip loading s3 retried item: serial_id {}", serial_id);
+                tracing::debug!("Skip loading s3 retried item: serial_id {}", serial_id);
                 continue;
             }
 
@@ -233,7 +234,13 @@ async fn load_iris_db_internal(
             );
             actor.increment_db_size(serial_id - 1);
 
-            if record_counter % 100_000 == 0 {
+            time_loading_into_memory += load_summary_ts.elapsed();
+            load_summary_ts = Instant::now();
+
+            all_serial_ids.remove(&(serial_id as i64));
+            record_counter += 1;
+
+            if record_counter % 500_000 == 0 {
                 let elapsed = now.elapsed();
                 tracing::info!(
                     "Loaded {} records into memory in {:?} ({:.2} entries/s)",
@@ -242,12 +249,6 @@ async fn load_iris_db_internal(
                     record_counter as f64 / elapsed.as_secs_f64()
                 );
             }
-
-            time_loading_into_memory += load_summary_ts.elapsed();
-            load_summary_ts = Instant::now();
-
-            all_serial_ids.remove(&(serial_id as i64));
-            record_counter += 1;
         }
 
         // Reached only by breaking on a closed channel. If the task's result wasn't
