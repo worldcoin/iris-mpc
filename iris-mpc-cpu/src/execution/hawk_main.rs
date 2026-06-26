@@ -1990,16 +1990,6 @@ impl HawkHandle {
             search_results,
             identity_updates.search_results
         ) {
-            let unique_insertions_persistence_skipped = decisions
-                .iter()
-                .map(|decision| matches!(decision, UniqueInsertSkipped))
-                .collect_vec();
-
-            let unique_insertions = decisions
-                .iter()
-                .map(|decision| matches!(decision, UniqueInsert))
-                .collect_vec();
-
             // The accepted insertions for uniqueness, reauth, and identity updates.
             // Focus on the insertions and keep only the centered irises.
             tracing::info!(
@@ -2008,10 +1998,18 @@ impl HawkHandle {
                 side
             );
 
+            let n_unique = decisions
+                .iter()
+                .filter(|decision| matches!(decision, UniqueInsert))
+                .count();
+
+            let n_unique_skipped = decisions
+                .iter()
+                .filter(|decision| matches!(decision, UniqueInsertSkipped))
+                .count();
+
             tracing::info!(
-                "Unique insertions: {}, persistence skipped: {}",
-                unique_insertions.len(),
-                unique_insertions_persistence_skipped.len()
+                "Unique insertions: {n_unique}, persistence skipped: {n_unique_skipped}"
             );
 
             // Collect the HNSW insertion plans for all mutating decisions.
