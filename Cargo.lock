@@ -78,7 +78,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 [[package]]
 name = "ampc-actor-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=2dc1f945f609d718c5e35eace83d9a1f57e4ee11#2dc1f945f609d718c5e35eace83d9a1f57e4ee11"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=34170ed878ea13ab59170b2d1741407e5c8c53eb#34170ed878ea13ab59170b2d1741407e5c8c53eb"
 dependencies = [
  "aes-prng",
  "ampc-secret-sharing",
@@ -111,7 +111,7 @@ dependencies = [
 [[package]]
 name = "ampc-anon-stats"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=2dc1f945f609d718c5e35eace83d9a1f57e4ee11#2dc1f945f609d718c5e35eace83d9a1f57e4ee11"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=34170ed878ea13ab59170b2d1741407e5c8c53eb#34170ed878ea13ab59170b2d1741407e5c8c53eb"
 dependencies = [
  "ampc-actor-utils",
  "ampc-secret-sharing",
@@ -137,7 +137,7 @@ dependencies = [
 [[package]]
 name = "ampc-secret-sharing"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=2dc1f945f609d718c5e35eace83d9a1f57e4ee11#2dc1f945f609d718c5e35eace83d9a1f57e4ee11"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=34170ed878ea13ab59170b2d1741407e5c8c53eb#34170ed878ea13ab59170b2d1741407e5c8c53eb"
 dependencies = [
  "aes-prng",
  "base64",
@@ -153,7 +153,7 @@ dependencies = [
 [[package]]
 name = "ampc-server-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=2dc1f945f609d718c5e35eace83d9a1f57e4ee11#2dc1f945f609d718c5e35eace83d9a1f57e4ee11"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=34170ed878ea13ab59170b2d1741407e5c8c53eb#34170ed878ea13ab59170b2d1741407e5c8c53eb"
 dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sqs",
@@ -4611,7 +4611,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
  "heck",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "log",
  "multimap",
  "once_cell",
@@ -4644,7 +4644,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn",
