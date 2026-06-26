@@ -269,11 +269,19 @@ impl<'a> BatchProcessor<'a> {
                     // we have already set this for this batch, so it might have gone out to other parties, so we need to update our own state to match what we already sent out
                     own_state.messages_to_poll = shared_state.messages_to_poll;
                 }
-                tracing::info!(
-                    "Updated shared batch sync state: batch_id={}, messages_to_poll={}",
-                    shared_state.batch_id,
-                    shared_state.messages_to_poll,
-                );
+                if shared_state.messages_to_poll == 0 {
+                    tracing::debug!(
+                        "Updated shared batch sync state: batch_id={}, messages_to_poll={}",
+                        shared_state.batch_id,
+                        shared_state.messages_to_poll,
+                    );
+                } else {
+                    tracing::info!(
+                        "Updated shared batch sync state: batch_id={}, messages_to_poll={}",
+                        shared_state.batch_id,
+                        shared_state.messages_to_poll,
+                    );
+                }
             }
 
             let server_coord_config = self.config.server_coordination.as_ref().ok_or(
@@ -293,19 +301,28 @@ impl<'a> BatchProcessor<'a> {
             let batch_sync_result = BatchSyncResult::new(own_state, all_states);
             let messages_to_poll = batch_sync_result.messages_to_poll();
 
-            tracing::info!(
-                "Batch ID: {}. Agreed to poll {} messages (max_batch_size: {}).",
-                current_batch_id,
-                messages_to_poll,
-                self.config.max_batch_size
-            );
+            if messages_to_poll == 0 {
+                tracing::debug!(
+                    "Batch ID: {}. Agreed to poll {} messages (max_batch_size: {}).",
+                    current_batch_id,
+                    messages_to_poll,
+                    self.config.max_batch_size
+                );
+            } else {
+                tracing::info!(
+                    "Batch ID: {}. Agreed to poll {} messages (max_batch_size: {}).",
+                    current_batch_id,
+                    messages_to_poll,
+                    self.config.max_batch_size
+                );
+            }
 
             // Poll the determined number of messages
             if messages_to_poll > 0 {
                 self.poll_exact_messages(messages_to_poll).await?;
                 break;
             } else {
-                tracing::info!(
+                tracing::debug!(
                     "Batch ID: {}. No messages to poll based on sync state. Will re-check after a short delay.",
                     current_batch_id
                 );
@@ -337,6 +354,39 @@ impl<'a> BatchProcessor<'a> {
                 .zip(self.batch_query.request_types.iter())
                 .collect::<Vec<_>>()
         );
+
+        if !self.batch_query.skip_persistence.is_empty() {
+            let skip_ids: Vec<&String> = self
+                .batch_query
+                .request_ids
+                .iter()
+                .zip(self.batch_query.skip_persistence.iter())
+                .filter_map(|(id, skip)| skip.then_some(id))
+                .collect();
+            tracing::info!(
+                "Batch ID: {}. skip_persistence enabled for {}/{} requests: {:?}",
+                batch_id,
+                skip_ids.len(),
+                self.batch_query.skip_persistence.len(),
+                skip_ids,
+            );
+        }
+
+        if !self.config.disable_persistence && !self.batch_query.modifications.is_empty() {
+            let mut mods: Vec<String> = self
+                .batch_query
+                .modifications
+                .values()
+                .map(|m| format!("{}#{} serial={:?}", m.request_type, m.id, m.serial_id))
+                .collect();
+            mods.sort();
+            tracing::info!(
+                "Batch ID: {}. Inserted {} IN_PROGRESS modifications: {:?}",
+                batch_id,
+                mods.len(),
+                mods,
+            );
+        }
 
         Ok(Some(self.batch_query.clone()))
     }
@@ -690,7 +740,7 @@ impl<'a> BatchProcessor<'a> {
             {
                 self.batch_query.full_face_mirror_attacks_detection_enabled = enable_mirror_attacks;
                 tracing::info!(
-                    "Setting mirror attack to {} for batch due to request from {}",
+                    "Setting full-face mirror-attack detection to {} for batch due to request from {}",
                     enable_mirror_attacks,
                     uniqueness_request.signup_id
                 );
@@ -709,14 +759,6 @@ impl<'a> BatchProcessor<'a> {
         );
 
         self.add_iris_shares_task(uniqueness_request.s3_key)?;
-
-        if let Some(skip_persistence) = uniqueness_request.skip_persistence {
-            tracing::info!(
-                "Setting skip_persistence to {} for request id {}",
-                skip_persistence,
-                uniqueness_request.signup_id
-            );
-        }
 
         Ok(())
     }
@@ -1306,10 +1348,6 @@ pub async fn get_own_batch_sync_state(
 ) -> Result<BatchSyncState> {
     let approximate_visible_messages =
         get_approximate_number_of_messages(&sqs_client.clone(), &config.requests_queue_url).await?;
-    tracing::info!(
-        "fetching approximate_visible_messages: {}",
-        approximate_visible_messages
-    );
 
     let index = (current_batch_id - 1) as usize;
 
@@ -1325,6 +1363,18 @@ pub async fn get_own_batch_sync_state(
         // Use the dynamic batch size calculation based on SQS approximate visible messages
         std::cmp::min(approximate_visible_messages, config.max_batch_size as u32)
     };
+
+    if messages_to_poll == 0 {
+        tracing::debug!(
+            "fetching approximate_visible_messages: {}",
+            approximate_visible_messages
+        );
+    } else {
+        tracing::info!(
+            "fetching approximate_visible_messages: {}",
+            approximate_visible_messages
+        );
+    }
 
     let batch_sync_state = BatchSyncState {
         messages_to_poll,

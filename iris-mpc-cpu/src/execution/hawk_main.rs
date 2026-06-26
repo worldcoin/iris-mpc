@@ -1525,7 +1525,7 @@ impl HawkResult {
             .map(|&d| matches!(d, ReauthUpdate(_)))
             .collect_vec();
 
-        tracing::info!(
+        tracing::debug!(
             "Reauths: {:?}, Unique insert: {:?}, Unique no-match (incl. skip): {:?}",
             successful_reauths,
             unique_insert,
@@ -1954,7 +1954,7 @@ impl HawkHandle {
             })
             .collect_vec();
 
-        tracing::info!("Updated decisions (reset + reauth): {:?}", update_ids);
+        tracing::debug!("Updated decisions (reset + reauth): {:?}", update_ids);
 
         // Get deleted vector IDs for RemoveNode mutations.
         let deleted_ids = request.deletion_ids(&*hawk_actor.registry[LEFT].read().await);
@@ -2008,7 +2008,7 @@ impl HawkHandle {
                 .filter(|decision| matches!(decision, UniqueInsertSkipped))
                 .count();
 
-            tracing::info!(
+            tracing::debug!(
                 "Unique insertions: {n_unique}, persistence skipped: {n_unique_skipped}"
             );
 

@@ -21,11 +21,21 @@ use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::{izip, Itertools};
 use std::{collections::HashMap, time::Instant};
 
+/// Batch identity and stage timings carried to the result summaries.
+pub struct BatchTimings {
+    pub batch_id: u64,
+    /// Hex-encoded short prefix of the batch hash.
+    pub batch_hash: String,
+    pub receive_ms: u128,
+    pub compute_ms: u128,
+}
+
 /// Processes a ServerJobResult, storing data in the database and sending result messages
 /// through SNS.
 #[allow(clippy::too_many_arguments)]
 pub async fn process_job_result(
     job_result: ServerJobResult<HawkMutation>,
+    batch_timings: BatchTimings,
     party_id: usize,
     store: &Store,
     graph_store: &GraphStore,
@@ -419,6 +429,7 @@ pub async fn process_job_result(
         metrics::histogram!("persist_total_duration")
             .record(persist_total_start.elapsed().as_secs_f64());
     }
+    let persist_ms = persist_total_start.elapsed().as_millis();
 
     for memory_serial_id in memory_serial_ids {
         tracing::info!("Inserted serial_id: {}", memory_serial_id + 1);
@@ -529,8 +540,22 @@ pub async fn process_job_result(
 
     metrics::histogram!("process_job_duration").record(now.elapsed().as_secs_f64());
 
+    // batch_id/hash are shared with RESULT_SUMMARY to correlate the two lines.
     tracing::info!(
-        "RESULT_SUMMARY party={} uniqueness={} reauth={} reset_check={} reset_update={} recovery_update={} deletion={} recovery_check={} persist_ms={} total_ms={}",
+        "BATCH_SUMMARY batch_id={} hash={} party={} queries={} receive_ms={} compute_ms={} persist_ms={}",
+        batch_timings.batch_id,
+        batch_timings.batch_hash,
+        party_id,
+        request_ids.len(),
+        batch_timings.receive_ms,
+        batch_timings.compute_ms,
+        persist_ms,
+    );
+
+    tracing::info!(
+        "RESULT_SUMMARY batch_id={} hash={} party={} uniqueness={} reauth={} reset_check={} reset_update={} recovery_update={} deletion={} recovery_check={}",
+        batch_timings.batch_id,
+        batch_timings.batch_hash,
         party_id,
         n_uniqueness,
         n_reauth,
@@ -539,8 +564,6 @@ pub async fn process_job_result(
         n_recovery_update,
         n_deletion,
         n_recovery_check,
-        persist_total_start.elapsed().as_millis(),
-        now.elapsed().as_millis(),
     );
 
     shutdown_handler.decrement_batches_pending_completion();
