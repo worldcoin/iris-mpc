@@ -215,7 +215,7 @@ async fn load_iris_db_internal(
                 );
                 continue;
             } else if !all_serial_ids.contains(&(serial_id as i64)) {
-                tracing::warn!("Skip loading s3 retried item: serial_id {}", serial_id);
+                tracing::debug!("Skip loading s3 retried item: serial_id {}", serial_id);
                 continue;
             }
 
@@ -233,7 +233,7 @@ async fn load_iris_db_internal(
             );
             actor.increment_db_size(serial_id - 1);
 
-            if record_counter % 100_000 == 0 {
+            if record_counter % 500_000 == 0 {
                 let elapsed = now.elapsed();
                 tracing::info!(
                     "Loaded {} records into memory in {:?} ({:.2} entries/s)",

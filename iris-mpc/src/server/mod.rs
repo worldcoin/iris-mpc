@@ -661,7 +661,6 @@ async fn init_hawk_actor(
                         height, db_count
                     );
                 }
-                tracing::info!(height, "restart: installed graph from checkpoint");
                 graph_target.map(|arc| {
                     Arc::try_unwrap(arc)
                         .expect("graph Arc has exactly one owner after restart")
