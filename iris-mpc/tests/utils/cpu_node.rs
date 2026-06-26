@@ -415,7 +415,7 @@ impl CpuNode {
                                         (
                                             vec_id(*k),
                                             graph_v3::EdgeIds(
-                                                vs.neighbors.iter().map(|&n| vec_id(n)).collect(),
+                                                vs.neighbors().iter().map(|&n| vec_id(n)).collect(),
                                             ),
                                         )
                                     })

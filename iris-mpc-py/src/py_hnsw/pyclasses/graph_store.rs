@@ -38,6 +38,6 @@ impl PyGraphStore {
 
     pub fn get_links(&self, vector_id: u32, layer_index: usize) -> PyResult<Option<Vec<u32>>> {
         let raw_ret = self.0.layers[layer_index].get_links(&vector_id);
-        Ok(raw_ret.map(|neighborhood| neighborhood.neighbors.to_vec()))
+        Ok(raw_ret.map(|neighborhood| neighborhood.neighbors().to_vec()))
     }
 }
