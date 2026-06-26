@@ -257,8 +257,10 @@ mod tests {
             "left eye should have one layer"
         );
         assert_eq!(
-            both_eyes[0].layers[0].get_links(&1).map(|n| &n.neighbors),
-            Some(&vec![]),
+            both_eyes[0].layers[0]
+                .get_links(&1)
+                .map(|n| n.neighbors().to_vec()),
+            Some(vec![]),
             "node 1 should exist in left eye layer 0"
         );
         assert!(
@@ -274,12 +276,16 @@ mod tests {
         apply_graph_mutations(&mut both_eyes, vec![row]).unwrap();
 
         assert_eq!(
-            both_eyes[0].layers[0].get_links(&1).map(|n| &n.neighbors),
-            Some(&vec![])
+            both_eyes[0].layers[0]
+                .get_links(&1)
+                .map(|n| n.neighbors().to_vec()),
+            Some(vec![])
         );
         assert_eq!(
-            both_eyes[1].layers[0].get_links(&10).map(|n| &n.neighbors),
-            Some(&vec![])
+            both_eyes[1].layers[0]
+                .get_links(&10)
+                .map(|n| n.neighbors().to_vec()),
+            Some(vec![])
         );
         // Cross-check: node from one eye must not appear in the other.
         assert!(both_eyes[0].layers[0].get_links(&10).is_none());
@@ -300,8 +306,8 @@ mod tests {
             assert_eq!(
                 both_eyes[0].layers[0]
                     .get_links(&node)
-                    .map(|n| &n.neighbors),
-                Some(&vec![]),
+                    .map(|n| n.neighbors().to_vec()),
+                Some(vec![]),
                 "node {node} missing from left eye"
             );
         }
@@ -309,8 +315,8 @@ mod tests {
             assert_eq!(
                 both_eyes[1].layers[0]
                     .get_links(&node)
-                    .map(|n| &n.neighbors),
-                Some(&vec![]),
+                    .map(|n| n.neighbors().to_vec()),
+                Some(vec![]),
                 "node {node} missing from right eye"
             );
         }

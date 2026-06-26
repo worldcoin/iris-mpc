@@ -989,8 +989,7 @@ impl HnswSearcher {
         while open_idx < init_nodes.len() && init_nodes.len() < ef {
             // get valid, unvisited neighbors of current node at `open_idx`
             let nbhd: Vec<VectorId> = graph
-                .get_links(&init_nodes[open_idx].serial_id(), lc)
-                .await
+                .fresh_links(&init_nodes[open_idx].serial_id(), lc)
                 .iter()
                 .map(|&sid| store.serial_to_vector_id(sid))
                 .filter(|x| !init_nodes.contains(x))
@@ -1273,7 +1272,7 @@ impl HnswSearcher {
         query: &V::QueryRef,
         visited: &mut HashSet<VectorId>,
     ) -> Result<Vec<(VectorId, V::DistanceRef)>> {
-        let neighbors = graph.get_links(&node.serial_id(), lc).await;
+        let neighbors = graph.fresh_links(&node.serial_id(), lc);
 
         let unvisited_neighbors: Vec<VectorId> = neighbors
             .iter()
@@ -1314,7 +1313,7 @@ impl HnswSearcher {
         let mut opened_nodes = Vec::with_capacity(nodes.len());
 
         for node in nodes {
-            let neighbors = graph.get_links(&node.serial_id(), lc).await;
+            let neighbors = graph.fresh_links(&node.serial_id(), lc);
 
             let unvisited_neighbors: Vec<VectorId> = neighbors
                 .iter()

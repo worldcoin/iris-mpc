@@ -34,12 +34,60 @@ use std::{
 use tokio::sync::RwLock;
 use tracing::warn;
 
+/// A capability token carrying the sequence number to stamp on a neighborhood
+/// mutation. Constructible only within the graph module (the apply path), so no
+/// external code can advance a neighborhood's `seq_no` out of band — every stamp
+/// traces back to a sequence number minted by `GraphMem`. Required by
+/// [`Layer::edit_links`], which is the sole path that grows or shrinks an
+/// existing neighborhood and always filters + stamps in one step.
+#[derive(Clone, Copy, Debug)]
+pub struct Tick(u64);
+
+impl Tick {
+    pub(in crate::hnsw::graph) fn new(seq_no: u64) -> Self {
+        Tick(seq_no)
+    }
+
+    fn value(self) -> u64 {
+        self.0
+    }
+}
+
 /// The neighbor list of a single node in one layer, together with the sequence
 /// number of the mutation that last modified it.
+///
+/// Fields are private: `neighbors` and `seq_no` move together so the
+/// "all edges fresh as of `seq_no`" invariant can only be established (and not
+/// silently broken) through [`Layer`]'s mutators.
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Neighborhood {
-    pub neighbors: Vec<SerialId>,
-    pub seq_no: u64,
+    neighbors: Vec<SerialId>,
+    seq_no: u64,
+}
+
+impl Neighborhood {
+    /// The neighbor list. Read-only; mutate via [`Layer`].
+    pub fn neighbors(&self) -> &[SerialId] {
+        &self.neighbors
+    }
+
+    /// Sequence number of the mutation that last modified this neighborhood.
+    /// Under the freshness invariant, every edge in `neighbors` is valid as of
+    /// this tick.
+    pub fn seq_no(&self) -> u64 {
+        self.seq_no
+    }
+}
+
+/// Whether neighbor `z` is still fresh for a neighborhood last certified at
+/// `old_seq`: fresh iff `z`'s content clock has not advanced past that point.
+///
+/// Nodes with no content stamp (e.g. bulk-loaded graphs whose clock is not
+/// populated) are treated as fresh — "gone"/deleted endpoints are dropped by
+/// the store-side validity prune and `RemoveNode` cleanup, not here. This
+/// predicate covers only the content-refresh (reauth) case.
+fn not_stale(content: &HashMap<SerialId, u64>, z: SerialId, old_seq: u64) -> bool {
+    content.get(&z).is_none_or(|&c| c <= old_seq)
 }
 
 /// Representation of the entry point of HNSW search in a layered graph.
@@ -252,7 +300,14 @@ impl GraphMem {
             }
         }
 
-        // Pass 2: apply edge-level mutations.
+        // Pass 2: apply edge-level mutations. Every neighborhood touched here is
+        // filtered against the content clock and re-stamped in one step (see
+        // `Layer::edit_links`): pre-existing edges that became stale relative to
+        // the neighborhood's prior `seq_no` are dropped *before* any new edge is
+        // appended, so a back-edge append can never silently re-certify an
+        // already-stale sibling as fresh. Edge ops never advance the content
+        // clock (`node_init_seq_no`) — only a node's own (re-)insertion does.
+        let tick = Tick::new(seq_no);
         for op in mutation.ops.iter() {
             match op {
                 MutationOp::AddNode { .. } | MutationOp::RemoveNode { .. } => {}
@@ -269,61 +324,30 @@ impl GraphMem {
                     let base_sid = base.serial_id();
                     let neighbor_sids: Vec<SerialId> =
                         to_add.iter().map(|v| v.serial_id()).collect();
+                    let content = &self.node_init_seq_no;
                     let layer_mut = &mut self.layers[layer];
-                    match edge_type {
-                        EdgeType::Base => {
-                            if layer_mut.get_links(&base_sid).is_none() {
-                                warn!(
-                                    "AddEdges(Base): base={:?} missing at layer {layer}; skipping",
-                                    base
-                                );
-                            } else {
-                                layer_mut.link_neighbors_to_node(
-                                    base_sid,
-                                    neighbor_sids.clone(),
-                                    seq_no,
-                                );
-                                self.node_init_seq_no.insert(base_sid, seq_no);
-                            }
+                    // Forward half: append `neighbor_sids` to base's own list.
+                    if matches!(edge_type, EdgeType::Base | EdgeType::All) {
+                        if layer_mut.get_links(&base_sid).is_none() {
+                            warn!("AddEdges({edge_type:?}): base={base:?} missing at layer {layer}; skipping outgoing half");
+                        } else {
+                            layer_mut.edit_links(base_sid, tick, |old_seq, nbrs| {
+                                nbrs.retain(|z| not_stale(content, *z, old_seq));
+                                nbrs.extend_from_slice(&neighbor_sids);
+                            });
                         }
-                        EdgeType::Neighbors => {
-                            for (target, target_sid) in to_add.iter().zip(neighbor_sids.iter()) {
-                                if layer_mut.get_links(target_sid).is_none() {
-                                    warn!(
-                                        "AddEdges(Neighbors): target={:?} missing at layer {layer} (base={:?}); add_neighbor will no-op for this target",
-                                        target, base
-                                    );
-                                } else {
-                                    self.node_init_seq_no.insert(*target_sid, seq_no);
-                                }
-                            }
-                            layer_mut.link_node_to_neighbors(base_sid, neighbor_sids, seq_no);
-                        }
-                        EdgeType::All => {
-                            if layer_mut.get_links(&base_sid).is_none() {
-                                warn!(
-                                    "AddEdges(All): base={:?} missing at layer {layer}; skipping outgoing half",
-                                    base
-                                );
+                    }
+                    // Back half: append base into each target's list.
+                    if matches!(edge_type, EdgeType::Neighbors | EdgeType::All) {
+                        for (target, target_sid) in to_add.iter().zip(neighbor_sids.iter()) {
+                            if layer_mut.get_links(target_sid).is_none() {
+                                warn!("AddEdges({edge_type:?}): target={target:?} missing at layer {layer} (base={base:?}); skipping back-edge");
                             } else {
-                                layer_mut.link_neighbors_to_node(
-                                    base_sid,
-                                    neighbor_sids.clone(),
-                                    seq_no,
-                                );
-                                self.node_init_seq_no.insert(base_sid, seq_no);
+                                layer_mut.edit_links(*target_sid, tick, |old_seq, nbrs| {
+                                    nbrs.retain(|z| not_stale(content, *z, old_seq));
+                                    nbrs.push(base_sid);
+                                });
                             }
-                            for (target, target_sid) in to_add.iter().zip(neighbor_sids.iter()) {
-                                if layer_mut.get_links(target_sid).is_none() {
-                                    warn!(
-                                        "AddEdges(All): target={:?} missing at layer {layer} (base={:?}); add_neighbor will no-op for this target",
-                                        target, base
-                                    );
-                                } else {
-                                    self.node_init_seq_no.insert(*target_sid, seq_no);
-                                }
-                            }
-                            layer_mut.link_node_to_neighbors(base_sid, neighbor_sids, seq_no);
                         }
                     }
                 }
@@ -336,69 +360,37 @@ impl GraphMem {
                     let layer = *layer;
                     if self.layers.len() < layer + 1 {
                         warn!(
-                            "RemoveEdges: layer {layer} does not exist (base={:?}); skipping",
-                            base
+                            "RemoveEdges: layer {layer} does not exist (base={base:?}); skipping"
                         );
                         continue;
                     }
                     let base_sid = base.serial_id();
-                    let neighbor_sids: Vec<SerialId> =
+                    let remove_sids: Vec<SerialId> =
                         to_remove.iter().map(|v| v.serial_id()).collect();
+                    let content = &self.node_init_seq_no;
                     let layer_mut = &mut self.layers[layer];
-                    match edge_type {
-                        EdgeType::Base => {
-                            if layer_mut.get_links(&base_sid).is_none() {
-                                warn!(
-                                    "RemoveEdges(Base): base={:?} missing at layer {layer}; skipping",
-                                    base
-                                );
-                            } else {
-                                layer_mut.unlink_neighbors_from_node(
-                                    base_sid,
-                                    neighbor_sids.clone(),
-                                    seq_no,
-                                );
-                                self.node_init_seq_no.insert(base_sid, seq_no);
-                            }
+                    if matches!(edge_type, EdgeType::Base | EdgeType::All) {
+                        if layer_mut.get_links(&base_sid).is_none() {
+                            warn!("RemoveEdges({edge_type:?}): base={base:?} missing at layer {layer}; skipping outgoing half");
+                        } else {
+                            layer_mut.edit_links(base_sid, tick, |old_seq, nbrs| {
+                                nbrs.retain(|z| {
+                                    not_stale(content, *z, old_seq) && !remove_sids.contains(z)
+                                });
+                            });
                         }
-                        EdgeType::Neighbors => {
-                            for (target, target_sid) in to_remove.iter().zip(neighbor_sids.iter()) {
-                                if layer_mut.get_links(target_sid).is_none() {
-                                    warn!(
-                                        "RemoveEdges(Neighbors): target={:?} missing at layer {layer} (base={:?}); remove_incoming_edges will no-op for this target",
-                                        target, base
-                                    );
-                                } else {
-                                    self.node_init_seq_no.insert(*target_sid, seq_no);
-                                }
-                            }
-                            layer_mut.unlink_node_from_neighbors(base_sid, neighbor_sids, seq_no);
-                        }
-                        EdgeType::All => {
-                            if layer_mut.get_links(&base_sid).is_none() {
-                                warn!(
-                                    "RemoveEdges(All): base={:?} missing at layer {layer}; skipping outgoing half",
-                                    base
-                                );
+                    }
+                    if matches!(edge_type, EdgeType::Neighbors | EdgeType::All) {
+                        for (target, target_sid) in to_remove.iter().zip(remove_sids.iter()) {
+                            if layer_mut.get_links(target_sid).is_none() {
+                                warn!("RemoveEdges({edge_type:?}): target={target:?} missing at layer {layer} (base={base:?}); skipping");
                             } else {
-                                layer_mut.unlink_neighbors_from_node(
-                                    base_sid,
-                                    neighbor_sids.clone(),
-                                    seq_no,
-                                );
-                                self.node_init_seq_no.insert(base_sid, seq_no);
+                                layer_mut.edit_links(*target_sid, tick, |old_seq, nbrs| {
+                                    nbrs.retain(|z| {
+                                        not_stale(content, *z, old_seq) && *z != base_sid
+                                    });
+                                });
                             }
-                            for (target, target_sid) in to_remove.iter().zip(neighbor_sids.iter()) {
-                                if layer_mut.get_links(target_sid).is_none() {
-                                    warn!(
-                                        "RemoveEdges(All): target={:?} missing at layer {layer} (base={:?}); remove_incoming_edges will no-op for this target",
-                                        target, base
-                                    );
-                                } else {
-                                    self.node_init_seq_no.insert(*target_sid, seq_no);
-                                }
-                            }
-                            layer_mut.unlink_node_from_neighbors(base_sid, neighbor_sids, seq_no);
                         }
                     }
                 }
@@ -474,6 +466,25 @@ impl GraphMem {
             .get_links(base)
             .map(|n| n.neighbors.as_slice())
             .unwrap_or(&[])
+    }
+
+    /// Neighbors of `base` at layer `lc` with content-stale edges skipped: a
+    /// neighbor `z` is omitted iff its content clock has advanced past this
+    /// neighborhood's last-certified `seq_no` (i.e. `z` was reauthed after the
+    /// edge was certified). This is the read-path counterpart of the
+    /// filter-on-bump in `insert_apply`: traversal must skip stale edges even in
+    /// neighborhoods not yet physically cleaned by a write, so search behaves as
+    /// if every neighborhood were freshly filtered. Empty if `base`/`lc` absent.
+    pub fn fresh_links(&self, base: &SerialId, lc: usize) -> Vec<SerialId> {
+        let Some(nbhd) = self.layers.get(lc).and_then(|layer| layer.get_links(base)) else {
+            return Vec::new();
+        };
+        let old_seq = nbhd.seq_no;
+        nbhd.neighbors
+            .iter()
+            .copied()
+            .filter(|z| not_stale(&self.node_init_seq_no, *z, old_seq))
+            .collect()
     }
 
     /// Set the neighbors of vertex `base` at layer `lc` to `links`.
@@ -734,52 +745,33 @@ impl Layer {
         self.set_links(id, neighbors, seq_no);
     }
 
-    /// Insert `node` as an incoming edge into each target's neighbor list,
-    /// keeping each list sorted and deduplicated. Targets that don't exist in
-    /// this layer are silently skipped. Idempotent: if `node` is already
-    /// present in a target's list, that target's seq_no is still updated.
-    pub fn link_node_to_neighbors(
-        &mut self,
-        node: SerialId,
-        neighbors: Vec<SerialId>,
-        seq_no: u64,
-    ) {
-        for target in &neighbors {
-            if let Some(target_nbhd) = self.links.get_mut(target) {
-                if let Err(pos) = target_nbhd.neighbors.binary_search(&node) {
-                    self.set_hash
-                        .remove_unordered_set(*target, target_nbhd.neighbors.iter());
-                    target_nbhd.neighbors.insert(pos, node);
-                    target_nbhd.seq_no = seq_no;
-                    self.set_hash
-                        .add_unordered_set(*target, target_nbhd.neighbors.iter());
-                }
-            }
-        }
-    }
-
-    /// Add `neighbors` into `node`'s own neighbor list, sorted and deduplicated.
-    /// No-op if `node` is not present in this layer. Idempotent: existing
-    /// entries are not duplicated, but `seq_no` is always updated on success.
-    pub fn link_neighbors_to_node(
-        &mut self,
-        node: SerialId,
-        neighbors: Vec<SerialId>,
-        seq_no: u64,
-    ) {
-        let Some(node_nbhd) = self.links.get_mut(&node) else {
+    /// Bracketed, filter-then-stamp edit of `node`'s neighbor list — the sole
+    /// path that incrementally grows or shrinks an existing neighborhood.
+    ///
+    /// Removes the old set-hash contribution, runs `f` (which receives the
+    /// pre-edit `seq_no` so it can drop entries that became stale relative to
+    /// it), then re-sorts, dedups, stamps `tick`, and re-adds the set-hash
+    /// contribution. No-op if `node` is absent from this layer.
+    ///
+    /// Requires a [`Tick`] (constructible only inside the graph module), so no
+    /// out-of-band `seq_no` can be stamped. `f` must filter the existing list
+    /// *before* pushing new neighbors: freshly added edges are fresh as of
+    /// `tick` and must not be subject to the stale filter, whose threshold is
+    /// the older `seq_no`.
+    pub(in crate::hnsw::graph) fn edit_links<F>(&mut self, node: SerialId, tick: Tick, f: F)
+    where
+        F: FnOnce(u64, &mut Vec<SerialId>),
+    {
+        let Some(nbhd) = self.links.get_mut(&node) else {
             return;
         };
         self.set_hash
-            .remove_unordered_set(node, node_nbhd.neighbors.iter());
-        for nb in neighbors {
-            if let Err(pos) = node_nbhd.neighbors.binary_search(&nb) {
-                node_nbhd.neighbors.insert(pos, nb);
-            }
-        }
-        node_nbhd.seq_no = seq_no;
-        self.set_hash
-            .add_unordered_set(node, node_nbhd.neighbors.iter());
+            .remove_unordered_set(node, nbhd.neighbors.iter());
+        f(nbhd.seq_no, &mut nbhd.neighbors);
+        nbhd.neighbors.sort_unstable();
+        nbhd.neighbors.dedup();
+        nbhd.seq_no = tick.value();
+        self.set_hash.add_unordered_set(node, nbhd.neighbors.iter());
     }
 
     /// Remove a node from the graph and clean up all backlinks from its neighbors.
@@ -804,47 +796,12 @@ impl Layer {
         }
     }
 
-    /// Remove `node` from each target's neighbor list, where `target` ranges
-    /// over `neighbors`. Targets that don't exist in this layer are silently
-    /// skipped. Updates `seq_no` on modified neighborhoods.
-    pub fn unlink_node_from_neighbors(
-        &mut self,
-        node: SerialId,
-        neighbors: Vec<SerialId>,
-        seq_no: u64,
-    ) {
-        for target in &neighbors {
-            if let Some(target_nbhd) = self.links.get_mut(target) {
-                self.set_hash
-                    .remove_unordered_set(*target, target_nbhd.neighbors.iter());
-                target_nbhd.neighbors.retain(|x| x != &node);
-                target_nbhd.seq_no = seq_no;
-                self.set_hash
-                    .add_unordered_set(*target, target_nbhd.neighbors.iter());
-            }
-        }
-    }
-
-    /// Remove each entry in `neighbors` from `node`'s own neighbor list. No-op
-    /// if `node` is not present in this layer. The removal is unidirectional:
-    /// the targets' own link lists are not modified. Updates `seq_no` on success.
-    pub fn unlink_neighbors_from_node(
-        &mut self,
-        node: SerialId,
-        neighbors: Vec<SerialId>,
-        seq_no: u64,
-    ) {
-        let Some(node_nbhd) = self.links.get_mut(&node) else {
-            return;
-        };
-        self.set_hash
-            .remove_unordered_set(node, node_nbhd.neighbors.iter());
-        node_nbhd.neighbors.retain(|x| !neighbors.contains(x));
-        node_nbhd.seq_no = seq_no;
-        self.set_hash
-            .add_unordered_set(node, node_nbhd.neighbors.iter());
-    }
-
+    /// Replace `from`'s entire neighbor list in one shot, stamping `seq_no`
+    /// directly. This is the **bulk-load / trusted-construction** primitive
+    /// (deserialization, checkpoint hashing, idealized graphs); it does *not*
+    /// filter against the content clock because it sets a full, trusted list
+    /// rather than incrementally mutating a live neighborhood. Incremental
+    /// growth/shrink of a live neighborhood goes through [`Layer::edit_links`].
     pub fn set_links(&mut self, from: SerialId, links: Vec<SerialId>, seq_no: u64) {
         use std::collections::hash_map::Entry;
         match self.links.entry(from) {
@@ -1319,6 +1276,139 @@ mod tests {
         );
         assert_eq!(graph.layers[0].get_links(&2).unwrap().neighbors, vec![1u32]);
         assert_eq!(graph.layers[0].get_links(&3).unwrap().neighbors, vec![1u32]);
+    }
+
+    /// Filter-on-bump: an asymmetric stale edge `a -> b` (no `b -> a` back-edge,
+    /// as arises after compaction) is dropped the next time `a`'s neighborhood
+    /// is touched once `b`'s content clock has advanced via reauth. This is the
+    /// v5 replacement for main's per-edge version-skip.
+    #[test]
+    fn stale_edge_dropped_on_neighborhood_touch_after_reauth() {
+        let mut graph = GraphMem::new();
+        let a = VectorId::from_serial_id(1);
+        let b = VectorId::from_serial_id(2);
+        let d = VectorId::from_serial_id(3);
+        let node = |id| MutationOp::AddNode {
+            id,
+            height: 1,
+            update_ep: UpdateEntryPoint::False,
+        };
+
+        // seq 1: insert a and b.
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 1,
+                ops: vec![node(a), node(b)],
+            })
+            .unwrap();
+        // seq 2: asymmetric forward edge a -> b only; b's list stays empty.
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 2,
+                ops: vec![MutationOp::AddEdges {
+                    base: a,
+                    layer: 0,
+                    neighbors: vec![b],
+                    edge_type: EdgeType::Base,
+                }],
+            })
+            .unwrap();
+        assert_eq!(
+            graph.layers[0].get_links(&1).unwrap().neighbors().to_vec(),
+            vec![2u32]
+        );
+
+        // seq 3: reauth b. RemoveNode(b) — b's list is empty, so its
+        // opportunistic bidirectional cleanup never touches a's list and a -> b
+        // survives — then AddNode(b) advances content[b] to 3.
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 3,
+                ops: vec![MutationOp::RemoveNode { id: b }, node(b)],
+            })
+            .unwrap();
+        // a's neighborhood (last touched at seq 2) hasn't been revisited, so the
+        // stale edge is still present — detection happens on next touch.
+        assert_eq!(
+            graph.layers[0].get_links(&1).unwrap().neighbors().to_vec(),
+            vec![2u32]
+        );
+
+        // seq 4/5: touch a's neighborhood with a fresh edge a -> d. The filter
+        // runs against a's prior seq (2) and drops a -> b (content[b] = 3 > 2)
+        // before appending d.
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 4,
+                ops: vec![node(d)],
+            })
+            .unwrap();
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 5,
+                ops: vec![MutationOp::AddEdges {
+                    base: a,
+                    layer: 0,
+                    neighbors: vec![d],
+                    edge_type: EdgeType::Base,
+                }],
+            })
+            .unwrap();
+        assert_eq!(
+            graph.layers[0].get_links(&1).unwrap().neighbors().to_vec(),
+            vec![3u32]
+        );
+    }
+
+    /// Read-path skip: `fresh_links` omits a content-stale neighbor even when
+    /// the neighborhood was never touched after the reauth (so the physical edge
+    /// is still present). This is what makes search match main's version-skip
+    /// for stale edges that filter-on-bump hasn't yet cleaned.
+    #[test]
+    fn fresh_links_skips_content_stale_neighbor() {
+        let mut graph = GraphMem::new();
+        let a = VectorId::from_serial_id(1);
+        let b = VectorId::from_serial_id(2);
+        let node = |id| MutationOp::AddNode {
+            id,
+            height: 1,
+            update_ep: UpdateEntryPoint::False,
+        };
+
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 1,
+                ops: vec![node(a), node(b)],
+            })
+            .unwrap();
+        // Asymmetric a -> b; a's neighborhood certified at seq 2.
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 2,
+                ops: vec![MutationOp::AddEdges {
+                    base: a,
+                    layer: 0,
+                    neighbors: vec![b],
+                    edge_type: EdgeType::Base,
+                }],
+            })
+            .unwrap();
+        assert_eq!(graph.fresh_links(&1, 0), vec![2u32]);
+
+        // Reauth b (content[b] -> 3) without touching a.
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 3,
+                ops: vec![MutationOp::RemoveNode { id: b }, node(b)],
+            })
+            .unwrap();
+
+        // Physical edge survives (a untouched), but read-path skips it.
+        assert_eq!(
+            graph.layers[0].get_links(&1).unwrap().neighbors().to_vec(),
+            vec![2u32]
+        );
+        assert_eq!(graph.fresh_links(&1, 0), Vec::<SerialId>::new());
     }
 
     #[test]

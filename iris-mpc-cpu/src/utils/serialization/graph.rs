@@ -687,9 +687,9 @@ impl From<Layer> for graph_v4::Layer {
                     (
                         graph_v4::VectorId { id: v, version: 0 },
                         graph_v4::EdgeIds(
-                            nb.neighbors
-                                .into_iter()
-                                .map(|x| graph_v4::VectorId { id: x, version: 0 })
+                            nb.neighbors()
+                                .iter()
+                                .map(|&x| graph_v4::VectorId { id: x, version: 0 })
                                 .collect(),
                         ),
                     )
@@ -764,8 +764,8 @@ impl From<Layer> for graph_v5::Layer {
                     (
                         v,
                         graph_v5::Neighborhood {
-                            neighbors: nb.neighbors,
-                            updated_seq_no: nb.seq_no,
+                            neighbors: nb.neighbors().to_vec(),
+                            updated_seq_no: nb.seq_no(),
                         },
                     )
                 })
