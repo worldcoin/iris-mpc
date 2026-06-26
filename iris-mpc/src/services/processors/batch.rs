@@ -1353,17 +1353,14 @@ pub async fn get_own_batch_sync_state(
         std::cmp::min(approximate_visible_messages, config.max_batch_size as u32)
     };
 
-    if messages_to_poll == 0 {
-        tracing::debug!(
-            "fetching approximate_visible_messages: {}",
-            approximate_visible_messages
-        );
-    } else {
-        tracing::info!(
-            "fetching approximate_visible_messages: {}",
-            approximate_visible_messages
-        );
-    }
+    let log_msg = format!(
+        "fetching approximate_visible_messages: {}",
+        approximate_visible_messages,
+    );
+    match messages_to_poll {
+        0 => tracing::debug!(log_msg),
+        _ => tracing::info!(log_msg),
+    };
 
     let batch_sync_state = BatchSyncState {
         messages_to_poll,
