@@ -542,14 +542,15 @@ impl From<graph_v3::EntryPoint> for layered_graph::EntryPoint {
 
 impl From<graph_v3::Layer> for Layer {
     fn from(value: graph_v3::Layer) -> Self {
-        // Recompute set_hash via set_links rather than trusting the stored
-        // value: older checkpoints carry a set_hash from a prior fold algorithm.
-        // Pre-size the map so the bulk insert doesn't rehash.
-        let mut layer = Layer::with_capacity(value.links.len());
-        for (v, nb) in value.links.into_iter() {
-            layer.set_links(v.into(), nb.0.into_iter().map(|x| x.into()).collect());
-        }
-        layer
+        // Recompute set_hash rather than trusting the stored value: older
+        // checkpoints carry a set_hash from a prior fold algorithm. Build the
+        // map, then fold the checksum in parallel (see `Layer::from_links`).
+        let links = value
+            .links
+            .into_iter()
+            .map(|(v, nb)| (v.into(), nb.0.into_iter().map(|x| x.into()).collect()))
+            .collect();
+        Layer::from_links(links)
     }
 }
 
@@ -583,12 +584,13 @@ impl From<graph_v4::EntryPoint> for layered_graph::EntryPoint {
 
 impl From<graph_v4::Layer> for Layer {
     fn from(value: graph_v4::Layer) -> Self {
-        // See `From<graph_v3::Layer>`: recompute set_hash, pre-sized map.
-        let mut layer = Layer::with_capacity(value.links.len());
-        for (v, nb) in value.links.into_iter() {
-            layer.set_links(v.into(), nb.0.into_iter().map(|x| x.into()).collect());
-        }
-        layer
+        // See `From<graph_v3::Layer>`: recompute set_hash via parallel fold.
+        let links = value
+            .links
+            .into_iter()
+            .map(|(v, nb)| (v.into(), nb.0.into_iter().map(|x| x.into()).collect()))
+            .collect();
+        Layer::from_links(links)
     }
 }
 
