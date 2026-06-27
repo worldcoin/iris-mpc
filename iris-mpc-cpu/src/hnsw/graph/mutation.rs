@@ -200,16 +200,15 @@ mod tests {
         layer.get_links(&node).map(|n| n.neighbors().to_vec())
     }
 
-    /// Test helper: add `node` as an incoming edge into each target's list,
-    /// the back-edge half of an insert (formerly `link_node_to_neighbors`).
+    /// Test helper: add `node` as an incoming edge into each target's list —
+    /// the back-edge half of an insert.
     fn add_backlinks(layer: &mut Layer, node: u32, targets: &[u32], seq: u64) {
         for &t in targets {
             layer.edit_links(t, Tick::new(seq), |_old, nbrs| nbrs.push(node));
         }
     }
 
-    /// Test helper: remove `neighbors` from `node`'s own list, unidirectionally
-    /// (formerly `unlink_neighbors_from_node`).
+    /// Test helper: remove `neighbors` from `node`'s own list, unidirectionally.
     fn remove_links(layer: &mut Layer, node: u32, neighbors: &[u32], seq: u64) {
         layer.edit_links(node, Tick::new(seq), |_old, nbrs| {
             nbrs.retain(|x| !neighbors.contains(x))

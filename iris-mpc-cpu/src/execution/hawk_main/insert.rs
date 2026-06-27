@@ -106,8 +106,6 @@ pub async fn insert<V: VectorStoreMut>(
     for (idx, (plan, insert_id, replace_id)) in
         izip!(insert_plans, insert_ids, replace_ids).enumerate()
     {
-        let mut slot_updated: BTreeSet<(VectorId, usize)> = BTreeSet::new();
-
         // (a) Delete first: own GraphMutation with the lower seq_no.
         if let Some(rid) = replace_id {
             let mutation = graph.apply_new(UnstampedMutation {
@@ -116,9 +114,8 @@ pub async fn insert<V: VectorStoreMut>(
             slot_outputs[idx].push(mutation);
         }
 
-        // (b) Insert: own GraphMutation. Collect this slot's updated and
-        // expanded neighborhoods for the per-slot prune and the batch
-        // compaction respectively.
+        // (b) Insert: own GraphMutation. Collect this slot's expanded
+        // neighborhoods for the batch compaction.
         if let Some(InsertPlanV {
             query,
             mut links,
@@ -153,35 +150,15 @@ pub async fn insert<V: VectorStoreMut>(
                 });
             }
             let unstamped = UnstampedMutation { ops };
-            for pair in unstamped.updated_neighborhoods() {
-                slot_updated.insert(pair);
-            }
             for pair in unstamped.expanded_neighborhoods() {
                 batch_expanded.insert(pair);
             }
             let mutation = graph.apply_new(unstamped)?;
             slot_outputs[idx].push(mutation);
         }
-
-        // (c) Per-slot invalid-link prune over any neighborhood this slot's
-        // mutations touched. Skipped for pure-delete slots (they don't touch
-        // any neighborhood at all here).
-        //
-        // TODO: remove once neighborhood-versioning lands. With per-edge
-        // sequence numbers, stale-edge filtering becomes implicit in
-        // `insert_apply` and this step is unnecessary.
-        if !slot_updated.is_empty() {
-            let ops = searcher
-                .prune_invalid_links(store, graph, &slot_updated)
-                .await?;
-            if !ops.is_empty() {
-                let mutation = graph.apply_new(UnstampedMutation { ops })?;
-                slot_outputs[idx].push(mutation);
-            }
-        }
     }
 
-    // (d) Global compaction across the batch, attributed to the last
+    // (c) Global compaction across the batch, attributed to the last
     // non-empty slot.
     if !batch_expanded.is_empty() {
         let ops = searcher

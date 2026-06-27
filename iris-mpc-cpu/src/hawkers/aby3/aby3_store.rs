@@ -586,12 +586,6 @@ where
         VectorId::new(serial_id, version)
     }
 
-    async fn only_valid_vectors(&mut self, mut vectors: Vec<VectorId>) -> Vec<VectorId> {
-        let registry = self.registry.read().await;
-        vectors.retain(|v| registry.contains(v));
-        vectors
-    }
-
     async fn only_valid_entry_points(
         &mut self,
         mut entry_points: Vec<(VectorId, usize)>,

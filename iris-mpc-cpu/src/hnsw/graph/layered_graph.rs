@@ -34,12 +34,10 @@ use std::{
 use tokio::sync::RwLock;
 use tracing::warn;
 
-/// A capability token carrying the sequence number to stamp on a neighborhood
-/// mutation. Constructible only within the graph module (the apply path), so no
-/// external code can advance a neighborhood's `seq_no` out of band — every stamp
-/// traces back to a sequence number minted by `GraphMem`. Required by
-/// [`Layer::edit_links`], which is the sole path that grows or shrinks an
-/// existing neighborhood and always filters + stamps in one step.
+/// Capability token carrying the sequence number to stamp on a neighborhood
+/// edit. Constructible only within the graph module, so no external code can
+/// advance a neighborhood's `seq_no` out of band. Required by
+/// [`Layer::edit_links`].
 #[derive(Clone, Copy, Debug)]
 pub struct Tick(u64);
 
@@ -79,15 +77,17 @@ impl Neighborhood {
     }
 }
 
-/// Whether neighbor `z` is still fresh for a neighborhood last certified at
-/// `old_seq`: fresh iff `z`'s content clock has not advanced past that point.
+/// Whether edge `A -> z` is valid for a neighborhood last certified at `old_seq`:
+/// `z` must be a live node (present in the content clock) *and* its content must
+/// not have advanced past `old_seq`. An absent stamp means dead (removed or never
+/// added) and a stamp `> old_seq` means content-refreshed (reauthed) since the
+/// edge was certified — either way the edge is dropped.
 ///
-/// Nodes with no content stamp (e.g. bulk-loaded graphs whose clock is not
-/// populated) are treated as fresh — "gone"/deleted endpoints are dropped by
-/// the store-side validity prune and `RemoveNode` cleanup, not here. This
-/// predicate covers only the content-refresh (reauth) case.
-fn not_stale(content: &HashMap<SerialId, u64>, z: SerialId, old_seq: u64) -> bool {
-    content.get(&z).is_none_or(|&c| c <= old_seq)
+/// Used both at write time (the filter-on-bump in `insert_apply`, which drops
+/// invalid edges before re-stamping a neighborhood) and at read time
+/// ([`GraphMem::get_active_links`], which skips them during traversal).
+fn is_active(content: &HashMap<SerialId, u64>, z: SerialId, old_seq: u64) -> bool {
+    content.get(&z).is_some_and(|&c| c <= old_seq)
 }
 
 /// Representation of the entry point of HNSW search in a layered graph.
@@ -192,6 +192,14 @@ impl GraphMem {
     }
 
     pub fn from_precomputed(entry_points: Vec<(SerialId, usize)>, layers: Vec<Layer>) -> Self {
+        // Seed the content clock at 0 for every node so the read-path liveness
+        // filter (`is_active`) treats these trusted nodes as live; without this
+        // `get_active_links` would drop every edge.
+        let node_init_seq_no = layers
+            .iter()
+            .flat_map(|l| l.links.keys())
+            .map(|&v| (v, 0u64))
+            .collect();
         GraphMem {
             entry_points: entry_points
                 .into_iter()
@@ -202,7 +210,7 @@ impl GraphMem {
                 .collect::<Vec<_>>(),
             layers,
             last_update_seq_no: 0,
-            node_init_seq_no: HashMap::new(),
+            node_init_seq_no,
         }
     }
 
@@ -300,13 +308,12 @@ impl GraphMem {
             }
         }
 
-        // Pass 2: apply edge-level mutations. Every neighborhood touched here is
-        // filtered against the content clock and re-stamped in one step (see
-        // `Layer::edit_links`): pre-existing edges that became stale relative to
-        // the neighborhood's prior `seq_no` are dropped *before* any new edge is
-        // appended, so a back-edge append can never silently re-certify an
-        // already-stale sibling as fresh. Edge ops never advance the content
-        // clock (`node_init_seq_no`) — only a node's own (re-)insertion does.
+        // Pass 2: apply edge-level mutations. Each touched neighborhood drops its
+        // invalid edges (see `is_active`) then is re-stamped in one step (see
+        // `Layer::edit_links`): the drop happens *before* any new edge is
+        // appended, so an append can't re-certify an already-invalid sibling as
+        // fresh. Edge ops never advance the content clock — only a node's own
+        // (re-)insertion does.
         let tick = Tick::new(seq_no);
         for op in mutation.ops.iter() {
             match op {
@@ -332,7 +339,7 @@ impl GraphMem {
                             warn!("AddEdges({edge_type:?}): base={base:?} missing at layer {layer}; skipping outgoing half");
                         } else {
                             layer_mut.edit_links(base_sid, tick, |old_seq, nbrs| {
-                                nbrs.retain(|z| not_stale(content, *z, old_seq));
+                                nbrs.retain(|z| is_active(content, *z, old_seq));
                                 nbrs.extend_from_slice(&neighbor_sids);
                             });
                         }
@@ -344,7 +351,7 @@ impl GraphMem {
                                 warn!("AddEdges({edge_type:?}): target={target:?} missing at layer {layer} (base={base:?}); skipping back-edge");
                             } else {
                                 layer_mut.edit_links(*target_sid, tick, |old_seq, nbrs| {
-                                    nbrs.retain(|z| not_stale(content, *z, old_seq));
+                                    nbrs.retain(|z| is_active(content, *z, old_seq));
                                     nbrs.push(base_sid);
                                 });
                             }
@@ -375,7 +382,7 @@ impl GraphMem {
                         } else {
                             layer_mut.edit_links(base_sid, tick, |old_seq, nbrs| {
                                 nbrs.retain(|z| {
-                                    not_stale(content, *z, old_seq) && !remove_sids.contains(z)
+                                    is_active(content, *z, old_seq) && !remove_sids.contains(z)
                                 });
                             });
                         }
@@ -387,7 +394,7 @@ impl GraphMem {
                             } else {
                                 layer_mut.edit_links(*target_sid, tick, |old_seq, nbrs| {
                                     nbrs.retain(|z| {
-                                        not_stale(content, *z, old_seq) && *z != base_sid
+                                        is_active(content, *z, old_seq) && *z != base_sid
                                     });
                                 });
                             }
@@ -460,7 +467,11 @@ impl GraphMem {
         self.entry_points = vec![EntryPoint { point, layer }];
     }
 
-    pub async fn get_links(&self, base: &SerialId, lc: usize) -> &[SerialId] {
+    /// The stored neighbor list of `base` at layer `lc`, verbatim — no staleness
+    /// filtering. For maintenance paths (compaction, pruning) that reason about
+    /// physical edges; search traversal must use [`Self::get_active_links`].
+    /// Empty if `base`/`lc` absent.
+    pub async fn get_raw_links(&self, base: &SerialId, lc: usize) -> &[SerialId] {
         let layer = &self.layers[lc];
         layer
             .get_links(base)
@@ -468,14 +479,14 @@ impl GraphMem {
             .unwrap_or(&[])
     }
 
-    /// Neighbors of `base` at layer `lc` with content-stale edges skipped: a
-    /// neighbor `z` is omitted iff its content clock has advanced past this
-    /// neighborhood's last-certified `seq_no` (i.e. `z` was reauthed after the
-    /// edge was certified). This is the read-path counterpart of the
-    /// filter-on-bump in `insert_apply`: traversal must skip stale edges even in
-    /// neighborhoods not yet physically cleaned by a write, so search behaves as
-    /// if every neighborhood were freshly filtered. Empty if `base`/`lc` absent.
-    pub fn fresh_links(&self, base: &SerialId, lc: usize) -> Vec<SerialId> {
+    /// Neighbors of `base` at layer `lc` valid for traversal: a neighbor `z` is
+    /// kept iff it is [`is_active`] (live and not content-refreshed past this
+    /// neighborhood's last-certified `seq_no`). Applies the same filter as the
+    /// write-path filter-on-bump, so traversal skips reauthed and removed edges
+    /// even in neighborhoods a write has not yet physically cleaned. Unlike
+    /// [`Self::get_raw_links`] it returns an owned `Vec`. Empty if `base`/`lc`
+    /// absent.
+    pub fn get_active_links(&self, base: &SerialId, lc: usize) -> Vec<SerialId> {
         let Some(nbhd) = self.layers.get(lc).and_then(|layer| layer.get_links(base)) else {
             return Vec::new();
         };
@@ -483,7 +494,7 @@ impl GraphMem {
         nbhd.neighbors
             .iter()
             .copied()
-            .filter(|z| not_stale(&self.node_init_seq_no, *z, old_seq))
+            .filter(|z| is_active(&self.node_init_seq_no, *z, old_seq))
             .collect()
     }
 
@@ -1360,12 +1371,12 @@ mod tests {
         );
     }
 
-    /// Read-path skip: `fresh_links` omits a content-stale neighbor even when
-    /// the neighborhood was never touched after the reauth (so the physical edge
-    /// is still present). This is what makes search match main's version-skip
-    /// for stale edges that filter-on-bump hasn't yet cleaned.
+    /// Read-path skip: `get_active_links` omits a content-stale neighbor even
+    /// when the neighborhood was never touched after the reauth (so the physical
+    /// edge is still present). This is what makes search match main's
+    /// version-skip for stale edges that filter-on-bump hasn't yet cleaned.
     #[test]
-    fn fresh_links_skips_content_stale_neighbor() {
+    fn get_active_links_skips_content_stale_neighbor() {
         let mut graph = GraphMem::new();
         let a = VectorId::from_serial_id(1);
         let b = VectorId::from_serial_id(2);
@@ -1393,7 +1404,7 @@ mod tests {
                 }],
             })
             .unwrap();
-        assert_eq!(graph.fresh_links(&1, 0), vec![2u32]);
+        assert_eq!(graph.get_active_links(&1, 0), vec![2u32]);
 
         // Reauth b (content[b] -> 3) without touching a.
         graph
@@ -1408,7 +1419,56 @@ mod tests {
             graph.layers[0].get_links(&1).unwrap().neighbors().to_vec(),
             vec![2u32]
         );
-        assert_eq!(graph.fresh_links(&1, 0), Vec::<SerialId>::new());
+        assert_eq!(graph.get_active_links(&1, 0), Vec::<SerialId>::new());
+    }
+
+    /// Read-path liveness: `get_active_links` drops a dangling edge to a removed
+    /// node even though the physical edge survives `RemoveNode`'s opportunistic
+    /// cleanup. The removed node has no content-clock entry, so `is_active`
+    /// treats it as dead.
+    #[test]
+    fn get_active_links_drops_edge_to_removed_node() {
+        let mut graph = GraphMem::new();
+        let a = VectorId::from_serial_id(1);
+        let b = VectorId::from_serial_id(2);
+        let node = |id| MutationOp::AddNode {
+            id,
+            height: 1,
+            update_ep: UpdateEntryPoint::False,
+        };
+
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 1,
+                ops: vec![node(a), node(b)],
+            })
+            .unwrap();
+        // Asymmetric a -> b so b's removal can't clean a's back-edge.
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 2,
+                ops: vec![MutationOp::AddEdges {
+                    base: a,
+                    layer: 0,
+                    neighbors: vec![b],
+                    edge_type: EdgeType::Base,
+                }],
+            })
+            .unwrap();
+        // Remove b (no re-insert): content[b] is dropped.
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 3,
+                ops: vec![MutationOp::RemoveNode { id: b }],
+            })
+            .unwrap();
+
+        // Physical edge a -> b survives, but read-path skips the dead node.
+        assert_eq!(
+            graph.layers[0].get_links(&1).unwrap().neighbors().to_vec(),
+            vec![2u32]
+        );
+        assert_eq!(graph.get_active_links(&1, 0), Vec::<SerialId>::new());
     }
 
     #[test]

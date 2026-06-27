@@ -989,12 +989,11 @@ impl HnswSearcher {
         while open_idx < init_nodes.len() && init_nodes.len() < ef {
             // get valid, unvisited neighbors of current node at `open_idx`
             let nbhd: Vec<VectorId> = graph
-                .fresh_links(&init_nodes[open_idx].serial_id(), lc)
+                .get_active_links(&init_nodes[open_idx].serial_id(), lc)
                 .iter()
                 .map(|&sid| store.serial_to_vector_id(sid))
                 .filter(|x| !init_nodes.contains(x))
                 .collect();
-            let nbhd = store.only_valid_vectors(nbhd).await;
 
             // extend `init_nodes` with these neighbors, and progress
             init_nodes.extend(nbhd);
@@ -1272,19 +1271,19 @@ impl HnswSearcher {
         query: &V::QueryRef,
         visited: &mut HashSet<VectorId>,
     ) -> Result<Vec<(VectorId, V::DistanceRef)>> {
-        let neighbors = graph.fresh_links(&node.serial_id(), lc);
+        let neighbors = graph.get_active_links(&node.serial_id(), lc);
 
         let unvisited_neighbors: Vec<VectorId> = neighbors
             .iter()
-            .map(|&sid| VectorId::from_serial_id(sid))
+            .map(|&sid| store.serial_to_vector_id(sid))
             .filter(|e| visited.insert(*e))
             .collect();
 
-        let valid_neighbors = store.only_valid_vectors(unvisited_neighbors).await;
+        let distances = store
+            .eval_distance_batch(query, &unvisited_neighbors)
+            .await?;
 
-        let distances = store.eval_distance_batch(query, &valid_neighbors).await?;
-
-        Ok(valid_neighbors
+        Ok(unvisited_neighbors
             .into_iter()
             .zip(distances.into_iter())
             .collect())
@@ -1313,7 +1312,7 @@ impl HnswSearcher {
         let mut opened_nodes = Vec::with_capacity(nodes.len());
 
         for node in nodes {
-            let neighbors = graph.fresh_links(&node.serial_id(), lc);
+            let neighbors = graph.get_active_links(&node.serial_id(), lc);
 
             let unvisited_neighbors: Vec<VectorId> = neighbors
                 .iter()
@@ -1321,7 +1320,7 @@ impl HnswSearcher {
                 .filter(|e| visited.insert(*e))
                 .collect();
 
-            valid_neighbors.extend(store.only_valid_vectors(unvisited_neighbors).await);
+            valid_neighbors.extend(unvisited_neighbors);
             opened_nodes.push(*node);
 
             // halt opening once at least limit valid neighbors have been visited, if specified
@@ -1495,10 +1494,11 @@ impl HnswSearcher {
     /// from the iteration order of the input candidates list; the caller wraps
     /// them into a `GraphMutation`, stamps a sequence number, and applies.
     ///
-    /// Note: `compact_neighborhood_batch` does top-K-by-distance selection
-    /// without validity filtering. Callers should run `prune_invalid_links` on
-    /// a superset of these candidates first so that the input neighborhoods are
-    /// free of stale references.
+    /// Note: this reads raw neighborhoods (`get_raw_links`) and does
+    /// top-K-by-distance selection without validity filtering, so a stale or
+    /// dangling reference can participate in the ranking. That is benign:
+    /// content-stale and removed edges are skipped at read time by
+    /// `get_active_links`, and the next filter-on-bump drops them physically.
     pub async fn compact_batch<V: VectorStore>(
         &self,
         store: &mut V,
@@ -1510,7 +1510,7 @@ impl HnswSearcher {
         let mut oversized: Vec<(VectorId, usize, Vec<VectorId>)> = Vec::new();
         for (id, layer) in candidates {
             let nbhd: Vec<VectorId> = graph
-                .get_links(&id.serial_id(), *layer)
+                .get_raw_links(&id.serial_id(), *layer)
                 .await
                 .iter()
                 .map(|&sid| store.serial_to_vector_id(sid))
@@ -1567,53 +1567,6 @@ impl HnswSearcher {
         Ok(ops)
     }
 
-    /// Computes RemoveEdges ops for any of the `candidates` neighborhoods that
-    /// contain references to vectors no longer present in `store`. Returns
-    /// the ops; the caller wraps them into a `GraphMutation`, stamps a
-    /// sequence number, and applies.  Ordering of the returned ops is the
-    /// same as the ordering of associated input candidates.
-    ///
-    /// TODO: remove once neighborhood-versioning lands. With per-edge
-    /// sequence numbers, stale-edge filtering becomes implicit in
-    /// `insert_apply` and this step is unnecessary.
-    pub async fn prune_invalid_links<V: VectorStore>(
-        &self,
-        store: &mut V,
-        graph: &GraphMem,
-        candidates: &BTreeSet<(VectorId, usize)>,
-    ) -> Result<Vec<MutationOp>> {
-        let mut ops = Vec::new();
-        for (id, layer) in candidates {
-            let current_links: Vec<VectorId> = graph
-                .get_links(&id.serial_id(), *layer)
-                .await
-                .iter()
-                .map(|&sid| store.serial_to_vector_id(sid))
-                .collect();
-            if current_links.is_empty() {
-                continue;
-            }
-            let valid_links = store.only_valid_vectors(current_links.clone()).await;
-            if valid_links.len() == current_links.len() {
-                continue;
-            }
-            let valid_set: HashSet<_> = valid_links.iter().collect();
-            let to_remove: Vec<VectorId> = current_links
-                .into_iter()
-                .filter(|v| !valid_set.contains(v))
-                .collect();
-            if !to_remove.is_empty() {
-                ops.push(MutationOp::RemoveEdges {
-                    base: *id,
-                    layer: *layer,
-                    neighbors: to_remove,
-                    edge_type: EdgeType::Base,
-                });
-            }
-        }
-        Ok(ops)
-    }
-
     /// Insert a vector using the search results from `search_to_insert`,
     /// that is the nearest neighbor links at each insertion layer, and an enum
     /// indicating the effect upon the graph's entry points
@@ -1639,7 +1592,7 @@ impl HnswSearcher {
         }
 
         // Build the AddNode + per-layer AddEdges mutation, apply it, then run
-        // the same post-apply prune + compaction the batched path uses.
+        // the same post-apply compaction the batched path uses.
         let height = links_unstructured.len();
         let mut ops: Vec<MutationOp> = vec![MutationOp::AddNode {
             id: inserted_vector,
@@ -1655,18 +1608,8 @@ impl HnswSearcher {
             });
         }
         let plan = UnstampedMutation { ops };
-        let updated: BTreeSet<_> = plan.updated_neighborhoods().into_iter().collect();
         let expanded: BTreeSet<_> = plan.expanded_neighborhoods().into_iter().collect();
         graph.apply_new(plan)?;
-
-        // Per-slot invalid-link prune (single-slot here). To be removed once
-        // neighborhood-versioning makes this implicit.
-        if !updated.is_empty() {
-            let ops = self.prune_invalid_links(store, graph, &updated).await?;
-            if !ops.is_empty() {
-                graph.apply_new(UnstampedMutation { ops })?;
-            }
-        }
 
         // Single-insert compaction.
         if !expanded.is_empty() {
@@ -1715,10 +1658,7 @@ mod tests {
         hnsw::GraphMem,
     };
     use aes_prng::AesRng;
-    use iris_mpc_common::{
-        iris_db::{db::IrisDB, iris::IrisCode},
-        VectorId,
-    };
+    use iris_mpc_common::iris_db::{db::IrisDB, iris::IrisCode};
     use rand::SeedableRng;
     use tokio;
 
@@ -1836,105 +1776,6 @@ mod tests {
                 .await?;
         }
 
-        Ok(())
-    }
-
-    /// `prune_invalid_links` returns RemoveEdges ops for any neighborhood that
-    /// contains references to vectors no longer present in the store. The
-    /// stale id here is constructed directly (never inserted) so the test
-    /// doesn't depend on a "remove vector" API.
-    #[tokio::test]
-    async fn prune_invalid_links_emits_remove_edges_for_stale_refs() -> Result<()> {
-        let mut store = PlaintextStore::<FhdOps>::new();
-        let mut graph: GraphMem = GraphMem::new();
-        let searcher = HnswSearcher::new_with_test_parameters();
-
-        // Real, inserted vector.
-        let a = store.insert(&Arc::new(IrisCode::default())).await;
-        // Stale id — never inserted into the store.
-        let stale = VectorId::from_serial_id(999_999);
-
-        // Wire a → [stale] directly into the graph.
-        let setup = GraphMutation {
-            seq_no: graph.next_sequence_number(),
-            ops: vec![
-                MutationOp::AddNode {
-                    id: a,
-                    height: 1,
-                    update_ep: UpdateEntryPoint::False,
-                },
-                MutationOp::AddEdges {
-                    base: a,
-                    neighbors: vec![stale],
-                    layer: 0,
-                    edge_type: EdgeType::Base,
-                },
-            ],
-        };
-        graph.insert_apply(&setup)?;
-
-        let mut candidates: BTreeSet<(VectorId, usize)> = BTreeSet::new();
-        candidates.insert((a, 0));
-
-        let ops = searcher
-            .prune_invalid_links(&mut store, &graph, &candidates)
-            .await?;
-
-        assert_eq!(ops.len(), 1, "exactly one RemoveEdges expected");
-        match &ops[0] {
-            MutationOp::RemoveEdges {
-                base,
-                layer,
-                neighbors,
-                edge_type,
-            } => {
-                assert_eq!(*base, a);
-                assert_eq!(layer, &0);
-                assert_eq!(edge_type, &EdgeType::Base);
-                assert_eq!(neighbors, &vec![stale]);
-            }
-            other => panic!("expected RemoveEdges, got {:?}", other),
-        }
-
-        Ok(())
-    }
-
-    /// When every reference in the candidate neighborhoods is valid,
-    /// `prune_invalid_links` returns an empty Vec.
-    #[tokio::test]
-    async fn prune_invalid_links_noop_when_all_valid() -> Result<()> {
-        let mut store = PlaintextStore::<FhdOps>::new();
-        let mut graph: GraphMem = GraphMem::new();
-        let searcher = HnswSearcher::new_with_test_parameters();
-
-        let a = store.insert(&Arc::new(IrisCode::default())).await;
-        let b = store.insert(&Arc::new(IrisCode::default())).await;
-
-        let setup = GraphMutation {
-            seq_no: graph.next_sequence_number(),
-            ops: vec![
-                MutationOp::AddNode {
-                    id: a,
-                    height: 1,
-                    update_ep: UpdateEntryPoint::False,
-                },
-                MutationOp::AddEdges {
-                    base: a,
-                    neighbors: vec![b],
-                    layer: 0,
-                    edge_type: EdgeType::Base,
-                },
-            ],
-        };
-        graph.insert_apply(&setup)?;
-
-        let mut candidates = BTreeSet::new();
-        candidates.insert((a, 0));
-
-        let ops = searcher
-            .prune_invalid_links(&mut store, &graph, &candidates)
-            .await?;
-        assert!(ops.is_empty(), "expected no RemoveEdges, got {:?}", ops);
         Ok(())
     }
 

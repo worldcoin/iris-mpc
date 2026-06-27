@@ -67,11 +67,6 @@ pub trait VectorStore: Debug {
     /// to help comparison to other vectors.
     async fn vectors_as_queries(&mut self, vectors: Vec<VectorId>) -> Result<Vec<Self::QueryRef>>;
 
-    /// Retain only vectors that are valid and currently usable by other methods.
-    async fn only_valid_vectors(&mut self, vectors: Vec<VectorId>) -> Vec<VectorId> {
-        vectors
-    }
-
     /// Retain entrypoints (vector id, layer) whose vector id is valid
     async fn only_valid_entry_points(
         &mut self,

@@ -307,11 +307,6 @@ impl VectorStore for PlaintextDeepIDStore {
         Ok(results)
     }
 
-    async fn only_valid_vectors(&mut self, mut vectors: Vec<VectorId>) -> Vec<VectorId> {
-        vectors.retain(|v| self.storage.contains(v));
-        vectors
-    }
-
     async fn only_valid_entry_points(
         &mut self,
         mut entry_points: Vec<(VectorId, usize)>,
@@ -441,12 +436,6 @@ impl VectorStore for SharedPlaintextDeepIDStore {
         }
         metrics::counter!("less_than").increment(distances.len() as u64);
         Ok(results)
-    }
-
-    async fn only_valid_vectors(&mut self, mut vectors: Vec<VectorId>) -> Vec<VectorId> {
-        let store = self.storage.read().await;
-        vectors.retain(|v| store.contains(v));
-        vectors
     }
 
     async fn only_valid_entry_points(

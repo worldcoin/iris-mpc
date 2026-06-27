@@ -451,7 +451,7 @@ pub struct HawkInsertPlan {
 
 /// A `ConnectPlan` is one finalized step of the HNSW insertion pipeline —
 /// a `GraphMutation` produced by the per-slot insert loop or by the
-/// post-batch `compact_batch` / `prune_invalid_links` helpers.
+/// post-batch `compact_batch` helper.
 pub type ConnectPlan = GraphMutation;
 
 /// Build the MPC network handle. Cheap — just TCP listener setup.

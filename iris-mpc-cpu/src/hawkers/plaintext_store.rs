@@ -197,11 +197,6 @@ impl<D: DistanceOps> VectorStore for PlaintextStore<D> {
         VectorId::new(serial_id, version)
     }
 
-    async fn only_valid_vectors(&mut self, mut vectors: Vec<VectorId>) -> Vec<VectorId> {
-        vectors.retain(|v| self.storage.contains(v));
-        vectors
-    }
-
     async fn only_valid_entry_points(
         &mut self,
         mut entry_points: Vec<(VectorId, usize)>,
@@ -353,12 +348,6 @@ impl<D: DistanceOps> VectorStore for SharedPlaintextStore<D> {
             .get_current_version_sync(serial_id)
             .unwrap_or(0);
         VectorId::new(serial_id, version)
-    }
-
-    async fn only_valid_vectors(&mut self, mut vectors: Vec<VectorId>) -> Vec<VectorId> {
-        let storage = self.storage.read().await;
-        vectors.retain(|v| storage.contains(v));
-        vectors
     }
 
     async fn only_valid_entry_points(
