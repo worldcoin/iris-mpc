@@ -14,20 +14,19 @@
 //!
 //! Compare to [`super::multipart::download_graph`], which uses parallel
 //! range GETs into a `BytesMut` and returns a fully buffered `Bytes`. The
-//! streaming path takes one range at a time — slower in aggregate, but the
-//! deserialized value never coexists in memory with a fully buffered copy
-//! of the bytes.
+//! streaming path fans out the same way (see [`DEFAULT_DOWNLOAD_PARALLELISM`])
+//! but emits ranges in order into a bounded pipe, so the deserialized value
+//! never coexists in memory with a fully buffered copy of the bytes.
 //!
 //! # Range cadence and retry
 //!
-//! The download is split into `⌈size / range_size⌉` sequential range GETs
-//! (`Range: bytes=START-END`). Each range is fetched independently and
-//! retried up to [`RANGE_MAX_RETRIES`] times with [`RANGE_RETRY_DELAY`]
-//! between attempts before it bubbles up as a fatal error. Transient
-//! network errors thus cost at most one range re-fetch, not a full
-//! restart of the download — which is the property the buffered
-//! parallel-range path also has, kept here without paying for an
-//! out-of-order reassembly buffer.
+//! The download is split into `⌈size / range_size⌉` range GETs
+//! (`Range: bytes=START-END`), up to [`DEFAULT_DOWNLOAD_PARALLELISM`] in
+//! flight at once and emitted in ascending offset order. Each range is
+//! fetched independently and retried up to [`RANGE_MAX_RETRIES`] times with
+//! [`RANGE_RETRY_DELAY`] between attempts before it bubbles up as a fatal
+//! error. Transient network errors thus cost at most one range re-fetch,
+//! not a full restart of the download.
 //!
 //! The `head_object` size probe is subject to the same per-attempt retry.
 //!
@@ -46,7 +45,7 @@ use std::time::Duration;
 use aws_sdk_s3::Client as S3Client;
 use bytes::Bytes;
 use eyre::{eyre, Result};
-use futures::stream::{self, Stream};
+use futures::stream::{self, Stream, StreamExt};
 use serde::de::DeserializeOwned;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::time::sleep;
@@ -68,8 +67,22 @@ pub const DEFAULT_DOWNLOAD_PIPE_CAPACITY: usize = 8 * 1024 * 1024;
 
 /// Default per-range fetch size. Each range becomes one `GetObject` with
 /// a `Range` header. Larger ⇒ fewer requests, more work to redo on a
-/// flaky range; smaller ⇒ more requests, finer-grained retry.
-pub const DEFAULT_DOWNLOAD_RANGE_SIZE: usize = 64 * 1024 * 1024;
+/// flaky range; smaller ⇒ more requests, finer-grained retry. With
+/// [`DEFAULT_DOWNLOAD_PARALLELISM`] in-flight, peak download buffering is
+/// roughly `parallelism * range_size`.
+pub const DEFAULT_DOWNLOAD_RANGE_SIZE: usize = 16 * 1024 * 1024;
+
+/// Default number of range GETs kept in flight concurrently. Results are
+/// emitted to the deserializer in offset order, so this bounds throughput
+/// without unbounding memory: peak buffered bytes ≈ `parallelism *
+/// range_size` (here ~512 MB). Mirrors the buffered path's 32-way fan-out,
+/// which sustains ~1.2 GB/s.
+pub const DEFAULT_DOWNLOAD_PARALLELISM: usize = 32;
+
+/// Buffer placed between the bincode graph decoder and the `SyncIoBridge`
+/// over the duplex pipe. bincode issues many small reads per node; without
+/// this each one would block across the async bridge individually.
+const GRAPH_DECODE_BUFFER: usize = 1024 * 1024;
 
 /// Stream the object at `s3://{bucket}/{key}` through BLAKE3 and bincode
 /// in one pass. Returns the deserialized value and the BLAKE3 digest of
@@ -92,6 +105,7 @@ where
         key,
         DEFAULT_DOWNLOAD_PIPE_CAPACITY,
         DEFAULT_DOWNLOAD_RANGE_SIZE,
+        DEFAULT_DOWNLOAD_PARALLELISM,
     )
     .await
 }
@@ -102,13 +116,14 @@ pub async fn stream_download_and_deserialize_with<T>(
     key: &str,
     pipe_capacity: usize,
     range_size: usize,
+    parallelism: usize,
 ) -> Result<(T, [u8; 32])>
 where
     T: DeserializeOwned + Send + 'static,
 {
     tracing::info!(
         "Streaming download + deserialize: bucket={bucket}, key={key}, \
-         pipe_capacity={pipe_capacity}, range_size={range_size}"
+         pipe_capacity={pipe_capacity}, range_size={range_size}, parallelism={parallelism}"
     );
 
     if range_size == 0 {
@@ -117,14 +132,13 @@ where
 
     let total_size = head_object_size_with_retry(s3_client, bucket, key).await?;
 
-    // `stream::unfold`'s state machine is `!Unpin`; `StreamReader` needs
-    // `Unpin`. Pin the boxed stream once and feed it through.
     let stream = Box::pin(range_stream(
         s3_client.clone(),
         bucket.to_string(),
         key.to_string(),
         total_size,
         range_size as u64,
+        parallelism,
     ));
     let reader = StreamReader::new(stream);
     deserialize_and_hash_from(reader, pipe_capacity).await
@@ -147,12 +161,13 @@ pub async fn stream_download_and_deserialize_graph_pair(
         format,
         DEFAULT_DOWNLOAD_PIPE_CAPACITY,
         DEFAULT_DOWNLOAD_RANGE_SIZE,
+        DEFAULT_DOWNLOAD_PARALLELISM,
     )
     .await
 }
 
 /// Like [`stream_download_and_deserialize_graph_pair`] but with explicit
-/// `pipe_capacity` and `range_size` knobs.
+/// `pipe_capacity`, `range_size`, and `parallelism` knobs.
 pub async fn stream_download_and_deserialize_graph_pair_with(
     s3_client: &S3Client,
     bucket: &str,
@@ -160,10 +175,12 @@ pub async fn stream_download_and_deserialize_graph_pair_with(
     format: GraphFormat,
     pipe_capacity: usize,
     range_size: usize,
+    parallelism: usize,
 ) -> Result<([GraphMem; 2], [u8; 32])> {
     tracing::info!(
         "Streaming download + deserialize graph pair: bucket={bucket}, key={key}, \
-         format={format}, pipe_capacity={pipe_capacity}, range_size={range_size}"
+         format={format}, pipe_capacity={pipe_capacity}, range_size={range_size}, \
+         parallelism={parallelism}"
     );
 
     if range_size == 0 {
@@ -181,10 +198,15 @@ pub async fn stream_download_and_deserialize_graph_pair_with(
         key.to_string(),
         total_size,
         range_size as u64,
+        parallelism,
     ));
     let reader = StreamReader::new(stream);
     deserialize_and_hash_from_fn(reader, pipe_capacity, move |r| {
-        read_graph_pair_streaming(r, format)
+        // bincode reads the graph field-by-field (count, then per-entry
+        // VectorId + edge Vec); without buffering each tiny read blocks
+        // across the duplex via SyncIoBridge — ~10x slower at prod scale.
+        let mut buf = std::io::BufReader::with_capacity(GRAPH_DECODE_BUFFER, r);
+        read_graph_pair_streaming(&mut buf, format)
     })
     .await
 }
@@ -217,49 +239,47 @@ async fn head_object_size_with_retry(s3_client: &S3Client, bucket: &str, key: &s
     }
 }
 
-/// Produce ranges of the object in ascending offset order, one at a time.
-/// Each yielded `Bytes` is the complete body of one `GetObject(Range)`;
-/// the next range is not requested until the consumer pulls again, so the
-/// duplex pipe's back-pressure naturally throttles fetch cadence.
+/// Produce the object's ranges in ascending offset order, keeping up to
+/// `parallelism` `GetObject(Range)` requests in flight at once. `buffered`
+/// preserves emission order regardless of completion order, so the
+/// downstream `StreamReader` sees a contiguous byte stream while up to
+/// `parallelism * range_size` bytes are buffered in flight.
 ///
-/// Per-range retry is internal to each `unfold` step. After
-/// [`RANGE_MAX_RETRIES`] failures on a single range, the stream emits an
-/// `Err` and ends — the downstream `StreamReader` will then surface the
-/// error to its reader.
+/// Per-range retry is internal to [`fetch_range`]. After [`RANGE_MAX_RETRIES`]
+/// failures on a single range, that range yields an `Err`; the downstream
+/// `StreamReader` fuses on the first `Err` and surfaces it to its reader,
+/// at which point the dropped stream cancels any still-in-flight fetches.
 fn range_stream(
     s3_client: S3Client,
     bucket: String,
     key: String,
     total_size: u64,
     range_size: u64,
+    parallelism: usize,
 ) -> impl Stream<Item = std::io::Result<Bytes>> {
-    stream::unfold(0u64, move |offset| {
-        let s3_client = s3_client.clone();
-        let bucket = bucket.clone();
-        let key = key.clone();
-        async move {
-            if offset >= total_size {
-                return None;
-            }
-            let end_inclusive = std::cmp::min(offset + range_size, total_size) - 1;
-            let range = format!("bytes={offset}-{end_inclusive}");
-            let next_offset = end_inclusive + 1;
+    let mut ranges = Vec::new();
+    let mut offset = 0u64;
+    while offset < total_size {
+        let end_inclusive = std::cmp::min(offset + range_size, total_size) - 1;
+        ranges.push((offset, end_inclusive));
+        offset = end_inclusive + 1;
+    }
 
-            match fetch_range(&s3_client, &bucket, &key, &range).await {
-                Ok(bytes) => Some((Ok(bytes), next_offset)),
-                Err(e) => Some((
-                    Err(std::io::Error::other(format!(
-                        "range {range} of s3://{bucket}/{key}: {e}"
-                    ))),
-                    // Offset value is irrelevant — stream terminates after
-                    // yielding the error since StreamReader fuses on first
-                    // Err. We pass `total_size` so a buggy continuation
-                    // would short-circuit immediately.
-                    total_size,
-                )),
+    stream::iter(ranges)
+        .map(move |(start, end_inclusive)| {
+            let s3_client = s3_client.clone();
+            let bucket = bucket.clone();
+            let key = key.clone();
+            async move {
+                let range = format!("bytes={start}-{end_inclusive}");
+                fetch_range(&s3_client, &bucket, &key, &range)
+                    .await
+                    .map_err(|e| {
+                        std::io::Error::other(format!("range {range} of s3://{bucket}/{key}: {e}"))
+                    })
             }
-        }
-    })
+        })
+        .buffered(parallelism.max(1))
 }
 
 /// Fetch one S3 range. Buffers the response body in memory so a mid-body
