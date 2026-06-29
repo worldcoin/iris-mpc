@@ -369,14 +369,6 @@ pub enum Orientation {
 /// The index in `ServerJobResult::merged_results` which means "no matches and no insertions".
 const NON_MATCH_ID: u32 = u32::MAX;
 
-/// A query whose anon-stats partial-match count exceeds this is treated as a
-/// supermatcher and excluded from anon-stats collection, mirroring the GPU path's
-/// `SUPERMATCH_THRESHOLD` (`iris-mpc-gpu/src/server/actor.rs`). Without this cap a single
-/// saturated query — re-searched at ef=4000 (see `classify_and_extend`) — can dump
-/// thousands of distances into the anon-stats store, the cause of the ~21M anon-stats
-/// over-production (POP-4055).
-const ANON_STATS_SUPERMATCH_THRESHOLD: usize = 4_000;
-
 impl std::fmt::Display for StoreId {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
@@ -877,9 +869,6 @@ impl HawkActor {
                 })
                 .unwrap_or(AnonStatsOperation::Uniqueness);
 
-            // Collect this query's partial-match distances per db id first, so the
-            // supermatch cap can be applied before any of them are persisted.
-            let mut query_distances: BTreeMap<i64, Vec<_>> = BTreeMap::new();
             for insert_plan in vec_rots.iter() {
                 // Use anon_stats_matches (higher threshold) for distance collection,
                 // matching GPU behavior of collecting all partial matches at the
@@ -887,32 +876,14 @@ impl HawkActor {
                 let anon_stats_matches = insert_plan.classified.anon_stats_matches.results.clone();
 
                 for (vector_id, distance) in anon_stats_matches {
+                    let distance_share = distance;
                     let match_id = ((query_idx as i64) << 32) | vector_id.serial_id() as i64;
-                    query_distances.entry(match_id).or_default().push(distance);
+                    distances_with_ids
+                        .entry(match_id)
+                        .or_insert_with(|| (operation, Vec::new()))
+                        .1
+                        .push(distance_share);
                 }
-            }
-
-            // GPU parity: a query whose partial-match count exceeds the supermatch
-            // threshold is treated as a supermatcher and excluded from anon-stats
-            // collection (cf. `SUPERMATCH_THRESHOLD` in iris-mpc-gpu). This caps the
-            // ef=4000 saturated-query blow-up that over-produced the store (POP-4055).
-            if query_distances.len() > ANON_STATS_SUPERMATCH_THRESHOLD {
-                metrics::counter!("anon_stats_supermatch_skipped").increment(1);
-                tracing::info!(
-                    query_idx,
-                    partial_match_count = query_distances.len(),
-                    threshold = ANON_STATS_SUPERMATCH_THRESHOLD,
-                    "Skipping anon-stats collection for supermatcher-saturated query"
-                );
-                continue;
-            }
-
-            for (match_id, distance_shares) in query_distances {
-                distances_with_ids
-                    .entry(match_id)
-                    .or_insert_with(|| (operation, Vec::new()))
-                    .1
-                    .extend(distance_shares);
             }
         }
         distances_with_ids
