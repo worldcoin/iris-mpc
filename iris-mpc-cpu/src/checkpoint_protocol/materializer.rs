@@ -5,9 +5,9 @@ use crate::checkpoint_protocol::{
     CheckpointMeta, CycleError, FreezeHeight, Graph, Materializer, MutationStore,
 };
 use crate::execution::hawk_main::BothEyes;
-use crate::graph_checkpoint::download_graph;
+use crate::graph_checkpoint::stream_download_and_deserialize_graph_pair;
 use crate::hnsw::{graph::graph_store::GraphPg, VectorStore};
-use crate::utils::serialization::graph::{read_graph_pair, GraphFormat};
+use crate::utils::serialization::graph::GraphFormat;
 use futures::TryStreamExt;
 
 /// Rebuilds the graph from an S3 checkpoint plus WAL replay.
@@ -44,27 +44,24 @@ impl<V: VectorStore + Send + Sync> Materializer for RebuildFromCheckpoint<'_, V>
                 ))
             })?;
 
-        // Download the whole checkpoint (parallel ranged GETs), then deserialize
-        // from memory. Trades peak memory, not a constraint here, for throughput.
-        let bytes = download_graph(self.s3_client, &self.bucket, &base.s3_key)
-            .await
-            .map_err(|e| {
-                CycleError::Fatal(format!(
-                    "download_graph({}/{}): {e}",
-                    self.bucket, base.s3_key
-                ))
-            })?;
-        // hash + deserialize are CPU-bound (seconds to minutes at prod scale);
-        // run off the async runtime so they don't block a reactor thread.
+        // Stream the checkpoint through the decoder: parallel ranged GETs feed a
+        // bounded pipe consumed by the bincode decode on a blocking thread, so
+        // peak memory is the deserialized graph plus a small download window, not
+        // the whole serialized file. The returned hash is BLAKE3 over the
+        // downloaded bytes, for base verification below.
         let label = format!("{}/{}", self.bucket, base.s3_key);
-        let (downloaded_hash, mut graph) = tokio::task::spawn_blocking(move || {
-            let hash = *blake3::hash(&bytes).as_bytes();
-            let graph = read_graph_pair(&mut std::io::Cursor::new(&bytes), format)
-                .map_err(|e| CycleError::Fatal(format!("read_graph_pair({label}): {e}")))?;
-            Ok::<_, CycleError>((hash, graph))
-        })
+        let (mut graph, downloaded_hash) = stream_download_and_deserialize_graph_pair(
+            self.s3_client,
+            &self.bucket,
+            &base.s3_key,
+            format,
+        )
         .await
-        .map_err(|e| CycleError::Fatal(format!("materialize deserialize task: {e}")))??;
+        .map_err(|e| {
+            CycleError::Fatal(format!(
+                "stream_download_and_deserialize_graph_pair({label}): {e}"
+            ))
+        })?;
 
         let downloaded_hex = hex::encode(downloaded_hash);
         if downloaded_hex != base.blake3_hash {
