@@ -36,7 +36,7 @@ impl<V: VectorStore + Send + Sync> Materializer for RebuildFromCheckpoint<'_, V>
     ) -> Result<Graph, CycleError> {
         let format = GraphFormat::try_from(base.graph_version)
             .ok()
-            .filter(|f| matches!(f, GraphFormat::V3 | GraphFormat::V4))
+            .filter(|f| matches!(f, GraphFormat::V3 | GraphFormat::V4 | GraphFormat::V5))
             .ok_or_else(|| {
                 CycleError::Fatal(format!(
                     "unsupported checkpoint graph_version={} for {}/{}",

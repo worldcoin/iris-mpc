@@ -466,12 +466,12 @@ macro_rules! legacy_prune_to_mem {
             .flat_map(|l| l.links.keys())
             .map(|&v| (v, 0u64))
             .collect();
-        GraphMem {
-            entry_points: $entry_points.into_iter().map(|e| e.into()).collect(),
+        GraphMem::from_parts(
+            $entry_points.into_iter().map(|e| e.into()).collect(),
             layers,
-            last_update_seq_no: $last_update_seq_no,
+            $last_update_seq_no,
             node_init_seq_no,
-        }
+        )
     }};
 }
 
@@ -578,16 +578,16 @@ impl From<graph_v0::GraphV0> for GraphMem {
             .flat_map(|l| l.links.keys())
             .map(|&v| (v, 0u64))
             .collect();
-        GraphMem {
-            entry_points: value
+        GraphMem::from_parts(
+            value
                 .entry_point
                 .map(|ep| ep.into())
                 .into_iter()
                 .collect::<Vec<_>>(),
             layers,
-            last_update_seq_no: 0,
+            0,
             node_init_seq_no,
-        }
+        )
     }
 }
 
@@ -626,16 +626,16 @@ impl From<graph_v1::GraphV1> for GraphMem {
             .flat_map(|l| l.links.keys())
             .map(|&v| (v, 0u64))
             .collect();
-        GraphMem {
-            entry_points: value
+        GraphMem::from_parts(
+            value
                 .entry_point
                 .map(|e| e.into())
                 .into_iter()
                 .collect::<Vec<_>>(),
             layers,
-            last_update_seq_no: 0,
+            0,
             node_init_seq_no,
-        }
+        )
     }
 }
 
@@ -677,17 +677,17 @@ impl From<graph_v2::GraphV2> for GraphMem {
             .flat_map(|l| l.links.keys())
             .map(|&v| (v, 0u64))
             .collect();
-        GraphMem {
-            // GraphMem uses a Vec<EntryPoint>, V2 uses Option<EntryPoint>.
-            entry_points: value
+        // GraphMem uses a Vec<EntryPoint>, V2 uses Option<EntryPoint>.
+        GraphMem::from_parts(
+            value
                 .entry_point
                 .map(|e| e.into())
                 .into_iter()
                 .collect::<Vec<_>>(),
             layers,
-            last_update_seq_no: 0,
+            0,
             node_init_seq_no,
-        }
+        )
     }
 }
 
@@ -729,13 +729,13 @@ impl From<graph_v3::GraphV3> for GraphMem {
             .flat_map(|l| l.links.keys())
             .map(|&v| (v, 0u64))
             .collect();
-        GraphMem {
-            // V3 uses a Vec<EntryPoint>, which matches GraphMem
-            entry_points: value.entry_point.into_iter().map(|e| e.into()).collect(),
+        // V3 uses a Vec<EntryPoint>, which matches GraphMem
+        GraphMem::from_parts(
+            value.entry_point.into_iter().map(|e| e.into()).collect(),
             layers,
-            last_update_seq_no: 0,
+            0,
             node_init_seq_no,
-        }
+        )
     }
 }
 
@@ -776,12 +776,12 @@ impl From<graph_v4::GraphV4> for GraphMem {
             .flat_map(|l| l.links.keys())
             .map(|&v| (v, 0u64))
             .collect();
-        GraphMem {
-            entry_points: value.entry_points.into_iter().map(|e| e.into()).collect(),
+        GraphMem::from_parts(
+            value.entry_points.into_iter().map(|e| e.into()).collect(),
             layers,
-            last_update_seq_no: value.last_update_seq_no,
+            value.last_update_seq_no,
             node_init_seq_no,
-        }
+        )
     }
 }
 
@@ -866,12 +866,12 @@ impl From<graph_v5::Layer> for Layer {
 
 impl From<graph_v5::GraphV5> for GraphMem {
     fn from(value: GraphV5) -> Self {
-        GraphMem {
-            entry_points: value.entry_points.into_iter().map(|e| e.into()).collect(),
-            layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
-            last_update_seq_no: value.last_update_seq_no,
-            node_init_seq_no: value.node_init_seq_no,
-        }
+        GraphMem::from_parts(
+            value.entry_points.into_iter().map(|e| e.into()).collect(),
+            value.layers.into_iter().map(|layer| layer.into()).collect(),
+            value.last_update_seq_no,
+            value.node_init_seq_no,
+        )
     }
 }
 
@@ -947,10 +947,12 @@ mod tests {
         for &n in &[7u32, 3, 9, 1, 5, 8, 2, 6, 4] {
             layer.set_links(n, vec![n + 1, n + 2], 0);
         }
-        let mut g = GraphMem::new();
-        g.entry_points = vec![layered_graph::EntryPoint { point: 1, layer: 0 }];
-        g.layers = vec![layer];
-        g
+        // Seed the content clock at 0 for every node, matching how the From<GraphVN>
+        // converters build a real graph; otherwise the checksum (which now folds
+        // node_init_seq_no) would differ from a round-tripped graph's.
+        let node_init_seq_no = layer.get_links_map().keys().map(|&k| (k, 0u64)).collect();
+        let entry_points = vec![layered_graph::EntryPoint { point: 1, layer: 0 }];
+        GraphMem::from_parts(entry_points, vec![layer], 0, node_init_seq_no)
     }
 
     /// Round-trip a `GraphMem` through the current (V5) serialization format and

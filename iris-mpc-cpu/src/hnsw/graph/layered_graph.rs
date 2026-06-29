@@ -103,7 +103,7 @@ pub struct EntryPoint {
 }
 
 /// An in-memory implementation of an HNSW hierarchical graph.
-#[derive(Default, PartialEq, Eq, Debug, Deserialize)]
+#[derive(Default, PartialEq, Eq, Debug)]
 pub struct GraphMem {
     /// Entry points for HNSW search.
     ///
@@ -125,6 +125,14 @@ pub struct GraphMem {
     /// inserting it or modifying one of its edge lists). Removed when the node
     /// is deleted.
     pub node_init_seq_no: HashMap<SerialId, u64>,
+
+    /// Incrementally-maintained order-agnostic hash of `node_init_seq_no`,
+    /// folded into [`GraphMem::checksum`] so the content clock is part of
+    /// cross-party consensus (it gates edge liveness via `is_active`). Derived
+    /// state: not serialized; recomputed from `node_init_seq_no` on construction
+    /// and deserialization, kept in sync by `insert_apply`. Private so all
+    /// construction routes through `from_parts`, which computes it.
+    node_init_hash: SetHash,
 }
 
 impl Display for GraphMem {
@@ -167,7 +175,32 @@ impl Clone for GraphMem {
             layers: self.layers.clone(),
             last_update_seq_no: self.last_update_seq_no,
             node_init_seq_no: self.node_init_seq_no.clone(),
+            node_init_hash: self.node_init_hash.clone(),
         }
+    }
+}
+
+impl<'de> Deserialize<'de> for GraphMem {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // Mirror the field order of the manual `Serialize` impl; `node_init_hash`
+        // is derived and recomputed by `from_parts` rather than read.
+        #[derive(Deserialize)]
+        struct GraphMemData {
+            entry_points: Vec<EntryPoint>,
+            layers: Vec<Layer>,
+            last_update_seq_no: u64,
+            node_init_seq_no: HashMap<SerialId, u64>,
+        }
+        let d = GraphMemData::deserialize(deserializer)?;
+        Ok(GraphMem::from_parts(
+            d.entry_points,
+            d.layers,
+            d.last_update_seq_no,
+            d.node_init_seq_no,
+        ))
     }
 }
 
@@ -178,7 +211,41 @@ impl GraphMem {
             layers: vec![],
             last_update_seq_no: 0,
             node_init_seq_no: HashMap::new(),
+            node_init_hash: SetHash::default(),
         }
+    }
+
+    /// Assemble a `GraphMem` from its parts, computing the derived
+    /// `node_init_hash`. The sole constructor for callers outside this module
+    /// (the field is private), so the content-clock hash can never be missed.
+    pub fn from_parts(
+        entry_points: Vec<EntryPoint>,
+        layers: Vec<Layer>,
+        last_update_seq_no: u64,
+        node_init_seq_no: HashMap<SerialId, u64>,
+    ) -> Self {
+        let mut node_init_hash = SetHash::default();
+        // SetHash folds via commutative wrapping addition, so iteration order is
+        // irrelevant to the result.
+        #[allow(clippy::iter_over_hash_type)]
+        for (&serial, &seq) in &node_init_seq_no {
+            node_init_hash.add_unordered(Self::node_init_contribution(serial, seq));
+        }
+        GraphMem {
+            entry_points,
+            layers,
+            last_update_seq_no,
+            node_init_seq_no,
+            node_init_hash,
+        }
+    }
+
+    /// Single source of truth for how a `(serial, seq)` content-clock entry is
+    /// folded into `node_init_hash` — used by both the bulk build in
+    /// `from_parts` and the incremental updates in `insert_apply`, so the two
+    /// can never drift.
+    fn node_init_contribution(serial: SerialId, seq: u64) -> (&'static str, SerialId, u64) {
+        ("node_init", serial, seq)
     }
 
     /// Returns the sequence number that the next applied `GraphMutation` must
@@ -200,18 +267,14 @@ impl GraphMem {
             .flat_map(|l| l.links.keys())
             .map(|&v| (v, 0u64))
             .collect();
-        GraphMem {
-            entry_points: entry_points
-                .into_iter()
-                .map(|ep| EntryPoint {
-                    point: ep.0,
-                    layer: ep.1,
-                })
-                .collect::<Vec<_>>(),
-            layers,
-            last_update_seq_no: 0,
-            node_init_seq_no,
-        }
+        let entry_points = entry_points
+            .into_iter()
+            .map(|ep| EntryPoint {
+                point: ep.0,
+                layer: ep.1,
+            })
+            .collect::<Vec<_>>();
+        GraphMem::from_parts(entry_points, layers, 0, node_init_seq_no)
     }
 
     pub fn get_layers(&self) -> Vec<Layer> {
@@ -278,7 +341,10 @@ impl GraphMem {
                         layer.remove_node(sid);
                     }
                     self.entry_points.retain(|ep| ep.point != sid);
-                    self.node_init_seq_no.remove(&sid);
+                    if let Some(old) = self.node_init_seq_no.remove(&sid) {
+                        self.node_init_hash
+                            .remove(Self::node_init_contribution(sid, old));
+                    }
                 }
                 MutationOp::AddNode {
                     id,
@@ -302,7 +368,12 @@ impl GraphMem {
                     for layer_idx in 0..*height {
                         self.layers[layer_idx].insert_node(sid, Vec::new(), seq_no);
                     }
-                    self.node_init_seq_no.insert(sid, seq_no);
+                    if let Some(old) = self.node_init_seq_no.insert(sid, seq_no) {
+                        self.node_init_hash
+                            .remove(Self::node_init_contribution(sid, old));
+                    }
+                    self.node_init_hash
+                        .add_unordered(Self::node_init_contribution(sid, seq_no));
                 }
                 MutationOp::AddEdges { .. } | MutationOp::RemoveEdges { .. } => {}
             }
@@ -524,8 +595,13 @@ impl GraphMem {
         // yields the same checksum across parties.
         set_hash.add_unordered_set("entry_points", self.entry_points.iter());
         for (lc, layer) in self.layers.iter().enumerate() {
+            // Each layer's `set_hash` now folds (node, seq_no, neighbors), so the
+            // per-neighborhood freshness clock is covered here.
             set_hash.add_unordered((lc as u64, layer.set_hash.checksum()));
         }
+        // Fold the content clock (node_init_seq_no) so parties that would skip
+        // different edges via `is_active` disagree on the checksum.
+        set_hash.add_unordered(("node_init_clock", self.node_init_hash.checksum()));
         set_hash.checksum()
     }
 }
@@ -776,20 +852,24 @@ impl Layer {
         let Some(nbhd) = self.links.get_mut(&node) else {
             return;
         };
+        // Key the set-hash on (node, seq_no) so the neighborhood's freshness
+        // certificate is part of the consensus checksum. Remove under the OLD
+        // seq_no, re-add under the new one.
         self.set_hash
-            .remove_unordered_set(node, nbhd.neighbors.iter());
+            .remove_unordered_set((node, nbhd.seq_no), nbhd.neighbors.iter());
         f(nbhd.seq_no, &mut nbhd.neighbors);
         nbhd.neighbors.sort_unstable();
         nbhd.neighbors.dedup();
         nbhd.seq_no = tick.value();
-        self.set_hash.add_unordered_set(node, nbhd.neighbors.iter());
+        self.set_hash
+            .add_unordered_set((node, nbhd.seq_no), nbhd.neighbors.iter());
     }
 
     /// Remove a node from the graph and clean up all backlinks from its neighbors.
     pub fn remove_node(&mut self, id: SerialId) {
         if let Some(nbhd) = self.links.remove(&id) {
             self.set_hash
-                .remove_unordered_set(id, nbhd.neighbors.iter());
+                .remove_unordered_set((id, nbhd.seq_no), nbhd.neighbors.iter());
 
             // Remove the node from all neighbors' neighborhoods (bidirectional cleanup).
             // note that if this node did compaction then some old neighbors could still have links
@@ -797,11 +877,17 @@ impl Layer {
             // this is just an opportunistic low-cost cleanup.
             for neighbor in nbhd.neighbors {
                 if let Some(neighbor_nbhd) = self.links.get_mut(&neighbor) {
-                    self.set_hash
-                        .remove_unordered_set(neighbor, neighbor_nbhd.neighbors.iter());
+                    // seq_no is unchanged here (only the link list shrinks), so
+                    // remove and re-add under the same (neighbor, seq_no) key.
+                    self.set_hash.remove_unordered_set(
+                        (neighbor, neighbor_nbhd.seq_no),
+                        neighbor_nbhd.neighbors.iter(),
+                    );
                     neighbor_nbhd.neighbors.retain(|x| *x != id);
-                    self.set_hash
-                        .add_unordered_set(neighbor, neighbor_nbhd.neighbors.iter());
+                    self.set_hash.add_unordered_set(
+                        (neighbor, neighbor_nbhd.seq_no),
+                        neighbor_nbhd.neighbors.iter(),
+                    );
                 }
             }
         }
@@ -817,17 +903,20 @@ impl Layer {
         use std::collections::hash_map::Entry;
         match self.links.entry(from) {
             Entry::Occupied(mut e) => {
+                let key = *e.key();
+                let old_seq = e.get().seq_no;
                 self.set_hash
-                    .remove_unordered_set(*e.key(), e.get().neighbors.iter());
+                    .remove_unordered_set((key, old_seq), e.get().neighbors.iter());
                 let existing = e.get_mut();
                 existing.neighbors.clear();
                 existing.neighbors.extend(links);
                 existing.seq_no = seq_no;
                 self.set_hash
-                    .add_unordered_set(*e.key(), e.get().neighbors.iter());
+                    .add_unordered_set((key, seq_no), existing.neighbors.iter());
             }
             Entry::Vacant(e) => {
-                self.set_hash.add_unordered_set(*e.key(), links.iter());
+                self.set_hash
+                    .add_unordered_set((*e.key(), seq_no), links.iter());
                 e.insert(Neighborhood {
                     neighbors: links,
                     seq_no,
@@ -957,12 +1046,12 @@ where
         .map(|(id, seq)| (vector_map(id), seq))
         .collect();
 
-    GraphMem {
-        entry_points: new_entry_points,
-        layers: new_layers,
+    GraphMem::from_parts(
+        new_entry_points,
+        new_layers,
         last_update_seq_no,
-        node_init_seq_no: new_node_last_update_seq_no,
-    }
+        new_node_last_update_seq_no,
+    )
 }
 
 #[cfg(test)]
@@ -981,6 +1070,40 @@ mod tests {
     use iris_mpc_common::{iris_db::db::IrisDB, SerialId, VectorId};
 
     use rand::{RngCore, SeedableRng};
+
+    /// The consensus checksum must change when either clock changes, even with
+    /// identical neighbor sets and entry points — otherwise parties that skip
+    /// different edges via `is_active` could agree on the checksum.
+    #[test]
+    fn checksum_folds_content_and_neighborhood_clocks() {
+        use super::{EntryPoint, Layer};
+        // node1 neighborhood seq = `nbhd_seq`; node1 content clock = `content`.
+        let build = |nbhd_seq: u64, content: u64| -> GraphMem {
+            let mut layer = Layer::new();
+            layer.set_links(1u32, vec![2u32], nbhd_seq);
+            layer.set_links(2u32, vec![], 0);
+            let node_init = HashMap::from([(1u32, content), (2u32, 0u64)]);
+            GraphMem::from_parts(
+                vec![EntryPoint { point: 1, layer: 0 }],
+                vec![layer],
+                0,
+                node_init,
+            )
+        };
+
+        let base = build(0, 0);
+        assert_eq!(base.checksum(), build(0, 0).checksum(), "deterministic");
+        assert_ne!(
+            base.checksum(),
+            build(5, 0).checksum(),
+            "per-neighborhood seq_no must be folded into the checksum"
+        );
+        assert_ne!(
+            base.checksum(),
+            build(0, 7).checksum(),
+            "node_init_seq_no (content clock) must be folded into the checksum"
+        );
+    }
 
     #[allow(dead_code)]
     #[derive(Default, Clone, Debug, PartialEq, Eq)]
