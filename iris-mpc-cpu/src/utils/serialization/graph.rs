@@ -262,12 +262,9 @@ fn read_pair<R: std::io::Read + ?Sized, G: for<'a> Deserialize<'a>>(
 
 /// Convert a decoded wire-format pair into `GraphMem`s.
 ///
-/// Deliberately serial: each `into()` drains its source graph entry-by-entry
-/// while building the destination, so a single-threaded conversion keeps peak
-/// transient memory at ~1×E (E = edge payload). Converting the two eyes in
-/// parallel frees the source on a different allocator arena than it was decoded
-/// on, stranding it under glibc's per-thread arenas and pushing peak RSS toward
-/// ~2×E — costly at prod graph scale.
+/// Serial on purpose: parallelizing the two eyes frees the source on a
+/// different allocator arena than the decode used, which strands it under
+/// glibc and pushes peak RSS toward ~2×E. Serial keeps it at ~1×E.
 fn convert_pair<G>(pair: [G; 2]) -> [GraphMem; 2]
 where
     G: Into<GraphMem>,
@@ -654,15 +651,11 @@ impl From<GraphMem> for graph_v4::GraphV4 {
     }
 }
 
-/* ----------- Streaming Deserialization (single-copy path) ---------- */
+/* ----------- Streaming Deserialization ---------- */
 
-/// Read a pair of [`GraphMem`] structs from a byte stream.
-///
-/// `bincode::deserialize_from` pulls bytes incrementally from `reader`, and the
-/// `From<GraphVN>` conversions move neighbor `Vec`s into the destination graph,
-/// so peak transient memory is roughly the wire payload — no second full-graph
-/// copy. The streaming win comes from byte-streaming the input `reader`, not
-/// from the decode.
+/// Read a graph pair from a byte stream. Identical to [`read_graph_pair`]; the
+/// streaming benefit is in feeding `reader` incrementally (see the `s3_client`
+/// streaming download), not in the decode.
 pub fn read_graph_pair_streaming<R: std::io::Read + ?Sized>(
     reader: &mut R,
     format: GraphFormat,
@@ -795,9 +788,8 @@ mod tests {
         buf
     }
 
-    /// `read_graph_pair_streaming` (fed bytes via a `Cursor`) yields a graph pair
-    /// equal to `read_graph_pair` and to the original, including per-layer
-    /// `checksum()`, for every stable layer-hashed format.
+    /// For V3 and V4, `read_graph_pair_streaming` round-trips a pair back to the
+    /// original (and matches `read_graph_pair`), including per-layer `checksum()`.
     #[test]
     fn streaming_matches_derived_and_original() {
         let g = sample_graph();

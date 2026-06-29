@@ -130,16 +130,10 @@ where
     deserialize_and_hash_from(reader, pipe_capacity).await
 }
 
-/// Stream the object at `s3://{bucket}/{key}` through BLAKE3 and directly
-/// into a `[GraphMem; 2]` using a format-aware layer-by-layer
-/// reader that converts each layer immediately upon arrival.
-///
-/// Unlike `stream_download_and_deserialize::<[GraphVN; 2]>` followed by
-/// `.into()`, this never holds a full intermediate `GraphVN` alongside the
-/// destination `GraphMem` — it reads one set of links at a time and calls
-/// `Layer::set_links` immediately.  For `Current`/V4 and V3 the peak
-/// transient allocation above the final `GraphMem` is roughly one layer's
-/// link data; older formats fall back to the standard path.
+/// Stream the object at `s3://{bucket}/{key}` through BLAKE3 and deserialize
+/// into a `[GraphMem; 2]`. Bytes are fed to the decoder incrementally as ranges
+/// arrive; the decode itself ([`read_graph_pair_streaming`]) is the standard
+/// derived path.
 pub async fn stream_download_and_deserialize_graph_pair(
     s3_client: &S3Client,
     bucket: &str,
