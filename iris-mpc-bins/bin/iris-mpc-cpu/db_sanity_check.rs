@@ -307,7 +307,7 @@ async fn main() -> Result<()> {
         checkpoint_state.s3_key
     );
     let mut graphs: BothEyes<GraphMem> =
-        download_graph_checkpoint(&checkpoint_s3_client, bucket, &checkpoint_state).await?;
+        download_graph_checkpoint(&checkpoint_s3_client, bucket, &checkpoint_state, None).await?;
     rpt!(rpt, "  Checkpoint loaded and BLAKE3 verified.");
 
     // Replay any GraphMutations recorded in hawk_graph_mutations after the checkpoint.

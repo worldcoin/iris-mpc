@@ -116,6 +116,7 @@ impl MpcNodes {
                 &aws_clients.checkpoint_s3_client,
                 &config.graph_checkpoint_bucket_name,
                 &checkpoint_state,
+                None,
             )
             .await?;
 

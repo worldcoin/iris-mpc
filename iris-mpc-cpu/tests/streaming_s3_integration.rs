@@ -309,7 +309,8 @@ async fn v3_graph_pair_streams_to_graphmem() -> Result<()> {
 
     // Stream-download V3 bytes → `[GraphMem; 2]`.
     let download =
-        stream_download_and_deserialize_graph_pair(&client, &bucket, key, GraphFormat::V3).await;
+        stream_download_and_deserialize_graph_pair(&client, &bucket, key, GraphFormat::V3, None)
+            .await;
     cleanup_bucket(&client, &bucket).await;
     let (graphs, hash) = download?;
 
@@ -423,7 +424,8 @@ async fn v4_graph_pair_streams_to_graphmem_seq_no_preserved() -> Result<()> {
 
     // Stream-download V4 bytes → `[GraphMem; 2]`.
     let download =
-        stream_download_and_deserialize_graph_pair(&client, &bucket, key, GraphFormat::V4).await;
+        stream_download_and_deserialize_graph_pair(&client, &bucket, key, GraphFormat::V4, None)
+            .await;
     cleanup_bucket(&client, &bucket).await;
     let (graphs, hash) = download?;
 

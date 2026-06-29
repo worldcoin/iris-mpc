@@ -1,7 +1,7 @@
 mod multipart;
 mod streaming;
 mod streaming_download;
-use std::{io::Cursor, time::Instant};
+use std::{collections::HashSet, io::Cursor, time::Instant};
 
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client as S3Client;
@@ -172,15 +172,21 @@ pub async fn download_graph_checkpoint(
     s3_client: &S3Client,
     bucket: &str,
     state: &GraphCheckpointState,
+    prune_deletions: Option<HashSet<u32>>,
 ) -> Result<BothEyes<GraphMem>> {
     let format = GraphFormat::try_from(state.graph_version)?;
     if format == GraphFormat::Raw {
         bail!("Unexpected graph checkpoint format: Raw");
     }
     let start = Instant::now();
-    let (graphs, hash_bytes) =
-        stream_download_and_deserialize_graph_pair(s3_client, bucket, &state.s3_key, format)
-            .await?;
+    let (graphs, hash_bytes) = stream_download_and_deserialize_graph_pair(
+        s3_client,
+        bucket,
+        &state.s3_key,
+        format,
+        prune_deletions,
+    )
+    .await?;
     metrics::histogram!("genesis_checkpoint_download_duration")
         .record(start.elapsed().as_secs_f64());
 

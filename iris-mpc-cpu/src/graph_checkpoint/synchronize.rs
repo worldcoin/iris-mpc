@@ -142,7 +142,7 @@ pub async fn load_graph_and_roll_forward(
             "Loading graph from common S3 checkpoint, hash: {}",
             state.blake3_hash
         );
-        download_graph_checkpoint(s3_client, checkpoint_bucket, &state).await?
+        download_graph_checkpoint(s3_client, checkpoint_bucket, &state, None).await?
     } else {
         tracing::info!("No S3 checkpoint found, defaulting to empty graph");
         [GraphMem::new(), GraphMem::new()]

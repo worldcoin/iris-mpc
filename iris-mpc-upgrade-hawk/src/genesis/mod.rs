@@ -49,6 +49,7 @@ use iris_mpc_cpu::{
 };
 use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
 use std::{
+    collections::HashSet,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -450,6 +451,7 @@ async fn exec_setup(
         Arc::clone(&shutdown_handler),
         args.max_indexation_id as usize,
         graph_checkpoint.clone(),
+        excluded_serial_ids.iter().copied().collect(),
     )
     .await?;
     task_monitor_bg.check_tasks();
@@ -1387,6 +1389,7 @@ async fn init_graph_from_stores(
     shutdown_handler: Arc<ShutdownHandler>,
     max_indexation_id: usize,
     checkpoint: Option<GraphCheckpointState>,
+    deleted_serial_ids: HashSet<SerialId>,
 ) -> Result<HawkActor> {
     tracing::info!("⚓️ ANCHOR: Load the database");
 
@@ -1428,13 +1431,24 @@ async fn init_graph_from_stores(
             },
         ));
 
-    let graph_load_future = async {
+    let graph_load_future = async move {
         if let Some(state) = checkpoint {
             tracing::info!(
                 "Loading graph from S3 checkpoint, hash: {}",
                 state.blake3_hash
             );
-            download_graph_checkpoint(s3_client, checkpoint_bucket, &state).await
+            // Prune at read: drop edges stale w.r.t. their target's current
+            // version (v5 serial-only edges can't skip them at search time) and
+            // remove deleted serials (which legacy graphs may retain as stale
+            // stragglers). The deletion set is the S3 exclusion list, not the
+            // iris vector store.
+            download_graph_checkpoint(
+                s3_client,
+                checkpoint_bucket,
+                &state,
+                Some(deleted_serial_ids),
+            )
+            .await
         } else {
             tracing::info!("No S3 checkpoint found, defaulting to empty graph");
             Ok([GraphMem::new(), GraphMem::new()])

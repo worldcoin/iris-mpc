@@ -54,8 +54,9 @@ use tokio_util::io::{StreamReader, SyncIoBridge};
 
 use crate::{
     hnsw::graph::layered_graph::GraphMem,
-    utils::serialization::graph::{read_graph_pair_streaming, GraphFormat},
+    utils::serialization::graph::{read_graph_pair_pruned, read_graph_pair_streaming, GraphFormat},
 };
+use std::collections::HashSet;
 
 const RANGE_MAX_RETRIES: u32 = 3;
 const RANGE_RETRY_DELAY: Duration = Duration::from_secs(2);
@@ -140,17 +141,24 @@ where
 /// `Layer::set_links` immediately.  For `Current`/V4 and V3 the peak
 /// transient allocation above the final `GraphMem` is roughly one layer's
 /// link data; older formats fall back to the standard path.
+///
+/// When `prune_deletions` is `Some`, edges that are stale at load time are
+/// dropped during deserialization and the given deleted serials are removed
+/// (see [`read_graph_pair_pruned`]); genesis passes `Some` when materializing a
+/// legacy base checkpoint. `None` reads verbatim.
 pub async fn stream_download_and_deserialize_graph_pair(
     s3_client: &S3Client,
     bucket: &str,
     key: &str,
     format: GraphFormat,
+    prune_deletions: Option<HashSet<u32>>,
 ) -> Result<([GraphMem; 2], [u8; 32])> {
     stream_download_and_deserialize_graph_pair_with(
         s3_client,
         bucket,
         key,
         format,
+        prune_deletions,
         DEFAULT_DOWNLOAD_PIPE_CAPACITY,
         DEFAULT_DOWNLOAD_RANGE_SIZE,
     )
@@ -164,6 +172,7 @@ pub async fn stream_download_and_deserialize_graph_pair_with(
     bucket: &str,
     key: &str,
     format: GraphFormat,
+    prune_deletions: Option<HashSet<u32>>,
     pipe_capacity: usize,
     range_size: usize,
 ) -> Result<([GraphMem; 2], [u8; 32])> {
@@ -190,7 +199,11 @@ pub async fn stream_download_and_deserialize_graph_pair_with(
     ));
     let reader = StreamReader::new(stream);
     deserialize_and_hash_from_fn(reader, pipe_capacity, move |r| {
-        read_graph_pair_streaming(r, format)
+        if let Some(deleted) = &prune_deletions {
+            read_graph_pair_pruned(r, format, deleted)
+        } else {
+            read_graph_pair_streaming(r, format)
+        }
     })
     .await
 }
