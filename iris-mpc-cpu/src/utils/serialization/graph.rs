@@ -260,21 +260,26 @@ fn read_pair<R: std::io::Read + ?Sized, G: for<'a> Deserialize<'a>>(
     Ok(data)
 }
 
-/// Convert a decoded wire-format pair into `GraphMem`s, running the two eyes'
-/// (independent) conversions concurrently. The preceding bincode decode is serial.
-fn convert_pair_parallel<G>(pair: [G; 2]) -> [GraphMem; 2]
+/// Convert a decoded wire-format pair into `GraphMem`s.
+///
+/// Deliberately serial: each `into()` drains its source graph entry-by-entry
+/// while building the destination, so a single-threaded conversion keeps peak
+/// transient memory at ~1×E (E = edge payload). Converting the two eyes in
+/// parallel frees the source on a different allocator arena than it was decoded
+/// on, stranding it under glibc's per-thread arenas and pushing peak RSS toward
+/// ~2×E — costly at prod graph scale.
+fn convert_pair<G>(pair: [G; 2]) -> [GraphMem; 2]
 where
-    G: Into<GraphMem> + Send,
+    G: Into<GraphMem>,
 {
     let [left, right] = pair;
-    let (left, right) = rayon::join(|| left.into(), || right.into());
-    [left, right]
+    [left.into(), right.into()]
 }
 
 /// Designated method for reading a pair of `GraphMem` structs. Currently goes
 /// through the `GraphV4` serialization type.
 pub fn read_graph_pair_current<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<[GraphMem; 2]> {
-    Ok(convert_pair_parallel(read_pair::<_, GraphV4>(reader)?))
+    Ok(convert_pair(read_pair::<_, GraphV4>(reader)?))
 }
 
 /// Designated method for writing a pair of `GraphMem` structs. Currently goes
@@ -315,8 +320,8 @@ pub fn read_graph_pair<R: std::io::Read + ?Sized>(
 ) -> Result<[GraphMem; 2]> {
     match format {
         GraphFormat::Current => read_graph_pair_current(reader),
-        GraphFormat::V4 => Ok(convert_pair_parallel(read_pair::<_, GraphV4>(reader)?)),
-        GraphFormat::V3 => Ok(convert_pair_parallel(read_pair::<_, GraphV3>(reader)?)),
+        GraphFormat::V4 => Ok(convert_pair(read_pair::<_, GraphV4>(reader)?)),
+        GraphFormat::V3 => Ok(convert_pair(read_pair::<_, GraphV3>(reader)?)),
         GraphFormat::V2 => {
             let graphs = read_pair::<_, GraphV2>(reader)?;
             Ok(graphs.map(|graph| graph.into()))
