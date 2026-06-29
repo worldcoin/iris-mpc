@@ -255,6 +255,11 @@ pub enum RestartOutcome {
     NoCommonBase,
 }
 
+/// Max attempts for the restart consensus before giving up (and exiting).
+const RESTART_MAX_ATTEMPTS: usize = 30;
+/// Delay between restart consensus attempts.
+const RESTART_RETRY_DELAY: Duration = Duration::from_secs(5);
+
 /// Rebuild the live graph from the latest checkpoint + WAL replay, then
 /// install it into `target`. `min_mutations_to_apply=0` so the cycle
 /// proceeds even when there are no new mutations beyond the base.
@@ -277,33 +282,60 @@ pub async fn restart_from_checkpoint<V: VectorStore + Send + Sync>(
     // join the ring, or its peers block in the Phase 1 exchange until
     // timeout and crash-loop while this party silently boots empty.
     // "Nobody has a checkpoint" is a consensus outcome, not a local one.
-    let channel = networking
-        .control_channel()
-        .await
-        .map_err(|e| eyre!("open control_channel: {e}"))?;
-    let transport = RingConsensusTransport::new(channel);
-
-    let mut materializer = RebuildFromCheckpoint::new(graph_store, s3_client, bucket);
-    let mut finalizer = InstallAsServing::new(target);
     let hasher = Blake3GraphHasher::new();
-
     let cfg = CycleConfig {
         min_mutations_to_apply: 0,
         peer_round_timeout,
         checkpoint_window,
     };
 
-    let outcome = run_cycle(
-        &mut materializer,
-        &mut finalizer,
-        &transport,
-        graph_store,
-        &hasher,
-        &MostRecentCommon,
-        &cfg,
-    )
-    .await
-    .map_err(|e| eyre!("restart run_cycle: {e}"))?;
+    // Retry transient failures instead of exiting. Re-open the channel each
+    // attempt: a timed-out round can leave buffered frames that desync a reuse.
+    let outcome = {
+        let mut attempt = 0usize;
+        loop {
+            attempt += 1;
+            let channel = networking
+                .control_channel()
+                .await
+                .map_err(|e| eyre!("open control_channel: {e}"))?;
+            let transport = RingConsensusTransport::new(channel);
+            let mut materializer =
+                RebuildFromCheckpoint::new(graph_store, s3_client, bucket.clone());
+            let mut finalizer = InstallAsServing::new(target.clone());
+
+            match run_cycle(
+                &mut materializer,
+                &mut finalizer,
+                &transport,
+                graph_store,
+                &hasher,
+                &MostRecentCommon,
+                &cfg,
+            )
+            .await
+            {
+                Ok(outcome) => break outcome,
+                Err(CycleError::Transient(msg)) if attempt < RESTART_MAX_ATTEMPTS => {
+                    tracing::warn!(
+                        attempt,
+                        max = RESTART_MAX_ATTEMPTS,
+                        error = %msg,
+                        "restart run_cycle transient; retrying"
+                    );
+                    tokio::time::sleep(RESTART_RETRY_DELAY).await;
+                }
+                Err(CycleError::Transient(msg)) => {
+                    return Err(eyre!(
+                        "restart run_cycle: transient after {attempt} attempts: {msg}"
+                    ));
+                }
+                Err(CycleError::Fatal(msg)) => {
+                    return Err(eyre!("restart run_cycle: {msg}"));
+                }
+            }
+        }
+    };
 
     match outcome {
         Outcome::Finalized { height, .. } => {

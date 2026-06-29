@@ -1,6 +1,6 @@
 use crate::services::aws::clients::AwsClients;
 use crate::services::processors::batch::receive_batch_stream;
-use crate::services::processors::job::process_job_result;
+use crate::services::processors::job::{process_job_result, BatchTimings};
 use aws_sdk_s3::Client;
 use aws_sdk_sns::types::MessageAttributeValue;
 use iris_mpc_cpu::checkpoint_protocol::{restart_from_checkpoint, sidecar_main, RestartOutcome};
@@ -661,7 +661,6 @@ async fn init_hawk_actor(
                         height, db_count
                     );
                 }
-                tracing::info!(height, "restart: installed graph from checkpoint");
                 graph_target.map(|arc| {
                     Arc::try_unwrap(arc)
                         .expect("graph Arc has exactly one owner after restart")
@@ -711,17 +710,18 @@ async fn start_results_thread(
     task_monitor: &mut TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
     sns_attributes_maps: SnsAttributesMaps,
-) -> Result<Sender<ServerJobResult>> {
-    let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
+) -> Result<Sender<(BatchTimings, ServerJobResult)>> {
+    let (tx, mut rx) = mpsc::channel::<(BatchTimings, ServerJobResult)>(32); // TODO: pick some buffer value
     let sns_client_bg = aws_clients.sns_client.clone();
     let config_bg = config.clone();
     let store_bg = iris_store.clone();
     let shutdown_handler_bg = Arc::clone(shutdown_handler);
     let party_id = config.party_id;
     let _result_sender_abort = task_monitor.spawn(async move {
-        while let Some(job_result) = rx.recv().await {
+        while let Some((batch_timings, job_result)) = rx.recv().await {
             if let Err(e) = process_job_result(
                 job_result,
+                batch_timings,
                 party_id,
                 &store_bg,
                 &graph_store,
@@ -764,7 +764,7 @@ async fn run_main_server_loop(
     mut task_monitor: TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
     hawk_actor: HawkActor,
-    tx_results: Sender<ServerJobResult>,
+    tx_results: Sender<(BatchTimings, ServerJobResult)>,
     current_batch_id_atomic: Arc<AtomicU64>,
     batch_sync_shared_state: Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
 ) -> Result<()> {
@@ -882,24 +882,26 @@ async fn run_main_server_loop(
             metrics::histogram!("batch_sync_entries_retries").record((sync_attempts - 1) as f64);
             batch.retain_valid_entries();
 
+            // Batch receive wait (poll + sync), tracked separately from compute.
+            let batch_wait = now.elapsed();
+
             // start trace span - with single TraceId and single ParentTraceID
             tracing::info!(
                 "Received batch in {:.1}s ({} queries, sync {:.1}s/{} attempt{})",
-                now.elapsed().as_secs_f64(),
+                batch_wait.as_secs_f64(),
                 batch.request_types.len(),
                 sync_elapsed,
                 sync_attempts,
                 if sync_attempts != 1 { "s" } else { "" },
             );
 
-            metrics::histogram!("receive_batch_duration").record(now.elapsed().as_secs_f64());
+            metrics::histogram!("receive_batch_duration").record(batch_wait.as_secs_f64());
             metrics::gauge!("batch_size").set(batch.request_types.len() as f64);
 
-            // Iterate over a list of tracing payloads, and create logs with mappings to
-            // payloads Log at least a "start" event using a log with trace.id and
-            // parent.trace.id
+            tracing::info!("Started processing {} shares", batch.metadata.len());
+            // Per-share trace-id mappings kept at debug for DD trace correlation.
             for tracing_payload in batch.metadata.iter() {
-                tracing::info!(
+                tracing::debug!(
                     node_id = tracing_payload.node_id,
                     dd.trace_id = tracing_payload.trace_id,
                     dd.span_id = tracing_payload.span_id,
@@ -931,17 +933,13 @@ async fn run_main_server_loop(
             let result = timeout(processing_timeout, result_future.await)
                 .await
                 .map_err(|e| eyre!("HawkActor processing timeout: {:?}", e))??;
-            tx_results.send(result).await?;
-
-            tracing::info!(
-                "BATCH_SUMMARY batch_id={} party={} queries={} hash={} compute_ms={} total_ms={}",
-                current_batch_id_atomic.load(Ordering::SeqCst),
-                party_id,
-                batch.request_types.len(),
-                hex::encode(&batch_hash[0..4]),
-                pprof_start.elapsed().as_millis(),
-                now.elapsed().as_millis(),
-            );
+            let batch_timings = BatchTimings {
+                batch_id: current_batch_id_atomic.load(Ordering::SeqCst),
+                batch_hash: hex::encode(&batch_hash[0..4]),
+                receive_ms: batch_wait.as_millis(),
+                compute_ms: pprof_start.elapsed().as_millis(),
+            };
+            tx_results.send((batch_timings, result)).await?;
 
             // If enabled, stop pprof and upload artifacts tagged with batch info
             if let Some(guard) = pprof_guard.take() {

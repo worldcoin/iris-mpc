@@ -1,5 +1,4 @@
 use std::{
-    collections::HashMap,
     fmt::Display,
     fs::File,
     io::{BufReader, BufWriter, Cursor},
@@ -282,21 +281,26 @@ fn read_pair<R: std::io::Read + ?Sized, G: for<'a> Deserialize<'a>>(
     Ok(data)
 }
 
-/// Convert a decoded wire-format pair into `GraphMem`s, running the two eyes'
-/// (independent) conversions concurrently. The preceding bincode decode is serial.
-fn convert_pair_parallel<G>(pair: [G; 2]) -> [GraphMem; 2]
+/// Convert a decoded wire-format pair into `GraphMem`s.
+///
+/// Deliberately serial: each `into()` drains its source graph entry-by-entry
+/// while building the destination, so a single-threaded conversion keeps peak
+/// transient memory at ~1×E (E = edge payload). Converting the two eyes in
+/// parallel frees the source on a different allocator arena than it was decoded
+/// on, stranding it under glibc's per-thread arenas and pushing peak RSS toward
+/// ~2×E — costly at prod graph scale.
+fn convert_pair<G>(pair: [G; 2]) -> [GraphMem; 2]
 where
-    G: Into<GraphMem> + Send,
+    G: Into<GraphMem>,
 {
     let [left, right] = pair;
-    let (left, right) = rayon::join(|| left.into(), || right.into());
-    [left, right]
+    [left.into(), right.into()]
 }
 
 /// Designated method for reading a pair of `GraphMem` structs. Currently goes
 /// through the `GraphV5` serialization type.
 pub fn read_graph_pair_current<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<[GraphMem; 2]> {
-    Ok(convert_pair_parallel(read_pair::<_, GraphV5>(reader)?))
+    Ok(convert_pair(read_pair::<_, GraphV5>(reader)?))
 }
 
 /// Designated method for writing a pair of `GraphMem` structs. Currently goes
@@ -337,9 +341,9 @@ pub fn read_graph_pair<R: std::io::Read + ?Sized>(
 ) -> Result<[GraphMem; 2]> {
     match format {
         GraphFormat::Current => read_graph_pair_current(reader),
-        GraphFormat::V5 => Ok(convert_pair_parallel(read_pair::<_, GraphV5>(reader)?)),
-        GraphFormat::V4 => Ok(convert_pair_parallel(read_pair::<_, GraphV4>(reader)?)),
-        GraphFormat::V3 => Ok(convert_pair_parallel(read_pair::<_, GraphV3>(reader)?)),
+        GraphFormat::V5 => Ok(convert_pair(read_pair::<_, GraphV5>(reader)?)),
+        GraphFormat::V4 => Ok(convert_pair(read_pair::<_, GraphV4>(reader)?)),
+        GraphFormat::V3 => Ok(convert_pair(read_pair::<_, GraphV3>(reader)?)),
         GraphFormat::V2 => {
             let graphs = read_pair::<_, GraphV2>(reader)?;
             Ok(graphs.map(|graph| graph.into()))
@@ -788,226 +792,18 @@ impl From<GraphMem> for graph_v5::GraphV5 {
 
 /* ----------- Streaming Deserialization (single-copy path) ---------- */
 
-/// Read a pair of [`GraphMem`] structs layer-by-layer into [`GraphMem`]
-/// directly, without ever materialising the full intermediate `GraphVN`
-/// struct alongside the destination graph.
+/// Read a pair of [`GraphMem`] structs from a byte stream.
 ///
-/// For V5/Current each [`graph_v5::Layer`] (one `HashMap`) is read
-/// entry-by-entry and fed into [`Layer::set_links`] immediately, so peak
-/// transient memory is roughly one layer's worth of link data rather than
-/// one entire graph.  V3 and V4 use analogous paths.
-///
-/// V0/V1/V2/Raw fall back to [`read_graph_pair`]; those are rare migration
-/// paths and the graphs tend to be smaller.
+/// `bincode::deserialize_from` pulls bytes incrementally from `reader`, and the
+/// `From<GraphVN>` conversions move neighbor `Vec`s into the destination graph,
+/// so peak transient memory is roughly the wire payload — no second full-graph
+/// copy. The streaming win comes from byte-streaming the input `reader`, not
+/// from the decode.
 pub fn read_graph_pair_streaming<R: std::io::Read + ?Sized>(
     reader: &mut R,
     format: GraphFormat,
 ) -> Result<[GraphMem; 2]> {
-    match format {
-        GraphFormat::Current | GraphFormat::V5 => Ok([
-            read_graph_v5_streaming(reader)?,
-            read_graph_v5_streaming(reader)?,
-        ]),
-        GraphFormat::V4 => Ok([
-            read_graph_v4_streaming(reader)?,
-            read_graph_v4_streaming(reader)?,
-        ]),
-        GraphFormat::V3 => Ok([
-            read_graph_v3_streaming(reader)?,
-            read_graph_v3_streaming(reader)?,
-        ]),
-        _ => read_graph_pair(reader, format),
-    }
-}
-
-/// Streaming reader for a single `GraphV4`.
-///
-/// Reads `entry_points`, then deserialises each `Layer` individually via
-/// [`read_hashed_layer_streaming`], then reads `last_update_seq_no`.  Each
-/// layer is converted to [`Layer`] and appended before the
-/// next layer is read, so no two full-graph copies coexist.
-fn read_graph_v4_streaming<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<GraphMem> {
-    let entry_points: Vec<graph_v4::EntryPoint> = bincode::deserialize_from(&mut *reader)
-        .map_err(|e| eyre::eyre!("v4 streaming entry_points: {e}"))?;
-
-    let layer_count_u64: u64 = bincode::deserialize_from(&mut *reader)
-        .map_err(|e| eyre::eyre!("v4 streaming layer_count: {e}"))?;
-    let layer_count = usize::try_from(layer_count_u64)
-        .map_err(|_| eyre::eyre!("v4 streaming layer_count overflows usize: {layer_count_u64}"))?;
-    let mut layers = Vec::with_capacity(layer_count);
-    for i in 0..layer_count {
-        layers.push(
-            read_hashed_layer_streaming(reader)
-                .map_err(|e| eyre::eyre!("v4 streaming layer {i}: {e}"))?,
-        );
-    }
-
-    let last_update_seq_no: u64 = bincode::deserialize_from(&mut *reader)
-        .map_err(|e| eyre::eyre!("v4 streaming last_update_seq_no: {e}"))?;
-
-    let node_init_seq_no = layers
-        .iter()
-        .flat_map(|l| l.links.keys())
-        .map(|&v| (v, 0u64))
-        .collect();
-
-    Ok(GraphMem {
-        entry_points: entry_points.into_iter().map(|e| e.into()).collect(),
-        layers,
-        last_update_seq_no,
-        node_init_seq_no,
-    })
-}
-
-/// Streaming reader for a single `GraphV3`.
-///
-/// V3 differs from V4 only in having `entry_point` (same binary layout) and
-/// no `last_update_seq_no` field.  Layers share the same on-wire layout as
-/// V4 (see [`read_hashed_layer_streaming`]).
-fn read_graph_v3_streaming<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<GraphMem> {
-    // Field name is `entry_point` in GraphV3 vs `entry_points` in GraphV4,
-    // but bincode uses positional encoding so the bytes are identical.
-    let entry_points: Vec<graph_v3::EntryPoint> = bincode::deserialize_from(&mut *reader)
-        .map_err(|e| eyre::eyre!("v3 streaming entry_points: {e}"))?;
-
-    let layer_count_u64: u64 = bincode::deserialize_from(&mut *reader)
-        .map_err(|e| eyre::eyre!("v3 streaming layer_count: {e}"))?;
-    let layer_count = usize::try_from(layer_count_u64)
-        .map_err(|_| eyre::eyre!("v3 streaming layer_count overflows usize: {layer_count_u64}"))?;
-    let mut layers = Vec::with_capacity(layer_count);
-    for i in 0..layer_count {
-        layers.push(
-            read_hashed_layer_streaming(reader)
-                .map_err(|e| eyre::eyre!("v3 streaming layer {i}: {e}"))?,
-        );
-    }
-
-    // V3 has no `last_update_seq_no`; default to 0.
-    let node_init_seq_no = layers
-        .iter()
-        .flat_map(|l| l.links.keys())
-        .map(|&v| (v, 0u64))
-        .collect();
-
-    Ok(GraphMem {
-        entry_points: entry_points.into_iter().map(|e| e.into()).collect(),
-        layers,
-        last_update_seq_no: 0,
-        node_init_seq_no,
-    })
-}
-
-/// Deserialise one layer entry-by-entry into [`Layer`].
-///
-/// Works for both V3 and V4 layers because their on-wire layout is
-/// identical: both store `HashMap<{u32, i16}, Vec<{u32, i16}>>`
-/// (bincode: `u64 count` + N × `(VectorId, EdgeIds)`) followed by a
-/// `u64 set_hash`.  We decode using `graph_v4` types — safe because
-/// `graph_v3::VectorId` and `graph_v4::VectorId` are the same struct.
-///
-/// The version field is discarded; only the serial id (`u32`) is kept.
-/// The serialised `set_hash` is read and discarded; [`Layer::set_links`]
-/// recomputes it incrementally as each edge list is inserted.
-fn read_hashed_layer_streaming<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<Layer> {
-    // HashMap bincode layout: u64 count + count × (key, value)
-    let link_count: u64 =
-        bincode::deserialize_from(&mut *reader).map_err(|e| eyre::eyre!("link_count: {e}"))?;
-
-    let mut layer = Layer::new();
-    for _ in 0..link_count {
-        let v: graph_v4::VectorId =
-            bincode::deserialize_from(&mut *reader).map_err(|e| eyre::eyre!("VectorId: {e}"))?;
-        let edges: graph_v4::EdgeIds =
-            bincode::deserialize_from(&mut *reader).map_err(|e| eyre::eyre!("EdgeIds: {e}"))?;
-        layer.set_links(
-            v.id,
-            edges
-                .0
-                .into_iter()
-                .map(|x: graph_v4::VectorId| x.id)
-                .collect(),
-            0,
-        );
-    }
-
-    // Discard the stored set_hash; Layer::set_links already recomputed it.
-    let _: u64 =
-        bincode::deserialize_from(&mut *reader).map_err(|e| eyre::eyre!("set_hash: {e}"))?;
-
-    Ok(layer)
-}
-
-/// Streaming reader for a single `GraphV5`.
-///
-/// V5 differs from V4 in three ways: `VectorId` is a bare `u32` (no version field),
-/// each neighborhood stores `(Vec<u32>, updated_seq_no: u64)` rather than a plain
-/// `Vec`, and a `node_init_seq_no: HashMap<u32, u64>` field follows the layers.
-/// The on-wire order is:
-/// `entry_points` → `layers` → `node_init_seq_no` → `last_update_seq_no`.
-fn read_graph_v5_streaming<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<GraphMem> {
-    let entry_points: Vec<graph_v5::EntryPoint> = bincode::deserialize_from(&mut *reader)
-        .map_err(|e| eyre::eyre!("v5 streaming entry_points: {e}"))?;
-
-    let layer_count_u64: u64 = bincode::deserialize_from(&mut *reader)
-        .map_err(|e| eyre::eyre!("v5 streaming layer_count: {e}"))?;
-    let layer_count = usize::try_from(layer_count_u64)
-        .map_err(|_| eyre::eyre!("v5 streaming layer_count overflows usize: {layer_count_u64}"))?;
-    let mut layers = Vec::with_capacity(layer_count);
-    for i in 0..layer_count {
-        layers.push(
-            read_v5_layer_streaming(reader)
-                .map_err(|e| eyre::eyre!("v5 streaming layer {i}: {e}"))?,
-        );
-    }
-
-    // node_init_seq_no: HashMap<u32, u64> — bincode layout: u64 count + N × (u32, u64)
-    let init_count: u64 = bincode::deserialize_from(&mut *reader)
-        .map_err(|e| eyre::eyre!("v5 streaming node_init_seq_no count: {e}"))?;
-    let mut node_init_seq_no = HashMap::with_capacity(init_count as usize);
-    for _ in 0..init_count {
-        let v: graph_v5::VectorId = bincode::deserialize_from(&mut *reader)
-            .map_err(|e| eyre::eyre!("v5 streaming node_init key: {e}"))?;
-        let seq_no: u64 = bincode::deserialize_from(&mut *reader)
-            .map_err(|e| eyre::eyre!("v5 streaming node_init value: {e}"))?;
-        node_init_seq_no.insert(v, seq_no);
-    }
-
-    let last_update_seq_no: u64 = bincode::deserialize_from(&mut *reader)
-        .map_err(|e| eyre::eyre!("v5 streaming last_update_seq_no: {e}"))?;
-
-    Ok(GraphMem {
-        entry_points: entry_points.into_iter().map(|e| e.into()).collect(),
-        layers,
-        last_update_seq_no,
-        node_init_seq_no,
-    })
-}
-
-/// Deserialise one V5 layer entry-by-entry into [`Layer`].
-///
-/// V5 layer on-wire layout: `u64 count` + N × `(u32 VectorId, Neighborhood)`
-/// where `Neighborhood` = `(Vec<u32> neighbors, u64 updated_seq_no)`, followed
-/// by `u64 set_hash`.  The stored `set_hash` is discarded; [`Layer::set_links`]
-/// recomputes it incrementally, and the per-entry `updated_seq_no` is
-/// forwarded so edge-validity timestamps are preserved faithfully.
-fn read_v5_layer_streaming<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<Layer> {
-    let link_count: u64 =
-        bincode::deserialize_from(&mut *reader).map_err(|e| eyre::eyre!("link_count: {e}"))?;
-
-    let mut layer = Layer::new();
-    for _ in 0..link_count {
-        let v: graph_v5::VectorId =
-            bincode::deserialize_from(&mut *reader).map_err(|e| eyre::eyre!("VectorId: {e}"))?;
-        let nb: graph_v5::Neighborhood = bincode::deserialize_from(&mut *reader)
-            .map_err(|e| eyre::eyre!("Neighborhood: {e}"))?;
-        layer.set_links(v, nb.neighbors, nb.updated_seq_no);
-    }
-
-    // Discard the stored set_hash; Layer::set_links already recomputed it.
-    let _: u64 =
-        bincode::deserialize_from(&mut *reader).map_err(|e| eyre::eyre!("set_hash: {e}"))?;
-
-    Ok(layer)
+    read_graph_pair(reader, format)
 }
 
 #[cfg(test)]
@@ -1065,6 +861,83 @@ mod tests {
                         got.get_links_map(),
                         "links drifted on read ({fmt:?})"
                     );
+                }
+            }
+        }
+    }
+
+    /// Serialize a graph pair in the on-wire layout for `fmt`.
+    fn write_pair_in_format(g: &GraphMem, fmt: GraphFormat) -> Vec<u8> {
+        use crate::utils::serialization::types::{graph_v3, graph_v4};
+        let mut buf = Vec::new();
+        match fmt {
+            GraphFormat::V4 => {
+                let pair: [graph_v4::GraphV4; 2] = [g.clone().into(), g.clone().into()];
+                bincode::serialize_into(&mut buf, &pair).unwrap();
+            }
+            GraphFormat::V3 => {
+                let to_v3 = |g: &GraphMem| graph_v3::GraphV3 {
+                    entry_point: g
+                        .entry_points
+                        .iter()
+                        .map(|ep| graph_v3::EntryPoint {
+                            point: graph_v3::VectorId {
+                                id: ep.point,
+                                version: 0,
+                            },
+                            layer: ep.layer,
+                        })
+                        .collect(),
+                    layers: g
+                        .layers
+                        .iter()
+                        .map(|layer| graph_v3::Layer {
+                            links: layer
+                                .get_links_map()
+                                .iter()
+                                .map(|(v, nb)| {
+                                    (
+                                        graph_v3::VectorId { id: *v, version: 0 },
+                                        graph_v3::EdgeIds(
+                                            nb.neighbors()
+                                                .iter()
+                                                .map(|x| graph_v3::VectorId { id: *x, version: 0 })
+                                                .collect(),
+                                        ),
+                                    )
+                                })
+                                .collect(),
+                            set_hash: layer.checksum(),
+                        })
+                        .collect(),
+                };
+                let pair = [to_v3(g), to_v3(g)];
+                bincode::serialize_into(&mut buf, &pair).unwrap();
+            }
+            other => panic!("unsupported test format {other:?}"),
+        }
+        buf
+    }
+
+    /// `read_graph_pair_streaming` (fed bytes via a `Cursor`) yields a graph pair
+    /// equal to `read_graph_pair` and to the original, including per-layer
+    /// `checksum()`, for every stable layer-hashed format.
+    #[test]
+    fn streaming_matches_derived_and_original() {
+        let g = sample_graph();
+
+        for fmt in [GraphFormat::V3, GraphFormat::V4] {
+            let buf = write_pair_in_format(&g, fmt);
+
+            let derived = read_graph_pair(&mut Cursor::new(&buf), fmt).unwrap();
+            let streamed = read_graph_pair_streaming(&mut Cursor::new(&buf), fmt).unwrap();
+
+            for (s, d) in streamed.iter().zip(derived.iter()) {
+                assert_eq!(s.checksum(), d.checksum(), "streamed != derived ({fmt:?})");
+                assert_eq!(s.checksum(), g.checksum(), "streamed != original ({fmt:?})");
+                assert_eq!(s.layers.len(), g.layers.len());
+                for (orig, got) in g.layers.iter().zip(s.layers.iter()) {
+                    assert_eq!(orig.get_links_map(), got.get_links_map());
                 }
             }
         }
