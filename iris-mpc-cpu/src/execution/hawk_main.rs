@@ -369,13 +369,12 @@ pub enum Orientation {
 /// The index in `ServerJobResult::merged_results` which means "no matches and no insertions".
 const NON_MATCH_ID: u32 = u32::MAX;
 
-/// A query whose anon-stats partial-match count reaches this is treated as a
+/// A query whose anon-stats partial-match count exceeds this is treated as a
 /// supermatcher and excluded from anon-stats collection, mirroring the GPU path's
-/// `SUPERMATCH_THRESHOLD` (`iris-mpc-gpu/src/server/actor.rs`). The check is inclusive
-/// (`>=`): HNSW search returns at most `ef`, and the supermatch re-search caps `ef` at
-/// 4000 (see `classify_and_extend`), so a fully-saturated query's distinct-id count
-/// piles up *at* 4000 — a strict `>` would leak exactly those over-producers (the ~21M
-/// anon-stats over-production, POP-4055).
+/// `SUPERMATCH_THRESHOLD` (`iris-mpc-gpu/src/server/actor.rs`). Without this cap a single
+/// saturated query — re-searched at ef=4000 (see `classify_and_extend`) — can dump
+/// thousands of distances into the anon-stats store, the cause of the ~21M anon-stats
+/// over-production (POP-4055).
 const ANON_STATS_SUPERMATCH_THRESHOLD: usize = 4_000;
 
 impl std::fmt::Display for StoreId {
@@ -893,12 +892,11 @@ impl HawkActor {
                 }
             }
 
-            // GPU parity: a query whose partial-match count reaches the supermatch
+            // GPU parity: a query whose partial-match count exceeds the supermatch
             // threshold is treated as a supermatcher and excluded from anon-stats
-            // collection (cf. `SUPERMATCH_THRESHOLD` in iris-mpc-gpu). Inclusive `>=`
-            // because the ef=4000 re-search caps the count at 4000 — a strict `>` would
-            // leak exactly the saturated queries that over-produced the store (POP-4055).
-            if query_distances.len() >= ANON_STATS_SUPERMATCH_THRESHOLD {
+            // collection (cf. `SUPERMATCH_THRESHOLD` in iris-mpc-gpu). This caps the
+            // ef=4000 saturated-query blow-up that over-produced the store (POP-4055).
+            if query_distances.len() > ANON_STATS_SUPERMATCH_THRESHOLD {
                 metrics::counter!("anon_stats_supermatch_skipped").increment(1);
                 tracing::info!(
                     query_idx,
