@@ -1190,41 +1190,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_from_another_naive() -> Result<()> {
-        let mut vector_store = PlaintextStore::<FhdOps>::new();
-        let mut graph_store = GraphMem::new();
-        let searcher = HnswSearcher::new_with_test_parameters();
-        let mut rng = AesRng::seed_from_u64(0_u64);
-
-        let raw_queries = IrisDB::new_random_rng(10, &mut rng);
-
-        for raw_query in raw_queries.db {
-            let query = Arc::new(raw_query);
-            let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
-            let (neighbors, update_ep) = searcher
-                .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
-                .await?;
-            let inserted = vector_store.insert(&query).await;
-            searcher
-                .insert_from_search_results(
-                    &mut vector_store,
-                    &mut graph_store,
-                    inserted,
-                    neighbors,
-                    update_ep,
-                )
-                .await?;
-        }
-
-        // serial_id is 1-based, so serial_id -> (serial_id - 1) * 2 + 1
-        let different_graph_store: GraphMem =
-            migrate(graph_store.clone(), |v: SerialId| (v - 1) * 2 + 1);
-        assert_ne!(graph_store, different_graph_store);
-
-        Ok(())
-    }
-
     #[test]
     fn test_layer_deterministic_serialize_order() {
         let mut layer_a = super::Layer::new();
@@ -1592,6 +1557,107 @@ mod tests {
             vec![2u32]
         );
         assert_eq!(graph.get_active_links(&1, 0), Vec::<SerialId>::new());
+    }
+
+    /// Read-path selectivity: a live neighbor survives while a content-stale
+    /// neighbor is dropped. Guards against `get_active_links` blanket-emptying
+    /// (e.g. an inverted `is_active`), which the single-neighbor tests above
+    /// would not catch.
+    #[test]
+    fn get_active_links_keeps_live_drops_stale() {
+        let mut graph = GraphMem::new();
+        let a = VectorId::from_serial_id(1);
+        let b = VectorId::from_serial_id(2);
+        let c = VectorId::from_serial_id(3);
+        let node = |id| MutationOp::AddNode {
+            id,
+            height: 1,
+            update_ep: UpdateEntryPoint::False,
+        };
+
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 1,
+                ops: vec![node(a), node(b), node(c)],
+            })
+            .unwrap();
+        // a -> [b, c], certified at seq 2.
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 2,
+                ops: vec![MutationOp::AddEdges {
+                    base: a,
+                    layer: 0,
+                    neighbors: vec![b, c],
+                    edge_type: EdgeType::Base,
+                }],
+            })
+            .unwrap();
+        assert_eq!(graph.get_active_links(&1, 0), vec![2u32, 3u32]);
+
+        // Reauth only b (content[b] -> 3); a and c untouched.
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 3,
+                ops: vec![MutationOp::RemoveNode { id: b }, node(b)],
+            })
+            .unwrap();
+
+        // c (content[c]=1 <= 2) survives; b (content[b]=3 > 2) is skipped.
+        assert_eq!(graph.get_active_links(&1, 0), vec![3u32]);
+    }
+
+    /// `node_init_hash` is maintained incrementally by `insert_apply` but
+    /// recomputed in bulk by `from_parts` on deserialize. A graph built through
+    /// real mutations (including a reauth = RemoveNode+AddNode) must hash
+    /// identically after a serialize round trip, or the incremental and bulk
+    /// content clocks have drifted — a cross-party consensus break.
+    #[test]
+    fn incremental_checksum_matches_bulk_after_reauth() {
+        let mut graph = GraphMem::new();
+        let a = VectorId::from_serial_id(1);
+        let b = VectorId::from_serial_id(2);
+        let node = |id| MutationOp::AddNode {
+            id,
+            height: 1,
+            update_ep: UpdateEntryPoint::False,
+        };
+
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 1,
+                ops: vec![node(a), node(b)],
+            })
+            .unwrap();
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 2,
+                ops: vec![MutationOp::AddEdges {
+                    base: a,
+                    layer: 0,
+                    neighbors: vec![b],
+                    edge_type: EdgeType::All,
+                }],
+            })
+            .unwrap();
+        // Reauth b: RemoveNode + AddNode, incrementally updating node_init_hash.
+        graph
+            .insert_apply(&GraphMutation {
+                seq_no: 3,
+                ops: vec![MutationOp::RemoveNode { id: b }, node(b)],
+            })
+            .unwrap();
+
+        // bincode round trip: Deserialize routes through from_parts, which
+        // recomputes node_init_hash in bulk.
+        let buf = bincode::serialize(&graph).unwrap();
+        let bulk: GraphMem = bincode::deserialize(&buf).unwrap();
+
+        assert_eq!(
+            graph.checksum(),
+            bulk.checksum(),
+            "incremental node_init_hash drifted from bulk recompute"
+        );
     }
 
     #[test]

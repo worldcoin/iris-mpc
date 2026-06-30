@@ -934,15 +934,22 @@ mod tests {
     /// Genesis uploads checkpoints by serializing `[GraphMem; 2]` directly, but
     /// the materializer and hawk restart read them back as `GraphV5`. The two
     /// wire layouts must be byte-identical, else the cutover graph is corrupt.
-    /// `last_update_seq_no` is non-zero so a field-order drift misaligns the
-    /// following map-length prefix and fails loudly.
+    /// The clocks are non-zero and DISTINCT over out-of-order keys: a non-zero
+    /// `last_update_seq_no` makes a scalar field-order drift misalign the next
+    /// map-length prefix, and distinct `node_init`/`seq_no` values make the
+    /// BTreeMap-sort vs HashMap-iteration arm of `GraphV5::Serialize` observable
+    /// (uniform-zero clocks would alias the two orderings and pass regardless).
     #[test]
     fn graphmem_direct_write_matches_current_and_reads_back() {
         let mut layer = Layer::new();
-        for &n in &[7u32, 3, 9, 1, 5, 8, 2, 6, 4] {
-            layer.set_links(n, vec![n + 1, n + 2], 0);
+        for (i, &n) in [7u32, 3, 9, 1, 5, 8, 2, 6, 4].iter().enumerate() {
+            layer.set_links(n, vec![n + 1, n + 2], i as u64 + 1);
         }
-        let node_init_seq_no = layer.get_links_map().keys().map(|&k| (k, 0u64)).collect();
+        let node_init_seq_no = layer
+            .get_links_map()
+            .keys()
+            .map(|&k| (k, k as u64 * 10 + 1))
+            .collect();
         let entry_points = vec![layered_graph::EntryPoint { point: 1, layer: 0 }];
         let g = GraphMem::from_parts(entry_points, vec![layer], 42, node_init_seq_no);
 
@@ -1046,13 +1053,21 @@ mod tests {
 
     /// `read_graph_pair_streaming` (fed bytes via a `Cursor`) yields a graph pair
     /// equal to `read_graph_pair` and to the original, including per-layer
-    /// `checksum()`, for every stable layer-hashed format.
+    /// `checksum()`, for every stable layer-hashed format. V5/Current is the
+    /// format genesis writes and hawk restarts stream back, so it is covered
+    /// here too (its bytes come from `write_graph_pair_current`).
     #[test]
     fn streaming_matches_derived_and_original() {
         let g = sample_graph();
 
-        for fmt in [GraphFormat::V3, GraphFormat::V4] {
-            let buf = write_pair_in_format(&g, fmt);
+        for fmt in [GraphFormat::V3, GraphFormat::V4, GraphFormat::V5] {
+            let buf = if fmt == GraphFormat::V5 {
+                let mut b = Vec::new();
+                write_graph_pair_current(&mut b, [g.clone(), g.clone()]).unwrap();
+                b
+            } else {
+                write_pair_in_format(&g, fmt)
+            };
 
             let derived = read_graph_pair(&mut Cursor::new(&buf), fmt).unwrap();
             let streamed = read_graph_pair_streaming(&mut Cursor::new(&buf), fmt).unwrap();

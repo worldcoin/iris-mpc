@@ -96,11 +96,10 @@ impl std::fmt::Debug for MutationOp {
 }
 
 impl UnstampedMutation {
-    /// Subset of `updated_neighborhoods` restricted to neighborhoods that
-    /// may have *grown* — i.e. those affected by `AddEdges` ops in this
-    /// mutation. Used as the candidate set for batch compaction. The
-    /// returned Vec is the raw walk and may contain duplicates; callers
-    /// fold into a set to dedup.
+    /// Neighborhoods that may have *grown* — those affected by `AddEdges` ops
+    /// in this mutation. Used as the candidate set for batch compaction. The
+    /// returned Vec is the raw walk and may contain duplicates; callers fold
+    /// into a set to dedup.
     pub fn expanded_neighborhoods(&self) -> Vec<(VectorId, usize)> {
         let mut out = Vec::new();
         for op in &self.ops {
@@ -119,42 +118,6 @@ impl UnstampedMutation {
                         out.push((*n, *layer));
                     }
                 }
-            }
-        }
-        out
-    }
-
-    /// Neighborhoods touched by `AddEdges` OR `RemoveEdges` in this mutation.
-    /// Used by the per-slot invalid-link prune step: any neighborhood whose
-    /// edge set was modified is a candidate for stale-reference cleanup.
-    /// The returned Vec is the raw walk and may contain duplicates; callers
-    /// fold into a set to dedup.
-    pub fn updated_neighborhoods(&self) -> Vec<(VectorId, usize)> {
-        let mut out = Vec::new();
-        for op in &self.ops {
-            match op {
-                MutationOp::AddEdges {
-                    base,
-                    layer,
-                    neighbors,
-                    edge_type,
-                }
-                | MutationOp::RemoveEdges {
-                    base,
-                    layer,
-                    neighbors,
-                    edge_type,
-                } => {
-                    if matches!(edge_type, EdgeType::Base | EdgeType::All) {
-                        out.push((*base, *layer));
-                    }
-                    if matches!(edge_type, EdgeType::Neighbors | EdgeType::All) {
-                        for n in neighbors {
-                            out.push((*n, *layer));
-                        }
-                    }
-                }
-                _ => {}
             }
         }
         out
@@ -298,13 +261,6 @@ mod tests {
         assert_eq!(links(&layer, 2), Some(vec![1, 3]));
     }
 
-    /// edit_links on a node that doesn't exist is a no-op, not a panic.
-    #[test]
-    fn remove_neighbors_on_nonexistent_node_is_noop() {
-        let mut layer = Layer::new();
-        remove_links(&mut layer, 99, &[1, 2], 1); // should not panic
-    }
-
     // ── WAL replay sequences ──────────────────────────────────────────────────
 
     /// Replays a typical insert: InsertNode sets the new node's forward links,
@@ -435,85 +391,5 @@ mod tests {
         let mut got = mutation.expanded_neighborhoods();
         got.sort();
         assert_eq!(got, vec![(mk_vector_id(6), 0), (mk_vector_id(7), 0)]);
-    }
-
-    // ── updated_neighborhoods ─────────────────────────────────────────────────
-
-    #[test]
-    fn updated_neighborhoods_includes_removeedges() {
-        let mutation = UnstampedMutation {
-            ops: vec![
-                MutationOp::RemoveEdges {
-                    base: mk_vector_id(1),
-                    neighbors: vec![mk_vector_id(2), mk_vector_id(3)],
-                    layer: 0,
-                    edge_type: EdgeType::All,
-                },
-                MutationOp::AddEdges {
-                    base: mk_vector_id(10),
-                    neighbors: vec![mk_vector_id(11)],
-                    layer: 1,
-                    edge_type: EdgeType::Base,
-                },
-            ],
-        };
-        let mut got = mutation.updated_neighborhoods();
-        got.sort();
-        assert_eq!(
-            got,
-            vec![
-                (mk_vector_id(1), 0),
-                (mk_vector_id(2), 0),
-                (mk_vector_id(3), 0),
-                (mk_vector_id(10), 1)
-            ]
-        );
-    }
-
-    #[test]
-    fn updated_neighborhoods_removeedges_respects_edge_type() {
-        let mutation = UnstampedMutation {
-            ops: vec![
-                MutationOp::RemoveEdges {
-                    base: mk_vector_id(1),
-                    neighbors: vec![mk_vector_id(2), mk_vector_id(3)],
-                    layer: 0,
-                    edge_type: EdgeType::Base,
-                },
-                MutationOp::RemoveEdges {
-                    base: mk_vector_id(5),
-                    neighbors: vec![mk_vector_id(6), mk_vector_id(7)],
-                    layer: 0,
-                    edge_type: EdgeType::Neighbors,
-                },
-            ],
-        };
-        let mut got = mutation.updated_neighborhoods();
-        got.sort();
-        assert_eq!(
-            got,
-            vec![
-                (mk_vector_id(1), 0),
-                (mk_vector_id(6), 0),
-                (mk_vector_id(7), 0)
-            ]
-        );
-    }
-
-    #[test]
-    fn updated_neighborhoods_ignores_addnode_removenode() {
-        let mutation = UnstampedMutation {
-            ops: vec![
-                MutationOp::AddNode {
-                    id: mk_vector_id(1),
-                    height: 1,
-                    update_ep: UpdateEntryPoint::False,
-                },
-                MutationOp::RemoveNode {
-                    id: mk_vector_id(2),
-                },
-            ],
-        };
-        assert!(mutation.updated_neighborhoods().is_empty());
     }
 }
