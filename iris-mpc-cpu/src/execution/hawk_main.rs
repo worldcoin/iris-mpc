@@ -1525,7 +1525,7 @@ impl HawkResult {
             .map(|&d| matches!(d, ReauthUpdate(_)))
             .collect_vec();
 
-        tracing::info!(
+        tracing::debug!(
             "Reauths: {:?}, Unique insert: {:?}, Unique no-match (incl. skip): {:?}",
             successful_reauths,
             unique_insert,
@@ -1954,7 +1954,7 @@ impl HawkHandle {
             })
             .collect_vec();
 
-        tracing::info!("Updated decisions (reset + reauth): {:?}", update_ids);
+        tracing::debug!("Updated decisions (reset + reauth): {:?}", update_ids);
 
         // Get deleted vector IDs for RemoveNode mutations.
         let deleted_ids = request.deletion_ids(&*hawk_actor.registry[LEFT].read().await);
@@ -1990,16 +1990,6 @@ impl HawkHandle {
             search_results,
             identity_updates.search_results
         ) {
-            let unique_insertions_persistence_skipped = decisions
-                .iter()
-                .map(|decision| matches!(decision, UniqueInsertSkipped))
-                .collect_vec();
-
-            let unique_insertions = decisions
-                .iter()
-                .map(|decision| matches!(decision, UniqueInsert))
-                .collect_vec();
-
             // The accepted insertions for uniqueness, reauth, and identity updates.
             // Focus on the insertions and keep only the centered irises.
             tracing::info!(
@@ -2008,10 +1998,18 @@ impl HawkHandle {
                 side
             );
 
-            tracing::info!(
-                "Unique insertions: {}, persistence skipped: {}",
-                unique_insertions.len(),
-                unique_insertions_persistence_skipped.len()
+            let n_unique = decisions
+                .iter()
+                .filter(|decision| matches!(decision, UniqueInsert))
+                .count();
+
+            let n_unique_skipped = decisions
+                .iter()
+                .filter(|decision| matches!(decision, UniqueInsertSkipped))
+                .count();
+
+            tracing::debug!(
+                "Unique insertions: {n_unique}, persistence skipped: {n_unique_skipped}"
             );
 
             // Collect the HNSW insertion plans for all mutating decisions.

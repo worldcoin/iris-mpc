@@ -52,6 +52,15 @@ After release creation the build image is starting with tag with release number.
 - CPU-based node PoC in `iris-mpc/src/bin/server_hawk.rs`
 - Example client in `src/bin/client.rs`
 
+## Security Model
+
+The architecture of both the GPU and CPU client implementations is based on the "semi-honest, honest majority" assumptions for the three participating parties.  This means that the protocol is meant to be secure under the assumptions that:
+
+1. All parties run their client code and configurations faithfully ("semi-honest")
+2. At most one party out of the three may act adversarially to attempt to degrade the security properties of the system, i.e. in a three-party system, there is no collusion between multiple parties ("honest majority")
+
+This security model forms the baseline of the implementation, and any attacks or exploits which can succeed under these fairly strong assumptions should be considered meaningful vulnurabilities.  Attacks or exploits which require weakening of these assumptions to be viable are not considered critical.  However, the codebase does incorporate some mechanisms targeting "defense in depth", providing redundant protections or limited protections under weaker adversarial assumptions, so reports of such attacks are welcome and may be acted on if the costs of mitigation to performance and codebase complexity are acceptable.
+
 ## GPU Implementation
 
 #### Running the E2E test binary (single machine)
