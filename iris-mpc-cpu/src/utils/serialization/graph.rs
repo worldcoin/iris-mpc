@@ -687,6 +687,30 @@ mod tests {
         g
     }
 
+    /// Like `sample_graph` but with enough nodes that rayon splits
+    /// `Layer::from_links`'s parallel fold into multiple jobs. The determinism
+    /// test needs this: the multi-partial `reduce` (where an order-dependent
+    /// `set_hash` regression would diverge across parties) only runs when the
+    /// fold actually splits — `sample_graph`'s 9 nodes fold as a single job.
+    fn large_sample_graph() -> GraphMem {
+        let v = VectorId::from_serial_id;
+        let n = 4096u32;
+        let mut layer = Layer::new();
+        for i in 1..=n {
+            layer.set_links(
+                v(i),
+                vec![v(i % n + 1), v((i + 1) % n + 1), v((i + 2) % n + 1)],
+            );
+        }
+        let mut g = GraphMem::new();
+        g.entry_points = vec![layered_graph::EntryPoint {
+            point: v(1),
+            layer: 0,
+        }];
+        g.layers = vec![layer];
+        g
+    }
+
     /// The `Current` (GraphV4) file format must serialize byte-identically to the
     /// raw `GraphMem` wire format used by `upload_graph_checkpoint` and the
     /// materializer. If they drift, checkpoints minted via `graph-utils` won't
@@ -794,20 +818,32 @@ mod tests {
     /// original (and matches `read_graph_pair`), including per-layer `checksum()`.
     #[test]
     fn streaming_matches_derived_and_original() {
-        let g = sample_graph();
+        // Force a 4-thread pool so `from_links` splits regardless of host core
+        // count — otherwise `large_sample_graph` might still fold as one job and
+        // the multi-chunk `reduce` path would go untested.
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
 
-        for fmt in [GraphFormat::V3, GraphFormat::V4] {
-            let buf = write_pair_in_format(&g, fmt);
+        for g in [sample_graph(), large_sample_graph()] {
+            for fmt in [GraphFormat::V3, GraphFormat::V4] {
+                let buf = write_pair_in_format(&g, fmt);
 
-            let derived = read_graph_pair(&mut Cursor::new(&buf), fmt).unwrap();
-            let streamed = read_graph_pair_streaming(&mut Cursor::new(&buf), fmt).unwrap();
+                let derived = pool
+                    .install(|| read_graph_pair(&mut Cursor::new(&buf), fmt))
+                    .unwrap();
+                let streamed = pool
+                    .install(|| read_graph_pair_streaming(&mut Cursor::new(&buf), fmt))
+                    .unwrap();
 
-            for (s, d) in streamed.iter().zip(derived.iter()) {
-                assert_eq!(s.checksum(), d.checksum(), "streamed != derived ({fmt:?})");
-                assert_eq!(s.checksum(), g.checksum(), "streamed != original ({fmt:?})");
-                assert_eq!(s.layers.len(), g.layers.len());
-                for (orig, got) in g.layers.iter().zip(s.layers.iter()) {
-                    assert_eq!(orig.get_links_map(), got.get_links_map());
+                for (s, d) in streamed.iter().zip(derived.iter()) {
+                    assert_eq!(s.checksum(), d.checksum(), "streamed != derived ({fmt:?})");
+                    assert_eq!(s.checksum(), g.checksum(), "streamed != original ({fmt:?})");
+                    assert_eq!(s.layers.len(), g.layers.len());
+                    for (orig, got) in g.layers.iter().zip(s.layers.iter()) {
+                        assert_eq!(orig.get_links_map(), got.get_links_map());
+                    }
                 }
             }
         }
