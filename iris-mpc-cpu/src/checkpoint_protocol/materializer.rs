@@ -34,12 +34,16 @@ impl<V: VectorStore + Send + Sync> Materializer for RebuildFromCheckpoint<'_, V>
         base: CheckpointMeta,
         freeze: FreezeHeight,
     ) -> Result<Graph, CycleError> {
+        // The materializer rebuilds without iris-store access, so it cannot prune
+        // a legacy base; it requires a native V5 checkpoint. Migrating V3/V4 to
+        // V5 is genesis's job (it prunes against the registry).
         let format = GraphFormat::try_from(base.graph_version)
             .ok()
-            .filter(|f| matches!(f, GraphFormat::V3 | GraphFormat::V4 | GraphFormat::V5))
+            .filter(|f| matches!(f, GraphFormat::V5))
             .ok_or_else(|| {
                 CycleError::Fatal(format!(
-                    "unsupported checkpoint graph_version={} for {}/{}",
+                    "materializer requires a V5 checkpoint (legacy bases are migrated by \
+                     genesis); got graph_version={} for {}/{}",
                     base.graph_version, self.bucket, base.s3_key,
                 ))
             })?;

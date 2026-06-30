@@ -178,6 +178,16 @@ pub async fn download_graph_checkpoint(
     if format == GraphFormat::Raw {
         bail!("Unexpected graph checkpoint format: Raw");
     }
+    // Only genesis may consume a legacy V3/V4 base: it supplies a prune context
+    // and rewrites the result as V5. Every other consumer (hawk restart,
+    // diagnostics) must load a native V5 checkpoint, since v5 serial-only edges
+    // can't reproduce the version-skip an unpruned legacy base would need.
+    if prune.is_none() && matches!(format, GraphFormat::V3 | GraphFormat::V4) {
+        bail!(
+            "refusing to load unmigrated legacy {format:?} checkpoint; only genesis \
+             may consume V3/V4 (it prunes and rewrites as V5)"
+        );
+    }
     let start = Instant::now();
     let (graphs, hash_bytes) =
         stream_download_and_deserialize_graph_pair(s3_client, bucket, &state.s3_key, format, prune)
