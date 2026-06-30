@@ -1677,8 +1677,8 @@ mod tests {
         let ids: Vec<VectorId> = (1..=6).map(VectorId::from_serial_id).collect();
         let mut g = GraphMem::new();
 
-        // ── Phase 1: incremental build. Node 1 spans layers 0..2 and is the
-        // entry point at layer 1; nodes 2..=6 live in layer 0 only.
+        // ── Phase 1: build. Node 1 spans layers 0,1 (entry point at L1);
+        // nodes 2..=6 in layer 0 only.
         g.insert_apply(&GraphMutation {
             seq_no: 1,
             ops: vec![
@@ -1737,20 +1737,18 @@ mod tests {
         assert!(g.get_active_links(&5, 0).is_empty());
         assert_eq!(g.get_active_links(&6, 0), vec![5]);
 
-        // ── Phase 3: serialize → deserialize preserves the full graph. The
-        // structural `== g` subsumes a checksum equality check — GraphMem's
-        // derived Eq compares every layer set_hash and node_init_hash, the exact
-        // checksum inputs. `cksum` is kept as Phase 4's pre-reauth baseline.
+        // ── Phase 3: round-trip preserves the full graph. `== g` subsumes a
+        // checksum check (derived Eq covers set_hash + node_init_hash). `cksum`
+        // is Phase 4's baseline.
         let cksum = g.checksum();
         let mut buf = Vec::new();
         write_graph_current(&mut buf, g.clone()).unwrap();
         let g_round = read_graph_current(&mut buf.as_slice()).unwrap();
         assert_eq!(g_round, g, "graph changed across round-trip");
 
-        // ── Phase 4: reauth node 4 (RemoveNode + AddNode) at seq 3, bumping
-        // content[4] to 3. Node 3's neighborhood [1,4] (certified at seq 2) is
-        // left physically intact, so the stale edge 3->4 survives the raw store
-        // but the read mask hides it. The checksum must change.
+        // ── Phase 4: reauth node 4 (RemoveNode+AddNode) bumps content[4]=3.
+        // Node 3's neighborhood [1,4] (certified seq 2) is untouched, so stale
+        // 3->4 survives raw but the read mask hides it; checksum must change.
         g.insert_apply(&GraphMutation {
             seq_no: 3,
             ops: vec![MutationOp::RemoveNode { id: ids[3] }, node(ids[3], 1)],
@@ -1769,11 +1767,9 @@ mod tests {
         );
         assert_ne!(g.checksum(), cksum, "reauth must change the checksum");
 
-        // ── Phase 5: filter-on-bump. Adding edge 3->6 re-stamps node 3's
-        // neighborhood at seq 4; pass-2 retains against the OLD seq_no 2, so the
-        // now-stale 3->4 is PHYSICALLY dropped before 6 (fresh at tick 4) is
-        // appended. The masked edge becomes a real deletion; the fresh one is
-        // immune to the filter.
+        // ── Phase 5: filter-on-bump. Adding 3->6 re-stamps node 3 at seq 4;
+        // pass-2 retains against the OLD seq 2, so stale 3->4 is physically
+        // dropped before fresh 6 (tick 4, immune to the filter) is appended.
         g.insert_apply(&GraphMutation {
             seq_no: 4,
             ops: vec![MutationOp::AddEdges {
@@ -1793,13 +1789,11 @@ mod tests {
         assert_eq!(g.get_active_links(&3, 0), vec![1, 6]);
         assert_eq!(g.last_update_seq_no, 4);
 
-        // ── Phase 6: delete the entry-point node. Node 1 is the sole entry
-        // point, spans layers 0 and 1, and has symmetric backlinks (2->1, 3->1).
-        // RemoveNode must drop it from BOTH layers, run the set-hash-balanced
-        // bidirectional cleanup so 2 and 3 lose their backlink to 1, empty the
-        // entry-point list, and drop content[1]. With no entry points left,
-        // get_temporary_entry_point falls back to the min-serial node of the
-        // top non-empty layer.
+        // ── Phase 6: delete the sole entry point (node 1, in layers 0,1, with
+        // backlinks 2->1, 3->1). RemoveNode drops it from both layers, runs the
+        // set-hash-balanced backlink cleanup, empties the entry-point list, and
+        // drops content[1]; get_temporary_entry_point then falls back to the
+        // min-serial node of the top non-empty layer.
         g.insert_apply(&GraphMutation {
             seq_no: 5,
             ops: vec![MutationOp::RemoveNode { id: ids[0] }],
@@ -1817,17 +1811,14 @@ mod tests {
         // Backlinks to 1 cleaned; node 3 keeps its fresh edge to 6.
         assert_eq!(g.get_raw_links(&2, 0).await, &[] as &[u32], "2->1 cleaned");
         assert_eq!(g.get_raw_links(&3, 0).await, &[6u32], "3 keeps 6, loses 1");
-        // Sole entry point removed; fallback = min serial of top non-empty layer
-        // (layer 1 now empty, so layer 0, min serial 2).
+        // Fallback = min serial of top non-empty layer (L1 empty → L0, serial 2).
         assert_eq!(g.get_entry_points(), None);
         assert_eq!(g.get_temporary_entry_point(), Some((2u32, 0)));
         assert!(!g.node_init_seq_no.contains_key(&1), "content[1] dropped");
 
-        // The maintained node_init_hash matches a from_parts recompute (the
-        // bincode round-trip rebuilds it from node_init_seq_no) after the delete
-        // drops content[1] — pins incremental content-clock maintenance. Layer
-        // set_hash is round-tripped verbatim here; its incremental correctness is
-        // covered by the round-trips in Phases 3 and 11.
+        // node_init_hash matches a from_parts recompute after the delete drops
+        // content[1] — pins incremental content-clock maintenance. (Bincode reads
+        // layer set_hash verbatim; its recompute is covered by Phases 3/11.)
         let buf6 = bincode::serialize(&g).unwrap();
         let bulk6: GraphMem = bincode::deserialize(&buf6).unwrap();
         assert_eq!(
@@ -1837,15 +1828,12 @@ mod tests {
         );
         assert_eq!(g.last_update_seq_no, 5);
 
-        // ── Phase 7: RemoveEdges on an UPPER layer. Exercises (a) resurrecting a
-        // deleted serial, (b) layer-1 edges + get_active_links on layer>0, and
-        // (c) RemoveEdges' fused retain — one edit removes an explicit edge AND
-        // sweeps a sibling that went content-stale, the same filter-on-bump rule
-        // AddEdges uses.
+        // ── Phase 7: RemoveEdges on an upper layer — resurrect a deleted serial,
+        // layer-1 edges + get_active_links on layer>0, and the fused retain (one
+        // edit drops an explicit edge AND sweeps a content-stale sibling).
 
-        // seq 6: resurrect node 1 at height 2 (back in layers 0,1, entry point
-        // again) and give its layer-1 neighborhood edges to 4 and 6 (content[4]=3,
-        // content[6]=1, both <= 6 => active).
+        // seq 6: resurrect node 1 (layers 0,1, entry point again) with layer-1
+        // edges to 4 and 6 (content[4]=3, content[6]=1, both <= 6 => active).
         g.insert_apply(&GraphMutation {
             seq_no: 6,
             ops: vec![
@@ -1876,7 +1864,7 @@ mod tests {
         );
 
         // seq 7: reauth node 6 -> content[6]=7. Node 1's layer-1 list [4,6]@6 now
-        // has a stale 6; the asymmetric edge 1->6 survives RemoveNode(6)'s cleanup.
+        // has a stale 6; asymmetric 1->6 survives RemoveNode(6)'s cleanup.
         g.insert_apply(&GraphMutation {
             seq_no: 7,
             ops: vec![MutationOp::RemoveNode { id: ids[5] }, node(ids[5], 1)],
@@ -1893,9 +1881,8 @@ mod tests {
             "raw layer-1 edge survives"
         );
 
-        // seq 8: RemoveEdges Base(1 -/-> 4) at layer 1. The fused retain runs
-        // is_active(z, old_seq=6) && z != 4: drops 4 (explicit) AND the now-stale
-        // 6 (content[6]=7 > 6) in one edit.
+        // seq 8: RemoveEdges Base(1 -/-> 4) at layer 1. Fused retain
+        // is_active(z, old_seq=6) && z != 4 drops explicit 4 AND stale 6.
         g.insert_apply(&GraphMutation {
             seq_no: 8,
             ops: vec![MutationOp::RemoveEdges {
@@ -1914,12 +1901,10 @@ mod tests {
         assert!(g.get_active_links(&1, 1).is_empty());
         assert_eq!(g.last_update_seq_no, 8);
 
-        // ── Phase 8: replay guard. A mutation whose seq_no is not strictly
-        // greater than last_update_seq_no (8) is rejected before either pass
-        // runs — the graph must be byte-for-byte unchanged (the WAL/checkpoint
-        // replay-monotonicity invariant), proven here against the fully evolved
-        // graph rather than a fresh one. The rejected ops target real nodes, so
-        // a missed guard would leave a detectable edit.
+        // ── Phase 8: replay guard. A seq_no not strictly above last_update_seq_no
+        // (8) is rejected before either pass runs, leaving the graph byte-for-byte
+        // unchanged (replay-monotonicity). Run on the evolved graph with ops on
+        // real nodes, so a missed guard leaves a detectable edit.
         let snapshot8 = bincode::serialize(&g).unwrap();
 
         assert!(
@@ -1950,11 +1935,10 @@ mod tests {
             "rejected replay mutated the graph (the seq_no clock is part of these bytes)"
         );
 
-        // ── Phase 9: RemoveEdges EdgeType::All — the back-half target-loop
-        // retain (the last is_active-gated retain block with no coverage). One
-        // teardown drops the explicit edge from a target's list AND sweeps a
-        // sibling that went content-stale, plus double-remove idempotency and
-        // the warn-skip on an absent target.
+        // ── Phase 9: RemoveEdges EdgeType::All — the back-half target-loop retain.
+        // One teardown drops the explicit edge from a target's list AND sweeps a
+        // content-stale sibling, plus double-remove idempotency and absent-target
+        // warn-skip.
 
         // seq 9: symmetric 2<->5 (All), then give 5 an extra forward edge to 3.
         g.insert_apply(&GraphMutation {
@@ -1982,8 +1966,8 @@ mod tests {
             "5's list seeded at seq 9"
         );
 
-        // seq 10: reauth node 3 -> content[3]=10. Node 5's list [2,3]@9 now holds
-        // a content-stale 3; the asymmetric 5->3 survives RemoveNode(3)'s cleanup.
+        // seq 10: reauth node 3 -> content[3]=10. Node 5's list [2,3]@9 now has a
+        // stale 3; asymmetric 5->3 survives RemoveNode(3)'s cleanup.
         g.insert_apply(&GraphMutation {
             seq_no: 10,
             ops: vec![MutationOp::RemoveNode { id: ids[2] }, node(ids[2], 1)],
@@ -2000,9 +1984,9 @@ mod tests {
             "read mask hides stale 3"
         );
 
-        // seq 11: RemoveEdges All(2 -/- 5). Forward half empties 2's list; the
-        // back-half retain on target 5 runs is_active(z, old_seq=9) && z != 2,
-        // dropping the explicit 2 AND the content-stale 3 (content[3]=10 > 9).
+        // seq 11: RemoveEdges All(2 -/- 5). Forward half empties 2; back-half
+        // retain on 5 runs is_active(z, old_seq=9) && z != 2, dropping explicit 2
+        // AND stale 3 (content[3]=10 > 9).
         g.insert_apply(&GraphMutation {
             seq_no: 11,
             ops: vec![MutationOp::RemoveEdges {
@@ -2026,10 +2010,9 @@ mod tests {
         assert!(g.get_active_links(&5, 0).is_empty());
         assert_eq!(g.last_update_seq_no, 11);
 
-        // seq 12: idempotent re-remove (lists already empty) plus a warn-skip on
-        // a never-created target (serial 7). No panic; the link sets stay empty,
-        // but the touched neighborhood clocks (nodes 2 and 5) are re-stamped to
-        // 12, which moves the checksum — asserted below.
+        // seq 12: idempotent re-remove (empty lists) + warn-skip on never-created
+        // serial 7. Link sets stay empty, but the touched clocks (nodes 2,5) are
+        // re-stamped to 12, moving the checksum (asserted below).
         let cksum_pre12 = g.checksum();
         let absent = VectorId::from_serial_id(7);
         g.insert_apply(&GraphMutation {
@@ -2063,20 +2046,17 @@ mod tests {
             "seq-12 re-stamp of the touched neighborhoods (2 and 5) must move the checksum"
         );
 
-        // ── Phase 10: multi-version VectorId collapse — the defining v5 invariant.
-        // Edges are version-free: every consumer projects a VectorId through
-        // serial_id(), so a VectorId{serial, version != 0} lands under (and
-        // matches) the bare serial. Nodes 3 and 4 carry empty lists into this
-        // phase (reset by their reauths, untouched since) — pin that before
-        // seeding fresh edges. (Node 2's emptiness is already pinned in Phase 9.)
+        // ── Phase 10: multi-version VectorId collapse (the defining v5 invariant).
+        // Edges are version-free — every consumer projects through serial_id(), so
+        // VectorId{serial, version != 0} lands under the bare serial. Pin nodes 3,4
+        // empty first (reset by their reauths, untouched since; node 2 by Phase 9).
         assert!(g.get_raw_links(&3, 0).await.is_empty());
         assert!(g.get_raw_links(&4, 0).await.is_empty());
 
         let clock_before = g.node_init_seq_no.clone();
 
-        // seq 13: All(2 <-> [3@v7, 4@v2]). The versions are dropped on the way in;
-        // 2's list is keyed on serials {3,4}, and 2 is appended into 3's and 4's
-        // lists under the bare serials.
+        // seq 13: All(2 <-> [3@v7, 4@v2]). Versions dropped on the way in; 2's list
+        // keys on serials {3,4}, and 2 is back-linked into 3 and 4 by bare serial.
         g.insert_apply(&GraphMutation {
             seq_no: 13,
             ops: vec![MutationOp::AddEdges {
@@ -2108,9 +2088,8 @@ mod tests {
             "AddEdges must not perturb the content clock"
         );
 
-        // seq 14: RemoveEdges Base(2 -/- 3@v99) — a DIFFERENT version of serial 3
-        // still matches the serial-3 edge, proving same-serial/different-version
-        // identity at the remove path.
+        // seq 14: RemoveEdges Base(2 -/- 3@v99) — a different version of serial 3
+        // still matches the serial-3 edge (same-serial identity at the remove path).
         g.insert_apply(&GraphMutation {
             seq_no: 14,
             ops: vec![MutationOp::RemoveEdges {
@@ -2128,13 +2107,10 @@ mod tests {
         );
         assert_eq!(g.last_update_seq_no, 14);
 
-        // ── Phase 11: production BothEyes pair shape. Genesis writes
-        // `[GraphMem; 2]` via write_graph_pair_current and hawk restart reads it
-        // back with read_graph_pair (draining convert_pair). Run over THIS aged
-        // graph — non-uniform content clock, per-neighborhood seq_no drift,
-        // version-collapsed serials — so the match proves the prod reader rebuilds
-        // node_init_hash and every layer set_hash from the wire, not just for a
-        // clean fixture.
+        // ── Phase 11: production BothEyes pair shape. Genesis writes [GraphMem; 2]
+        // via write_graph_pair_current; hawk reads it back via read_graph_pair
+        // (convert_pair). Run over THIS aged graph so the match proves the prod
+        // reader rebuilds node_init_hash + every layer set_hash from the wire.
         use crate::utils::serialization::graph::{
             read_graph_pair, write_graph_pair_current, GraphFormat,
         };
