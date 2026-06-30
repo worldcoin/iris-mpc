@@ -1,17 +1,35 @@
 use serde::ser::{SerializeMap, SerializeStruct, Serializer};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// An in-memory implementation of an HNSW hierarchical graph.
 ///
 /// This type is a serialization-focused adapter, provided for long-term
 /// compatibility and portability of serialized data.
-#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Serialize` is hand-written: both field order AND the `node_init_seq_no`
+/// map ordering must match `GraphMem`'s own serializer, because genesis writes
+/// `[GraphMem; 2]` directly while the materializer and hawk restart read it
+/// back as `GraphV5`. A derived impl would emit `node_init_seq_no` in HashMap
+/// iteration order, diverging from `GraphMem` and breaking checkpoint BLAKE3.
+#[derive(Default, Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct GraphV5 {
     pub entry_points: Vec<EntryPoint>,
     pub layers: Vec<Layer>,
-    pub node_init_seq_no: HashMap<VectorId, u64>,
     pub last_update_seq_no: u64,
+    pub node_init_seq_no: HashMap<VectorId, u64>,
+}
+
+impl Serialize for GraphV5 {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut state = serializer.serialize_struct("GraphV5", 4)?;
+        state.serialize_field("entry_points", &self.entry_points)?;
+        state.serialize_field("layers", &self.layers)?;
+        state.serialize_field("last_update_seq_no", &self.last_update_seq_no)?;
+        let sorted_node_init: BTreeMap<_, _> = self.node_init_seq_no.iter().collect();
+        state.serialize_field("node_init_seq_no", &sorted_node_init)?;
+        state.end()
+    }
 }
 
 /// Type associated with the `GraphV5` serialization type.

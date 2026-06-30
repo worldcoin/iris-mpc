@@ -931,6 +931,38 @@ mod tests {
         );
     }
 
+    /// Genesis uploads checkpoints by serializing `[GraphMem; 2]` directly, but
+    /// the materializer and hawk restart read them back as `GraphV5`. The two
+    /// wire layouts must be byte-identical, else the cutover graph is corrupt.
+    /// `last_update_seq_no` is non-zero so a field-order drift misaligns the
+    /// following map-length prefix and fails loudly.
+    #[test]
+    fn graphmem_direct_write_matches_current_and_reads_back() {
+        let mut layer = Layer::new();
+        for &n in &[7u32, 3, 9, 1, 5, 8, 2, 6, 4] {
+            layer.set_links(n, vec![n + 1, n + 2], 0);
+        }
+        let node_init_seq_no = layer.get_links_map().keys().map(|&k| (k, 0u64)).collect();
+        let entry_points = vec![layered_graph::EntryPoint { point: 1, layer: 0 }];
+        let g = GraphMem::from_parts(entry_points, vec![layer], 42, node_init_seq_no);
+
+        let direct = bincode::serialize(&[g.clone(), g.clone()]).unwrap();
+        let mut via_current = Vec::new();
+        write_graph_pair_current(&mut via_current, [g.clone(), g.clone()]).unwrap();
+        assert_eq!(
+            direct, via_current,
+            "GraphMem-direct bytes differ from write_graph_pair_current (GraphV5) bytes"
+        );
+
+        let pair = read_graph_pair(&mut Cursor::new(&direct), GraphFormat::Current).unwrap();
+        for restored in pair {
+            assert_eq!(
+                restored, g,
+                "genesis-written bytes did not read back via V5 reader"
+            );
+        }
+    }
+
     /// Per-layer checksum and links survive a write→read round trip: the
     /// recomputed `set_hash` matches the source graph's.
     #[test]
