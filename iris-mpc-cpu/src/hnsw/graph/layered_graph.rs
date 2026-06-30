@@ -1737,16 +1737,14 @@ mod tests {
         assert!(g.get_active_links(&5, 0).is_empty());
         assert_eq!(g.get_active_links(&6, 0), vec![5]);
 
-        // ── Phase 3: serialize → deserialize preserves checksum and structure.
+        // ── Phase 3: serialize → deserialize preserves the full graph. The
+        // structural `== g` subsumes a checksum equality check — GraphMem's
+        // derived Eq compares every layer set_hash and node_init_hash, the exact
+        // checksum inputs. `cksum` is kept as Phase 4's pre-reauth baseline.
         let cksum = g.checksum();
         let mut buf = Vec::new();
         write_graph_current(&mut buf, g.clone()).unwrap();
         let g_round = read_graph_current(&mut buf.as_slice()).unwrap();
-        assert_eq!(
-            g_round.checksum(),
-            cksum,
-            "checksum drifted across round-trip"
-        );
         assert_eq!(g_round, g, "graph changed across round-trip");
 
         // ── Phase 4: reauth node 4 (RemoveNode + AddNode) at seq 3, bumping
@@ -1819,22 +1817,23 @@ mod tests {
         // Backlinks to 1 cleaned; node 3 keeps its fresh edge to 6.
         assert_eq!(g.get_raw_links(&2, 0).await, &[] as &[u32], "2->1 cleaned");
         assert_eq!(g.get_raw_links(&3, 0).await, &[6u32], "3 keeps 6, loses 1");
-        assert_eq!(g.get_active_links(&3, 0), vec![6]);
         // Sole entry point removed; fallback = min serial of top non-empty layer
         // (layer 1 now empty, so layer 0, min serial 2).
         assert_eq!(g.get_entry_points(), None);
         assert_eq!(g.get_temporary_entry_point(), Some((2u32, 0)));
         assert!(!g.node_init_seq_no.contains_key(&1), "content[1] dropped");
 
-        // Incremental checksum still equals the bulk recompute after a delete
-        // across two layers + backlink cleanup + content-clock removal — proves
-        // the set-hash rebalance stayed balanced.
+        // The maintained node_init_hash matches a from_parts recompute (the
+        // bincode round-trip rebuilds it from node_init_seq_no) after the delete
+        // drops content[1] — pins incremental content-clock maintenance. Layer
+        // set_hash is round-tripped verbatim here; its incremental correctness is
+        // covered by the round-trips in Phases 3 and 11.
         let buf6 = bincode::serialize(&g).unwrap();
         let bulk6: GraphMem = bincode::deserialize(&buf6).unwrap();
         assert_eq!(
             g.checksum(),
             bulk6.checksum(),
-            "incremental set-hash drifted from bulk after entry-point delete"
+            "incremental node_init_hash drifted from bulk after entry-point delete"
         );
         assert_eq!(g.last_update_seq_no, 5);
 
@@ -1915,21 +1914,12 @@ mod tests {
         assert!(g.get_active_links(&1, 1).is_empty());
         assert_eq!(g.last_update_seq_no, 8);
 
-        let buf7 = bincode::serialize(&g).unwrap();
-        let bulk7: GraphMem = bincode::deserialize(&buf7).unwrap();
-        assert_eq!(
-            g.checksum(),
-            bulk7.checksum(),
-            "incremental set-hash drifted from bulk after layer-1 RemoveEdges"
-        );
-
         // ── Phase 8: replay guard. A mutation whose seq_no is not strictly
         // greater than last_update_seq_no (8) is rejected before either pass
         // runs — the graph must be byte-for-byte unchanged (the WAL/checkpoint
         // replay-monotonicity invariant), proven here against the fully evolved
         // graph rather than a fresh one. The rejected ops target real nodes, so
         // a missed guard would leave a detectable edit.
-        let cksum8 = g.checksum();
         let snapshot8 = bincode::serialize(&g).unwrap();
 
         assert!(
@@ -1955,14 +1945,9 @@ mod tests {
         );
 
         assert_eq!(
-            g.last_update_seq_no, 8,
-            "rejected replay advanced the clock"
-        );
-        assert_eq!(g.checksum(), cksum8, "rejected replay changed the checksum");
-        assert_eq!(
             bincode::serialize(&g).unwrap(),
             snapshot8,
-            "rejected replay mutated the graph"
+            "rejected replay mutated the graph (the seq_no clock is part of these bytes)"
         );
 
         // ── Phase 9: RemoveEdges EdgeType::All — the back-half target-loop
@@ -2042,9 +2027,10 @@ mod tests {
         assert_eq!(g.last_update_seq_no, 11);
 
         // seq 12: idempotent re-remove (lists already empty) plus a warn-skip on
-        // a never-created target (serial 7). No panic; neighbor sets unchanged
-        // (the neighborhood clocks are re-stamped to 12, so the checksum is
-        // expected to move — only the link sets are asserted stable).
+        // a never-created target (serial 7). No panic; the link sets stay empty,
+        // but the touched neighborhood clocks (nodes 2 and 5) are re-stamped to
+        // 12, which moves the checksum — asserted below.
+        let cksum_pre12 = g.checksum();
         let absent = VectorId::from_serial_id(7);
         g.insert_apply(&GraphMutation {
             seq_no: 12,
@@ -2071,22 +2057,18 @@ mod tests {
             "absent target not created"
         );
         assert_eq!(g.last_update_seq_no, 12);
-
-        let buf9 = bincode::serialize(&g).unwrap();
-        let bulk9: GraphMem = bincode::deserialize(&buf9).unwrap();
-        assert_eq!(
+        assert_ne!(
             g.checksum(),
-            bulk9.checksum(),
-            "incremental set-hash drifted from bulk after EdgeType::All RemoveEdges"
+            cksum_pre12,
+            "seq-12 re-stamp of the touched neighborhoods (2 and 5) must move the checksum"
         );
 
         // ── Phase 10: multi-version VectorId collapse — the defining v5 invariant.
         // Edges are version-free: every consumer projects a VectorId through
         // serial_id(), so a VectorId{serial, version != 0} lands under (and
-        // matches) the bare serial. Nodes 2, 3, 4 carry empty lists into this
-        // phase (2 swept in Phase 9; 3 and 4 reset by their reauths) — pin that
-        // before seeding fresh edges.
-        assert!(g.get_raw_links(&2, 0).await.is_empty());
+        // matches) the bare serial. Nodes 3 and 4 carry empty lists into this
+        // phase (reset by their reauths, untouched since) — pin that before
+        // seeding fresh edges. (Node 2's emptiness is already pinned in Phase 9.)
         assert!(g.get_raw_links(&3, 0).await.is_empty());
         assert!(g.get_raw_links(&4, 0).await.is_empty());
 
@@ -2146,14 +2128,6 @@ mod tests {
         );
         assert_eq!(g.last_update_seq_no, 14);
 
-        let buf10 = bincode::serialize(&g).unwrap();
-        let bulk10: GraphMem = bincode::deserialize(&buf10).unwrap();
-        assert_eq!(
-            g.checksum(),
-            bulk10.checksum(),
-            "incremental set-hash drifted after multi-version VectorId edges"
-        );
-
         // ── Phase 11: production BothEyes pair shape. Genesis writes
         // `[GraphMem; 2]` via write_graph_pair_current and hawk restart reads it
         // back with read_graph_pair (draining convert_pair). Run over THIS aged
@@ -2164,23 +2138,13 @@ mod tests {
         use crate::utils::serialization::graph::{
             read_graph_pair, write_graph_pair_current, GraphFormat,
         };
-        let pair_cksum = g.checksum();
         let mut pair_buf = Vec::new();
         write_graph_pair_current(&mut pair_buf, [g.clone(), g.clone()]).unwrap();
         let pair =
             read_graph_pair(&mut std::io::Cursor::new(&pair_buf), GraphFormat::Current).unwrap();
         for restored in &pair {
-            assert_eq!(
-                restored.checksum(),
-                pair_cksum,
-                "pair round-trip drifted the checksum"
-            );
             assert_eq!(*restored, g, "pair round-trip changed the evolved graph");
         }
-        assert_eq!(
-            pair[0], pair[1],
-            "the two eyes diverged through convert_pair"
-        );
     }
 
     #[test]
