@@ -384,48 +384,74 @@ fn build_layer_arrays(graph: &GraphMem) -> LayerArrays<'_> {
     (adj, key, n)
 }
 
-/// The single search source: first live recorded entry point, else the live node
-/// at the temporary entry point's slot (LinearScan, no recorded entry points).
-/// Returns `(live_point, top_layer)` with the layer clamped to existing layers.
-fn pick_source(graph: &GraphMem, key: &[Vec<VectorId>], n: usize) -> Option<(VectorId, usize)> {
+/// The search sources: every live recorded entry point, else the live node at the
+/// temporary entry point's slot (LinearScan, no recorded entry points). Returns
+/// `(live_point, layer)` pairs with each layer clamped to existing layers. Seeding
+/// BFS from the whole entry-point set mirrors the search, which descends from the
+/// entry point nearest the query — so reachability is "reachable from any entry
+/// point" and the hop count is the shortest layered path from the nearest one.
+fn pick_sources(graph: &GraphMem, key: &[Vec<VectorId>], n: usize) -> Vec<(VectorId, usize)> {
     let num_layers = graph.layers.len();
     let live = |point: &VectorId, layer: usize| {
         let i = point.index() as usize;
         i < n && key[layer.min(num_layers - 1)][i] == *point
     };
-    if let Some((p, l)) = graph
+    let eps: Vec<(VectorId, usize)> = graph
         .entry_points
         .iter()
-        .map(|ep| (ep.point, ep.layer))
-        .find(|(p, l)| live(p, *l))
-    {
-        return Some((p, l.min(num_layers - 1)));
+        .map(|ep| (ep.point, ep.layer.min(num_layers - 1)))
+        .filter(|(p, l)| live(p, *l))
+        .collect();
+    if !eps.is_empty() {
+        return eps;
     }
     // LinearScan fallback. get_temporary_entry_point returns links.keys().min(),
     // i.e. the lowest version of the min serial, which may be stale; resolve to the
     // live (max-version) node at that slot.
-    let (tp, tl) = graph.get_temporary_entry_point()?;
+    let Some((tp, tl)) = graph.get_temporary_entry_point() else {
+        return Vec::new();
+    };
     let top = tl.min(num_layers - 1);
     let i = tp.index() as usize;
-    (i < n && key[top][i] != ABSENT).then(|| (key[top][i], top))
+    (i < n && key[top][i] != ABSENT)
+        .then(|| vec![(key[top][i], top)])
+        .unwrap_or_default()
 }
 
-/// Single-source layered BFS (top layer → 0) over version-strict edges, via a
-/// bucket queue (Dial's algorithm). Returns `dist` indexed by `VectorId::index()`
-/// (`u32::MAX` = unreachable). Distances carry down between layers (free descent).
+/// Multi-source layered BFS (top layer → 0) over version-strict edges, via a bucket
+/// queue (Dial's algorithm). Returns `dist` indexed by `VectorId::index()`
+/// (`u32::MAX` = unreachable). Each source enters at hop 0 in its own layer and
+/// distances carry down between layers (free descent). Reachability is a topological
+/// upper bound (any path from any source) and the hop count an optimistic lower
+/// bound on the actual greedy descent, which follows a single path and may stall.
 fn layered_bfs(
     adj: &[Vec<&[VectorId]>],
     key: &[Vec<VectorId>],
     n: usize,
-    source: (VectorId, usize),
+    sources: &[(VectorId, usize)],
 ) -> Vec<u32> {
-    let (point, top) = source;
-    let start = point.index() as usize;
     let mut dist = vec![u32::MAX; n];
-    let mut reached: Vec<u32> = vec![start as u32];
-    dist[start] = 0;
+    let Some(top) = sources.iter().map(|(_, l)| *l).max() else {
+        return dist;
+    };
+    // Seeds entering at each layer (real entry points all sit at the top layer, but
+    // a source recorded at a lower layer is introduced when its layer is reached).
+    let mut seeds: Vec<Vec<u32>> = vec![Vec::new(); top + 1];
+    for &(point, l) in sources {
+        let i = point.index() as usize;
+        if i < n && l <= top {
+            seeds[l].push(i as u32);
+        }
+    }
+    let mut reached: Vec<u32> = Vec::new();
     let mut queue: Vec<Vec<u32>> = Vec::new();
     for layer in (0..=top).rev() {
+        for &s in &seeds[layer] {
+            if dist[s as usize] == u32::MAX {
+                dist[s as usize] = 0;
+                reached.push(s);
+            }
+        }
         let adj_l = &adj[layer];
         let key_l = &key[layer];
         let mut max_d = 0u32;
@@ -547,16 +573,14 @@ fn scc_layer(adj_l: &[&[VectorId]], key_l: &[VectorId], n: usize) -> (Vec<u32>, 
     (comp_of, sizes)
 }
 
-/// Single-source layered BFS hop/reachability stats, bucketed by serial ID.
+/// Layered BFS hop/reachability stats, bucketed by serial ID.
 ///
-/// Uses one entry point: the top layer (~N/M^2 nodes, M ≥ that) is near-complete,
-/// so a single source reaches all of it within ~1 hop — equivalent to seeding from
-/// the whole entry-point set the search picks from.
-///
-/// Hop count is the shortest *layered* path: traverse a layer's edges, then descend
-/// (free) at any reached node. Since nodes enter a layer carrying the distance from
-/// above, each layer's relaxation is a non-uniform-source shortest path, run with a
-/// bucket queue (Dial's algorithm). Reachability is version-strict.
+/// Seeds from every live entry point (the set the search descends from), so a node
+/// counts as reachable if any entry point can reach it. Hop count is the shortest
+/// *layered* path: traverse a layer's edges, then descend (free) at any reached
+/// node. Since nodes enter a layer carrying the distance from above, each layer's
+/// relaxation is a non-uniform-source shortest path, run with a bucket queue
+/// (Dial's algorithm). Reachability is version-strict.
 fn compute_hop_buckets(
     eye: &str,
     graph: &GraphMem,
@@ -570,10 +594,7 @@ fn compute_hop_buckets(
         return;
     }
     let (adj, key, n) = build_layer_arrays(graph);
-    let dist = match pick_source(graph, &key, n) {
-        Some(src) => layered_bfs(&adj, &key, n, src),
-        None => vec![u32::MAX; n],
-    };
+    let dist = layered_bfs(&adj, &key, n, &pick_sources(graph, &key, n));
 
     // Aggregate per bucket: hops over reachable nodes, plus reachable/unreachable split.
     let num_buckets = (n as u32 / bucket_size) as usize + 1;
@@ -655,6 +676,8 @@ impl Stats {
 struct ProbeNeighbor {
     serial: u32,
     version: i16,
+    /// For an in-edge, the probe version this edge points at; `None` for out-edges.
+    target_version: Option<i16>,
     reachable: bool,
     hop: Option<u32>,
 }
@@ -667,6 +690,8 @@ struct ProbeReport {
     exists_in_graph: bool,
     in_irises_table: bool,
     graph_version: Option<i16>,
+    cpu_version: Option<i16>,
+    gpu_version: Option<i16>,
     layers_present: Vec<usize>,
     reachable: bool,
     hop: Option<u32>,
@@ -680,6 +705,9 @@ struct ProbeReport {
     out_degree: u32,
     in_neighbors_valid: Vec<ProbeNeighbor>,
     in_neighbors_raw: Vec<ProbeNeighbor>,
+    /// Distribution over which probe version raw in-edges point at: `(version, count)`,
+    /// version-descending. Surfaces in-links anchored to a stale version.
+    in_target_version_dist: Vec<(i16, u32)>,
     out_neighbors: Vec<ProbeNeighbor>,
     pending_modifications: Vec<String>,
     gpu_byte_match: Option<bool>,
@@ -733,6 +761,23 @@ async fn run_probe_reports(
     let hnsw_map = to_map(hnsw_rows);
     let gpu_map = to_map(gpu_rows);
 
+    let version_sql = "SELECT id, version_id FROM irises WHERE id = ANY($1)";
+    let fetch_versions = |pool: &sqlx::PgPool| {
+        let pool = pool.clone();
+        let ids = probe_i64.clone();
+        async move {
+            sqlx::query_as::<_, (i64, i16)>(version_sql)
+                .bind(&ids)
+                .fetch_all(&pool)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .collect::<HashMap<i64, i16>>()
+        }
+    };
+    let cpu_versions = fetch_versions(hnsw_pool).await;
+    let gpu_versions = fetch_versions(gpu_pool).await;
+
     // --- Per-eye topology ---
     let probe_set: HashSet<u32> = probes.iter().copied().collect();
     let mut out: Vec<ProbeReport> = Vec::new();
@@ -742,13 +787,10 @@ async fn run_probe_reports(
             continue;
         }
         let (adj, key, n) = build_layer_arrays(graph);
-        let source = pick_source(graph, &key, n);
-        let dist = match source {
-            Some(src) => layered_bfs(&adj, &key, n, src),
-            None => vec![u32::MAX; n],
-        };
+        let sources = pick_sources(graph, &key, n);
+        let dist = layered_bfs(&adj, &key, n, &sources);
         let (comp_of, sizes) = scc_layer(&adj[0], &key[0], n);
-        let entry_comp = source.map(|(p, _)| comp_of[p.index() as usize]);
+        let entry_comp = sources.first().map(|(p, _)| comp_of[p.index() as usize]);
 
         // One edge sweep collects in-neighbors (raw + valid) for the probe set.
         let mut in_raw: HashMap<u32, Vec<ProbeNeighbor>> = HashMap::new();
@@ -769,6 +811,7 @@ async fn run_probe_reports(
                 let pn = ProbeNeighbor {
                     serial: node.serial_id(),
                     version: node.version_id(),
+                    target_version: Some(nb.version_id()),
                     reachable,
                     hop: reachable.then(|| dist[si]),
                 };
@@ -810,6 +853,7 @@ async fn run_probe_reports(
                     ProbeNeighbor {
                         serial: nb.serial_id(),
                         version: nb.version_id(),
+                        target_version: None,
                         reachable: r,
                         hop: r.then(|| dist[i]),
                     }
@@ -817,6 +861,17 @@ async fn run_probe_reports(
                 .collect();
             let in_neighbors_raw = in_raw.remove(&serial).unwrap_or_default();
             let in_neighbors_valid = in_valid.remove(&serial).unwrap_or_default();
+            let in_target_version_dist = {
+                let mut counts: HashMap<i16, u32> = HashMap::new();
+                for nbn in &in_neighbors_raw {
+                    if let Some(tv) = nbn.target_version {
+                        *counts.entry(tv).or_default() += 1;
+                    }
+                }
+                let mut dist: Vec<(i16, u32)> = counts.into_iter().collect();
+                dist.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+                dist
+            };
             let in_degree_raw = in_neighbors_raw.len() as u32;
             let in_degree_valid = in_neighbors_valid.len() as u32;
             let valid_non_self = in_neighbors_valid
@@ -846,6 +901,8 @@ async fn run_probe_reports(
                 exists_in_graph: exists,
                 in_irises_table: iris_ids.contains(&(serial as i64)),
                 graph_version: live_vid.map(|v| v.version_id()),
+                cpu_version: cpu_versions.get(&(serial as i64)).copied(),
+                gpu_version: gpu_versions.get(&(serial as i64)).copied(),
                 layers_present,
                 reachable,
                 hop,
@@ -859,6 +916,7 @@ async fn run_probe_reports(
                 out_degree: out_neighbors.len() as u32,
                 in_neighbors_valid,
                 in_neighbors_raw,
+                in_target_version_dist,
                 out_neighbors,
                 pending_modifications: mods_by_serial.get(&serial).cloned().unwrap_or_default(),
                 gpu_byte_match: match (byte, gpu) {
@@ -872,14 +930,21 @@ async fn run_probe_reports(
     Ok(out)
 }
 
-/// Render a probe neighbor list (capped) as `serial:version@hop` / `…/unreach`.
+/// Render a probe neighbor list (capped) as `serial:version[→target]@hop` /
+/// `…/unreach`, where `→target` is the probe version an in-edge points at.
 fn fmt_nbrs(nbrs: &[ProbeNeighbor], cap: usize) -> String {
     let shown: Vec<String> = nbrs
         .iter()
         .take(cap)
-        .map(|n| match n.hop {
-            Some(h) => format!("{}:{}@{}", n.serial, n.version, h),
-            None => format!("{}:{}/unreach", n.serial, n.version),
+        .map(|n| {
+            let tv = n
+                .target_version
+                .map(|v| format!("→{v}"))
+                .unwrap_or_default();
+            match n.hop {
+                Some(h) => format!("{}:{}{}@{}", n.serial, n.version, tv, h),
+                None => format!("{}:{}{}/unreach", n.serial, n.version, tv),
+            }
         })
         .collect();
     let extra = if nbrs.len() > cap {
@@ -897,8 +962,13 @@ fn format_probe(r: &ProbeReport) -> String {
     let _ = writeln!(s, "  VERDICT: {}", r.verdict);
     let _ = writeln!(
         s,
-        "  exists={} in_irises={} version={:?} layers={:?}",
-        r.exists_in_graph, r.in_irises_table, r.graph_version, r.layers_present
+        "  exists={} in_irises={} version(graph/cpu/gpu)={:?}/{:?}/{:?} layers={:?}",
+        r.exists_in_graph,
+        r.in_irises_table,
+        r.graph_version,
+        r.cpu_version,
+        r.gpu_version,
+        r.layers_present
     );
     let _ = writeln!(
         s,
@@ -925,6 +995,12 @@ fn format_probe(r: &ProbeReport) -> String {
         "  in_neighbors_raw:   {}",
         fmt_nbrs(&r.in_neighbors_raw, 25)
     );
+    let dist: Vec<String> = r
+        .in_target_version_dist
+        .iter()
+        .map(|(v, c)| format!("v{v}:{c}"))
+        .collect();
+    let _ = writeln!(s, "  in_edge_target_versions: [{}]", dist.join(", "));
     let _ = writeln!(
         s,
         "  out_neighbors:      {}",
