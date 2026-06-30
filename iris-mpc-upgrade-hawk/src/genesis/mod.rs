@@ -15,6 +15,7 @@ use axum::{routing::get, Router};
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
 
+use futures::TryStreamExt;
 use iris_mpc_common::{
     config::{CommonConfig, Config, ENV_PROD, ENV_STAGE},
     helpers::{smpc_request, sync::Modification},
@@ -46,10 +47,11 @@ use iris_mpc_cpu::{
     graph_checkpoint::*,
     hawkers::aby3::aby3_store::{Aby3Store, VectorIdRegistryRef},
     hnsw::{graph::graph_store::GraphPg, GraphMem},
+    utils::serialization::graph::{GraphFormat, LegacyPruneContext},
 };
 use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -1431,24 +1433,32 @@ async fn init_graph_from_stores(
             },
         ));
 
+    let prune_iris_store = iris_store.clone();
     let graph_load_future = async move {
         if let Some(state) = checkpoint {
             tracing::info!(
                 "Loading graph from S3 checkpoint, hash: {}",
                 state.blake3_hash
             );
-            // Prune at read: drop edges stale w.r.t. their target's current
-            // version (v5 serial-only edges can't skip them at search time) and
-            // remove deleted serials (which legacy graphs may retain as stale
-            // stragglers). The deletion set is the S3 exclusion list, not the
-            // iris vector store.
-            download_graph_checkpoint(
-                s3_client,
-                checkpoint_bucket,
-                &state,
-                Some(deleted_serial_ids),
-            )
-            .await
+            // Legacy V3/V4 bases are pruned at read (see `read_graph_pair_pruned`);
+            // only they need the current-version table, so skip the scan for V5.
+            let prune = match GraphFormat::try_from(state.graph_version)? {
+                GraphFormat::V3 | GraphFormat::V4 => {
+                    let version_map: HashMap<u32, i16> = prune_iris_store
+                        .stream_iris_ids(max_index)
+                        .map_ok(|(id, version)| {
+                            (u32::try_from(id).expect("serial id fits u32"), version)
+                        })
+                        .try_collect()
+                        .await?;
+                    Some(LegacyPruneContext {
+                        version_map,
+                        deleted: deleted_serial_ids,
+                    })
+                }
+                _ => None,
+            };
+            download_graph_checkpoint(s3_client, checkpoint_bucket, &state, prune).await
         } else {
             tracing::info!("No S3 checkpoint found, defaulting to empty graph");
             Ok([GraphMem::new(), GraphMem::new()])

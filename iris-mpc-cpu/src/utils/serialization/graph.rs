@@ -361,100 +361,62 @@ pub fn read_graph_pair<R: std::io::Read + ?Sized>(
     }
 }
 
-/// Read a pair of `GraphMem` structs, pruning edges that are stale at load
-/// time. Used by genesis when materializing a legacy base checkpoint;
-/// `deleted` is the set of deleted serial ids (genesis already loads this from
-/// the S3 deletion list to exclude them from indexation — it is NOT the iris
-/// vector store).
+/// Inputs for read-time pruning of a legacy (V3/V4) base checkpoint.
+pub struct LegacyPruneContext {
+    /// Serial → current-version table from the iris store (`stream_iris_ids`).
+    /// An edge to Z survives only if its stored target version equals Z's
+    /// version here.
+    pub version_map: HashMap<u32, i16>,
+    /// Deleted serials (S3 deletion list). Dropped regardless of version: a
+    /// deletion keeps the iris row, and we don't assume its version bump reaches
+    /// `version_map`, so version-match alone may keep edges to a deleted serial.
+    pub deleted: HashSet<u32>,
+}
+
+/// Read a `GraphMem` pair, physically dropping edges the runtime would
+/// version-skip: an edge to Z survives iff Z is not deleted and the edge's
+/// stored version equals Z's current version (`version_map`). Surviving nodes
+/// seed the staleness clock to 0. Genesis uses this to materialize a legacy
+/// V3/V4 base; V5/Current edges are version-free (skipped lazily by
+/// `get_active_links`) and fall through to the plain reader.
 ///
-/// V5 serial-only edges cannot self-validate at search time the way V4's
-/// version-carrying edges do (main skips an edge A→Z when the edge's stored
-/// version no longer matches Z's current version). For a legacy V3/V4 base we
-/// reproduce that skip *physically* at read: drop every edge A→Z whose stored
-/// target version differs from Z's current version, then seed the staleness
-/// clock to 0.
-///
-/// Z's current version is read from Z's own node-key entry in the same graph —
-/// not from an external registry. Every reauth re-inserts the node
-/// (`RemoveNode`+`AddNode`), bumping the key version in lockstep with the
-/// iris-store version, so the key version equals the registry-current version
-/// the runtime skip compares against. This makes the prune a deterministic
-/// function of the graph bytes alone (consensus-safe, no iris-store dependency).
-///
-/// Deletions are the exception: a deletion bumps the iris version without an
-/// `AddNode`, and main's version-keyed `RemoveNode` (minted at the post-bump
-/// version) can no-op, leaving a straggler key at the old version that would
-/// otherwise read as "live". So deleted serials are dropped explicitly here
-/// (treated as absent) using `deleted`; their inbound edges then fall through
-/// the absent-target branch. v5's own deletion removes by serial, so graphs v5
-/// maintains never carry such stragglers.
-///
-/// V5/Current need no read-time prune: serial-only edges are version-free and
-/// physical stale edges are skipped lazily by `get_active_links` during
-/// traversal. Other (pre-clock) formats fall back to the plain reader.
+/// INVARIANT: `version_map` must be identical across parties or the resulting
+/// checksum diverges — relies on `version_id` being public and replicated.
 pub fn read_graph_pair_pruned<R: std::io::Read + ?Sized>(
     reader: &mut R,
     format: GraphFormat,
-    deleted: &HashSet<u32>,
+    prune: &LegacyPruneContext,
 ) -> Result<[GraphMem; 2]> {
     match format {
-        GraphFormat::V4 => Ok(read_pair::<_, GraphV4>(reader)?.map(|g| prune_graph_v4(g, deleted))),
-        GraphFormat::V3 => Ok(read_pair::<_, GraphV3>(reader)?.map(|g| prune_graph_v3(g, deleted))),
+        GraphFormat::V4 => Ok(read_pair::<_, GraphV4>(reader)?.map(|g| prune_graph_v4(g, prune))),
+        GraphFormat::V3 => Ok(read_pair::<_, GraphV3>(reader)?.map(|g| prune_graph_v3(g, prune))),
         _ => read_graph_pair(reader, format),
     }
 }
 
-/// Convert a legacy graph's layers to pruned `Layer`s plus a clock-0
-/// `node_init_seq_no`. `$layers` and `$entry_points` are moved out of the source
-/// graph (distinct fields, so a partial move). `$deleted` is the deleted-serial
-/// set, whose entries are dropped outright (treated as absent).
-///
-/// Current version per serial = the max key version across layers. v5 keys by
-/// bare serial, so if a legacy graph carries multiple version entries for one
-/// serial (a `RemoveNode` straggler) they would collapse onto one v5 entry in
-/// HashMap iteration order — nondeterministic, hence consensus-unsafe. We instead
-/// keep only the live (max-version) entry's out-edges and drop older stragglers
-/// (their neighborhoods are stale; reauth rebuilt the live one). An edge survives
-/// only if its target version equals that target's current version, dropping
-/// edges to absent/old/deleted targets. `set_links` recomputes each layer's
-/// `set_hash`.
+/// Build pruned `Layer`s and a clock-0 `node_init_seq_no` from a legacy graph.
+/// `$layers`/`$entry_points` are moved out (distinct fields → partial move).
+/// At most one version per serial matches `version_map`, so multi-version
+/// stragglers collapse deterministically onto the live entry. `set_links`
+/// recomputes each layer's `set_hash`.
 macro_rules! legacy_prune_to_mem {
-    ($layers:expr, $entry_points:expr, $last_update_seq_no:expr, $deleted:expr) => {{
+    ($layers:expr, $entry_points:expr, $last_update_seq_no:expr, $prune:expr) => {{
         let src_layers = $layers;
-        let deleted = $deleted;
-        let mut version_map: HashMap<u32, i16> = HashMap::new();
-        for layer in &src_layers {
-            for key in layer.links.keys() {
-                // Deleted serials never define a current version (a deletion can
-                // leave a stale-version straggler key in legacy graphs).
-                if deleted.contains(&key.id) {
-                    continue;
-                }
-                version_map
-                    .entry(key.id)
-                    .and_modify(|v| {
-                        if key.version > *v {
-                            *v = key.version;
-                        }
-                    })
-                    .or_insert(key.version);
-            }
-        }
+        let prune = $prune;
+        let live_at = |id: u32, version: i16| {
+            !prune.deleted.contains(&id) && prune.version_map.get(&id) == Some(&version)
+        };
         let mut layers = Vec::with_capacity(src_layers.len());
         for layer in src_layers {
             let mut out = Layer::with_capacity(layer.links.len());
             for (key, edges) in layer.links {
-                // Drop deleted serials and older-version stragglers; the live
-                // (max-version) entry is authoritative for a node's out-edges.
-                // Edges to a deleted/absent target are absent from version_map
-                // and dropped by the filter below.
-                if version_map.get(&key.id) != Some(&key.version) {
+                if !live_at(key.id, key.version) {
                     continue;
                 }
                 let kept: Vec<u32> = edges
                     .0
                     .into_iter()
-                    .filter(|e| version_map.get(&e.id) == Some(&e.version))
+                    .filter(|e| live_at(e.id, e.version))
                     .map(|e| e.id)
                     .collect();
                 out.set_links(key.id, kept, 0);
@@ -475,18 +437,18 @@ macro_rules! legacy_prune_to_mem {
     }};
 }
 
-fn prune_graph_v4(value: GraphV4, deleted: &HashSet<u32>) -> GraphMem {
+fn prune_graph_v4(value: GraphV4, prune: &LegacyPruneContext) -> GraphMem {
     legacy_prune_to_mem!(
         value.layers,
         value.entry_points,
         value.last_update_seq_no,
-        deleted
+        prune
     )
 }
 
-fn prune_graph_v3(value: GraphV3, deleted: &HashSet<u32>) -> GraphMem {
+fn prune_graph_v3(value: GraphV3, prune: &LegacyPruneContext) -> GraphMem {
     // V3 has no `last_update_seq_no` and names its entry points `entry_point`.
-    legacy_prune_to_mem!(value.layers, value.entry_point, 0, deleted)
+    legacy_prune_to_mem!(value.layers, value.entry_point, 0, prune)
 }
 
 /// Read a pair of `GraphMem` structs from file with a specified graph
@@ -1082,9 +1044,9 @@ mod tests {
     fn prune_drops_version_drifted_and_dangling_edges() {
         use crate::utils::serialization::types::graph_v4;
         let vid = |id: u32, version: i16| graph_v4::VectorId { id, version };
-        // Node 3 ("Z") current version is 2 (its key entry). Node 1 ("A") links
-        // to the stale Z@1 and to an absent target 9@0; node 2 ("B") links to
-        // the fresh Z@2.
+        // Registry says node 3 ("Z") current version is 2. Node 1 ("A") links to
+        // the stale Z@1 and to an absent target 9@0 (not in the registry); node 2
+        // ("B") links to the fresh Z@2.
         let mut links = HashMap::new();
         links.insert(vid(1, 0), graph_v4::EdgeIds(vec![vid(3, 1), vid(9, 0)]));
         links.insert(vid(2, 0), graph_v4::EdgeIds(vec![vid(3, 2)]));
@@ -1096,7 +1058,11 @@ mod tests {
             last_update_seq_no: 7,
         };
 
-        let mem = prune_graph_v4(g, &HashSet::new());
+        let prune = LegacyPruneContext {
+            version_map: HashMap::from([(1u32, 0i16), (2, 0), (3, 2)]),
+            deleted: HashSet::new(),
+        };
+        let mem = prune_graph_v4(g, &prune);
         let m = mem.layers[0].get_links_map();
         assert!(m[&1u32].neighbors().is_empty(), "stale + dangling dropped");
         assert_eq!(m[&2u32].neighbors(), [3u32], "fresh edge kept");
@@ -1108,15 +1074,18 @@ mod tests {
     }
 
     /// A legacy graph carrying two version entries for one serial (a `RemoveNode`
-    /// straggler) collapses deterministically onto the live (max-version) entry:
+    /// straggler) collapses deterministically onto the registry-current entry:
     /// the stale entry's out-edges are dropped, inbound edges to the old version
     /// are dropped, and the serial appears once with the live entry's edges.
+    /// Only one version can match the registry value, so there is no
+    /// HashMap-iteration-order dependence.
     #[test]
     fn prune_collapses_multi_version_serial_to_live_entry() {
         use crate::utils::serialization::types::graph_v4;
         let vid = |id: u32, version: i16| graph_v4::VectorId { id, version };
         // Serial 3 has both a stale entry (@1, out-edge to 2) and the live entry
-        // (@2, out-edge to 1). Serial 1 links to the stale 3@1; serial 2 to 3@2.
+        // (@2, out-edge to 1); registry-current is 2. Serial 1 links to the stale
+        // 3@1; serial 2 to 3@2.
         let mut links = HashMap::new();
         links.insert(vid(1, 0), graph_v4::EdgeIds(vec![vid(3, 1)]));
         links.insert(vid(2, 0), graph_v4::EdgeIds(vec![vid(3, 2)]));
@@ -1128,7 +1097,11 @@ mod tests {
             last_update_seq_no: 0,
         };
 
-        let mem = prune_graph_v4(g, &HashSet::new());
+        let prune = LegacyPruneContext {
+            version_map: HashMap::from([(1u32, 0i16), (2, 0), (3, 2)]),
+            deleted: HashSet::new(),
+        };
+        let mem = prune_graph_v4(g, &prune);
         let m = mem.layers[0].get_links_map();
         // Serial 3 present once, with the live (@2) entry's out-edges (-> 1).
         assert_eq!(m[&3u32].neighbors(), [1u32], "live entry's edges kept");
@@ -1140,17 +1113,17 @@ mod tests {
         assert_eq!(mem.node_init_seq_no.get(&3u32), Some(&0u64));
     }
 
-    /// A deleted serial is dropped outright even when its key version still
-    /// matches inbound edges (a deletion leaves a stale-version straggler key in
-    /// legacy graphs, since the bump has no `AddNode` and the version-keyed
-    /// `RemoveNode` can no-op). The node and its inbound edges disappear.
+    /// A deleted serial is dropped outright even when the registry version still
+    /// matches its inbound edges (a deletion's iris version bump is not relied on
+    /// here; the deletion list is the authority). The node and its inbound edges
+    /// disappear.
     #[test]
     fn prune_drops_deleted_serial_and_its_inbound_edges() {
         use crate::utils::serialization::types::graph_v4;
         let vid = |id: u32, version: i16| graph_v4::VectorId { id, version };
-        // Serial 3 is deleted but still present as a key @5 (straggler), and
-        // serial 1's edge 3@5 *matches* that key version — only the deletion
-        // list distinguishes it. Serial 2 is live and linked normally.
+        // Serial 3 is deleted but present as key @5, and the registry still
+        // reports 3@5 as current, so serial 1's edge 3@5 *matches* by version —
+        // only the deletion list distinguishes it. Serial 2 is live.
         let mut links = HashMap::new();
         links.insert(vid(1, 0), graph_v4::EdgeIds(vec![vid(3, 5), vid(2, 0)]));
         links.insert(vid(2, 0), graph_v4::EdgeIds(vec![]));
@@ -1161,8 +1134,11 @@ mod tests {
             last_update_seq_no: 0,
         };
 
-        let deleted = HashSet::from([3u32]);
-        let mem = prune_graph_v4(g, &deleted);
+        let prune = LegacyPruneContext {
+            version_map: HashMap::from([(1u32, 0i16), (2, 0), (3, 5)]),
+            deleted: HashSet::from([3u32]),
+        };
+        let mem = prune_graph_v4(g, &prune);
         let m = mem.layers[0].get_links_map();
         assert!(!m.contains_key(&3u32), "deleted serial absent as a node");
         assert_eq!(m[&1u32].neighbors(), [2u32], "edge to deleted 3 dropped");
