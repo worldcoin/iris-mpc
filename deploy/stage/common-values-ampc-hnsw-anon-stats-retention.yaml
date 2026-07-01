@@ -1,0 +1,29 @@
+# POP-3905 — anon-stats retention CronJob, ampc-hnsw cluster (stage). common-cronjob chart.
+# Per-party env in the per-node files (chart `env` is a list → not deep-merged).
+image: "ghcr.io/worldcoin/anon-stats-retention:latest"
+environment: stage
+schedule: "30 3 * * *"
+restartPolicy: OnFailure
+backoffLimit: 3
+concurrencyPolicy: Forbid
+successfulJobsHistoryLimit: 3
+failedJobsHistoryLimit: 5
+ttlSecondsAfterFinished: 86400
+# BLOCKING GATE: prod suspended until the 4 monitors validate in staging.
+suspend: false
+datadog:
+  enabled: true
+imagePullSecrets:
+  enabled: true
+  secretName: github-secret
+serviceAccount:
+  create: true
+nodeSelector:
+  kubernetes.io/arch: amd64
+resources:
+  limits:
+    cpu: "500m"
+    memory: 512Mi
+  requests:
+    cpu: "250m"
+    memory: 256Mi

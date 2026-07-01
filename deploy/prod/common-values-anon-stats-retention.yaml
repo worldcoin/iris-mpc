@@ -1,0 +1,39 @@
+# POP-3905 — anon-stats retention CronJob (prod). SUSPENDED until the 4-monitor
+# observability gate is validated in staging (see deploy/monitors/anon-stats-retention-monitors.md).
+# Un-suspend per party (canary one party first) only after the gate passes.
+image: "ghcr.io/worldcoin/anon-stats-retention:latest"
+
+environment: prod
+
+schedule: "30 3 * * *"
+
+restartPolicy: OnFailure
+backoffLimit: 3
+concurrencyPolicy: Forbid
+successfulJobsHistoryLimit: 3
+failedJobsHistoryLimit: 5
+ttlSecondsAfterFinished: 86400
+
+# BLOCKING GATE: prod stays suspended until staging validates all 4 monitors.
+suspend: true
+
+datadog:
+  enabled: true
+
+imagePullSecrets:
+  enabled: true
+  secretName: github-secret
+
+serviceAccount:
+  create: true
+
+nodeSelector:
+  kubernetes.io/arch: amd64
+
+resources:
+  limits:
+    cpu: "500m"
+    memory: 512Mi
+  requests:
+    cpu: "250m"
+    memory: 256Mi

@@ -1,0 +1,31 @@
+# POP-3905 — anon-stats retention CronJob, party 0 (stage). Per-node overrides.
+# The common-cronjob `env` is a LIST (Helm replaces, not merges), so this carries the
+# full env. DB schema is left at the default `anon_stats_mpc` to match anon-stats-server.
+env:
+  - name: RUST_LOG
+    value: "info"
+  - name: SMPC__ENVIRONMENT
+    value: "stage"
+  - name: SMPC__DB_URL
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_URL
+        name: application
+  - name: SMPC__SERVER_COORDINATION__PARTY_ID
+    value: "0"
+  - name: SMPC__SERVICE__SERVICE_NAME
+    value: "anon-stats-retention-smpcv2-0"
+  - name: SMPC__SERVICE__METRICS__HOST
+    valueFrom:
+      fieldRef:
+        fieldPath: status.hostIP
+  - name: SMPC__SERVICE__METRICS__PORT
+    value: "8125"
+  - name: SMPC__SERVICE__METRICS__PREFIX
+    value: "anon-stats-retention-smpcv2-0"
+  - name: RETENTION_DAYS
+    value: "14"
+  - name: PREMAKE_DAYS
+    value: "7"
+  - name: QUARANTINE_GRACE_HOURS
+    value: "48"

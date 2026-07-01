@@ -1,0 +1,43 @@
+# POP-3905 — anon-stats retention CronJob (stage). Uses the helm-charts `common-cronjob`
+# chart. Per-party env lives in the per-node values files (the chart's `env` is a LIST,
+# which Helm replaces rather than deep-merges, so each node carries the full list).
+image: "ghcr.io/worldcoin/anon-stats-retention:latest"
+
+environment: stage
+
+# Daily, 03:30 UTC. The binary premakes 7 days ahead and reaps partitions >14d old,
+# so a missed day is harmless (next run catches up) — but the missing-run monitor pages.
+schedule: "30 3 * * *"
+
+# Re-run a failed invocation within the same day; the binary is idempotent.
+restartPolicy: OnFailure
+backoffLimit: 3
+# Never overlap runs against the same DB.
+concurrencyPolicy: Forbid
+successfulJobsHistoryLimit: 3
+failedJobsHistoryLimit: 5
+ttlSecondsAfterFinished: 86400
+
+# Stage runs live (this is where the 4-monitor gate is validated). Prod ships suspended.
+suspend: false
+
+datadog:
+  enabled: true
+
+imagePullSecrets:
+  enabled: true
+  secretName: github-secret
+
+serviceAccount:
+  create: true
+
+nodeSelector:
+  kubernetes.io/arch: amd64
+
+resources:
+  limits:
+    cpu: "500m"
+    memory: 512Mi
+  requests:
+    cpu: "250m"
+    memory: 256Mi
