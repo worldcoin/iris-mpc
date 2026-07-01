@@ -121,9 +121,9 @@ pub struct GraphMem {
     /// success.
     pub last_update_seq_no: u64,
 
-    /// The sequence number of the mutation that last touched each node (either
-    /// inserting it or modifying one of its edge lists). Removed when the node
-    /// is deleted.
+    /// Content clock: the seq_no at which each node was last (re-)inserted
+    /// (`AddNode`). Bumped only by a node's own insertion, never by edge
+    /// changes; removed on deletion. Gates edge liveness via [`is_active`].
     pub node_init_seq_no: HashMap<SerialId, u64>,
 
     /// Incrementally-maintained order-agnostic hash of `node_init_seq_no`,
@@ -553,13 +553,11 @@ impl GraphMem {
             .unwrap_or(&[])
     }
 
-    /// Neighbors of `base` at layer `lc` valid for traversal: a neighbor `z` is
-    /// kept iff it is [`is_active`] (live and not content-refreshed past this
-    /// neighborhood's last-certified `seq_no`). Applies the same filter as the
-    /// write-path filter-on-bump, so traversal skips reauthed and removed edges
-    /// even in neighborhoods a write has not yet physically cleaned. Unlike
-    /// [`Self::get_raw_links`] it returns an owned `Vec`. Empty if `base`/`lc`
-    /// absent.
+    /// Neighbors of `base` at layer `lc` valid for traversal: `z` is kept iff
+    /// [`is_active`] (live and not content-refreshed past this neighborhood's
+    /// certified `seq_no`), so traversal skips reauthed/removed edges even in
+    /// neighborhoods no write has physically cleaned yet. Returns an owned `Vec`;
+    /// empty if `base`/`lc` absent.
     pub fn get_active_links(&self, base: &SerialId, lc: usize) -> Vec<SerialId> {
         let Some(nbhd) = self.layers.get(lc).and_then(|layer| layer.get_links(base)) else {
             return Vec::new();
@@ -578,17 +576,14 @@ impl GraphMem {
 
     pub fn checksum(&self) -> u64 {
         let mut set_hash = SetHash::default();
-        // Fold entry points in an order-agnostic way: each EntryPoint is hashed
-        // individually with a fixed key so a re-ordered `entry_points` Vec still
-        // yields the same checksum across parties.
+        // Order-agnostic over entry_points, so a re-ordered Vec hashes the same
+        // across parties.
         set_hash.add_unordered_set("entry_points", self.entry_points.iter());
         for (lc, layer) in self.layers.iter().enumerate() {
-            // Each layer's `set_hash` now folds (node, seq_no, neighbors), so the
-            // per-neighborhood freshness clock is covered here.
             set_hash.add_unordered((lc as u64, layer.set_hash.checksum()));
         }
-        // Fold the content clock (node_init_seq_no) so parties that would skip
-        // different edges via `is_active` disagree on the checksum.
+        // Fold the content clock too: parties must agree on which edges `is_active`
+        // would skip, or their checksums diverge.
         set_hash.add_unordered(("node_init_clock", self.node_init_hash.checksum()));
         set_hash.checksum()
     }
@@ -834,19 +829,13 @@ impl Layer {
         self.set_links_trusted(id, neighbors, seq_no);
     }
 
-    /// Bracketed, filter-then-stamp edit of `node`'s neighbor list — the sole
-    /// path that incrementally grows or shrinks an existing neighborhood.
+    /// Incrementally grow/shrink `node`'s existing neighbor list and re-stamp it
+    /// at `tick`. No-op if `node` is absent.
     ///
-    /// Removes the old set-hash contribution, runs `f` (which receives the
-    /// pre-edit `seq_no` so it can drop entries that became stale relative to
-    /// it), then re-sorts, dedups, stamps `tick`, and re-adds the set-hash
-    /// contribution. No-op if `node` is absent from this layer.
-    ///
-    /// Requires a [`Tick`] (constructible only inside the graph module), so no
-    /// out-of-band `seq_no` can be stamped. `f` must filter the existing list
-    /// *before* pushing new neighbors: freshly added edges are fresh as of
-    /// `tick` and must not be subject to the stale filter, whose threshold is
-    /// the older `seq_no`.
+    /// Requires a [`Tick`] so no out-of-band `seq_no` can be stamped. `f` must
+    /// filter the existing list *before* pushing new neighbors: appended edges
+    /// are fresh as of `tick`, while the stale filter's threshold is the older
+    /// `seq_no`, so filtering after would wrongly drop them.
     pub(in crate::hnsw::graph) fn edit_links<F>(&mut self, node: SerialId, tick: Tick, f: F)
     where
         F: FnOnce(u64, &mut Vec<SerialId>),
@@ -854,9 +843,8 @@ impl Layer {
         let Some(nbhd) = self.links.get_mut(&node) else {
             return;
         };
-        // Key the set-hash on (node, seq_no) so the neighborhood's freshness
-        // certificate is part of the consensus checksum. Remove under the OLD
-        // seq_no, re-add under the new one.
+        // The set-hash keys on (node, seq_no) — the freshness certificate is part
+        // of the consensus checksum — so a re-stamp must rebalance it.
         self.set_hash.remove_hash(Self::neighborhood_contribution(
             node,
             nbhd.seq_no,
@@ -873,12 +861,10 @@ impl Layer {
         ));
     }
 
-    /// Create `node`'s neighborhood on the live path, stamped at `tick`. The
-    /// insertion counterpart to [`Self::edit_links`]: it requires a [`Tick`], so
-    /// live creation can't stamp an out-of-band `seq_no`. Delegates to
-    /// [`Self::set_links_trusted`] with an empty list — matching the previous
-    /// `insert_node(id, Vec::new(), seq_no)` behavior (resets the list if `node`
-    /// already exists).
+    /// Create `node`'s empty neighborhood on the live path, stamped at `tick` —
+    /// the insertion counterpart to [`Self::edit_links`], requiring a [`Tick`] so
+    /// live creation can't stamp an out-of-band `seq_no`. Resets the list if
+    /// `node` already exists.
     pub(in crate::hnsw::graph) fn create_node(&mut self, node: SerialId, tick: Tick) {
         self.set_links_trusted(node, Vec::new(), tick.value());
     }
@@ -892,15 +878,12 @@ impl Layer {
                 &nbhd.neighbors,
             ));
 
-            // Remove the node from all neighbors' neighborhoods (bidirectional cleanup).
-            // note that if this node did compaction then some old neighbors could still have links
-            // to this deleted node. that is ok. it is also ok if the following code block is deleted.
-            // this is just an opportunistic low-cost cleanup.
+            // Opportunistic bidirectional cleanup: drop the backlink from each
+            // neighbor. Best-effort — after compaction some neighbors may still
+            // link here, which is fine (the read mask drops dead edges anyway).
             for neighbor in nbhd.neighbors {
                 if let Some(neighbor_nbhd) = self.links.get_mut(&neighbor) {
-                    // seq_no is unchanged here (only the link list shrinks, so it
-                    // stays sorted); remove and re-add under the same (neighbor,
-                    // seq_no) key.
+                    // seq_no unchanged (the list only shrinks, so it stays sorted).
                     self.set_hash.remove_hash(Self::neighborhood_contribution(
                         neighbor,
                         neighbor_nbhd.seq_no,
@@ -927,9 +910,8 @@ impl Layer {
     /// (edges) there.
     pub fn set_links_trusted(&mut self, from: SerialId, mut links: Vec<SerialId>, seq_no: u64) {
         use std::collections::hash_map::Entry;
-        // Canonicalize: the set-hash contribution hashes the neighbor slice in
-        // order, so every stored list must be sorted+deduped (see
-        // `neighborhood_contribution`), matching what `edit_links` maintains.
+        // Canonicalize: the hash is order-sensitive, so every stored list must be
+        // sorted+deduped (see `neighborhood_contribution`).
         links.sort_unstable();
         links.dedup();
         match self.links.entry(from) {

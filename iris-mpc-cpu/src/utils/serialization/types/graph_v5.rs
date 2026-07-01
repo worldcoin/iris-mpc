@@ -2,10 +2,9 @@ use serde::ser::{SerializeMap, SerializeStruct, Serializer};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
-/// An in-memory implementation of an HNSW hierarchical graph.
-///
-/// This type is a serialization-focused adapter, provided for long-term
-/// compatibility and portability of serialized data.
+/// Wire-format adapter for `GraphMem` — the `GraphV5` on-disk / checkpoint
+/// serialization type, kept for long-term compatibility and portability of
+/// serialized data.
 ///
 /// `Serialize` is hand-written: both field order AND the `node_init_seq_no`
 /// map ordering must match `GraphMem`'s own serializer, because genesis writes
