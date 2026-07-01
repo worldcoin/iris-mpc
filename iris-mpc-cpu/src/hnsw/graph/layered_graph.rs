@@ -821,11 +821,25 @@ impl Layer {
         self.links.get(from)
     }
 
-    /// Order-agnostic checksum of this layer's link map. Two layers with the
-    /// same `(node, set-of-neighbors)` content produce the same checksum even
-    /// if their `HashMap` iteration order or internal `Vec` ordering differ.
+    /// Checksum of this layer's link map, agnostic to `HashMap` iteration order
+    /// (nodes fold commutatively into the accumulator). Within a neighborhood the
+    /// neighbor list is kept sorted+deduped so its contribution is a single hash;
+    /// see [`Self::neighborhood_contribution`].
     pub fn checksum(&self) -> u64 {
         self.set_hash.checksum()
+    }
+
+    /// Set-hash contribution of one neighborhood, keyed on `(node, seq_no)` over
+    /// the neighbor list. The list MUST be sorted+deduped: the hash is
+    /// order-sensitive, so cross-party checksum consensus depends on every party
+    /// hashing the identical canonical order. `edit_links` and `set_links`
+    /// maintain that invariant; the `debug_assert` guards it.
+    fn neighborhood_contribution(node: SerialId, seq_no: u64, neighbors: &[SerialId]) -> u64 {
+        debug_assert!(
+            neighbors.is_sorted(),
+            "neighborhood must be sorted before hashing (consensus invariant)"
+        );
+        SetHash::hash((node, seq_no, neighbors))
     }
 
     pub fn insert_node(&mut self, id: SerialId, neighbors: Vec<SerialId>, seq_no: u64) {
@@ -855,21 +869,30 @@ impl Layer {
         // Key the set-hash on (node, seq_no) so the neighborhood's freshness
         // certificate is part of the consensus checksum. Remove under the OLD
         // seq_no, re-add under the new one.
-        self.set_hash
-            .remove_unordered_set((node, nbhd.seq_no), nbhd.neighbors.iter());
+        self.set_hash.remove_hash(Self::neighborhood_contribution(
+            node,
+            nbhd.seq_no,
+            &nbhd.neighbors,
+        ));
         f(nbhd.seq_no, &mut nbhd.neighbors);
         nbhd.neighbors.sort_unstable();
         nbhd.neighbors.dedup();
         nbhd.seq_no = tick.value();
-        self.set_hash
-            .add_unordered_set((node, nbhd.seq_no), nbhd.neighbors.iter());
+        self.set_hash.add_hash(Self::neighborhood_contribution(
+            node,
+            nbhd.seq_no,
+            &nbhd.neighbors,
+        ));
     }
 
     /// Remove a node from the graph and clean up all backlinks from its neighbors.
     pub fn remove_node(&mut self, id: SerialId) {
         if let Some(nbhd) = self.links.remove(&id) {
-            self.set_hash
-                .remove_unordered_set((id, nbhd.seq_no), nbhd.neighbors.iter());
+            self.set_hash.remove_hash(Self::neighborhood_contribution(
+                id,
+                nbhd.seq_no,
+                &nbhd.neighbors,
+            ));
 
             // Remove the node from all neighbors' neighborhoods (bidirectional cleanup).
             // note that if this node did compaction then some old neighbors could still have links
@@ -877,17 +900,20 @@ impl Layer {
             // this is just an opportunistic low-cost cleanup.
             for neighbor in nbhd.neighbors {
                 if let Some(neighbor_nbhd) = self.links.get_mut(&neighbor) {
-                    // seq_no is unchanged here (only the link list shrinks), so
-                    // remove and re-add under the same (neighbor, seq_no) key.
-                    self.set_hash.remove_unordered_set(
-                        (neighbor, neighbor_nbhd.seq_no),
-                        neighbor_nbhd.neighbors.iter(),
-                    );
+                    // seq_no is unchanged here (only the link list shrinks, so it
+                    // stays sorted); remove and re-add under the same (neighbor,
+                    // seq_no) key.
+                    self.set_hash.remove_hash(Self::neighborhood_contribution(
+                        neighbor,
+                        neighbor_nbhd.seq_no,
+                        &neighbor_nbhd.neighbors,
+                    ));
                     neighbor_nbhd.neighbors.retain(|x| *x != id);
-                    self.set_hash.add_unordered_set(
-                        (neighbor, neighbor_nbhd.seq_no),
-                        neighbor_nbhd.neighbors.iter(),
-                    );
+                    self.set_hash.add_hash(Self::neighborhood_contribution(
+                        neighbor,
+                        neighbor_nbhd.seq_no,
+                        &neighbor_nbhd.neighbors,
+                    ));
                 }
             }
         }
@@ -899,24 +925,34 @@ impl Layer {
     /// filter against the content clock because it sets a full, trusted list
     /// rather than incrementally mutating a live neighborhood. Incremental
     /// growth/shrink of a live neighborhood goes through [`Layer::edit_links`].
-    pub fn set_links(&mut self, from: SerialId, links: Vec<SerialId>, seq_no: u64) {
+    pub fn set_links(&mut self, from: SerialId, mut links: Vec<SerialId>, seq_no: u64) {
         use std::collections::hash_map::Entry;
+        // Canonicalize: the set-hash contribution hashes the neighbor slice in
+        // order, so every stored list must be sorted+deduped (see
+        // `neighborhood_contribution`), matching what `edit_links` maintains.
+        links.sort_unstable();
+        links.dedup();
         match self.links.entry(from) {
             Entry::Occupied(mut e) => {
                 let key = *e.key();
                 let old_seq = e.get().seq_no;
-                self.set_hash
-                    .remove_unordered_set((key, old_seq), e.get().neighbors.iter());
+                self.set_hash.remove_hash(Self::neighborhood_contribution(
+                    key,
+                    old_seq,
+                    &e.get().neighbors,
+                ));
                 let existing = e.get_mut();
-                existing.neighbors.clear();
-                existing.neighbors.extend(links);
+                existing.neighbors = links;
                 existing.seq_no = seq_no;
-                self.set_hash
-                    .add_unordered_set((key, seq_no), existing.neighbors.iter());
+                self.set_hash.add_hash(Self::neighborhood_contribution(
+                    key,
+                    seq_no,
+                    &existing.neighbors,
+                ));
             }
             Entry::Vacant(e) => {
                 self.set_hash
-                    .add_unordered_set((*e.key(), seq_no), links.iter());
+                    .add_hash(Self::neighborhood_contribution(*e.key(), seq_no, &links));
                 e.insert(Neighborhood {
                     neighbors: links,
                     seq_no,
@@ -1266,11 +1302,13 @@ mod tests {
             for (point_id, nbhd) in links.iter() {
                 let new_point_id = point_ids_map[point_id];
                 let new_nbhd = &new_links[&new_point_id];
-                for (neighbor_id, new_neighbor_id) in
-                    nbhd.neighbors.iter().zip(new_nbhd.neighbors.iter())
-                {
-                    assert_eq!(point_ids_map[neighbor_id], *new_neighbor_id);
-                }
+                // Neighbor lists are stored serial-sorted, and the id remap does
+                // not preserve that order, so compare the remapped sets.
+                let expected: std::collections::HashSet<SerialId> =
+                    nbhd.neighbors.iter().map(|n| point_ids_map[n]).collect();
+                let got: std::collections::HashSet<SerialId> =
+                    new_nbhd.neighbors.iter().copied().collect();
+                assert_eq!(expected, got, "neighbors of {point_id} -> {new_point_id}");
             }
         }
 
@@ -2412,7 +2450,11 @@ mod int4_layer_tests {
                 .map(|j| ((j + 1) as u32, me.dot(&vectors[j])))
                 .collect();
             dists.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-            let expected: Vec<SerialId> = dists.into_iter().take(k).map(|(j, _)| j).collect();
+            // Select the top-k by distance, then compare as a set: neighbor lists
+            // are stored serial-sorted (canonical for the set-hash), so distance
+            // order is not preserved — only membership of the correct k matters.
+            let mut expected: Vec<SerialId> = dists.into_iter().take(k).map(|(j, _)| j).collect();
+            expected.sort_unstable();
             assert_eq!(&nbhd.neighbors, &expected, "key {key}");
         }
     }

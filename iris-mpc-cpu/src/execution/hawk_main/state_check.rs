@@ -45,6 +45,19 @@ impl SetHash {
         self.accumulator = self.accumulator.wrapping_sub(Self::hash(value));
     }
 
+    /// Fold a precomputed hash directly into the accumulator (wrapping add).
+    /// For a value already reduced to a `u64` — e.g. a neighborhood's
+    /// `(node, seq_no, sorted-neighbors)` contribution — this skips the re-hash
+    /// that [`Self::add_unordered`] would apply to the `u64`.
+    pub fn add_hash(&mut self, hash: u64) {
+        self.accumulator = self.accumulator.wrapping_add(hash);
+    }
+
+    /// Inverse of [`Self::add_hash`], via wrapping subtraction.
+    pub fn remove_hash(&mut self, hash: u64) {
+        self.accumulator = self.accumulator.wrapping_sub(hash);
+    }
+
     /// Add a `(key, set-of-items)` pair to the accumulator without any
     /// dependence on the iteration order of `items`. Each `(key, item)` pair
     /// is hashed and folded in individually via wrapping addition, and a
@@ -57,19 +70,6 @@ impl SetHash {
         T: Hash,
     {
         self.fold_unordered_set(key, items, u64::wrapping_add);
-    }
-
-    /// Inverse of [`Self::add_unordered_set`]: removes a `(key, set-of-items)`
-    /// pair previously added, using wrapping subtraction. Must be called
-    /// with the same `(key, items)` content that was added, otherwise the
-    /// accumulator drifts.
-    pub fn remove_unordered_set<K, I, T>(&mut self, key: K, items: I)
-    where
-        K: Hash,
-        I: IntoIterator<Item = T>,
-        T: Hash,
-    {
-        self.fold_unordered_set(key, items, u64::wrapping_sub);
     }
 
     fn fold_unordered_set<K, I, T>(&mut self, key: K, items: I, op: fn(u64, u64) -> u64)
@@ -862,14 +862,16 @@ mod test {
     }
 
     #[test]
-    fn test_unordered_set_add_remove_identity() {
-        // remove_unordered_set is the exact inverse of add_unordered_set:
-        // a round-trip with identical (key, items) must be a no-op.
+    fn test_add_remove_hash_identity() {
+        // remove_hash is the exact inverse of add_hash — the pair the
+        // per-neighborhood layer set-hash uses. A round-trip with the same
+        // value must be a no-op.
         let baseline = SetHash::default();
+        let h0 = SetHash::hash(("node", 7u64, [1u32, 2, 3].as_slice()));
 
         let mut h = SetHash::default();
-        h.add_unordered_set("key", [10u64, 20, 30]);
-        h.remove_unordered_set("key", [10u64, 20, 30]);
+        h.add_hash(h0);
+        h.remove_hash(h0);
 
         assert_eq!(baseline.checksum(), h.checksum());
     }
