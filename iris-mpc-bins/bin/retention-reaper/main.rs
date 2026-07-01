@@ -5,17 +5,18 @@
 //! config — reusable across anon_stats (POP-3905), modifications (POP-3931), and future
 //! append-only stores. No table-specific code, no partition/catalog manipulation.
 //!
-//! Connection/metrics plumbing is reused from ampc-anon-stats (`AnonStatsServerConfig` /
-//! `PostgresClient`): `SMPC__DB_URL` + `SMPC__DB_SCHEMA_NAME` (search_path) select the DB;
-//! `SMPC__SERVER_COORDINATION__PARTY_ID` + `SMPC__SERVICE__*` drive metrics. The DB it
-//! points at is deploy-config, so the same image serves any party/cluster/table-set.
+//! Fully self-contained config (`RETENTION_*` env — see `ReaperConfig`). Depends only on
+//! generic building blocks: `iris_mpc_common::postgres` for the pool (per-connection
+//! `search_path`) and `ampc_server_utils::config::ServiceConfig` for the standard
+//! Datadog/StatsD wiring. The DB it points at is deploy config, so the same image serves
+//! any party / cluster / table-set.
 
 use std::env;
 use std::time::{Duration, Instant};
 
-use ampc_anon_stats::store::postgres::{AccessMode, PostgresClient};
-use ampc_anon_stats::AnonStatsServerConfig;
+use ampc_server_utils::config::{MetricsConfig, ServiceConfig};
 use eyre::{bail, Context, Result};
+use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::tracing::initialize_tracing;
 use serde::Deserialize;
 use sqlx::{Executor, PgConnection, PgPool, Row};
@@ -24,6 +25,10 @@ use tracing::{error, info, warn};
 
 const DEFAULT_BATCH_SIZE: i64 = 10_000;
 const DEFAULT_STATEMENT_TIMEOUT_SECS: u64 = 60;
+const DEFAULT_SCHEMA: &str = "public";
+const DEFAULT_METRICS_PORT: u16 = 8125;
+const DEFAULT_METRICS_QUEUE_SIZE: usize = 5000;
+const DEFAULT_METRICS_BUFFER_SIZE: usize = 256;
 
 /// One retention job. `guard` is a raw SQL predicate ANDed into the DELETE — it is TRUSTED
 /// deploy config (never user input); `table`/`ts_column` are validated as identifiers.
@@ -49,44 +54,99 @@ fn default_batch_size() -> i64 {
     DEFAULT_BATCH_SIZE
 }
 
+/// Self-contained config, loaded from `RETENTION_*` env vars. No dependency on any
+/// service-specific config — this is what makes the reaper portable across stores.
+struct ReaperConfig {
+    /// `RETENTION_DB_URL` (required) — Postgres/Aurora connection URL.
+    db_url: String,
+    /// `RETENTION_DB_SCHEMA` (default `public`) — set as `search_path` per connection.
+    db_schema: String,
+    /// `RETENTION_PARTY` (optional) — metrics label only.
+    party: String,
+    /// `RETENTION_JOBS` (required) — JSON array of jobs.
+    jobs: Vec<RetentionJob>,
+    /// `RETENTION_STATEMENT_TIMEOUT_SECS` (default 60).
+    statement_timeout: Duration,
+    /// Standard Datadog/StatsD service config, built from `RETENTION_SERVICE_NAME` +
+    /// `RETENTION_METRICS_*`. `None` (no metrics/tracing) when `RETENTION_SERVICE_NAME`
+    /// is unset — convenient for local runs.
+    service: Option<ServiceConfig>,
+}
+
+impl ReaperConfig {
+    fn from_env() -> Result<Self> {
+        let db_url = env::var("RETENTION_DB_URL")
+            .wrap_err("RETENTION_DB_URL is required (Postgres connection URL)")?;
+        let db_schema = env::var("RETENTION_DB_SCHEMA").unwrap_or_else(|_| DEFAULT_SCHEMA.into());
+        let party = env::var("RETENTION_PARTY").unwrap_or_default();
+        let jobs = load_jobs()?;
+        let statement_timeout = Duration::from_secs(env_u64(
+            "RETENTION_STATEMENT_TIMEOUT_SECS",
+            DEFAULT_STATEMENT_TIMEOUT_SECS,
+        )?);
+        Ok(Self {
+            db_url,
+            db_schema,
+            party,
+            jobs,
+            statement_timeout,
+            service: build_service_config()?,
+        })
+    }
+}
+
+/// Build the Datadog/StatsD `ServiceConfig` from env. Returns `None` (metrics/tracing off)
+/// when `RETENTION_SERVICE_NAME` is unset. Metrics are enabled only when
+/// `RETENTION_METRICS_HOST` is also present.
+fn build_service_config() -> Result<Option<ServiceConfig>> {
+    let Ok(service_name) = env::var("RETENTION_SERVICE_NAME") else {
+        return Ok(None);
+    };
+    let metrics = match env::var("RETENTION_METRICS_HOST") {
+        Ok(host) => Some(MetricsConfig {
+            host,
+            port: env_u64("RETENTION_METRICS_PORT", DEFAULT_METRICS_PORT as u64)? as u16,
+            queue_size: DEFAULT_METRICS_QUEUE_SIZE,
+            buffer_size: DEFAULT_METRICS_BUFFER_SIZE,
+            prefix: env::var("RETENTION_METRICS_PREFIX").unwrap_or_else(|_| service_name.clone()),
+        }),
+        Err(_) => None,
+    };
+    Ok(Some(ServiceConfig {
+        service_name,
+        traces_endpoint: env::var("RETENTION_TRACES_ENDPOINT").ok(),
+        metrics,
+    }))
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
 
-    let config =
-        AnonStatsServerConfig::load_config("SMPC").wrap_err("failed to load SMPC config")?;
-    let jobs = load_jobs()?;
+    let config = ReaperConfig::from_env()?;
     let _tracing =
         initialize_tracing(config.service.clone()).wrap_err("failed to initialize tracing")?;
-    let statement_timeout = Duration::from_secs(env_u64(
-        "RETENTION_STATEMENT_TIMEOUT_SECS",
-        DEFAULT_STATEMENT_TIMEOUT_SECS,
-    )?);
-    let party = config.party_id.to_string();
+    let party = config.party.clone();
 
-    let client = PostgresClient::new(
-        &config.db_url,
-        &config.db_schema_name,
-        AccessMode::ReadWrite,
-    )
-    .await
-    .wrap_err("failed to connect to postgres")?;
+    let client = PostgresClient::new(&config.db_url, &config.db_schema, AccessMode::ReadWrite)
+        .await
+        .wrap_err("failed to connect to postgres")?;
 
     info!(
-        party_id = %party,
-        schema = %config.db_schema_name,
-        jobs = jobs.len(),
+        party = %party,
+        schema = %config.db_schema,
+        jobs = config.jobs.len(),
         "retention-reaper starting"
     );
 
     let start = Instant::now();
     let mut failed = false;
-    for job in &jobs {
+    for job in &config.jobs {
         // table + ts_column are interpolated into SQL, so must be strict identifiers.
         validate_identifier(&job.table)
             .and_then(|_| validate_identifier(&job.ts_column))
             .wrap_err_with(|| format!("invalid identifier in job for table {}", job.table))?;
-        match reap(&client.pool, job, statement_timeout, &party).await {
+        match reap(&client.pool, job, config.statement_timeout, &party).await {
             Ok(deleted) => info!(table = %job.table, rows_deleted = deleted, "retention job ok"),
             Err(error) => {
                 error!(table = %job.table, error = %error, "retention job failed");

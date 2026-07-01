@@ -1,27 +1,27 @@
-# POP-3905 — anon-stats retention, hnsw party 1 (stage). retention-reaper + RETENTION_JOBS.
-# DB schema left at default anon_stats_mpc (matches anon-stats-server). guard=processed=TRUE
-# so only collected rows are reaped; unprocessed rows are never deleted.
+# POP-3905 — anon-stats retention (retention-reaper), hnsw party 1 (stage). Per-node env.
+# Fully generic RETENTION_* config (no service-specific config). DB schema anon_stats_mpc
+# matches anon-stats-server; guard=processed=TRUE reaps only collected rows.
 env:
   - name: RUST_LOG
     value: "info"
-  - name: SMPC__ENVIRONMENT
-    value: "stage"
-  - name: SMPC__DB_URL
+  - name: RETENTION_DB_URL
     valueFrom:
       secretKeyRef:
         key: DATABASE_AURORA_URL
         name: application
-  - name: SMPC__SERVER_COORDINATION__PARTY_ID
+  - name: RETENTION_DB_SCHEMA
+    value: "anon_stats_mpc"
+  - name: RETENTION_PARTY
     value: "1"
-  - name: SMPC__SERVICE__SERVICE_NAME
+  - name: RETENTION_SERVICE_NAME
     value: "retention-reaper-anon-stats-hnsw-1"
-  - name: SMPC__SERVICE__METRICS__HOST
+  - name: RETENTION_METRICS_HOST
     valueFrom:
       fieldRef:
         fieldPath: status.hostIP
-  - name: SMPC__SERVICE__METRICS__PORT
+  - name: RETENTION_METRICS_PORT
     value: "8125"
-  - name: SMPC__SERVICE__METRICS__PREFIX
+  - name: RETENTION_METRICS_PREFIX
     value: "retention-reaper-anon-stats-hnsw-1"
   - name: RETENTION_JOBS
     value: '[{"table":"anon_stats_1d","retention":"14 days","guard":"processed = TRUE"},{"table":"anon_stats_1d_lifted","retention":"14 days","guard":"processed = TRUE"},{"table":"anon_stats_2d","retention":"14 days","guard":"processed = TRUE"},{"table":"anon_stats_2d_lifted","retention":"14 days","guard":"processed = TRUE"},{"table":"anon_stats_face","retention":"14 days","guard":"processed = TRUE"}]'
