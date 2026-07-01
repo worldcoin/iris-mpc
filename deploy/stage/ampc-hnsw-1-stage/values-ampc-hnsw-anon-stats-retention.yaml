@@ -1,27 +1,32 @@
 # POP-3905 — anon-stats retention (retention-reaper), hnsw party 1 (stage). Per-node env.
-# Fully generic RETENTION_* config (no service-specific config). DB schema anon_stats_mpc
-# matches anon-stats-server; guard=processed=TRUE reaps only collected rows.
+# Generic RETENTION__* config via the config crate (prefix + __ separator + try_deserialize),
+# same mechanics as the servers' SMPC__* config. Schema anon_stats_mpc matches
+# anon-stats-server; guard=processed=TRUE reaps only collected rows.
 env:
   - name: RUST_LOG
     value: "info"
-  - name: RETENTION_DB_URL
+  - name: RETENTION__DB_URL
     valueFrom:
       secretKeyRef:
         key: DATABASE_AURORA_URL
         name: application
-  - name: RETENTION_DB_SCHEMA
+  - name: RETENTION__DB_SCHEMA
     value: "anon_stats_mpc"
-  - name: RETENTION_PARTY
+  - name: RETENTION__PARTY
     value: "1"
-  - name: RETENTION_SERVICE_NAME
+  - name: RETENTION__SERVICE__SERVICE_NAME
     value: "retention-reaper-anon-stats-hnsw-1"
-  - name: RETENTION_METRICS_HOST
+  - name: RETENTION__SERVICE__METRICS__HOST
     valueFrom:
       fieldRef:
         fieldPath: status.hostIP
-  - name: RETENTION_METRICS_PORT
+  - name: RETENTION__SERVICE__METRICS__PORT
     value: "8125"
-  - name: RETENTION_METRICS_PREFIX
+  - name: RETENTION__SERVICE__METRICS__QUEUE_SIZE
+    value: "5000"
+  - name: RETENTION__SERVICE__METRICS__BUFFER_SIZE
+    value: "256"
+  - name: RETENTION__SERVICE__METRICS__PREFIX
     value: "retention-reaper-anon-stats-hnsw-1"
   - name: RETENTION_JOBS
     value: '[{"table":"anon_stats_1d","retention":"14 days","guard":"processed = TRUE"},{"table":"anon_stats_1d_lifted","retention":"14 days","guard":"processed = TRUE"},{"table":"anon_stats_2d","retention":"14 days","guard":"processed = TRUE"},{"table":"anon_stats_2d_lifted","retention":"14 days","guard":"processed = TRUE"},{"table":"anon_stats_face","retention":"14 days","guard":"processed = TRUE"}]'
