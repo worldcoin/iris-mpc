@@ -5,24 +5,42 @@ use crate::checkpoint_protocol::{
     CheckpointMeta, CycleError, FreezeHeight, Graph, Materializer, MutationStore,
 };
 use crate::execution::hawk_main::BothEyes;
-use crate::graph_checkpoint::download_graph;
+use crate::graph_checkpoint::{download_graph, stream_download_and_deserialize_graph_pair};
 use crate::hnsw::{graph::graph_store::GraphPg, VectorStore};
 use crate::utils::serialization::graph::{read_graph_pair, GraphFormat};
 use futures::TryStreamExt;
+
+/// How the base checkpoint bytes are fetched during materialization.
+#[derive(Clone, Copy, Debug)]
+pub enum CheckpointDownload {
+    /// Stream ranged GETs through the decoder; peak memory is bounded to the
+    /// download window plus the graph. Used by the sidecar.
+    Streaming,
+    /// Buffer the whole object, then deserialize from memory. Higher peak RSS
+    /// (full file resident alongside the graph); the established hawk-restart path.
+    Buffered,
+}
 
 /// Rebuilds the graph from an S3 checkpoint plus WAL replay.
 pub struct RebuildFromCheckpoint<'a, V: VectorStore> {
     pub graph_store: &'a GraphPg<V>,
     pub s3_client: &'a S3Client,
     pub bucket: String,
+    pub download: CheckpointDownload,
 }
 
 impl<'a, V: VectorStore + Send + Sync> RebuildFromCheckpoint<'a, V> {
-    pub fn new(graph_store: &'a GraphPg<V>, s3_client: &'a S3Client, bucket: String) -> Self {
+    pub fn new(
+        graph_store: &'a GraphPg<V>,
+        s3_client: &'a S3Client,
+        bucket: String,
+        download: CheckpointDownload,
+    ) -> Self {
         Self {
             graph_store,
             s3_client,
             bucket,
+            download,
         }
     }
 }
@@ -48,27 +66,41 @@ impl<V: VectorStore + Send + Sync> Materializer for RebuildFromCheckpoint<'_, V>
                 ))
             })?;
 
-        // Download the whole checkpoint (parallel ranged GETs), then deserialize
-        // from memory. Trades peak memory, not a constraint here, for throughput.
-        let bytes = download_graph(self.s3_client, &self.bucket, &base.s3_key)
+        // Fetch + deserialize the base checkpoint. `Streaming` feeds parallel
+        // ranged GETs through the decoder on a blocking thread, bounding peak
+        // memory to the download window plus the graph; `Buffered` downloads the
+        // whole object first (full file resident alongside the graph). Both
+        // return BLAKE3 over the downloaded bytes for verification below.
+        let label = format!("{}/{}", self.bucket, base.s3_key);
+        let (mut graph, downloaded_hash) = match self.download {
+            CheckpointDownload::Streaming => stream_download_and_deserialize_graph_pair(
+                self.s3_client,
+                &self.bucket,
+                &base.s3_key,
+                format,
+                None,
+            )
             .await
             .map_err(|e| {
                 CycleError::Fatal(format!(
-                    "download_graph({}/{}): {e}",
-                    self.bucket, base.s3_key
+                    "stream_download_and_deserialize_graph_pair({label}): {e}"
                 ))
-            })?;
-        // hash + deserialize are CPU-bound (seconds to minutes at prod scale);
-        // run off the async runtime so they don't block a reactor thread.
-        let label = format!("{}/{}", self.bucket, base.s3_key);
-        let (downloaded_hash, mut graph) = tokio::task::spawn_blocking(move || {
-            let hash = *blake3::hash(&bytes).as_bytes();
-            let graph = read_graph_pair(&mut std::io::Cursor::new(&bytes), format)
-                .map_err(|e| CycleError::Fatal(format!("read_graph_pair({label}): {e}")))?;
-            Ok::<_, CycleError>((hash, graph))
-        })
-        .await
-        .map_err(|e| CycleError::Fatal(format!("materialize deserialize task: {e}")))??;
+            })?,
+            CheckpointDownload::Buffered => {
+                let bytes = download_graph(self.s3_client, &self.bucket, &base.s3_key)
+                    .await
+                    .map_err(|e| CycleError::Fatal(format!("download_graph({label}): {e}")))?;
+                // hash + deserialize are CPU-bound; run off the async runtime.
+                tokio::task::spawn_blocking(move || {
+                    let hash = *blake3::hash(&bytes).as_bytes();
+                    let graph = read_graph_pair(&mut std::io::Cursor::new(&bytes), format)
+                        .map_err(|e| CycleError::Fatal(format!("read_graph_pair({label}): {e}")))?;
+                    Ok::<_, CycleError>((graph, hash))
+                })
+                .await
+                .map_err(|e| CycleError::Fatal(format!("materialize deserialize task: {e}")))??
+            }
+        };
 
         let downloaded_hex = hex::encode(downloaded_hash);
         if downloaded_hex != base.blake3_hash {

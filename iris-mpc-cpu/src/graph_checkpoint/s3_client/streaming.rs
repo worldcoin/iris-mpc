@@ -12,7 +12,11 @@
 //! to pass a fully buffered `Bytes` payload (doubling memory for large
 //! graphs).
 
-use std::{io::Write, sync::Arc, time::Duration};
+use std::{
+    io::{BufWriter, Write},
+    sync::Arc,
+    time::Duration,
+};
 
 use aws_sdk_s3::{
     types::{CompletedMultipartUpload, CompletedPart},
@@ -37,6 +41,12 @@ pub const DEFAULT_STREAMING_PART_SIZE: usize = 100 * 1024 * 1024;
 
 /// Suggested cap on concurrent in-flight `UploadPart` tasks.
 pub const DEFAULT_STREAMING_PARALLELISM: usize = 8;
+
+/// Buffer between the bincode serializer and the `SyncIoBridge` over the
+/// duplex pipe. bincode emits many small writes per node; without this each
+/// one would block across the async bridge individually. Mirrors
+/// `GRAPH_DECODE_BUFFER` on the download path.
+const GRAPH_ENCODE_BUFFER: usize = 1024 * 1024;
 
 /// `Write` adapter that forwards every byte to an inner writer while
 /// folding the same bytes into a `blake3::Hasher`. Lets callers compute
@@ -185,13 +195,16 @@ where
     let (reader, writer) = tokio::io::duplex(part_size);
 
     let serialize_handle = tokio::task::spawn_blocking(move || -> Result<()> {
-        let mut sync_writer = SyncIoBridge::new(writer);
-        serialize(&mut sync_writer)?;
-        sync_writer
+        // Coalesce bincode's many small writes so they don't each block across
+        // the async bridge individually.
+        let mut buf_writer =
+            BufWriter::with_capacity(GRAPH_ENCODE_BUFFER, SyncIoBridge::new(writer));
+        serialize(&mut buf_writer)?;
+        buf_writer
             .flush()
             .map_err(|e| eyre!("serializer flush failed: {e:?}"))?;
         // Drop closes the underlying writer half, signalling EOF to the reader.
-        drop(sync_writer);
+        drop(buf_writer);
         Ok(())
     });
 

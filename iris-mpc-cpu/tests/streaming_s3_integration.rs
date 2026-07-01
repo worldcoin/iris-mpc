@@ -210,6 +210,7 @@ async fn streaming_download_round_trip() -> Result<()> {
         key,
         4 * 1024 * 1024,
         3 * 1024 * 1024,
+        4,
     )
     .await;
     cleanup_bucket(&client, &bucket).await;

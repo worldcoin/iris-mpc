@@ -14,7 +14,7 @@ pub mod transport;
 mod tests;
 
 pub use hasher::Blake3GraphHasher;
-pub use materializer::RebuildFromCheckpoint;
+pub use materializer::{CheckpointDownload, RebuildFromCheckpoint};
 pub use runner::{restart_from_checkpoint, sidecar_main, RestartOutcome, SidecarConfig};
 pub use selector::{BaseSelector, MostRecentCommon, StrictLatest};
 pub use terminal::{InstallAsServing, UploadAndRecord};
