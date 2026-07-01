@@ -56,6 +56,7 @@ fn default_batch_size() -> i64 {
 /// reaper is portable across stores.
 ///
 /// Env (all `RETENTION__`-prefixed, `__` = nesting, matching the `SMPC__…` convention):
+///   `RETENTION__ENABLED` (default false — master kill switch),
 ///   `RETENTION__DB_URL` (required), `RETENTION__DB_SCHEMA` (default `public`),
 ///   `RETENTION__PARTY` (metrics label), `RETENTION__STATEMENT_TIMEOUT_SECS` (default 60),
 ///   `RETENTION__SERVICE__SERVICE_NAME` + `RETENTION__SERVICE__METRICS__{HOST,PORT,
@@ -66,6 +67,10 @@ fn default_batch_size() -> i64 {
 /// the `config` Environment source ignores it.
 #[derive(Debug, Deserialize)]
 struct ReaperConfig {
+    /// `RETENTION__ENABLED` (default `false`) — master kill switch. When false the job
+    /// logs and exits cleanly without connecting to the DB or touching any table.
+    #[serde(default)]
+    enabled: bool,
     db_url: String,
     #[serde(default = "default_schema")]
     db_schema: String,
@@ -116,6 +121,17 @@ async fn main() -> Result<()> {
     let config = ReaperConfig::load()?;
     let _tracing =
         initialize_tracing(config.service.clone()).wrap_err("failed to initialize tracing")?;
+
+    // Master kill switch — disabled by default. Log and exit cleanly (exit 0) without
+    // connecting to the DB, so enabling retention on a cluster is a deliberate flag flip.
+    if !config.enabled {
+        info!(
+            party = %config.party,
+            "retention-reaper is disabled (RETENTION__ENABLED=false) — exiting without action"
+        );
+        return Ok(());
+    }
+
     let party = config.party.clone();
     let statement_timeout = config.statement_timeout();
 
