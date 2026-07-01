@@ -917,13 +917,14 @@ impl Layer {
         }
     }
 
-    /// **Trusted bulk-load / construction only** — deserialization, legacy
-    /// prune, checkpoint hashing, idealized graphs, and test fixtures. Writes
-    /// `from`'s full neighbor list at a caller-supplied `seq_no`, canonicalizing
-    /// it (sort+dedup). Unlike the live path it takes a raw `seq_no` with **no
-    /// [`Tick`] guard** and applies **no staleness filter**, so the caller must
-    /// vouch for the `seq_no`. Never call on the live mutation path — use
-    /// [`Layer::create_node`] (creation) and [`Layer::edit_links`] (edges) there.
+    /// **Trusted bulk-load / construction only** — deserialization and legacy
+    /// prune in production, idealized-graph construction, plus test fixtures.
+    /// Writes `from`'s full neighbor list at a caller-supplied `seq_no`,
+    /// canonicalizing it (sort+dedup). Unlike the live path it takes a raw
+    /// `seq_no` with **no [`Tick`] guard** and applies **no staleness filter**,
+    /// so the caller must vouch for the `seq_no`. Never call on the live mutation
+    /// path — use [`Layer::create_node`] (creation) and [`Layer::edit_links`]
+    /// (edges) there.
     pub fn set_links_trusted(&mut self, from: SerialId, mut links: Vec<SerialId>, seq_no: u64) {
         use std::collections::hash_map::Entry;
         // Canonicalize: the set-hash contribution hashes the neighbor slice in
