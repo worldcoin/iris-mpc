@@ -228,7 +228,7 @@ async fn streaming_download_round_trip() -> Result<()> {
 /// contamination visible in assertions.
 ///
 /// The stored `set_hash` values are arbitrary — the streaming reader
-/// discards them and lets `Layer::set_links` recompute from scratch,
+/// discards them and lets `Layer::set_links_trusted` recompute from scratch,
 /// which is exactly what the test exercises.
 fn make_v3_pair() -> [GraphV3; 2] {
     let make_graph = |base: u32| {

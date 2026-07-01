@@ -397,7 +397,7 @@ pub fn read_graph_pair_pruned<R: std::io::Read + ?Sized>(
 /// Build pruned `Layer`s and a clock-0 `node_init_seq_no` from a legacy graph.
 /// `$layers`/`$entry_points` are moved out (distinct fields → partial move).
 /// At most one version per serial matches `version_map`, so multi-version
-/// stragglers collapse deterministically onto the live entry. `set_links`
+/// stragglers collapse deterministically onto the live entry. `set_links_trusted`
 /// recomputes each layer's `set_hash`.
 macro_rules! legacy_prune_to_mem {
     ($layers:expr, $entry_points:expr, $last_update_seq_no:expr, $prune:expr) => {{
@@ -419,7 +419,7 @@ macro_rules! legacy_prune_to_mem {
                     .filter(|e| live_at(e.id, e.version))
                     .map(|e| e.id)
                     .collect();
-                out.set_links(key.id, kept, 0);
+                out.set_links_trusted(key.id, kept, 0);
             }
             layers.push(out);
         }
@@ -526,7 +526,7 @@ impl From<graph_v0::Layer> for Layer {
     fn from(value: graph_v0::Layer) -> Self {
         let mut layer = Layer::new();
         for (point_id, edges) in value.links.into_iter() {
-            layer.set_links(point_id.0, edges.0.into_iter().map(|x| x.0 .0).collect(), 0);
+            layer.set_links_trusted(point_id.0, edges.0.into_iter().map(|x| x.0 .0).collect(), 0);
         }
         layer
     }
@@ -574,7 +574,7 @@ impl From<graph_v1::Layer> for Layer {
     fn from(value: graph_v1::Layer) -> Self {
         let mut layer = Layer::new();
         for (v, nb) in value.links.into_iter() {
-            layer.set_links(v.0, nb.0.into_iter().map(|x| x.0).collect(), 0);
+            layer.set_links_trusted(v.0, nb.0.into_iter().map(|x| x.0).collect(), 0);
         }
         layer
     }
@@ -623,9 +623,9 @@ impl From<graph_v2::Layer> for Layer {
         let mut layer = Layer::new();
 
         // value.set_hash is ignored;
-        // instead the set_hash is recomputed implicitly in the set_links calls
+        // instead the set_hash is recomputed implicitly in the set_links_trusted calls
         for (v, nb) in value.links.into_iter() {
-            layer.set_links(v.id, nb.0.into_iter().map(|x| x.id).collect(), 0);
+            layer.set_links_trusted(v.id, nb.0.into_iter().map(|x| x.id).collect(), 0);
         }
         layer
     }
@@ -672,12 +672,12 @@ impl From<graph_v3::EntryPoint> for layered_graph::EntryPoint {
 
 impl From<graph_v3::Layer> for Layer {
     fn from(value: graph_v3::Layer) -> Self {
-        // Recompute set_hash via set_links rather than trusting the stored
+        // Recompute set_hash via set_links_trusted rather than trusting the stored
         // value: older checkpoints carry a set_hash from a prior fold algorithm.
         // Pre-size the map so the bulk insert doesn't rehash.
         let mut layer = Layer::with_capacity(value.links.len());
         for (v, nb) in value.links.into_iter() {
-            layer.set_links(v.id, nb.0.into_iter().map(|x| x.id).collect(), 0);
+            layer.set_links_trusted(v.id, nb.0.into_iter().map(|x| x.id).collect(), 0);
         }
         layer
     }
@@ -724,7 +724,7 @@ impl From<graph_v4::Layer> for Layer {
         // See `From<graph_v3::Layer>`: recompute set_hash, pre-sized map.
         let mut layer = Layer::with_capacity(value.links.len());
         for (v, nb) in value.links.into_iter() {
-            layer.set_links(v.id, nb.0.into_iter().map(|x| x.id).collect(), 0);
+            layer.set_links_trusted(v.id, nb.0.into_iter().map(|x| x.id).collect(), 0);
         }
         layer
     }
@@ -820,7 +820,7 @@ impl From<graph_v5::Layer> for Layer {
     fn from(value: graph_v5::Layer) -> Self {
         let mut layer = Layer::new();
         for (v, nb) in value.links.into_iter() {
-            layer.set_links(v, nb.neighbors, nb.updated_seq_no);
+            layer.set_links_trusted(v, nb.neighbors, nb.updated_seq_no);
         }
         layer
     }
@@ -907,7 +907,7 @@ mod tests {
     fn sample_graph() -> GraphMem {
         let mut layer = Layer::new();
         for &n in &[7u32, 3, 9, 1, 5, 8, 2, 6, 4] {
-            layer.set_links(n, vec![n + 1, n + 2], 0);
+            layer.set_links_trusted(n, vec![n + 1, n + 2], 0);
         }
         // Seed the content clock at 0 for every node, matching how the From<GraphVN>
         // converters build a real graph; otherwise the checksum (which now folds
@@ -943,7 +943,7 @@ mod tests {
     fn graphmem_direct_write_matches_current_and_reads_back() {
         let mut layer = Layer::new();
         for (i, &n) in [7u32, 3, 9, 1, 5, 8, 2, 6, 4].iter().enumerate() {
-            layer.set_links(n, vec![n + 1, n + 2], i as u64 + 1);
+            layer.set_links_trusted(n, vec![n + 1, n + 2], i as u64 + 1);
         }
         let node_init_seq_no = layer
             .get_links_map()
@@ -1210,7 +1210,7 @@ mod tests {
         let mut reference = Layer::new();
         for (n, nbs) in &entries {
             let wnbs: Vec<graph_v3::VectorId> = nbs.iter().map(|&x| wire(x)).collect();
-            reference.set_links(wire(*n).id, wnbs.iter().map(|x| x.id).collect(), 0);
+            reference.set_links_trusted(wire(*n).id, wnbs.iter().map(|x| x.id).collect(), 0);
             links.insert(wire(*n), graph_v3::EdgeIds(wnbs));
         }
         let recomputed = reference.checksum();

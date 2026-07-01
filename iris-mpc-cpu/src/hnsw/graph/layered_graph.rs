@@ -331,6 +331,10 @@ impl GraphMem {
         }
 
         let seq_no = mutation.seq_no;
+        // One monotonic tick for this mutation: node creation (Pass 1) and edge
+        // edits (Pass 2) both stamp neighborhoods with it, so every live seq_no
+        // stamp is `Tick`-guarded.
+        let tick = Tick::new(seq_no);
 
         // Pass 1: apply node-level mutations.
         for op in mutation.ops.iter() {
@@ -366,7 +370,7 @@ impl GraphMem {
                         self.layers.resize(*height, Layer::new());
                     }
                     for layer_idx in 0..*height {
-                        self.layers[layer_idx].insert_node(sid, Vec::new(), seq_no);
+                        self.layers[layer_idx].create_node(sid, tick);
                     }
                     if let Some(old) = self.node_init_seq_no.insert(sid, seq_no) {
                         self.node_init_hash
@@ -385,7 +389,6 @@ impl GraphMem {
         // appended, so an append can't re-certify an already-invalid sibling as
         // fresh. Edge ops never advance the content clock — only a node's own
         // (re-)insertion does.
-        let tick = Tick::new(seq_no);
         for op in mutation.ops.iter() {
             match op {
                 MutationOp::AddNode { .. } | MutationOp::RemoveNode { .. } => {}
@@ -567,21 +570,6 @@ impl GraphMem {
             .copied()
             .filter(|z| is_active(&self.node_init_seq_no, *z, old_seq))
             .collect()
-    }
-
-    /// Set the neighbors of vertex `base` at layer `lc` to `links`.
-    pub async fn set_links(
-        &mut self,
-        base: SerialId,
-        links: Vec<SerialId>,
-        lc: usize,
-        seq_no: u64,
-    ) {
-        if self.layers.len() < lc + 1 {
-            self.layers.resize(lc + 1, Layer::new());
-        }
-        let layer = self.layers.get_mut(lc).unwrap();
-        layer.set_links(base, links, seq_no);
     }
 
     pub fn num_layers(&self) -> usize {
@@ -832,8 +820,8 @@ impl Layer {
     /// Set-hash contribution of one neighborhood, keyed on `(node, seq_no)` over
     /// the neighbor list. The list MUST be sorted+deduped: the hash is
     /// order-sensitive, so cross-party checksum consensus depends on every party
-    /// hashing the identical canonical order. `edit_links` and `set_links`
-    /// maintain that invariant; the `debug_assert` guards it.
+    /// hashing the identical canonical order. `edit_links` and
+    /// `set_links_trusted` maintain that invariant; the `debug_assert` guards it.
     fn neighborhood_contribution(node: SerialId, seq_no: u64, neighbors: &[SerialId]) -> u64 {
         debug_assert!(
             neighbors.is_sorted(),
@@ -843,7 +831,7 @@ impl Layer {
     }
 
     pub fn insert_node(&mut self, id: SerialId, neighbors: Vec<SerialId>, seq_no: u64) {
-        self.set_links(id, neighbors, seq_no);
+        self.set_links_trusted(id, neighbors, seq_no);
     }
 
     /// Bracketed, filter-then-stamp edit of `node`'s neighbor list — the sole
@@ -885,6 +873,16 @@ impl Layer {
         ));
     }
 
+    /// Create `node`'s neighborhood on the live path, stamped at `tick`. The
+    /// insertion counterpart to [`Self::edit_links`]: it requires a [`Tick`], so
+    /// live creation can't stamp an out-of-band `seq_no`. Delegates to
+    /// [`Self::set_links_trusted`] with an empty list — matching the previous
+    /// `insert_node(id, Vec::new(), seq_no)` behavior (resets the list if `node`
+    /// already exists).
+    pub(in crate::hnsw::graph) fn create_node(&mut self, node: SerialId, tick: Tick) {
+        self.set_links_trusted(node, Vec::new(), tick.value());
+    }
+
     /// Remove a node from the graph and clean up all backlinks from its neighbors.
     pub fn remove_node(&mut self, id: SerialId) {
         if let Some(nbhd) = self.links.remove(&id) {
@@ -919,13 +917,14 @@ impl Layer {
         }
     }
 
-    /// Replace `from`'s entire neighbor list in one shot, stamping `seq_no`
-    /// directly. This is the **bulk-load / trusted-construction** primitive
-    /// (deserialization, checkpoint hashing, idealized graphs); it does *not*
-    /// filter against the content clock because it sets a full, trusted list
-    /// rather than incrementally mutating a live neighborhood. Incremental
-    /// growth/shrink of a live neighborhood goes through [`Layer::edit_links`].
-    pub fn set_links(&mut self, from: SerialId, mut links: Vec<SerialId>, seq_no: u64) {
+    /// **Trusted bulk-load / construction only** — deserialization, legacy
+    /// prune, checkpoint hashing, idealized graphs, and test fixtures. Writes
+    /// `from`'s full neighbor list at a caller-supplied `seq_no`, canonicalizing
+    /// it (sort+dedup). Unlike the live path it takes a raw `seq_no` with **no
+    /// [`Tick`] guard** and applies **no staleness filter**, so the caller must
+    /// vouch for the `seq_no`. Never call on the live mutation path — use
+    /// [`Layer::create_node`] (creation) and [`Layer::edit_links`] (edges) there.
+    pub fn set_links_trusted(&mut self, from: SerialId, mut links: Vec<SerialId>, seq_no: u64) {
         use std::collections::hash_map::Entry;
         // Canonicalize: the set-hash contribution hashes the neighbor slice in
         // order, so every stored list must be sorted+deduped (see
@@ -968,7 +967,7 @@ impl Layer {
     fn from_knn_results(results: Vec<KNNResult<SerialId>>, n: usize) -> Self {
         let mut ret = Layer::new();
         for KNNResult { node, neighbors } in results.into_iter().take(n) {
-            ret.set_links(node, neighbors, 0);
+            ret.set_links_trusted(node, neighbors, 0);
         }
         ret
     }
@@ -1066,7 +1065,7 @@ where
         .map(|v| {
             let mut layer = Layer::new();
             for (from, nbhd) in v.links.into_iter() {
-                layer.set_links(
+                layer.set_links_trusted(
                     vector_map(from),
                     nbhd.neighbors.into_iter().map(vector_map).collect(),
                     nbhd.seq_no,
@@ -1116,8 +1115,8 @@ mod tests {
         // node1 neighborhood seq = `nbhd_seq`; node1 content clock = `content`.
         let build = |nbhd_seq: u64, content: u64| -> GraphMem {
             let mut layer = Layer::new();
-            layer.set_links(1u32, vec![2u32], nbhd_seq);
-            layer.set_links(2u32, vec![], 0);
+            layer.set_links_trusted(1u32, vec![2u32], nbhd_seq);
+            layer.set_links_trusted(2u32, vec![], 0);
             let node_init = HashMap::from([(1u32, content), (2u32, 0u64)]);
             GraphMem::from_parts(
                 vec![EntryPoint { point: 1, layer: 0 }],
@@ -1234,11 +1233,11 @@ mod tests {
         let mut layer_a = super::Layer::new();
         let mut layer_b = super::Layer::new();
 
-        layer_a.set_links(1, vec![2, 3], 0);
-        layer_a.set_links(4, vec![5], 0);
+        layer_a.set_links_trusted(1, vec![2, 3], 0);
+        layer_a.set_links_trusted(4, vec![5], 0);
 
-        layer_b.set_links(4, vec![5], 0);
-        layer_b.set_links(1, vec![2, 3], 0);
+        layer_b.set_links_trusted(4, vec![5], 0);
+        layer_b.set_links_trusted(1, vec![2, 3], 0);
 
         let bytes_a = bincode::serialize(&layer_a).expect("layer_a serialize");
         let bytes_b = bincode::serialize(&layer_b).expect("layer_b serialize");

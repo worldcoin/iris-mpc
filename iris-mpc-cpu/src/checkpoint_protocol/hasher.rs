@@ -6,7 +6,7 @@
 //!   `SortedLinks` wrapper in `layered_graph.rs`, which sorts entries by
 //!   key before emitting — so HashMap iteration order is not a hash risk.
 //! - **Per-key neighbor `Vec<V>`** is emitted in insertion order; the
-//!   planner is responsible for sorting neighbors before `set_links`, and
+//!   planner is responsible for sorting neighbors before `set_links_trusted`, and
 //!   `Layer::add_neighbor` maintains sortedness. Bypassing the planner
 //!   breaks hash consensus.
 
@@ -71,7 +71,7 @@ mod tests {
             let mut layers: Vec<Layer> = (0..=max_lc).map(|_| Layer::new()).collect();
             for (lc, pairs) in converted {
                 for (k, v) in pairs {
-                    layers[lc].set_links(k, v, 0);
+                    layers[lc].set_links_trusted(k, v, 0);
                 }
             }
             g.layers = layers;
@@ -168,14 +168,14 @@ mod tests {
     fn left_right_swap_changes_hash() {
         let left = {
             let mut l = Layer::new();
-            l.set_links(1, vec![2], 0);
+            l.set_links_trusted(1, vec![2], 0);
             let mut g = GraphMem::new();
             g.layers = vec![l];
             g
         };
         let right = {
             let mut l = Layer::new();
-            l.set_links(5, vec![6], 0);
+            l.set_links_trusted(5, vec![6], 0);
             let mut g = GraphMem::new();
             g.layers = vec![l];
             g
