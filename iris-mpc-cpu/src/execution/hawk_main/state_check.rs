@@ -97,6 +97,13 @@ impl SetHash {
         self.accumulator
     }
 
+    /// Reconstruct from a precomputed accumulator, e.g. the wrapping-sum of
+    /// per-chunk checksums from a parallel fold. Sound because the fold is
+    /// associative and commutative.
+    pub(crate) fn from_accumulator(accumulator: u64) -> Self {
+        Self { accumulator }
+    }
+
     pub(crate) fn hash(value: impl Hash) -> u64 {
         let mut hasher = SipHasher13::default();
         value.hash(&mut hasher);

@@ -17,9 +17,9 @@ use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 use crate::checkpoint_protocol::{
-    run_cycle, Blake3GraphHasher, CycleConfig, CycleError, GraphMutationId, InstallAsServing,
-    MostRecentCommon, Outcome, RebuildFromCheckpoint, RingConsensusTransport, SkipReason,
-    UploadAndRecord,
+    run_cycle, Blake3GraphHasher, CheckpointDownload, CycleConfig, CycleError, GraphMutationId,
+    InstallAsServing, MostRecentCommon, Outcome, RebuildFromCheckpoint, RingConsensusTransport,
+    SkipReason, UploadAndRecord,
 };
 use crate::execution::hawk_main::BothEyes;
 use crate::graph_checkpoint::PruningMode;
@@ -204,7 +204,12 @@ async fn sidecar_cycle<V: VectorStore + Send + Sync>(
         .map_err(|e| CycleError::Transient(format!("open control_channel: {e}")))?;
     let transport = RingConsensusTransport::new(channel);
 
-    let mut materializer = RebuildFromCheckpoint::new(graph_store, s3_client, cfg.bucket.clone());
+    let mut materializer = RebuildFromCheckpoint::new(
+        graph_store,
+        s3_client,
+        cfg.bucket.clone(),
+        CheckpointDownload::Streaming,
+    );
     let mut finalizer = UploadAndRecord::new(
         graph_store,
         s3_client,
@@ -300,8 +305,12 @@ pub async fn restart_from_checkpoint<V: VectorStore + Send + Sync>(
                 .await
                 .map_err(|e| eyre!("open control_channel: {e}"))?;
             let transport = RingConsensusTransport::new(channel);
-            let mut materializer =
-                RebuildFromCheckpoint::new(graph_store, s3_client, bucket.clone());
+            let mut materializer = RebuildFromCheckpoint::new(
+                graph_store,
+                s3_client,
+                bucket.clone(),
+                CheckpointDownload::Buffered,
+            );
             let mut finalizer = InstallAsServing::new(target.clone());
 
             match run_cycle(
