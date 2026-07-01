@@ -171,10 +171,20 @@ async fn reap(
 /// Oldest-retained age (retention actually working) + dead-tuple ratio (bloat — the one real
 /// risk of DELETE-based retention). Both best-effort; logged and skipped on error.
 async fn emit_health_metrics(pool: &PgPool, job: &RetentionJob, party: &str) {
+    // Oldest row *among the retention-eligible rows* — apply the same guard as the delete.
+    // Without it, an intentionally-retained old row (e.g. a still-unprocessed anon_stats row
+    // under guard `processed = TRUE`) would inflate this gauge and falsely trip the
+    // retention-lag monitor even though the reaper is working correctly.
+    let guard_where = job
+        .guard
+        .as_deref()
+        .map(|g| format!(" WHERE ({g})"))
+        .unwrap_or_default();
     let oldest_sql = format!(
-        "SELECT EXTRACT(EPOCH FROM (now() - MIN({ts})))::float8 AS age FROM {table}",
+        "SELECT EXTRACT(EPOCH FROM (now() - MIN({ts})))::float8 AS age FROM {table}{guard_where}",
         ts = quote_ident(&job.ts_column),
         table = quote_ident(&job.table),
+        guard_where = guard_where,
     );
     match sqlx::query(&oldest_sql).fetch_one(pool).await {
         Ok(row) => {
