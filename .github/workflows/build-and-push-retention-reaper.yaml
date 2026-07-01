@@ -1,20 +1,18 @@
-name: Build and push image for anon-stats-retention
+name: Build and push image for retention-reaper
 
-# POP-3905 — image for the anon-stats-retention CronJob.
-# Mirrors build-and-push-anon-stats-server.yaml. Pushes to GHCR (which the deploy values
-# reference). An ECR mirror can be added once an `AWS_ECR_ANON_STATS_RETENTION` repo+secret
-# is provisioned — left out deliberately so the workflow has no hard infra prerequisite.
+# POP-3905 — generic append-only-table retention CronJob image (pushes to GHCR, which the
+# deploy values reference). An ECR mirror can be added once a repo+secret is provisioned.
 
 on:
   push:
     branches:
       - main
     paths:
-      - Dockerfile.anon-stats-retention
-      - iris-mpc-bins/bin/iris-mpc-anon-stats-retention/**
+      - Dockerfile.retention-reaper
+      - iris-mpc-bins/bin/retention-reaper/**
       - iris-mpc-bins/Cargo.toml
       - iris-mpc-common/**
-      - .github/workflows/build-and-push-anon-stats-retention.yaml
+      - .github/workflows/build-and-push-retention-reaper.yaml
 
   release:
     types:
@@ -28,7 +26,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: "worldcoin/anon-stats-retention"
+  IMAGE_NAME: "worldcoin/retention-reaper"
 
 jobs:
   docker:
@@ -66,4 +64,4 @@ jobs:
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          file: Dockerfile.anon-stats-retention
+          file: Dockerfile.retention-reaper

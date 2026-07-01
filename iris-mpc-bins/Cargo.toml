@@ -238,5 +238,5 @@ name = "iris-mpc-anon-stats-server"
 path = "bin/iris-mpc-anon-stats-server/main.rs"
 
 [[bin]]
-name = "anon-stats-retention"
-path = "bin/iris-mpc-anon-stats-retention/main.rs"
+name = "retention-reaper"
+path = "bin/retention-reaper/main.rs"
