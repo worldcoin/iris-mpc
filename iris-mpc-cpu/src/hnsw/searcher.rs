@@ -403,6 +403,7 @@ impl HnswSearcher {
             .await
             .into_iter()
             .zip(graph.entry_points.iter().map(|ep| ep.layer))
+            .filter_map(|(vid, layer)| vid.map(|v| (v, layer)))
             .collect();
         let entry_points = store.only_valid_entry_points(entry_points).await;
         let (ep_vectors, ep_layers): (Vec<VectorId>, Vec<usize>) = entry_points.into_iter().unzip();
@@ -462,15 +463,20 @@ impl HnswSearcher {
         query: &V::QueryRef,
     ) -> Result<(SortedNeighborhood<V>, Option<usize>)> {
         if let Some((entry_point, layer)) = ep {
-            let vector_id = store
+            // A resolver `None` means the entry point is no longer live; treat it
+            // as no entry point rather than fabricating a version.
+            if let Some(vector_id) = store
                 .serials_to_vector_ids(&[entry_point])
                 .await
                 .pop()
-                .expect("resolver yields one id per input serial");
-            let distance = store.eval_distance(query, &vector_id).await?;
-
-            let W = SortedNeighborhood::from_singleton((vector_id, distance));
-            Ok((W, Some(layer)))
+                .flatten()
+            {
+                let distance = store.eval_distance(query, &vector_id).await?;
+                let W = SortedNeighborhood::from_singleton((vector_id, distance));
+                Ok((W, Some(layer)))
+            } else {
+                Ok((SortedNeighborhood::new(), None))
+            }
         } else {
             Ok((SortedNeighborhood::new(), None))
         }
@@ -999,6 +1005,7 @@ impl HnswSearcher {
                 .serials_to_vector_ids(&active)
                 .await
                 .into_iter()
+                .flatten()
                 .filter(|x| !init_nodes.contains(x))
                 .collect();
 
@@ -1284,6 +1291,7 @@ impl HnswSearcher {
             .serials_to_vector_ids(&neighbors)
             .await
             .into_iter()
+            .flatten()
             .filter(|e| visited.insert(*e))
             .collect();
 
@@ -1326,6 +1334,7 @@ impl HnswSearcher {
                 .serials_to_vector_ids(&neighbors)
                 .await
                 .into_iter()
+                .flatten()
                 .filter(|e| visited.insert(*e))
                 .collect();
 
@@ -1503,11 +1512,11 @@ impl HnswSearcher {
     /// from the iteration order of the input candidates list; the caller wraps
     /// them into a `GraphMutation`, stamps a sequence number, and applies.
     ///
-    /// Note: this reads raw neighborhoods (`get_raw_links`) and does
-    /// top-K-by-distance selection without validity filtering, so a stale or
-    /// dangling reference can participate in the ranking. That is benign:
-    /// content-stale and removed edges are skipped at read time by
-    /// `get_active_links`, and the next filter-on-bump drops them physically.
+    /// Ranks over active neighborhoods (`get_active_links`), not raw: compaction
+    /// evicts physically and an evicted live edge cannot be recovered, so
+    /// selection must never see a content-stale or removed edge (read-time masking
+    /// wouldn't undo the eviction). Registry-absent serials are dropped by the
+    /// resolver. This reproduces main's pre-compaction `only_valid_vectors` clean.
     pub async fn compact_batch<V: VectorStore>(
         &self,
         store: &mut V,
@@ -1518,8 +1527,13 @@ impl HnswSearcher {
         // exceeding M_limit on their layer.
         let mut oversized: Vec<(VectorId, usize, Vec<VectorId>)> = Vec::new();
         for (id, layer) in candidates {
-            let raw = graph.get_raw_links(&id.serial_id(), *layer).await.to_vec();
-            let nbhd: Vec<VectorId> = store.serials_to_vector_ids(&raw).await;
+            let active = graph.get_active_links(&id.serial_id(), *layer);
+            let nbhd: Vec<VectorId> = store
+                .serials_to_vector_ids(&active)
+                .await
+                .into_iter()
+                .flatten()
+                .collect();
             if nbhd.len() > self.params.get_M_limit(*layer) {
                 oversized.push((*id, *layer, nbhd));
             }
@@ -1800,21 +1814,27 @@ mod tests {
             nbrs.push(store.insert(&Arc::new(IrisCode::default())).await);
         }
 
+        // Neighbors must exist as graph nodes before edges wire to them
+        // (causal construction), so the content clock marks them live.
+        let mut ops = vec![MutationOp::AddNode {
+            id: base,
+            height: 1,
+            update_ep: UpdateEntryPoint::False,
+        }];
+        ops.extend(nbrs.iter().map(|&n| MutationOp::AddNode {
+            id: n,
+            height: 1,
+            update_ep: UpdateEntryPoint::False,
+        }));
+        ops.push(MutationOp::AddEdges {
+            base,
+            neighbors: nbrs.clone(),
+            layer: 0,
+            edge_type: EdgeType::Base,
+        });
         let setup = GraphMutation {
             seq_no: graph.next_sequence_number(),
-            ops: vec![
-                MutationOp::AddNode {
-                    id: base,
-                    height: 1,
-                    update_ep: UpdateEntryPoint::False,
-                },
-                MutationOp::AddEdges {
-                    base,
-                    neighbors: nbrs.clone(),
-                    layer: 0,
-                    edge_type: EdgeType::Base,
-                },
-            ],
+            ops,
         };
         graph.insert_apply(&setup)?;
 
@@ -1877,6 +1897,11 @@ mod tests {
             ops: vec![
                 MutationOp::AddNode {
                     id: a,
+                    height: 1,
+                    update_ep: UpdateEntryPoint::False,
+                },
+                MutationOp::AddNode {
+                    id: b,
                     height: 1,
                     update_ep: UpdateEntryPoint::False,
                 },

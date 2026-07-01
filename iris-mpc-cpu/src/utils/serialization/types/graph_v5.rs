@@ -16,7 +16,7 @@ pub struct GraphV5 {
     pub entry_points: Vec<EntryPoint>,
     pub layers: Vec<Layer>,
     pub last_update_seq_no: u64,
-    pub node_init_seq_no: HashMap<VectorId, u64>,
+    pub node_init_seq_no: HashMap<SerialId, u64>,
 }
 
 impl Serialize for GraphV5 {
@@ -34,7 +34,7 @@ impl Serialize for GraphV5 {
 /// Type associated with the `GraphV5` serialization type.
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EntryPoint {
-    pub point: VectorId,
+    pub point: SerialId,
     pub layer: usize,
 }
 
@@ -46,18 +46,18 @@ pub struct EntryPoint {
 /// across processes and parties, breaking cross-party checkpoint consensus.
 #[derive(Default, Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Layer {
-    pub links: HashMap<VectorId, Neighborhood>,
+    pub links: HashMap<SerialId, Neighborhood>,
     pub set_hash: u64,
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Neighborhood {
-    pub neighbors: Vec<VectorId>,
+    pub neighbors: Vec<SerialId>,
     pub updated_seq_no: u64,
 }
 
 struct SortedLinks<'a> {
-    links: &'a HashMap<VectorId, Neighborhood>,
+    links: &'a HashMap<SerialId, Neighborhood>,
 }
 
 impl Serialize for SortedLinks<'_> {
@@ -84,10 +84,10 @@ impl Serialize for Layer {
 
 /// Type associated with the `GraphV5` serialization type.
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EdgeIds(pub Vec<VectorId>);
+pub struct EdgeIds(pub Vec<SerialId>);
 
 /// Type associated with the `GraphV5` serialization type.
-pub type VectorId = u32;
+pub type SerialId = u32;
 
 /* ------------------------------- I/O ------------------------------ */
 

@@ -206,12 +206,14 @@ pub trait VectorStore: Debug {
         Ok(results)
     }
 
-    /// Resolve each serial to its current `VectorId` (serial + current version)
-    /// in one batch. Registry-backed stores take the version lock ONCE for the
-    /// whole slice via an awaited read (never `try_read`), so resolution always
-    /// reflects the true current version instead of falling back to 0 under
-    /// writer contention.
-    async fn serials_to_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<VectorId>;
+    /// Resolve each serial to its current `VectorId` (serial + current version),
+    /// or `None` if the serial is not currently live in the registry/storage.
+    /// Returns one entry per input serial, positionally aligned. Registry-backed
+    /// stores take the version lock via an awaited read (never `try_read`), so
+    /// resolution reflects the true current version. A serial absent from the
+    /// registry resolves to `None` (dropped by the caller), matching the old
+    /// `only_valid_vectors` semantics — never fabricated at version 0.
+    async fn serials_to_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<Option<VectorId>>;
 }
 
 /// The operations exposed by a vector store, including mutations.

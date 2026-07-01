@@ -320,6 +320,13 @@ impl GraphMem {
     /// `self.last_update_seq_no`; otherwise the call returns `Err` without
     /// touching the graph. On success `self.last_update_seq_no` advances to
     /// `mutation.seq_no`.
+    ///
+    /// Causal construction: an `AddEdges` op must not reference a target created
+    /// *later* — in a following mutation, or later in this same op list. The edge
+    /// is stamped at this tick while the target's content clock is minted at its
+    /// own (later) insertion, so [`is_active`] treats it as stale and drops it at
+    /// read time. Insert all endpoints before wiring edges between them; debug
+    /// builds assert it.
     pub fn insert_apply(&mut self, mutation: &GraphMutation) -> Result<()> {
         if mutation.seq_no <= self.last_update_seq_no {
             return Err(eyre::eyre!(
@@ -406,6 +413,15 @@ impl GraphMem {
                     let neighbor_sids: Vec<SerialId> =
                         to_add.iter().map(|v| v.serial_id()).collect();
                     let content = &self.node_init_seq_no;
+                    // Causal-construction guard: an edge to a node not yet in the
+                    // content clock is stamped at this tick while the target's
+                    // clock is minted later, so `is_active` reads it as stale and
+                    // drops it. Insert endpoints before wiring edges to them.
+                    debug_assert!(
+                        neighbor_sids.iter().all(|z| content.contains_key(z)),
+                        "AddEdges: neighbor absent from content clock (edge added \
+                         before its endpoint exists); the edge would be silently dropped"
+                    );
                     let layer_mut = &mut self.layers[layer];
                     // Forward half: append `neighbor_sids` to base's own list.
                     if matches!(edge_type, EdgeType::Base | EdgeType::All) {
@@ -545,10 +561,10 @@ impl GraphMem {
     /// filtering. For maintenance paths (compaction, pruning) that reason about
     /// physical edges; search traversal must use [`Self::get_active_links`].
     /// Empty if `base`/`lc` absent.
-    pub async fn get_raw_links(&self, base: &SerialId, lc: usize) -> &[SerialId] {
-        let layer = &self.layers[lc];
-        layer
-            .get_links(base)
+    pub fn get_raw_links(&self, base: &SerialId, lc: usize) -> &[SerialId] {
+        self.layers
+            .get(lc)
+            .and_then(|layer| layer.get_links(base))
             .map(|n| n.neighbors.as_slice())
             .unwrap_or(&[])
     }
@@ -869,7 +885,12 @@ impl Layer {
         self.set_links_trusted(node, Vec::new(), tick.value());
     }
 
-    /// Remove a node from the graph and clean up all backlinks from its neighbors.
+    /// Remove `id`'s own neighborhood. Backlinks (`other -> id`) are intentionally
+    /// left in place: `id` is dropped from the content clock at the same
+    /// `RemoveNode`, so [`is_active`] masks every dangling edge to it at read time,
+    /// and filter-on-bump drops it physically the next time that neighbor is
+    /// touched. This keeps `RemoveNode` a pure node removal — no implicit,
+    /// WAL-invisible mutation of other nodes' neighborhoods.
     pub fn remove_node(&mut self, id: SerialId) {
         if let Some(nbhd) = self.links.remove(&id) {
             self.set_hash.remove_hash(Self::neighborhood_contribution(
@@ -877,26 +898,6 @@ impl Layer {
                 nbhd.seq_no,
                 &nbhd.neighbors,
             ));
-
-            // Opportunistic bidirectional cleanup: drop the backlink from each
-            // neighbor. Best-effort — after compaction some neighbors may still
-            // link here, which is fine (the read mask drops dead edges anyway).
-            for neighbor in nbhd.neighbors {
-                if let Some(neighbor_nbhd) = self.links.get_mut(&neighbor) {
-                    // seq_no unchanged (the list only shrinks, so it stays sorted).
-                    self.set_hash.remove_hash(Self::neighborhood_contribution(
-                        neighbor,
-                        neighbor_nbhd.seq_no,
-                        &neighbor_nbhd.neighbors,
-                    ));
-                    neighbor_nbhd.neighbors.retain(|x| *x != id);
-                    self.set_hash.add_hash(Self::neighborhood_contribution(
-                        neighbor,
-                        neighbor_nbhd.seq_no,
-                        &neighbor_nbhd.neighbors,
-                    ));
-                }
-            }
         }
     }
 
@@ -1187,10 +1188,10 @@ mod tests {
             entry_points
         }
 
-        async fn serials_to_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<VectorId> {
+        async fn serials_to_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<Option<VectorId>> {
             serial_ids
                 .iter()
-                .map(|&serial_id| VectorId::from_serial_id(serial_id))
+                .map(|&serial_id| Some(VectorId::from_serial_id(serial_id)))
                 .collect()
         }
     }
@@ -1440,9 +1441,8 @@ mod tests {
             vec![2u32]
         );
 
-        // seq 3: reauth b. RemoveNode(b) — b's list is empty, so its
-        // opportunistic bidirectional cleanup never touches a's list and a -> b
-        // survives — then AddNode(b) advances content[b] to 3.
+        // seq 3: reauth b. RemoveNode(b) no longer touches a's list (no backlink
+        // cleanup), so a -> b survives — then AddNode(b) advances content[b] to 3.
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 3,
@@ -1534,8 +1534,8 @@ mod tests {
     }
 
     /// Read-path liveness: `get_active_links` drops a dangling edge to a removed
-    /// node even though the physical edge survives `RemoveNode`'s opportunistic
-    /// cleanup. The removed node has no content-clock entry, so `is_active`
+    /// node. The physical edge survives `RemoveNode` (which no longer cleans
+    /// backlinks); the removed node has no content-clock entry, so `is_active`
     /// treats it as dead.
     #[test]
     fn get_active_links_drops_edge_to_removed_node() {
@@ -1812,11 +1812,7 @@ mod tests {
             ops: vec![MutationOp::RemoveNode { id: v(3) }, node(v(3))],
         })
         .unwrap();
-        assert_eq!(
-            g.get_raw_links(&1, 0).await,
-            &[2u32, 3u32],
-            "stale 3 still raw"
-        );
+        assert_eq!(g.get_raw_links(&1, 0), &[2u32, 3u32], "stale 3 still raw");
         assert_eq!(g.get_active_links(&1, 0), vec![2], "3 masked as stale");
 
         // RemoveEdges Base(1 -/-> 2): retain drops explicit 2 AND stale 3.
@@ -1831,7 +1827,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(
-            g.get_raw_links(&1, 0).await,
+            g.get_raw_links(&1, 0),
             &[] as &[u32],
             "explicit 2 removed AND content-stale 3 swept in one retain"
         );
@@ -1861,11 +1857,7 @@ mod tests {
             ops: vec![MutationOp::RemoveNode { id: v(6) }, node(v(6))],
         })
         .unwrap();
-        assert_eq!(
-            g.get_raw_links(&5, 0).await,
-            &[4u32, 6u32],
-            "stale 6 still raw"
-        );
+        assert_eq!(g.get_raw_links(&5, 0), &[4u32, 6u32], "stale 6 still raw");
 
         // RemoveEdges All(4 -/- 5): forward half empties 4; back-half retain on
         // target 5 drops explicit 4 AND stale 6.
@@ -1880,12 +1872,12 @@ mod tests {
         })
         .unwrap();
         assert_eq!(
-            g.get_raw_links(&4, 0).await,
+            g.get_raw_links(&4, 0),
             &[] as &[u32],
             "forward half drops 5"
         );
         assert_eq!(
-            g.get_raw_links(&5, 0).await,
+            g.get_raw_links(&5, 0),
             &[] as &[u32],
             "back-half retain drops explicit 4 AND content-stale 6"
         );
@@ -1924,17 +1916,17 @@ mod tests {
         })
         .unwrap();
         assert_eq!(
-            g.get_raw_links(&1, 0).await,
+            g.get_raw_links(&1, 0),
             &[2u32, 3u32],
             "versions collapsed to serials"
         );
         assert_eq!(
-            g.get_raw_links(&2, 0).await,
+            g.get_raw_links(&2, 0),
             &[1u32],
             "back-edge keyed on serial 2"
         );
         assert_eq!(
-            g.get_raw_links(&3, 0).await,
+            g.get_raw_links(&3, 0),
             &[1u32],
             "back-edge keyed on serial 3"
         );
@@ -1956,16 +1948,17 @@ mod tests {
         })
         .unwrap();
         assert_eq!(
-            g.get_raw_links(&1, 0).await,
+            g.get_raw_links(&1, 0),
             &[3u32],
             "versioned RemoveEdges matched the serial-2 edge"
         );
     }
 
-    /// Deleting the sole entry point: RemoveNode drops it from every layer, runs
-    /// the set-hash-balanced backlink cleanup, empties the entry-point list, and
-    /// drops its content-clock entry; get_temporary_entry_point then falls back
-    /// to the min-serial node of the top non-empty layer.
+    /// Deleting the sole entry point: RemoveNode drops it from every layer, empties
+    /// the entry-point list, and drops its content-clock entry. Backlinks to it
+    /// linger in raw (RemoveNode does no WAL-invisible backlink cleanup) but are
+    /// masked by is_active. get_temporary_entry_point then falls back to the
+    /// min-serial node of the top non-empty layer.
     #[tokio::test]
     async fn remove_node_of_entry_point_falls_back_to_min_serial() {
         let node = |id: VectorId| MutationOp::AddNode {
@@ -2010,15 +2003,18 @@ mod tests {
 
         assert!(g.layers[0].get_links(&1).is_none(), "gone at layer 0");
         assert!(g.layers[1].get_links(&1).is_none(), "gone at layer 1");
-        assert_eq!(
-            g.get_raw_links(&2, 0).await,
-            &[] as &[u32],
-            "2->1 backlink cleaned"
+        // Backlinks 2->1 / 3->1 now linger physically (RemoveNode no longer does
+        // implicit backlink cleanup) but are masked at read: 1 is dropped from the
+        // content clock, so is_active hides the dangling edge.
+        assert_eq!(g.get_raw_links(&2, 0), &[1u32], "2->1 lingers in raw");
+        assert!(
+            g.get_active_links(&2, 0).is_empty(),
+            "2->1 masked by is_active"
         );
-        assert_eq!(
-            g.get_raw_links(&3, 0).await,
-            &[] as &[u32],
-            "3->1 backlink cleaned"
+        assert_eq!(g.get_raw_links(&3, 0), &[1u32], "3->1 lingers in raw");
+        assert!(
+            g.get_active_links(&3, 0).is_empty(),
+            "3->1 masked by is_active"
         );
         assert_eq!(g.get_entry_points(), None, "entry-point list emptied");
         // L1 now empty, so fall back to min serial of L0.

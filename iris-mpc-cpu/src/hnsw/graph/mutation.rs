@@ -41,6 +41,10 @@ pub enum MutationOp {
     RemoveNode {
         id: VectorId,
     },
+    /// Every `base` and `neighbors` node must already exist (its `AddNode` applied
+    /// in an earlier mutation or earlier in this op list). An edge to a
+    /// not-yet-created node is dropped as stale — see `GraphMem::insert_apply`
+    /// (causal construction).
     AddEdges {
         base: VectorId,
         neighbors: Vec<VectorId>,

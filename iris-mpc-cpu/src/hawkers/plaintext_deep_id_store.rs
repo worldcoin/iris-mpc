@@ -315,14 +315,13 @@ impl VectorStore for PlaintextDeepIDStore {
         entry_points
     }
 
-    async fn serials_to_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<VectorId> {
+    async fn serials_to_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<Option<VectorId>> {
         serial_ids
             .iter()
             .map(|&serial_id| {
-                VectorId::new(
-                    serial_id,
-                    self.storage.get_current_version(serial_id).unwrap_or(0),
-                )
+                self.storage
+                    .get_current_version(serial_id)
+                    .map(|version| VectorId::new(serial_id, version))
             })
             .collect()
     }
@@ -454,15 +453,14 @@ impl VectorStore for SharedPlaintextDeepIDStore {
         entry_points
     }
 
-    async fn serials_to_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<VectorId> {
+    async fn serials_to_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<Option<VectorId>> {
         let storage = self.storage.read().await;
         serial_ids
             .iter()
             .map(|&serial_id| {
-                VectorId::new(
-                    serial_id,
-                    storage.get_current_version(serial_id).unwrap_or(0),
-                )
+                storage
+                    .get_current_version(serial_id)
+                    .map(|version| VectorId::new(serial_id, version))
             })
             .collect()
     }

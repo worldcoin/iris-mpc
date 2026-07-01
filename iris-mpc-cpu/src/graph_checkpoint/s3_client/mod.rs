@@ -178,6 +178,12 @@ pub async fn download_graph_checkpoint(
     if format == GraphFormat::Raw {
         bail!("Unexpected graph checkpoint format: Raw");
     }
+    // V2 bakes versions into edges (like V3/V4) but has no v5 prune path, so a
+    // serial-only conversion would silently keep version-stale edges. Reject it
+    // outright — there is no supported V2 base migration.
+    if format == GraphFormat::V2 {
+        bail!("refusing V2 checkpoint: version-baked edges with no v5 migration path");
+    }
     // Only genesis may consume a legacy V3/V4 base: it supplies a prune context
     // and rewrites the result as V5. Every other consumer (hawk restart,
     // diagnostics) must load a native V5 checkpoint, since v5 serial-only edges

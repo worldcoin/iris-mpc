@@ -578,15 +578,14 @@ where
         Ok(query_ids.into_iter().map(Aby3Query::new).collect_vec())
     }
 
-    async fn serials_to_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<VectorId> {
+    async fn serials_to_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<Option<VectorId>> {
         let registry = self.registry.read().await;
         serial_ids
             .iter()
             .map(|&serial_id| {
-                VectorId::new(
-                    serial_id,
-                    registry.get_current_version(serial_id).unwrap_or(0),
-                )
+                registry
+                    .get_current_version(serial_id)
+                    .map(|version| VectorId::new(serial_id, version))
             })
             .collect()
     }
