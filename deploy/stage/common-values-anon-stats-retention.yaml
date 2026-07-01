@@ -1,0 +1,30 @@
+# POP-3905 — anon-stats retention CronJob (stage, smpcv2). Uses the common-cronjob chart
+# (chartVersion 1.8.5) via wf-cluster-apps, mirroring iris-mpc-db-exporter. Per-cluster env
+# (RETENTION__*) lives in the per-node values files.
+image: "ghcr.io/worldcoin/retention-reaper:latest"
+
+replicaCount: 1
+
+environment: stage
+
+# Daily, 03:30 UTC. Idempotent — a missed/failed run is caught by the next day + the
+# missing-run monitor; no retry (fail loud), same as iris-mpc-db-exporter.
+schedule: "30 3 * * *"
+backoffLimit: 0
+
+# Never run two reapers against the same DB at once.
+concurrencyPolicy: Forbid
+
+imagePullSecrets:
+  - name: github-secret
+
+resources:
+  limits:
+    cpu: "500m"
+    memory: 256Mi
+  requests:
+    cpu: "100m"
+    memory: 128Mi
+
+nodeSelector:
+  kubernetes.io/arch: amd64
