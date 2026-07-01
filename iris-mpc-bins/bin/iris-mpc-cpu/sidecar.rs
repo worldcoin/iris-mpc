@@ -65,6 +65,13 @@ pub struct SidecarArgs {
     #[clap(long, default_value = "10")]
     pub peer_round_timeout_secs: u64,
 
+    /// Wall-clock bound on establishing the peer mesh (control channel /
+    /// make_connections), in seconds. The underlying dial retries with no
+    /// deadline; without this bound an unreachable peer wedges the cycle
+    /// indefinitely. Generous by default so normal startup skew is absorbed.
+    #[clap(long, default_value = "300")]
+    pub make_connections_timeout_secs: u64,
+
     /// Minimum new mutations beyond the base to run a cycle. Smaller deltas
     /// are skipped to avoid hammering S3.
     #[clap(long, default_value = "10000")]
@@ -109,6 +116,9 @@ impl SidecarArgs {
     }
     fn peer_round_timeout(&self) -> Duration {
         Duration::from_secs(self.peer_round_timeout_secs)
+    }
+    fn make_connections_timeout(&self) -> Duration {
+        Duration::from_secs(self.make_connections_timeout_secs)
     }
 }
 
@@ -192,6 +202,7 @@ async fn main() -> Result<()> {
         cycle_interval: args.cycle_interval(),
         retry_interval: args.retry_interval(),
         peer_round_timeout: args.peer_round_timeout(),
+        make_connections_timeout: args.make_connections_timeout(),
         min_mutations_per_cycle: args.min_mutations_per_cycle,
         checkpoint_window: args.checkpoint_window,
         is_archival: args.is_archival,

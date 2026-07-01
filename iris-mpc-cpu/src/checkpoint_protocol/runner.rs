@@ -52,6 +52,10 @@ fn default_sidecar_parallelism() -> usize {
     1
 }
 
+fn default_make_connections_timeout() -> Duration {
+    Duration::from_secs(300)
+}
+
 impl SidecarConfigWrapper {
     pub fn load_config(prefix: &str) -> Result<Self> {
         let settings = config::Config::builder();
@@ -87,6 +91,13 @@ pub struct SidecarConfig {
     /// Per-peer-round timeout passed into the protocol's `CycleConfig`.
     #[serde_as(as = "DurationSeconds<u64>")]
     pub peer_round_timeout: Duration,
+    /// Wall-clock bound on opening the control channel (establishing the peer
+    /// mesh). The underlying dial retries with no deadline of its own, so an
+    /// unreachable peer would otherwise wedge the cycle indefinitely; this
+    /// converts that into a transient error (the next fire retries).
+    #[serde(default = "default_make_connections_timeout")]
+    #[serde_as(as = "DurationSeconds<u64>")]
+    pub make_connections_timeout: Duration,
     /// Lower-bound for cycle work; below this the cycle is skipped (no
     /// upload / no DB write) to avoid hammering S3 with near-empty deltas.
     pub min_mutations_per_cycle: u64,
@@ -198,9 +209,14 @@ async fn sidecar_cycle<V: VectorStore + Send + Sync>(
     s3_client: &S3Client,
     networking: &mut Box<dyn NetworkHandle>,
 ) -> Result<Outcome, CycleError> {
-    let channel = networking
-        .control_channel()
+    let channel = tokio::time::timeout(cfg.make_connections_timeout, networking.control_channel())
         .await
+        .map_err(|_| {
+            CycleError::Transient(format!(
+                "control_channel: peer mesh not established within {:?}",
+                cfg.make_connections_timeout
+            ))
+        })?
         .map_err(|e| CycleError::Transient(format!("open control_channel: {e}")))?;
     let transport = RingConsensusTransport::new(channel);
 
@@ -389,6 +405,7 @@ mod tests {
             ("WRAPPERTEST__CONFIG__CYCLE_INTERVAL", "30"),
             ("WRAPPERTEST__CONFIG__RETRY_INTERVAL", "5"),
             ("WRAPPERTEST__CONFIG__PEER_ROUND_TIMEOUT", "10"),
+            ("WRAPPERTEST__CONFIG__MAKE_CONNECTIONS_TIMEOUT", "120"),
             ("WRAPPERTEST__CONFIG__MIN_MUTATIONS_PER_CYCLE", "100"),
             ("WRAPPERTEST__CONFIG__CHECKPOINT_WINDOW", "8"),
             ("WRAPPERTEST__CONFIG__IS_ARCHIVAL", "false"),
@@ -415,6 +432,7 @@ mod tests {
         assert_eq!(cfg.cycle_interval, Duration::from_secs(30));
         assert_eq!(cfg.retry_interval, Duration::from_secs(5));
         assert_eq!(cfg.peer_round_timeout, Duration::from_secs(10));
+        assert_eq!(cfg.make_connections_timeout, Duration::from_secs(120));
         assert_eq!(cfg.min_mutations_per_cycle, 100);
         assert_eq!(cfg.checkpoint_window, 8);
         assert!(!cfg.is_archival);
