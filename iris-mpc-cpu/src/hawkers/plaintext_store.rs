@@ -192,9 +192,16 @@ impl<D: DistanceOps> VectorStore for PlaintextStore<D> {
         Ok(results)
     }
 
-    fn serial_to_vector_id(&self, serial_id: SerialId) -> VectorId {
-        let version = self.storage.get_current_version(serial_id).unwrap_or(0);
-        VectorId::new(serial_id, version)
+    async fn serials_to_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<VectorId> {
+        serial_ids
+            .iter()
+            .map(|&serial_id| {
+                VectorId::new(
+                    serial_id,
+                    self.storage.get_current_version(serial_id).unwrap_or(0),
+                )
+            })
+            .collect()
     }
 
     async fn only_valid_entry_points(
@@ -342,12 +349,17 @@ impl<D: DistanceOps> VectorStore for SharedPlaintextStore<D> {
         Ok(results)
     }
 
-    fn serial_to_vector_id(&self, serial_id: SerialId) -> VectorId {
-        let version = self
-            .storage
-            .get_current_version_sync(serial_id)
-            .unwrap_or(0);
-        VectorId::new(serial_id, version)
+    async fn serials_to_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<VectorId> {
+        let storage = self.storage.read().await;
+        serial_ids
+            .iter()
+            .map(|&serial_id| {
+                VectorId::new(
+                    serial_id,
+                    storage.get_current_version(serial_id).unwrap_or(0),
+                )
+            })
+            .collect()
     }
 
     async fn only_valid_entry_points(

@@ -397,10 +397,12 @@ impl HnswSearcher {
         let max_graph_layer = self.max_graph_layer;
 
         // Get all valid entry points
-        let entry_points: Vec<_> = graph
-            .entry_points
-            .iter()
-            .map(|ep| (store.serial_to_vector_id(ep.point), ep.layer))
+        let ep_serials: Vec<_> = graph.entry_points.iter().map(|ep| ep.point).collect();
+        let entry_points: Vec<(VectorId, usize)> = store
+            .serials_to_vector_ids(&ep_serials)
+            .await
+            .into_iter()
+            .zip(graph.entry_points.iter().map(|ep| ep.layer))
             .collect();
         let entry_points = store.only_valid_entry_points(entry_points).await;
         let (ep_vectors, ep_layers): (Vec<VectorId>, Vec<usize>) = entry_points.into_iter().unzip();
@@ -460,7 +462,11 @@ impl HnswSearcher {
         query: &V::QueryRef,
     ) -> Result<(SortedNeighborhood<V>, Option<usize>)> {
         if let Some((entry_point, layer)) = ep {
-            let vector_id = store.serial_to_vector_id(entry_point);
+            let vector_id = store
+                .serials_to_vector_ids(&[entry_point])
+                .await
+                .pop()
+                .expect("resolver yields one id per input serial");
             let distance = store.eval_distance(query, &vector_id).await?;
 
             let W = SortedNeighborhood::from_singleton((vector_id, distance));
@@ -988,10 +994,11 @@ impl HnswSearcher {
         let mut open_idx = 0;
         while open_idx < init_nodes.len() && init_nodes.len() < ef {
             // get valid, unvisited neighbors of current node at `open_idx`
-            let nbhd: Vec<VectorId> = graph
-                .get_active_links(&init_nodes[open_idx].serial_id(), lc)
-                .iter()
-                .map(|&sid| store.serial_to_vector_id(sid))
+            let active = graph.get_active_links(&init_nodes[open_idx].serial_id(), lc);
+            let nbhd: Vec<VectorId> = store
+                .serials_to_vector_ids(&active)
+                .await
+                .into_iter()
                 .filter(|x| !init_nodes.contains(x))
                 .collect();
 
@@ -1273,9 +1280,10 @@ impl HnswSearcher {
     ) -> Result<Vec<(VectorId, V::DistanceRef)>> {
         let neighbors = graph.get_active_links(&node.serial_id(), lc);
 
-        let unvisited_neighbors: Vec<VectorId> = neighbors
-            .iter()
-            .map(|&sid| store.serial_to_vector_id(sid))
+        let unvisited_neighbors: Vec<VectorId> = store
+            .serials_to_vector_ids(&neighbors)
+            .await
+            .into_iter()
             .filter(|e| visited.insert(*e))
             .collect();
 
@@ -1314,9 +1322,10 @@ impl HnswSearcher {
         for node in nodes {
             let neighbors = graph.get_active_links(&node.serial_id(), lc);
 
-            let unvisited_neighbors: Vec<VectorId> = neighbors
-                .iter()
-                .map(|&sid| store.serial_to_vector_id(sid))
+            let unvisited_neighbors: Vec<VectorId> = store
+                .serials_to_vector_ids(&neighbors)
+                .await
+                .into_iter()
                 .filter(|e| visited.insert(*e))
                 .collect();
 
@@ -1509,12 +1518,8 @@ impl HnswSearcher {
         // exceeding M_limit on their layer.
         let mut oversized: Vec<(VectorId, usize, Vec<VectorId>)> = Vec::new();
         for (id, layer) in candidates {
-            let nbhd: Vec<VectorId> = graph
-                .get_raw_links(&id.serial_id(), *layer)
-                .await
-                .iter()
-                .map(|&sid| store.serial_to_vector_id(sid))
-                .collect();
+            let raw = graph.get_raw_links(&id.serial_id(), *layer).await.to_vec();
+            let nbhd: Vec<VectorId> = store.serials_to_vector_ids(&raw).await;
             if nbhd.len() > self.params.get_M_limit(*layer) {
                 oversized.push((*id, *layer, nbhd));
             }

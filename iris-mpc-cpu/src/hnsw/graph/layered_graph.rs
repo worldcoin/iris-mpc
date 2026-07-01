@@ -1169,8 +1169,11 @@ mod tests {
             entry_points
         }
 
-        fn serial_to_vector_id(&self, serial_id: SerialId) -> VectorId {
-            VectorId::from_serial_id(serial_id)
+        async fn serials_to_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<VectorId> {
+            serial_ids
+                .iter()
+                .map(|&serial_id| VectorId::from_serial_id(serial_id))
+                .collect()
         }
     }
 
