@@ -12,7 +12,7 @@ use iris_mpc_common::VectorId;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    hnsw::graph::layered_graph::{self, GraphMem, Layer},
+    hnsw::graph::layered_graph::{self, GraphMem, Layer, NodeInit},
     utils::serialization::types::{
         graph_v0::{self, read_graph_v0, GraphV0},
         graph_v1::{self, read_graph_v1, GraphV1},
@@ -394,11 +394,11 @@ pub fn read_graph_pair_pruned<R: std::io::Read + ?Sized>(
     }
 }
 
-/// Build pruned `Layer`s and a clock-0 `node_init_seq_no` from a legacy graph.
-/// `$layers`/`$entry_points` are moved out (distinct fields → partial move).
-/// At most one version per serial matches `version_map`, so multi-version
-/// stragglers collapse deterministically onto the live entry. `set_links_trusted`
-/// recomputes each layer's `set_hash`.
+/// Build pruned `Layer`s and a `node_init` clock (seq 0, version from
+/// `version_map`) from a legacy graph. `$layers`/`$entry_points` are moved out
+/// (distinct fields → partial move). At most one version per serial matches
+/// `version_map`, so multi-version stragglers collapse deterministically onto
+/// the live entry. `set_links_trusted` recomputes each layer's `set_hash`.
 macro_rules! legacy_prune_to_mem {
     ($layers:expr, $entry_points:expr, $last_update_seq_no:expr, $prune:expr) => {{
         let src_layers = $layers;
@@ -423,16 +423,24 @@ macro_rules! legacy_prune_to_mem {
             }
             layers.push(out);
         }
-        let node_init_seq_no = layers
+        // A kept node's key version equals its registry-current version (that's
+        // what `live_at` checked), so it seeds the graph's version truth.
+        let node_init = layers
             .iter()
             .flat_map(|l| l.links.keys())
-            .map(|&v| (v, 0u64))
+            .map(|&v| {
+                let version = *prune
+                    .version_map
+                    .get(&v)
+                    .expect("pruned node must be in version_map");
+                (v, NodeInit { seq_no: 0, version })
+            })
             .collect();
         GraphMem::from_parts(
             $entry_points.into_iter().map(|e| e.into()).collect(),
             layers,
             $last_update_seq_no,
-            node_init_seq_no,
+            node_init,
         )
     }};
 }
@@ -535,10 +543,10 @@ impl From<graph_v0::Layer> for Layer {
 impl From<graph_v0::GraphV0> for GraphMem {
     fn from(value: GraphV0) -> Self {
         let layers: Vec<Layer> = value.layers.into_iter().map(|layer| layer.into()).collect();
-        let node_init_seq_no = layers
+        let node_init = layers
             .iter()
             .flat_map(|l| l.links.keys())
-            .map(|&v| (v, 0u64))
+            .map(|&v| (v, NodeInit::default()))
             .collect();
         GraphMem::from_parts(
             value
@@ -548,7 +556,7 @@ impl From<graph_v0::GraphV0> for GraphMem {
                 .collect::<Vec<_>>(),
             layers,
             0,
-            node_init_seq_no,
+            node_init,
         )
     }
 }
@@ -583,10 +591,10 @@ impl From<graph_v1::Layer> for Layer {
 impl From<graph_v1::GraphV1> for GraphMem {
     fn from(value: GraphV1) -> Self {
         let layers: Vec<Layer> = value.layers.into_iter().map(|layer| layer.into()).collect();
-        let node_init_seq_no = layers
+        let node_init = layers
             .iter()
             .flat_map(|l| l.links.keys())
-            .map(|&v| (v, 0u64))
+            .map(|&v| (v, NodeInit::default()))
             .collect();
         GraphMem::from_parts(
             value
@@ -596,7 +604,7 @@ impl From<graph_v1::GraphV1> for GraphMem {
                 .collect::<Vec<_>>(),
             layers,
             0,
-            node_init_seq_no,
+            node_init,
         )
     }
 }
@@ -634,10 +642,10 @@ impl From<graph_v2::Layer> for Layer {
 impl From<graph_v2::GraphV2> for GraphMem {
     fn from(value: graph_v2::GraphV2) -> Self {
         let layers: Vec<Layer> = value.layers.into_iter().map(|layer| layer.into()).collect();
-        let node_init_seq_no = layers
+        let node_init = layers
             .iter()
             .flat_map(|l| l.links.keys())
-            .map(|&v| (v, 0u64))
+            .map(|&v| (v, NodeInit::default()))
             .collect();
         // GraphMem uses a Vec<EntryPoint>, V2 uses Option<EntryPoint>.
         GraphMem::from_parts(
@@ -648,7 +656,7 @@ impl From<graph_v2::GraphV2> for GraphMem {
                 .collect::<Vec<_>>(),
             layers,
             0,
-            node_init_seq_no,
+            node_init,
         )
     }
 }
@@ -686,17 +694,17 @@ impl From<graph_v3::Layer> for Layer {
 impl From<graph_v3::GraphV3> for GraphMem {
     fn from(value: graph_v3::GraphV3) -> Self {
         let layers: Vec<Layer> = value.layers.into_iter().map(|layer| layer.into()).collect();
-        let node_init_seq_no = layers
+        let node_init = layers
             .iter()
             .flat_map(|l| l.links.keys())
-            .map(|&v| (v, 0u64))
+            .map(|&v| (v, NodeInit::default()))
             .collect();
         // V3 uses a Vec<EntryPoint>, which matches GraphMem
         GraphMem::from_parts(
             value.entry_point.into_iter().map(|e| e.into()).collect(),
             layers,
             0,
-            node_init_seq_no,
+            node_init,
         )
     }
 }
@@ -733,16 +741,16 @@ impl From<graph_v4::Layer> for Layer {
 impl From<graph_v4::GraphV4> for GraphMem {
     fn from(value: graph_v4::GraphV4) -> Self {
         let layers: Vec<Layer> = value.layers.into_iter().map(|layer| layer.into()).collect();
-        let node_init_seq_no = layers
+        let node_init = layers
             .iter()
             .flat_map(|l| l.links.keys())
-            .map(|&v| (v, 0u64))
+            .map(|&v| (v, NodeInit::default()))
             .collect();
         GraphMem::from_parts(
             value.entry_points.into_iter().map(|e| e.into()).collect(),
             layers,
             value.last_update_seq_no,
-            node_init_seq_no,
+            node_init,
         )
     }
 }
@@ -826,13 +834,26 @@ impl From<graph_v5::Layer> for Layer {
     }
 }
 
+impl From<graph_v5::NodeInit> for NodeInit {
+    fn from(value: graph_v5::NodeInit) -> Self {
+        NodeInit {
+            seq_no: value.seq_no,
+            version: value.version,
+        }
+    }
+}
+
 impl From<graph_v5::GraphV5> for GraphMem {
     fn from(value: GraphV5) -> Self {
         GraphMem::from_parts(
             value.entry_points.into_iter().map(|e| e.into()).collect(),
             value.layers.into_iter().map(|layer| layer.into()).collect(),
             value.last_update_seq_no,
-            value.node_init_seq_no,
+            value
+                .node_init
+                .into_iter()
+                .map(|(k, v)| (k, v.into()))
+                .collect(),
         )
     }
 }
@@ -870,12 +891,25 @@ impl From<Layer> for graph_v5::Layer {
     }
 }
 
+impl From<NodeInit> for graph_v5::NodeInit {
+    fn from(value: NodeInit) -> Self {
+        graph_v5::NodeInit {
+            seq_no: value.seq_no,
+            version: value.version,
+        }
+    }
+}
+
 impl From<GraphMem> for graph_v5::GraphV5 {
     fn from(value: GraphMem) -> Self {
         graph_v5::GraphV5 {
             entry_points: value.entry_points.into_iter().map(|ep| ep.into()).collect(),
             layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
-            node_init_seq_no: value.node_init_seq_no,
+            node_init: value
+                .node_init
+                .into_iter()
+                .map(|(k, v)| (k, v.into()))
+                .collect(),
             last_update_seq_no: value.last_update_seq_no,
         }
     }
@@ -911,10 +945,14 @@ mod tests {
         }
         // Seed the content clock at 0 for every node, matching how the From<GraphVN>
         // converters build a real graph; otherwise the checksum (which now folds
-        // node_init_seq_no) would differ from a round-tripped graph's.
-        let node_init_seq_no = layer.get_links_map().keys().map(|&k| (k, 0u64)).collect();
+        // node_init) would differ from a round-tripped graph's.
+        let node_init = layer
+            .get_links_map()
+            .keys()
+            .map(|&k| (k, NodeInit::default()))
+            .collect();
         let entry_points = vec![layered_graph::EntryPoint { point: 1, layer: 0 }];
-        GraphMem::from_parts(entry_points, vec![layer], 0, node_init_seq_no)
+        GraphMem::from_parts(entry_points, vec![layer], 0, node_init)
     }
 
     /// Round-trip a `GraphMem` through the current (V5) serialization format and
@@ -936,22 +974,31 @@ mod tests {
     /// wire layouts must be byte-identical, else the cutover graph is corrupt.
     /// The clocks are non-zero and DISTINCT over out-of-order keys: a non-zero
     /// `last_update_seq_no` makes a scalar field-order drift misalign the next
-    /// map-length prefix, and distinct `node_init`/`seq_no` values make the
+    /// map-length prefix, and distinct `node_init` seq/version values make the
     /// BTreeMap-sort vs HashMap-iteration arm of `GraphV5::Serialize` observable
     /// (uniform-zero clocks would alias the two orderings and pass regardless).
+    /// Distinct versions also pin the per-entry (seq_no, version) field order.
     #[test]
     fn graphmem_direct_write_matches_current_and_reads_back() {
         let mut layer = Layer::new();
         for (i, &n) in [7u32, 3, 9, 1, 5, 8, 2, 6, 4].iter().enumerate() {
             layer.set_links_trusted(n, vec![n + 1, n + 2], i as u64 + 1);
         }
-        let node_init_seq_no = layer
+        let node_init = layer
             .get_links_map()
             .keys()
-            .map(|&k| (k, k as u64 * 10 + 1))
+            .map(|&k| {
+                (
+                    k,
+                    NodeInit {
+                        seq_no: k as u64 * 10 + 1,
+                        version: k as i16 + 1,
+                    },
+                )
+            })
             .collect();
         let entry_points = vec![layered_graph::EntryPoint { point: 1, layer: 0 }];
-        let g = GraphMem::from_parts(entry_points, vec![layer], 42, node_init_seq_no);
+        let g = GraphMem::from_parts(entry_points, vec![layer], 42, node_init);
 
         let direct = bincode::serialize(&[g.clone(), g.clone()]).unwrap();
         let mut via_current = Vec::new();
@@ -1085,8 +1132,8 @@ mod tests {
 
     /// Prune-at-read drops edges whose stored target version differs from the
     /// target's current key version, plus edges to absent targets, reproducing
-    /// the runtime version-skip that v5 serial-only edges can't perform. Clock
-    /// is seeded to 0 for every surviving node.
+    /// the runtime version-skip that v5 serial-only edges can't perform. Every
+    /// surviving node's clock seeds at seq 0 with its registry-current version.
     #[test]
     fn prune_drops_version_drifted_and_dangling_edges() {
         use crate::utils::serialization::types::graph_v4;
@@ -1115,8 +1162,12 @@ mod tests {
         assert_eq!(m[&2u32].neighbors(), [3u32], "fresh edge kept");
         assert!(m[&3u32].neighbors().is_empty());
         assert_eq!(mem.last_update_seq_no, 7);
-        for k in [1u32, 2, 3] {
-            assert_eq!(mem.node_init_seq_no.get(&k), Some(&0u64));
+        for (k, version) in [(1u32, 0i16), (2, 0), (3, 2)] {
+            assert_eq!(
+                mem.node_init.get(&k),
+                Some(&NodeInit { seq_no: 0, version }),
+                "clock seeds at seq 0 with the registry-current version"
+            );
         }
     }
 
@@ -1157,7 +1208,13 @@ mod tests {
             "inbound edge to 3@1 dropped"
         );
         assert_eq!(m[&2u32].neighbors(), [3u32], "inbound edge to 3@2 kept");
-        assert_eq!(mem.node_init_seq_no.get(&3u32), Some(&0u64));
+        assert_eq!(
+            mem.node_init.get(&3u32),
+            Some(&NodeInit {
+                seq_no: 0,
+                version: 2
+            })
+        );
     }
 
     /// A deleted serial is dropped outright even when the registry version still
@@ -1191,7 +1248,7 @@ mod tests {
         assert_eq!(m[&1u32].neighbors(), [2u32], "edge to deleted 3 dropped");
         assert!(m[&2u32].neighbors().is_empty());
         assert!(
-            !mem.node_init_seq_no.contains_key(&3u32),
+            !mem.node_init.contains_key(&3u32),
             "deleted serial absent from clock"
         );
     }

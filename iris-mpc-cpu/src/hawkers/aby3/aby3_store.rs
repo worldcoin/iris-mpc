@@ -590,15 +590,6 @@ where
             .collect()
     }
 
-    async fn only_valid_entry_points(
-        &mut self,
-        mut entry_points: Vec<(VectorId, usize)>,
-    ) -> Vec<(VectorId, usize)> {
-        let registry = self.registry.read().await;
-        entry_points.retain(|(v, _)| registry.contains(v));
-        entry_points
-    }
-
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn eval_distance(
         &mut self,

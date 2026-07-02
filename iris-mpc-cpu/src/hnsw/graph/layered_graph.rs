@@ -18,7 +18,7 @@ use crate::{
 };
 
 use eyre::Result;
-use iris_mpc_common::{iris_db::iris::IrisCode, SerialId};
+use iris_mpc_common::{iris_db::iris::IrisCode, SerialId, VectorId, VersionId};
 use itertools::{izip, Itertools};
 use serde::{
     ser::{SerializeMap, SerializeStruct, Serializer},
@@ -77,6 +77,28 @@ impl Neighborhood {
     }
 }
 
+/// Content-clock entry of one live node: the seq_no of its last (re-)insertion
+/// and the iris version it was inserted at. The version makes the graph the
+/// self-contained source of truth for the current `VectorId` of in-graph nodes
+/// (see [`GraphMem::vector_id_of`]); it can be cross-checked against the vector
+/// store's registry where one is in context.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeInit {
+    /// Seq_no of the node's last `AddNode`. Gates edge liveness via [`is_active`].
+    pub seq_no: u64,
+    /// Iris version carried by that `AddNode`'s `VectorId`.
+    pub version: VersionId,
+}
+
+impl NodeInit {
+    /// Whether this node's content is unchanged since a neighborhood was
+    /// certified at `old_seq` — the sole definition of the staleness
+    /// comparison; see [`is_active`].
+    fn active_at(self, old_seq: u64) -> bool {
+        self.seq_no <= old_seq
+    }
+}
+
 /// Whether edge `A -> z` is valid for a neighborhood last certified at `old_seq`:
 /// `z` must be a live node (present in the content clock) *and* its content must
 /// not have advanced past `old_seq`. An absent stamp means dead (removed or never
@@ -86,8 +108,8 @@ impl Neighborhood {
 /// Used both at write time (the filter-on-bump in `insert_apply`, which drops
 /// invalid edges before re-stamping a neighborhood) and at read time
 /// ([`GraphMem::get_active_links`], which skips them during traversal).
-fn is_active(content: &HashMap<SerialId, u64>, z: SerialId, old_seq: u64) -> bool {
-    content.get(&z).is_some_and(|&c| c <= old_seq)
+fn is_active(content: &HashMap<SerialId, NodeInit>, z: SerialId, old_seq: u64) -> bool {
+    content.get(&z).is_some_and(|ni| ni.active_at(old_seq))
 }
 
 /// Representation of the entry point of HNSW search in a layered graph.
@@ -121,17 +143,19 @@ pub struct GraphMem {
     /// success.
     pub last_update_seq_no: u64,
 
-    /// Content clock: the seq_no at which each node was last (re-)inserted
-    /// (`AddNode`). Bumped only by a node's own insertion, never by edge
-    /// changes; removed on deletion. Gates edge liveness via [`is_active`].
-    pub node_init_seq_no: HashMap<SerialId, u64>,
+    /// Content clock: for each live node, the seq_no at which it was last
+    /// (re-)inserted (`AddNode`) and the iris version that insertion carried.
+    /// Bumped only by a node's own insertion, never by edge changes; removed on
+    /// deletion. Gates edge liveness via [`is_active`] and resolves serials to
+    /// current `VectorId`s via [`GraphMem::vector_id_of`].
+    pub node_init: HashMap<SerialId, NodeInit>,
 
-    /// Incrementally-maintained order-agnostic hash of `node_init_seq_no`,
-    /// folded into [`GraphMem::checksum`] so the content clock is part of
-    /// cross-party consensus (it gates edge liveness via `is_active`). Derived
-    /// state: not serialized; recomputed from `node_init_seq_no` on construction
-    /// and deserialization, kept in sync by `insert_apply`. Private so all
-    /// construction routes through `from_parts`, which computes it.
+    /// Incrementally-maintained order-agnostic hash of `node_init`, folded
+    /// into [`GraphMem::checksum`] so the content clock (liveness + version)
+    /// is part of cross-party consensus. Derived state: not serialized;
+    /// recomputed from `node_init` on construction and deserialization, kept
+    /// in sync by `insert_apply`. Private so all construction routes through
+    /// `from_parts`, which computes it.
     node_init_hash: SetHash,
 }
 
@@ -174,7 +198,7 @@ impl Clone for GraphMem {
             entry_points: self.entry_points.clone(),
             layers: self.layers.clone(),
             last_update_seq_no: self.last_update_seq_no,
-            node_init_seq_no: self.node_init_seq_no.clone(),
+            node_init: self.node_init.clone(),
             node_init_hash: self.node_init_hash.clone(),
         }
     }
@@ -192,14 +216,14 @@ impl<'de> Deserialize<'de> for GraphMem {
             entry_points: Vec<EntryPoint>,
             layers: Vec<Layer>,
             last_update_seq_no: u64,
-            node_init_seq_no: HashMap<SerialId, u64>,
+            node_init: HashMap<SerialId, NodeInit>,
         }
         let d = GraphMemData::deserialize(deserializer)?;
         Ok(GraphMem::from_parts(
             d.entry_points,
             d.layers,
             d.last_update_seq_no,
-            d.node_init_seq_no,
+            d.node_init,
         ))
     }
 }
@@ -210,7 +234,7 @@ impl GraphMem {
             entry_points: vec![],
             layers: vec![],
             last_update_seq_no: 0,
-            node_init_seq_no: HashMap::new(),
+            node_init: HashMap::new(),
             node_init_hash: SetHash::default(),
         }
     }
@@ -222,30 +246,32 @@ impl GraphMem {
         entry_points: Vec<EntryPoint>,
         layers: Vec<Layer>,
         last_update_seq_no: u64,
-        node_init_seq_no: HashMap<SerialId, u64>,
+        node_init: HashMap<SerialId, NodeInit>,
     ) -> Self {
         let mut node_init_hash = SetHash::default();
         // SetHash folds via commutative wrapping addition, so iteration order is
         // irrelevant to the result.
         #[allow(clippy::iter_over_hash_type)]
-        for (&serial, &seq) in &node_init_seq_no {
-            node_init_hash.add_unordered(Self::node_init_contribution(serial, seq));
+        for (&serial, &init) in &node_init {
+            node_init_hash.add_unordered(Self::node_init_contribution(serial, init));
         }
         GraphMem {
             entry_points,
             layers,
             last_update_seq_no,
-            node_init_seq_no,
+            node_init,
             node_init_hash,
         }
     }
 
-    /// Single source of truth for how a `(serial, seq)` content-clock entry is
-    /// folded into `node_init_hash` — used by both the bulk build in
-    /// `from_parts` and the incremental updates in `insert_apply`, so the two
-    /// can never drift.
-    fn node_init_contribution(serial: SerialId, seq: u64) -> (&'static str, SerialId, u64) {
-        ("node_init", serial, seq)
+    /// Single source of truth for how a content-clock entry is folded into
+    /// `node_init_hash` — used by both the bulk build in `from_parts` and the
+    /// incremental updates in `insert_apply`, so the two can never drift.
+    fn node_init_contribution(
+        serial: SerialId,
+        init: NodeInit,
+    ) -> (&'static str, SerialId, u64, VersionId) {
+        ("node_init", serial, init.seq_no, init.version)
     }
 
     /// Returns the sequence number that the next applied `GraphMutation` must
@@ -259,13 +285,21 @@ impl GraphMem {
     }
 
     pub fn from_precomputed(entry_points: Vec<(SerialId, usize)>, layers: Vec<Layer>) -> Self {
-        // Seed the content clock at 0 for every node so the read-path liveness
-        // filter (`is_active`) treats these trusted nodes as live; without this
-        // `get_active_links` would drop every edge.
-        let node_init_seq_no = layers
+        // Seed the content clock at seq 0 / version 0 for every node so the
+        // read-path liveness filter (`is_active`) treats these trusted nodes as
+        // live; without this `get_active_links` would drop every edge.
+        let node_init = layers
             .iter()
             .flat_map(|l| l.links.keys())
-            .map(|&v| (v, 0u64))
+            .map(|&v| {
+                (
+                    v,
+                    NodeInit {
+                        seq_no: 0,
+                        version: 0,
+                    },
+                )
+            })
             .collect();
         let entry_points = entry_points
             .into_iter()
@@ -274,7 +308,7 @@ impl GraphMem {
                 layer: ep.1,
             })
             .collect::<Vec<_>>();
-        GraphMem::from_parts(entry_points, layers, 0, node_init_seq_no)
+        GraphMem::from_parts(entry_points, layers, 0, node_init)
     }
 
     pub fn get_layers(&self) -> Vec<Layer> {
@@ -352,7 +386,7 @@ impl GraphMem {
                         layer.remove_node(sid);
                     }
                     self.entry_points.retain(|ep| ep.point != sid);
-                    if let Some(old) = self.node_init_seq_no.remove(&sid) {
+                    if let Some(old) = self.node_init.remove(&sid) {
                         self.node_init_hash
                             .remove(Self::node_init_contribution(sid, old));
                     }
@@ -379,12 +413,16 @@ impl GraphMem {
                     for layer_idx in 0..*height {
                         self.layers[layer_idx].create_node(sid, tick);
                     }
-                    if let Some(old) = self.node_init_seq_no.insert(sid, seq_no) {
+                    let init = NodeInit {
+                        seq_no,
+                        version: id.version_id(),
+                    };
+                    if let Some(old) = self.node_init.insert(sid, init) {
                         self.node_init_hash
                             .remove(Self::node_init_contribution(sid, old));
                     }
                     self.node_init_hash
-                        .add_unordered(Self::node_init_contribution(sid, seq_no));
+                        .add_unordered(Self::node_init_contribution(sid, init));
                 }
                 MutationOp::AddEdges { .. } | MutationOp::RemoveEdges { .. } => {}
             }
@@ -412,7 +450,7 @@ impl GraphMem {
                     let base_sid = base.serial_id();
                     let neighbor_sids: Vec<SerialId> =
                         to_add.iter().map(|v| v.serial_id()).collect();
-                    let content = &self.node_init_seq_no;
+                    let content = &self.node_init;
                     // Causal-construction guard: an edge to a node not yet in the
                     // content clock is stamped at this tick while the target's
                     // clock is minted later, so `is_active` reads it as stale and
@@ -464,7 +502,7 @@ impl GraphMem {
                     let base_sid = base.serial_id();
                     let remove_sids: Vec<SerialId> =
                         to_remove.iter().map(|v| v.serial_id()).collect();
-                    let content = &self.node_init_seq_no;
+                    let content = &self.node_init;
                     let layer_mut = &mut self.layers[layer];
                     if matches!(edge_type, EdgeType::Base | EdgeType::All) {
                         if layer_mut.get_links(&base_sid).is_none() {
@@ -569,20 +607,34 @@ impl GraphMem {
             .unwrap_or(&[])
     }
 
-    /// Neighbors of `base` at layer `lc` valid for traversal: `z` is kept iff
-    /// [`is_active`] (live and not content-refreshed past this neighborhood's
-    /// certified `seq_no`), so traversal skips reauthed/removed edges even in
-    /// neighborhoods no write has physically cleaned yet. Returns an owned `Vec`;
-    /// empty if `base`/`lc` absent.
-    pub fn get_active_links(&self, base: &SerialId, lc: usize) -> Vec<SerialId> {
+    /// Current `VectorId` of an in-graph node, from the graph's own content
+    /// clock. `None` means not live in the graph (never inserted, or removed) —
+    /// callers must not fabricate a version for it.
+    pub fn vector_id_of(&self, serial: SerialId) -> Option<VectorId> {
+        self.node_init
+            .get(&serial)
+            .map(|ni| VectorId::new(serial, ni.version))
+    }
+
+    /// Neighbors of `base` at layer `lc` valid for traversal, resolved to their
+    /// current `VectorId`s from the content clock: `z` is kept iff [`is_active`]
+    /// (live and not content-refreshed past this neighborhood's certified
+    /// `seq_no`), so traversal skips reauthed/removed edges even in
+    /// neighborhoods no write has physically cleaned yet. Returns an owned
+    /// `Vec`; empty if `base`/`lc` absent.
+    pub fn get_active_links(&self, base: &SerialId, lc: usize) -> Vec<VectorId> {
         let Some(nbhd) = self.layers.get(lc).and_then(|layer| layer.get_links(base)) else {
             return Vec::new();
         };
         let old_seq = nbhd.seq_no;
         nbhd.neighbors
             .iter()
-            .copied()
-            .filter(|z| is_active(&self.node_init_seq_no, *z, old_seq))
+            .filter_map(|&z| {
+                self.node_init
+                    .get(&z)
+                    .filter(|ni| ni.active_at(old_seq))
+                    .map(|ni| VectorId::new(z, ni.version))
+            })
             .collect()
     }
 
@@ -784,8 +836,8 @@ impl Serialize for GraphMem {
         state.serialize_field("entry_points", &self.entry_points)?;
         state.serialize_field("layers", &self.layers)?;
         state.serialize_field("last_update_seq_no", &self.last_update_seq_no)?;
-        let sorted_node_init: BTreeMap<_, _> = self.node_init_seq_no.iter().collect();
-        state.serialize_field("node_init_seq_no", &sorted_node_init)?;
+        let sorted_node_init: BTreeMap<_, _> = self.node_init.iter().collect();
+        state.serialize_field("node_init", &sorted_node_init)?;
         state.end()
     }
 }
@@ -1060,9 +1112,9 @@ where
         .collect();
 
     let new_node_last_update_seq_no = graph
-        .node_init_seq_no
+        .node_init
         .into_iter()
-        .map(|(id, seq)| (vector_map(id), seq))
+        .map(|(id, init)| (vector_map(id), init))
         .collect();
 
     GraphMem::from_parts(
@@ -1095,13 +1147,28 @@ mod tests {
     /// different edges via `is_active` could agree on the checksum.
     #[test]
     fn checksum_folds_content_and_neighborhood_clocks() {
-        use super::{EntryPoint, Layer};
+        use super::{EntryPoint, Layer, NodeInit};
         // node1 neighborhood seq = `nbhd_seq`; node1 content clock = `content`.
-        let build = |nbhd_seq: u64, content: u64| -> GraphMem {
+        let build = |nbhd_seq: u64, content: u64, version: i16| -> GraphMem {
             let mut layer = Layer::new();
             layer.set_links_trusted(1u32, vec![2u32], nbhd_seq);
             layer.set_links_trusted(2u32, vec![], 0);
-            let node_init = HashMap::from([(1u32, content), (2u32, 0u64)]);
+            let node_init = HashMap::from([
+                (
+                    1u32,
+                    NodeInit {
+                        seq_no: content,
+                        version,
+                    },
+                ),
+                (
+                    2u32,
+                    NodeInit {
+                        seq_no: 0,
+                        version: 0,
+                    },
+                ),
+            ]);
             GraphMem::from_parts(
                 vec![EntryPoint { point: 1, layer: 0 }],
                 vec![layer],
@@ -1110,17 +1177,22 @@ mod tests {
             )
         };
 
-        let base = build(0, 0);
-        assert_eq!(base.checksum(), build(0, 0).checksum(), "deterministic");
+        let base = build(0, 0, 0);
+        assert_eq!(base.checksum(), build(0, 0, 0).checksum(), "deterministic");
         assert_ne!(
             base.checksum(),
-            build(5, 0).checksum(),
+            build(5, 0, 0).checksum(),
             "per-neighborhood seq_no must be folded into the checksum"
         );
         assert_ne!(
             base.checksum(),
-            build(0, 7).checksum(),
-            "node_init_seq_no (content clock) must be folded into the checksum"
+            build(0, 7, 0).checksum(),
+            "node_init (content clock) must be folded into the checksum"
+        );
+        assert_ne!(
+            base.checksum(),
+            build(0, 0, 3).checksum(),
+            "node version must be folded into the checksum"
         );
     }
 
@@ -1179,13 +1251,6 @@ mod tests {
             distance2: &Self::DistanceRef,
         ) -> Result<bool> {
             Ok(*distance1 < *distance2)
-        }
-
-        async fn only_valid_entry_points(
-            &mut self,
-            entry_points: Vec<(VectorId, usize)>,
-        ) -> Vec<(VectorId, usize)> {
-            entry_points
         }
 
         async fn serials_to_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<Option<VectorId>> {
@@ -1515,7 +1580,7 @@ mod tests {
                 }],
             })
             .unwrap();
-        assert_eq!(graph.get_active_links(&1, 0), vec![2u32]);
+        assert_eq!(graph.get_active_links(&1, 0), vec![b]);
 
         // Reauth b (content[b] -> 3) without touching a.
         graph
@@ -1530,7 +1595,7 @@ mod tests {
             graph.layers[0].get_links(&1).unwrap().neighbors().to_vec(),
             vec![2u32]
         );
-        assert_eq!(graph.get_active_links(&1, 0), Vec::<SerialId>::new());
+        assert_eq!(graph.get_active_links(&1, 0), Vec::<VectorId>::new());
     }
 
     /// Read-path liveness: `get_active_links` drops a dangling edge to a removed
@@ -1579,19 +1644,20 @@ mod tests {
             graph.layers[0].get_links(&1).unwrap().neighbors().to_vec(),
             vec![2u32]
         );
-        assert_eq!(graph.get_active_links(&1, 0), Vec::<SerialId>::new());
+        assert_eq!(graph.get_active_links(&1, 0), Vec::<VectorId>::new());
     }
 
     /// Read-path selectivity: a live neighbor survives while a content-stale
     /// neighbor is dropped. Guards against `get_active_links` blanket-emptying
     /// (e.g. an inverted `is_active`), which the single-neighbor tests above
-    /// would not catch.
+    /// would not catch. `c` carries a non-zero version, pinning that the
+    /// surviving link resolves to the version its `AddNode` carried.
     #[test]
     fn get_active_links_keeps_live_drops_stale() {
         let mut graph = GraphMem::new();
         let a = VectorId::from_serial_id(1);
         let b = VectorId::from_serial_id(2);
-        let c = VectorId::from_serial_id(3);
+        let c = VectorId::new(3, 5);
         let node = |id| MutationOp::AddNode {
             id,
             height: 1,
@@ -1616,7 +1682,7 @@ mod tests {
                 }],
             })
             .unwrap();
-        assert_eq!(graph.get_active_links(&1, 0), vec![2u32, 3u32]);
+        assert_eq!(graph.get_active_links(&1, 0), vec![b, c]);
 
         // Reauth only b (content[b] -> 3); a and c untouched.
         graph
@@ -1626,8 +1692,11 @@ mod tests {
             })
             .unwrap();
 
-        // c (content[c]=1 <= 2) survives; b (content[b]=3 > 2) is skipped.
-        assert_eq!(graph.get_active_links(&1, 0), vec![3u32]);
+        // c (content[c]=1 <= 2) survives at its inserted version; b
+        // (content[b]=3 > 2) is skipped.
+        assert_eq!(graph.get_active_links(&1, 0), vec![c]);
+        assert_eq!(graph.vector_id_of(3), Some(c));
+        assert_eq!(graph.vector_id_of(4), None, "never-inserted serial");
     }
 
     /// `node_init_hash` is maintained incrementally by `insert_apply` but
@@ -1738,8 +1807,8 @@ mod tests {
             ],
         })
         .unwrap();
-        assert_eq!(g.get_active_links(&1, 0), vec![2, 3]);
-        assert_eq!(g.get_active_links(&2, 0), vec![1]);
+        assert_eq!(g.get_active_links(&1, 0), vec![v(2), v(3)]);
+        assert_eq!(g.get_active_links(&2, 0), vec![v(1)]);
 
         // Reauth node 3 (bumps its content clock) and delete node 4, so the aged
         // graph carries a non-uniform content clock and a removed node.
@@ -1813,7 +1882,7 @@ mod tests {
         })
         .unwrap();
         assert_eq!(g.get_raw_links(&1, 0), &[2u32, 3u32], "stale 3 still raw");
-        assert_eq!(g.get_active_links(&1, 0), vec![2], "3 masked as stale");
+        assert_eq!(g.get_active_links(&1, 0), vec![v(2)], "3 masked as stale");
 
         // RemoveEdges Base(1 -/-> 2): retain drops explicit 2 AND stale 3.
         g.insert_apply(&GraphMutation {
@@ -1901,7 +1970,7 @@ mod tests {
             ops: vec![node(v(1)), node(v(2)), node(v(3))],
         })
         .unwrap();
-        let clock_before = g.node_init_seq_no.clone();
+        let clock_before = g.node_init.clone();
 
         // All(1 <-> [2@v7, 3@v2]): versions dropped; 1's list keys on {2,3}, and
         // 1 is back-linked into 2 and 3 by bare serial.
@@ -1931,7 +2000,7 @@ mod tests {
             "back-edge keyed on serial 3"
         );
         assert_eq!(
-            g.node_init_seq_no, clock_before,
+            g.node_init, clock_before,
             "AddEdges must not perturb the content clock"
         );
 
@@ -2019,7 +2088,7 @@ mod tests {
         assert_eq!(g.get_entry_points(), None, "entry-point list emptied");
         // L1 now empty, so fall back to min serial of L0.
         assert_eq!(g.get_temporary_entry_point(), Some((2u32, 0)));
-        assert!(!g.node_init_seq_no.contains_key(&1), "content[1] dropped");
+        assert!(!g.node_init.contains_key(&1), "content[1] dropped");
     }
 
     #[test]

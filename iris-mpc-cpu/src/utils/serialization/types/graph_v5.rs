@@ -6,17 +6,25 @@ use std::collections::{BTreeMap, HashMap};
 /// serialization type, kept for long-term compatibility and portability of
 /// serialized data.
 ///
-/// `Serialize` is hand-written: both field order AND the `node_init_seq_no`
+/// `Serialize` is hand-written: both field order AND the `node_init`
 /// map ordering must match `GraphMem`'s own serializer, because genesis writes
 /// `[GraphMem; 2]` directly while the materializer and hawk restart read it
-/// back as `GraphV5`. A derived impl would emit `node_init_seq_no` in HashMap
+/// back as `GraphV5`. A derived impl would emit `node_init` in HashMap
 /// iteration order, diverging from `GraphMem` and breaking checkpoint BLAKE3.
 #[derive(Default, Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct GraphV5 {
     pub entry_points: Vec<EntryPoint>,
     pub layers: Vec<Layer>,
     pub last_update_seq_no: u64,
-    pub node_init_seq_no: HashMap<SerialId, u64>,
+    pub node_init: HashMap<SerialId, NodeInit>,
+}
+
+/// Type associated with the `GraphV5` serialization type. Wire layout must
+/// match `layered_graph::NodeInit` (u64 seq_no, then i16 version).
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeInit {
+    pub seq_no: u64,
+    pub version: i16,
 }
 
 impl Serialize for GraphV5 {
@@ -25,8 +33,8 @@ impl Serialize for GraphV5 {
         state.serialize_field("entry_points", &self.entry_points)?;
         state.serialize_field("layers", &self.layers)?;
         state.serialize_field("last_update_seq_no", &self.last_update_seq_no)?;
-        let sorted_node_init: BTreeMap<_, _> = self.node_init_seq_no.iter().collect();
-        state.serialize_field("node_init_seq_no", &sorted_node_init)?;
+        let sorted_node_init: BTreeMap<_, _> = self.node_init.iter().collect();
+        state.serialize_field("node_init", &sorted_node_init)?;
         state.end()
     }
 }

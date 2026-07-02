@@ -396,16 +396,20 @@ impl HnswSearcher {
     ) -> Result<(SortedNeighborhood<V>, usize, usize, UpdateEntryPoint)> {
         let max_graph_layer = self.max_graph_layer;
 
-        // Get all valid entry points
-        let ep_serials: Vec<_> = graph.entry_points.iter().map(|ep| ep.point).collect();
-        let entry_points: Vec<(VectorId, usize)> = store
-            .serials_to_vector_ids(&ep_serials)
-            .await
-            .into_iter()
-            .zip(graph.entry_points.iter().map(|ep| ep.layer))
-            .filter_map(|(vid, layer)| vid.map(|v| (v, layer)))
+        // Entry points resolve from the graph's own content clock: a serial
+        // without a clock entry is not live (removed, or pruned at migration)
+        // and is skipped rather than resolved to a fabricated version.
+        let entry_points: Vec<(VectorId, usize)> = graph
+            .entry_points
+            .iter()
+            .filter_map(|ep| graph.vector_id_of(ep.point).map(|v| (v, ep.layer)))
             .collect();
-        let entry_points = store.only_valid_entry_points(entry_points).await;
+        #[cfg(debug_assertions)]
+        Self::debug_assert_graph_resolution_matches_store(
+            store,
+            entry_points.iter().map(|(v, _)| *v),
+        )
+        .await;
         let (ep_vectors, ep_layers): (Vec<VectorId>, Vec<usize>) = entry_points.into_iter().unzip();
         metrics::gauge!("entry_points_count").set(ep_vectors.len() as f64);
 
@@ -417,7 +421,9 @@ impl HnswSearcher {
         }
 
         let (W, n_layers) = if ep_vectors.is_empty() {
-            let ep = graph.get_temporary_entry_point();
+            let ep = graph
+                .get_temporary_entry_point()
+                .and_then(|(serial, layer)| graph.vector_id_of(serial).map(|v| (v, layer)));
             let (W, layer) = self.init_nbhd_from_ep(store, ep, query).await?;
 
             // Layers are 0-indexed, so number of graph layers is one greater than the entry point layer
@@ -450,35 +456,46 @@ impl HnswSearcher {
         Ok((W, n_layers, bounded_insertion_layer, update_ep))
     }
 
-    /// For a specified entry point, returns an initialized singleton candidate
-    /// neighborhood containing the entry point, and the graph layer of this
-    /// neighborhood.
+    /// For a specified entry point (already resolved via the graph's content
+    /// clock), returns an initialized singleton candidate neighborhood
+    /// containing the entry point, and the graph layer of this neighborhood.
     ///
     /// If `ep` is specified as `None` (no entry point available), then returns
     /// an empty neighborhood and `None` for its layer.
     async fn init_nbhd_from_ep<V: VectorStore>(
         &self,
         store: &mut V,
-        ep: Option<(SerialId, usize)>,
+        ep: Option<(VectorId, usize)>,
         query: &V::QueryRef,
     ) -> Result<(SortedNeighborhood<V>, Option<usize>)> {
-        if let Some((entry_point, layer)) = ep {
-            // A resolver `None` means the entry point is no longer live; treat it
-            // as no entry point rather than fabricating a version.
-            if let Some(vector_id) = store
-                .serials_to_vector_ids(&[entry_point])
-                .await
-                .pop()
-                .flatten()
-            {
-                let distance = store.eval_distance(query, &vector_id).await?;
-                let W = SortedNeighborhood::from_singleton((vector_id, distance));
-                Ok((W, Some(layer)))
-            } else {
-                Ok((SortedNeighborhood::new(), None))
-            }
+        if let Some((vector_id, layer)) = ep {
+            let distance = store.eval_distance(query, &vector_id).await?;
+            let W = SortedNeighborhood::from_singleton((vector_id, distance));
+            Ok((W, Some(layer)))
         } else {
             Ok((SortedNeighborhood::new(), None))
+        }
+    }
+
+    /// Debug-only cross-check of the graph's content-clock resolution against
+    /// the store registry. The registry may run *ahead* of the graph clock
+    /// within a batch or during genesis delta replay (registry writes land
+    /// before the corresponding graph mutation), so the invariant is
+    /// asymmetric: a graph-live serial must be registry-present, and the graph
+    /// version must never exceed the registry's.
+    #[cfg(debug_assertions)]
+    async fn debug_assert_graph_resolution_matches_store<V: VectorStore>(
+        store: &V,
+        resolved: impl Iterator<Item = VectorId>,
+    ) {
+        let resolved: Vec<VectorId> = resolved.collect();
+        let serials: Vec<SerialId> = resolved.iter().map(|v| v.serial_id()).collect();
+        let from_store = store.serials_to_vector_ids(&serials).await;
+        for (graph_v, store_v) in resolved.iter().zip(from_store) {
+            debug_assert!(
+                store_v.is_some_and(|s| s.version_id() >= graph_v.version_id()),
+                "graph content clock ahead of the store registry: graph {graph_v:?}, store {store_v:?}"
+            );
         }
     }
 
@@ -999,13 +1016,11 @@ impl HnswSearcher {
         let mut init_nodes = Vec::from_iter(W.as_ref().iter().map(|(e, _eq)| *e));
         let mut open_idx = 0;
         while open_idx < init_nodes.len() && init_nodes.len() < ef {
-            // get valid, unvisited neighbors of current node at `open_idx`
-            let active = graph.get_active_links(&init_nodes[open_idx].serial_id(), lc);
-            let nbhd: Vec<VectorId> = store
-                .serials_to_vector_ids(&active)
-                .await
+            // get valid, unvisited neighbors of current node at `open_idx`,
+            // resolved to current VectorIds by the graph's content clock
+            let nbhd: Vec<VectorId> = graph
+                .get_active_links(&init_nodes[open_idx].serial_id(), lc)
                 .into_iter()
-                .flatten()
                 .filter(|x| !init_nodes.contains(x))
                 .collect();
 
@@ -1285,13 +1300,9 @@ impl HnswSearcher {
         query: &V::QueryRef,
         visited: &mut HashSet<VectorId>,
     ) -> Result<Vec<(VectorId, V::DistanceRef)>> {
-        let neighbors = graph.get_active_links(&node.serial_id(), lc);
-
-        let unvisited_neighbors: Vec<VectorId> = store
-            .serials_to_vector_ids(&neighbors)
-            .await
+        let unvisited_neighbors: Vec<VectorId> = graph
+            .get_active_links(&node.serial_id(), lc)
             .into_iter()
-            .flatten()
             .filter(|e| visited.insert(*e))
             .collect();
 
@@ -1328,15 +1339,18 @@ impl HnswSearcher {
         let mut opened_nodes = Vec::with_capacity(nodes.len());
 
         for node in nodes {
-            let neighbors = graph.get_active_links(&node.serial_id(), lc);
-
-            let unvisited_neighbors: Vec<VectorId> = store
-                .serials_to_vector_ids(&neighbors)
-                .await
+            let unvisited_neighbors: Vec<VectorId> = graph
+                .get_active_links(&node.serial_id(), lc)
                 .into_iter()
-                .flatten()
                 .filter(|e| visited.insert(*e))
                 .collect();
+
+            #[cfg(debug_assertions)]
+            Self::debug_assert_graph_resolution_matches_store(
+                store,
+                unvisited_neighbors.iter().copied(),
+            )
+            .await;
 
             valid_neighbors.extend(unvisited_neighbors);
             opened_nodes.push(*node);
@@ -1515,8 +1529,9 @@ impl HnswSearcher {
     /// Ranks over active neighborhoods (`get_active_links`), not raw: compaction
     /// evicts physically and an evicted live edge cannot be recovered, so
     /// selection must never see a content-stale or removed edge (read-time masking
-    /// wouldn't undo the eviction). Registry-absent serials are dropped by the
-    /// resolver. This reproduces main's pre-compaction `only_valid_vectors` clean.
+    /// wouldn't undo the eviction). Clock-absent serials are dropped by the
+    /// active filter. This reproduces main's pre-compaction `only_valid_vectors`
+    /// clean.
     pub async fn compact_batch<V: VectorStore>(
         &self,
         store: &mut V,
@@ -1527,13 +1542,7 @@ impl HnswSearcher {
         // exceeding M_limit on their layer.
         let mut oversized: Vec<(VectorId, usize, Vec<VectorId>)> = Vec::new();
         for (id, layer) in candidates {
-            let active = graph.get_active_links(&id.serial_id(), *layer);
-            let nbhd: Vec<VectorId> = store
-                .serials_to_vector_ids(&active)
-                .await
-                .into_iter()
-                .flatten()
-                .collect();
+            let nbhd: Vec<VectorId> = graph.get_active_links(&id.serial_id(), *layer);
             if nbhd.len() > self.params.get_M_limit(*layer) {
                 oversized.push((*id, *layer, nbhd));
             }

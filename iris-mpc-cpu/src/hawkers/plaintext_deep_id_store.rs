@@ -307,14 +307,6 @@ impl VectorStore for PlaintextDeepIDStore {
         Ok(results)
     }
 
-    async fn only_valid_entry_points(
-        &mut self,
-        mut entry_points: Vec<(VectorId, usize)>,
-    ) -> Vec<(VectorId, usize)> {
-        entry_points.retain(|(v, _)| self.storage.contains(v));
-        entry_points
-    }
-
     async fn serials_to_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<Option<VectorId>> {
         serial_ids
             .iter()
@@ -442,15 +434,6 @@ impl VectorStore for SharedPlaintextDeepIDStore {
         }
         metrics::counter!("less_than").increment(distances.len() as u64);
         Ok(results)
-    }
-
-    async fn only_valid_entry_points(
-        &mut self,
-        mut entry_points: Vec<(VectorId, usize)>,
-    ) -> Vec<(VectorId, usize)> {
-        let store = self.storage.read().await;
-        entry_points.retain(|(v, _)| store.contains(v));
-        entry_points
     }
 
     async fn serials_to_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<Option<VectorId>> {

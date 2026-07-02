@@ -156,12 +156,27 @@ impl<D: DistanceOps> VectorStore for PlaintextStore<D> {
         vector: &VectorId,
     ) -> Result<Self::DistanceRef> {
         debug!(event_type = EvaluateDistance.id());
-        let vector_code = self.storage.get_vector(vector).ok_or_else(|| {
-            eyre::eyre!(
-                "Vector ID not found in store for serial {}",
-                vector.serial_id()
-            )
-        })?;
+        // A present serial at a newer version is the sanctioned lag window (the
+        // store runs ahead of the graph clock until the graph mutation lands):
+        // evaluate against the empty iris, which matches nothing — mirroring
+        // the shared-store `get_vector_or_empty` fetch. An absent serial is a
+        // genuine error.
+        let vector_code = match self.storage.get_vector(vector) {
+            Some(code) => code,
+            None if self
+                .storage
+                .get_current_version(vector.serial_id())
+                .is_some() =>
+            {
+                self.storage.get_vector_or_empty(vector)
+            }
+            None => {
+                return Err(eyre::eyre!(
+                    "Vector ID not found in store for serial {}",
+                    vector.serial_id()
+                ))
+            }
+        };
         let distance = D::plaintext_distance(vector_code, query, self.distance_mode);
         Ok(distance)
     }
@@ -201,14 +216,6 @@ impl<D: DistanceOps> VectorStore for PlaintextStore<D> {
                     .map(|version| VectorId::new(serial_id, version))
             })
             .collect()
-    }
-
-    async fn only_valid_entry_points(
-        &mut self,
-        mut entry_points: Vec<(VectorId, usize)>,
-    ) -> Vec<(VectorId, usize)> {
-        entry_points.retain(|(v, _)| self.storage.contains(v));
-        entry_points
     }
 }
 
@@ -307,13 +314,21 @@ impl<D: DistanceOps> VectorStore for SharedPlaintextStore<D> {
     ) -> Result<Vec<Self::DistanceRef>> {
         debug!(event_type = EvaluateDistance.id());
         let store = self.storage.read().await;
+        // See `PlaintextStore::eval_distance` for the lag-window fallback.
         let vector_codes = vectors
             .iter()
             .map(|v| {
                 let serial_id = v.serial_id();
-                store.get_vector(v).ok_or_else(|| {
-                    eyre::eyre!("Vector ID not found in store for serial {}", serial_id)
-                })
+                match store.get_vector(v) {
+                    Some(code) => Ok(code),
+                    None if store.get_current_version(serial_id).is_some() => {
+                        Ok(store.get_vector_or_empty(v))
+                    }
+                    None => Err(eyre::eyre!(
+                        "Vector ID not found in store for serial {}",
+                        serial_id
+                    )),
+                }
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(vector_codes
@@ -358,15 +373,6 @@ impl<D: DistanceOps> VectorStore for SharedPlaintextStore<D> {
                     .map(|version| VectorId::new(serial_id, version))
             })
             .collect()
-    }
-
-    async fn only_valid_entry_points(
-        &mut self,
-        mut entry_points: Vec<(VectorId, usize)>,
-    ) -> Vec<(VectorId, usize)> {
-        let storage = self.storage.read().await;
-        entry_points.retain(|(v, _)| storage.contains(v));
-        entry_points
     }
 }
 

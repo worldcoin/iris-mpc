@@ -67,12 +67,6 @@ pub trait VectorStore: Debug {
     /// to help comparison to other vectors.
     async fn vectors_as_queries(&mut self, vectors: Vec<VectorId>) -> Result<Vec<Self::QueryRef>>;
 
-    /// Retain entrypoints (vector id, layer) whose vector id is valid
-    async fn only_valid_entry_points(
-        &mut self,
-        entry_points: Vec<(VectorId, usize)>,
-    ) -> Vec<(VectorId, usize)>;
-
     /// Evaluate the distance between pairs of (query, vector), in batch.
     /// The default implementation is a loop over `eval_distance`.
     /// Override for more efficient batch distance evaluations.
@@ -210,9 +204,11 @@ pub trait VectorStore: Debug {
     /// or `None` if the serial is not currently live in the registry/storage.
     /// Returns one entry per input serial, positionally aligned. Registry-backed
     /// stores take the version lock via an awaited read (never `try_read`), so
-    /// resolution reflects the true current version. A serial absent from the
-    /// registry resolves to `None` (dropped by the caller), matching the old
-    /// `only_valid_vectors` semantics — never fabricated at version 0.
+    /// resolution reflects the true current version.
+    ///
+    /// Traversal resolves from the graph's own content clock
+    /// (`GraphMem::vector_id_of` / `get_active_links`); this method is the
+    /// registry side of the debug-build cross-check that the two sources agree.
     async fn serials_to_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<Option<VectorId>>;
 }
 
