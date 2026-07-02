@@ -1,6 +1,7 @@
-# POP-3905 — anon-stats retention CronJob (stage, ampc-hnsw). common-cronjob chart (1.8.5)
-# via wf-cluster-apps, mirroring ampc-hnsw-db-exporter. Per-cluster env + the
-# attachSecurityGroupPolicy that lets the pod reach the anon-stats Aurora live per-node.
+# POP-3905 — anon-stats retention CronJob (stage, ampc-hnsw). common-cronjob chart (1.11.0,
+# worldcoin-foundation/common-cronjob) via wf-cluster-apps, mirroring ampc-hnsw-db-exporter.
+# Per-cluster env (map format) + the attachSecurityGroupPolicy that lets the pod reach the
+# anon-stats Aurora live per-node.
 image: "ghcr.io/worldcoin/retention-reaper:latest"
 
 replicaCount: 1
