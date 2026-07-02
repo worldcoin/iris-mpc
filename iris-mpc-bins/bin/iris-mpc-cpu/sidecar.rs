@@ -61,8 +61,10 @@ pub struct SidecarArgs {
     #[clap(long, default_value = "10")]
     pub retry_interval_secs: u64,
 
-    /// Per-peer-round timeout passed to the protocol, in seconds.
-    #[clap(long, default_value = "10")]
+    /// Per-peer-round timeout passed to the protocol, in seconds. Generous:
+    /// the sidecar is a daily one-shot, and each round's window also contains
+    /// per-party DB queries, so a tight timeout only buys spurious desyncs.
+    #[clap(long, default_value = "120")]
     pub peer_round_timeout_secs: u64,
 
     /// Wall-clock bound on establishing the peer mesh (control channel /

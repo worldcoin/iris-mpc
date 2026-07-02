@@ -2,7 +2,7 @@ args:
   - "--party-index=2"
   - "--addresses=sidecar.0.dev.hnsw.worldcoin.dev:5000,sidecar.1.dev.hnsw.worldcoin.dev:5001,0.0.0.0:5002"
   - "--outbound-addrs=sidecar.0.dev.hnsw.worldcoin.dev:5000,sidecar.1.dev.hnsw.worldcoin.dev:5001,sidecar.2.dev.hnsw.worldcoin.dev:5002"
-  - "--peer-round-timeout-secs=30"
+  - "--peer-round-timeout-secs=120"
   - "--make-connections-timeout-secs=300"
   - "--min-mutations-per-cycle=1"
   - "--one-shot"
