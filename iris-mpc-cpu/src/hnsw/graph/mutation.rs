@@ -1,4 +1,4 @@
-use iris_mpc_common::VectorId;
+use iris_mpc_common::{SerialId, VectorId};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,19 +41,23 @@ pub enum MutationOp {
     RemoveNode {
         id: VectorId,
     },
-    /// Every `base` and `neighbors` node must already exist (its `AddNode` applied
-    /// in an earlier mutation or earlier in this op list). An edge to a
-    /// not-yet-created node is dropped as stale — see `GraphMem::insert_apply`
-    /// (causal construction).
+    /// Every `base` and `neighbors` node must already exist: its `AddNode`
+    /// applied in an earlier mutation, or anywhere in this op list (node ops
+    /// apply before edge ops). An edge to a not-yet-created node is treated as
+    /// stale at read time — see `GraphMem::apply_new` (causal construction).
+    ///
+    /// Edge ops carry bare serials: node identity/version lives in `AddNode`/
+    /// `RemoveNode` (the content-clock source), and edges only select
+    /// neighborhood members.
     AddEdges {
-        base: VectorId,
-        neighbors: Vec<VectorId>,
+        base: SerialId,
+        neighbors: Vec<SerialId>,
         layer: usize,
         edge_type: EdgeType,
     },
     RemoveEdges {
-        base: VectorId,
-        neighbors: Vec<VectorId>,
+        base: SerialId,
+        neighbors: Vec<SerialId>,
         layer: usize,
         edge_type: EdgeType,
     },
@@ -104,7 +108,7 @@ impl UnstampedMutation {
     /// in this mutation. Used as the candidate set for batch compaction. The
     /// returned Vec is the raw walk and may contain duplicates; callers fold
     /// into a set to dedup.
-    pub fn expanded_neighborhoods(&self) -> Vec<(VectorId, usize)> {
+    pub fn expanded_neighborhoods(&self) -> Vec<(SerialId, usize)> {
         let mut out = Vec::new();
         for op in &self.ops {
             if let MutationOp::AddEdges {
@@ -314,11 +318,6 @@ mod tests {
 
     use super::{EdgeType, MutationOp, UnstampedMutation, UpdateEntryPoint};
 
-    #[allow(dead_code)]
-    fn mk_vector_id(id: u32) -> VectorId {
-        VectorId::from_serial_id(id)
-    }
-
     fn mk_add_edges(
         base: u32,
         neighbors: Vec<u32>,
@@ -326,8 +325,8 @@ mod tests {
         edge_type: EdgeType,
     ) -> MutationOp {
         MutationOp::AddEdges {
-            base: mk_vector_id(base),
-            neighbors: neighbors.into_iter().map(mk_vector_id).collect(),
+            base,
+            neighbors,
             layer,
             edge_type,
         }
@@ -340,14 +339,7 @@ mod tests {
         };
         let mut got = mutation.expanded_neighborhoods();
         got.sort();
-        assert_eq!(
-            got,
-            vec![
-                (mk_vector_id(1), 0),
-                (mk_vector_id(2), 0),
-                (mk_vector_id(3), 0)
-            ]
-        );
+        assert_eq!(got, vec![(1, 0), (2, 0), (3, 0)]);
     }
 
     #[test]
@@ -355,10 +347,7 @@ mod tests {
         let mutation = UnstampedMutation {
             ops: vec![mk_add_edges(1, vec![2, 3], 1, EdgeType::Base)],
         };
-        assert_eq!(
-            mutation.expanded_neighborhoods(),
-            vec![(mk_vector_id(1), 1)]
-        );
+        assert_eq!(mutation.expanded_neighborhoods(), vec![(1, 1)]);
     }
 
     #[test]
@@ -368,7 +357,7 @@ mod tests {
         };
         let mut got = mutation.expanded_neighborhoods();
         got.sort();
-        assert_eq!(got, vec![(mk_vector_id(2), 2), (mk_vector_id(3), 2)]);
+        assert_eq!(got, vec![(2, 2), (3, 2)]);
     }
 
     #[test]
@@ -376,16 +365,16 @@ mod tests {
         let mutation = UnstampedMutation {
             ops: vec![
                 MutationOp::AddNode {
-                    id: mk_vector_id(1),
+                    id: VectorId::from_serial_id(1),
                     height: 1,
                     update_ep: UpdateEntryPoint::False,
                 },
                 MutationOp::RemoveNode {
-                    id: mk_vector_id(2),
+                    id: VectorId::from_serial_id(2),
                 },
                 MutationOp::RemoveEdges {
-                    base: mk_vector_id(3),
-                    neighbors: vec![mk_vector_id(4), mk_vector_id(5)],
+                    base: 3,
+                    neighbors: vec![4, 5],
                     layer: 0,
                     edge_type: EdgeType::All,
                 },
@@ -394,6 +383,6 @@ mod tests {
         };
         let mut got = mutation.expanded_neighborhoods();
         got.sort();
-        assert_eq!(got, vec![(mk_vector_id(6), 0), (mk_vector_id(7), 0)]);
+        assert_eq!(got, vec![(6, 0), (7, 0)]);
     }
 }

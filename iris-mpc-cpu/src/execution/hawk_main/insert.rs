@@ -11,7 +11,7 @@ use crate::hnsw::{
 use super::VecRequests;
 
 use eyre::{bail, Result};
-use iris_mpc_common::VectorId;
+use iris_mpc_common::{SerialId, VectorId};
 use itertools::izip;
 use std::collections::BTreeSet;
 
@@ -101,7 +101,7 @@ pub async fn insert<V: VectorStoreMut>(
 
     let mut slot_outputs: Vec<Vec<ConnectPlanV>> = vec![vec![]; insert_plans.len()];
     let mut slot_inserted_ids: Vec<Option<VectorId>> = vec![None; insert_plans.len()];
-    let mut batch_expanded: BTreeSet<(VectorId, usize)> = BTreeSet::new();
+    let mut batch_expanded: BTreeSet<(SerialId, usize)> = BTreeSet::new();
 
     for (idx, (plan, insert_id, replace_id)) in
         izip!(insert_plans, insert_ids, replace_ids).enumerate()
@@ -143,9 +143,9 @@ pub async fn insert<V: VectorStoreMut>(
             }];
             for (layer_idx, layer_links) in links.into_iter().enumerate() {
                 ops.push(MutationOp::AddEdges {
-                    base: inserted_id,
+                    base: inserted_id.serial_id(),
                     layer: layer_idx,
-                    neighbors: layer_links,
+                    neighbors: layer_links.iter().map(|v| v.serial_id()).collect(),
                     edge_type: EdgeType::All,
                 });
             }
@@ -671,11 +671,11 @@ mod tests {
                 .iter()
                 .enumerate()
                 .filter(|(j, _)| *j != i)
-                .map(|(_, v)| *v)
+                .map(|(_, v)| v.serial_id())
                 .collect();
             assert_eq!(neighbors.len(), m_limit);
             setup_ops.push(MutationOp::AddEdges {
-                base: id,
+                base: id.serial_id(),
                 layer: 0,
                 neighbors,
                 edge_type: EdgeType::Base,
@@ -748,5 +748,106 @@ mod tests {
             max_seq_overall, last_seq_slot0,
             "global compaction mutation should be the LAST entry in the last non-empty slot"
         );
+
+        // The minted stream — setup plus slot mutations, including the
+        // compaction-minted RemoveEdges — replays literally to the same graph.
+        let mut fresh: GraphMem = GraphMem::new();
+        fresh.insert_apply(&setup).expect("replay setup");
+        for m in grouped.iter().flatten() {
+            fresh.insert_apply(m).expect("replay slot mutation");
+        }
+        assert_eq!(
+            graph.checksum(),
+            fresh.checksum(),
+            "replay diverged from mint"
+        );
+    }
+
+    /// A replace (reauth-style) slot leaves the old node's back-edge dangling in
+    /// its neighbor's list; the new node's back-edge touch drops it at mint and
+    /// must record the drop explicitly, so the persisted mutations replay
+    /// literally to the identical graph.
+    #[tokio::test]
+    async fn test_insert_replace_mutations_replay_literally_to_same_graph() {
+        use crate::hnsw::graph::mutation::UnstampedMutation;
+
+        let mut store = PlaintextStore::default();
+        let mut graph: GraphMem = GraphMem::new();
+        let searcher = HnswSearcher::new_with_test_parameters();
+        let mut wal: Vec<GraphMutation> = Vec::new();
+
+        // Seed: A and B as symmetrically-linked graph nodes, minted so the
+        // seeding is itself part of the replayable stream.
+        let a = store.insert(&Arc::new(IrisCode::default())).await;
+        let b = store.insert(&Arc::new(IrisCode::default())).await;
+        wal.push(
+            graph
+                .apply_new(UnstampedMutation {
+                    ops: vec![
+                        MutationOp::AddNode {
+                            id: a,
+                            height: 1,
+                            update_ep: UpdateEntryPoint::Append { layer: 0 },
+                        },
+                        MutationOp::AddNode {
+                            id: b,
+                            height: 1,
+                            update_ep: UpdateEntryPoint::False,
+                        },
+                    ],
+                })
+                .unwrap(),
+        );
+        wal.push(
+            graph
+                .apply_new(UnstampedMutation {
+                    ops: vec![MutationOp::AddEdges {
+                        base: a.serial_id(),
+                        neighbors: vec![b.serial_id()],
+                        layer: 0,
+                        edge_type: EdgeType::All,
+                    }],
+                })
+                .unwrap(),
+        );
+
+        // Replace A with a new vector linked to B: B's list still holds the
+        // dangling edge to A when the new node's back-edge touches it.
+        let plans = vec![Some(dummy_insert_plan_with_links(
+            UpdateEntryPoint::False,
+            vec![vec![b]],
+        ))];
+        let insert_ids: VecRequests<Option<VectorId>> = vec![None];
+        let replace_ids: VecRequests<Option<VectorId>> = vec![Some(a)];
+        let (grouped, _) = insert(
+            &mut store,
+            &mut graph,
+            &searcher,
+            plans,
+            &insert_ids,
+            &replace_ids,
+        )
+        .await
+        .expect("insert should succeed");
+        wal.extend(grouped.into_iter().flatten());
+
+        // The dangling-A drop from B's list was recorded explicitly.
+        assert!(
+            wal.iter().any(|m| m.ops.iter().any(|op| matches!(
+                op,
+                MutationOp::RemoveEdges { base, neighbors, .. }
+                    if *base == b.serial_id() && *neighbors == vec![a.serial_id()]
+            ))),
+            "expected a synthesized RemoveEdges for B's dangling edge to A"
+        );
+
+        let mut fresh: GraphMem = GraphMem::new();
+        fresh.insert_apply_all(&wal).expect("literal replay");
+        assert_eq!(
+            graph.checksum(),
+            fresh.checksum(),
+            "replay diverged from mint"
+        );
+        assert_eq!(graph, fresh, "replay diverged from mint");
     }
 }

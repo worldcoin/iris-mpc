@@ -91,7 +91,7 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
         // Phase 1: insert all nodes. The ring links each node to the *next* one,
         // so all endpoints must exist before edges are wired — otherwise an edge
         // would point at a node whose content clock postdates the edge's
-        // neighborhood and the stale-edge filter in `insert_apply` would drop it.
+        // neighborhood and the read-path staleness filter would skip it.
         for i in 0..db_size {
             seq += 1;
             graph
@@ -112,9 +112,9 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
                 .insert_apply(&GraphMutation {
                     seq_no: seq,
                     ops: vec![MutationOp::AddEdges {
-                        base: id(i),
+                        base: id(i).serial_id(),
                         layer: 0,
-                        neighbors: edges(i),
+                        neighbors: edges(i).iter().map(|v| v.serial_id()).collect(),
                         edge_type: EdgeType::All,
                     }],
                 })

@@ -74,10 +74,9 @@ impl WalMutationBuilder {
         for idx in starting_idx..new_len {
             let node_id = idx + 1;
             // All nodes added before this one become neighbors.
-            let neighbors: Vec<VectorId> = (1..=node_id)
+            let neighbors: Vec<u32> = (1..=node_id)
                 .filter(|x| x != &node_id)
                 .map(|x| x as u32)
-                .map(VectorId::from_serial_id)
                 .collect();
 
             let mut mutation = GraphMutation {
@@ -92,7 +91,7 @@ impl WalMutationBuilder {
 
             if !neighbors.is_empty() {
                 mutation.ops.push(MutationOp::AddEdges {
-                    base: VectorId::from_serial_id(node_id as _),
+                    base: node_id as u32,
                     neighbors,
                     layer: 0,
                     edge_type: EdgeType::All,
@@ -129,19 +128,15 @@ impl WalMutationBuilder {
     pub fn add_node_with_neighbors(&mut self, neighbor_ids: &[u32]) -> &mut Self {
         let node_id = (self.entries.len() + 1) as u32;
         let modification_id = node_id as i64;
-        let neighbors: Vec<VectorId> = neighbor_ids
-            .iter()
-            .map(|&id| VectorId::from_serial_id(id))
-            .collect();
         let mut ops = vec![MutationOp::AddNode {
             id: VectorId::from_serial_id(node_id),
             height: 1,
             update_ep: UpdateEntryPoint::False,
         }];
-        if !neighbors.is_empty() {
+        if !neighbor_ids.is_empty() {
             ops.push(MutationOp::AddEdges {
-                base: VectorId::from_serial_id(node_id),
-                neighbors,
+                base: node_id,
+                neighbors: neighbor_ids.to_vec(),
                 layer: 0,
                 edge_type: EdgeType::All,
             });
@@ -203,7 +198,7 @@ impl WalMutationBuilder {
             let modification_id = m.seq_no as i64;
             let serial_id: i64 = match m.ops.first() {
                 Some(MutationOp::AddNode { id, .. }) => id.serial_id() as i64,
-                Some(MutationOp::AddEdges { base, .. }) => base.serial_id() as i64,
+                Some(MutationOp::AddEdges { base, .. }) => *base as i64,
                 _ => 0,
             };
             let s3_url = uuid::Uuid::from_u128(modification_id as u128).to_string();

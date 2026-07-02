@@ -2513,9 +2513,9 @@ mod hawk_mutation_tests {
                     update_ep: UpdateEntryPoint::False,
                 },
                 MutationOp::AddEdges {
-                    base: vector_id,
+                    base: vector_id.serial_id(),
                     layer: 0,
-                    neighbors: vec![vector_id],
+                    neighbors: vec![vector_id.serial_id()],
                     edge_type: EdgeType::Base,
                 },
             ],

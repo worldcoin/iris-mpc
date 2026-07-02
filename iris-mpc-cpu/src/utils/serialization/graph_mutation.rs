@@ -4,7 +4,7 @@ use crate::{
         mutation::{EdgeType, MutationOp, UpdateEntryPoint},
         GraphMutation,
     },
-    utils::serialization::types::graph_mutation_v0::{self, GraphMutationV0},
+    utils::serialization::types::graph_mutation_v1::{self, GraphMutationV1},
 };
 use eyre::{Result, WrapErr};
 use iris_mpc_common::VectorId;
@@ -17,23 +17,27 @@ use serde::{Deserialize, Serialize};
 ///
 /// The active version is persisted in `hawk_graph_mutations.mutation_format_version`
 /// so that the deserializer can dispatch without inspecting the blob bytes.
+///
+/// V0 (edge ops carrying `VectorId`, no drop enrichment) is intentionally not
+/// readable: its segments were recorded under predicate-apply semantics and do
+/// not replay literally. The WAL is reset at the v5 cutover, so a version-0 row
+/// reaching this code is an operational error and fails loudly in `try_from`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GraphMutationFormat {
-    /// V0: plain `bincode::serialize(BothEyes<Vec<GraphMutation>>)`.
-    ///
-    /// This is the format that existed before versioning was introduced.
-    /// All previously-written rows are implicitly V0.
-    V0,
+    /// V1: plain `bincode::serialize(BothEyes<Vec<GraphMutation>>)` with edge
+    /// ops carrying bare serial ids and mint-time staleness drops recorded as
+    /// explicit `RemoveEdges` (literal replay).
+    V1,
 }
 
 impl GraphMutationFormat {
     /// The format new writes are emitted in.
-    pub const CURRENT: Self = Self::V0;
+    pub const CURRENT: Self = Self::V1;
 
     /// Integer stored in `mutation_format_version` DB column.
     pub fn version(&self) -> i16 {
         match self {
-            GraphMutationFormat::V0 => 0,
+            GraphMutationFormat::V1 => 1,
         }
     }
 }
@@ -43,7 +47,7 @@ impl TryFrom<i16> for GraphMutationFormat {
 
     fn try_from(v: i16) -> Result<Self> {
         match v {
-            0 => Ok(GraphMutationFormat::V0),
+            1 => Ok(GraphMutationFormat::V1),
             _ => Err(eyre::eyre!(
                 "unsupported GraphMutation format version: {}",
                 v
@@ -56,7 +60,7 @@ impl TryFrom<i16> for GraphMutationFormat {
 
 /// Serialize using the current stable format.
 pub fn serialize_mutations_current(data: &BothEyes<Vec<GraphMutation>>) -> Result<Vec<u8>> {
-    // V0: plain bincode — no prefix bytes in the blob itself; version is tracked
+    // V1: plain bincode — no prefix bytes in the blob itself; version is tracked
     // in the DB column `mutation_format_version`.
     Ok(bincode::serialize(data)?)
 }
@@ -71,58 +75,58 @@ pub fn deserialize_mutations(
     bytes: &[u8],
 ) -> Result<BothEyes<Vec<GraphMutation>>> {
     match format {
-        GraphMutationFormat::V0 => deserialize_v0_to_current(bytes),
-        // When a V1 is added: add arm here, define a types/graph_mutation_v1.rs
-        // intermediate struct with From<GraphMutationV1> → BothEyes<Vec<GraphMutation>>,
-        // and call bincode::deserialize::<GraphMutationV1>(bytes)?.into()
+        GraphMutationFormat::V1 => deserialize_v1_to_current(bytes),
+        // When a V2 is added: add arm here, define a types/graph_mutation_v2.rs
+        // intermediate struct with From<GraphMutationV2> → BothEyes<Vec<GraphMutation>>,
+        // and call bincode::deserialize::<GraphMutationV2>(bytes)?.into()
     }
 }
 
 /* ------------- Deserialize Helpers ------------- */
 
-fn deserialize_v0_to_current(bytes: &[u8]) -> Result<BothEyes<Vec<GraphMutation>>> {
-    let v0: BothEyes<Vec<GraphMutationV0>> = bincode::deserialize(bytes).wrap_err_with(|| {
+fn deserialize_v1_to_current(bytes: &[u8]) -> Result<BothEyes<Vec<GraphMutation>>> {
+    let v1: BothEyes<Vec<GraphMutationV1>> = bincode::deserialize(bytes).wrap_err_with(|| {
         format!(
-            "deserializing GraphMutation V0 blob ({} bytes)",
+            "deserializing GraphMutation V1 blob ({} bytes)",
             bytes.len()
         )
     })?;
-    Ok(v0.map(|eye| eye.into_iter().map(|m| m.into()).collect()))
+    Ok(v1.map(|eye| eye.into_iter().map(|m| m.into()).collect()))
 }
 
-/* ----------- Conversion GraphMutationV0 -> GraphMutation ----------- */
+/* ----------- Conversion GraphMutationV1 -> GraphMutation ----------- */
 
-impl From<graph_mutation_v0::VectorId> for VectorId {
-    fn from(value: graph_mutation_v0::VectorId) -> Self {
+impl From<graph_mutation_v1::VectorId> for VectorId {
+    fn from(value: graph_mutation_v1::VectorId) -> Self {
         VectorId::new(value.id, value.version)
     }
 }
 
-impl From<graph_mutation_v0::EdgeType> for EdgeType {
-    fn from(value: graph_mutation_v0::EdgeType) -> Self {
+impl From<graph_mutation_v1::EdgeType> for EdgeType {
+    fn from(value: graph_mutation_v1::EdgeType) -> Self {
         match value {
-            graph_mutation_v0::EdgeType::Base => EdgeType::Base,
-            graph_mutation_v0::EdgeType::Neighbors => EdgeType::Neighbors,
-            graph_mutation_v0::EdgeType::All => EdgeType::All,
+            graph_mutation_v1::EdgeType::Base => EdgeType::Base,
+            graph_mutation_v1::EdgeType::Neighbors => EdgeType::Neighbors,
+            graph_mutation_v1::EdgeType::All => EdgeType::All,
         }
     }
 }
 
-impl From<graph_mutation_v0::UpdateEntryPoint> for UpdateEntryPoint {
-    fn from(value: graph_mutation_v0::UpdateEntryPoint) -> Self {
+impl From<graph_mutation_v1::UpdateEntryPoint> for UpdateEntryPoint {
+    fn from(value: graph_mutation_v1::UpdateEntryPoint) -> Self {
         match value {
-            graph_mutation_v0::UpdateEntryPoint::False => UpdateEntryPoint::False,
-            graph_mutation_v0::UpdateEntryPoint::Append { layer } => {
+            graph_mutation_v1::UpdateEntryPoint::False => UpdateEntryPoint::False,
+            graph_mutation_v1::UpdateEntryPoint::Append { layer } => {
                 UpdateEntryPoint::Append { layer }
             }
         }
     }
 }
 
-impl From<graph_mutation_v0::MutationOp> for MutationOp {
-    fn from(value: graph_mutation_v0::MutationOp) -> Self {
+impl From<graph_mutation_v1::MutationOp> for MutationOp {
+    fn from(value: graph_mutation_v1::MutationOp) -> Self {
         match value {
-            graph_mutation_v0::MutationOp::AddNode {
+            graph_mutation_v1::MutationOp::AddNode {
                 id,
                 height,
                 update_ep,
@@ -131,28 +135,28 @@ impl From<graph_mutation_v0::MutationOp> for MutationOp {
                 height,
                 update_ep: update_ep.into(),
             },
-            graph_mutation_v0::MutationOp::RemoveNode { id } => {
+            graph_mutation_v1::MutationOp::RemoveNode { id } => {
                 MutationOp::RemoveNode { id: id.into() }
             }
-            graph_mutation_v0::MutationOp::AddEdges {
+            graph_mutation_v1::MutationOp::AddEdges {
                 base,
                 neighbors,
                 layer,
                 edge_type,
             } => MutationOp::AddEdges {
-                base: base.into(),
-                neighbors: neighbors.into_iter().map(|n| n.into()).collect(),
+                base,
+                neighbors,
                 layer,
                 edge_type: edge_type.into(),
             },
-            graph_mutation_v0::MutationOp::RemoveEdges {
+            graph_mutation_v1::MutationOp::RemoveEdges {
                 base,
                 neighbors,
                 layer,
                 edge_type,
             } => MutationOp::RemoveEdges {
-                base: base.into(),
-                neighbors: neighbors.into_iter().map(|n| n.into()).collect(),
+                base,
+                neighbors,
                 layer,
                 edge_type: edge_type.into(),
             },
@@ -160,8 +164,8 @@ impl From<graph_mutation_v0::MutationOp> for MutationOp {
     }
 }
 
-impl From<GraphMutationV0> for GraphMutation {
-    fn from(value: GraphMutationV0) -> Self {
+impl From<GraphMutationV1> for GraphMutation {
+    fn from(value: GraphMutationV1) -> Self {
         GraphMutation {
             seq_no: value.seq_no,
             ops: value.ops.into_iter().map(|op| op.into()).collect(),
@@ -174,39 +178,44 @@ mod tests {
     use super::*;
 
     #[test]
-    fn validate_v0_deserialize() {
-        // Input in the V0 wire types: one mutation on the first eye, none on the
+    fn validate_v1_deserialize() {
+        // Input in the V1 wire types: one mutation on the first eye, none on the
         // second.
-        let vid1 = graph_mutation_v0::VectorId { id: 42, version: 1 };
-        let vid2 = graph_mutation_v0::VectorId { id: 99, version: 2 };
-        let vid3 = graph_mutation_v0::VectorId {
+        let vid1 = graph_mutation_v1::VectorId { id: 42, version: 1 };
+        let vid3 = graph_mutation_v1::VectorId {
             id: 100,
             version: 3,
         };
 
-        let both_eyes: BothEyes<Vec<graph_mutation_v0::GraphMutationV0>> = [
-            vec![graph_mutation_v0::GraphMutationV0 {
+        let both_eyes: BothEyes<Vec<graph_mutation_v1::GraphMutationV1>> = [
+            vec![graph_mutation_v1::GraphMutationV1 {
                 seq_no: 12345,
                 ops: vec![
-                    graph_mutation_v0::MutationOp::AddNode {
+                    graph_mutation_v1::MutationOp::AddNode {
                         id: vid1.clone(),
                         height: 3,
-                        update_ep: graph_mutation_v0::UpdateEntryPoint::Append { layer: 2 },
+                        update_ep: graph_mutation_v1::UpdateEntryPoint::Append { layer: 2 },
                     },
-                    graph_mutation_v0::MutationOp::AddEdges {
-                        base: vid2.clone(),
-                        neighbors: vec![vid1.clone(), vid3.clone()],
+                    graph_mutation_v1::MutationOp::AddEdges {
+                        base: 99,
+                        neighbors: vec![42, 100],
                         layer: 1,
-                        edge_type: graph_mutation_v0::EdgeType::All,
+                        edge_type: graph_mutation_v1::EdgeType::All,
                     },
-                    graph_mutation_v0::MutationOp::RemoveNode { id: vid3.clone() },
+                    graph_mutation_v1::MutationOp::RemoveEdges {
+                        base: 42,
+                        neighbors: vec![100],
+                        layer: 0,
+                        edge_type: graph_mutation_v1::EdgeType::Base,
+                    },
+                    graph_mutation_v1::MutationOp::RemoveNode { id: vid3.clone() },
                 ],
             }],
             vec![],
         ];
 
         // Hand-built target in the *current* types. Deliberately constructed
-        // literally rather than via `.into()`, so the V0 -> current conversion is
+        // literally rather than via `.into()`, so the V1 -> current conversion is
         // actually under test instead of being asserted against itself.
         let expected: BothEyes<Vec<GraphMutation>> = [
             vec![GraphMutation {
@@ -218,10 +227,16 @@ mod tests {
                         update_ep: UpdateEntryPoint::Append { layer: 2 },
                     },
                     MutationOp::AddEdges {
-                        base: VectorId::new(99, 2),
-                        neighbors: vec![VectorId::new(42, 1), VectorId::new(100, 3)],
+                        base: 99,
+                        neighbors: vec![42, 100],
                         layer: 1,
                         edge_type: EdgeType::All,
+                    },
+                    MutationOp::RemoveEdges {
+                        base: 42,
+                        neighbors: vec![100],
+                        layer: 0,
+                        edge_type: EdgeType::Base,
                     },
                     MutationOp::RemoveNode {
                         id: VectorId::new(100, 3),
@@ -232,9 +247,16 @@ mod tests {
         ];
 
         let serialized = bincode::serialize(&both_eyes).expect("serialization failed");
-        let deserialized = deserialize_mutations(GraphMutationFormat::V0, &serialized)
+        let deserialized = deserialize_mutations(GraphMutationFormat::V1, &serialized)
             .expect("deserialization failed");
 
         assert_eq!(deserialized, expected);
+    }
+
+    /// V0 rows (pre-enrichment, edge ops carrying VectorId) must fail loudly:
+    /// they cannot be replayed literally, and the WAL is reset at cutover.
+    #[test]
+    fn version_0_is_rejected() {
+        assert!(GraphMutationFormat::try_from(0).is_err());
     }
 }

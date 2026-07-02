@@ -400,9 +400,9 @@ impl DbContext {
                     update_ep: UpdateEntryPoint::False,
                 },
                 MutationOp::AddEdges {
-                    base: vectors[i],
+                    base: vectors[i].serial_id(),
                     layer: 0,
-                    neighbors,
+                    neighbors: neighbors.iter().map(|v| v.serial_id()).collect(),
                     edge_type: EdgeType::Base,
                 },
             ];

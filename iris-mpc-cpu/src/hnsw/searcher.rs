@@ -1536,15 +1536,20 @@ impl HnswSearcher {
         &self,
         store: &mut V,
         graph: &GraphMem,
-        candidates: &BTreeSet<(VectorId, usize)>,
+        candidates: &BTreeSet<(SerialId, usize)>,
     ) -> Result<Vec<MutationOp>> {
         // Read the current neighborhood for each candidate; keep only those
         // exceeding M_limit on their layer.
         let mut oversized: Vec<(VectorId, usize, Vec<VectorId>)> = Vec::new();
-        for (id, layer) in candidates {
-            let nbhd: Vec<VectorId> = graph.get_active_links(&id.serial_id(), *layer);
+        for (serial, layer) in candidates {
+            let nbhd: Vec<VectorId> = graph.get_active_links(serial, *layer);
             if nbhd.len() > self.params.get_M_limit(*layer) {
-                oversized.push((*id, *layer, nbhd));
+                // A node in a layer always has a content-clock entry; resolve
+                // its current VectorId for the MPC ranking.
+                let id = graph
+                    .vector_id_of(*serial)
+                    .expect("oversized neighborhood without a content-clock entry");
+                oversized.push((id, *layer, nbhd));
             }
         }
 
@@ -1577,14 +1582,14 @@ impl HnswSearcher {
             izip!(&base_nodes, &layers, &neighborhoods, compacted_nbhds)
         {
             let compacted_set: HashSet<_> = compacted.iter().collect();
-            let to_remove: Vec<VectorId> = original
+            let to_remove: Vec<SerialId> = original
                 .iter()
                 .filter(|v| !compacted_set.contains(v))
-                .cloned()
+                .map(|v| v.serial_id())
                 .collect();
             if !to_remove.is_empty() {
                 ops.push(MutationOp::RemoveEdges {
-                    base: *id,
+                    base: id.serial_id(),
                     layer: *layer,
                     neighbors: to_remove,
                     edge_type: EdgeType::Base,
@@ -1629,9 +1634,9 @@ impl HnswSearcher {
         }];
         for (layer_idx, layer_links) in links_unstructured.into_iter().enumerate() {
             ops.push(MutationOp::AddEdges {
-                base: inserted_vector,
+                base: inserted_vector.serial_id(),
                 layer: layer_idx,
-                neighbors: layer_links,
+                neighbors: layer_links.iter().map(|v| v.serial_id()).collect(),
                 edge_type: EdgeType::All,
             });
         }
@@ -1836,8 +1841,8 @@ mod tests {
             update_ep: UpdateEntryPoint::False,
         }));
         ops.push(MutationOp::AddEdges {
-            base,
-            neighbors: nbrs.clone(),
+            base: base.serial_id(),
+            neighbors: nbrs.iter().map(|v| v.serial_id()).collect(),
             layer: 0,
             edge_type: EdgeType::Base,
         });
@@ -1848,7 +1853,7 @@ mod tests {
         graph.insert_apply(&setup)?;
 
         let mut candidates = BTreeSet::new();
-        candidates.insert((base, 0));
+        candidates.insert((base.serial_id(), 0));
 
         let ops = searcher
             .compact_batch(&mut store, &graph, &candidates)
@@ -1862,13 +1867,13 @@ mod tests {
                 neighbors,
                 edge_type,
             } => {
-                assert_eq!(*b, base);
+                assert_eq!(*b, base.serial_id());
                 assert_eq!(layer, &0);
                 assert_eq!(edge_type, &EdgeType::Base);
                 let expected_trim = oversized_count - searcher.params.get_M_max(0);
                 assert_eq!(neighbors.len(), expected_trim);
                 // Every removed neighbor came from the original set.
-                let orig: HashSet<_> = nbrs.iter().collect();
+                let orig: HashSet<_> = nbrs.iter().map(|v| v.serial_id()).collect();
                 for n in neighbors {
                     assert!(
                         orig.contains(n),
@@ -1915,8 +1920,8 @@ mod tests {
                     update_ep: UpdateEntryPoint::False,
                 },
                 MutationOp::AddEdges {
-                    base: a,
-                    neighbors: vec![b],
+                    base: a.serial_id(),
+                    neighbors: vec![b.serial_id()],
                     layer: 0,
                     edge_type: EdgeType::Base,
                 },
@@ -1925,7 +1930,7 @@ mod tests {
         graph.insert_apply(&setup)?;
 
         let mut candidates = BTreeSet::new();
-        candidates.insert((a, 0));
+        candidates.insert((a.serial_id(), 0));
 
         let ops = searcher
             .compact_batch(&mut store, &graph, &candidates)
