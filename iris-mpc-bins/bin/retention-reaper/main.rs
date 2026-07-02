@@ -57,6 +57,7 @@ fn default_batch_size() -> i64 {
 ///
 /// Env (all `RETENTION__`-prefixed, `__` = nesting, matching the `SMPC__…` convention):
 ///   `RETENTION__ENABLED` (default false — master kill switch),
+///   `RETENTION__DRY_RUN` (default false — count-and-log instead of delete),
 ///   `RETENTION__DB_URL` (required), `RETENTION__DB_SCHEMA` (default `public`),
 ///   `RETENTION__PARTY` (metrics label), `RETENTION__STATEMENT_TIMEOUT_SECS` (default 60),
 ///   `RETENTION__SERVICE__SERVICE_NAME` + `RETENTION__SERVICE__METRICS__{HOST,PORT,
@@ -71,6 +72,12 @@ struct ReaperConfig {
     /// logs and exits cleanly without connecting to the DB or touching any table.
     #[serde(default)]
     enabled: bool,
+    /// `RETENTION__DRY_RUN` (default `false`) — when true, each job runs a read-only COUNT
+    /// over the exact delete predicate and logs how many rows it WOULD delete, without
+    /// deleting anything. Lets the reaper be validated in stage before it removes data.
+    /// Only meaningful when `enabled` is true (the kill switch still gates everything).
+    #[serde(default)]
+    dry_run: bool,
     db_url: String,
     #[serde(default = "default_schema")]
     db_schema: String,
@@ -133,6 +140,7 @@ async fn main() -> Result<()> {
     }
 
     let party = config.party.clone();
+    let dry_run = config.dry_run;
     let statement_timeout = config.statement_timeout();
 
     let client = PostgresClient::new(&config.db_url, &config.db_schema, AccessMode::ReadWrite)
@@ -143,7 +151,13 @@ async fn main() -> Result<()> {
         party = %party,
         schema = %config.db_schema,
         jobs = config.jobs.len(),
-        "retention-reaper starting"
+        dry_run,
+        "retention-reaper starting{}",
+        if dry_run {
+            " (DRY RUN — no rows will be deleted)"
+        } else {
+            ""
+        }
     );
 
     let start = Instant::now();
@@ -153,8 +167,14 @@ async fn main() -> Result<()> {
         validate_identifier(&job.table)
             .and_then(|_| validate_identifier(&job.ts_column))
             .wrap_err_with(|| format!("invalid identifier in job for table {}", job.table))?;
-        match reap(&client.pool, job, statement_timeout, &party).await {
-            Ok(deleted) => info!(table = %job.table, rows_deleted = deleted, "retention job ok"),
+        match reap(&client.pool, job, statement_timeout, &party, dry_run).await {
+            Ok(deleted) => {
+                if dry_run {
+                    info!(table = %job.table, rows_would_delete = deleted, "retention job ok (dry run)");
+                } else {
+                    info!(table = %job.table, rows_deleted = deleted, "retention job ok");
+                }
+            }
             Err(error) => {
                 error!(table = %job.table, error = %error, "retention job failed");
                 failed = true; // keep going: one bad table shouldn't skip the others
@@ -185,12 +205,62 @@ async fn reap(
     job: &RetentionJob,
     statement_timeout: Duration,
     party: &str,
+    dry_run: bool,
 ) -> Result<i64> {
     let guard = job
         .guard
         .as_deref()
         .map(|g| format!(" AND ({g})"))
         .unwrap_or_default();
+
+    let mut conn = pool.acquire().await.wrap_err("acquire connection")?;
+    set_statement_timeout(&mut conn, statement_timeout).await?;
+
+    if dry_run {
+        // Read-only preview: COUNT exactly the rows the live path would delete, using the
+        // identical predicate (no LIMIT, no ctid, no DELETE). The logged number is what a
+        // real run would remove — the whole point of the dry run is a trustworthy preview.
+        let count_sql = format!(
+            "SELECT count(*)::bigint AS n FROM {table} WHERE {ts} < now() - $1::interval{guard}",
+            table = quote_ident(&job.table),
+            ts = quote_ident(&job.ts_column),
+            guard = guard,
+        );
+        let would_delete: i64 = timeout(
+            statement_timeout + Duration::from_secs(5),
+            sqlx::query(&count_sql)
+                .bind(&job.retention)
+                .fetch_one(&mut *conn),
+        )
+        .await
+        .wrap_err_with(|| format!("dry-run count on {} exceeded timeout", job.table))?
+        .wrap_err_with(|| format!("dry-run count on {} failed", job.table))?
+        .try_get::<i64, _>("n")?;
+
+        info!(
+            table = %job.table,
+            ts_column = %job.ts_column,
+            retention = %job.retention,
+            guard = job.guard.as_deref().unwrap_or("(none)"),
+            rows_would_delete = would_delete,
+            "DRY RUN: would delete {would_delete} rows from {} where {} < now() - '{}'::interval{}",
+            job.table,
+            job.ts_column,
+            job.retention,
+            guard,
+        );
+        metrics::gauge!(
+            "retention.dry_run.rows_would_delete",
+            "table" => job.table.clone(),
+            "party" => party.to_string()
+        )
+        .set(would_delete as f64);
+        // Read-only health gauges are still useful during a dry run (verify oldest-retained /
+        // bloat look sane before enabling live deletes).
+        emit_health_metrics(pool, job, party).await;
+        return Ok(would_delete);
+    }
+
     // retention is bound as a parameter; identifiers are validated + quoted; batch is i64.
     let delete_sql = format!(
         "WITH del AS (DELETE FROM {table} WHERE ctid IN (\
@@ -201,9 +271,6 @@ async fn reap(
         guard = guard,
         batch = job.batch_size,
     );
-
-    let mut conn = pool.acquire().await.wrap_err("acquire connection")?;
-    set_statement_timeout(&mut conn, statement_timeout).await?;
 
     let mut total: i64 = 0;
     loop {
