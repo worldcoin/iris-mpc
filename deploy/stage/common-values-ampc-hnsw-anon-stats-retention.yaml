@@ -2,7 +2,7 @@
 # worldcoin-foundation/common-cronjob) via wf-cluster-apps, mirroring ampc-hnsw-db-exporter.
 # Per-cluster env (map format) + the attachSecurityGroupPolicy that lets the pod reach the
 # anon-stats Aurora live per-node.
-image: "ghcr.io/worldcoin/retention-reaper:latest"
+image: "ghcr.io/worldcoin/retention-reaper:c3b02487b5ec98db4c5dcedbb4359fa82e02c3c2"
 
 replicaCount: 1
 
