@@ -4,8 +4,7 @@ on:
   push:
     branches:
       - "dev"
-      - "feat/recovery-update"
-      - "pop-3712-reauth-skip-persistence-alias"
+      - "carlomazzaferro/pop-3905-retention-dry-run"
 
     paths-ignore:
       - "deploy/**"
