@@ -34,5 +34,16 @@ resources:
     cpu: "100m"
     memory: 128Mi
 
+# Schedule onto the dedicated anon-stats-server node pool — that pool has the network
+# path to the anon-stats Aurora (smpcv2 uses a dedicated pool, not a per-pod SG like hnsw).
+# Without this the reaper lands on a generic node and times out connecting to Postgres.
 nodeSelector:
   kubernetes.io/arch: amd64
+  workload: anon-stats-server
+
+# The dedicated pool is tainted; mirror the anon-stats-server toleration so the reaper schedules there.
+tolerations:
+  - key: dedicated
+    operator: Equal
+    value: anonStatsServer
+    effect: NoSchedule
