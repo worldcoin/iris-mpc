@@ -4,8 +4,7 @@ on:
   push:
     branches:
       - "dev"
-      - "dk/update_anon_stats_config_for_mirror"
-      - "carlomazzaferro/pop-3904-bump-ampc-common-nhd-threshold-config"
+      - "carlomazzaferro/pop-3905-retention-dry-run"
 
 concurrency:
   group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
