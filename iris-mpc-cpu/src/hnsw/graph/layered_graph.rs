@@ -105,72 +105,22 @@ impl NodeInit {
 /// added) and a stamp `> old_seq` means content-refreshed (reauthed) since the
 /// edge was certified — either way the edge is dropped.
 ///
-/// Used at mint time (the filter-on-bump in [`GraphMem::apply_new`], which
-/// drops invalid edges before re-stamping a neighborhood and records each drop
-/// as an explicit `RemoveEdges`) and at read time
-/// ([`GraphMem::get_active_links`], which skips them during traversal). Replay
-/// ([`GraphMem::insert_apply`]) never evaluates it — recorded segments replay
-/// literally.
+/// Used on every apply (the filter-on-bump in [`GraphMem::apply_ops`], which
+/// drops invalid edges before re-stamping a neighborhood) and at read time
+/// ([`GraphMem::get_active_links`], which skips them during traversal). It is
+/// how this implementation realizes, lazily, the abstract mutation semantics
+/// that a node's removal or re-insertion invalidates every edge incident to it.
+///
+/// Because replay re-evaluates it, changing this predicate (or the
+/// filter-on-bump discipline) changes the *physical* state a recorded stream
+/// replays to — and cross-party consensus checksums physical state. Even a
+/// change that preserves the abstract graph (`model.rs`) makes a post-change
+/// restart re-derive its history physically differently from still-live
+/// peers. Deploy any such change behind a checkpoint barrier; bump
+/// `GraphMutationFormat` so stray pre-change segments fail loud instead of
+/// replaying into checksum-divergent state.
 fn is_active(content: &HashMap<SerialId, NodeInit>, z: SerialId, old_seq: u64) -> bool {
     content.get(&z).is_some_and(|ni| ni.active_at(old_seq))
-}
-
-/// One mint-side staleness drop: while applying the op at `op_index`, the
-/// filter re-stamping `node`'s neighborhood at `layer` dropped `dropped` as
-/// invalid (see [`is_active`]). Enrichment turns each record into a synthesized
-/// `RemoveEdges` so the drop is explicit in the persisted mutation.
-struct StaleDrop {
-    op_index: usize,
-    layer: usize,
-    node: SerialId,
-    dropped: Vec<SerialId>,
-}
-
-/// Record a neighborhood's filter drops when minting (`drops = Some`); no-op on
-/// replay or when nothing was dropped.
-fn record_drops(
-    drops: &mut Option<&mut Vec<StaleDrop>>,
-    op_index: usize,
-    layer: usize,
-    node: SerialId,
-    dropped: Vec<SerialId>,
-) {
-    if let Some(d) = drops.as_deref_mut() {
-        if !dropped.is_empty() {
-            d.push(StaleDrop {
-                op_index,
-                layer,
-                node,
-                dropped,
-            });
-        }
-    }
-}
-
-/// Splice recorded staleness drops into `ops` as explicit `RemoveEdges`, each
-/// placed immediately *before* the op whose apply performed the drop, so a
-/// literal replay drops the edge before that op can re-append the same serial.
-/// `drops` must be in op order (`op_index` non-decreasing), which the apply
-/// pass produces naturally.
-fn enrich_with_drops(ops: Vec<MutationOp>, drops: Vec<StaleDrop>) -> Vec<MutationOp> {
-    if drops.is_empty() {
-        return ops;
-    }
-    let mut out = Vec::with_capacity(ops.len() + drops.len());
-    let mut drops = drops.into_iter().peekable();
-    for (op_index, op) in ops.into_iter().enumerate() {
-        while drops.peek().is_some_and(|d| d.op_index == op_index) {
-            let d = drops.next().expect("peeked");
-            out.push(MutationOp::RemoveEdges {
-                base: d.node,
-                neighbors: d.dropped,
-                layer: d.layer,
-                edge_type: EdgeType::Base,
-            });
-        }
-        out.push(op);
-    }
-    out
 }
 
 /// Representation of the entry point of HNSW search in a layered graph.
@@ -406,41 +356,35 @@ impl GraphMem {
         }
     }
 
-    /// Applies a replayed (WAL/checkpoint) mutation to the in-memory graph,
-    /// literally.
+    /// Applies a replayed (WAL/checkpoint) mutation to the in-memory graph.
     ///
-    /// Replay executes exactly the recorded ops: `AddEdges` appends the named
-    /// serials, `RemoveEdges` removes the named serials — no staleness
-    /// predicate runs. Stale-edge drops are explicit `RemoveEdges` ops in the
-    /// recorded stream, synthesized at mint time by [`Self::apply_new`], so a
-    /// segment replays to the minted state even under a binary whose staleness
-    /// predicate has since changed.
+    /// Replay runs the same deterministic apply as minting ([`Self::apply_new`]):
+    /// the recorded ops are intent against the abstract graph, and staleness
+    /// cleanup (see [`is_active`]) re-derives identically because apply is a
+    /// pure function of the graph state and the mutation stream. A party that
+    /// rebuilds from a checkpoint plus this stream therefore lands on the exact
+    /// state of a party that minted it live.
     ///
     /// The supplied `mutation.seq_no` must be strictly greater than
     /// `self.last_update_seq_no`; otherwise the call returns `Err` without
     /// touching the graph. On success `self.last_update_seq_no` advances to
     /// `mutation.seq_no`.
     pub fn insert_apply(&mut self, mutation: &GraphMutation) -> Result<()> {
-        self.apply_ops(mutation.seq_no, &mutation.ops, None)
+        self.apply_ops(mutation.seq_no, &mutation.ops)
     }
 
-    /// Shared two-pass apply. `drops = Some` is mint mode: every touched
+    /// Shared two-pass apply: node ops, then edge ops. Every touched
     /// neighborhood is filtered through [`is_active`] before the op's own edit
-    /// (filter-on-bump), and each dropped edge is recorded for enrichment.
-    /// `drops = None` is literal replay: no predicate runs.
+    /// (filter-on-bump), so a re-stamped freshness certificate never covers an
+    /// invalid edge.
     ///
-    /// Causal construction (mint): an `AddEdges` op must not reference a target
+    /// Causal construction: an `AddEdges` op must not reference a target
     /// created *later* — in a following mutation. The edge is stamped at this
     /// tick while the target's content clock is minted at its own (later)
     /// insertion, so [`is_active`] treats it as stale and drops it at read
     /// time. Insert all endpoints before wiring edges between them; debug
     /// builds assert it.
-    fn apply_ops(
-        &mut self,
-        seq_no: u64,
-        ops: &[MutationOp],
-        mut drops: Option<&mut Vec<StaleDrop>>,
-    ) -> Result<()> {
+    fn apply_ops(&mut self, seq_no: u64, ops: &[MutationOp]) -> Result<()> {
         if seq_no <= self.last_update_seq_no {
             return Err(eyre::eyre!(
                 "GraphMem::apply_ops: mutation seq_no {} is not strictly greater than \
@@ -450,7 +394,6 @@ impl GraphMem {
             ));
         }
 
-        let minting = drops.is_some();
         // One monotonic tick for this mutation: node creation (Pass 1) and edge
         // edits (Pass 2) both stamp neighborhoods with it, so every live seq_no
         // stamp is `Tick`-guarded.
@@ -507,13 +450,13 @@ impl GraphMem {
             }
         }
 
-        // Pass 2: apply edge-level mutations. When minting, each touched
-        // neighborhood drops its invalid edges (see `is_active`) then is
-        // re-stamped in one step (see `Layer::edit_links`): the drop happens
-        // *before* any new edge is appended, so an append can't re-certify an
-        // already-invalid sibling as fresh. Edge ops never advance the content
-        // clock — only a node's own (re-)insertion does.
-        for (op_index, op) in ops.iter().enumerate() {
+        // Pass 2: apply edge-level mutations. Each touched neighborhood drops
+        // its invalid edges (see `is_active`) then is re-stamped in one step
+        // (see `Layer::edit_links`): the drop happens *before* any new edge is
+        // appended, so an append can't re-certify an already-invalid sibling
+        // as fresh. Edge ops never advance the content clock — only a node's
+        // own (re-)insertion does.
+        for op in ops.iter() {
             match op {
                 MutationOp::AddNode { .. } | MutationOp::RemoveNode { .. } => {}
                 MutationOp::AddEdges {
@@ -542,24 +485,14 @@ impl GraphMem {
                         if layer_mut.get_links(base).is_none() {
                             warn!("AddEdges({edge_type:?}): base={base} missing at layer {layer}; skipping outgoing half");
                         } else {
-                            let mut dropped = Vec::new();
                             layer_mut.edit_links(*base, tick, |old_seq, nbrs| {
-                                if minting {
-                                    nbrs.retain(|z| {
-                                        let keep = is_active(content, *z, old_seq);
-                                        if !keep {
-                                            dropped.push(*z);
-                                        }
-                                        keep
-                                    });
-                                }
+                                nbrs.retain(|z| is_active(content, *z, old_seq));
                                 nbrs.extend_from_slice(to_add);
                                 debug_assert!(
-                                    !minting || nbrs.iter().all(|z| is_active(content, *z, seq_no)),
-                                    "mint left an invalid edge in a re-stamped neighborhood"
+                                    nbrs.iter().all(|z| is_active(content, *z, seq_no)),
+                                    "apply left an invalid edge in a re-stamped neighborhood"
                                 );
                             });
-                            record_drops(&mut drops, op_index, layer, *base, dropped);
                         }
                     }
                     // Back half: append base into each target's list.
@@ -568,25 +501,14 @@ impl GraphMem {
                             if layer_mut.get_links(target).is_none() {
                                 warn!("AddEdges({edge_type:?}): target={target} missing at layer {layer} (base={base}); skipping back-edge");
                             } else {
-                                let mut dropped = Vec::new();
                                 layer_mut.edit_links(*target, tick, |old_seq, nbrs| {
-                                    if minting {
-                                        nbrs.retain(|z| {
-                                            let keep = is_active(content, *z, old_seq);
-                                            if !keep {
-                                                dropped.push(*z);
-                                            }
-                                            keep
-                                        });
-                                    }
+                                    nbrs.retain(|z| is_active(content, *z, old_seq));
                                     nbrs.push(*base);
                                     debug_assert!(
-                                        !minting
-                                            || nbrs.iter().all(|z| is_active(content, *z, seq_no)),
-                                        "mint left an invalid edge in a re-stamped neighborhood"
+                                        nbrs.iter().all(|z| is_active(content, *z, seq_no)),
+                                        "apply left an invalid edge in a re-stamped neighborhood"
                                     );
                                 });
-                                record_drops(&mut drops, op_index, layer, *target, dropped);
                             }
                         }
                     }
@@ -608,25 +530,11 @@ impl GraphMem {
                         if layer_mut.get_links(base).is_none() {
                             warn!("RemoveEdges({edge_type:?}): base={base} missing at layer {layer}; skipping outgoing half");
                         } else {
-                            let mut dropped = Vec::new();
                             layer_mut.edit_links(*base, tick, |old_seq, nbrs| {
                                 nbrs.retain(|z| {
-                                    // Named serials replay from this op itself;
-                                    // only predicate drops need recording.
-                                    if to_remove.contains(z) {
-                                        return false;
-                                    }
-                                    if !minting {
-                                        return true;
-                                    }
-                                    let keep = is_active(content, *z, old_seq);
-                                    if !keep {
-                                        dropped.push(*z);
-                                    }
-                                    keep
+                                    !to_remove.contains(z) && is_active(content, *z, old_seq)
                                 });
                             });
-                            record_drops(&mut drops, op_index, layer, *base, dropped);
                         }
                     }
                     if matches!(edge_type, EdgeType::Neighbors | EdgeType::All) {
@@ -634,23 +542,9 @@ impl GraphMem {
                             if layer_mut.get_links(target).is_none() {
                                 warn!("RemoveEdges({edge_type:?}): target={target} missing at layer {layer} (base={base}); skipping");
                             } else {
-                                let mut dropped = Vec::new();
                                 layer_mut.edit_links(*target, tick, |old_seq, nbrs| {
-                                    nbrs.retain(|z| {
-                                        if *z == *base {
-                                            return false;
-                                        }
-                                        if !minting {
-                                            return true;
-                                        }
-                                        let keep = is_active(content, *z, old_seq);
-                                        if !keep {
-                                            dropped.push(*z);
-                                        }
-                                        keep
-                                    });
+                                    nbrs.retain(|z| *z != *base && is_active(content, *z, old_seq));
                                 });
-                                record_drops(&mut drops, op_index, layer, *target, dropped);
                             }
                         }
                     }
@@ -663,15 +557,11 @@ impl GraphMem {
     }
 
     /// Stamp a locally-built [`UnstampedMutation`] with the next sequence
-    /// number, apply it with the staleness filter active, and return the
-    /// resulting [`GraphMutation`] with every filter drop made explicit: a
-    /// synthesized `RemoveEdges` (base-half, bare serials) is spliced in
-    /// immediately *before* the op whose apply performed the drop, so a literal
-    /// replay ([`Self::insert_apply`]) reproduces this graph's state — the
-    /// drop-before-append order matters when the same serial is dropped as
-    /// stale and re-appended within one op (a reauth back-edge). The enriched
-    /// op list is state-equivalent, not op-identical, to what was applied here;
-    /// the checksum covers state only.
+    /// number, apply it, and return the resulting [`GraphMutation`] carrying
+    /// the ops unchanged. The returned mutation is what gets persisted: it
+    /// records intent only, and replaying it ([`Self::insert_apply`]) runs the
+    /// identical apply, so any staleness cleanup performed here re-derives
+    /// deterministically on replay rather than being recorded.
     ///
     /// This is the sole minter of sequence numbers for in-process mutations:
     /// the number is assigned from `next_sequence_number()` and consumed by the
@@ -682,11 +572,10 @@ impl GraphMem {
     /// monotonicity check guards the externally-supplied `seq_no`.
     pub fn apply_new(&mut self, mutation: UnstampedMutation) -> Result<GraphMutation> {
         let seq_no = self.next_sequence_number();
-        let mut drops = Vec::new();
-        self.apply_ops(seq_no, &mutation.ops, Some(&mut drops))?;
+        self.apply_ops(seq_no, &mutation.ops)?;
         Ok(GraphMutation {
             seq_no,
-            ops: enrich_with_drops(mutation.ops, drops),
+            ops: mutation.ops,
         })
     }
 
@@ -1604,13 +1493,10 @@ mod tests {
         assert_eq!(graph.layers[0].get_links(&3).unwrap().neighbors, vec![1u32]);
     }
 
-    /// Filter-on-bump at mint: an asymmetric stale edge `a -> b` (no `b -> a`
+    /// Filter-on-bump: an asymmetric stale edge `a -> b` (no `b -> a`
     /// back-edge, as arises after compaction) is dropped the next time `a`'s
     /// neighborhood is touched once `b`'s content clock has advanced via
-    /// reauth — and the drop is recorded in the minted mutation as an explicit
-    /// `RemoveEdges` placed before the triggering op, so a literal replay
-    /// reproduces it. This is the v5 replacement for main's per-edge
-    /// version-skip.
+    /// reauth. This is the v5 replacement for main's per-edge version-skip.
     #[test]
     fn stale_edge_dropped_on_neighborhood_touch_after_reauth() {
         let mut graph = GraphMem::new();
@@ -1681,19 +1567,9 @@ mod tests {
             vec![3u32]
         );
 
-        // The minted mutation carries the drop explicitly, before the touch.
-        assert_eq!(
-            minted.ops,
-            vec![
-                MutationOp::RemoveEdges {
-                    base: 1,
-                    neighbors: vec![2],
-                    layer: 0,
-                    edge_type: EdgeType::Base,
-                },
-                touch,
-            ]
-        );
+        // The minted mutation records intent only; the drop is not reflected
+        // in the op list and re-derives on replay.
+        assert_eq!(minted.ops, vec![touch]);
     }
 
     /// Read-path skip: `get_active_links` omits a content-stale neighbor even
@@ -1991,12 +1867,11 @@ mod tests {
         }
     }
 
-    /// The `MutationOp::RemoveEdges` fused retain at mint: one teardown drops
-    /// the explicitly-named edge AND sweeps a sibling that went content-stale,
+    /// The `MutationOp::RemoveEdges` fused retain: one teardown drops the
+    /// explicitly-named edge AND sweeps a sibling that went content-stale,
     /// in a single neighborhood re-stamp — covering both the base-list retain
     /// (EdgeType::Base) and the target-loop back-half retain (EdgeType::All).
-    /// The swept sibling (and only it — the named edge replays from the op
-    /// itself) is recorded as a synthesized `RemoveEdges` before the op.
+    /// The sweep is not reflected in the returned op list (intent only).
     /// Stale edges survive RemoveNode cleanup by staying asymmetric: the
     /// reauthed target's own list never names the holder, so bidirectional
     /// cleanup doesn't visit it.
@@ -2032,8 +1907,8 @@ mod tests {
         assert_eq!(g.get_raw_links(&1, 0), &[2u32, 3u32], "stale 3 still raw");
         assert_eq!(g.get_active_links(&1, 0), vec![v(2)], "3 masked as stale");
 
-        // RemoveEdges Base(1 -/-> 2): retain drops explicit 2 AND stale 3; only
-        // the stale sweep is synthesized into the minted op list.
+        // RemoveEdges Base(1 -/-> 2): retain drops explicit 2 AND stale 3; the
+        // returned op list carries the intent unchanged.
         let teardown = MutationOp::RemoveEdges {
             base: 1,
             neighbors: vec![2],
@@ -2050,19 +1925,7 @@ mod tests {
             &[] as &[u32],
             "explicit 2 removed AND content-stale 3 swept in one retain"
         );
-        assert_eq!(
-            minted.ops,
-            vec![
-                MutationOp::RemoveEdges {
-                    base: 1,
-                    neighbors: vec![3],
-                    layer: 0,
-                    edge_type: EdgeType::Base,
-                },
-                teardown,
-            ],
-            "stale sweep recorded before the op; named edge not re-recorded"
-        );
+        assert_eq!(minted.ops, vec![teardown], "ops returned unchanged");
 
         // ── EdgeType::All, back-half (target-loop) retain. 4<->5 symmetric plus
         // asymmetric 5->6; reauth 6 so 5->6 is stale.
@@ -2090,7 +1953,7 @@ mod tests {
         assert_eq!(g.get_raw_links(&5, 0), &[4u32, 6u32], "stale 6 still raw");
 
         // RemoveEdges All(4 -/- 5): forward half empties 4; back-half retain on
-        // target 5 drops explicit 4 AND stale 6 — the latter synthesized.
+        // target 5 drops explicit 4 AND stale 6.
         let teardown = MutationOp::RemoveEdges {
             base: 4,
             neighbors: vec![5],
@@ -2112,34 +1975,21 @@ mod tests {
             &[] as &[u32],
             "back-half retain drops explicit 4 AND content-stale 6"
         );
-        assert_eq!(
-            minted.ops,
-            vec![
-                MutationOp::RemoveEdges {
-                    base: 5,
-                    neighbors: vec![6],
-                    layer: 0,
-                    edge_type: EdgeType::Base,
-                },
-                teardown,
-            ],
-            "back-half stale sweep recorded against the touched target's list"
-        );
+        assert_eq!(minted.ops, vec![teardown], "ops returned unchanged");
     }
 
-    /// The WAL contract: a mutation stream minted by `apply_new` (staleness
-    /// filter active, drops recorded) replays LITERALLY via `insert_apply_all`
-    /// onto a fresh graph to the identical state — checksum included. Every
-    /// filter drop must therefore appear as a synthesized `RemoveEdges` in the
-    /// minted ops, correctly placed. The history exercises: reauth whose
-    /// re-wiring touches a neighborhood holding its own stale back-edge
-    /// (drop-then-re-add of the same serial in one op — ordering load-bearing),
+    /// The WAL contract: a mutation stream minted by `apply_new` records
+    /// intent only, and replaying it via `insert_apply_all` onto a fresh graph
+    /// reproduces the identical state — checksum included — because replay
+    /// runs the same deterministic apply as minting (staleness cleanup
+    /// re-derives rather than being recorded). The history exercises: reauth
+    /// whose re-wiring touches a neighborhood holding its own stale back-edge,
     /// deletion followed by a touch sweeping the dangling edge, both
     /// `RemoveEdges` fused-retain halves (Base forward, All back), a
     /// compaction-shaped `RemoveEdges`, multi-layer edges, and entry-point
     /// churn.
     #[test]
-    fn minted_stream_replays_literally_to_identical_graph() {
+    fn minted_stream_replays_to_identical_graph() {
         fn mint(g: &mut GraphMem, wal: &mut Vec<GraphMutation>, ops: Vec<MutationOp>) {
             wal.push(g.apply_new(UnstampedMutation { ops }).unwrap());
         }
@@ -2190,7 +2040,7 @@ mod tests {
         );
         // seq 4: reauth 1, phase two — KEY fixture: the re-wiring back-halves
         // touch 2 (layer 0) and 5 (layer 1), each holding the stale edge to 1
-        // that the same op re-adds. The synthesized drop must precede the op.
+        // that the same op re-adds (drop-then-re-add within one apply).
         mint(
             &mut l,
             &mut wal,
@@ -2198,24 +2048,8 @@ mod tests {
         );
         assert_eq!(
             wal[3].ops,
-            vec![
-                node1(),
-                MutationOp::RemoveEdges {
-                    base: 2,
-                    neighbors: vec![1],
-                    layer: 0,
-                    edge_type: EdgeType::Base,
-                },
-                all(1, vec![2], 0),
-                MutationOp::RemoveEdges {
-                    base: 5,
-                    neighbors: vec![1],
-                    layer: 1,
-                    edge_type: EdgeType::Base,
-                },
-                all(1, vec![5], 1),
-            ],
-            "reauth drops synthesized per layer, each before its re-adding op"
+            vec![node1(), all(1, vec![2], 0), all(1, vec![5], 1)],
+            "minted ops are the intent, unmodified"
         );
 
         // seq 5: pure deletion of 2 — node 1 keeps a dangling 1->2 edge.
@@ -2289,13 +2123,14 @@ mod tests {
             }],
         );
 
-        // The stream really carries synthesized drops beyond the asserted ones.
-        let synthesized_drops = wal
+        // The recorded stream carries exactly the two explicit RemoveEdges
+        // (seq 9 and seq 12) — filter drops are never reflected into it.
+        let remove_edges = wal
             .iter()
             .flat_map(|m| m.ops.iter())
             .filter(|op| matches!(op, MutationOp::RemoveEdges { .. }))
             .count();
-        assert!(synthesized_drops >= 6, "got {synthesized_drops}");
+        assert_eq!(remove_edges, 2, "ops must record intent only");
 
         let mut r = GraphMem::new();
         r.insert_apply_all(&wal).unwrap();

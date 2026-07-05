@@ -18,15 +18,23 @@ use serde::{Deserialize, Serialize};
 /// The active version is persisted in `hawk_graph_mutations.mutation_format_version`
 /// so that the deserializer can dispatch without inspecting the blob bytes.
 ///
-/// V0 (edge ops carrying `VectorId`, no drop enrichment) is intentionally not
-/// readable: its segments were recorded under predicate-apply semantics and do
-/// not replay literally. The WAL is reset at the v5 cutover, so a version-0 row
-/// reaching this code is an operational error and fails loudly in `try_from`.
+/// A format version pins *replay behavior*, not just the byte layout: replay
+/// re-runs the same apply as minting, staleness filter included, so changing
+/// the filter predicate or the filter-on-bump discipline changes the physical
+/// state a recorded stream replays to, which the consensus checksum compares.
+/// The hard requirement for such changes is a checkpoint barrier (no
+/// pre-change segments left to replay); the version bump is the tripwire that
+/// makes a stray old segment fail loud instead of replaying into
+/// checksum-divergent state.
+///
+/// V0 (edge ops carrying `VectorId`) is intentionally not readable: the WAL is
+/// reset at the v5 cutover, so a version-0 row reaching this code is an
+/// operational error and fails loudly in `try_from`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GraphMutationFormat {
     /// V1: plain `bincode::serialize(BothEyes<Vec<GraphMutation>>)` with edge
-    /// ops carrying bare serial ids and mint-time staleness drops recorded as
-    /// explicit `RemoveEdges` (literal replay).
+    /// ops carrying bare serial ids; ops record intent only (staleness cleanup
+    /// re-derives on replay).
     V1,
 }
 
@@ -253,8 +261,8 @@ mod tests {
         assert_eq!(deserialized, expected);
     }
 
-    /// V0 rows (pre-enrichment, edge ops carrying VectorId) must fail loudly:
-    /// they cannot be replayed literally, and the WAL is reset at cutover.
+    /// V0 rows (edge ops carrying VectorId) must fail loudly: the WAL is
+    /// reset at cutover, so one reaching this code is an operational error.
     #[test]
     fn version_0_is_rejected() {
         assert!(GraphMutationFormat::try_from(0).is_err());

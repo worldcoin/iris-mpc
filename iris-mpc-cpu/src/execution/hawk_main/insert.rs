@@ -750,7 +750,7 @@ mod tests {
         );
 
         // The minted stream — setup plus slot mutations, including the
-        // compaction-minted RemoveEdges — replays literally to the same graph.
+        // compaction-minted RemoveEdges — replays to the same graph.
         let mut fresh: GraphMem = GraphMem::new();
         fresh.insert_apply(&setup).expect("replay setup");
         for m in grouped.iter().flatten() {
@@ -764,11 +764,11 @@ mod tests {
     }
 
     /// A replace (reauth-style) slot leaves the old node's back-edge dangling in
-    /// its neighbor's list; the new node's back-edge touch drops it at mint and
-    /// must record the drop explicitly, so the persisted mutations replay
-    /// literally to the identical graph.
+    /// its neighbor's list; the new node's back-edge touch drops it. The drop is
+    /// not recorded — the persisted mutations carry intent only, and replay
+    /// re-derives the drop to reach the identical graph.
     #[tokio::test]
-    async fn test_insert_replace_mutations_replay_literally_to_same_graph() {
+    async fn test_insert_replace_mutations_replay_to_same_graph() {
         use crate::hnsw::graph::mutation::UnstampedMutation;
 
         let mut store = PlaintextStore::default();
@@ -831,18 +831,17 @@ mod tests {
         .expect("insert should succeed");
         wal.extend(grouped.into_iter().flatten());
 
-        // The dangling-A drop from B's list was recorded explicitly.
+        // The dangling-A drop from B's list is not reflected in the stream.
         assert!(
-            wal.iter().any(|m| m.ops.iter().any(|op| matches!(
+            !wal.iter().any(|m| m.ops.iter().any(|op| matches!(
                 op,
-                MutationOp::RemoveEdges { base, neighbors, .. }
-                    if *base == b.serial_id() && *neighbors == vec![a.serial_id()]
+                MutationOp::RemoveEdges { base, .. } if *base == b.serial_id()
             ))),
-            "expected a synthesized RemoveEdges for B's dangling edge to A"
+            "ops must record intent only, not filter drops"
         );
 
         let mut fresh: GraphMem = GraphMem::new();
-        fresh.insert_apply_all(&wal).expect("literal replay");
+        fresh.insert_apply_all(&wal).expect("replay");
         assert_eq!(
             graph.checksum(),
             fresh.checksum(),
