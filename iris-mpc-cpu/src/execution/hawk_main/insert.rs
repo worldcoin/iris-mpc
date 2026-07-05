@@ -765,8 +765,7 @@ mod tests {
 
     /// A replace (reauth-style) slot leaves the old node's back-edge dangling in
     /// its neighbor's list; the new node's back-edge touch drops it. The drop is
-    /// not recorded — the persisted mutations carry intent only, and replay
-    /// re-derives the drop to reach the identical graph.
+    /// not recorded; replay re-derives it to reach the identical graph.
     #[tokio::test]
     async fn test_insert_replace_mutations_replay_to_same_graph() {
         use crate::hnsw::graph::mutation::UnstampedMutation;

@@ -105,20 +105,15 @@ impl NodeInit {
 /// added) and a stamp `> old_seq` means content-refreshed (reauthed) since the
 /// edge was certified — either way the edge is dropped.
 ///
-/// Used on every apply (the filter-on-bump in [`GraphMem::apply_ops`], which
-/// drops invalid edges before re-stamping a neighborhood) and at read time
-/// ([`GraphMem::get_active_links`], which skips them during traversal). It is
-/// how this implementation realizes, lazily, the abstract mutation semantics
-/// that a node's removal or re-insertion invalidates every edge incident to it.
+/// Used on every apply (the filter-on-bump in [`GraphMem::apply_ops`]) and at
+/// read time ([`GraphMem::get_active_links`]) — the lazy realization of the
+/// abstract semantics that removing or re-inserting a node invalidates every
+/// edge incident to it (see `model.rs`).
 ///
-/// Because replay re-evaluates it, changing this predicate (or the
-/// filter-on-bump discipline) changes the *physical* state a recorded stream
-/// replays to — and cross-party consensus checksums physical state. Even a
-/// change that preserves the abstract graph (`model.rs`) makes a post-change
-/// restart re-derive its history physically differently from still-live
-/// peers. Deploy any such change behind a checkpoint barrier; bump
-/// `GraphMutationFormat` so stray pre-change segments fail loud instead of
-/// replaying into checksum-divergent state.
+/// Replay re-evaluates this predicate, so changing it (or the filter-on-bump
+/// discipline) changes the physical state a recorded stream replays to, which
+/// the consensus checksum compares. Such changes need a checkpoint barrier
+/// and a `GraphMutationFormat` bump.
 fn is_active(content: &HashMap<SerialId, NodeInit>, z: SerialId, old_seq: u64) -> bool {
     content.get(&z).is_some_and(|ni| ni.active_at(old_seq))
 }
@@ -358,12 +353,9 @@ impl GraphMem {
 
     /// Applies a replayed (WAL/checkpoint) mutation to the in-memory graph.
     ///
-    /// Replay runs the same deterministic apply as minting ([`Self::apply_new`]):
-    /// the recorded ops are intent against the abstract graph, and staleness
-    /// cleanup (see [`is_active`]) re-derives identically because apply is a
-    /// pure function of the graph state and the mutation stream. A party that
-    /// rebuilds from a checkpoint plus this stream therefore lands on the exact
-    /// state of a party that minted it live.
+    /// Replay runs the same apply as minting ([`Self::apply_new`]); staleness
+    /// cleanup (see [`is_active`]) re-derives from the graph state rather
+    /// than being recorded.
     ///
     /// The supplied `mutation.seq_no` must be strictly greater than
     /// `self.last_update_seq_no`; otherwise the call returns `Err` without
@@ -557,11 +549,9 @@ impl GraphMem {
     }
 
     /// Stamp a locally-built [`UnstampedMutation`] with the next sequence
-    /// number, apply it, and return the resulting [`GraphMutation`] carrying
-    /// the ops unchanged. The returned mutation is what gets persisted: it
-    /// records intent only, and replaying it ([`Self::insert_apply`]) runs the
-    /// identical apply, so any staleness cleanup performed here re-derives
-    /// deterministically on replay rather than being recorded.
+    /// number, apply it, and return the resulting [`GraphMutation`] with the
+    /// ops unchanged; replaying it ([`Self::insert_apply`]) runs the
+    /// identical apply.
     ///
     /// This is the sole minter of sequence numbers for in-process mutations:
     /// the number is assigned from `next_sequence_number()` and consumed by the
@@ -1567,8 +1557,7 @@ mod tests {
             vec![3u32]
         );
 
-        // The minted mutation records intent only; the drop is not reflected
-        // in the op list and re-derives on replay.
+        // The drop is not reflected in the op list; it re-derives on replay.
         assert_eq!(minted.ops, vec![touch]);
     }
 
@@ -1978,14 +1967,11 @@ mod tests {
         assert_eq!(minted.ops, vec![teardown], "ops returned unchanged");
     }
 
-    /// The WAL contract: a mutation stream minted by `apply_new` records
-    /// intent only, and replaying it via `insert_apply_all` onto a fresh graph
-    /// reproduces the identical state — checksum included — because replay
-    /// runs the same deterministic apply as minting (staleness cleanup
-    /// re-derives rather than being recorded). The history exercises: reauth
-    /// whose re-wiring touches a neighborhood holding its own stale back-edge,
-    /// deletion followed by a touch sweeping the dangling edge, both
-    /// `RemoveEdges` fused-retain halves (Base forward, All back), a
+    /// A stream minted by `apply_new` replays via `insert_apply_all` onto a
+    /// fresh graph to the identical state — checksum included. Exercises:
+    /// reauth whose re-wiring touches a neighborhood holding its own stale
+    /// back-edge, deletion followed by a touch sweeping the dangling edge,
+    /// both `RemoveEdges` fused-retain halves (Base forward, All back), a
     /// compaction-shaped `RemoveEdges`, multi-layer edges, and entry-point
     /// churn.
     #[test]
@@ -2123,8 +2109,8 @@ mod tests {
             }],
         );
 
-        // The recorded stream carries exactly the two explicit RemoveEdges
-        // (seq 9 and seq 12) — filter drops are never reflected into it.
+        // Only the two explicit RemoveEdges (seq 9, 12) appear in the stream;
+        // filter drops are never recorded.
         let remove_edges = wal
             .iter()
             .flat_map(|m| m.ops.iter())

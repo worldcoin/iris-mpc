@@ -1,26 +1,22 @@
 //! Executable specification of the graph the WAL contracts with.
 //!
-//! [`ModelGraph`] is the abstract graph: nodes carrying a version, plain
-//! per-layer edge sets, entry points — no timestamps, no staleness. Mutation
-//! ops are set arithmetic, and removal semantics are *eager*: removing or
-//! re-inserting a node deletes every edge incident to it, in both directions,
-//! immediately. `GraphMem` implements the same semantics lazily (content
-//! clock, freshness certificates, filter-on-bump, read-time skipping); the
-//! refinement test in this module drives both with generated mutation streams
-//! and asserts their observations agree after every mutation.
+//! [`ModelGraph`] is the abstract graph: versioned nodes, entry points, plain
+//! per-layer edge sets — no timestamps, no staleness. Ops are set arithmetic;
+//! removal is eager: removing or re-inserting a node deletes every incident
+//! edge, both directions, immediately. `GraphMem` implements the same
+//! semantics lazily; the refinement test drives both with generated mutation
+//! streams and asserts their observations agree after every mutation.
 //!
-//! Spec preconditions mirrored as assertions here (production upholds them by
-//! construction): `AddEdges` endpoints must be live at apply time (causal
-//! construction), and `AddNode` targets a serial that is not currently live
-//! (a reauth is `RemoveNode` + `AddNode` in one mutation).
+//! Spec preconditions (asserted here, upheld by production mints): `AddEdges`
+//! endpoints are live at apply time (causal construction); `AddNode` targets
+//! a non-live serial (reauth = `RemoveNode` + `AddNode` in one mutation).
 
 use super::mutation::{EdgeType, MutationOp, UpdateEntryPoint};
 use iris_mpc_common::{SerialId, VersionId};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// The abstract graph state: the reference implementation the production
-/// graph is tested against. Correct by inspection — keep it free of laziness,
-/// clocks, and performance concerns.
+/// Reference implementation the production graph is tested against; keep it
+/// free of laziness, clocks, and performance concerns.
 #[derive(Default)]
 pub struct ModelGraph {
     /// Live nodes and the version their insertion carried.
@@ -271,9 +267,8 @@ mod tests {
 
     /// Drive `GraphMem` and the model with the same generated mutation
     /// stream — inserts, reauths, deletions, edge touches, compaction-shaped
-    /// removals — checking observation agreement after every mutation, then
-    /// replay the recorded stream onto a fresh graph and require the
-    /// identical state (the WAL determinism pin).
+    /// removals — checking observation agreement after every mutation; then
+    /// the recorded stream must replay onto a fresh graph to identical state.
     #[test]
     fn graphmem_refines_the_model() {
         for seed in 0..8u64 {

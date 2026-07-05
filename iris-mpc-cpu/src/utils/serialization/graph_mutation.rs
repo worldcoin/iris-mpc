@@ -18,13 +18,11 @@ use serde::{Deserialize, Serialize};
 /// The active version is persisted in `hawk_graph_mutations.mutation_format_version`
 /// so that the deserializer can dispatch without inspecting the blob bytes.
 ///
-/// A format version pins *replay behavior*, not just the byte layout: replay
-/// re-runs the same apply as minting, staleness filter included, so changing
-/// the filter predicate or the filter-on-bump discipline changes the physical
-/// state a recorded stream replays to, which the consensus checksum compares.
-/// The hard requirement for such changes is a checkpoint barrier (no
-/// pre-change segments left to replay); the version bump is the tripwire that
-/// makes a stray old segment fail loud instead of replaying into
+/// A format version pins replay behavior, not just byte layout: replay
+/// re-runs the same apply as minting, staleness filter included. Changing the
+/// filter predicate or the filter-on-bump discipline therefore needs a
+/// checkpoint barrier (no old segments left to replay) plus a version bump,
+/// so a stray old segment fails loud instead of replaying into
 /// checksum-divergent state.
 ///
 /// V0 (edge ops carrying `VectorId`) is intentionally not readable: the WAL is
