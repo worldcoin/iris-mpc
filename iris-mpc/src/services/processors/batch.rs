@@ -461,10 +461,10 @@ impl<'a> BatchProcessor<'a> {
             }
 
             if last_progress_log.elapsed() >= BATCH_POLL_PROGRESS_LOG_INTERVAL {
-                let elapsed_secs = poll_start.elapsed().as_secs();
+                let elapsed = poll_start.elapsed();
+                let elapsed_secs = elapsed.as_secs();
                 if self.config.batch_poll_abort_after_secs > 0
-                    && poll_start.elapsed()
-                        >= Duration::from_secs(self.config.batch_poll_abort_after_secs)
+                    && elapsed >= Duration::from_secs(self.config.batch_poll_abort_after_secs)
                     && self.msg_counter > 0
                 {
                     tracing::warn!(
