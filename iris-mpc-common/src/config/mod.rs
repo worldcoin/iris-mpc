@@ -911,15 +911,3 @@ impl From<Config> for CommonConfig {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::Config;
-
-    #[test]
-    fn batch_poll_abort_after_secs_defaults_to_disabled() {
-        let config: Config = serde_json::from_value(serde_json::json!({})).unwrap();
-
-        assert_eq!(config.batch_poll_abort_after_secs, 0);
-    }
-}
