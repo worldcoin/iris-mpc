@@ -312,6 +312,9 @@ pub struct Config {
     #[serde(default = "default_batch_sync_polling_timeout_secs")]
     pub batch_sync_polling_timeout_secs: u64,
 
+    #[serde(default = "default_batch_poll_abort_after_secs")]
+    pub batch_poll_abort_after_secs: u64,
+
     #[serde(default = "default_separate_tokio_cores_per_node")]
     pub separate_tokio_cores_per_node: Option<usize>,
 
@@ -475,6 +478,10 @@ fn default_sqs_long_poll_wait_time() -> usize {
 
 fn default_batch_sync_polling_timeout_secs() -> u64 {
     10
+}
+
+fn default_batch_poll_abort_after_secs() -> u64 {
+    0
 }
 
 fn default_full_scan_side_switching_enabled() -> bool {
@@ -733,6 +740,12 @@ pub struct CommonConfig {
     batch_polling_timeout_secs: i32,
     sqs_long_poll_wait_time: usize,
     batch_sync_polling_timeout_secs: u64,
+    // serde(default) keeps version skew deserializable: an old peer's serialized
+    // state (no such key) must still parse on an upgraded party. Value equality is
+    // then enforced by check_common_config — parties must not run with different
+    // abort deadlines.
+    #[serde(default = "default_batch_poll_abort_after_secs")]
+    batch_poll_abort_after_secs: u64,
 }
 
 impl CommonConfig {
@@ -820,6 +833,7 @@ impl From<Config> for CommonConfig {
             batch_polling_timeout_secs,
             sqs_long_poll_wait_time,
             batch_sync_polling_timeout_secs,
+            batch_poll_abort_after_secs,
             // pprof collector (not part of common hash)
             pprof_s3_bucket: _,
             pprof_prefix: _,
@@ -893,6 +907,19 @@ impl From<Config> for CommonConfig {
             batch_polling_timeout_secs,
             sqs_long_poll_wait_time,
             batch_sync_polling_timeout_secs,
+            batch_poll_abort_after_secs,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+
+    #[test]
+    fn batch_poll_abort_after_secs_defaults_to_disabled() {
+        let config: Config = serde_json::from_value(serde_json::json!({})).unwrap();
+
+        assert_eq!(config.batch_poll_abort_after_secs, 0);
     }
 }

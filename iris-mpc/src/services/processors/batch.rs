@@ -39,12 +39,43 @@ use iris_mpc_common::helpers::sync::Modification;
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
 use iris_mpc_common::job::{BatchMetadata, BatchQuery, GaloisSharesBothSides};
 use iris_mpc_store::Store;
+use rand::Rng;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinHandle;
+
+const BATCH_POLL_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(30);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PollOutcome {
+    Completed,
+    AbortedEmpty,
+}
+
+#[derive(Default)]
+struct BatchPollAbortCounter {
+    batch_id: Option<u64>,
+    count: u32,
+}
+
+impl BatchPollAbortCounter {
+    fn record_abort(&mut self, batch_id: u64) -> u32 {
+        if self.batch_id != Some(batch_id) {
+            self.batch_id = Some(batch_id);
+            self.count = 0;
+        }
+        self.count += 1;
+        self.count
+    }
+}
+
+fn batch_poll_abort_jitter() -> Duration {
+    Duration::from_millis(rand::thread_rng().gen_range(1_000..=3_000))
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn receive_batch_stream(
@@ -246,6 +277,8 @@ impl<'a> BatchProcessor<'a> {
             return Ok(None);
         }
 
+        let mut batch_poll_abort_counter = BatchPollAbortCounter::default();
+
         loop {
             let current_batch_id = self.current_batch_id_atomic.load(Ordering::SeqCst);
 
@@ -308,8 +341,33 @@ impl<'a> BatchProcessor<'a> {
 
             // Poll the determined number of messages
             if messages_to_poll > 0 {
-                self.poll_exact_messages(messages_to_poll).await?;
-                break;
+                match self.poll_exact_messages(messages_to_poll).await? {
+                    PollOutcome::Completed => break,
+                    PollOutcome::AbortedEmpty => {
+                        {
+                            let mut shared_state = self.batch_sync_shared_state.lock().await;
+                            // This state is served to peers via /batch-sync-state. After an empty
+                            // abort it is safe to reset only messages_to_poll because this party
+                            // consumed nothing, peers compute min() fresh each sync round, and any
+                            // peer already latched to the old target either completes then
+                            // reconverges via the indefinitely retrying batch-entries SHA sync or
+                            // observes the reset on a later round.
+                            shared_state.messages_to_poll = 0;
+                        }
+
+                        let abort_count = batch_poll_abort_counter.record_abort(current_batch_id);
+                        if abort_count > 5 {
+                            tracing::error!(
+                                "Batch ID: {}. Empty batch poll aborted {} times for this batch_id; continuing batch sync.",
+                                current_batch_id,
+                                abort_count
+                            );
+                        }
+
+                        tokio::time::sleep(batch_poll_abort_jitter()).await;
+                        continue;
+                    }
+                }
             } else {
                 tracing::debug!(
                     "Batch ID: {}. No messages to poll based on sync state. Will re-check after a short delay.",
@@ -380,8 +438,13 @@ impl<'a> BatchProcessor<'a> {
         Ok(Some(self.batch_query.clone()))
     }
 
-    async fn poll_exact_messages(&mut self, num_to_poll: u32) -> Result<(), ReceiveRequestError> {
+    async fn poll_exact_messages(
+        &mut self,
+        num_to_poll: u32,
+    ) -> Result<PollOutcome, ReceiveRequestError> {
         let current_batch_id = self.current_batch_id_atomic.load(Ordering::SeqCst);
+        let poll_start = Instant::now();
+        let mut last_progress_log = poll_start;
         tracing::info!(
             "Batch ID: {}. Polling SQS for up to {} messages.",
             current_batch_id,
@@ -394,7 +457,34 @@ impl<'a> BatchProcessor<'a> {
                 tracing::info!(
                     "Stopping batch receive during polling exact messages due to shutdown signal..."
                 );
-                return Ok(()); // Exit if shutdown is signaled
+                return Ok(PollOutcome::Completed); // Exit if shutdown is signaled
+            }
+
+            if last_progress_log.elapsed() >= BATCH_POLL_PROGRESS_LOG_INTERVAL {
+                let elapsed_secs = poll_start.elapsed().as_secs();
+                if self.config.batch_poll_abort_after_secs > 0
+                    && poll_start.elapsed()
+                        >= Duration::from_secs(self.config.batch_poll_abort_after_secs)
+                    && self.msg_counter > 0
+                {
+                    tracing::warn!(
+                        "Batch ID: {}. Batch poll still waiting after {}s with {} out of {} messages processed; continuing because partial polls cannot abort.",
+                        current_batch_id,
+                        elapsed_secs,
+                        self.msg_counter,
+                        num_to_poll
+                    );
+                    metrics::counter!("batch_poll_partial_stuck").increment(1);
+                } else {
+                    tracing::info!(
+                        "Batch ID: {}. Batch poll still waiting after {}s with {} out of {} messages processed.",
+                        current_batch_id,
+                        elapsed_secs,
+                        self.msg_counter,
+                        num_to_poll
+                    );
+                }
+                last_progress_log = Instant::now();
             }
 
             let rcv_message_output = self
@@ -419,6 +509,26 @@ impl<'a> BatchProcessor<'a> {
                         self.msg_counter,
                         num_to_poll
                     );
+                    // The abort deadline check must stay only in empty-receive branches.
+                    // With msg_counter == 0, no message was processed and deleted in this
+                    // attempt; process_message increments only after successful processing
+                    // and delete, while receive/process failures return Err and tear down.
+                    // Never abort with msg_counter > 0 because those deleted messages exist
+                    // only in this processor's in-memory batch_query.
+                    if self.config.batch_poll_abort_after_secs > 0
+                        && poll_start.elapsed()
+                            >= Duration::from_secs(self.config.batch_poll_abort_after_secs)
+                        && self.msg_counter == 0
+                    {
+                        tracing::warn!(
+                            "Batch ID: {}. aborting empty batch poll attempt after {}s waiting for target {}; re-entering batch sync",
+                            current_batch_id,
+                            poll_start.elapsed().as_secs(),
+                            num_to_poll
+                        );
+                        metrics::counter!("batch_poll_aborted").increment(1);
+                        return Ok(PollOutcome::AbortedEmpty);
+                    }
                     // Add a small delay to prevent tight looping when queue is empty but we are still expecting messages
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     continue;
@@ -436,6 +546,23 @@ impl<'a> BatchProcessor<'a> {
                   "Batch ID: {}. SQS receive_message returned no messages array, will retry polling.",
                     current_batch_id
                 );
+                // The abort deadline check must stay only in empty-receive branches; aborting
+                // after any successfully processed message would strand SQS-deleted messages
+                // that are present only in this processor's in-memory batch_query.
+                if self.config.batch_poll_abort_after_secs > 0
+                    && poll_start.elapsed()
+                        >= Duration::from_secs(self.config.batch_poll_abort_after_secs)
+                    && self.msg_counter == 0
+                {
+                    tracing::warn!(
+                        "Batch ID: {}. aborting empty batch poll attempt after {}s waiting for target {}; re-entering batch sync",
+                        current_batch_id,
+                        poll_start.elapsed().as_secs(),
+                        num_to_poll
+                    );
+                    metrics::counter!("batch_poll_aborted").increment(1);
+                    return Ok(PollOutcome::AbortedEmpty);
+                }
                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 continue;
             }
@@ -446,7 +573,8 @@ impl<'a> BatchProcessor<'a> {
             self.msg_counter,
             num_to_poll
         );
-        Ok(())
+        metrics::histogram!("batch_poll_duration").record(poll_start.elapsed().as_secs_f64());
+        Ok(PollOutcome::Completed)
     }
 
     async fn process_message(
@@ -1367,4 +1495,19 @@ pub async fn get_own_batch_sync_state(
         batch_id: current_batch_id,
     };
     Ok(batch_sync_state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BatchPollAbortCounter;
+
+    #[test]
+    fn batch_poll_abort_counter_tracks_current_batch_id() {
+        let mut counter = BatchPollAbortCounter::default();
+
+        assert_eq!(counter.record_abort(7), 1);
+        assert_eq!(counter.record_abort(7), 2);
+        assert_eq!(counter.record_abort(8), 1);
+        assert_eq!(counter.record_abort(8), 2);
+    }
 }
