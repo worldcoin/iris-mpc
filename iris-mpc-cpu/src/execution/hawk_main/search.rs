@@ -143,6 +143,7 @@ async fn per_session<const ROTMASK: u32>(
     let inner = async {
         let mut vector_store = session.aby3_store.write().await;
         let graph_store = session.graph_store.clone().read_owned().await;
+        let mut session_supermatcher_count: u32 = 0;
 
         for task in batch.tasks {
             let query = search_queries[batch.i_eye][task.i_request][task.i_rotation];
@@ -163,14 +164,29 @@ async fn per_session<const ROTMASK: u32>(
                     &mut vector_store,
                     &graph_store,
                     insertion_layer,
+                    &mut session_supermatcher_count,
                 )
                 .await?
             } else {
                 // plain search for non-centers
-                per_search_query(query, search_params, &mut vector_store, &graph_store).await?
+                per_search_query(
+                    query,
+                    search_params,
+                    &mut vector_store,
+                    &graph_store,
+                    &mut session_supermatcher_count,
+                )
+                .await?
             };
 
             tx.send((task.id(), result))?;
+        }
+
+        if session_supermatcher_count > 0 {
+            metrics::counter!("supermatcher_extended_searches")
+                .increment(session_supermatcher_count as u64);
+            metrics::histogram!("supermatcher_extended_searches_per_session")
+                .record(session_supermatcher_count as f64);
         }
 
         Ok(())
@@ -208,6 +224,7 @@ async fn classify_and_extend(
     aby3_store: &mut Aby3Store<HawkOps>,
     graph_store: &GraphMem,
     ef: usize,
+    supermatcher_count: &mut u32,
 ) -> Result<ClassifiedMatches> {
     let margin = search_params.saturation_margin;
     let classified = classify_edges(edges, aby3_store, ef, margin).await?;
@@ -229,7 +246,7 @@ async fn classify_and_extend(
             "Potential supermatcher: all {ef} results below anon stats threshold, \
              re-searching with ef={ef_supermatch} to confirm",
         );
-        metrics::counter!("supermatcher_extended_searches").increment(1);
+        *supermatcher_count += 1;
 
         let supermatch_neighbors = hnsw_supermatch
             .search(aby3_store, graph_store, query, ef_supermatch)
@@ -318,6 +335,7 @@ async fn per_insert_query(
     aby3_store: &mut Aby3Store<HawkOps>,
     graph_store: &GraphMem,
     insertion_layer: usize,
+    supermatcher_count: &mut u32,
 ) -> Result<HawkInsertPlan> {
     let start = Instant::now();
 
@@ -337,6 +355,7 @@ async fn per_insert_query(
                     aby3_store,
                     graph_store,
                     ef,
+                    supermatcher_count,
                 )
                 .await?
             }
@@ -371,6 +390,7 @@ async fn per_search_query(
     search_params: &SearchParams,
     aby3_store: &mut Aby3Store<HawkOps>,
     graph_store: &GraphMem,
+    supermatcher_count: &mut u32,
 ) -> Result<HawkInsertPlan> {
     let start = Instant::now();
 
@@ -390,6 +410,7 @@ async fn per_search_query(
             aby3_store,
             graph_store,
             ef_search,
+            supermatcher_count,
         )
         .await?
     } else {
