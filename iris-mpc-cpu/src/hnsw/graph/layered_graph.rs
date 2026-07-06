@@ -110,10 +110,12 @@ impl NodeInit {
 /// abstract semantics that removing or re-inserting a node invalidates every
 /// edge incident to it (see `model.rs`).
 ///
-/// Replay re-evaluates this predicate, so changing it (or the filter-on-bump
-/// discipline) changes the physical state a recorded stream replays to, which
-/// the consensus checksum compares. Such changes need a checkpoint barrier
-/// and a `GraphMutationFormat` bump.
+/// Replay re-evaluates this predicate. Changes that preserve the abstract
+/// graph (`model.rs`) replay old segments safely and need no WAL migration —
+/// only that all parties process batches on the same binary version, since
+/// the consensus checksum compares per-version-deterministic physical state.
+/// Changes to the abstract semantics themselves require a
+/// `GraphMutationFormat` bump behind a checkpoint barrier.
 fn is_active(content: &HashMap<SerialId, NodeInit>, z: SerialId, old_seq: u64) -> bool {
     content.get(&z).is_some_and(|ni| ni.active_at(old_seq))
 }

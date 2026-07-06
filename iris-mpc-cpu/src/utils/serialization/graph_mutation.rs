@@ -18,12 +18,12 @@ use serde::{Deserialize, Serialize};
 /// The active version is persisted in `hawk_graph_mutations.mutation_format_version`
 /// so that the deserializer can dispatch without inspecting the blob bytes.
 ///
-/// A format version pins replay behavior, not just byte layout: replay
-/// re-runs the same apply as minting, staleness filter included. Changing the
-/// filter predicate or the filter-on-bump discipline therefore needs a
-/// checkpoint barrier (no old segments left to replay) plus a version bump,
-/// so a stray old segment fails loud instead of replaying into
-/// checksum-divergent state.
+/// A format version pins the wire layout and the abstract mutation semantics
+/// (see `hnsw::graph::model`), not the implementation. Semantics changes
+/// require a new version behind a checkpoint barrier (no old segments left to
+/// reinterpret). Implementation changes that preserve the abstract graph
+/// (e.g. pruning discipline) replay old segments safely and need no bump —
+/// only same-binary deployment across parties while batches are processed.
 ///
 /// V0 (edge ops carrying `VectorId`) is intentionally not readable: the WAL is
 /// reset at the v5 cutover, so a version-0 row reaching this code is an
