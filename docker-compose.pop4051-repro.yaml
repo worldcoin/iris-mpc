@@ -1,0 +1,13 @@
+# POP-4051 repro overlay: enables the bounded batch-poll abort on all parties.
+# Baseline stall repro: omit this file (or ABORT_SECS=0).
+# Fix validation:      ABORT_SECS=10 docker compose -f docker-compose.hawk.yaml -f docker-compose.pop4051-repro.yaml up
+services:
+  hawk_participant_0:
+    environment:
+      SMPC__BATCH_POLL_ABORT_AFTER_SECS: "${ABORT_SECS:-0}"
+  hawk_participant_1:
+    environment:
+      SMPC__BATCH_POLL_ABORT_AFTER_SECS: "${ABORT_SECS:-0}"
+  hawk_participant_2:
+    environment:
+      SMPC__BATCH_POLL_ABORT_AFTER_SECS: "${ABORT_SECS:-0}"
