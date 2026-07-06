@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "dev"
+      - "carlomazzaferro/pop-4051-bound-batch-poll"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
