@@ -2,7 +2,15 @@
 # worldcoin-foundation/common-cronjob) via wf-cluster-apps, mirroring ampc-hnsw-db-exporter.
 # Per-cluster env (map format) + the attachSecurityGroupPolicy that lets the pod reach the
 # anon-stats Aurora live per-node.
-image: "ghcr.io/worldcoin/retention-reaper:latest"
+image: "ghcr.io/worldcoin/retention-reaper:d9a3d33342dfd9e95c7b11e8ef4e4101a3e6ed80"
+
+# STAGE DRY-RUN VALIDATION: enable the reaper in dry-run mode — it logs what it WOULD
+# reap (read-only COUNT, no DELETE). Safe only because the image above is the dry-run
+# build; deep-merges with the per-cluster RETENTION__* env maps. Flip DRY_RUN to "false"
+# to go live once the previewed counts look right.
+env:
+  RETENTION__ENABLED: "true"
+  RETENTION__DRY_RUN: "true"
 
 replicaCount: 1
 

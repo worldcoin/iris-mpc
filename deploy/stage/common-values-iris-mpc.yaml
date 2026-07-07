@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:7fde3a4d9acd4e8c8f0980921f0a9f25aadb8e21"
+image: "ghcr.io/worldcoin/iris-mpc:fdbf805c139ed76c32cd88ac9be591856677dd0f"
 
 environment: stage
 replicaCount: 1
@@ -6,7 +6,7 @@ replicaCount: 1
 # Common environment variables shared across all iris-mpc nodes.
 # Defined as a map so Helm deep-merges with per-node env maps.
 env:
-  RUST_LOG: "info"
+  RUST_LOG: "debug"
   RUST_BACKTRACE: "full"
   NCCL_SOCKET_IFNAME: "ens,eth"
   NCCL_IB_CUDA_SUPPORT: "1"

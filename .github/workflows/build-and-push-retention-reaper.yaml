@@ -7,9 +7,6 @@ on:
   push:
     branches:
       - main
-      # TEMPORARY: build a branch image pre-merge so it can be deployed to stage.
-      # Remove before merge.
-      - carlomazzaferro/pop-3905-anon-stats-retention
     paths:
       - Dockerfile.retention-reaper
       - iris-mpc-bins/bin/retention-reaper/**
