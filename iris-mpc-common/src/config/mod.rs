@@ -312,6 +312,18 @@ pub struct Config {
     #[serde(default = "default_batch_sync_polling_timeout_secs")]
     pub batch_sync_polling_timeout_secs: u64,
 
+    #[serde(default = "default_db_backed_ingest")]
+    pub db_backed_ingest: bool,
+
+    #[serde(default = "default_db_ingest_sqs_wait_secs")]
+    pub db_ingest_sqs_wait_secs: i32,
+
+    #[serde(default = "default_db_ingest_backoff_initial_ms")]
+    pub db_ingest_backoff_initial_ms: u64,
+
+    #[serde(default = "default_db_ingest_backoff_max_ms")]
+    pub db_ingest_backoff_max_ms: u64,
+
     #[serde(default = "default_separate_tokio_cores_per_node")]
     pub separate_tokio_cores_per_node: Option<usize>,
 
@@ -475,6 +487,22 @@ fn default_sqs_long_poll_wait_time() -> usize {
 
 fn default_batch_sync_polling_timeout_secs() -> u64 {
     10
+}
+
+fn default_db_backed_ingest() -> bool {
+    false
+}
+
+fn default_db_ingest_sqs_wait_secs() -> i32 {
+    10
+}
+
+fn default_db_ingest_backoff_initial_ms() -> u64 {
+    200
+}
+
+fn default_db_ingest_backoff_max_ms() -> u64 {
+    5_000
 }
 
 fn default_full_scan_side_switching_enabled() -> bool {
@@ -733,6 +761,12 @@ pub struct CommonConfig {
     batch_polling_timeout_secs: i32,
     sqs_long_poll_wait_time: usize,
     batch_sync_polling_timeout_secs: u64,
+    // serde(default) keeps version skew deserializable: an old peer's serialized
+    // state (no such key) must still parse on an upgraded party. Value equality is
+    // then enforced by check_common_config — parties must not run in mixed
+    // ingestion modes.
+    #[serde(default = "default_db_backed_ingest")]
+    db_backed_ingest: bool,
 }
 
 impl CommonConfig {
@@ -820,6 +854,10 @@ impl From<Config> for CommonConfig {
             batch_polling_timeout_secs,
             sqs_long_poll_wait_time,
             batch_sync_polling_timeout_secs,
+            db_backed_ingest,
+            db_ingest_sqs_wait_secs: _,
+            db_ingest_backoff_initial_ms: _,
+            db_ingest_backoff_max_ms: _,
             // pprof collector (not part of common hash)
             pprof_s3_bucket: _,
             pprof_prefix: _,
@@ -893,6 +931,7 @@ impl From<Config> for CommonConfig {
             batch_polling_timeout_secs,
             sqs_long_poll_wait_time,
             batch_sync_polling_timeout_secs,
+            db_backed_ingest,
         }
     }
 }

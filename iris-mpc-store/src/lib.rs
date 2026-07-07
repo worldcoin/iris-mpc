@@ -30,6 +30,22 @@ pub use s3_importer::{
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::ops::DerefMut;
 
+pub const SNS_SEQUENCE_NUMBER_WIDTH: usize = 40;
+
+#[derive(sqlx::FromRow, Debug, Clone, PartialEq, Eq)]
+pub struct IngestedRequest {
+    pub sequence_number: String,
+    pub message_body: String,
+}
+
+pub fn normalize_sns_sequence_number(sequence_number: &str) -> Result<String> {
+    let parsed = sequence_number.parse::<u128>()?;
+    Ok(format!(
+        "{parsed:0width$}",
+        width = SNS_SEQUENCE_NUMBER_WIDTH
+    ))
+}
+
 /// The unified type that can hold either DB or S3 variants.
 pub enum StoredIris {
     // DB stores the shares in their original form
@@ -486,6 +502,89 @@ WHERE id = $1;
         Ok(id.0.unwrap_or(0) as usize)
     }
 
+    pub async fn insert_ingested_request(
+        &self,
+        sequence_number: &str,
+        message_body: &str,
+    ) -> Result<bool> {
+        let normalized_sequence_number = normalize_sns_sequence_number(sequence_number)?;
+        let result = sqlx::query(
+            r#"
+            INSERT INTO ingested_requests (sequence_number, message_body)
+            VALUES ($1, $2)
+            ON CONFLICT (sequence_number) DO NOTHING
+            "#,
+        )
+        .bind(normalized_sequence_number)
+        .bind(message_body)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn count_pending_ingested_requests(&self) -> Result<i64> {
+        let count: (i64,) = sqlx::query_as(
+            r#"
+            SELECT COUNT(*)
+            FROM ingested_requests
+            WHERE consumed_batch_id IS NULL
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(count.0)
+    }
+
+    pub async fn pending_ingested_requests(&self, limit: u32) -> Result<Vec<IngestedRequest>> {
+        let rows = sqlx::query_as::<_, IngestedRequest>(
+            r#"
+            SELECT sequence_number, message_body
+            FROM ingested_requests
+            WHERE consumed_batch_id IS NULL
+            ORDER BY sequence_number
+            LIMIT $1
+            "#,
+        )
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn mark_ingested_requests_consumed(
+        &self,
+        sequence_numbers: &[String],
+        batch_id: u64,
+    ) -> Result<()> {
+        if sequence_numbers.is_empty() {
+            return Ok(());
+        }
+
+        let result = sqlx::query(
+            r#"
+            UPDATE ingested_requests
+            SET consumed_batch_id = $1
+            WHERE sequence_number = ANY($2::text[])
+              AND consumed_batch_id IS NULL
+            "#,
+        )
+        .bind(batch_id as i64)
+        .bind(sequence_numbers)
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() != sequence_numbers.len() as u64 {
+            return Err(eyre!(
+                "marked {} ingested request rows consumed, expected {}",
+                result.rows_affected(),
+                sequence_numbers.len()
+            ));
+        }
+
+        Ok(())
+    }
+
     pub async fn insert_modification(
         &self,
         serial_id: Option<i64>,
@@ -916,6 +1015,46 @@ pub mod tests {
         let mut tx = store.tx().await?;
         store.insert_irises(&mut tx, &[]).await?;
         tx.commit().await?;
+
+        cleanup(&postgres_client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ingested_requests_idempotency() -> Result<()> {
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+
+        let sequence_number = "42";
+        let normalized_sequence_number = normalize_sns_sequence_number(sequence_number)?;
+
+        assert!(
+            store
+                .insert_ingested_request(sequence_number, "message body")
+                .await?
+        );
+        assert!(
+            !store
+                .insert_ingested_request(sequence_number, "message body")
+                .await?
+        );
+
+        assert_eq!(store.count_pending_ingested_requests().await?, 1);
+
+        let pending = store.pending_ingested_requests(10).await?;
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].sequence_number, normalized_sequence_number);
+        assert_eq!(pending[0].message_body, "message body");
+
+        let sequence_numbers = vec![pending[0].sequence_number.clone()];
+        store
+            .mark_ingested_requests_consumed(&sequence_numbers, 7)
+            .await?;
+
+        assert_eq!(store.count_pending_ingested_requests().await?, 0);
 
         cleanup(&postgres_client, &schema_name).await?;
         Ok(())

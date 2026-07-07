@@ -10,7 +10,7 @@ use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sns::types::MessageAttributeValue;
 use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::Client;
-use eyre::Result;
+use eyre::{eyre, Result};
 use iris_mpc_common::config::Config;
 use iris_mpc_common::galois_engine::degree4::{
     GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare, GaloisShares,
@@ -38,13 +38,167 @@ use iris_mpc_common::helpers::smpc_response::{
 use iris_mpc_common::helpers::sync::Modification;
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
 use iris_mpc_common::job::{BatchMetadata, BatchQuery, GaloisSharesBothSides};
-use iris_mpc_store::Store;
+use iris_mpc_store::{IngestedRequest, Store};
+use rand::Rng;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinHandle;
+
+fn messages_to_poll_for_available(
+    available_messages: u32,
+    max_batch_size: usize,
+    predefined_batch_sizes: &[usize],
+    current_batch_id: u64,
+) -> u32 {
+    let index = current_batch_id.saturating_sub(1) as usize;
+    let configured_limit = if predefined_batch_sizes.len() > index {
+        predefined_batch_sizes[index]
+    } else {
+        max_batch_size
+    };
+    std::cmp::min(
+        available_messages,
+        std::cmp::min(configured_limit, max_batch_size) as u32,
+    )
+}
+
+#[derive(Debug)]
+struct DbIngestBackoff {
+    initial_ms: u64,
+    max_ms: u64,
+    current_ms: u64,
+}
+
+impl DbIngestBackoff {
+    fn new(initial_ms: u64, max_ms: u64) -> Self {
+        let initial_ms = initial_ms.max(1);
+        let max_ms = max_ms.max(initial_ms);
+        Self {
+            initial_ms,
+            max_ms,
+            current_ms: initial_ms,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.current_ms = self.initial_ms;
+    }
+
+    fn next_sleep(&mut self) -> Duration {
+        let jitter_ms = rand::thread_rng().gen_range(0..=self.current_ms);
+        let sleep_ms = self.current_ms.saturating_add(jitter_ms).min(self.max_ms);
+        self.current_ms = self.current_ms.saturating_mul(2).min(self.max_ms);
+        Duration::from_millis(sleep_ms)
+    }
+}
+
+pub fn spawn_db_backed_ingest_task(
+    client: Client,
+    config: Config,
+    iris_store: Store,
+    shutdown_handler: Arc<ShutdownHandler>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut backoff = DbIngestBackoff::new(
+            config.db_ingest_backoff_initial_ms,
+            config.db_ingest_backoff_max_ms,
+        );
+
+        tracing::info!("Starting DB-backed SQS ingest task");
+        while !shutdown_handler.is_shutting_down() {
+            match ingest_one_sqs_message(&client, &config, &iris_store).await {
+                Ok(received_message) => {
+                    if received_message {
+                        tracing::debug!("DB-backed ingest processed one SQS message");
+                    }
+                    backoff.reset();
+                }
+                Err(err) => {
+                    let sleep = backoff.next_sleep();
+                    tracing::warn!(
+                        "DB-backed ingest error: {:?}; retrying after {:?}",
+                        err,
+                        sleep
+                    );
+                    tokio::time::sleep(sleep).await;
+                }
+            }
+        }
+        tracing::info!("Stopping DB-backed SQS ingest task");
+    })
+}
+
+async fn ingest_one_sqs_message(
+    client: &Client,
+    config: &Config,
+    iris_store: &Store,
+) -> Result<bool> {
+    let receive_output = client
+        .receive_message()
+        .wait_time_seconds(config.db_ingest_sqs_wait_secs)
+        .max_number_of_messages(1)
+        .queue_url(&config.requests_queue_url)
+        .send()
+        .await?;
+
+    let Some(messages) = receive_output.messages else {
+        return Ok(false);
+    };
+
+    let mut received_message = false;
+    for sqs_message in messages {
+        ingest_sqs_message(client, config, iris_store, sqs_message).await?;
+        received_message = true;
+    }
+    Ok(received_message)
+}
+
+async fn ingest_sqs_message(
+    client: &Client,
+    config: &Config,
+    iris_store: &Store,
+    sqs_message: aws_sdk_sqs::types::Message,
+) -> Result<()> {
+    let body = sqs_message
+        .body()
+        .ok_or_else(|| eyre!("SQS message missing body: {:?}", sqs_message.message_id))?
+        .to_string();
+    let sns_message: SQSMessage = serde_json::from_str(&body)?;
+
+    let inserted = iris_store
+        .insert_ingested_request(&sns_message.sequence_number, &body)
+        .await?;
+
+    let receipt_handle = sqs_message.receipt_handle.as_deref().ok_or_else(|| {
+        eyre!(
+            "SQS message missing receipt handle: {:?}",
+            sqs_message.message_id
+        )
+    })?;
+    client
+        .delete_message()
+        .queue_url(&config.requests_queue_url)
+        .receipt_handle(receipt_handle)
+        .send()
+        .await?;
+
+    if inserted {
+        tracing::debug!(
+            "Inserted ingested request sequence_number={}",
+            sns_message.sequence_number
+        );
+    } else {
+        tracing::debug!(
+            "Skipped duplicate ingested request sequence_number={}",
+            sns_message.sequence_number
+        );
+    }
+    Ok(())
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn receive_batch_stream(
@@ -250,10 +404,14 @@ impl<'a> BatchProcessor<'a> {
             let current_batch_id = self.current_batch_id_atomic.load(Ordering::SeqCst);
 
             // Determine the number of messages to poll based on synchronized state
-            let mut own_state =
-                get_own_batch_sync_state(self.config, self.client, current_batch_id)
-                    .await
-                    .map_err(ReceiveRequestError::BatchSyncError)?;
+            let mut own_state = get_own_batch_sync_state(
+                self.config,
+                self.client,
+                self.iris_store,
+                current_batch_id,
+            )
+            .await
+            .map_err(ReceiveRequestError::BatchSyncError)?;
 
             // Update the shared state with our current state
             {
@@ -308,7 +466,12 @@ impl<'a> BatchProcessor<'a> {
 
             // Poll the determined number of messages
             if messages_to_poll > 0 {
-                self.poll_exact_messages(messages_to_poll).await?;
+                if self.config.db_backed_ingest {
+                    self.process_pending_ingested_requests(messages_to_poll)
+                        .await?;
+                } else {
+                    self.poll_exact_messages(messages_to_poll).await?;
+                }
                 break;
             } else {
                 tracing::debug!(
@@ -446,6 +609,80 @@ impl<'a> BatchProcessor<'a> {
             self.msg_counter,
             num_to_poll
         );
+        Ok(())
+    }
+
+    async fn process_pending_ingested_requests(
+        &mut self,
+        num_to_poll: u32,
+    ) -> Result<(), ReceiveRequestError> {
+        let current_batch_id = self.current_batch_id_atomic.load(Ordering::SeqCst);
+        tracing::info!(
+            "Batch ID: {}. Reading {} pending ingested requests from DB.",
+            current_batch_id,
+            num_to_poll
+        );
+
+        let rows = self
+            .iris_store
+            .pending_ingested_requests(num_to_poll)
+            .await
+            .map_err(ReceiveRequestError::BatchSyncError)?;
+
+        if rows.len() != num_to_poll as usize {
+            return Err(ReceiveRequestError::BatchSyncError(eyre!(
+                "expected {} pending ingested requests for batch {}, found {}",
+                num_to_poll,
+                current_batch_id,
+                rows.len()
+            )));
+        }
+
+        for row in &rows {
+            self.process_ingested_request(row).await?;
+        }
+
+        let sequence_numbers: Vec<String> =
+            rows.iter().map(|row| row.sequence_number.clone()).collect();
+        self.iris_store
+            .mark_ingested_requests_consumed(&sequence_numbers, current_batch_id)
+            .await
+            .map_err(ReceiveRequestError::BatchSyncError)?;
+        tracing::info!(
+            "Batch ID: {}. Marked {} ingested requests consumed.",
+            current_batch_id,
+            sequence_numbers.len()
+        );
+        Ok(())
+    }
+
+    async fn process_ingested_request(
+        &mut self,
+        ingested_request: &IngestedRequest,
+    ) -> Result<(), ReceiveRequestError> {
+        let message: SQSMessage = serde_json::from_str(&ingested_request.message_body)
+            .map_err(|e| ReceiveRequestError::json_parse_error("ingested SQS body", e))?;
+
+        let message_attributes = message.message_attributes.clone();
+        let batch_metadata = self.extract_batch_metadata(&message_attributes);
+
+        let request_type = message_attributes
+            .get(SMPC_MESSAGE_TYPE_ATTRIBUTE)
+            .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?
+            .string_value()
+            .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?
+            .to_string();
+
+        #[cfg(feature = "explicit-sns-batching")]
+        if request_type == BATCH_MESSAGE_TYPE {
+            self.process_batch_message(&message, batch_metadata).await?;
+            self.msg_counter += 1;
+            return Ok(());
+        }
+
+        self.process_message_(&message, &request_type, batch_metadata)
+            .await?;
+        self.msg_counter += 1;
         Ok(())
     }
 
@@ -1333,30 +1570,45 @@ async fn persist_modification(
 pub async fn get_own_batch_sync_state(
     config: &Config,
     sqs_client: &Client,
+    iris_store: &Store,
     current_batch_id: u64,
 ) -> Result<BatchSyncState> {
-    let approximate_visible_messages =
-        get_approximate_number_of_messages(&sqs_client.clone(), &config.requests_queue_url).await?;
+    let available_messages = if config.db_backed_ingest {
+        let pending = iris_store.count_pending_ingested_requests().await?;
+        std::cmp::min(pending, u32::MAX as i64) as u32
+    } else {
+        get_approximate_number_of_messages(&sqs_client.clone(), &config.requests_queue_url).await?
+    };
 
-    let index = (current_batch_id - 1) as usize;
-
-    let messages_to_poll = if config.predefined_batch_sizes.len() > index {
+    let index = current_batch_id.saturating_sub(1) as usize;
+    if config.predefined_batch_sizes.len() > index {
         // predefined_batch_sizes are only used in test environments to reproduce specific scenarios
         tracing::info!(
             "Using predefined batch size {} for batch ID {}",
             config.predefined_batch_sizes[index],
             current_batch_id
         );
-        std::cmp::min(config.predefined_batch_sizes[index], config.max_batch_size) as u32
-    } else {
-        // Use the dynamic batch size calculation based on SQS approximate visible messages
-        std::cmp::min(approximate_visible_messages, config.max_batch_size as u32)
     };
 
-    let log_msg = format!(
-        "fetching approximate_visible_messages: {}",
-        approximate_visible_messages,
-    );
+    let messages_to_poll = if config.db_backed_ingest {
+        messages_to_poll_for_available(
+            available_messages,
+            config.max_batch_size,
+            &config.predefined_batch_sizes,
+            current_batch_id,
+        )
+    } else if config.predefined_batch_sizes.len() > index {
+        std::cmp::min(config.predefined_batch_sizes[index], config.max_batch_size) as u32
+    } else {
+        std::cmp::min(available_messages, config.max_batch_size as u32)
+    };
+
+    let count_source = if config.db_backed_ingest {
+        "pending ingested DB rows"
+    } else {
+        "approximate visible SQS messages"
+    };
+    let log_msg = format!("fetching {}: {}", count_source, available_messages);
     match messages_to_poll {
         0 => tracing::debug!(log_msg),
         _ => tracing::info!(log_msg),
@@ -1367,4 +1619,106 @@ pub async fn get_own_batch_sync_state(
         batch_id: current_batch_id,
     };
     Ok(batch_sync_state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{messages_to_poll_for_available, DbIngestBackoff};
+    use iris_mpc_store::{normalize_sns_sequence_number, SNS_SEQUENCE_NUMBER_WIDTH};
+
+    #[test]
+    fn messages_to_poll_for_available_caps_by_available_messages() {
+        assert_eq!(messages_to_poll_for_available(3, 10, &[], 2), 3);
+    }
+
+    #[test]
+    fn messages_to_poll_for_available_caps_by_max_batch_size() {
+        assert_eq!(messages_to_poll_for_available(20, 7, &[], 2), 7);
+    }
+
+    #[test]
+    fn messages_to_poll_for_available_honors_predefined_batch_size() {
+        assert_eq!(messages_to_poll_for_available(20, 10, &[6], 1), 6);
+        assert_eq!(messages_to_poll_for_available(4, 10, &[6], 1), 4);
+        assert_eq!(messages_to_poll_for_available(20, 5, &[6], 1), 5);
+    }
+
+    #[test]
+    fn messages_to_poll_for_available_uses_saturating_batch_index() {
+        let predefined_batch_sizes = [3, 9];
+
+        assert_eq!(
+            messages_to_poll_for_available(20, 10, &predefined_batch_sizes, 0),
+            3
+        );
+        assert_eq!(
+            messages_to_poll_for_available(20, 10, &predefined_batch_sizes, 1),
+            3
+        );
+        assert_eq!(
+            messages_to_poll_for_available(20, 10, &predefined_batch_sizes, 2),
+            9
+        );
+    }
+
+    #[test]
+    fn db_ingest_backoff_starts_grows_caps_and_resets() {
+        let mut backoff = DbIngestBackoff::new(8, 32);
+        assert_eq!(backoff.current_ms, 8);
+
+        let first_sleep = backoff.next_sleep();
+        assert!(first_sleep.as_millis() >= 8);
+        assert!(first_sleep.as_millis() <= 16);
+        assert_eq!(backoff.current_ms, 16);
+
+        let second_sleep = backoff.next_sleep();
+        assert!(second_sleep >= first_sleep);
+        assert!(second_sleep.as_millis() <= 32);
+        assert_eq!(backoff.current_ms, 32);
+
+        for _ in 0..10 {
+            assert!(backoff.next_sleep().as_millis() <= 32);
+            assert_eq!(backoff.current_ms, 32);
+        }
+
+        backoff.reset();
+        assert_eq!(backoff.current_ms, 8);
+    }
+
+    #[test]
+    fn db_ingest_backoff_clamps_initial_and_max() {
+        let backoff = DbIngestBackoff::new(0, 0);
+        assert_eq!(backoff.initial_ms, 1);
+        assert_eq!(backoff.max_ms, 1);
+        assert_eq!(backoff.current_ms, 1);
+
+        let backoff = DbIngestBackoff::new(10, 5);
+        assert_eq!(backoff.initial_ms, 10);
+        assert_eq!(backoff.max_ms, 10);
+        assert_eq!(backoff.current_ms, 10);
+    }
+
+    #[test]
+    fn normalize_sns_sequence_number_pads_to_fixed_width() {
+        let normalized = normalize_sns_sequence_number("123456789012345678901234567890").unwrap();
+
+        assert_eq!(normalized.len(), SNS_SEQUENCE_NUMBER_WIDTH);
+        assert_eq!(normalized, "0000000000123456789012345678901234567890");
+    }
+
+    #[test]
+    fn normalize_sns_sequence_number_preserves_numeric_order_lexically() {
+        let normalized_9 = normalize_sns_sequence_number("9").unwrap();
+        let normalized_10 = normalize_sns_sequence_number("10").unwrap();
+        let normalized_large =
+            normalize_sns_sequence_number("123456789012345678901234567890").unwrap();
+
+        assert!(normalized_9 < normalized_10);
+        assert!(normalized_10 < normalized_large);
+    }
+
+    #[test]
+    fn normalize_sns_sequence_number_rejects_non_numeric_input() {
+        assert!(normalize_sns_sequence_number("not-a-number").is_err());
+    }
 }

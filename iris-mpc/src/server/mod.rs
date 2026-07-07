@@ -1,5 +1,5 @@
 use crate::services::aws::clients::AwsClients;
-use crate::services::processors::batch::receive_batch_stream;
+use crate::services::processors::batch::{receive_batch_stream, spawn_db_backed_ingest_task};
 use crate::services::processors::job::{process_job_result, BatchTimings};
 use aws_sdk_s3::Client;
 use aws_sdk_sns::types::MessageAttributeValue;
@@ -794,6 +794,16 @@ async fn run_main_server_loop(
     let res: Result<()> = async {
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
+        let _db_backed_ingest_handle = if config.db_backed_ingest {
+            Some(spawn_db_backed_ingest_task(
+                aws_clients.sqs_client.clone(),
+                config.clone(),
+                iris_store.clone(),
+                shutdown_handler.clone(),
+            ))
+        } else {
+            None
+        };
 
         let (mut batch_stream, sem) = receive_batch_stream(
             party_id,
