@@ -616,6 +616,10 @@ impl<'a> BatchProcessor<'a> {
         &mut self,
         num_to_poll: u32,
     ) -> Result<(), ReceiveRequestError> {
+        // Batch ids restart per boot and advance under prefetch, so the claim
+        // below uses the id only as an opaque non-NULL marker. Persist-marking
+        // is keyed by the batch's sequence numbers; boot recovery releases
+        // unpersisted claims.
         let current_batch_id = self.current_batch_id_atomic.load(Ordering::SeqCst);
         tracing::info!(
             "Batch ID: {}. Reading {} pending ingested requests from DB.",

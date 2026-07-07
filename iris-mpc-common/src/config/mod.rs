@@ -761,11 +761,6 @@ pub struct CommonConfig {
     batch_polling_timeout_secs: i32,
     sqs_long_poll_wait_time: usize,
     batch_sync_polling_timeout_secs: u64,
-    // serde(default) keeps version skew deserializable: an old peer's serialized
-    // state (no such key) must still parse on an upgraded party. Value equality is
-    // then enforced by check_common_config — parties must not run in mixed
-    // ingestion modes.
-    #[serde(default = "default_db_backed_ingest")]
     db_backed_ingest: bool,
 }
 

@@ -502,6 +502,13 @@ WHERE id = $1;
         Ok(id.0.unwrap_or(0) as usize)
     }
 
+    /// Inserts an SQS message into `ingested_requests`, keyed by its SNS FIFO
+    /// sequence number. Idempotent via `ON CONFLICT DO NOTHING`.
+    ///
+    /// Returns `Ok(true)` if a new row was inserted, `Ok(false)` if a row with
+    /// this sequence number already existed (duplicate delivery / re-receive —
+    /// safe to delete the SQS message either way), and `Err` on DB failure
+    /// (message must NOT be deleted from SQS; it will be re-received).
     pub async fn insert_ingested_request(
         &self,
         sequence_number: &str,
