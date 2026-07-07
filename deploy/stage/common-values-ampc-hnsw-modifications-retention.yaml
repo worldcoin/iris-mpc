@@ -1,0 +1,44 @@
+# POP-3931 — `modifications` retention CronJob (stage, runs on the ampc-hnsw clusters).
+# common-cronjob chart (1.11.0, worldcoin-foundation/common-cronjob) via wf-cluster-apps,
+# mirroring ampc-hnsw-anon-stats-retention (POP-3905).
+#
+# Runs hnsw-side because the guard needs BOTH databases: the reaped table is the GPU
+# MPCV2 DB's `modifications` (grows unbounded in shadow mode), while the consumer
+# watermark `last_indexed_modification_id` lives in the hawk DB's `persistent_state` —
+# and the `ampc-hnsw` namespace `application` secret is the one place that already holds
+# both URLs (DATABASE_AURORA_MPCV2_URL + DATABASE_AURORA_HNSW_URL, the genesis pattern).
+#
+# NOTE: enabling requires an image with watermark support (POP-3931 reaper extension).
+# The pin below must be bumped to a post-POP-3931 build before RETENTION__ENABLED is set;
+# until then the CronJob is a disabled no-op regardless of image.
+image: "ghcr.io/worldcoin/retention-reaper:d9a3d33342dfd9e95c7b11e8ef4e4101a3e6ed80"
+
+# Disabled by default (RETENTION__ENABLED unset → false): deploys as a no-op. The enable
+# path is the same as anon-stats: bump image → RETENTION__ENABLED+DRY_RUN → inspect
+# previewed counts + watermark gauge → flip DRY_RUN off, one party first.
+
+replicaCount: 1
+
+environment: stage
+
+# Daily, 04:00 UTC — offset from the anon-stats reaper (03:30) so the two never overlap
+# on shared node/network capacity. Idempotent; missed runs are caught next day + monitor.
+schedule: "0 4 * * *"
+backoffLimit: 0
+
+# Never run two reapers against the same DB at once.
+concurrencyPolicy: Forbid
+
+imagePullSecrets:
+  - name: github-secret
+
+resources:
+  limits:
+    cpu: "500m"
+    memory: 256Mi
+  requests:
+    cpu: "100m"
+    memory: 128Mi
+
+nodeSelector:
+  kubernetes.io/arch: amd64
