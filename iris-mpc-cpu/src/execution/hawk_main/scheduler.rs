@@ -77,8 +77,9 @@ impl Schedule {
     /// as it is optimized for its logic
     pub fn intra_match_batches(&self) -> Vec<Batch> {
         let n_tasks = self.n_requests * self.n_rotations;
-        let batch_size = n_tasks / self.n_sessions;
-        let rest_size = n_tasks % self.n_sessions;
+        let n_sessions = self.n_sessions.min(n_tasks).max(1);
+        let batch_size = n_tasks / n_sessions;
+        let rest_size = n_tasks % n_sessions;
 
         (0..N_EYES)
             .flat_map(|i_eye| {
@@ -112,8 +113,9 @@ impl Schedule {
     /// This method is search-aware and weighs central rotations as higher workloads than non-central ones
     pub fn search_batches(&self) -> Vec<Batch> {
         let n_tasks = self.n_requests * self.n_rotations;
-        let batch_size = n_tasks / self.n_sessions;
-        let rest_size = n_tasks % self.n_sessions;
+        let n_sessions = self.n_sessions.min(n_tasks).max(1);
+        let batch_size = n_tasks / n_sessions;
+        let rest_size = n_tasks % n_sessions;
 
         (0..N_EYES)
             .flat_map(|i_eye| {
