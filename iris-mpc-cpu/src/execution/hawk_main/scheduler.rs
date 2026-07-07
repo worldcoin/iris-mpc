@@ -92,7 +92,7 @@ impl Schedule {
                     })
                 });
 
-                (0..self.n_sessions).map(move |i_session| {
+                (0..n_sessions).map(move |i_session| {
                     // Some sessions get one more task if n_sessions does not divide n_tasks.
                     let one_more = (i_session < rest_size) as usize;
 
@@ -132,7 +132,7 @@ impl Schedule {
                     })
                 });
 
-                (0..self.n_sessions).map(move |i_session| {
+                (0..n_sessions).map(move |i_session| {
                     // Some sessions get one more task if n_sessions does not divide n_tasks.
                     let one_more = (i_session < rest_size) as usize;
 
@@ -231,8 +231,8 @@ mod test {
 
     fn test_intra_match_schedule_impl(n_sessions: usize, n_requests: usize, n_rotations: usize) {
         let n_eyes = N_EYES;
-        let n_batches = n_eyes * n_sessions;
         let n_tasks = n_eyes * n_requests * n_rotations;
+        let n_batches = n_eyes * n_sessions.min(n_requests * n_rotations).max(1);
 
         let batches = Schedule::new(n_sessions, n_requests, n_rotations).intra_match_batches();
         assert_eq!(batches.len(), n_batches);
@@ -281,8 +281,8 @@ mod test {
 
     fn test_search_schedule_impl(n_sessions: usize, n_requests: usize, n_rotations: usize) {
         let n_eyes = N_EYES;
-        let n_batches = n_eyes * n_sessions;
         let n_tasks = n_eyes * n_requests * n_rotations;
+        let n_batches = n_eyes * n_sessions.min(n_requests * n_rotations).max(1);
 
         let batches = Schedule::new(n_sessions, n_requests, n_rotations).search_batches();
         assert_eq!(batches.len(), n_batches);
