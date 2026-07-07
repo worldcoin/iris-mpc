@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-cpu:d9a3d33342dfd9e95c7b11e8ef4e4101a3e6ed80-arm64"
+image: "ghcr.io/worldcoin/iris-mpc-cpu:efa4c833664db0ae1b66724d598347d4ef68ac7b-arm64" # TEMP: POP-4051 db-ingest POC branch pin — revert before merge
 
 environment: stage
 replicaCount: 1
@@ -27,6 +27,7 @@ env:
       secretKeyRef:
         key: DATABASE_AURORA_HNSW_URL
         name: application
+  SMPC__DB_BACKED_INGEST: "true" # TEMP: POP-4051 db-ingest POC — revert before merge
   SMPC__MAX_DB_SIZE: "2000000"
   SMPC__MAX_BATCH_SIZE: "1"
   SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS: "30"
