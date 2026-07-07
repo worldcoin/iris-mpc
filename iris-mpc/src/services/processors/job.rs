@@ -422,6 +422,27 @@ pub async fn process_job_result(
                 .await?;
         }
 
+        if config.db_backed_ingest {
+            let marked = store
+                .mark_ingested_requests_persisted_tx(&mut graph_tx.tx, batch_timings.batch_id)
+                .await?;
+            if marked == 0 && !request_ids.is_empty() {
+                tracing::error!(
+                    "db-backed ingest: batch {} committed a nonempty request set ({} requests) but marked 0 ingested rows persisted; claimed rows may be re-formed",
+                    batch_timings.batch_id,
+                    request_ids.len()
+                );
+                metrics::counter!("db_ingest_persist_mark_zero").increment(1);
+            } else {
+                tracing::info!(
+                    "db-backed ingest: marked {} ingested request(s) persisted for batch {}",
+                    marked,
+                    batch_timings.batch_id
+                );
+                metrics::counter!("db_ingest_rows_persisted").increment(marked);
+            }
+        }
+
         // Commit transaction
         let step_start = Instant::now();
         graph_tx.tx.commit().await?;

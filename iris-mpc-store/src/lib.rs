@@ -585,6 +585,46 @@ WHERE id = $1;
         Ok(())
     }
 
+    /// Marks all rows claimed by `batch_id` as persisted, on the caller's transaction,
+    /// so the mark is atomic with the batch's result commit. Returns rows affected.
+    pub async fn mark_ingested_requests_persisted_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        batch_id: u64,
+    ) -> Result<u64> {
+        let result = sqlx::query(
+            r#"
+            UPDATE ingested_requests
+            SET persisted_at = now()
+            WHERE consumed_batch_id = $1
+              AND persisted_at IS NULL
+            "#,
+        )
+        .bind(batch_id as i64)
+        .execute(tx.deref_mut())
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Releases claims that were never persisted (crash/restart recovery). Batch ids
+    /// restart at 1 on boot, so a claim without a persist mark can never be trusted.
+    /// Returns rows affected.
+    pub async fn reset_unpersisted_ingested_claims(&self) -> Result<u64> {
+        let result = sqlx::query(
+            r#"
+            UPDATE ingested_requests
+            SET consumed_batch_id = NULL
+            WHERE consumed_batch_id IS NOT NULL
+              AND persisted_at IS NULL
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
     pub async fn insert_modification(
         &self,
         serial_id: Option<i64>,
@@ -1054,6 +1094,59 @@ pub mod tests {
             .mark_ingested_requests_consumed(&sequence_numbers, 7)
             .await?;
 
+        assert_eq!(store.count_pending_ingested_requests().await?, 0);
+
+        cleanup(&postgres_client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ingested_requests_two_phase_claim_recovery() -> Result<()> {
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+
+        assert!(
+            store
+                .insert_ingested_request("42", "first message body")
+                .await?
+        );
+        assert!(
+            store
+                .insert_ingested_request("43", "second message body")
+                .await?
+        );
+
+        let pending = store.pending_ingested_requests(10).await?;
+        assert_eq!(pending.len(), 2);
+        let sequence_numbers = pending
+            .iter()
+            .map(|request| request.sequence_number.clone())
+            .collect::<Vec<_>>();
+
+        store
+            .mark_ingested_requests_consumed(&sequence_numbers, 7)
+            .await?;
+        assert_eq!(store.count_pending_ingested_requests().await?, 0);
+
+        assert_eq!(store.reset_unpersisted_ingested_claims().await?, 2);
+        assert_eq!(store.count_pending_ingested_requests().await?, 2);
+
+        store
+            .mark_ingested_requests_consumed(&sequence_numbers, 1)
+            .await?;
+        assert_eq!(store.count_pending_ingested_requests().await?, 0);
+
+        let mut tx = store.tx().await?;
+        let marked = store
+            .mark_ingested_requests_persisted_tx(&mut tx, 1)
+            .await?;
+        assert_eq!(marked, 2);
+        tx.commit().await?;
+
+        assert_eq!(store.reset_unpersisted_ingested_claims().await?, 0);
         assert_eq!(store.count_pending_ingested_requests().await?, 0);
 
         cleanup(&postgres_client, &schema_name).await?;

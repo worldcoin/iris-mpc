@@ -76,6 +76,12 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     process_config(&config);
 
+    if config.db_backed_ingest && config.disable_persistence {
+        bail!(
+            "db_backed_ingest=true is incompatible with disable_persistence=true: ingested request claims would never be marked persisted and would be re-formed on every restart"
+        );
+    }
+
     let (iris_store, graph_store) = prepare_stores(&config).await?;
 
     let aws_clients = init_aws_services(&config).await?;
@@ -792,6 +798,21 @@ async fn run_main_server_loop(
     let recovery_update_error_result_attributes =
         create_message_type_attribute_map(RECOVERY_UPDATE_MESSAGE_TYPE);
     let res: Result<()> = async {
+        if config.db_backed_ingest {
+            let released = iris_store
+                .reset_unpersisted_ingested_claims()
+                .await
+                .wrap_err("failed to reset unpersisted ingested claims on startup")?;
+            if released > 0 {
+                tracing::warn!(
+                    "Released {} unpersisted ingested request claim(s) from a crashed/restarted batch; they will be re-formed",
+                    released
+                );
+            } else {
+                tracing::info!("No unpersisted ingested request claims to release on startup");
+            }
+        }
+
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
         let _db_backed_ingest_handle = if config.db_backed_ingest {
