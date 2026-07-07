@@ -105,8 +105,8 @@ impl NodeInit {
 /// added) and a stamp `> old_seq` means content-refreshed (reauthed) since the
 /// edge was certified — either way the edge is dropped.
 ///
-/// Used on every apply (the filter-on-bump in [`GraphMem::apply_ops`]) and at
-/// read time ([`GraphMem::get_active_links`]) — the lazy realization of the
+/// Used on every apply (the filter-on-bump in `GraphMem::edit_neighborhood`)
+/// and at read time ([`GraphMem::get_active_links`]) — the lazy realization of the
 /// abstract semantics that removing or re-inserting a node invalidates every
 /// edge incident to it (see `model.rs`).
 ///
@@ -444,12 +444,9 @@ impl GraphMem {
             }
         }
 
-        // Pass 2: apply edge-level mutations. Each touched neighborhood drops
-        // its invalid edges (see `is_active`) then is re-stamped in one step
-        // (see `Layer::edit_links`): the drop happens *before* any new edge is
-        // appended, so an append can't re-certify an already-invalid sibling
-        // as fresh. Edge ops never advance the content clock — only a node's
-        // own (re-)insertion does.
+        // Pass 2: apply edge-level mutations, each neighborhood touch routed
+        // through `Self::edit_neighborhood`. Edge ops never advance the
+        // content clock — only a node's own (re-)insertion does.
         for op in ops.iter() {
             match op {
                 MutationOp::AddNode { .. } | MutationOp::RemoveNode { .. } => {}
@@ -463,45 +460,33 @@ impl GraphMem {
                     if self.layers.len() < layer + 1 {
                         self.layers.resize(layer + 1, Layer::new());
                     }
-                    let content = &self.node_init;
                     // Causal-construction guard: an edge to a node not yet in the
                     // content clock is stamped at this tick while the target's
                     // clock is minted later, so `is_active` reads it as stale and
                     // drops it. Insert endpoints before wiring edges to them.
                     debug_assert!(
-                        to_add.iter().all(|z| content.contains_key(z)),
+                        to_add.iter().all(|z| self.node_init.contains_key(z)),
                         "AddEdges: neighbor absent from content clock (edge added \
                          before its endpoint exists); the edge would be silently dropped"
                     );
-                    let layer_mut = &mut self.layers[layer];
                     // Forward half: append `to_add` to base's own list.
                     if matches!(edge_type, EdgeType::Base | EdgeType::All) {
-                        if layer_mut.get_links(base).is_none() {
+                        if self.layers[layer].get_links(base).is_none() {
                             warn!("AddEdges({edge_type:?}): base={base} missing at layer {layer}; skipping outgoing half");
                         } else {
-                            layer_mut.edit_links(*base, tick, |old_seq, nbrs| {
-                                nbrs.retain(|z| is_active(content, *z, old_seq));
-                                nbrs.extend_from_slice(to_add);
-                                debug_assert!(
-                                    nbrs.iter().all(|z| is_active(content, *z, seq_no)),
-                                    "apply left an invalid edge in a re-stamped neighborhood"
-                                );
+                            self.edit_neighborhood(layer, *base, tick, |nbrs| {
+                                nbrs.extend_from_slice(to_add)
                             });
                         }
                     }
                     // Back half: append base into each target's list.
                     if matches!(edge_type, EdgeType::Neighbors | EdgeType::All) {
                         for target in to_add.iter() {
-                            if layer_mut.get_links(target).is_none() {
+                            if self.layers[layer].get_links(target).is_none() {
                                 warn!("AddEdges({edge_type:?}): target={target} missing at layer {layer} (base={base}); skipping back-edge");
                             } else {
-                                layer_mut.edit_links(*target, tick, |old_seq, nbrs| {
-                                    nbrs.retain(|z| is_active(content, *z, old_seq));
-                                    nbrs.push(*base);
-                                    debug_assert!(
-                                        nbrs.iter().all(|z| is_active(content, *z, seq_no)),
-                                        "apply left an invalid edge in a re-stamped neighborhood"
-                                    );
+                                self.edit_neighborhood(layer, *target, tick, |nbrs| {
+                                    nbrs.push(*base)
                                 });
                             }
                         }
@@ -518,26 +503,22 @@ impl GraphMem {
                         warn!("RemoveEdges: layer {layer} does not exist (base={base}); skipping");
                         continue;
                     }
-                    let content = &self.node_init;
-                    let layer_mut = &mut self.layers[layer];
                     if matches!(edge_type, EdgeType::Base | EdgeType::All) {
-                        if layer_mut.get_links(base).is_none() {
+                        if self.layers[layer].get_links(base).is_none() {
                             warn!("RemoveEdges({edge_type:?}): base={base} missing at layer {layer}; skipping outgoing half");
                         } else {
-                            layer_mut.edit_links(*base, tick, |old_seq, nbrs| {
-                                nbrs.retain(|z| {
-                                    !to_remove.contains(z) && is_active(content, *z, old_seq)
-                                });
+                            self.edit_neighborhood(layer, *base, tick, |nbrs| {
+                                nbrs.retain(|z| !to_remove.contains(z))
                             });
                         }
                     }
                     if matches!(edge_type, EdgeType::Neighbors | EdgeType::All) {
                         for target in to_remove.iter() {
-                            if layer_mut.get_links(target).is_none() {
+                            if self.layers[layer].get_links(target).is_none() {
                                 warn!("RemoveEdges({edge_type:?}): target={target} missing at layer {layer} (base={base}); skipping");
                             } else {
-                                layer_mut.edit_links(*target, tick, |old_seq, nbrs| {
-                                    nbrs.retain(|z| *z != *base && is_active(content, *z, old_seq));
+                                self.edit_neighborhood(layer, *target, tick, |nbrs| {
+                                    nbrs.retain(|z| *z != *base)
                                 });
                             }
                         }
@@ -548,6 +529,27 @@ impl GraphMem {
 
         self.last_update_seq_no = seq_no;
         Ok(())
+    }
+
+    /// Edit `node`'s neighborhood at layer `lc` under the certificate
+    /// discipline: edges invalid against the *old* certificate (see
+    /// [`is_active`]) are dropped before `f`'s set edit runs, then the
+    /// neighborhood is re-stamped at `tick` — so an append can't re-certify an
+    /// already-invalid sibling, and a re-stamp can't skip the filter. Sole
+    /// graph-code path to [`Layer::edit_links`].
+    fn edit_neighborhood<F>(&mut self, lc: usize, node: SerialId, tick: Tick, f: F)
+    where
+        F: FnOnce(&mut Vec<SerialId>),
+    {
+        let content = &self.node_init;
+        self.layers[lc].edit_links(node, tick, |old_seq, nbrs| {
+            nbrs.retain(|z| is_active(content, *z, old_seq));
+            f(nbrs);
+            debug_assert!(
+                nbrs.iter().all(|z| is_active(content, *z, tick.value())),
+                "edit left an invalid edge in a re-stamped neighborhood"
+            );
+        });
     }
 
     /// Stamp a locally-built [`UnstampedMutation`] with the next sequence
@@ -916,10 +918,9 @@ impl Layer {
     /// Incrementally grow/shrink `node`'s existing neighbor list and re-stamp it
     /// at `tick`. No-op if `node` is absent.
     ///
-    /// Requires a [`Tick`] so no out-of-band `seq_no` can be stamped. `f` must
-    /// filter the existing list *before* pushing new neighbors: appended edges
-    /// are fresh as of `tick`, while the stale filter's threshold is the older
-    /// `seq_no`, so filtering after would wrongly drop them.
+    /// Requires a [`Tick`] so no out-of-band `seq_no` can be stamped.
+    /// Representation primitive only — graph code routes through
+    /// `GraphMem::edit_neighborhood`, which owns the staleness filter.
     pub(in crate::hnsw::graph) fn edit_links<F>(&mut self, node: SerialId, tick: Tick, f: F)
     where
         F: FnOnce(u64, &mut Vec<SerialId>),
