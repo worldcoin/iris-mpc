@@ -46,6 +46,7 @@ pub struct SidecarTestConfig {
     pub cycle_interval_secs: u64,
     pub retry_interval_secs: u64,
     pub peer_round_timeout_secs: u64,
+    pub make_connections_timeout_secs: u64,
     /// Guard: sidecar will not checkpoint if fewer than this many new WAL rows exist.
     /// Set to 5 by default; tests must seed at least this many mutations.
     pub min_mutations_per_cycle: u64,
@@ -60,6 +61,7 @@ impl Default for SidecarTestConfig {
             cycle_interval_secs: 1,
             retry_interval_secs: 1,
             peer_round_timeout_secs: 30,
+            make_connections_timeout_secs: 300,
             min_mutations_per_cycle: MIN_MUTATIONS_PER_SIDECAR_CYCLE as _,
             checkpoint_window: 10,
             is_archival: false,
