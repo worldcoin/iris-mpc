@@ -460,6 +460,7 @@ async fn server_main(config: Config) -> Result<()> {
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
             merged_results,
+            sqs_sequence_numbers: _,
             request_ids,
             request_types,
             metadata,

@@ -648,6 +648,13 @@ impl<'a> BatchProcessor<'a> {
             .mark_ingested_requests_consumed(&sequence_numbers, current_batch_id)
             .await
             .map_err(ReceiveRequestError::BatchSyncError)?;
+        // Carry the claimed set with the batch so the results transaction can
+        // mark exactly these rows persisted (batch ids are not stable enough
+        // to correlate claim and persist — they restart per boot and the
+        // shared atomic advances under prefetch).
+        self.batch_query
+            .sqs_sequence_numbers
+            .extend(sequence_numbers.iter().cloned());
         tracing::info!(
             "Batch ID: {}. Marked {} ingested requests consumed.",
             current_batch_id,

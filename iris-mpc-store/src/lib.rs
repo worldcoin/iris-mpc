@@ -585,22 +585,29 @@ WHERE id = $1;
         Ok(())
     }
 
-    /// Marks all rows claimed by `batch_id` as persisted, on the caller's transaction,
-    /// so the mark is atomic with the batch's result commit. Returns rows affected.
+    /// Marks the given claimed rows as persisted, on the caller's transaction,
+    /// so the mark is atomic with the batch's result commit. Keyed by sequence
+    /// number (the PK) rather than batch id: batch ids restart per boot and the
+    /// shared batch-id atomic advances under prefetch, so they cannot reliably
+    /// correlate a claim with its persist. Returns rows affected.
     pub async fn mark_ingested_requests_persisted_tx(
         &self,
         tx: &mut Transaction<'_, Postgres>,
-        batch_id: u64,
+        sequence_numbers: &[String],
     ) -> Result<u64> {
+        if sequence_numbers.is_empty() {
+            return Ok(0);
+        }
+
         let result = sqlx::query(
             r#"
             UPDATE ingested_requests
             SET persisted_at = now()
-            WHERE consumed_batch_id = $1
+            WHERE sequence_number = ANY($1::text[])
               AND persisted_at IS NULL
             "#,
         )
-        .bind(batch_id as i64)
+        .bind(sequence_numbers)
         .execute(tx.deref_mut())
         .await?;
 
@@ -1141,7 +1148,7 @@ pub mod tests {
 
         let mut tx = store.tx().await?;
         let marked = store
-            .mark_ingested_requests_persisted_tx(&mut tx, 1)
+            .mark_ingested_requests_persisted_tx(&mut tx, &sequence_numbers)
             .await?;
         assert_eq!(marked, 2);
         tx.commit().await?;
