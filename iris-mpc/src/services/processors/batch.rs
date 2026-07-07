@@ -498,6 +498,10 @@ impl<'a> BatchProcessor<'a> {
         let current_batch_id = self.current_batch_id_atomic.load(Ordering::SeqCst);
         let poll_start = Instant::now();
         let mut last_progress_log = poll_start;
+        // Abort deadlines measure time since the last received message, not total
+        // batch age: a large batch that is slowly but steadily filling must not be
+        // rolled back, only one that has genuinely stopped making progress.
+        let mut last_progress_at = poll_start;
         tracing::info!(
             "Batch ID: {}. Polling SQS for up to {} messages.",
             current_batch_id,
@@ -514,18 +518,19 @@ impl<'a> BatchProcessor<'a> {
             }
 
             if last_progress_log.elapsed() >= BATCH_POLL_PROGRESS_LOG_INTERVAL {
-                let elapsed = poll_start.elapsed();
-                let elapsed_secs = elapsed.as_secs();
+                let elapsed_secs = poll_start.elapsed().as_secs();
+                let stalled = last_progress_at.elapsed();
                 if batch_poll_abort_enabled(self.config.batch_poll_abort_after_secs)
-                    && elapsed >= Duration::from_secs(self.config.batch_poll_abort_after_secs)
+                    && stalled >= Duration::from_secs(self.config.batch_poll_abort_after_secs)
                     && self.msg_counter > 0
                 {
                     tracing::warn!(
-                        "Batch ID: {}. Batch poll aborting after {}s with {} out of {} messages processed; held messages will be redelivered.",
+                        "Batch ID: {}. Batch poll aborting after {}s without progress ({} out of {} messages processed, {}s total); held messages will be redelivered.",
                         current_batch_id,
-                        elapsed_secs,
+                        stalled.as_secs(),
                         self.msg_counter,
-                        num_to_poll
+                        num_to_poll,
+                        elapsed_secs
                     );
                     metrics::counter!("batch_poll_partial_stuck").increment(1);
                     self.abort_partial_batch().await?;
@@ -571,14 +576,14 @@ impl<'a> BatchProcessor<'a> {
                     // Empty-poll abort is separate from partial-poll abort. With
                     // msg_counter == 0 there are no held messages or DB rows to unwind.
                     if batch_poll_abort_enabled(self.config.batch_poll_abort_after_secs)
-                        && poll_start.elapsed()
+                        && last_progress_at.elapsed()
                             >= Duration::from_secs(self.config.batch_poll_abort_after_secs)
                         && self.msg_counter == 0
                     {
                         tracing::warn!(
                             "Batch ID: {}. aborting empty batch poll attempt after {}s waiting for target {}; re-entering batch sync",
                             current_batch_id,
-                            poll_start.elapsed().as_secs(),
+                            last_progress_at.elapsed().as_secs(),
                             num_to_poll
                         );
                         metrics::counter!("batch_poll_aborted").increment(1);
@@ -593,6 +598,7 @@ impl<'a> BatchProcessor<'a> {
                     // Should be only one message due to max_number_of_messages(1)
                     self.process_message(sqs_message).await?;
                 }
+                last_progress_at = Instant::now();
             } else {
                 // This case should ideally not be hit often if wait_time_seconds > 0,
                 // as SQS long polling usually returns an empty messages array instead of None.
@@ -604,14 +610,14 @@ impl<'a> BatchProcessor<'a> {
                 // Empty-poll abort is separate from partial-poll abort. With
                 // msg_counter == 0 there are no held messages or DB rows to unwind.
                 if batch_poll_abort_enabled(self.config.batch_poll_abort_after_secs)
-                    && poll_start.elapsed()
+                    && last_progress_at.elapsed()
                         >= Duration::from_secs(self.config.batch_poll_abort_after_secs)
                     && self.msg_counter == 0
                 {
                     tracing::warn!(
                         "Batch ID: {}. aborting empty batch poll attempt after {}s waiting for target {}; re-entering batch sync",
                         current_batch_id,
-                        poll_start.elapsed().as_secs(),
+                        last_progress_at.elapsed().as_secs(),
                         num_to_poll
                     );
                     metrics::counter!("batch_poll_aborted").increment(1);
@@ -1527,51 +1533,83 @@ impl<'a> BatchProcessor<'a> {
         }
 
         for pending_chunk in self.pending_deletes.chunks(10) {
-            let mut entry_id_to_message_id = HashMap::new();
-            let entries: Result<Vec<DeleteMessageBatchRequestEntry>, ReceiveRequestError> =
-                pending_chunk
-                    .iter()
-                    .enumerate()
-                    .map(|(index, (receipt_handle, message_id))| {
-                        let entry_id = format!("msg-{}", index);
-                        entry_id_to_message_id.insert(entry_id.clone(), message_id.clone());
-                        DeleteMessageBatchRequestEntry::builder()
-                            .id(entry_id)
-                            .receipt_handle(receipt_handle)
-                            .build()
-                            .map_err(|e| {
-                                Self::sqs_ack_error(
-                                    &format!(
-                                        "failed to build delete batch entry for message {}",
-                                        message_id
-                                    ),
-                                    e,
-                                )
-                            })
-                    })
-                    .collect();
+            // A failed delete after this point is NOT acceptable as plain redelivery:
+            // the batch proceeds to completion (results published), so a redelivered
+            // message would be processed a second time as a fresh request. Retry the
+            // failed entries once; if any still fail, propagate an error so the
+            // existing teardown -> restart -> modifications-sync path reconciles
+            // instead of silently double-processing.
+            let mut remaining: Vec<(String, String)> = pending_chunk.to_vec();
+            for attempt in 0..2 {
+                let mut entry_id_to_pending = HashMap::new();
+                let entries: Result<Vec<DeleteMessageBatchRequestEntry>, ReceiveRequestError> =
+                    remaining
+                        .iter()
+                        .enumerate()
+                        .map(|(index, (receipt_handle, message_id))| {
+                            let entry_id = format!("msg-{}", index);
+                            entry_id_to_pending.insert(
+                                entry_id.clone(),
+                                (receipt_handle.clone(), message_id.clone()),
+                            );
+                            DeleteMessageBatchRequestEntry::builder()
+                                .id(entry_id)
+                                .receipt_handle(receipt_handle)
+                                .build()
+                                .map_err(|e| {
+                                    Self::sqs_ack_error(
+                                        &format!(
+                                            "failed to build delete batch entry for message {}",
+                                            message_id
+                                        ),
+                                        e,
+                                    )
+                                })
+                        })
+                        .collect();
 
-            let delete_response = self
-                .client
-                .delete_message_batch()
-                .queue_url(&self.config.requests_queue_url)
-                .set_entries(Some(entries?))
-                .send()
-                .await
-                .map_err(|e| Self::sqs_ack_error("failed to delete held SQS messages", e))?;
+                let delete_response = self
+                    .client
+                    .delete_message_batch()
+                    .queue_url(&self.config.requests_queue_url)
+                    .set_entries(Some(entries?))
+                    .send()
+                    .await
+                    .map_err(|e| Self::sqs_ack_error("failed to delete held SQS messages", e))?;
 
-            for failed_entry in delete_response.failed {
-                let message_id = entry_id_to_message_id
-                    .get(&failed_entry.id)
-                    .map(String::as_str)
-                    .unwrap_or("<unknown>");
-                tracing::error!(
-                    "Failed to delete held message {} from queue {}: {} - {}. POC accepts redelivery under SQS at-least-once semantics.",
-                    message_id,
-                    self.config.requests_queue_url,
-                    failed_entry.code,
-                    failed_entry.message.unwrap_or_default()
-                );
+                remaining =
+                    delete_response
+                        .failed
+                        .iter()
+                        .filter_map(|failed_entry| {
+                            let pending = entry_id_to_pending.get(&failed_entry.id).cloned();
+                            tracing::warn!(
+                            "Failed to delete held message {} from queue {} (attempt {}): {} - {}",
+                            pending.as_ref().map(|(_, m)| m.as_str()).unwrap_or("<unknown>"),
+                            self.config.requests_queue_url,
+                            attempt + 1,
+                            failed_entry.code,
+                            failed_entry.message.clone().unwrap_or_default()
+                        );
+                            pending
+                        })
+                        .collect();
+
+                if remaining.is_empty() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+
+            if !remaining.is_empty() {
+                return Err(Self::sqs_ack_error(
+                    &format!(
+                        "failed to delete {} held SQS message(s) after retry; erroring so \
+                         teardown/modifications-sync reconciles instead of double-processing",
+                        remaining.len()
+                    ),
+                    eyre::eyre!("unresolved failed entries in delete_message_batch"),
+                ));
             }
         }
 
