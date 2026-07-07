@@ -71,7 +71,7 @@ pub async fn plaintext_parallel_batch_insert<D: DistanceOps>(
             jobs.spawn(async move {
                 let insertion_layer = searcher.gen_layer_prf(&prf_seed, &(vector_id))?;
 
-                let (links, update_ep) = searcher
+                let (links, update_ep, as_of) = searcher
                     .search_to_insert(&mut store, &graph, &query, insertion_layer)
                     .await?;
 
@@ -87,6 +87,7 @@ pub async fn plaintext_parallel_batch_insert<D: DistanceOps>(
                     query,
                     links: links_unstructured,
                     update_ep,
+                    as_of,
                 };
                 Ok((vector_id, insert_plan))
             });
@@ -156,7 +157,7 @@ pub async fn deep_id_parallel_batch_insert(
             jobs.spawn(async move {
                 let insertion_layer = searcher.gen_layer_prf(&prf_seed, &(vector_id))?;
 
-                let (links, update_ep) = searcher
+                let (links, update_ep, as_of) = searcher
                     .search_to_insert(&mut store, &graph, &query, insertion_layer)
                     .await?;
 
@@ -172,6 +173,7 @@ pub async fn deep_id_parallel_batch_insert(
                     query,
                     links: links_unstructured,
                     update_ep,
+                    as_of,
                 };
                 Ok((vector_id, insert_plan))
             });

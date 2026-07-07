@@ -17,6 +17,17 @@ pub struct GraphMutation {
 /// graph.
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct UnstampedMutation {
+    /// Sequence number of the graph state the edge references in `ops` were
+    /// identified against (the search snapshot). Consumed at stamping: a
+    /// reference whose target changed after `as_of` is void and is dropped
+    /// (see `GraphMem::apply_new`). Never persisted — the stamped record
+    /// carries only the surviving ops.
+    ///
+    /// Must come from the graph read that produced the references (search or
+    /// neighborhood-ranking APIs return it alongside their results); minting
+    /// with a later seq re-certifies references against content they never
+    /// saw.
+    pub as_of: u64,
     pub ops: Vec<MutationOp>,
 }
 
@@ -335,6 +346,7 @@ mod tests {
     #[test]
     fn expanded_neighborhoods_addedges_all_yields_base_and_neighbors() {
         let mutation = UnstampedMutation {
+            as_of: 0,
             ops: vec![mk_add_edges(1, vec![2, 3], 0, EdgeType::All)],
         };
         let mut got = mutation.expanded_neighborhoods();
@@ -345,6 +357,7 @@ mod tests {
     #[test]
     fn expanded_neighborhoods_addedges_base_yields_only_base() {
         let mutation = UnstampedMutation {
+            as_of: 0,
             ops: vec![mk_add_edges(1, vec![2, 3], 1, EdgeType::Base)],
         };
         assert_eq!(mutation.expanded_neighborhoods(), vec![(1, 1)]);
@@ -353,6 +366,7 @@ mod tests {
     #[test]
     fn expanded_neighborhoods_addedges_neighbors_yields_only_neighbors() {
         let mutation = UnstampedMutation {
+            as_of: 0,
             ops: vec![mk_add_edges(1, vec![2, 3], 2, EdgeType::Neighbors)],
         };
         let mut got = mutation.expanded_neighborhoods();
@@ -363,6 +377,7 @@ mod tests {
     #[test]
     fn expanded_neighborhoods_ignores_non_addedges_ops() {
         let mutation = UnstampedMutation {
+            as_of: 0,
             ops: vec![
                 MutationOp::AddNode {
                     id: VectorId::from_serial_id(1),

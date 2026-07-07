@@ -1424,11 +1424,11 @@ impl HnswSearcher {
         query: &V::QueryRef,
         insertion_layer: usize,
     ) -> Result<VectorId> {
-        let (neighbors, update_ep) = self
+        let (neighbors, update_ep, as_of) = self
             .search_to_insert(store, graph, query, insertion_layer)
             .await?;
         let inserted = store.insert(query).await;
-        self.insert_from_search_results(store, graph, inserted, neighbors, update_ep)
+        self.insert_from_search_results(store, graph, inserted, neighbors, update_ep, as_of)
             .await?;
         Ok(inserted)
     }
@@ -1465,7 +1465,12 @@ impl HnswSearcher {
         graph: &GraphMem,
         query: &V::QueryRef,
         insertion_layer: usize,
-    ) -> Result<(Vec<SortedNeighborhood<V>>, UpdateEntryPoint)> {
+    ) -> Result<(Vec<SortedNeighborhood<V>>, UpdateEntryPoint, u64)> {
+        // The graph state this search's results are identified against;
+        // returned so the mutation minted from them carries its provenance
+        // (`UnstampedMutation::as_of`).
+        let as_of = graph.last_update_seq_no;
+
         // Initialize candidate neighborhood, index of highest search layer,
         // finalized layer of node insertion, and entry point update outcome.
         let init_start = std::time::Instant::now();
@@ -1516,7 +1521,7 @@ impl HnswSearcher {
 
         assert_eq!(links.len(), insertion_layer + 1);
 
-        Ok((links, update_ep))
+        Ok((links, update_ep, as_of))
     }
 
     /// Computes RemoveEdges ops for any of the `candidates` neighborhoods that
@@ -1537,7 +1542,11 @@ impl HnswSearcher {
         store: &mut V,
         graph: &GraphMem,
         candidates: &BTreeSet<(SerialId, usize)>,
-    ) -> Result<Vec<MutationOp>> {
+    ) -> Result<(Vec<MutationOp>, u64)> {
+        // The ranking below is identified against this graph state; minted
+        // removals carry it as their `UnstampedMutation::as_of`.
+        let as_of = graph.last_update_seq_no;
+
         // Read the current neighborhood for each candidate; keep only those
         // exceeding M_limit on their layer.
         let mut oversized: Vec<(VectorId, usize, Vec<VectorId>)> = Vec::new();
@@ -1560,7 +1569,7 @@ impl HnswSearcher {
         );
 
         if oversized.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), as_of));
         }
 
         // Build parallel slices for the batched MPC compaction call.
@@ -1597,7 +1606,7 @@ impl HnswSearcher {
             }
         }
 
-        Ok(ops)
+        Ok((ops, as_of))
     }
 
     /// Insert a vector using the search results from `search_to_insert`,
@@ -1615,6 +1624,7 @@ impl HnswSearcher {
         inserted_vector: VectorId,
         links: Vec<SortedNeighborhood<V>>,
         update_ep: UpdateEntryPoint,
+        as_of: u64,
     ) -> Result<()> {
         // Trim and extract unstructured vector lists.
         let mut links_unstructured: Vec<Vec<VectorId>> = Vec::new();
@@ -1640,15 +1650,15 @@ impl HnswSearcher {
                 edge_type: EdgeType::All,
             });
         }
-        let plan = UnstampedMutation { ops };
+        let plan = UnstampedMutation { as_of, ops };
         let expanded: BTreeSet<_> = plan.expanded_neighborhoods().into_iter().collect();
         graph.apply_new(plan)?;
 
         // Single-insert compaction.
         if !expanded.is_empty() {
-            let ops = self.compact_batch(store, graph, &expanded).await?;
+            let (ops, as_of) = self.compact_batch(store, graph, &expanded).await?;
             if !ops.is_empty() {
-                graph.apply_new(UnstampedMutation { ops })?;
+                graph.apply_new(UnstampedMutation { as_of, ops })?;
             }
         }
 
@@ -1709,7 +1719,7 @@ mod tests {
         // Insert the codes.
         for query in queries1.iter() {
             let insertion_layer = db.gen_layer_rng(rng)?;
-            let (neighbors, update_ep) = db
+            let (neighbors, update_ep, as_of) = db
                 .search_to_insert(vector_store, graph_store, query, insertion_layer)
                 .await?;
             assert!(!db.is_match(vector_store, &neighbors).await?);
@@ -1722,6 +1732,7 @@ mod tests {
                 inserted,
                 neighbors,
                 update_ep,
+                as_of,
             )
             .await?;
         }
@@ -1787,7 +1798,7 @@ mod tests {
             // Same queries used above
             let query = queries_copy.next().unwrap();
 
-            let (neighbors, update_ep) = searcher_linear
+            let (neighbors, update_ep, _as_of) = searcher_linear
                 .search_to_insert(
                     vector_store_linear,
                     graph_store_linear,
@@ -1855,7 +1866,7 @@ mod tests {
         let mut candidates = BTreeSet::new();
         candidates.insert((base.serial_id(), 0));
 
-        let ops = searcher
+        let (ops, _as_of) = searcher
             .compact_batch(&mut store, &graph, &candidates)
             .await?;
 
@@ -1932,7 +1943,7 @@ mod tests {
         let mut candidates = BTreeSet::new();
         candidates.insert((a.serial_id(), 0));
 
-        let ops = searcher
+        let (ops, _as_of) = searcher
             .compact_batch(&mut store, &graph, &candidates)
             .await?;
         assert!(ops.is_empty());

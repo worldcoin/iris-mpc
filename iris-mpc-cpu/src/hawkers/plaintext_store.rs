@@ -127,11 +127,11 @@ impl<D: DistanceOps> PlaintextStore<D> {
                 .clone();
             let query_id = VectorId::from_serial_id(serial_id);
             let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
-            let (neighbors, update_ep) = searcher
+            let (neighbors, update_ep, as_of) = searcher
                 .search_to_insert(self, &graph, &query, insertion_layer)
                 .await?;
             searcher
-                .insert_from_search_results(self, &mut graph, query_id, neighbors, update_ep)
+                .insert_from_search_results(self, &mut graph, query_id, neighbors, update_ep, as_of)
                 .await?;
         }
 

@@ -7,9 +7,10 @@
 //! semantics lazily; the refinement test drives both with generated mutation
 //! streams and asserts their observations agree after every mutation.
 //!
-//! Spec preconditions (asserted here, upheld by production mints): `AddEdges`
-//! endpoints are live at apply time (causal construction); `AddNode` targets
-//! a non-live serial (reauth = `RemoveNode` + `AddNode` in one mutation).
+//! Spec preconditions (asserted here, established by the linearization in
+//! `GraphMem::apply_new`): `AddEdges` endpoints are live at apply time
+//! (causal construction); `AddNode` targets a non-live serial (reauth =
+//! `RemoveNode` + `AddNode` in one mutation).
 
 use super::mutation::{EdgeType, MutationOp, UpdateEntryPoint};
 use iris_mpc_common::{SerialId, VersionId};
@@ -279,18 +280,25 @@ mod tests {
 
             for step in 0..300 {
                 let live: Vec<SerialId> = UNIVERSE.filter(|s| m.version_of(*s).is_some()).collect();
-                let ops: Vec<MutationOp> = match rng.gen_range(0..100) {
+                let now = g.last_update_seq_no;
+                // `forbidden`: a serial whose content changed after the arm's
+                // as_of — the minted record must not reference it.
+                let mut forbidden: Option<SerialId> = None;
+                let (as_of, ops): (u64, Vec<MutationOp>) = match rng.gen_range(0..100) {
                     // Insert a non-live serial (fresh or resurrected).
                     0..=29 => {
                         let free: Vec<SerialId> =
                             UNIVERSE.filter(|s| m.version_of(*s).is_none()).collect();
                         match free.choose(rng) {
-                            Some(&s) => insert_ops(
-                                &m,
-                                s,
-                                rng.gen_range(0..4),
-                                rng.gen_range(1..=MAX_HEIGHT),
-                                rng,
+                            Some(&s) => (
+                                now,
+                                insert_ops(
+                                    &m,
+                                    s,
+                                    rng.gen_range(0..4),
+                                    rng.gen_range(1..=MAX_HEIGHT),
+                                    rng,
+                                ),
                             ),
                             None => continue,
                         }
@@ -309,15 +317,18 @@ mod tests {
                                 rng.gen_range(1..=MAX_HEIGHT),
                                 rng,
                             ));
-                            ops
+                            (now, ops)
                         }
                         None => continue,
                     },
                     // Deletion.
                     50..=64 => match live.choose(rng) {
-                        Some(&s) => vec![MutationOp::RemoveNode {
-                            id: VectorId::new(s, m.version_of(s).unwrap()),
-                        }],
+                        Some(&s) => (
+                            now,
+                            vec![MutationOp::RemoveNode {
+                                id: VectorId::new(s, m.version_of(s).unwrap()),
+                            }],
+                        ),
                         None => continue,
                     },
                     // Edge touch: wire a live base to live targets.
@@ -333,16 +344,19 @@ mod tests {
                             .choose(rng)
                             .unwrap()
                             .clone();
-                        vec![MutationOp::AddEdges {
-                            base,
-                            neighbors: targets,
-                            layer,
-                            edge_type,
-                        }]
+                        (
+                            now,
+                            vec![MutationOp::AddEdges {
+                                base,
+                                neighbors: targets,
+                                layer,
+                                edge_type,
+                            }],
+                        )
                     }
                     // Compaction-shaped RemoveEdges (named serials need not be
                     // present or live).
-                    _ => {
+                    85..=91 => {
                         let layer = rng.gen_range(0..MAX_HEIGHT);
                         let bases = pick_members(&m, layer, 0, 1, rng);
                         let Some(&base) = bases.first() else { continue };
@@ -362,17 +376,129 @@ mod tests {
                         }
                         let edge_type =
                             [EdgeType::Base, EdgeType::All].choose(rng).unwrap().clone();
-                        vec![MutationOp::RemoveEdges {
-                            base,
-                            neighbors: targets,
-                            layer,
-                            edge_type,
-                        }]
+                        (
+                            now,
+                            vec![MutationOp::RemoveEdges {
+                                base,
+                                neighbors: targets,
+                                layer,
+                                edge_type,
+                            }],
+                        )
+                    }
+                    // Drifted intent: identify refs now, let an intervening
+                    // reauth or deletion land, then mint with the stale as_of.
+                    // Linearization must resolve the void refs so the record
+                    // satisfies the spec preconditions (the model panics
+                    // otherwise).
+                    _ => {
+                        let layer = rng.gen_range(0..MAX_HEIGHT);
+                        let bases = pick_members(&m, layer, 0, 1, rng);
+                        let Some(&base) = bases.first() else { continue };
+                        let targets = pick_members(&m, layer, base, rng.gen_range(1..=3), rng);
+                        if targets.is_empty() {
+                            continue;
+                        }
+
+                        // Intervening reauth or deletion of one identified
+                        // serial.
+                        let mut pool = targets.clone();
+                        pool.push(base);
+                        let victim = *pool.choose(rng).unwrap();
+                        let version = m.version_of(victim).unwrap() + 1;
+                        let mut intervening = vec![MutationOp::RemoveNode {
+                            id: VectorId::new(victim, version),
+                        }];
+                        if rng.gen_bool(0.5) {
+                            intervening.extend(insert_ops(
+                                &m,
+                                victim,
+                                version,
+                                rng.gen_range(1..=MAX_HEIGHT),
+                                rng,
+                            ));
+                        }
+                        let minted = g
+                            .apply_new(UnstampedMutation {
+                                as_of: g.last_update_seq_no,
+                                ops: intervening,
+                            })
+                            .unwrap();
+                        m.apply(&minted.ops);
+                        wal.push(minted);
+                        assert_refines(&g, &m, step);
+                        forbidden = Some(victim);
+
+                        // The drifted intent: an insert wiring to the stale
+                        // refs, an edge touch, or a compaction-shaped removal.
+                        let free: Vec<SerialId> = UNIVERSE
+                            .filter(|s| *s != victim && m.version_of(*s).is_none())
+                            .collect();
+                        let ops = match (rng.gen_range(0..3), free.choose(rng)) {
+                            (0, Some(&s)) => {
+                                let height = layer + 1;
+                                let update_ep = if height > m.num_layers() {
+                                    UpdateEntryPoint::Append { layer }
+                                } else {
+                                    UpdateEntryPoint::False
+                                };
+                                vec![
+                                    MutationOp::AddNode {
+                                        id: VectorId::new(s, rng.gen_range(0..4)),
+                                        height,
+                                        update_ep,
+                                    },
+                                    MutationOp::AddEdges {
+                                        base: s,
+                                        neighbors: targets,
+                                        layer,
+                                        edge_type: EdgeType::All,
+                                    },
+                                ]
+                            }
+                            (1, _) => vec![MutationOp::AddEdges {
+                                base,
+                                neighbors: targets,
+                                layer,
+                                edge_type: [EdgeType::Base, EdgeType::Neighbors, EdgeType::All]
+                                    .choose(rng)
+                                    .unwrap()
+                                    .clone(),
+                            }],
+                            _ => vec![MutationOp::RemoveEdges {
+                                base,
+                                neighbors: targets,
+                                layer,
+                                edge_type: [EdgeType::Base, EdgeType::All]
+                                    .choose(rng)
+                                    .unwrap()
+                                    .clone(),
+                            }],
+                        };
+                        (now, ops)
                     }
                 };
 
-                wal.push(g.apply_new(UnstampedMutation { ops: ops.clone() }).unwrap());
-                m.apply(&ops);
+                let minted = g.apply_new(UnstampedMutation { as_of, ops }).unwrap();
+                if let Some(victim) = forbidden {
+                    for op in &minted.ops {
+                        if let MutationOp::AddEdges {
+                            base, neighbors, ..
+                        }
+                        | MutationOp::RemoveEdges {
+                            base, neighbors, ..
+                        } = op
+                        {
+                            assert!(
+                                *base != victim && !neighbors.contains(&victim),
+                                "step {step}: record references serial {victim}, whose content \
+                                 changed after the intent's as_of"
+                            );
+                        }
+                    }
+                }
+                m.apply(&minted.ops);
+                wal.push(minted);
                 assert_refines(&g, &m, step);
             }
 
