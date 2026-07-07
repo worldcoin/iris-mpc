@@ -307,7 +307,9 @@ async fn reap(
             table = %job.table,
             ts_column = %job.ts_column,
             retention = %job.retention,
-            guard = job.guard.as_deref().unwrap_or("(none)"),
+            // The RENDERED guard — what actually executed (watermark substituted), not the
+            // raw config string with the {{watermark}} placeholder still in it.
+            guard = guard_pred.as_deref().unwrap_or("(none)"),
             rows_would_delete = would_delete,
             "DRY RUN: would delete {would_delete} rows from {} where {} < now() - '{}'::interval{}",
             job.table,
@@ -323,7 +325,14 @@ async fn reap(
         .set(would_delete as f64);
         // Read-only health gauges are still useful during a dry run (verify oldest-retained /
         // bloat look sane before enabling live deletes).
-        emit_health_metrics(pool, job, guard_pred.as_deref(), party).await;
+        emit_health_metrics(
+            &mut conn,
+            job,
+            guard_pred.as_deref(),
+            statement_timeout,
+            party,
+        )
+        .await;
         return Ok(would_delete);
     }
 
@@ -369,7 +378,14 @@ async fn reap(
     )
     .increment(total as u64);
     // Health gauges are best-effort: a probe failure must never fail the run or block deletes.
-    emit_health_metrics(pool, job, guard_pred.as_deref(), party).await;
+    emit_health_metrics(
+        &mut conn,
+        job,
+        guard_pred.as_deref(),
+        statement_timeout,
+        party,
+    )
+    .await;
     Ok(total)
 }
 
@@ -423,9 +439,16 @@ async fn fetch_watermark(
     party: &str,
 ) -> Result<i64> {
     let fetched: Result<i64> = async {
+        // Server-side statement_timeout on a dedicated connection + client-side tokio
+        // timeout — same double bound as the delete path.
+        let mut conn = pool
+            .acquire()
+            .await
+            .wrap_err("acquire watermark connection")?;
+        set_statement_timeout(&mut conn, statement_timeout).await?;
         let row = timeout(
             statement_timeout + Duration::from_secs(5),
-            sqlx::query(query).fetch_optional(pool),
+            sqlx::query(query).fetch_optional(&mut *conn),
         )
         .await
         .wrap_err_with(|| format!("watermark query for {table} exceeded timeout"))?
@@ -466,11 +489,16 @@ async fn fetch_watermark(
 }
 
 /// Oldest-retained age (retention actually working) + dead-tuple ratio (bloat — the one real
-/// risk of DELETE-based retention). Both best-effort; logged and skipped on error.
+/// risk of DELETE-based retention). Both best-effort; logged and skipped on error. Runs on
+/// the caller's statement_timeout-bounded connection, plus a client-side tokio timeout —
+/// a slow probe (the oldest-retained scan carries the full rendered guard, subqueries and
+/// all) must never hang the pod: with `concurrencyPolicy: Forbid` a hung run would block
+/// every subsequent run and silently stop retention.
 async fn emit_health_metrics(
-    pool: &PgPool,
+    conn: &mut PgConnection,
     job: &RetentionJob,
     guard_pred: Option<&str>,
+    statement_timeout: Duration,
     party: &str,
 ) {
     // Oldest row *among the retention-eligible rows* — apply the same guard as the delete
@@ -487,7 +515,14 @@ async fn emit_health_metrics(
         table = quote_ident(&job.table),
         guard_where = guard_where,
     );
-    match sqlx::query(&oldest_sql).fetch_one(pool).await {
+    match timeout(
+        statement_timeout + Duration::from_secs(5),
+        sqlx::query(&oldest_sql).fetch_one(&mut *conn),
+    )
+    .await
+    .map_err(eyre::Report::from)
+    .and_then(|r| r.map_err(eyre::Report::from))
+    {
         Ok(row) => {
             if let Ok(age) = row.try_get::<Option<f64>, _>("age") {
                 metrics::gauge!(
@@ -500,11 +535,19 @@ async fn emit_health_metrics(
         Err(e) => warn!(table = %job.table, error = %e, "oldest_retained probe failed"),
     }
 
-    let bloat_sql = "SELECT n_dead_tup, n_live_tup FROM pg_stat_user_tables WHERE relname = $1";
-    match sqlx::query(bloat_sql)
-        .bind(&job.table)
-        .fetch_optional(pool)
-        .await
+    // schemaname filter: the same table name can exist in several schemas of one DB
+    // (e.g. per-party SMPC_* schemas) — pin the probe to the connection's search_path.
+    let bloat_sql = "SELECT n_dead_tup, n_live_tup FROM pg_stat_user_tables \
+                     WHERE relname = $1 AND schemaname = current_schema()";
+    match timeout(
+        statement_timeout + Duration::from_secs(5),
+        sqlx::query(bloat_sql)
+            .bind(&job.table)
+            .fetch_optional(&mut *conn),
+    )
+    .await
+    .map_err(eyre::Report::from)
+    .and_then(|r| r.map_err(eyre::Report::from))
     {
         Ok(Some(row)) => {
             let dead: i64 = row.try_get("n_dead_tup").unwrap_or(0);
