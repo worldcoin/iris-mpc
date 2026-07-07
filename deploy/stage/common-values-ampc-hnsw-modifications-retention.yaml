@@ -2,11 +2,13 @@
 # common-cronjob chart (1.11.0, worldcoin-foundation/common-cronjob) via wf-cluster-apps,
 # mirroring ampc-hnsw-anon-stats-retention (POP-3905).
 #
-# Runs hnsw-side because the guard needs BOTH databases: the reaped table is the GPU
-# MPCV2 DB's `modifications` (grows unbounded in shadow mode), while the consumer
-# watermark `last_indexed_modification_id` lives in the hawk DB's `persistent_state` —
-# and the `ampc-hnsw` namespace `application` secret is the one place that already holds
-# both URLs (DATABASE_AURORA_MPCV2_URL + DATABASE_AURORA_HNSW_URL, the genesis pattern).
+# Scope (for now): the HNSW (hawk) DB's `modifications` copy — the hawk server writes a
+# row per signup-modification into its own DB and only genesis Final-Cleanup clears it.
+# Watermark (`last_indexed_modification_id` in `persistent_state`) is co-located in the
+# same DB+schema, so this instance needs no second pool. The GPU MPCV2 DB's copy grows
+# unboundedly too; its reaper instance FOLLOWS SHORTLY — the binary already supports it
+# (RETENTION__WATERMARK_DB_URL cross-DB watermark), it only needs its own values +
+# cluster-apps entry (the `ampc-hnsw` ns secret already holds DATABASE_AURORA_MPCV2_URL).
 #
 # NOTE: enabling requires an image with watermark support (POP-3931 reaper extension).
 # The pin below must be bumped to a post-POP-3931 build before RETENTION__ENABLED is set;

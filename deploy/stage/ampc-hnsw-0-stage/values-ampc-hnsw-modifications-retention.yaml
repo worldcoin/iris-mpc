@@ -1,7 +1,11 @@
 # POP-3931 — modifications retention (retention-reaper), party 0 (stage). Per-node.
-# Reaps the GPU MPCV2 DB's modifications table (RETENTION__DB_URL → MPCV2 Aurora); the
-# consumer watermark comes from the hawk DB (RETENTION__WATERMARK_DB_URL → HNSW Aurora,
-# persistent_state, MIN over domains 'hawk' + 'genesis', both REQUIRED else 0 = fail closed).
+# Reaps the HNSW (hawk) DB's modifications copy — the hawk server (shared server binary)
+# writes a row per signup-modification into its own DB, and only genesis Final-Cleanup
+# ever clears it. Watermark is CO-LOCATED here (persistent_state, same DB+schema), so no
+# second pool: watermark_query runs on the main connection (MIN over domains 'hawk' +
+# 'genesis', both REQUIRED with non-NULL values, else 0 = fail closed).
+# The GPU MPCV2 DB's copy grows too — its instance follows shortly after this one
+# (same binary; it adds RETENTION__WATERMARK_DB_URL for the cross-DB watermark).
 #
 # Guard anatomy (ANDed onto the binary's own created_at < now() - 30 days conjunct):
 #   - status/persisted: only terminal, fully-persisted rows (never in-flight)
@@ -13,7 +17,6 @@
 env:
   RUST_LOG: "info"
   RETENTION__DB_SCHEMA: "SMPC_stage_0"
-  RETENTION__WATERMARK_DB_SCHEMA: "SMPC_stage_0"
   RETENTION__PARTY: "0"
   RETENTION__SERVICE__SERVICE_NAME: "retention-reaper-modifications-hnsw-0"
   RETENTION__SERVICE__METRICS__PORT: "8125"
@@ -21,11 +24,6 @@ env:
   RETENTION__SERVICE__METRICS__BUFFER_SIZE: "256"
   RETENTION__SERVICE__METRICS__PREFIX: "retention-reaper-modifications-hnsw-0"
   RETENTION__DB_URL:
-    valueFrom:
-      secretKeyRef:
-        name: application
-        key: DATABASE_AURORA_MPCV2_URL
-  RETENTION__WATERMARK_DB_URL:
     valueFrom:
       secretKeyRef:
         name: application
@@ -40,9 +38,7 @@ env:
     "guard":"status = 'COMPLETED' AND persisted AND id < {{watermark}} AND id < (SELECT COALESCE(MIN(id), 0) FROM (SELECT id FROM modifications ORDER BY id DESC LIMIT 10000) newest)",
     "watermark_query":"SELECT CASE WHEN COUNT(*) FILTER (WHERE domain = 'hawk' AND \"value\" #>> '{}' IS NOT NULL) = 0 OR COUNT(*) FILTER (WHERE domain = 'genesis' AND \"value\" #>> '{}' IS NOT NULL) = 0 THEN 0 ELSE MIN((\"value\" #>> '{}')::bigint) END FROM persistent_state WHERE \"key\" = 'last_indexed_modification_id' AND domain IN ('hawk', 'genesis')"}]
 
-# ampc-hnsw pod SG — in-region path to the HNSW Aurora (watermark). The MPCV2 Aurora is
-# cross-region (eu-north-1) via the peering path genesis already uses; verify on the
-# first dry-run that both connections succeed before enabling.
+# ampc-hnsw pod SG — in-region path to the HNSW Aurora, same SG the hawk service uses.
 attachSecurityGroupPolicy:
   enabled: true
   groupIds:
