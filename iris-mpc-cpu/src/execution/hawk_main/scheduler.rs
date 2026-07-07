@@ -30,9 +30,6 @@ where
 }
 
 /// A schedule is a collections of batches to process in parallel.
-/// n_tasks is n_requests * n_rotations. these get distributed over
-/// n_sessions. Schedule::new() must ensure that n_sessions does not exceed
-/// n_requests * n_rotations.
 pub struct Schedule {
     n_sessions: usize,
     n_requests: usize,
@@ -68,7 +65,7 @@ pub type TaskId = (usize, usize, usize);
 impl Schedule {
     pub fn new(n_sessions: usize, n_requests: usize, n_rotations: usize) -> Self {
         Self {
-            n_sessions: n_sessions.min(n_requests * n_rotations),
+            n_sessions,
             n_requests,
             n_rotations,
         }
@@ -232,9 +229,7 @@ mod test {
 
     fn test_intra_match_schedule_impl(n_sessions: usize, n_requests: usize, n_rotations: usize) {
         let n_eyes = N_EYES;
-        // n_sessions is capped to n_tasks in Schedule::new; reflect that here.
-        let effective_sessions = n_sessions.min(n_requests * n_rotations);
-        let n_batches = n_eyes * effective_sessions;
+        let n_batches = n_eyes * n_sessions;
         let n_tasks = n_eyes * n_requests * n_rotations;
 
         let batches = Schedule::new(n_sessions, n_requests, n_rotations).intra_match_batches();
@@ -254,7 +249,7 @@ mod test {
             .iter()
             .flat_map(|b| {
                 assert!(b.i_eye < n_eyes);
-                assert!(b.i_session < effective_sessions);
+                assert!(b.i_session < n_sessions);
 
                 b.tasks.iter().map(|t| {
                     assert!(t.i_request < n_requests);
@@ -284,9 +279,7 @@ mod test {
 
     fn test_search_schedule_impl(n_sessions: usize, n_requests: usize, n_rotations: usize) {
         let n_eyes = N_EYES;
-        // n_sessions is capped to n_tasks in Schedule::new; reflect that here.
-        let effective_sessions = n_sessions.min(n_requests * n_rotations);
-        let n_batches = n_eyes * effective_sessions;
+        let n_batches = n_eyes * n_sessions;
         let n_tasks = n_eyes * n_requests * n_rotations;
 
         let batches = Schedule::new(n_sessions, n_requests, n_rotations).search_batches();
@@ -306,7 +299,7 @@ mod test {
             .iter()
             .flat_map(|b| {
                 assert!(b.i_eye < n_eyes);
-                assert!(b.i_session < effective_sessions);
+                assert!(b.i_session < n_sessions);
 
                 b.tasks.iter().map(|t| {
                     assert!(t.i_request < n_requests);
