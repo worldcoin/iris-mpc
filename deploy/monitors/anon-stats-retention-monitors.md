@@ -43,29 +43,21 @@ Catches a mis-set retention/guard deleting far more than a normal day.
 - [ ] Then clone to `env:prod` and flip `suspend: false` **per party, canary one first**.
 - [ ] Re-evaluate #3 thresholds if/when POP-3908 raises volume — that's the trigger to consider pg_partman for the hottest table.
 
+
 ---
 
-## POP-3931 addendum — `modifications` retention (same reaper, two extra signals)
+## POP-3931 addendum — `modifications` retention (same reaper, same monitors)
 
 The modifications job reuses monitors #1–#5 verbatim (service names
 `retention-reaper-modifications-hnsw-{0,1,2}`; metrics carry `table:modifications`).
-Two additions specific to the watermark guard:
+Two operational notes specific to this table:
 
-**#6 — watermark broken (distinct from "nothing to delete")**
-`retention.watermark_fetch_failed` > 0 over 26h, OR `retention.watermark` gauge
-flat at 0 for >48h while the hawk consumer is demonstrably indexing. A permanently-zero
-watermark is the most likely *silent* failure mode (jsonb shape drift, wrong pool/schema,
-missing `hawk`/`genesis` domain row) — the reaper fails closed and deletes nothing, so
-only this monitor makes that state visible.
-
-**#7 — watermark stalled vs table growth**
-`retention.watermark` not advancing while `modifications` row count grows (proxy:
-`retention.oldest_retained_seconds{table:modifications}` climbing past ~35d). Means the
-HNSW consumer stopped advancing `last_indexed_modification_id` — retention is then
-correctly frozen, but the underlying POP-3931 growth problem is back and the CONSUMER
-needs attention, not the reaper.
-
-**Operational note:** after the `created_at` migration lands, existing rows are
-backfilled with the migration timestamp — expect `rows_deleted = 0` for the first 30
-days; do not treat that as a missing-run signal (#4's anomaly baseline starts after the
-first non-zero window).
+- **30-day dead period:** after the `created_at` migration lands, existing rows are
+  backfilled with the migration timestamp — expect `rows_deleted = 0` for the first 30
+  days; do not treat that as a missing-run signal (#4's anomaly baseline starts after
+  the first non-zero window).
+- **Newest-10k floor:** the guard always retains the newest 10 000 rows (protects the
+  cross-party startup-sync window and the MAX(id)+1 id-assignment trigger), so
+  `oldest_retained_seconds` on a very quiet party can legitimately exceed the retention
+  window — the #2 threshold (22d for anon_stats) should be set per-table with margin
+  for this.

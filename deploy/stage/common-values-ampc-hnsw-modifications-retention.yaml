@@ -3,16 +3,14 @@
 # mirroring ampc-hnsw-anon-stats-retention (POP-3905).
 #
 # Scope (for now): the HNSW (hawk) DB's `modifications` copy — the hawk server writes a
-# row per signup-modification into its own DB and only genesis Final-Cleanup clears it.
-# Watermark (`last_indexed_modification_id` in `persistent_state`) is co-located in the
-# same DB+schema, so this instance needs no second pool. The GPU MPCV2 DB's copy grows
-# unboundedly too; its reaper instance FOLLOWS SHORTLY — the binary already supports it
-# (RETENTION__WATERMARK_DB_URL cross-DB watermark), it only needs its own values +
-# cluster-apps entry (the `ampc-hnsw` ns secret already holds DATABASE_AURORA_MPCV2_URL).
+# row per signup-modification into its own DB and nothing deletes it in steady state
+# (genesis Final-Cleanup is a one-off job, not a cadence). Retention here is a plain
+# guarded age-based DELETE — the two systems' copies are disjoint, no cross-DB
+# coordination exists or is needed. The GPU MPCV2 DB's copy grows the same way; its
+# reaper instance FOLLOWS SHORTLY (same binary, values + cluster-apps entry only).
 #
-# NOTE: enabling requires an image with watermark support (POP-3931 reaper extension).
-# The pin below must be bumped to a post-POP-3931 build before RETENTION__ENABLED is set;
-# until then the CronJob is a disabled no-op regardless of image.
+# NOTE: bump the pin to a post-POP-3931 build before enabling — the batch-pause and
+# bounded-health-probe behavior land with this PR's image.
 image: "ghcr.io/worldcoin/retention-reaper:d9a3d33342dfd9e95c7b11e8ef4e4101a3e6ed80"
 
 # Disabled by default (RETENTION__ENABLED unset → false): deploys as a no-op. The enable

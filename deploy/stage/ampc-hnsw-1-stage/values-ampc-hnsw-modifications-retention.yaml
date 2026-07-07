@@ -1,19 +1,16 @@
 # POP-3931 — modifications retention (retention-reaper), party 1 (stage). Per-node.
 # Reaps the HNSW (hawk) DB's modifications copy — the hawk server (shared server binary)
-# writes a row per signup-modification into its own DB, and only genesis Final-Cleanup
-# ever clears it. Watermark is CO-LOCATED here (persistent_state, same DB+schema), so no
-# second pool: watermark_query runs on the main connection (MIN over domains 'hawk' +
-# 'genesis', both REQUIRED with non-NULL values, else 0 = fail closed).
-# The GPU MPCV2 DB's copy grows too — its instance follows shortly after this one
-# (same binary; it adds RETENTION__WATERMARK_DB_URL for the cross-DB watermark).
+# writes a row per signup-modification into its own DB; nothing deletes it in steady
+# state (genesis Final-Cleanup is a one-off, not a cadence). The GPU MPCV2 DB's copy
+# grows the same way; its own reaper instance follows shortly after this one.
 #
 # Guard anatomy (ANDed onto the binary's own created_at < now() - 30 days conjunct):
 #   - status/persisted: only terminal, fully-persisted rows (never in-flight)
-#   - id < {{watermark}}: never delete what the HNSW consumer hasn't indexed
 #   - id < MIN(id of newest 10000 rows): always retain the newest 10k regardless — keeps
-#     the cross-party startup-sync window intact (sync compares newest
-#     max_modifications_lookback rows, default 328 ≈ 30x margin) AND guarantees the
-#     MAX(id)+1 assignment trigger can never see an emptied table (id reuse).
+#     the cross-party startup-sync window intact (sync compares the newest
+#     max_modifications_lookback rows by id, default 328 ≈ 30x margin) AND guarantees
+#     the MAX(id)+1 assignment trigger can never see an emptied table (id reuse).
+#     Matters on quiet parties where 30 days can hold fewer rows than the sync window.
 env:
   RUST_LOG: "info"
   RETENTION__DB_SCHEMA: "SMPC_stage_1"
@@ -35,8 +32,7 @@ env:
   RETENTION_JOBS: >-
     [{"table":"modifications","ts_column":"created_at","retention":"30 days",
     "batch_size":2000,"batch_pause_ms":250,
-    "guard":"status = 'COMPLETED' AND persisted AND id < {{watermark}} AND id < (SELECT COALESCE(MIN(id), 0) FROM (SELECT id FROM modifications ORDER BY id DESC LIMIT 10000) newest)",
-    "watermark_query":"SELECT CASE WHEN COUNT(*) FILTER (WHERE domain = 'hawk' AND \"value\" #>> '{}' IS NOT NULL) = 0 OR COUNT(*) FILTER (WHERE domain = 'genesis' AND \"value\" #>> '{}' IS NOT NULL) = 0 THEN 0 ELSE MIN((\"value\" #>> '{}')::bigint) END FROM persistent_state WHERE \"key\" = 'last_indexed_modification_id' AND domain IN ('hawk', 'genesis')"}]
+    "guard":"status = 'COMPLETED' AND persisted AND id < (SELECT COALESCE(MIN(id), 0) FROM (SELECT id FROM modifications ORDER BY id DESC LIMIT 10000) newest)"}]
 
 # ampc-hnsw pod SG — in-region path to the HNSW Aurora, same SG the hawk service uses.
 attachSecurityGroupPolicy:

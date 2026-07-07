@@ -35,17 +35,10 @@ struct RetentionJob {
     /// Postgres interval literal, e.g. "14 days".
     retention: String,
     /// Optional extra predicate, e.g. "processed = TRUE" or
-    /// "status = 'COMPLETED' AND persisted AND id < {{watermark}}".
+    /// "status = 'COMPLETED' AND persisted". May contain same-DB subqueries (it is
+    /// TRUSTED deploy config), e.g. a newest-N retention floor.
     #[serde(default)]
     guard: Option<String>,
-    /// Optional scalar-bigint SQL, run once per job before the delete loop — on the
-    /// watermark pool when `RETENTION__WATERMARK_DB_URL` is set, else the main pool.
-    /// Its result replaces the `{{watermark}}` placeholder in `guard` (substituted as an
-    /// i64 literal — injection-safe). NULL / zero rows → 0, so an absent consumer pointer
-    /// FAILS CLOSED (`id < 0` matches nothing). A query/connection/type error fails the
-    /// job loudly instead of falling through to an unguarded delete.
-    #[serde(default)]
-    watermark_query: Option<String>,
     #[serde(default = "default_batch_size")]
     batch_size: i64,
     /// Pause between delete batches. The batched DELETE competes with hot write paths —
@@ -100,15 +93,6 @@ struct ReaperConfig {
     db_schema: String,
     #[serde(default)]
     party: String,
-    /// `RETENTION__WATERMARK_DB_URL` / `RETENTION__WATERMARK_DB_SCHEMA` — optional second
-    /// database for `watermark_query` when the consumer's pointer lives elsewhere (e.g.
-    /// `modifications` grows in the GPU DB while `last_indexed_modification_id` lives in
-    /// the hawk DB's `persistent_state`). Connected ReadOnly: search_path only, never
-    /// creates schemas, never migrates. Schema defaults to `db_schema` when unset.
-    #[serde(default)]
-    watermark_db_url: Option<String>,
-    #[serde(default)]
-    watermark_db_schema: Option<String>,
     #[serde(default = "default_statement_timeout_secs")]
     statement_timeout_secs: u64,
     #[serde(default)]
@@ -173,27 +157,6 @@ async fn main() -> Result<()> {
         .await
         .wrap_err("failed to connect to postgres")?;
 
-    // Optional second pool for watermark queries (ReadOnly — search_path only, no schema
-    // creation, no migrations). Falls back to the main pool when unset.
-    let watermark_client = match &config.watermark_db_url {
-        Some(url) => {
-            let schema = config
-                .watermark_db_schema
-                .as_deref()
-                .unwrap_or(&config.db_schema);
-            Some(
-                PostgresClient::new(url, schema, AccessMode::ReadOnly)
-                    .await
-                    .wrap_err("failed to connect to watermark postgres")?,
-            )
-        }
-        None => None,
-    };
-    let watermark_pool = watermark_client
-        .as_ref()
-        .map(|c| &c.pool)
-        .unwrap_or(&client.pool);
-
     info!(
         party = %party,
         schema = %config.db_schema,
@@ -214,16 +177,7 @@ async fn main() -> Result<()> {
         validate_identifier(&job.table)
             .and_then(|_| validate_identifier(&job.ts_column))
             .wrap_err_with(|| format!("invalid identifier in job for table {}", job.table))?;
-        match reap(
-            &client.pool,
-            watermark_pool,
-            job,
-            statement_timeout,
-            &party,
-            dry_run,
-        )
-        .await
-        {
+        match reap(&client.pool, job, statement_timeout, &party, dry_run).await {
             Ok(deleted) => {
                 if dry_run {
                     info!(table = %job.table, rows_would_delete = deleted, "retention job ok (dry run)");
@@ -258,23 +212,13 @@ async fn main() -> Result<()> {
 /// loops until a partial batch signals the table is drained for this run.
 async fn reap(
     pool: &PgPool,
-    watermark_pool: &PgPool,
     job: &RetentionJob,
     statement_timeout: Duration,
     party: &str,
     dry_run: bool,
 ) -> Result<i64> {
-    // Fetch the consumer watermark (if configured) BEFORE rendering the guard: a fetch
-    // failure fails the job here — there is no code path from a broken watermark to a
-    // delete without it.
-    let watermark = match &job.watermark_query {
-        Some(query) => Some(
-            fetch_watermark(watermark_pool, query, statement_timeout, &job.table, party).await?,
-        ),
-        None => None,
-    };
-    let guard_pred = render_guard(job.guard.as_deref(), watermark, &job.table)?;
-    let guard = guard_pred
+    let guard = job
+        .guard
         .as_deref()
         .map(|g| format!(" AND ({g})"))
         .unwrap_or_default();
@@ -307,9 +251,7 @@ async fn reap(
             table = %job.table,
             ts_column = %job.ts_column,
             retention = %job.retention,
-            // The RENDERED guard — what actually executed (watermark substituted), not the
-            // raw config string with the {{watermark}} placeholder still in it.
-            guard = guard_pred.as_deref().unwrap_or("(none)"),
+            guard = job.guard.as_deref().unwrap_or("(none)"),
             rows_would_delete = would_delete,
             "DRY RUN: would delete {would_delete} rows from {} where {} < now() - '{}'::interval{}",
             job.table,
@@ -325,14 +267,7 @@ async fn reap(
         .set(would_delete as f64);
         // Read-only health gauges are still useful during a dry run (verify oldest-retained /
         // bloat look sane before enabling live deletes).
-        emit_health_metrics(
-            &mut conn,
-            job,
-            guard_pred.as_deref(),
-            statement_timeout,
-            party,
-        )
-        .await;
+        emit_health_metrics(&mut conn, job, statement_timeout, party).await;
         return Ok(would_delete);
     }
 
@@ -378,135 +313,29 @@ async fn reap(
     )
     .increment(total as u64);
     // Health gauges are best-effort: a probe failure must never fail the run or block deletes.
-    emit_health_metrics(
-        &mut conn,
-        job,
-        guard_pred.as_deref(),
-        statement_timeout,
-        party,
-    )
-    .await;
+    emit_health_metrics(&mut conn, job, statement_timeout, party).await;
     Ok(total)
-}
-
-const WATERMARK_PLACEHOLDER: &str = "{{watermark}}";
-
-/// Render the job guard, substituting the fetched watermark as an i64 literal.
-/// Misconfigurations fail loudly and closed: a placeholder without a `watermark_query`
-/// (guard would reach SQL unrendered) and a `watermark_query` whose result nothing
-/// references (a safety bound silently not applied) are both hard errors.
-fn render_guard(
-    guard: Option<&str>,
-    watermark: Option<i64>,
-    table: &str,
-) -> Result<Option<String>> {
-    match (guard, watermark) {
-        (None, None) => Ok(None),
-        (None, Some(_)) => {
-            bail!("job for {table}: watermark_query is set but there is no guard to apply it to")
-        }
-        (Some(g), None) => {
-            if g.contains(WATERMARK_PLACEHOLDER) {
-                bail!(
-                    "job for {table}: guard references {WATERMARK_PLACEHOLDER} but no \
-                     watermark_query is configured"
-                );
-            }
-            Ok(Some(g.to_string()))
-        }
-        (Some(g), Some(w)) => {
-            if !g.contains(WATERMARK_PLACEHOLDER) {
-                bail!(
-                    "job for {table}: watermark_query is set but the guard does not \
-                     reference {WATERMARK_PLACEHOLDER}"
-                );
-            }
-            Ok(Some(g.replace(WATERMARK_PLACEHOLDER, &w.to_string())))
-        }
-    }
-}
-
-/// Scalar-bigint watermark fetch with fail-closed semantics: zero rows or a NULL value
-/// mean "consumer pointer absent" → 0 (the guard `id < 0` then matches nothing). Any
-/// error — connection, timeout, wrong column type — fails the JOB (its delete is skipped,
-/// the run exits non-zero) and bumps a dedicated failure metric so "watermark broken" is
-/// alertable separately from a legitimate "nothing to delete".
-async fn fetch_watermark(
-    pool: &PgPool,
-    query: &str,
-    statement_timeout: Duration,
-    table: &str,
-    party: &str,
-) -> Result<i64> {
-    let fetched: Result<i64> = async {
-        // Server-side statement_timeout on a dedicated connection + client-side tokio
-        // timeout — same double bound as the delete path.
-        let mut conn = pool
-            .acquire()
-            .await
-            .wrap_err("acquire watermark connection")?;
-        set_statement_timeout(&mut conn, statement_timeout).await?;
-        let row = timeout(
-            statement_timeout + Duration::from_secs(5),
-            sqlx::query(query).fetch_optional(&mut *conn),
-        )
-        .await
-        .wrap_err_with(|| format!("watermark query for {table} exceeded timeout"))?
-        .wrap_err_with(|| format!("watermark query for {table} failed"))?;
-        match row {
-            None => Ok(0),
-            Some(row) => Ok(row
-                .try_get::<Option<i64>, _>(0)
-                .wrap_err_with(|| {
-                    format!("watermark query for {table} did not return a bigint in column 0")
-                })?
-                .unwrap_or(0)),
-        }
-    }
-    .await;
-
-    match fetched {
-        Ok(value) => {
-            info!(table = %table, watermark = value, "watermark fetched");
-            metrics::gauge!(
-                "retention.watermark",
-                "table" => table.to_string(),
-                "party" => party.to_string()
-            )
-            .set(value as f64);
-            Ok(value)
-        }
-        Err(error) => {
-            metrics::counter!(
-                "retention.watermark_fetch_failed",
-                "table" => table.to_string(),
-                "party" => party.to_string()
-            )
-            .increment(1);
-            Err(error)
-        }
-    }
 }
 
 /// Oldest-retained age (retention actually working) + dead-tuple ratio (bloat — the one real
 /// risk of DELETE-based retention). Both best-effort; logged and skipped on error. Runs on
 /// the caller's statement_timeout-bounded connection, plus a client-side tokio timeout —
-/// a slow probe (the oldest-retained scan carries the full rendered guard, subqueries and
-/// all) must never hang the pod: with `concurrencyPolicy: Forbid` a hung run would block
-/// every subsequent run and silently stop retention.
+/// a slow probe (the oldest-retained scan carries the full guard, subqueries and all) must
+/// never hang the pod: with `concurrencyPolicy: Forbid` a hung run would block every
+/// subsequent run and silently stop retention.
 async fn emit_health_metrics(
     conn: &mut PgConnection,
     job: &RetentionJob,
-    guard_pred: Option<&str>,
     statement_timeout: Duration,
     party: &str,
 ) {
-    // Oldest row *among the retention-eligible rows* — apply the same guard as the delete
-    // (the RENDERED guard: the raw config string may contain the {{watermark}} placeholder).
+    // Oldest row *among the retention-eligible rows* — apply the same guard as the delete.
     // Without it, an intentionally-retained old row (e.g. a still-unprocessed anon_stats row
     // under guard `processed = TRUE`) would inflate this gauge and falsely trip the
     // retention-lag monitor even though the reaper is working correctly.
-    let guard_where = guard_pred
+    let guard_where = job
+        .guard
+        .as_deref()
         .map(|g| format!(" WHERE ({g})"))
         .unwrap_or_default();
     let oldest_sql = format!(
@@ -645,51 +474,11 @@ mod tests {
     }
 
     #[test]
-    fn parses_job_with_watermark_query() {
+    fn parses_job_with_subquery_guard_and_pause_default() {
         let raw = r#"[{"table":"modifications","retention":"30 days",
-          "guard":"status = 'COMPLETED' AND persisted AND id < {{watermark}}",
-          "watermark_query":"SELECT 1::bigint"}]"#;
+          "guard":"status = 'COMPLETED' AND persisted AND id < (SELECT COALESCE(MIN(id), 0) FROM (SELECT id FROM modifications ORDER BY id DESC LIMIT 10000) newest)"}]"#;
         let jobs: Vec<RetentionJob> = serde_json::from_str(raw).unwrap();
-        assert_eq!(jobs[0].watermark_query.as_deref(), Some("SELECT 1::bigint"));
+        assert!(jobs[0].guard.as_deref().unwrap().contains("LIMIT 10000"));
         assert_eq!(jobs[0].batch_pause_ms, 100); // defaulted
-    }
-
-    #[test]
-    fn renders_watermark_into_guard_as_i64_literal() {
-        let rendered = render_guard(
-            Some("status = 'COMPLETED' AND persisted AND id < {{watermark}}"),
-            Some(4242),
-            "modifications",
-        )
-        .unwrap();
-        assert_eq!(
-            rendered.as_deref(),
-            Some("status = 'COMPLETED' AND persisted AND id < 4242")
-        );
-    }
-
-    #[test]
-    fn watermark_zero_renders_fail_closed_predicate() {
-        // Absent consumer pointer → 0 → `id < 0` matches no rows. The rendered SQL must
-        // keep the conjunct — deleting is only possible when the watermark is positive.
-        let rendered = render_guard(Some("id < {{watermark}}"), Some(0), "modifications").unwrap();
-        assert_eq!(rendered.as_deref(), Some("id < 0"));
-    }
-
-    #[test]
-    fn plain_guard_passes_through_without_watermark() {
-        let rendered = render_guard(Some("processed = TRUE"), None, "anon_stats_1d").unwrap();
-        assert_eq!(rendered.as_deref(), Some("processed = TRUE"));
-        assert_eq!(render_guard(None, None, "t").unwrap(), None);
-    }
-
-    #[test]
-    fn rejects_watermark_misconfigurations() {
-        // Placeholder in guard but no watermark fetched → would reach SQL unrendered.
-        assert!(render_guard(Some("id < {{watermark}}"), None, "t").is_err());
-        // Watermark fetched but guard never references it → safety bound silently dropped.
-        assert!(render_guard(Some("processed = TRUE"), Some(7), "t").is_err());
-        // Watermark fetched with no guard at all.
-        assert!(render_guard(None, Some(7), "t").is_err());
     }
 }
