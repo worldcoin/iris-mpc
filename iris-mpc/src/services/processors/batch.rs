@@ -9,6 +9,9 @@ use ampc_server_utils::{
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sns::types::MessageAttributeValue;
 use aws_sdk_sns::Client as SNSClient;
+use aws_sdk_sqs::types::{
+    ChangeMessageVisibilityBatchRequestEntry, DeleteMessageBatchRequestEntry,
+};
 use aws_sdk_sqs::Client;
 use eyre::Result;
 use iris_mpc_common::config::Config;
@@ -54,7 +57,10 @@ const BATCH_POLL_PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(30);
 enum PollOutcome {
     Completed,
     AbortedEmpty,
+    AbortedPartial,
 }
+
+type PendingDelete = (String, String);
 
 #[derive(Default)]
 struct BatchPollAbortCounter {
@@ -75,6 +81,24 @@ impl BatchPollAbortCounter {
 
 fn batch_poll_abort_jitter() -> Duration {
     Duration::from_millis(rand::thread_rng().gen_range(1_000..=3_000))
+}
+
+fn batch_poll_abort_enabled(batch_poll_abort_after_secs: u64) -> bool {
+    batch_poll_abort_after_secs > 0
+}
+
+fn reset_partial_batch_state_fields(
+    batch_query: &mut BatchQuery,
+    msg_counter: &mut usize,
+    pending_deletes: &mut Vec<PendingDelete>,
+    handles: &mut Vec<JoinHandle<Result<(GaloisShares, GaloisShares), eyre::Error>>>,
+) {
+    *batch_query = BatchQuery::default();
+    *msg_counter = 0;
+    pending_deletes.clear();
+    for handle in handles.drain(..) {
+        handle.abort();
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -220,6 +244,7 @@ pub struct BatchProcessor<'a> {
     semaphore: Arc<Semaphore>,
     handles: Vec<JoinHandle<Result<(GaloisShares, GaloisShares), eyre::Error>>>,
     msg_counter: usize,
+    pending_deletes: Vec<PendingDelete>,
     current_batch_id_atomic: Arc<AtomicU64>,
     iris_store: &'a Store,
     batch_sync_shared_state: Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
@@ -265,6 +290,7 @@ impl<'a> BatchProcessor<'a> {
             semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
             handles: vec![],
             msg_counter: 0,
+            pending_deletes: vec![],
             current_batch_id_atomic,
             iris_store,
             batch_sync_shared_state,
@@ -359,6 +385,33 @@ impl<'a> BatchProcessor<'a> {
                         if abort_count > 5 {
                             tracing::error!(
                                 "Batch ID: {}. Empty batch poll aborted {} times for this batch_id; continuing batch sync.",
+                                current_batch_id,
+                                abort_count
+                            );
+                        }
+
+                        tokio::time::sleep(batch_poll_abort_jitter()).await;
+                        continue;
+                    }
+                    PollOutcome::AbortedPartial => {
+                        {
+                            let mut shared_state = self.batch_sync_shared_state.lock().await;
+                            // This state is served to peers via /batch-sync-state. After a
+                            // partial abort we reset only messages_to_poll so this party can
+                            // re-enter sync after restoring its own SQS/DB attempt state.
+                            shared_state.messages_to_poll = 0;
+                        }
+
+                        metrics::counter!("batch_poll_aborted_partial").increment(1);
+                        let abort_count = batch_poll_abort_counter.record_abort(current_batch_id);
+                        tracing::warn!(
+                            "Batch ID: {}. Partial batch poll aborted {} times for this batch_id; re-entering batch sync.",
+                            current_batch_id,
+                            abort_count
+                        );
+                        if abort_count > 5 {
+                            tracing::error!(
+                                "Batch ID: {}. Partial batch poll aborted {} times for this batch_id; continuing batch sync.",
                                 current_batch_id,
                                 abort_count
                             );
@@ -463,18 +516,24 @@ impl<'a> BatchProcessor<'a> {
             if last_progress_log.elapsed() >= BATCH_POLL_PROGRESS_LOG_INTERVAL {
                 let elapsed = poll_start.elapsed();
                 let elapsed_secs = elapsed.as_secs();
-                if self.config.batch_poll_abort_after_secs > 0
+                if batch_poll_abort_enabled(self.config.batch_poll_abort_after_secs)
                     && elapsed >= Duration::from_secs(self.config.batch_poll_abort_after_secs)
                     && self.msg_counter > 0
                 {
                     tracing::warn!(
-                        "Batch ID: {}. Batch poll still waiting after {}s with {} out of {} messages processed; continuing because partial polls cannot abort.",
+                        "Batch ID: {}. Batch poll aborting after {}s with {} out of {} messages processed; held messages will be redelivered.",
                         current_batch_id,
                         elapsed_secs,
                         self.msg_counter,
                         num_to_poll
                     );
                     metrics::counter!("batch_poll_partial_stuck").increment(1);
+                    self.abort_partial_batch().await?;
+                    // POC: If a peer completed the full target while this party aborts its
+                    // partial batch, the next formed batch can be smaller and fail the existing
+                    // batch-entries SHA sync indefinitely. Symmetric partial stalls converge
+                    // because all parties abort and re-form from the same redelivered messages.
+                    return Ok(PollOutcome::AbortedPartial);
                 } else {
                     tracing::info!(
                         "Batch ID: {}. Batch poll still waiting after {}s with {} out of {} messages processed.",
@@ -509,13 +568,9 @@ impl<'a> BatchProcessor<'a> {
                         self.msg_counter,
                         num_to_poll
                     );
-                    // The abort deadline check must stay only in empty-receive branches.
-                    // With msg_counter == 0, no message was processed and deleted in this
-                    // attempt; process_message increments only after successful processing
-                    // and delete, while receive/process failures return Err and tear down.
-                    // Never abort with msg_counter > 0 because those deleted messages exist
-                    // only in this processor's in-memory batch_query.
-                    if self.config.batch_poll_abort_after_secs > 0
+                    // Empty-poll abort is separate from partial-poll abort. With
+                    // msg_counter == 0 there are no held messages or DB rows to unwind.
+                    if batch_poll_abort_enabled(self.config.batch_poll_abort_after_secs)
                         && poll_start.elapsed()
                             >= Duration::from_secs(self.config.batch_poll_abort_after_secs)
                         && self.msg_counter == 0
@@ -546,10 +601,9 @@ impl<'a> BatchProcessor<'a> {
                   "Batch ID: {}. SQS receive_message returned no messages array, will retry polling.",
                     current_batch_id
                 );
-                // The abort deadline check must stay only in empty-receive branches; aborting
-                // after any successfully processed message would strand SQS-deleted messages
-                // that are present only in this processor's in-memory batch_query.
-                if self.config.batch_poll_abort_after_secs > 0
+                // Empty-poll abort is separate from partial-poll abort. With
+                // msg_counter == 0 there are no held messages or DB rows to unwind.
+                if batch_poll_abort_enabled(self.config.batch_poll_abort_after_secs)
                     && poll_start.elapsed()
                         >= Duration::from_secs(self.config.batch_poll_abort_after_secs)
                     && self.msg_counter == 0
@@ -573,6 +627,12 @@ impl<'a> BatchProcessor<'a> {
             self.msg_counter,
             num_to_poll
         );
+        if batch_poll_abort_enabled(self.config.batch_poll_abort_after_secs) {
+            // POC: Completion-time deletes could move after the batch-entries SHA sync in
+            // server/mod.rs, but this POC deletes at poll completion so the visibility hold
+            // window stays bounded; entries sync can take minutes under skew.
+            self.delete_pending_messages().await?;
+        }
         metrics::histogram!("batch_poll_duration").record(poll_start.elapsed().as_secs_f64());
         Ok(PollOutcome::Completed)
     }
@@ -581,6 +641,10 @@ impl<'a> BatchProcessor<'a> {
         &mut self,
         sqs_message: aws_sdk_sqs::types::Message,
     ) -> Result<(), ReceiveRequestError> {
+        if batch_poll_abort_enabled(self.config.batch_poll_abort_after_secs) {
+            self.extend_held_message_visibility(&sqs_message).await?;
+        }
+
         let message: SQSMessage = serde_json::from_str(sqs_message.body().unwrap())
             .map_err(|e| ReceiveRequestError::json_parse_error("SQS body", e))?;
 
@@ -615,14 +679,22 @@ impl<'a> BatchProcessor<'a> {
         #[cfg(feature = "explicit-sns-batching")]
         if request_type == BATCH_MESSAGE_TYPE {
             self.process_batch_message(&message, batch_metadata).await?;
-            self.delete_message(&sqs_message).await?;
+            if batch_poll_abort_enabled(self.config.batch_poll_abort_after_secs) {
+                self.hold_message_for_batch_delete(&sqs_message)?;
+            } else {
+                self.delete_message(&sqs_message).await?;
+            }
             self.msg_counter += 1;
             return Ok(());
         }
 
         self.process_message_(&message, request_type, batch_metadata)
             .await?;
-        self.delete_message(&sqs_message).await?;
+        if batch_poll_abort_enabled(self.config.batch_poll_abort_after_secs) {
+            self.hold_message_for_batch_delete(&sqs_message)?;
+        } else {
+            self.delete_message(&sqs_message).await?;
+        }
         self.msg_counter += 1;
         Ok(())
     }
@@ -1379,6 +1451,237 @@ impl<'a> BatchProcessor<'a> {
         Ok(())
     }
 
+    fn sqs_ack_error(context: &str, error: impl std::fmt::Display) -> ReceiveRequestError {
+        ReceiveRequestError::FailedToMarkRequestAsDeleted(eyre::eyre!("{}: {}", context, error))
+    }
+
+    fn sqs_receipt_and_message_id(
+        sqs_message: &aws_sdk_sqs::types::Message,
+    ) -> Result<PendingDelete, ReceiveRequestError> {
+        let receipt_handle = sqs_message.receipt_handle.as_deref().ok_or_else(|| {
+            ReceiveRequestError::FailedToMarkRequestAsDeleted(eyre::eyre!(
+                "SQS message missing receipt handle: {:?}",
+                sqs_message.message_id
+            ))
+        })?;
+        let message_id = sqs_message.message_id.as_deref().ok_or_else(|| {
+            ReceiveRequestError::FailedToMarkRequestAsDeleted(eyre::eyre!(
+                "SQS message missing message id for receipt handle {}",
+                receipt_handle
+            ))
+        })?;
+        Ok((receipt_handle.to_string(), message_id.to_string()))
+    }
+
+    fn held_visibility_timeout_secs(&self) -> i32 {
+        let visibility_secs = self.config.batch_poll_abort_after_secs.saturating_add(60);
+        if visibility_secs > i32::MAX as u64 {
+            i32::MAX
+        } else {
+            visibility_secs as i32
+        }
+    }
+
+    async fn extend_held_message_visibility(
+        &self,
+        sqs_message: &aws_sdk_sqs::types::Message,
+    ) -> Result<(), ReceiveRequestError> {
+        let (receipt_handle, message_id) = Self::sqs_receipt_and_message_id(sqs_message)?;
+        let visibility_timeout = self.held_visibility_timeout_secs();
+        self.client
+            .change_message_visibility()
+            .queue_url(&self.config.requests_queue_url)
+            .receipt_handle(receipt_handle)
+            .visibility_timeout(visibility_timeout)
+            .send()
+            .await
+            .map_err(|e| {
+                Self::sqs_ack_error(
+                    &format!(
+                        "failed to extend visibility to {}s for message {}",
+                        visibility_timeout, message_id
+                    ),
+                    e,
+                )
+            })?;
+        tracing::debug!(
+            "Extended visibility for held message {} to {}s",
+            message_id,
+            visibility_timeout
+        );
+        Ok(())
+    }
+
+    fn hold_message_for_batch_delete(
+        &mut self,
+        sqs_message: &aws_sdk_sqs::types::Message,
+    ) -> Result<(), ReceiveRequestError> {
+        self.pending_deletes
+            .push(Self::sqs_receipt_and_message_id(sqs_message)?);
+        Ok(())
+    }
+
+    async fn delete_pending_messages(&mut self) -> Result<(), ReceiveRequestError> {
+        if self.pending_deletes.is_empty() {
+            return Ok(());
+        }
+
+        for pending_chunk in self.pending_deletes.chunks(10) {
+            let mut entry_id_to_message_id = HashMap::new();
+            let entries: Result<Vec<DeleteMessageBatchRequestEntry>, ReceiveRequestError> =
+                pending_chunk
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (receipt_handle, message_id))| {
+                        let entry_id = format!("msg-{}", index);
+                        entry_id_to_message_id.insert(entry_id.clone(), message_id.clone());
+                        DeleteMessageBatchRequestEntry::builder()
+                            .id(entry_id)
+                            .receipt_handle(receipt_handle)
+                            .build()
+                            .map_err(|e| {
+                                Self::sqs_ack_error(
+                                    &format!(
+                                        "failed to build delete batch entry for message {}",
+                                        message_id
+                                    ),
+                                    e,
+                                )
+                            })
+                    })
+                    .collect();
+
+            let delete_response = self
+                .client
+                .delete_message_batch()
+                .queue_url(&self.config.requests_queue_url)
+                .set_entries(Some(entries?))
+                .send()
+                .await
+                .map_err(|e| Self::sqs_ack_error("failed to delete held SQS messages", e))?;
+
+            for failed_entry in delete_response.failed {
+                let message_id = entry_id_to_message_id
+                    .get(&failed_entry.id)
+                    .map(String::as_str)
+                    .unwrap_or("<unknown>");
+                tracing::error!(
+                    "Failed to delete held message {} from queue {}: {} - {}. POC accepts redelivery under SQS at-least-once semantics.",
+                    message_id,
+                    self.config.requests_queue_url,
+                    failed_entry.code,
+                    failed_entry.message.unwrap_or_default()
+                );
+            }
+        }
+
+        self.pending_deletes.clear();
+        Ok(())
+    }
+
+    async fn abort_partial_batch(&mut self) -> Result<(), ReceiveRequestError> {
+        self.delete_in_progress_modifications_for_abort().await?;
+        self.reset_held_message_visibility_for_abort().await;
+        self.reset_partial_batch_state();
+        Ok(())
+    }
+
+    async fn delete_in_progress_modifications_for_abort(&self) -> Result<(), ReceiveRequestError> {
+        if self.config.disable_persistence {
+            // POC: persist_modification returns Modification::default() when persistence is
+            // disabled, so deleting by those default ids would be incorrect.
+            return Ok(());
+        }
+
+        let modifications: Vec<Modification> =
+            self.batch_query.modifications.values().cloned().collect();
+        if modifications.is_empty() {
+            return Ok(());
+        }
+
+        let mut tx = self
+            .iris_store
+            .tx()
+            .await
+            .map_err(ReceiveRequestError::from)?;
+        self.iris_store
+            .delete_modifications(&mut tx, &modifications)
+            .await
+            .map_err(ReceiveRequestError::from)?;
+        tx.commit()
+            .await
+            .map_err(|e| ReceiveRequestError::FailedToPersistModification(eyre::Report::from(e)))?;
+        Ok(())
+    }
+
+    async fn reset_held_message_visibility_for_abort(&self) {
+        if self.pending_deletes.is_empty() {
+            return;
+        }
+
+        for pending_chunk in self.pending_deletes.chunks(10) {
+            let entries: Vec<ChangeMessageVisibilityBatchRequestEntry> = pending_chunk
+                .iter()
+                .enumerate()
+                .filter_map(|(index, (receipt_handle, message_id))| {
+                    ChangeMessageVisibilityBatchRequestEntry::builder()
+                        .id(format!("msg-{}", index))
+                        .receipt_handle(receipt_handle)
+                        .visibility_timeout(0)
+                        .build()
+                        .map_err(|e| {
+                            tracing::warn!(
+                                "Failed to build visibility reset entry for held message {}: {}. Continuing because visibility reset is best-effort on abort.",
+                                message_id,
+                                e
+                            );
+                        })
+                        .ok()
+                })
+                .collect();
+
+            if entries.is_empty() {
+                continue;
+            }
+
+            match self
+                .client
+                .change_message_visibility_batch()
+                .queue_url(&self.config.requests_queue_url)
+                .set_entries(Some(entries))
+                .send()
+                .await
+            {
+                Ok(response) => {
+                    for failed_entry in response.failed {
+                        tracing::warn!(
+                            "Failed to reset held message visibility for batch entry {}: {} - {}. Continuing because the message will redeliver after its extended visibility timeout.",
+                            failed_entry.id,
+                            failed_entry.code,
+                            failed_entry.message.unwrap_or_default()
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to reset held message visibility for queue {}: {}. Continuing because held messages will redeliver after their extended visibility timeout.",
+                        self.config.requests_queue_url,
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    fn reset_partial_batch_state(&mut self) {
+        reset_partial_batch_state_fields(
+            &mut self.batch_query,
+            &mut self.msg_counter,
+            &mut self.pending_deletes,
+            &mut self.handles,
+        );
+    }
+
     fn update_luc_config_if_needed(&mut self, uniqueness_request: &UniquenessRequest) -> Vec<u32> {
         let config = &self.config;
 
@@ -1499,7 +1802,15 @@ pub async fn get_own_batch_sync_state(
 
 #[cfg(test)]
 mod tests {
-    use super::BatchPollAbortCounter;
+    use super::{
+        batch_poll_abort_enabled, reset_partial_batch_state_fields, BatchPollAbortCounter,
+        GaloisShares, PendingDelete, UNIQUENESS_MESSAGE_TYPE,
+    };
+    use iris_mpc_common::helpers::sync::Modification;
+    use iris_mpc_common::helpers::sync::ModificationKey::RequestId;
+    use iris_mpc_common::job::{BatchMetadata, BatchQuery};
+    use std::future::pending;
+    use tokio::task::JoinHandle;
 
     #[test]
     fn batch_poll_abort_counter_tracks_current_batch_id() {
@@ -1509,5 +1820,71 @@ mod tests {
         assert_eq!(counter.record_abort(7), 2);
         assert_eq!(counter.record_abort(8), 1);
         assert_eq!(counter.record_abort(8), 2);
+    }
+
+    #[tokio::test]
+    async fn reset_partial_batch_state_clears_all_attempt_fields() {
+        let mut batch_query = BatchQuery::default();
+        batch_query.push_matching_request(
+            "sns-message-id".to_string(),
+            "request-id".to_string(),
+            UNIQUENESS_MESSAGE_TYPE,
+            BatchMetadata::default(),
+            vec![1, 2],
+            true,
+        );
+        batch_query.modifications.insert(
+            RequestId("request-id".to_string()),
+            Modification {
+                id: 42,
+                serial_id: None,
+                request_type: UNIQUENESS_MESSAGE_TYPE.to_string(),
+                s3_url: Some("s3://bucket/key".to_string()),
+                status: "IN_PROGRESS".to_string(),
+                persisted: false,
+                result_message_body: None,
+            },
+        );
+
+        let mut msg_counter = 1;
+        let mut pending_deletes: Vec<PendingDelete> =
+            vec![("receipt-handle".to_string(), "message-id".to_string())];
+        let handle: JoinHandle<Result<(GaloisShares, GaloisShares), eyre::Error>> =
+            tokio::spawn(async { pending().await });
+        let mut handles = vec![handle];
+
+        reset_partial_batch_state_fields(
+            &mut batch_query,
+            &mut msg_counter,
+            &mut pending_deletes,
+            &mut handles,
+        );
+
+        assert_eq!(batch_query, BatchQuery::default());
+        assert_eq!(msg_counter, 0);
+        assert!(pending_deletes.is_empty());
+        assert!(handles.is_empty());
+    }
+
+    #[test]
+    fn pending_deletes_bookkeeping_accumulates_and_clears() {
+        let mut pending_deletes: Vec<PendingDelete> = Vec::new();
+
+        pending_deletes.push(("receipt-1".to_string(), "message-1".to_string()));
+        pending_deletes.push(("receipt-2".to_string(), "message-2".to_string()));
+
+        assert_eq!(pending_deletes.len(), 2);
+        assert_eq!(pending_deletes[0].1, "message-1");
+
+        pending_deletes.clear();
+
+        assert!(pending_deletes.is_empty());
+    }
+
+    #[test]
+    fn batch_poll_abort_enabled_only_when_positive() {
+        assert!(!batch_poll_abort_enabled(0));
+        assert!(batch_poll_abort_enabled(1));
+        assert!(batch_poll_abort_enabled(60));
     }
 }
