@@ -15,7 +15,7 @@ image: "ghcr.io/worldcoin/retention-reaper:d9a3d33342dfd9e95c7b11e8ef4e4101a3e6e
 
 # Disabled by default (RETENTION__ENABLED unset → false): deploys as a no-op. The enable
 # path is the same as anon-stats: bump image → RETENTION__ENABLED+DRY_RUN → inspect
-# previewed counts + watermark gauge → flip DRY_RUN off, one party first.
+# previewed counts + health gauges → flip DRY_RUN off, one party first.
 
 replicaCount: 1
 
