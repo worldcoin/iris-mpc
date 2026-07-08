@@ -941,8 +941,10 @@ mod tests {
         // ingestion modes (one party counting SQS, others counting DB rows).
         // If this field ever leaves CommonConfig, that gate silently vanishes.
         let base = CommonConfig::default();
-        let mut flag_on = CommonConfig::default();
-        flag_on.db_backed_ingest = true;
+        let flag_on = CommonConfig {
+            db_backed_ingest: true,
+            ..Default::default()
+        };
         assert_ne!(base, flag_on);
         // The ingest tuning knobs (db_ingest_sqs_wait_secs, backoff params)
         // deliberately live only on Config, not CommonConfig: they may skew
