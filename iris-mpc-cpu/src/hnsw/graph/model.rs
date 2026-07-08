@@ -10,8 +10,10 @@
 //! A record's edge references resolve against its `as_of` (the graph seq
 //! they were identified at): a reference whose target was (re-)inserted
 //! after `as_of` is void — unless the record's own `AddNode` creates it —
-//! and an op whose `base` is void is dropped whole. The model resolves
-//! eagerly from its node-insertion times; `GraphMem::resolve_ops` must agree.
+//! and an op whose `base` is void is dropped whole. `AddEdges`
+//! self-references are always void (a stale echo of a search against the
+//! node's replaced content). The model resolves eagerly from its
+//! node-insertion times; `GraphMem::resolve_ops` must agree.
 //!
 //! Spec preconditions (asserted here, established by resolution): `AddEdges`
 //! endpoints are live at apply time (causal construction); `AddNode` targets
@@ -65,10 +67,12 @@ impl ModelGraph {
                     if !fresh(&self.nodes, *base) {
                         return None;
                     }
+                    // Self-references never materialize as edges; in a
+                    // minting record they are stale search echoes.
                     let kept: Vec<SerialId> = neighbors
                         .iter()
                         .copied()
-                        .filter(|z| fresh(&self.nodes, *z))
+                        .filter(|z| z != base && fresh(&self.nodes, *z))
                         .collect();
                     (!kept.is_empty()).then(|| MutationOp::AddEdges {
                         base: *base,
