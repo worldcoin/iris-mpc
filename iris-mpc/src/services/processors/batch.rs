@@ -551,8 +551,25 @@ impl<'a> BatchProcessor<'a> {
             num_to_poll
         );
         let queue_url = &self.config.requests_queue_url;
+        // This wait is unbounded (the batch only forms once the cross-party-agreed
+        // target is received) and its per-attempt retry logs are debug-level, so a
+        // stalled poll is invisible at info level — the 2026-06-23 stage wedge sat
+        // silent for 2.5h (POP-4051). Surface progress periodically at info.
+        let poll_start = std::time::Instant::now();
+        let mut last_progress_log = poll_start;
 
         while self.msg_counter < num_to_poll as usize {
+            if last_progress_log.elapsed() >= std::time::Duration::from_secs(30) {
+                tracing::info!(
+                    "Batch ID: {}. Batch poll still waiting after {}s with {} out of {} messages processed.",
+                    current_batch_id,
+                    poll_start.elapsed().as_secs(),
+                    self.msg_counter,
+                    num_to_poll
+                );
+                metrics::counter!("batch_poll_waiting").increment(1);
+                last_progress_log = std::time::Instant::now();
+            }
             if self.shutdown_handler.is_shutting_down() {
                 tracing::info!(
                     "Stopping batch receive during polling exact messages due to shutdown signal..."
@@ -609,6 +626,7 @@ impl<'a> BatchProcessor<'a> {
             self.msg_counter,
             num_to_poll
         );
+        metrics::histogram!("batch_poll_duration").record(poll_start.elapsed().as_secs_f64());
         Ok(())
     }
 
