@@ -85,6 +85,26 @@ fn is_content_poison(err: &ReceiveRequestError) -> bool {
     }
 }
 
+/// Legacy (SQS-count) sizing. Deliberately NOT the same as
+/// `messages_to_poll_for_available`: the legacy path targets the predefined
+/// batch size even when the (approximate) count reports fewer, and then WAITS
+/// for the messages to materialize — that unbounded wait is the historical
+/// behavior tests reproduce with predefined_batch_sizes. The DB path must
+/// never do that: it only forms from rows it already holds.
+fn legacy_messages_to_poll(
+    available_messages: u32,
+    max_batch_size: usize,
+    predefined_batch_sizes: &[usize],
+    current_batch_id: u64,
+) -> u32 {
+    let index = current_batch_id.saturating_sub(1) as usize;
+    if predefined_batch_sizes.len() > index {
+        std::cmp::min(predefined_batch_sizes[index], max_batch_size) as u32
+    } else {
+        std::cmp::min(available_messages, max_batch_size as u32)
+    }
+}
+
 fn messages_to_poll_for_available(
     available_messages: u32,
     max_batch_size: usize,
@@ -1738,10 +1758,13 @@ pub async fn get_own_batch_sync_state(
             &config.predefined_batch_sizes,
             current_batch_id,
         )
-    } else if config.predefined_batch_sizes.len() > index {
-        std::cmp::min(config.predefined_batch_sizes[index], config.max_batch_size) as u32
     } else {
-        std::cmp::min(available_messages, config.max_batch_size as u32)
+        legacy_messages_to_poll(
+            available_messages,
+            config.max_batch_size,
+            &config.predefined_batch_sizes,
+            current_batch_id,
+        )
     };
 
     let count_source = if config.db_backed_ingest {
@@ -1869,6 +1892,31 @@ mod tests {
     #[test]
     fn normalize_sns_sequence_number_rejects_non_numeric_input() {
         assert!(normalize_sns_sequence_number("not-a-number").is_err());
+    }
+
+    #[test]
+    fn legacy_messages_to_poll_targets_predefined_even_beyond_available() {
+        // The deliberate legacy/db divergence: legacy targets the predefined
+        // size (then waits for it); the db path caps by what it holds.
+        assert_eq!(super::legacy_messages_to_poll(1, 10, &[5], 1), 5);
+        assert_eq!(messages_to_poll_for_available(1, 10, &[5], 1), 1);
+    }
+
+    #[test]
+    fn legacy_messages_to_poll_caps_predefined_by_max_batch_size() {
+        assert_eq!(super::legacy_messages_to_poll(50, 4, &[9], 1), 4);
+    }
+
+    #[test]
+    fn legacy_messages_to_poll_uses_available_beyond_predefined_index() {
+        assert_eq!(super::legacy_messages_to_poll(3, 10, &[5], 2), 3);
+        assert_eq!(super::legacy_messages_to_poll(30, 10, &[], 1), 10);
+    }
+
+    #[test]
+    fn legacy_messages_to_poll_batch_id_zero_does_not_panic() {
+        // saturating_sub keeps batch id 0 on the first predefined entry.
+        assert_eq!(super::legacy_messages_to_poll(3, 10, &[5], 0), 5);
     }
 
     #[test]

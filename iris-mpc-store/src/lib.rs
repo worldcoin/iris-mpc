@@ -1214,6 +1214,46 @@ pub mod tests {
     }
 
     #[tokio::test]
+    async fn test_ingested_requests_double_claim_fails_loud() -> Result<()> {
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+
+        for seq in ["20", "21", "22"] {
+            assert!(store.insert_ingested_request(seq, "body").await?);
+        }
+        let all = store.pending_ingested_requests(10).await?;
+        let seqs: Vec<String> = all.iter().map(|r| r.sequence_number.clone()).collect();
+
+        // First claimer takes rows 20,21.
+        store
+            .mark_ingested_requests_consumed(&seqs[0..2], 1)
+            .await?;
+
+        // Second claimer (dual-consumer race: e.g. rolling-deploy pod overlap)
+        // tries an overlapping set {21,22}: the claim is compare-and-swap
+        // (WHERE consumed_batch_id IS NULL), so it must fail loud, not
+        // silently steal row 21 from the in-flight batch.
+        let overlap = vec![seqs[1].clone(), seqs[2].clone()];
+        assert!(store
+            .mark_ingested_requests_consumed(&overlap, 2)
+            .await
+            .is_err());
+
+        // Pinned side effect of the failed partial UPDATE: the non-overlapping
+        // row 22 WAS claimed by the losing call and now sits claimed with no
+        // batch to persist it — boot recovery is what releases it.
+        assert_eq!(store.count_pending_ingested_requests().await?, 0);
+        assert_eq!(store.reset_unpersisted_ingested_claims().await?, 3);
+        assert_eq!(store.count_pending_ingested_requests().await?, 3);
+
+        cleanup(&postgres_client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_ingested_requests_frontier_skip_ahead() -> Result<()> {
         let schema_name = temporary_name();
         let postgres_client =
