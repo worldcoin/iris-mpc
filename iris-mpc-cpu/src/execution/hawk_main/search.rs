@@ -231,9 +231,9 @@ async fn classify_and_extend(
         );
         metrics::counter!("supermatcher_extended_searches").increment(1);
 
-        let seed_nbhd = SortedNeighborhood::from_ascending_vec(edges.to_vec());
+        let seeded_nbhd = SortedNeighborhood::from_ascending_vec(edges.to_vec());
         let supermatch_neighbors = hnsw_supermatch
-            .search_layer_0_seeded(aby3_store, graph_store, query, seed_nbhd, ef_supermatch)
+            .search_layer_0_seeded(aby3_store, graph_store, query, seeded_nbhd, ef_supermatch)
             .await?;
 
         let supermatch_classified = classify_edges(

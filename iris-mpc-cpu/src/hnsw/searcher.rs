@@ -1387,23 +1387,25 @@ impl HnswSearcher {
     /// previous search. Used to confirm/deny a potential supermatcher without
     /// repeating the upper-layer greedy descent.
     ///
-    /// `seed_nbhd` is reused directly as the initial candidate frontier `W` (its edges
-    /// must be sorted ascending by distance, with valid distances -- as produced by
-    /// `search()` / `search_to_insert()`). `ef` is the layer-0 exploration factor:
-    /// the neighborhood size used while expanding from the initial neighborhood and the size the result is
-    /// trimmed to.
+    /// The edges of  `seeded_nbhd` must be sorted ascending by distance.
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     pub async fn search_layer_0_seeded<V: VectorStore>(
         &self,
         store: &mut V,
         graph: &GraphMem,
         query: &V::QueryRef,
-        seed_nbhd: SortedNeighborhood<V>,
+        seeded_nbhd: SortedNeighborhood<V>,
         ef: usize,
     ) -> Result<SortedNeighborhood<V>> {
         let start = Instant::now();
-        let mut W = seed_nbhd;
 
+        // `search_layer()` requires a non-empty frontier; fall back to full search init.
+        if seeded_nbhd.is_empty() {
+            let W = self.search(store, graph, query, ef).await?;
+            return Ok(W);
+        }
+
+        let mut W = seeded_nbhd;
         Self::search_layer(
             store,
             graph,
@@ -1415,7 +1417,7 @@ impl HnswSearcher {
         )
         .await?;
 
-        W.trim(store, ef).await?;
+        W.edges.truncate(ef);
         metrics::histogram!("search_layer_0_seeded_duration").record(start.elapsed().as_secs_f64());
         Ok(W)
     }
