@@ -930,3 +930,22 @@ impl From<Config> for CommonConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn db_backed_ingest_is_part_of_common_config_equality() {
+        // The equality check across parties is the gate that prevents mixed
+        // ingestion modes (one party counting SQS, others counting DB rows).
+        // If this field ever leaves CommonConfig, that gate silently vanishes.
+        let base = CommonConfig::default();
+        let mut flag_on = CommonConfig::default();
+        flag_on.db_backed_ingest = true;
+        assert_ne!(base, flag_on);
+        // The ingest tuning knobs (db_ingest_sqs_wait_secs, backoff params)
+        // deliberately live only on Config, not CommonConfig: they may skew
+        // across parties during rolling deploys without splitting the fleet.
+    }
+}

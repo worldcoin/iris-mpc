@@ -4,7 +4,7 @@ use crate::services::processors::result_message::send_error_results_to_sns;
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use ampc_server_utils::{
     get_approximate_number_of_messages, get_batch_sync_states, BatchSyncResult,
-    BatchSyncSharedState, BatchSyncState,
+    BatchSyncSharedState, BatchSyncState, TaskMonitor,
 };
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sns::types::MessageAttributeValue;
@@ -38,7 +38,7 @@ use iris_mpc_common::helpers::smpc_response::{
 use iris_mpc_common::helpers::sync::Modification;
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
 use iris_mpc_common::job::{BatchMetadata, BatchQuery, GaloisSharesBothSides};
-use iris_mpc_store::{IngestedRequest, Store};
+use iris_mpc_store::{normalize_sns_sequence_number, IngestedRequest, Store};
 use rand::Rng;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -47,6 +47,43 @@ use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinHandle;
+
+/// Request types the batch processor knows how to handle; anything else in a
+/// DB-ingested row is quarantined as content poison.
+const KNOWN_MESSAGE_TYPES: &[&str] = &[
+    IDENTITY_DELETION_MESSAGE_TYPE,
+    UNIQUENESS_MESSAGE_TYPE,
+    REAUTH_MESSAGE_TYPE,
+    RECOVERY_CHECK_MESSAGE_TYPE,
+    RESET_CHECK_MESSAGE_TYPE,
+    RESET_UPDATE_MESSAGE_TYPE,
+    RECOVERY_UPDATE_MESSAGE_TYPE,
+];
+
+/// True iff the failure is fully determined by the message CONTENT — identical
+/// bytes on all three parties, so quarantining is symmetric by construction.
+/// Everything environment-dependent (SQS, S3, DB, joins, sync) must stay fatal:
+/// quarantining one of those on a single party would skip a row only there and
+/// permanently diverge the batches. Exhaustive on purpose — a new variant must
+/// be classified here explicitly, at compile time.
+fn is_content_poison(err: &ReceiveRequestError) -> bool {
+    match err {
+        ReceiveRequestError::JsonParseError { .. }
+        | ReceiveRequestError::NoMessageTypeAttribute
+        | ReceiveRequestError::NoStringMessageTypeAttribute
+        | ReceiveRequestError::InvalidMessageType => true,
+        ReceiveRequestError::FailedToReadFromSQS(_)
+        | ReceiveRequestError::FailedToDeleteFromSQS(_)
+        | ReceiveRequestError::FailedToMarkRequestAsDeleted(_)
+        | ReceiveRequestError::FailedToPersistModification(_)
+        | ReceiveRequestError::FailedToJoinHandle(_)
+        | ReceiveRequestError::BatchSyncError(_)
+        | ReceiveRequestError::BatchPollingTimeout(_)
+        | ReceiveRequestError::FailedToProcessIrisShares(_) => false,
+        #[cfg(feature = "explicit-sns-batching")]
+        ReceiveRequestError::BatchDecompressionError(_) => true,
+    }
+}
 
 fn messages_to_poll_for_available(
     available_messages: u32,
@@ -96,13 +133,18 @@ impl DbIngestBackoff {
     }
 }
 
+// Spawned on the shared TaskMonitor so a panic or unexpected exit is caught by
+// the per-batch check_tasks() and tears the process down loudly — an
+// unmonitored ingest task dying silently starves this party's pending count
+// and drags the whole fleet's min() agreement to zero.
 pub fn spawn_db_backed_ingest_task(
+    task_monitor: &mut TaskMonitor,
     client: Client,
     config: Config,
     iris_store: Store,
     shutdown_handler: Arc<ShutdownHandler>,
-) -> JoinHandle<()> {
-    tokio::spawn(async move {
+) {
+    task_monitor.spawn(async move {
         let mut backoff = DbIngestBackoff::new(
             config.db_ingest_backoff_initial_ms,
             config.db_ingest_backoff_max_ms,
@@ -118,6 +160,7 @@ pub fn spawn_db_backed_ingest_task(
                     backoff.reset();
                 }
                 Err(err) => {
+                    metrics::counter!("db_ingest_errors").increment(1);
                     let sleep = backoff.next_sleep();
                     tracing::warn!(
                         "DB-backed ingest error: {:?}; retrying after {:?}",
@@ -129,7 +172,8 @@ pub fn spawn_db_backed_ingest_task(
             }
         }
         tracing::info!("Stopping DB-backed SQS ingest task");
-    })
+        Ok(())
+    });
 }
 
 async fn ingest_one_sqs_message(
@@ -163,22 +207,56 @@ async fn ingest_sqs_message(
     iris_store: &Store,
     sqs_message: aws_sdk_sqs::types::Message,
 ) -> Result<()> {
-    let body = sqs_message
-        .body()
-        .ok_or_else(|| eyre!("SQS message missing body: {:?}", sqs_message.message_id))?
-        .to_string();
-    let sns_message: SQSMessage = serde_json::from_str(&body)?;
-
-    let inserted = iris_store
-        .insert_ingested_request(&sns_message.sequence_number, &body)
-        .await?;
-
     let receipt_handle = sqs_message.receipt_handle.as_deref().ok_or_else(|| {
         eyre!(
             "SQS message missing receipt handle: {:?}",
             sqs_message.message_id
         )
     })?;
+
+    // Classify content-determined failures BEFORE touching the DB: the same
+    // bytes reach every party, so an envelope-parse/normalize failure here is
+    // symmetric — quarantine (delete + count). Retrying instead would wedge
+    // the FIFO group head forever on all parties at once. The sequence number
+    // MUST come from the SNS envelope, not the SQS system attribute: SQS
+    // assigns per-queue sequence numbers, which differ across the 3 parties.
+    let poison_reason = match sqs_message.body() {
+        None => Some("missing body".to_string()),
+        Some(body) => match serde_json::from_str::<SQSMessage>(body) {
+            Err(e) => Some(format!("body is not an SNS envelope: {e}")),
+            Ok(sns_message) => match normalize_sns_sequence_number(&sns_message.sequence_number) {
+                Err(e) => Some(format!("invalid sequence number: {e}")),
+                Ok(_) => None,
+            },
+        },
+    };
+
+    if let Some(reason) = poison_reason {
+        tracing::error!(
+            "db-backed ingest: quarantining poison SQS message {:?} at ingest ({}); deleting without insert",
+            sqs_message.message_id,
+            reason
+        );
+        metrics::counter!("db_ingest_poison_messages").increment(1);
+        client
+            .delete_message()
+            .queue_url(&config.requests_queue_url)
+            .receipt_handle(receipt_handle)
+            .send()
+            .await?;
+        return Ok(());
+    }
+
+    let body = sqs_message.body().expect("checked above").to_string();
+    let sns_message: SQSMessage = serde_json::from_str(&body).expect("checked above");
+
+    // DB errors are transient: propagate WITHOUT deleting so the message is
+    // redelivered (PK dedup makes the redelivery-after-successful-insert
+    // case harmless).
+    let inserted = iris_store
+        .insert_ingested_request(&sns_message.sequence_number, &body)
+        .await?;
+
     client
         .delete_message()
         .queue_url(&config.requests_queue_url)
@@ -186,6 +264,8 @@ async fn ingest_sqs_message(
         .send()
         .await?;
 
+    metrics::counter!("db_ingest_messages", "result" => if inserted { "inserted" } else { "duplicate" })
+        .increment(1);
     if inserted {
         tracing::debug!(
             "Inserted ingested request sequence_number={}",
@@ -696,12 +776,7 @@ impl<'a> BatchProcessor<'a> {
             // failure result to; the row is skipped (it stays claimed and gets
             // persisted-marked with the batch, so it never re-forms). Anything
             // else (SQS/S3/DB errors) stays fatal.
-            Err(
-                err @ (ReceiveRequestError::JsonParseError { .. }
-                | ReceiveRequestError::NoMessageTypeAttribute
-                | ReceiveRequestError::NoStringMessageTypeAttribute
-                | ReceiveRequestError::InvalidMessageType),
-            ) => {
+            Err(err) if is_content_poison(&err) => {
                 tracing::error!(
                     "db-backed ingest: quarantining poison request sequence_number={}: {}",
                     ingested_request.sequence_number,
@@ -737,6 +812,13 @@ impl<'a> BatchProcessor<'a> {
             self.process_batch_message(&message, batch_metadata).await?;
             self.msg_counter += 1;
             return Ok(());
+        }
+
+        // process_message_ logs-and-ignores unknown types (legacy semantics:
+        // the SQS copy is already gone). In the DB path an unknown type must
+        // route through the quarantine arm so db_ingest_poison_rows counts it.
+        if !KNOWN_MESSAGE_TYPES.contains(&request_type.as_str()) {
+            return Err(ReceiveRequestError::InvalidMessageType);
         }
 
         self.process_message_(&message, &request_type, batch_metadata)
@@ -1682,7 +1764,15 @@ pub async fn get_own_batch_sync_state(
 
 #[cfg(test)]
 mod tests {
-    use super::{messages_to_poll_for_available, DbIngestBackoff};
+    use super::{
+        is_content_poison, messages_to_poll_for_available, DbIngestBackoff, ReceiveRequestError,
+        SQSMessage, KNOWN_MESSAGE_TYPES,
+    };
+    use iris_mpc_common::helpers::smpc_request::{
+        IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RECOVERY_CHECK_MESSAGE_TYPE,
+        RECOVERY_UPDATE_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
+        UNIQUENESS_MESSAGE_TYPE,
+    };
     use iris_mpc_store::{normalize_sns_sequence_number, SNS_SEQUENCE_NUMBER_WIDTH};
 
     #[test]
@@ -1779,5 +1869,59 @@ mod tests {
     #[test]
     fn normalize_sns_sequence_number_rejects_non_numeric_input() {
         assert!(normalize_sns_sequence_number("not-a-number").is_err());
+    }
+
+    #[test]
+    fn is_content_poison_classifies_every_constructible_variant() {
+        // Content-determined -> poison (quarantine is symmetric across parties).
+        let json_err = serde_json::from_str::<SQSMessage>("{{{").unwrap_err();
+        assert!(is_content_poison(&ReceiveRequestError::json_parse_error(
+            "test", json_err
+        )));
+        assert!(is_content_poison(
+            &ReceiveRequestError::NoMessageTypeAttribute
+        ));
+        assert!(is_content_poison(
+            &ReceiveRequestError::NoStringMessageTypeAttribute
+        ));
+        assert!(is_content_poison(&ReceiveRequestError::InvalidMessageType));
+
+        // Environment-dependent -> MUST stay fatal. Quarantining any of these
+        // on one party would skip a row only there and diverge the batches.
+        assert!(!is_content_poison(
+            &ReceiveRequestError::FailedToPersistModification(eyre::eyre!("db down"))
+        ));
+        assert!(!is_content_poison(
+            &ReceiveRequestError::FailedToMarkRequestAsDeleted(eyre::eyre!("x"))
+        ));
+        assert!(!is_content_poison(&ReceiveRequestError::BatchSyncError(
+            eyre::eyre!("peer timeout")
+        )));
+        assert!(!is_content_poison(
+            &ReceiveRequestError::BatchPollingTimeout(5)
+        ));
+        assert!(!is_content_poison(
+            &ReceiveRequestError::FailedToProcessIrisShares(eyre::eyre!("s3"))
+        ));
+        // FailedToReadFromSQS / FailedToDeleteFromSQS / FailedToJoinHandle are
+        // not constructible without SDK/runtime machinery; the exhaustive
+        // match in is_content_poison (no wildcard arm) is the compile-time
+        // guard that any new variant gets an explicit classification.
+    }
+
+    #[test]
+    fn known_message_types_cover_all_processor_arms() {
+        for t in [
+            IDENTITY_DELETION_MESSAGE_TYPE,
+            UNIQUENESS_MESSAGE_TYPE,
+            REAUTH_MESSAGE_TYPE,
+            RECOVERY_CHECK_MESSAGE_TYPE,
+            RESET_CHECK_MESSAGE_TYPE,
+            RESET_UPDATE_MESSAGE_TYPE,
+            RECOVERY_UPDATE_MESSAGE_TYPE,
+        ] {
+            assert!(KNOWN_MESSAGE_TYPES.contains(&t));
+        }
+        assert!(!KNOWN_MESSAGE_TYPES.contains(&"bogus-type"));
     }
 }

@@ -9,4 +9,4 @@ CREATE TABLE ingested_requests (
 
 CREATE INDEX ingested_requests_pending_sequence_number_idx
     ON ingested_requests (sequence_number)
-    WHERE consumed_batch_id IS NULL;
+    WHERE consumed_batch_id IS NULL AND persisted_at IS NULL;

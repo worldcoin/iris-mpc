@@ -82,6 +82,13 @@ pub async fn server_main(config: Config) -> Result<()> {
         );
     }
 
+    if config.db_backed_ingest && !(0..=20).contains(&config.db_ingest_sqs_wait_secs) {
+        bail!(
+            "db_ingest_sqs_wait_secs must be within SQS's accepted 0..=20 range, got {}: every receive would fail and ingest would idle with warn-only logs",
+            config.db_ingest_sqs_wait_secs
+        );
+    }
+
     let (iris_store, graph_store) = prepare_stores(&config).await?;
 
     let aws_clients = init_aws_services(&config).await?;
@@ -485,12 +492,21 @@ async fn build_sync_state(
     let modifications = store
         .last_modifications(config.max_modifications_lookback)
         .await?;
-    let next_sns_sequence_num = get_next_sns_seq_num(
-        &aws_clients.sqs_client,
-        &config.requests_queue_url,
-        config.sqs_sync_long_poll_seconds,
-    )
-    .await?;
+    // Under DB-backed ingest the queue is a transient buffer with party-local
+    // offsets: the peeked head sequence number is meaningless cross-party (its
+    // only consumer, sync_sqs_queues, is skipped) and the peek itself
+    // hard-errors on a corrupt head message — a boot crashloop for a failure
+    // the ingest-side quarantine already handles.
+    let next_sns_sequence_num = if config.db_backed_ingest {
+        None
+    } else {
+        get_next_sns_seq_num(
+            &aws_clients.sqs_client,
+            &config.requests_queue_url,
+            config.sqs_sync_long_poll_seconds,
+        )
+        .await?
+    };
     let common_config = CommonConfig::from(config.clone());
 
     // Fetch graph mutations for all modifications in the lookback window so
@@ -826,16 +842,15 @@ async fn run_main_server_loop(
 
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
-        let _db_backed_ingest_handle = if config.db_backed_ingest {
-            Some(spawn_db_backed_ingest_task(
+        if config.db_backed_ingest {
+            spawn_db_backed_ingest_task(
+                &mut task_monitor,
                 aws_clients.sqs_client.clone(),
                 config.clone(),
                 iris_store.clone(),
                 shutdown_handler.clone(),
-            ))
-        } else {
-            None
-        };
+            );
+        }
 
         let (mut batch_stream, sem) = receive_batch_stream(
             party_id,
