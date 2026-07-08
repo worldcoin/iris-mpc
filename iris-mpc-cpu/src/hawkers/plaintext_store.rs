@@ -13,7 +13,7 @@ use crate::{
 use aes_prng::AesRng;
 use iris_mpc_common::{
     iris_db::{db::IrisDB, iris::IrisCode},
-    SerialId, VectorId,
+    VectorId,
 };
 use rand::{CryptoRng, RngCore, SeedableRng};
 use serde::{Deserialize, Serialize};
@@ -206,17 +206,6 @@ impl<D: DistanceOps> VectorStore for PlaintextStore<D> {
         metrics::counter!("less_than").increment(distances.len() as u64);
         Ok(results)
     }
-
-    async fn serials_to_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<Option<VectorId>> {
-        serial_ids
-            .iter()
-            .map(|&serial_id| {
-                self.storage
-                    .get_current_version(serial_id)
-                    .map(|version| VectorId::new(serial_id, version))
-            })
-            .collect()
-    }
 }
 
 impl<D: DistanceOps> VectorStoreMut for PlaintextStore<D> {
@@ -361,18 +350,6 @@ impl<D: DistanceOps> VectorStore for SharedPlaintextStore<D> {
         }
         metrics::counter!("less_than").increment(distances.len() as u64);
         Ok(results)
-    }
-
-    async fn serials_to_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<Option<VectorId>> {
-        let storage = self.storage.read().await;
-        serial_ids
-            .iter()
-            .map(|&serial_id| {
-                storage
-                    .get_current_version(serial_id)
-                    .map(|version| VectorId::new(serial_id, version))
-            })
-            .collect()
     }
 }
 

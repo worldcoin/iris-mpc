@@ -29,7 +29,7 @@ use crate::{
 };
 use ampc_secret_sharing::shares::{vecshare_bittranspose::Transpose64, VecShare};
 use eyre::{bail, OptionExt, Result};
-use iris_mpc_common::{iris_db::iris::Threshold, SerialId, VectorId};
+use iris_mpc_common::{iris_db::iris::Threshold, VectorId};
 use itertools::{izip, Itertools};
 use rand_distr::{Distribution, Standard};
 use static_assertions::const_assert;
@@ -576,18 +576,6 @@ where
         let query_ids: Vec<QueryId> = to_cache.iter().map(|(qid, _)| *qid).collect();
         self.workers.cache_queries(to_cache).await?;
         Ok(query_ids.into_iter().map(Aby3Query::new).collect_vec())
-    }
-
-    async fn serials_to_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<Option<VectorId>> {
-        let registry = self.registry.read().await;
-        serial_ids
-            .iter()
-            .map(|&serial_id| {
-                registry
-                    .get_current_version(serial_id)
-                    .map(|version| VectorId::new(serial_id, version))
-            })
-            .collect()
     }
 
     #[instrument(level = "trace", target = "searcher::network", skip_all)]

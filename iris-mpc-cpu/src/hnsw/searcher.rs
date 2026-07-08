@@ -404,12 +404,6 @@ impl HnswSearcher {
             .iter()
             .filter_map(|ep| graph.vector_id_of(ep.point).map(|v| (v, ep.layer)))
             .collect();
-        #[cfg(debug_assertions)]
-        Self::debug_assert_graph_resolution_matches_store(
-            store,
-            entry_points.iter().map(|(v, _)| *v),
-        )
-        .await;
         let (ep_vectors, ep_layers): (Vec<VectorId>, Vec<usize>) = entry_points.into_iter().unzip();
         metrics::gauge!("entry_points_count").set(ep_vectors.len() as f64);
 
@@ -474,28 +468,6 @@ impl HnswSearcher {
             Ok((W, Some(layer)))
         } else {
             Ok((SortedNeighborhood::new(), None))
-        }
-    }
-
-    /// Debug-only cross-check of the graph's content-clock resolution against
-    /// the store registry. The registry may run *ahead* of the graph clock
-    /// within a batch or during genesis delta replay (registry writes land
-    /// before the corresponding graph mutation), so the invariant is
-    /// asymmetric: a graph-live serial must be registry-present, and the graph
-    /// version must never exceed the registry's.
-    #[cfg(debug_assertions)]
-    async fn debug_assert_graph_resolution_matches_store<V: VectorStore>(
-        store: &V,
-        resolved: impl Iterator<Item = VectorId>,
-    ) {
-        let resolved: Vec<VectorId> = resolved.collect();
-        let serials: Vec<SerialId> = resolved.iter().map(|v| v.serial_id()).collect();
-        let from_store = store.serials_to_vector_ids(&serials).await;
-        for (graph_v, store_v) in resolved.iter().zip(from_store) {
-            debug_assert!(
-                store_v.is_some_and(|s| s.version_id() >= graph_v.version_id()),
-                "graph content clock ahead of the store registry: graph {graph_v:?}, store {store_v:?}"
-            );
         }
     }
 
@@ -1344,13 +1316,6 @@ impl HnswSearcher {
                 .into_iter()
                 .filter(|e| visited.insert(*e))
                 .collect();
-
-            #[cfg(debug_assertions)]
-            Self::debug_assert_graph_resolution_matches_store(
-                store,
-                unvisited_neighbors.iter().copied(),
-            )
-            .await;
 
             valid_neighbors.extend(unvisited_neighbors);
             opened_nodes.push(*node);

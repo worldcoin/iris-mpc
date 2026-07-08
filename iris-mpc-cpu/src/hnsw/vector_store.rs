@@ -1,5 +1,5 @@
 use eyre::{bail, OptionExt, Result};
-use iris_mpc_common::{SerialId, VectorId};
+use iris_mpc_common::VectorId;
 use itertools::izip;
 use serde::Serialize;
 use std::{fmt::Debug, hash::Hash};
@@ -199,15 +199,6 @@ pub trait VectorStore: Debug {
 
         Ok(results)
     }
-
-    /// Resolve each serial to its current `VectorId`, or `None` if not live
-    /// in the registry/storage; one entry per input serial, positionally
-    /// aligned. Registry-backed stores take the version lock via an awaited
-    /// read, so resolution reflects the true current version.
-    ///
-    /// Traversal resolves from the graph's content clock instead; this method
-    /// is the registry side of the debug-build cross-check between the two.
-    async fn serials_to_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<Option<VectorId>>;
 }
 
 /// The operations exposed by a vector store, including mutations.

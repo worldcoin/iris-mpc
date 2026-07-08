@@ -1316,13 +1316,6 @@ mod tests {
         ) -> Result<bool> {
             Ok(*distance1 < *distance2)
         }
-
-        async fn serials_to_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<Option<VectorId>> {
-            serial_ids
-                .iter()
-                .map(|&serial_id| Some(VectorId::from_serial_id(serial_id)))
-                .collect()
-        }
     }
 
     impl VectorStoreMut for TestStore {
