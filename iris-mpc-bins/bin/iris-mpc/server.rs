@@ -265,6 +265,8 @@ async fn server_main(config: Config) -> Result<()> {
         next_sns_sequence_num: next_sns_seq_number_future.await?,
         common_config: CommonConfig::from(config.clone()),
         graph_mutation_bytes: vec![],
+        // GPU path has no DB-backed ingest wiring.
+        max_persisted_sequence_number: None,
     };
 
     tracing::info!("Sync state: {:?}", my_state);

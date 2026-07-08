@@ -168,6 +168,51 @@ pub async fn server_main(config: Config) -> Result<()> {
     }
 
     if config.db_backed_ingest {
+        // Two-step boot recovery, the DB analog of the SQS queue trim:
+        //
+        // Step 1 — skip-ahead to the fleet's persisted frontier. Rows at or
+        // below max(peers' persisted sequence numbers) belong to batches that
+        // completed on at least one peer: their effects reached this party via
+        // the modifications roll-forward above, and peers will never co-form
+        // them again. Releasing them instead (the naive local decision) would
+        // make this party re-form rows the peers moved past — a permanent
+        // batch divergence. Locally, "claimed but unpersisted from a crashed
+        // symmetric batch" and "claimed but unpersisted because only MY commit
+        // failed" are indistinguishable; only the peers' frontier tells them
+        // apart.
+        let fleet_frontier = sync_result.max_persisted_sequence_number();
+        if let Some(frontier) = &fleet_frontier {
+            let marked = iris_store
+                .mark_ingested_requests_persisted_up_to(frontier)
+                .await
+                .wrap_err("failed to skip-ahead ingested rows to fleet frontier")?;
+            if marked > 0 {
+                tracing::warn!(
+                    "Skip-ahead: marked {} ingested row(s) persisted up to fleet frontier {} (completed on a peer; effects arrived via modifications sync)",
+                    marked,
+                    frontier
+                );
+                metrics::counter!("db_ingest_frontier_skip_ahead").increment(marked);
+            }
+        }
+
+        // Step 2 — release remaining unpersisted claims (all above the fleet
+        // frontier = no party persisted them = the symmetric-crash case).
+        // Deterministic re-formation picks them up identically everywhere.
+        let released = iris_store
+            .reset_unpersisted_ingested_claims()
+            .await
+            .wrap_err("failed to reset unpersisted ingested claims on startup")?;
+        if released > 0 {
+            tracing::warn!(
+                "Released {} unpersisted ingested request claim(s) from a crashed/restarted batch; they will be re-formed",
+                released
+            );
+            metrics::counter!("db_ingest_claims_released").increment(released);
+        } else {
+            tracing::info!("No unpersisted ingested request claims to release on startup");
+        }
+
         // Skip the startup queue trim: with DB-backed ingest, queues are
         // transient buffers with party-dependent ingest offsets, so cross-party
         // queue-position comparison is meaningless (an already-drained queue
@@ -509,6 +554,12 @@ async fn build_sync_state(
     };
     let common_config = CommonConfig::from(config.clone());
 
+    let max_persisted_sequence_number = if config.db_backed_ingest {
+        store.max_persisted_sequence_number().await?
+    } else {
+        None
+    };
+
     // Fetch graph mutations for all modifications in the lookback window so
     // they can be exchanged with the other parties via the SyncState payload.
     // We only need mutations starting from the oldest modification we track.
@@ -535,6 +586,7 @@ async fn build_sync_state(
         next_sns_sequence_num,
         common_config,
         graph_mutation_bytes,
+        max_persisted_sequence_number,
     })
 }
 
@@ -825,21 +877,6 @@ async fn run_main_server_loop(
     let recovery_update_error_result_attributes =
         create_message_type_attribute_map(RECOVERY_UPDATE_MESSAGE_TYPE);
     let res: Result<()> = async {
-        if config.db_backed_ingest {
-            let released = iris_store
-                .reset_unpersisted_ingested_claims()
-                .await
-                .wrap_err("failed to reset unpersisted ingested claims on startup")?;
-            if released > 0 {
-                tracing::warn!(
-                    "Released {} unpersisted ingested request claim(s) from a crashed/restarted batch; they will be re-formed",
-                    released
-                );
-            } else {
-                tracing::info!("No unpersisted ingested request claims to release on startup");
-            }
-        }
-
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
         if config.db_backed_ingest {

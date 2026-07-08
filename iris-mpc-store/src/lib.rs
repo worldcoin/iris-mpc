@@ -628,6 +628,45 @@ WHERE id = $1;
         Ok(result.rows_affected())
     }
 
+    /// This party's persisted frontier: the highest sequence number with a
+    /// persist mark. The persisted set is a contiguous prefix of the sequence
+    /// order (formation consumes lowest-first in FIFO ingest order), so this
+    /// single value fully describes local progress. Exchanged via SyncState.
+    pub async fn max_persisted_sequence_number(&self) -> Result<Option<String>> {
+        let row: (Option<String>,) = sqlx::query_as(
+            r#"
+            SELECT MAX(sequence_number)
+            FROM ingested_requests
+            WHERE persisted_at IS NOT NULL
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    /// Startup skip-ahead (DB analog of the SQS queue trim): marks every
+    /// unpersisted row at or below the fleet's persisted frontier as persisted,
+    /// regardless of claim state. A row at or below the frontier was part of a
+    /// batch that completed on at least one peer — its effects reach this party
+    /// via the modifications roll-forward, and re-forming it locally would
+    /// diverge the batches (peers will never co-form it). Returns rows affected.
+    pub async fn mark_ingested_requests_persisted_up_to(&self, frontier: &str) -> Result<u64> {
+        let result = sqlx::query(
+            r#"
+            UPDATE ingested_requests
+            SET persisted_at = now()
+            WHERE sequence_number <= $1
+              AND persisted_at IS NULL
+            "#,
+        )
+        .bind(frontier)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
     /// Releases claims that were never persisted (crash/restart recovery). Batch ids
     /// restart at 1 on boot, so a claim without a persist mark can never be trusted.
     /// Returns rows affected.
@@ -1169,6 +1208,65 @@ pub mod tests {
 
         assert_eq!(store.reset_unpersisted_ingested_claims().await?, 0);
         assert_eq!(store.count_pending_ingested_requests().await?, 0);
+
+        cleanup(&postgres_client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ingested_requests_frontier_skip_ahead() -> Result<()> {
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+
+        // The C2 state: rows 10,11 persisted somewhere in the fleet (this
+        // party's commit was the one that failed: claimed, unpersisted), row 12
+        // claimed above the fleet frontier (nobody persisted), row 13 pending.
+        for seq in ["10", "11", "12", "13"] {
+            assert!(store.insert_ingested_request(seq, "body").await?);
+        }
+        let all = store.pending_ingested_requests(10).await?;
+        let seqs: Vec<String> = all.iter().map(|r| r.sequence_number.clone()).collect();
+        store
+            .mark_ingested_requests_consumed(&seqs[0..3], 1)
+            .await?;
+
+        assert_eq!(store.max_persisted_sequence_number().await?, None);
+
+        // Fleet frontier says a peer persisted through row 11.
+        let frontier = normalize_sns_sequence_number("11")?;
+        assert_eq!(
+            store
+                .mark_ingested_requests_persisted_up_to(&frontier)
+                .await?,
+            2
+        );
+        // Skip-ahead is idempotent.
+        assert_eq!(
+            store
+                .mark_ingested_requests_persisted_up_to(&frontier)
+                .await?,
+            0
+        );
+        assert_eq!(
+            store.max_persisted_sequence_number().await?.as_deref(),
+            Some(frontier.as_str())
+        );
+
+        // Release: only row 12 (claimed above the frontier) goes back to
+        // pending; rows 10,11 stay persisted forever.
+        assert_eq!(store.reset_unpersisted_ingested_claims().await?, 1);
+        let pending = store.pending_ingested_requests(10).await?;
+        let pending_seqs: Vec<&str> = pending.iter().map(|r| r.sequence_number.as_str()).collect();
+        assert_eq!(
+            pending_seqs,
+            vec![
+                normalize_sns_sequence_number("12")?.as_str(),
+                normalize_sns_sequence_number("13")?.as_str()
+            ]
+        );
 
         cleanup(&postgres_client, &schema_name).await?;
         Ok(())
