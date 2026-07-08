@@ -396,9 +396,9 @@ impl HnswSearcher {
     ) -> Result<(SortedNeighborhood<V>, usize, usize, UpdateEntryPoint)> {
         let max_graph_layer = self.max_graph_layer;
 
-        // Entry points resolve from the graph's own content clock: a serial
-        // without a clock entry is not live (removed, or pruned at migration)
-        // and is skipped rather than resolved to a fabricated version.
+        // Entry points resolve from the graph's content clock: a serial
+        // without a clock entry is not live and is skipped rather than
+        // resolved to a fabricated version.
         let entry_points: Vec<(VectorId, usize)> = graph
             .entry_points
             .iter()
@@ -1466,9 +1466,8 @@ impl HnswSearcher {
         query: &V::QueryRef,
         insertion_layer: usize,
     ) -> Result<(Vec<SortedNeighborhood<V>>, UpdateEntryPoint, u64)> {
-        // The graph state this search's results are identified against;
-        // returned so the mutation minted from them carries its provenance
-        // (`UnstampedMutation::as_of`).
+        // Graph state this search's results are identified against; becomes
+        // the minted mutation's `UnstampedMutation::as_of`.
         let as_of = graph.last_update_seq_no;
 
         // Initialize candidate neighborhood, index of highest search layer,
@@ -1531,20 +1530,17 @@ impl HnswSearcher {
     /// from the iteration order of the input candidates list; the caller wraps
     /// them into a `GraphMutation`, stamps a sequence number, and applies.
     ///
-    /// Ranks over active neighborhoods (`get_active_links`), not raw: compaction
-    /// evicts physically and an evicted live edge cannot be recovered, so
-    /// selection must never see a content-stale or removed edge (read-time masking
-    /// wouldn't undo the eviction). Clock-absent serials are dropped by the
-    /// active filter. This reproduces main's pre-compaction `only_valid_vectors`
-    /// clean.
+    /// Ranks over active neighborhoods (`get_active_links`), not raw:
+    /// compaction evicts physically and an evicted live edge cannot be
+    /// recovered, so selection must never see a content-stale or removed edge.
     pub async fn compact_batch<V: VectorStore>(
         &self,
         store: &mut V,
         graph: &GraphMem,
         candidates: &BTreeSet<(SerialId, usize)>,
     ) -> Result<(Vec<MutationOp>, u64)> {
-        // The ranking below is identified against this graph state; minted
-        // removals carry it as their `UnstampedMutation::as_of`.
+        // Graph state the ranking is identified against; becomes the minted
+        // removals' `UnstampedMutation::as_of`.
         let as_of = graph.last_update_seq_no;
 
         // Read the current neighborhood for each candidate; keep only those

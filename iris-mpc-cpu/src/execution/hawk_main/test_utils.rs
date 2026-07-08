@@ -88,10 +88,9 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
     for side in [LEFT, RIGHT] {
         let mut graph = actor.graph_store[side].write().await;
         let mut seq = 0u64;
-        // Phase 1: insert all nodes. The ring links each node to the *next* one,
-        // so all endpoints must exist before edges are wired — otherwise an edge
-        // would point at a node whose content clock postdates the edge's
-        // neighborhood and the read-path staleness filter would skip it.
+        // Phase 1: insert all nodes. The ring links each node to the *next*
+        // one, so all endpoints must exist before edges are wired or the
+        // staleness filter would drop them.
         for i in 0..db_size {
             seq += 1;
             graph

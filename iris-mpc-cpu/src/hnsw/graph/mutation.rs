@@ -5,32 +5,23 @@ use serde::{Deserialize, Serialize};
 pub struct GraphMutation {
     pub seq_no: u64,
     /// Sequence number of the graph state the edge references in `ops` were
-    /// identified against (the search snapshot). Every apply — first or
-    /// replayed — resolves the references against it (see
-    /// `GraphMem::insert_apply`): the record carries the intent verbatim,
-    /// together with the context needed to resolve it.
+    /// identified against. Every apply — first or replayed — resolves the
+    /// references against it (see `GraphMem::insert_apply`).
     pub as_of: u64,
     pub ops: Vec<MutationOp>,
 }
 
-/// A graph mutation that has not yet been assigned a sequence number.
+/// A graph mutation not yet assigned a sequence number.
 ///
-/// Holds the ops describing *what* to change without committing to *where* in
-/// the mutation sequence the change lands. The only way to turn one into a
-/// stamped [`GraphMutation`] is [`crate::hnsw::GraphMem::apply_new`], which
-/// assigns the sequence number and applies it in a single step — so a sequence
-/// number can never be minted in-process without immediately advancing the
-/// graph.
+/// The only way to turn one into a stamped [`GraphMutation`] is
+/// [`crate::hnsw::GraphMem::apply_new`], which assigns the sequence number and
+/// applies it in a single step.
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct UnstampedMutation {
     /// Sequence number of the graph state the edge references in `ops` were
-    /// identified against (the search snapshot); carried into the stamped
-    /// record (`GraphMutation::as_of`).
-    ///
-    /// Must come from the graph read that produced the references (search or
-    /// neighborhood-ranking APIs return it alongside their results); minting
-    /// with a later seq re-certifies references against content they never
-    /// saw.
+    /// identified against; becomes `GraphMutation::as_of`. Must come from the
+    /// graph read that produced the references — a later seq would re-certify
+    /// references against content they never saw.
     pub as_of: u64,
     pub ops: Vec<MutationOp>,
 }
@@ -59,11 +50,10 @@ pub enum MutationOp {
     /// Every `base` and `neighbors` node must already exist: its `AddNode`
     /// applied in an earlier mutation, or anywhere in this op list (node ops
     /// apply before edge ops). A reference to a not-yet-created node is void
-    /// and dropped at apply (causal construction).
+    /// and dropped at apply.
     ///
-    /// Edge ops carry bare serials: node identity/version lives in `AddNode`/
-    /// `RemoveNode` (the content-clock source), and edges only select
-    /// neighborhood members.
+    /// Edge ops carry bare serials: node identity/version lives in
+    /// `AddNode`/`RemoveNode`; edges only select neighborhood members.
     AddEdges {
         base: SerialId,
         neighbors: Vec<SerialId>,
@@ -119,10 +109,8 @@ impl std::fmt::Debug for MutationOp {
 }
 
 impl UnstampedMutation {
-    /// Neighborhoods that may have *grown* — those affected by `AddEdges` ops
-    /// in this mutation. Used as the candidate set for batch compaction. The
-    /// returned Vec is the raw walk and may contain duplicates; callers fold
-    /// into a set to dedup.
+    /// Neighborhoods that may have grown — those touched by `AddEdges` ops.
+    /// Candidate set for batch compaction; may contain duplicates.
     pub fn expanded_neighborhoods(&self) -> Vec<(SerialId, usize)> {
         let mut out = Vec::new();
         for op in &self.ops {

@@ -18,21 +18,19 @@ use serde::{Deserialize, Serialize};
 /// The active version is persisted in `hawk_graph_mutations.mutation_format_version`
 /// so that the deserializer can dispatch without inspecting the blob bytes.
 ///
-/// A format version pins the wire layout and the abstract mutation semantics
-/// (see `hnsw::graph::model`), not the implementation. Semantics changes
-/// require a new version behind a checkpoint barrier (no old segments left to
-/// reinterpret). Implementation changes that preserve the abstract graph
-/// (e.g. pruning discipline) replay old segments safely and need no bump —
-/// only same-binary deployment across parties while batches are processed.
+/// A format version pins the wire layout and the mutation semantics, not the
+/// implementation. Semantics changes require a new version behind a
+/// checkpoint barrier (no old segments left to reinterpret); changes that
+/// replay old segments to the same graph need no bump — only same-binary
+/// deployment across parties while batches are processed.
 ///
-/// V0 (edge ops carrying `VectorId`) is intentionally not readable: the WAL is
-/// reset at the v5 cutover, so a version-0 row reaching this code is an
-/// operational error and fails loudly in `try_from`.
+/// V0 (edge ops carrying `VectorId`) is intentionally not readable: the WAL
+/// is reset before V1 writes begin, so a version-0 row reaching this code is
+/// an operational error and fails loudly in `try_from`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GraphMutationFormat {
-    /// V1: plain `bincode::serialize(BothEyes<Vec<GraphMutation>>)` with edge
-    /// ops carrying bare serial ids; ops record the intent verbatim, anchored
-    /// by `as_of` — reference resolution and staleness cleanup re-derive on
+    /// V1: plain `bincode::serialize(BothEyes<Vec<GraphMutation>>)`; edge ops
+    /// carry bare serial ids, records carry `as_of`, references resolve on
     /// every apply.
     V1,
 }
@@ -83,9 +81,6 @@ pub fn deserialize_mutations(
 ) -> Result<BothEyes<Vec<GraphMutation>>> {
     match format {
         GraphMutationFormat::V1 => deserialize_v1_to_current(bytes),
-        // When a V2 is added: add arm here, define a types/graph_mutation_v2.rs
-        // intermediate struct with From<GraphMutationV2> → BothEyes<Vec<GraphMutation>>,
-        // and call bincode::deserialize::<GraphMutationV2>(bytes)?.into()
     }
 }
 
@@ -263,8 +258,7 @@ mod tests {
         assert_eq!(deserialized, expected);
     }
 
-    /// V0 rows (edge ops carrying VectorId) must fail loudly: the WAL is
-    /// reset at cutover, so one reaching this code is an operational error.
+    /// V0 rows must fail loudly; see `GraphMutationFormat`.
     #[test]
     fn version_0_is_rejected() {
         assert!(GraphMutationFormat::try_from(0).is_err());

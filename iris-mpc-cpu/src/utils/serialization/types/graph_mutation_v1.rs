@@ -2,11 +2,9 @@ use serde::{Deserialize, Serialize};
 
 /// V1 wire format for one WAL graph mutation.
 ///
-/// Differences from V0: edge ops carry bare serial ids — node identity/version
-/// rides only `AddNode`/`RemoveNode` — and ops record the intent verbatim,
-/// anchored by `as_of`; every apply resolves the references against it
-/// (staleness cleanup likewise re-derives on replay). V0 is not readable; the
-/// WAL is reset at the v5 cutover.
+/// Edge ops carry bare serial ids — node identity/version rides only
+/// `AddNode`/`RemoveNode` — and records carry `as_of`; references resolve on
+/// every apply. V0 (edge ops carrying `VectorId`) is not readable.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GraphMutationV1 {
     pub seq_no: u64,

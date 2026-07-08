@@ -200,15 +200,13 @@ pub trait VectorStore: Debug {
         Ok(results)
     }
 
-    /// Resolve each serial to its current `VectorId` (serial + current version),
-    /// or `None` if the serial is not currently live in the registry/storage.
-    /// Returns one entry per input serial, positionally aligned. Registry-backed
-    /// stores take the version lock via an awaited read (never `try_read`), so
-    /// resolution reflects the true current version.
+    /// Resolve each serial to its current `VectorId`, or `None` if not live
+    /// in the registry/storage; one entry per input serial, positionally
+    /// aligned. Registry-backed stores take the version lock via an awaited
+    /// read, so resolution reflects the true current version.
     ///
-    /// Traversal resolves from the graph's own content clock
-    /// (`GraphMem::vector_id_of` / `get_active_links`); this method is the
-    /// registry side of the debug-build cross-check that the two sources agree.
+    /// Traversal resolves from the graph's content clock instead; this method
+    /// is the registry side of the debug-build cross-check between the two.
     async fn serials_to_vector_ids(&self, serial_ids: &[SerialId]) -> Vec<Option<VectorId>>;
 }
 

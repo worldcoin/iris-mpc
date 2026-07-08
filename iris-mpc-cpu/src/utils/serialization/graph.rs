@@ -284,12 +284,11 @@ fn read_pair<R: std::io::Read + ?Sized, G: for<'a> Deserialize<'a>>(
 
 /// Convert a decoded wire-format pair into `GraphMem`s.
 ///
-/// Deliberately serial: each `into()` drains its source graph entry-by-entry
-/// while building the destination, so a single-threaded conversion keeps peak
-/// transient memory at ~1×E (E = edge payload). Converting the two eyes in
-/// parallel frees the source on a different allocator arena than it was decoded
-/// on, stranding it under glibc's per-thread arenas and pushing peak RSS toward
-/// ~2×E — costly at prod graph scale.
+/// Deliberately serial: each `into()` drains its source entry-by-entry, so
+/// peak transient memory stays at ~1×E (E = edge payload). Converting the
+/// eyes in parallel would free each source on a different allocator arena
+/// than it was decoded on, stranding it under glibc's per-thread arenas and
+/// pushing peak RSS toward ~2×E.
 fn convert_pair<G>(pair: [G; 2]) -> [GraphMem; 2]
 where
     G: Into<GraphMem>,
@@ -943,9 +942,8 @@ mod tests {
         for &n in &[7u32, 3, 9, 1, 5, 8, 2, 6, 4] {
             layer.set_links_trusted(n, vec![n + 1, n + 2], 0);
         }
-        // Seed the content clock at 0 for every node, matching how the From<GraphVN>
-        // converters build a real graph; otherwise the checksum (which now folds
-        // node_init) would differ from a round-tripped graph's.
+        // Seed the content clock at 0 for every node, matching the From<GraphVN>
+        // converters; the checksum folds node_init.
         let node_init = layer
             .get_links_map()
             .keys()
@@ -969,15 +967,12 @@ mod tests {
         );
     }
 
-    /// Genesis uploads checkpoints by serializing `[GraphMem; 2]` directly, but
-    /// the materializer and hawk restart read them back as `GraphV5`. The two
-    /// wire layouts must be byte-identical, else the cutover graph is corrupt.
-    /// The clocks are non-zero and DISTINCT over out-of-order keys: a non-zero
-    /// `last_update_seq_no` makes a scalar field-order drift misalign the next
-    /// map-length prefix, and distinct `node_init` seq/version values make the
-    /// BTreeMap-sort vs HashMap-iteration arm of `GraphV5::Serialize` observable
-    /// (uniform-zero clocks would alias the two orderings and pass regardless).
-    /// Distinct versions also pin the per-entry (seq_no, version) field order.
+    /// Checkpoints are written by serializing `[GraphMem; 2]` directly but
+    /// read back as `GraphV5`; the two wire layouts must be byte-identical.
+    /// The fixture's clocks are non-zero and distinct over out-of-order keys
+    /// so field-order drift and BTreeMap-sort vs HashMap-iteration ordering
+    /// are both observable (uniform-zero clocks would alias the orderings and
+    /// pass regardless).
     #[test]
     fn graphmem_direct_write_matches_current_and_reads_back() {
         let mut layer = Layer::new();
@@ -1098,11 +1093,9 @@ mod tests {
         buf
     }
 
-    /// `read_graph_pair_streaming` (fed bytes via a `Cursor`) yields a graph pair
-    /// equal to `read_graph_pair` and to the original, including per-layer
-    /// `checksum()`, for every stable layer-hashed format. V5/Current is the
-    /// format genesis writes and hawk restarts stream back, so it is covered
-    /// here too (its bytes come from `write_graph_pair_current`).
+    /// `read_graph_pair_streaming` yields a graph pair equal to
+    /// `read_graph_pair` and to the original, including per-layer `checksum()`,
+    /// for every stable layer-hashed format.
     #[test]
     fn streaming_matches_derived_and_original() {
         let g = sample_graph();
@@ -1131,8 +1124,7 @@ mod tests {
     }
 
     /// Prune-at-read drops edges whose stored target version differs from the
-    /// target's current key version, plus edges to absent targets, reproducing
-    /// the runtime version-skip that v5 serial-only edges can't perform. Every
+    /// target's registry-current version, plus edges to absent targets. Every
     /// surviving node's clock seeds at seq 0 with its registry-current version.
     #[test]
     fn prune_drops_version_drifted_and_dangling_edges() {
@@ -1217,10 +1209,9 @@ mod tests {
         );
     }
 
-    /// A deleted serial is dropped outright even when the registry version still
-    /// matches its inbound edges (a deletion's iris version bump is not relied on
-    /// here; the deletion list is the authority). The node and its inbound edges
-    /// disappear.
+    /// A deleted serial is dropped outright — node and inbound edges — even
+    /// when the registry version still matches: the deletion list is the
+    /// authority, not a version bump.
     #[test]
     fn prune_drops_deleted_serial_and_its_inbound_edges() {
         use crate::utils::serialization::types::graph_v4;
@@ -1253,9 +1244,8 @@ mod tests {
         );
     }
 
-    /// `From<graph_v3::Layer>` recomputes `set_hash` from links and ignores the
-    /// stored value (prod checkpoints carry an older-algorithm `set_hash`). Feed
-    /// a deliberately wrong stored value and assert it's ignored.
+    /// `From<graph_v3::Layer>` recomputes `set_hash` from links and ignores
+    /// the stored value (older checkpoints carry an older-algorithm hash).
     #[test]
     fn from_graph_v3_layer_recomputes_ignoring_stored_set_hash() {
         use crate::utils::serialization::types::graph_v3;
