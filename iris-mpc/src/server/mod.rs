@@ -160,7 +160,18 @@ pub async fn server_main(config: Config) -> Result<()> {
         }
     }
 
-    sync_sqs_queues(&config, &sync_result, &aws_clients).await?;
+    if config.db_backed_ingest {
+        // Skip the startup queue trim: with DB-backed ingest, queues are
+        // transient buffers with party-dependent ingest offsets, so cross-party
+        // queue-position comparison is meaningless (an already-drained queue
+        // reports None and max_sns_sequence_num panics on mixed states) and the
+        // trim could delete messages a lagging party has not yet ingested.
+        // Dedup of redeliveries is handled by the ingest's PK ON CONFLICT;
+        // already-processed rows are excluded by persisted_at.
+        tracing::info!("db-backed ingest enabled; skipping startup SQS queue sync/trim");
+    } else {
+        sync_sqs_queues(&config, &sync_result, &aws_clients).await?;
+    }
 
     if shutdown_handler.is_shutting_down() {
         tracing::warn!("Shutting down has been triggered");
