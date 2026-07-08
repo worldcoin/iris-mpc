@@ -77,8 +77,9 @@ impl Schedule {
     /// as it is optimized for its logic
     pub fn intra_match_batches(&self) -> Vec<Batch> {
         let n_tasks = self.n_requests * self.n_rotations;
-        let batch_size = n_tasks / self.n_sessions;
-        let rest_size = n_tasks % self.n_sessions;
+        let n_sessions = self.n_sessions.min(n_tasks).max(1);
+        let batch_size = n_tasks / n_sessions;
+        let rest_size = n_tasks % n_sessions;
 
         (0..N_EYES)
             .flat_map(|i_eye| {
@@ -91,7 +92,7 @@ impl Schedule {
                     })
                 });
 
-                (0..self.n_sessions).map(move |i_session| {
+                (0..n_sessions).map(move |i_session| {
                     // Some sessions get one more task if n_sessions does not divide n_tasks.
                     let one_more = (i_session < rest_size) as usize;
 
@@ -112,8 +113,9 @@ impl Schedule {
     /// This method is search-aware and weighs central rotations as higher workloads than non-central ones
     pub fn search_batches(&self) -> Vec<Batch> {
         let n_tasks = self.n_requests * self.n_rotations;
-        let batch_size = n_tasks / self.n_sessions;
-        let rest_size = n_tasks % self.n_sessions;
+        let n_sessions = self.n_sessions.min(n_tasks).max(1);
+        let batch_size = n_tasks / n_sessions;
+        let rest_size = n_tasks % n_sessions;
 
         (0..N_EYES)
             .flat_map(|i_eye| {
@@ -130,7 +132,7 @@ impl Schedule {
                     })
                 });
 
-                (0..self.n_sessions).map(move |i_session| {
+                (0..n_sessions).map(move |i_session| {
                     // Some sessions get one more task if n_sessions does not divide n_tasks.
                     let one_more = (i_session < rest_size) as usize;
 
@@ -229,8 +231,8 @@ mod test {
 
     fn test_intra_match_schedule_impl(n_sessions: usize, n_requests: usize, n_rotations: usize) {
         let n_eyes = N_EYES;
-        let n_batches = n_eyes * n_sessions;
         let n_tasks = n_eyes * n_requests * n_rotations;
+        let n_batches = n_eyes * n_sessions.min(n_requests * n_rotations).max(1);
 
         let batches = Schedule::new(n_sessions, n_requests, n_rotations).intra_match_batches();
         assert_eq!(batches.len(), n_batches);
@@ -279,8 +281,8 @@ mod test {
 
     fn test_search_schedule_impl(n_sessions: usize, n_requests: usize, n_rotations: usize) {
         let n_eyes = N_EYES;
-        let n_batches = n_eyes * n_sessions;
         let n_tasks = n_eyes * n_requests * n_rotations;
+        let n_batches = n_eyes * n_sessions.min(n_requests * n_rotations).max(1);
 
         let batches = Schedule::new(n_sessions, n_requests, n_rotations).search_batches();
         assert_eq!(batches.len(), n_batches);
