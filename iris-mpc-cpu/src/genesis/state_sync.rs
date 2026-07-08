@@ -1,4 +1,4 @@
-use super::BatchSizeConfig;
+use super::{BatchSizeConfig, DeltaMode};
 use eyre::{ensure, Result};
 use iris_mpc_common::{config::CommonConfig, helpers::sync::Modification, SerialId};
 use serde::{Deserialize, Serialize};
@@ -26,6 +26,12 @@ pub struct Config {
 
     // The modifications that will be performed during the delta phase
     pub modifications: Vec<Modification>,
+
+    // Delta reconciliation mode; must agree across nodes.
+    pub delta_mode: DeltaMode,
+
+    // Pinned base checkpoint blake3 hash (version-join); must agree across nodes.
+    pub base_checkpoint_hash: Option<String>,
 }
 
 /// Constructor.
@@ -39,6 +45,8 @@ impl Config {
         max_modification_id: i64,
         max_modification_persisted_id: i64,
         modifications: Vec<Modification>,
+        delta_mode: DeltaMode,
+        base_checkpoint_hash: Option<String>,
     ) -> Self {
         Self {
             batch_size_config,
@@ -48,6 +56,8 @@ impl Config {
             max_modification_id,
             max_modification_persisted_id,
             modifications,
+            delta_mode,
+            base_checkpoint_hash,
         }
     }
 }
@@ -147,6 +157,8 @@ mod tests {
                 100,
                 10,
                 vec![mod_1, mod_2],
+                DeltaMode::default(),
+                None,
             )
         }
         fn new_2() -> Self {
@@ -167,6 +179,8 @@ mod tests {
                 200,
                 200,
                 vec![mod_1],
+                DeltaMode::default(),
+                None,
             )
         }
 
@@ -188,6 +202,8 @@ mod tests {
                 200,
                 200,
                 vec![mod_1],
+                DeltaMode::default(),
+                None,
             )
         }
     }

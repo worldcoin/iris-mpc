@@ -2,7 +2,9 @@ use aws_sdk_s3::Client as S3Client;
 use eyre::{bail, Result};
 use iris_mpc_common::SerialId;
 use iris_mpc_cpu::execution::hawk_main::{BothEyes, GraphRef, HawkOps};
-use iris_mpc_cpu::genesis::state_accessor::set_last_indexed_iris_id;
+use iris_mpc_cpu::genesis::state_accessor::{
+    set_last_indexed_iris_id, set_last_indexed_modification_id,
+};
 use iris_mpc_cpu::graph_checkpoint::{upload_graph_checkpoint, GraphCheckpointState};
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
@@ -85,5 +87,59 @@ pub async fn maybe_rollback_iris_db(
             .await?;
         tx.commit().await?;
     }
+    Ok(())
+}
+
+/// Reset all HNSW-schema state to `graph_checkpoint` for version-join mode:
+/// trim the iris tail beyond the checkpoint, restore the indexed cursors, and
+/// clear the WAL and modifications table. When a base checkpoint was pinned,
+/// also drop checkpoint rows that post-date it so an abandoned lineage cannot
+/// win the next run's latest-common selection. Single transaction: a crash
+/// before commit leaves the prior state; a crash after leaves a re-runnable one.
+///
+/// Takes the **HNSW** iris store (not the source store): all mutated tables live
+/// in the HNSW schema.
+///
+/// # Errors
+/// Bails if the checkpoint is ahead of the DB
+/// (`last_indexed_id < graph_checkpoint.last_indexed_iris_id`) — corrupt state.
+pub async fn reset_to_checkpoint(
+    graph_checkpoint: &GraphCheckpointState,
+    graph_store: &GraphPg<Aby3Store<HawkOps>>,
+    hnsw_iris_store: &IrisStore,
+    last_indexed_id: SerialId,
+    pinned: bool,
+) -> Result<()> {
+    if last_indexed_id < graph_checkpoint.last_indexed_iris_id {
+        bail!(
+            "s3 checkpoint is ahead of iris db: db_last_indexed_iris_id={}, checkpoint_last_indexed_iris_id={}",
+            last_indexed_id,
+            graph_checkpoint.last_indexed_iris_id
+        );
+    }
+
+    let s_cp = graph_checkpoint.last_indexed_iris_id;
+    let m_cp = graph_checkpoint.last_indexed_modification_id;
+
+    let mut graph_tx = graph_store.tx().await?;
+    set_last_indexed_iris_id(&mut graph_tx.tx, s_cp).await?;
+    set_last_indexed_modification_id(&mut graph_tx.tx, m_cp).await?;
+    hnsw_iris_store
+        .delete_irises_after_id_tx(&mut graph_tx.tx, s_cp as usize)
+        .await?;
+    graph_tx.clear_hawk_graph_mutations().await?;
+    hnsw_iris_store
+        .clear_modifications_table(&mut graph_tx.tx)
+        .await?;
+    if pinned {
+        graph_tx.delete_checkpoints_after(s_cp).await?;
+    }
+    graph_tx.tx.commit().await?;
+
+    tracing::info!(
+        "reset HNSW state to checkpoint: last_indexed_iris_id={}, last_indexed_modification_id={}",
+        s_cp,
+        m_cp
+    );
     Ok(())
 }

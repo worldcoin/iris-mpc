@@ -19,10 +19,11 @@ use iris_mpc_common::{
     config::{CommonConfig, Config, ENV_PROD, ENV_STAGE},
     helpers::{smpc_request, sync::Modification},
     postgres::{AccessMode, PostgresClient},
-    SerialId,
+    SerialId, VectorId,
 };
 pub use iris_mpc_cpu::genesis::BatchSizeConfig;
 use iris_mpc_cpu::{
+    execution::hawk_main::state_check::SetHash,
     execution::hawk_main::{
         build_hawk_network_handle,
         iris_worker::IrisWorkerPool,
@@ -40,14 +41,16 @@ use iris_mpc_cpu::{
         state_sync::{
             Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
         },
-        BatchGenerator, BatchIterator, Handle as GenesisHawkHandle, IndexationError, JobRequest,
-        JobResult,
+        version_join::{compute_version_join, max_version_per_serial, VersionJoinPlan},
+        BatchGenerator, BatchIterator, DeltaMode, Handle as GenesisHawkHandle, IndexationError,
+        JobRequest, JobResult,
     },
     graph_checkpoint::*,
     hawkers::aby3::aby3_store::{Aby3Store, VectorIdRegistryRef},
     hnsw::{graph::graph_store::GraphPg, GraphMem},
 };
 use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
+use std::collections::{HashMap, HashSet};
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -60,7 +63,9 @@ use tokio::{
     time::timeout,
 };
 
-pub use graph_checkpoint::{maybe_rollback_iris_db, upload_and_sync_genesis_checkpoint};
+pub use graph_checkpoint::{
+    maybe_rollback_iris_db, reset_to_checkpoint, upload_and_sync_genesis_checkpoint,
+};
 pub use iris_mpc_cpu::graph_checkpoint::{
     get_common_checkpoint, get_most_recent_checkpoints, get_others_graph_hashes,
 };
@@ -85,6 +90,12 @@ pub struct ExecutionArgs {
 
     // Controls which older checkpoints are pruned after loading a common checkpoint.
     pub pruning_mode: PruningMode,
+
+    // Selects how the delta phase reconciles state (modifications replay vs version join).
+    pub delta_mode: DeltaMode,
+
+    // Pinned base checkpoint blake3 hash; None selects the latest common checkpoint.
+    pub base_checkpoint_hash: Option<String>,
 }
 
 impl ExecutionArgs {
@@ -99,6 +110,8 @@ impl ExecutionArgs {
             perform_snapshot,
             checkpoint_frequency: args.checkpoint_frequency,
             pruning_mode: args.pruning_mode,
+            delta_mode: DeltaMode::default(),
+            base_checkpoint_hash: None,
         }
     }
 }
@@ -189,19 +202,40 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         args.perform_snapshot,
     );
 
-    // Phase 1: apply delta.
-    hawk_handle = exec_delta(
-        &config,
-        &ctx,
-        graph_store.clone(),
-        &checkpoint_s3_client,
-        &imem_graph_stores,
-        hawk_handle,
-        &tx_results,
-        &mut task_monitor_bg,
-        &shutdown_handler,
-    )
-    .await?;
+    // Phase 1: apply delta (dispatch on mode).
+    hawk_handle = match ctx.args.delta_mode {
+        DeltaMode::Modifications => {
+            exec_delta(
+                &config,
+                &ctx,
+                graph_store.clone(),
+                &checkpoint_s3_client,
+                &imem_graph_stores,
+                hawk_handle,
+                &tx_results,
+                &mut task_monitor_bg,
+                &shutdown_handler,
+            )
+            .await?
+        }
+        DeltaMode::VersionJoin => {
+            exec_delta_version_join(
+                &config,
+                &ctx,
+                graph_store.clone(),
+                &checkpoint_s3_client,
+                &registries,
+                &worker_pools,
+                &hnsw_iris_store,
+                &imem_graph_stores,
+                hawk_handle,
+                &tx_results,
+                &mut task_monitor_bg,
+                &shutdown_handler,
+            )
+            .await?
+        }
+    };
     tracing::info!("Delta complete.");
 
     // Phase 2: indexation.
@@ -322,9 +356,9 @@ async fn exec_setup(
         last_indexed_modification_id,
     );
     // This is the largest modification id that has been completed by the node.
-    let (modifications, max_modification_id_to_persist) =
+    let (mut modifications, max_modification_id_to_persist) =
         get_iris_modifications(&iris_store, last_indexed_modification_id, last_indexed_id).await?;
-    let max_modification_id = modifications.last().map_or(0, |m| m.id);
+    let mut max_modification_id = modifications.last().map_or(0, |m| m.id);
     tracing::info!(
         "Modifications to be applied count = {}. Max modification id completed = {}, Max modification to be performed = {}",
         modifications.len(),
@@ -341,11 +375,37 @@ async fn exec_setup(
         max_modification_id,
         max_modification_id_to_persist,
         modifications.clone(),
+        args.delta_mode,
+        args.base_checkpoint_hash.clone(),
     );
     let my_state = get_sync_state(config, genesis_config).await?;
     tracing::info!("Synchronization state initialised");
 
-    let (graph_checkpoints, hashes) = get_most_recent_checkpoints(&graph_store_arc).await?;
+    let (mut graph_checkpoints, mut hashes) = get_most_recent_checkpoints(&graph_store_arc).await?;
+
+    // Checkpoint pinning (orthogonal to delta mode): restrict the local
+    // candidate list and the hashes advertised on GRAPH_CHECKPOINT_ROUTE to the
+    // single pinned entry, so `get_common_checkpoint` selects it on every party
+    // or bails.
+    if let Some(pin) = args.base_checkpoint_hash.as_ref() {
+        let idx = graph_checkpoints
+            .iter()
+            .position(|cp| &cp.blake3_hash == pin)
+            .ok_or_else(|| {
+                eyre!("pinned base checkpoint hash {pin} not found in local checkpoints")
+            })?;
+        if idx >= hashes.len() {
+            bail!(
+                "pinned base checkpoint {pin} is older than the {} most recent checkpoints",
+                hashes.len()
+            );
+        }
+        let pinned_hash = hashes[idx];
+        let pinned_cp = graph_checkpoints.swap_remove(idx);
+        graph_checkpoints = vec![pinned_cp];
+        hashes = [[0u8; 32]; 10];
+        hashes[0] = pinned_hash;
+    }
 
     let batch_sync_shared_state =
         Arc::new(tokio::sync::Mutex::new(BatchSyncSharedState::default()));
@@ -395,6 +455,12 @@ async fn exec_setup(
         get_common_checkpoint(server_coord_config, hashes, graph_checkpoints).await?;
     tracing::info!("common graph checkpoint: {:?}", graph_checkpoint);
 
+    // Version-join reconciles against a base checkpoint; without one there is
+    // nothing to diff against.
+    if args.delta_mode == DeltaMode::VersionJoin && graph_checkpoint.is_none() {
+        bail!("version-join delta mode requires a common base checkpoint, but none was found");
+    }
+
     // don't roll anything back if the checkpoint can not be found
     if let Some(cp) = graph_checkpoint.as_ref() {
         if !s3_key_exists(
@@ -418,21 +484,54 @@ async fn exec_setup(
     hawk_networking.control_channel().await?.sync().await?;
 
     if let Some(cp) = graph_checkpoint.as_ref() {
-        maybe_rollback_iris_db(
-            cp,
-            &graph_store_arc,
-            &iris_store,
-            last_indexed_id,
-            last_indexed_modification_id,
-        )
-        .await?;
+        match args.delta_mode {
+            DeltaMode::Modifications => {
+                maybe_rollback_iris_db(
+                    cp,
+                    &graph_store_arc,
+                    &iris_store,
+                    last_indexed_id,
+                    last_indexed_modification_id,
+                )
+                .await?;
+            }
+            DeltaMode::VersionJoin => {
+                // Reset all HNSW-schema state to the checkpoint: trim the iris
+                // tail, restore cursors, clear the WAL and modifications table.
+                reset_to_checkpoint(
+                    cp,
+                    &graph_store_arc,
+                    &hnsw_iris_store,
+                    last_indexed_id,
+                    args.base_checkpoint_hash.is_some(),
+                )
+                .await?;
+            }
+        }
     }
 
-    // update if the iris db was rolled back
+    // update if the iris db was rolled back / reset
     let last_indexed_id = graph_checkpoint
         .as_ref()
         .map(|x| x.last_indexed_iris_id)
         .unwrap_or(last_indexed_id);
+
+    // Version-join: re-fetch the modification list with the checkpoint cursor
+    // (NOT the persistent_state cursor, which hawk-main overwrites from a
+    // different id-space). Used only for the comparison log; the join sets drive
+    // the actual work.
+    if args.delta_mode == DeltaMode::VersionJoin {
+        if let Some(cp) = graph_checkpoint.as_ref() {
+            let (mods, _) = get_iris_modifications(
+                &iris_store,
+                cp.last_indexed_modification_id,
+                last_indexed_id,
+            )
+            .await?;
+            max_modification_id = mods.last().map_or(0, |m| m.id);
+            modifications = mods;
+        }
+    }
 
     // Bail if stores are inconsistent.
     validate_consistency_of_stores(config, &iris_store, args.max_indexation_id, last_indexed_id)
@@ -695,6 +794,338 @@ async fn exec_delta(
             Err(err)
         }
     }
+}
+
+/// Apply the version-join delta: reconcile the graph and HNSW iris store to the
+/// source by `(serial → version)` comparison against the base checkpoint.
+///
+/// The base checkpoint has already been loaded into the in-memory graph and the
+/// HNSW schema reset to it (see `reset_to_checkpoint`). This computes the two
+/// diff sets, applies store repairs directly (no MPC), then replays the stale
+/// graph nodes via the Hawk handle.
+#[allow(clippy::too_many_arguments)]
+async fn exec_delta_version_join(
+    config: &Config,
+    ctx: &ExecutionContextInfo,
+    graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
+    s3_client: &S3Client,
+    registries: &BothEyes<VectorIdRegistryRef>,
+    worker_pools: &BothEyes<Arc<dyn IrisWorkerPool>>,
+    hnsw_iris_store: &IrisStore,
+    imem_graph_stores: &Arc<BothEyes<GraphRef>>,
+    mut hawk_handle: GenesisHawkHandle,
+    tx_results: &Sender<JobResult>,
+    task_monitor_bg: &mut TaskMonitor,
+    shutdown_handler: &Arc<ShutdownHandler>,
+) -> Result<GenesisHawkHandle> {
+    // S_cp: the checkpoint's last indexed iris id (ctx.last_indexed_id was set
+    // to it during reset). Serials are compared over 1..=S_cp.
+    let max_serial = ctx.last_indexed_id;
+    let excluded: HashSet<SerialId> = ctx.excluded_serial_ids.iter().copied().collect();
+
+    let res: Result<bool> = async {
+        // 1. Build the three (serial -> version) maps per eye and compute the plan.
+        //    hnsw_versions is a single DB scan (one iris row covers both eyes).
+        let hnsw_versions = gather_hnsw_versions(hnsw_iris_store, max_serial).await?;
+
+        let mut plans: [Option<VersionJoinPlan>; 2] = [None, None];
+        for side in [LEFT, RIGHT] {
+            let graph_versions = gather_graph_versions(&imem_graph_stores[side]).await;
+            let source_versions = gather_source_versions(&registries[side], max_serial).await;
+            plans[side] = Some(compute_version_join(
+                &graph_versions,
+                &source_versions,
+                &hnsw_versions,
+                &excluded,
+                max_serial,
+            ));
+        }
+        let [left_plan, right_plan] = plans;
+        let left_plan = left_plan.expect("LEFT plan computed");
+        let right_plan = right_plan.expect("RIGHT plan computed");
+        if left_plan != right_plan {
+            bail!("version-join plans differ across eyes; source/graph state is inconsistent");
+        }
+        let plan = left_plan;
+
+        // 2. Comparison log (join vs modifications) + metrics.
+        log_version_join_comparison(&plan, &ctx.modifications);
+
+        // 3. Store repairs first (no MPC, no in-flight results work yet).
+        apply_store_repairs(&plan, registries, worker_pools, hnsw_iris_store).await?;
+
+        // 4. Graph replays: submit one serial at a time, syncing periodically.
+        if !plan.graph_replay.is_empty() {
+            metrics::gauge!("genesis_number_version_replays").set(plan.graph_replay.len() as f64);
+            let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
+            let end = plan.graph_replay.len().saturating_sub(1);
+            let mut now = Instant::now();
+            for (idx, serial) in plan.graph_replay.iter().enumerate() {
+                let request = JobRequest::new_version_replay(*serial);
+                let result_future = hawk_handle.submit_request(request).await;
+                let result =
+                    timeout(processing_timeout, result_future)
+                        .await
+                        .map_err(|err| {
+                            tracing::error!("HawkActor processing timeout: {:?}", err);
+                            eyre!("HawkActor processing timeout: {:?}", err)
+                        })??;
+
+                let (done_rx, result) = result;
+                tx_results.send(result).await?;
+                shutdown_handler.increment_batches_pending_completion();
+
+                let is_sync_batch = idx % (PERSIST_DELAY - 1) == 0 || idx == end;
+                if is_sync_batch {
+                    let wait_start = Instant::now();
+                    hawk_handle.sync_state(false, Some(done_rx)).await?;
+                    metrics::histogram!("genesis_persist_wait_duration")
+                        .record(wait_start.elapsed().as_secs_f64());
+                }
+                metrics::histogram!("genesis_version_replay_total_duration",
+                    "synced" => if is_sync_batch { "true" } else { "false" })
+                .record(now.elapsed().as_secs_f64());
+                now = Instant::now();
+            }
+        }
+
+        Ok(!plan.graph_replay.is_empty())
+    }
+    .await;
+
+    match res {
+        Ok(graph_changed) => {
+            tracing::info!("Waiting for version replays to be processed...");
+            let _ = shutdown_handler.wait_for_pending_batches_completion().await;
+            tracing::info!("All version replays have been processed");
+
+            // Single end-of-delta cursor write (no per-replay cursor writes):
+            // set to the global max persisted+completed source modification id so
+            // future Modifications-mode runs start from a sane cursor.
+            tracing::info!(
+                "Setting last indexed modification id to {}",
+                ctx.max_modification_persist_id
+            );
+            let mut graph_tx = graph_store.tx().await?;
+            set_last_indexed_modification_id(&mut graph_tx.tx, ctx.max_modification_persist_id)
+                .await?;
+            graph_tx.tx.commit().await?;
+
+            // S3 checkpoint after delta, only if the graph changed (store repairs
+            // do not touch the graph, so the base checkpoint still represents it).
+            if graph_changed {
+                tracing::info!("Creating S3 checkpoint after version-join delta...");
+                upload_and_sync_genesis_checkpoint(
+                    &config.graph_checkpoint_bucket_name,
+                    ctx.config.party_id,
+                    imem_graph_stores,
+                    s3_client,
+                    ctx.last_indexed_id,
+                    ctx.max_modification_persist_id,
+                    true, // is_archival
+                    tx_results,
+                    &mut hawk_handle,
+                )
+                .await?;
+                tracing::info!("S3 checkpoint created after version-join delta");
+            }
+
+            Ok(hawk_handle)
+        }
+        Err(err) => {
+            tracing::error!(
+                "HawkActor processing error while applying version-join delta: {:?}",
+                err
+            );
+            tracing::info!("Initiating shutdown");
+            drop(hawk_handle);
+            task_monitor_bg.abort_all();
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            task_monitor_bg.check_tasks_finished();
+            Err(err)
+        }
+    }
+}
+
+/// Scan the HNSW iris store's `(serial → version)` index over `1..=max_serial`.
+async fn gather_hnsw_versions(
+    hnsw_iris_store: &IrisStore,
+    max_serial: SerialId,
+) -> Result<HashMap<SerialId, i16>> {
+    use futures::TryStreamExt;
+    let rows: Vec<(i64, i16)> = hnsw_iris_store
+        .stream_iris_ids(max_serial as usize)
+        .try_collect()
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, version)| (id as SerialId, version))
+        .collect())
+}
+
+/// Build the graph's `(serial → max version)` map from layer-0 node keys.
+async fn gather_graph_versions(graph_ref: &GraphRef) -> HashMap<SerialId, i16> {
+    let graph = graph_ref.read().await;
+    if graph.layers.is_empty() {
+        return HashMap::new();
+    }
+    max_version_per_serial(
+        graph.layers[0]
+            .links
+            .keys()
+            .map(|v| (v.serial_id(), v.version_id())),
+    )
+}
+
+/// Build the source `(serial → version)` map from the registry (no DB scan).
+async fn gather_source_versions(
+    registry: &VectorIdRegistryRef,
+    max_serial: SerialId,
+) -> HashMap<SerialId, i16> {
+    let reg = registry.read().await;
+    let mut out = HashMap::new();
+    for serial in 1..=max_serial {
+        if let Some(version) = reg.get_current_version(serial) {
+            out.insert(serial, version);
+        }
+    }
+    out
+}
+
+/// Log the join-gated set against the modification-gated set (§4) and emit the
+/// per-class metric gauges. The per-party set hashes are the operational
+/// cross-party check for the `store_repair` set (which is derived from purely
+/// local HNSW state and so is not covered by graph checksums).
+fn log_version_join_comparison(plan: &VersionJoinPlan, modifications: &[Modification]) {
+    const SAMPLE: usize = 50;
+
+    let join_set: HashSet<SerialId> = plan.graph_replay.iter().copied().collect();
+    let mod_set: HashSet<SerialId> = modifications
+        .iter()
+        .filter_map(|m| m.serial_id.map(|s| s as SerialId))
+        .collect();
+
+    let intersection = join_set.intersection(&mod_set).count();
+    let mut mod_only: Vec<SerialId> = mod_set.difference(&join_set).copied().collect();
+    let mut join_only: Vec<SerialId> = join_set.difference(&mod_set).copied().collect();
+    let mut mod_all: Vec<SerialId> = mod_set.iter().copied().collect();
+    mod_only.sort_unstable();
+    join_only.sort_unstable();
+    mod_all.sort_unstable();
+
+    let hash_of = |serials: &[SerialId]| -> u64 {
+        let mut h = SetHash::default();
+        for s in serials {
+            h.add_unordered(*s);
+        }
+        h.checksum()
+    };
+    let sample = |v: &[SerialId]| v[..v.len().min(SAMPLE)].to_vec();
+
+    tracing::info!(
+        "version-join comparison: join_set={} mod_set={} intersection={} mod_only={} join_only={} \
+         store_repair={} anomalies={} | join_hash={} mod_hash={} store_repair_hash={} | \
+         mod_only_sample={:?} join_only_sample={:?} store_repair_sample={:?}",
+        join_set.len(),
+        mod_set.len(),
+        intersection,
+        mod_only.len(),
+        join_only.len(),
+        plan.store_repair.len(),
+        plan.anomalies.total(),
+        hash_of(&plan.graph_replay),
+        hash_of(&mod_all),
+        hash_of(&plan.store_repair),
+        sample(&mod_only),
+        sample(&join_only),
+        sample(&plan.store_repair),
+    );
+
+    if plan.anomalies.total() > 0 {
+        tracing::error!(
+            "version-join anomalies: graph_ahead={:?} graph_missing={:?} missing_hnsw_row={:?} \
+             source_missing={:?}",
+            sample(&plan.anomalies.graph_ahead),
+            sample(&plan.anomalies.graph_missing),
+            sample(&plan.anomalies.missing_hnsw_row),
+            sample(&plan.anomalies.source_missing),
+        );
+    }
+
+    metrics::gauge!("genesis_version_join_graph_replay_count").set(plan.graph_replay.len() as f64);
+    metrics::gauge!("genesis_version_join_store_repair_count").set(plan.store_repair.len() as f64);
+    metrics::gauge!("genesis_version_join_mod_only_count").set(mod_only.len() as f64);
+    metrics::gauge!("genesis_version_join_join_only_count").set(join_only.len() as f64);
+    metrics::gauge!("genesis_version_join_anomaly_count").set(plan.anomalies.total() as f64);
+}
+
+/// Overwrite the HNSW iris rows in `store_repair` from the worker pools (source
+/// content). Rows missing entirely are INSERTed; present rows are UPDATEd.
+/// Chunked to bound transaction size; safe as direct writes because the results
+/// thread has no in-flight work when this runs.
+async fn apply_store_repairs(
+    plan: &VersionJoinPlan,
+    registries: &BothEyes<VectorIdRegistryRef>,
+    worker_pools: &BothEyes<Arc<dyn IrisWorkerPool>>,
+    hnsw_iris_store: &IrisStore,
+) -> Result<()> {
+    if plan.store_repair.is_empty() {
+        return Ok(());
+    }
+    let missing: HashSet<SerialId> = plan.missing_hnsw_rows.iter().copied().collect();
+    const CHUNK: usize = 1024;
+
+    for chunk in plan.store_repair.chunks(CHUNK) {
+        // Resolve current vector ids from the LEFT registry (versions are equal
+        // across eyes, asserted by the plan equality check).
+        let maybe_vids = registries[LEFT].get_vector_ids(chunk).await;
+        let mut vids: Vec<VectorId> = Vec::with_capacity(chunk.len());
+        for (serial, maybe) in chunk.iter().zip(maybe_vids) {
+            let vid =
+                maybe.ok_or_else(|| eyre!("store_repair serial {serial} missing from registry"))?;
+            vids.push(vid);
+        }
+
+        let (left_data, right_data) = tokio::try_join!(
+            worker_pools[LEFT].fetch_irises(vids.clone()),
+            worker_pools[RIGHT].fetch_irises(vids.clone()),
+        )?;
+
+        let mut tx = hnsw_iris_store.tx().await?;
+        let mut insert_vids: Vec<VectorId> = Vec::new();
+        let mut insert_refs: Vec<StoredIrisRef> = Vec::new();
+        for (i, vid) in vids.iter().enumerate() {
+            let left_iris = &left_data[i];
+            let right_iris = &right_data[i];
+            let iris_ref = StoredIrisRef {
+                id: vid.serial_id() as i64,
+                left_code: &left_iris.code.coefs,
+                left_mask: &left_iris.mask.coefs,
+                right_code: &right_iris.code.coefs,
+                right_mask: &right_iris.mask.coefs,
+            };
+            if missing.contains(&vid.serial_id()) {
+                insert_vids.push(*vid);
+                insert_refs.push(iris_ref);
+            } else {
+                hnsw_iris_store
+                    .update_iris_with_version_id(Some(&mut tx), vid.version_id(), &iris_ref)
+                    .await?;
+            }
+        }
+        if !insert_vids.is_empty() {
+            hnsw_iris_store
+                .insert_copy_irises(&mut tx, &insert_vids, &insert_refs)
+                .await?;
+        }
+        tx.commit().await?;
+    }
+    tracing::info!(
+        "version-join applied {} store repairs ({} inserts)",
+        plan.store_repair.len(),
+        plan.missing_hnsw_rows.len()
+    );
+    Ok(())
 }
 
 /// Index Iris's from last indexation id.
@@ -1314,6 +1745,49 @@ async fn get_results_thread(
                     let _ = done_tx.send(());
                     shutdown_handler_bg.decrement_batches_pending_completion();
                 },
+                JobResult::VersionReplay {
+                    vector_id_to_persist,
+                    done_tx,
+                } => {
+                    tracing::info!(
+                        "Job Results :: Received version replay for serial-id={}",
+                        vector_id_to_persist.serial_id()
+                    );
+                    let (left_irises, right_irises) = tokio::try_join!(
+                        worker_pools[LEFT].fetch_irises(vec![vector_id_to_persist]),
+                        worker_pools[RIGHT].fetch_irises(vec![vector_id_to_persist]),
+                    )?;
+                    let left_iris = &left_irises[0];
+                    let right_iris = &right_irises[0];
+
+                    let mut graph_tx = graph_store_bg.tx().await?;
+                    let iris_data = StoredIrisRef {
+                        id: vector_id_to_persist.serial_id() as i64,
+                        left_code: &left_iris.code.coefs,
+                        left_mask: &left_iris.mask.coefs,
+                        right_code: &right_iris.code.coefs,
+                        right_mask: &right_iris.mask.coefs,
+                    };
+                    // No modification-id cursor write here: version replays have
+                    // no modification id, and a synthetic value would regress the
+                    // cursor. The end-of-delta cursor write handles it once.
+                    hnsw_iris_store
+                        .update_iris_with_version_id(
+                            Some(&mut graph_tx.tx),
+                            vector_id_to_persist.version_id(),
+                            &iris_data,
+                        )
+                        .await?;
+                    graph_tx.tx.commit().await?;
+
+                    tracing::info!(
+                        "Job Results :: Persisted version replay for serial-id={}",
+                        vector_id_to_persist.serial_id()
+                    );
+
+                    let _ = done_tx.send(());
+                    shutdown_handler_bg.decrement_batches_pending_completion();
+                }
                 JobResult::S3Checkpoint{checkpoint_state, done_tx} => {
                     let graph_tx = graph_store_bg.tx().await?;
                     save_checkpoint_state(graph_tx, &checkpoint_state).await?;

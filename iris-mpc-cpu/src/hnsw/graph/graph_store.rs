@@ -505,6 +505,27 @@ impl<'b, V: VectorStore> GraphTx<'b, V> {
 
         Ok(())
     }
+
+    /// Delete every row from `hawk_graph_mutations`. Used when resetting the
+    /// HNSW schema to a checkpoint: the WAL must not carry mutations that
+    /// post-date the base.
+    pub async fn clear_hawk_graph_mutations(&mut self) -> Result<()> {
+        sqlx::query("DELETE FROM hawk_graph_mutations")
+            .execute(self.tx.deref_mut())
+            .await?;
+        Ok(())
+    }
+
+    /// Delete `genesis_graph_checkpoint` rows whose `last_indexed_iris_id` is
+    /// strictly greater than the pinned checkpoint's. Abandoned-lineage entries
+    /// left by prior runs must not win the next run's latest-common selection.
+    pub async fn delete_checkpoints_after(&mut self, last_indexed_iris_id: u32) -> Result<()> {
+        sqlx::query("DELETE FROM genesis_graph_checkpoint WHERE last_indexed_iris_id > $1")
+            .bind(i64::from(last_indexed_iris_id))
+            .execute(self.tx.deref_mut())
+            .await?;
+        Ok(())
+    }
 }
 
 pub mod test_utils {

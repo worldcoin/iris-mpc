@@ -2,13 +2,14 @@ use super::hawk_job::{Job, JobRequest, JobResult, SYNC_DONE, SYNC_ERROR, SYNC_RU
 use crate::{
     execution::hawk_main::{
         insert::insert, iris_worker::QueryId, scheduler::parallelize,
-        search::search_single_query_no_match_count, BothEyes, HawkActor, HawkSession, LEFT, RIGHT,
-        STORE_IDS,
+        search::search_single_query_no_match_count, BothEyes, HawkActor, HawkSession, StoreId,
+        LEFT, RIGHT, STORE_IDS,
     },
     hawkers::aby3::aby3_store::Aby3Query,
+    hnsw::HnswSearcher,
 };
 use eyre::{bail, eyre, OptionExt, Result};
-use iris_mpc_common::helpers::smpc_request;
+use iris_mpc_common::{helpers::smpc_request, VectorId};
 use itertools::{izip, Itertools};
 use std::{
     future::Future,
@@ -97,6 +98,55 @@ impl Handle {
 
         Ok(Self { job_queue: tx })
     }
+}
+
+/// Re-search and re-insert `vector_id` for one eye: fetch the iris from the
+/// worker pool, cache it, search for insertion links, and insert the node into
+/// the in-memory store and graph. Shared by the modification-replay and
+/// version-replay job arms. Returns the inserted `VectorId`.
+async fn replay_serial_for_side(
+    session: &HawkSession,
+    searcher: &HnswSearcher,
+    side: StoreId,
+    vector_id: VectorId,
+) -> Result<VectorId> {
+    let identifier = (vector_id, side);
+
+    // TODO remove any prior versions of this vector id from graph
+
+    // Fetch the iris from the worker pool and cache it before search.
+    let query_id = QueryId::new();
+    let irises = {
+        let store = session.aby3_store.read().await;
+        store.workers.fetch_irises(vec![vector_id]).await?
+    };
+    {
+        let store = session.aby3_store.read().await;
+        store
+            .workers
+            .cache_queries(vec![(query_id, irises.into_iter().next().unwrap())])
+            .await?;
+    }
+    let query = Aby3Query::new(query_id);
+    let insert_plan =
+        search_single_query_no_match_count(session.clone(), query, searcher, &identifier).await?;
+    let plans = vec![Some(insert_plan)];
+    let ids = vec![Some(vector_id)];
+
+    let mut store = session.aby3_store.write().await;
+    let mut graph = session.graph_store.write().await;
+
+    let replace_ids = vec![None; plans.len()];
+    let (_connect_plan, _inserted_id) =
+        insert(&mut *store, &mut graph, searcher, plans, &ids, &replace_ids).await?;
+
+    // Evict the cached query now that search + insert are done.
+    // Use the workers reference from the already-held write guard: the query
+    // cache uses its own internal lock, independent of the aby3_store RwLock.
+    // Acquiring a second `read()` here would deadlock against the `write()` guard.
+    store.workers.evict_queries(vec![query_id]).await?;
+
+    Ok(vector_id)
 }
 
 /// Methods.
@@ -281,56 +331,7 @@ impl Handle {
                                     let vector_id = vector_id_.ok_or_eyre(
                                         "Expected vector serial id of update is missing from store",
                                     )?;
-                                    let identifier = (vector_id, side);
-
-                                    // TODO remove any prior versions of this vector id from graph
-
-                                    // Fetch the iris from the worker pool and cache it before search.
-                                    let query_id = QueryId::new();
-                                    let irises = {
-                                        let store = session.aby3_store.read().await;
-                                        store.workers.fetch_irises(vec![vector_id]).await?
-                                    };
-                                    {
-                                        let store = session.aby3_store.read().await;
-                                        store
-                                            .workers
-                                            .cache_queries(vec![(query_id, irises.into_iter().next().unwrap())])
-                                            .await?;
-                                    }
-                                    let query = Aby3Query::new(query_id);
-                                    let insert_plan = search_single_query_no_match_count(
-                                        session.clone(),
-                                        query,
-                                        &searcher,
-                                        &identifier,
-                                    )
-                                    .await?;
-                                    let plans = vec![Some(insert_plan)];
-                                    let ids = vec![Some(vector_id)];
-
-                                    let mut store = session.aby3_store.write().await;
-                                    let mut graph = session.graph_store.write().await;
-
-                                    let replace_ids = vec![None; plans.len()];
-                                    let (connect_plan, _inserted_id) = insert(
-                                        &mut *store,
-                                        &mut graph,
-                                        &searcher,
-                                        plans,
-                                        &ids,
-                                        &replace_ids,
-                                    )
-                                    .await?;
-
-                                    // Evict the cached query now that search + insert are done.
-                                    // Use the workers reference from the already-held write guard:
-                                    // the query cache uses its own internal lock, independent of
-                                    // the aby3_store RwLock. Acquiring a second `read()` here would
-                                    // deadlock against the outer `write()` guard.
-                                    store.workers.evict_queries(vec![query_id]).await?;
-
-                                    Ok((connect_plan, vector_id))
+                                    replay_serial_for_side(session, &searcher, side, vector_id).await
                                 }
                                 smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
                                     let msg = format!(
@@ -355,10 +356,7 @@ impl Handle {
                 let results_ = parallelize(jobs_per_side.into_iter()).await?;
                 let results: [_; 2] = results_.try_into().unwrap();
 
-                // Convert the results into SingleHawkMutation format
-                let [left_plans_and_vector, right_plans_and_vector] = results;
-                let left_vector = left_plans_and_vector.1;
-                let right_vector = right_plans_and_vector.1;
+                let [left_vector, right_vector] = results;
 
                 assert_eq!(left_vector.version_id(), right_vector.version_id());
                 assert_eq!(left_vector.serial_id(), right_vector.serial_id());
@@ -369,6 +367,39 @@ impl Handle {
                 Ok((
                     done_rx,
                     JobResult::new_modification_result(modification.id, left_vector, done_tx),
+                ))
+            }
+            JobRequest::VersionReplay { serial_id } => {
+                let jobs_per_side =
+                    izip!(STORE_IDS, sessions.iter()).map(|(side, sessions_side)| {
+                        let sessions = sessions_side.clone();
+                        let registry = actor.registry(side);
+                        let searcher = actor.searcher();
+
+                        async move {
+                            let session =
+                                sessions.first().ok_or_eyre("Sessions for side are empty")?;
+                            let vector_id = registry.get_vector_id(serial_id).await.ok_or_eyre(
+                                "Expected vector serial id of replay is missing from store",
+                            )?;
+                            replay_serial_for_side(session, &searcher, side, vector_id).await
+                        }
+                    });
+
+                let results_ = parallelize(jobs_per_side.into_iter()).await?;
+                let results: [_; 2] = results_.try_into().unwrap();
+
+                let [left_vector, right_vector] = results;
+
+                assert_eq!(left_vector.version_id(), right_vector.version_id());
+                assert_eq!(left_vector.serial_id(), right_vector.serial_id());
+
+                metrics::histogram!("genesis_version_replay_duration")
+                    .record(now.elapsed().as_secs_f64());
+
+                Ok((
+                    done_rx,
+                    JobResult::new_version_replay_result(left_vector, done_tx),
                 ))
             }
             JobRequest::SyncState {

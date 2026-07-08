@@ -57,6 +57,12 @@ pub enum JobRequest {
         /// Modification entry for processing.
         modification: Modification,
     },
+    /// Re-search and re-insert the current version of a serial whose graph node
+    /// is stale (version-join delta mode). Carries no modification id.
+    VersionReplay {
+        /// Serial id whose current source version is to be replayed.
+        serial_id: u32,
+    },
     /// Acts as a code barrier for inter-node synchronization.
     SyncState {
         /// Whether this node has been signaled to shut down.
@@ -80,6 +86,10 @@ impl JobRequest {
 
     pub fn new_modification(modification: Modification) -> Self {
         Self::Modification { modification }
+    }
+
+    pub fn new_version_replay(serial_id: u32) -> Self {
+        Self::VersionReplay { serial_id }
     }
 }
 
@@ -107,6 +117,12 @@ pub enum JobResult {
         modification_id: i64,
 
         /// Vector id for persistence.
+        vector_id_to_persist: VectorId,
+
+        done_tx: sync::oneshot::Sender<()>,
+    },
+    VersionReplay {
+        /// Vector id for persistence (current source version).
         vector_id_to_persist: VectorId,
 
         done_tx: sync::oneshot::Sender<()>,
@@ -156,6 +172,16 @@ impl JobResult {
         }
     }
 
+    pub(crate) fn new_version_replay_result(
+        vector_id_to_persist: VectorId,
+        done_tx: sync::oneshot::Sender<()>,
+    ) -> Self {
+        Self::VersionReplay {
+            vector_id_to_persist,
+            done_tx,
+        }
+    }
+
     pub fn new_s3_checkpoint(
         checkpoint_state: GraphCheckpointState,
         done_tx: sync::oneshot::Sender<()>,
@@ -194,6 +220,17 @@ impl fmt::Display for JobResult {
                     f,
                     "JobResult::Modification: modification-id={}",
                     modification_id
+                )
+            }
+            JobResult::VersionReplay {
+                vector_id_to_persist,
+                ..
+            } => {
+                write!(
+                    f,
+                    "JobResult::VersionReplay: serial-id={}, version-id={}",
+                    vector_id_to_persist.serial_id(),
+                    vector_id_to_persist.version_id()
                 )
             }
             JobResult::SyncState { mismatched } => {
