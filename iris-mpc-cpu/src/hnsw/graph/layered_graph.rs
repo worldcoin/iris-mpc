@@ -25,7 +25,7 @@ use serde::{
     Deserialize, Serialize,
 };
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt::Display,
     iter::once,
     path::PathBuf,
@@ -105,10 +105,13 @@ impl NodeInit {
 /// added) and a stamp `> old_seq` means content-refreshed (reauthed) since the
 /// edge was certified — either way the edge is dropped.
 ///
-/// Used on every apply (the filter-on-bump in `GraphMem::edit_neighborhood`)
-/// and at read time ([`GraphMem::get_active_links`]) — the lazy realization of the
-/// abstract semantics that removing or re-inserting a node invalidates every
-/// edge incident to it (see `model.rs`).
+/// One discipline, three anchors: edits filter against the neighborhood's old
+/// certificate (the filter-on-bump in `GraphMem::edit_neighborhood`), reads
+/// against its current one ([`GraphMem::get_active_links`]), and every apply
+/// resolves the record's references against the record's `as_of`
+/// ([`GraphMem::resolve_ops`]) — the lazy realization of the abstract
+/// semantics that removing or re-inserting a node invalidates every edge
+/// incident to it (see `model.rs`).
 ///
 /// Replay re-evaluates this predicate. Changes that preserve the abstract
 /// graph (`model.rs`) replay old segments safely and need no WAL migration —
@@ -353,32 +356,34 @@ impl GraphMem {
         }
     }
 
-    /// Applies a replayed (WAL/checkpoint) mutation to the in-memory graph.
+    /// Applies a mutation record to the in-memory graph.
     ///
-    /// Replay runs the same apply as minting ([`Self::apply_new`]); staleness
-    /// cleanup (see [`is_active`]) re-derives from the graph state rather
-    /// than being recorded.
+    /// The one apply path: minting ([`Self::apply_new`]) and replay both land
+    /// here. The record's edge references are first resolved against the
+    /// current graph state at the record's `as_of` ([`Self::resolve_ops`]);
+    /// staleness cleanup (see [`is_active`]) likewise re-derives from graph
+    /// state. Replay reaches the same state the mint produced because both
+    /// evaluate the same predicates over the same replayed history.
     ///
     /// The supplied `mutation.seq_no` must be strictly greater than
     /// `self.last_update_seq_no`; otherwise the call returns `Err` without
     /// touching the graph. On success `self.last_update_seq_no` advances to
     /// `mutation.seq_no`.
     pub fn insert_apply(&mut self, mutation: &GraphMutation) -> Result<()> {
-        self.apply_ops(mutation.seq_no, &mutation.ops)
+        self.apply_ops(mutation.seq_no, mutation.as_of, &mutation.ops)
     }
 
-    /// Shared two-pass apply: node ops, then edge ops. Every touched
-    /// neighborhood is filtered through [`is_active`] before the op's own edit
-    /// (filter-on-bump), so a re-stamped freshness certificate never covers an
-    /// invalid edge.
+    /// Shared apply: resolve the record's references at its `as_of`
+    /// ([`Self::resolve_ops`]), then two passes — node ops, then edge ops.
+    /// Every touched neighborhood is filtered through [`is_active`] before
+    /// the op's own edit (filter-on-bump), so a re-stamped freshness
+    /// certificate never covers an invalid edge.
     ///
-    /// Causal construction: an `AddEdges` op must not reference a target
-    /// created *later* — in a following mutation. The edge is stamped at this
-    /// tick while the target's content clock is minted at its own (later)
-    /// insertion, so [`is_active`] treats it as stale and drops it at read
-    /// time. Insert all endpoints before wiring edges between them; debug
-    /// builds assert it.
-    fn apply_ops(&mut self, seq_no: u64, ops: &[MutationOp]) -> Result<()> {
+    /// Causal construction: an `AddEdges` reference to a target created
+    /// *later* — in a following mutation — is not yet in the content clock,
+    /// so resolution drops it. Insert all endpoints before wiring edges
+    /// between them; debug builds assert it.
+    fn apply_ops(&mut self, seq_no: u64, as_of: u64, ops: &[MutationOp]) -> Result<()> {
         if seq_no <= self.last_update_seq_no {
             return Err(eyre::eyre!(
                 "GraphMem::apply_ops: mutation seq_no {} is not strictly greater than \
@@ -387,6 +392,11 @@ impl GraphMem {
                 self.last_update_seq_no,
             ));
         }
+        debug_assert!(
+            as_of < seq_no,
+            "record as_of {as_of} is not before its own seq_no {seq_no}",
+        );
+        let ops = self.resolve_ops(as_of, ops);
 
         // One monotonic tick for this mutation: node creation (Pass 1) and edge
         // edits (Pass 2) both stamp neighborhoods with it, so every live seq_no
@@ -553,9 +563,10 @@ impl GraphMem {
     }
 
     /// Stamp a locally-built [`UnstampedMutation`] with the next sequence
-    /// number, apply it, and return the resulting [`GraphMutation`] with the
-    /// ops unchanged; replaying it ([`Self::insert_apply`]) runs the
-    /// identical apply.
+    /// number and apply it, returning the [`GraphMutation`] record carrying
+    /// the ops and `as_of` verbatim. Stamping adds nothing but the sequence
+    /// number: reference resolution happens inside the apply
+    /// ([`Self::insert_apply`]), identically here and on replay.
     ///
     /// This is the sole minter of sequence numbers for in-process mutations:
     /// the number is assigned from `next_sequence_number()` and consumed by the
@@ -565,12 +576,91 @@ impl GraphMem {
     /// go through `insert_apply`/`insert_apply_all` instead, where the strict
     /// monotonicity check guards the externally-supplied `seq_no`.
     pub fn apply_new(&mut self, mutation: UnstampedMutation) -> Result<GraphMutation> {
-        let seq_no = self.next_sequence_number();
-        self.apply_ops(seq_no, &mutation.ops)?;
-        Ok(GraphMutation {
-            seq_no,
+        let record = GraphMutation {
+            seq_no: self.next_sequence_number(),
+            as_of: mutation.as_of,
             ops: mutation.ops,
-        })
+        };
+        self.insert_apply(&record)?;
+        Ok(record)
+    }
+
+    /// Resolve a record's edge references, identified at `as_of`, against the
+    /// current graph: the same staleness discipline as reads
+    /// ([`Self::get_active_links`]) and edits ([`Self::edit_neighborhood`]),
+    /// applied to the record itself on every apply. A referenced serial is
+    /// *void* if it is not [`is_active`] at `as_of` — removed, or
+    /// content-refreshed after identification — unless this record's own
+    /// `AddNode` creates it (freshness-at-creation). Void `neighbors` are
+    /// dropped from their op; an op whose `base` is void is dropped entirely,
+    /// since its ranking belonged to content that no longer exists. For
+    /// `RemoveEdges` a void target's removal is skipped: the ranked edge is
+    /// already invalid, and a fresh edge to the target's new content is not
+    /// this record's to evict.
+    ///
+    /// Node ops pass through untouched. The resolved ops all satisfy the
+    /// spec preconditions (`model.rs`) at apply time. Deterministic in the
+    /// graph state, so replay resolves each record exactly as its mint did.
+    fn resolve_ops(&self, as_of: u64, ops: &[MutationOp]) -> Vec<MutationOp> {
+        let minted: HashSet<SerialId> = ops
+            .iter()
+            .filter_map(|op| match op {
+                MutationOp::AddNode { id, .. } => Some(id.serial_id()),
+                _ => None,
+            })
+            .collect();
+        let fresh = |z: &SerialId| minted.contains(z) || is_active(&self.node_init, *z, as_of);
+
+        let mut dropped = 0usize;
+        // The surviving refs of one op half, or `None` if the op is void.
+        let mut filter_refs = |base: &SerialId, neighbors: &[SerialId]| {
+            if !fresh(base) {
+                dropped += neighbors.len();
+                return None;
+            }
+            let kept: Vec<SerialId> = neighbors.iter().copied().filter(|z| fresh(z)).collect();
+            dropped += neighbors.len() - kept.len();
+            (!kept.is_empty()).then_some(kept)
+        };
+
+        let mut resolved = Vec::with_capacity(ops.len());
+        for op in ops {
+            let resolved_op = match op {
+                MutationOp::AddNode { .. } | MutationOp::RemoveNode { .. } => Some(op.clone()),
+                MutationOp::AddEdges {
+                    base,
+                    neighbors,
+                    layer,
+                    edge_type,
+                } => filter_refs(base, neighbors).map(|neighbors| MutationOp::AddEdges {
+                    base: *base,
+                    neighbors,
+                    layer: *layer,
+                    edge_type: edge_type.clone(),
+                }),
+                MutationOp::RemoveEdges {
+                    base,
+                    neighbors,
+                    layer,
+                    edge_type,
+                } => filter_refs(base, neighbors).map(|neighbors| MutationOp::RemoveEdges {
+                    base: *base,
+                    neighbors,
+                    layer: *layer,
+                    edge_type: edge_type.clone(),
+                }),
+            };
+            resolved.extend(resolved_op);
+        }
+        if dropped > 0 {
+            metrics::counter!("graph_resolution_dropped_refs").increment(dropped as u64);
+            warn!(
+                "resolution dropped {dropped} edge ref(s) identified at seq {as_of} \
+                 (graph at {})",
+                self.last_update_seq_no,
+            );
+        }
+        resolved
     }
 
     pub fn insert_apply_all(&mut self, mutations: &[GraphMutation]) -> Result<()> {
@@ -1328,7 +1418,7 @@ mod tests {
         for raw_query in IrisDB::new_random_rng(20, &mut rng).db {
             let query = Arc::new(raw_query);
             let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
-            let (neighbors, update_ep) = searcher
+            let (neighbors, update_ep, as_of) = searcher
                 .search_to_insert(&mut vector_store, &graph_store, &query, insertion_layer)
                 .await?;
             let inserted = vector_store.insert(&query).await;
@@ -1339,6 +1429,7 @@ mod tests {
                     inserted,
                     neighbors,
                     update_ep,
+                    as_of,
                 )
                 .await?;
 
@@ -1395,6 +1486,7 @@ mod tests {
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 1,
+                as_of: 0,
                 ops: vec![
                     MutationOp::AddNode {
                         id: a,
@@ -1417,6 +1509,7 @@ mod tests {
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 2,
+                as_of: 1,
                 ops: vec![MutationOp::AddEdges {
                     base: 1,
                     layer: 0,
@@ -1448,6 +1541,7 @@ mod tests {
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 1,
+                as_of: 0,
                 ops: vec![
                     MutationOp::AddNode {
                         id: a,
@@ -1470,6 +1564,7 @@ mod tests {
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 2,
+                as_of: 1,
                 ops: vec![MutationOp::AddEdges {
                     base: 1,
                     layer: 0,
@@ -1505,12 +1600,14 @@ mod tests {
         // seq 1: insert a and b.
         graph
             .apply_new(UnstampedMutation {
+                as_of: graph.last_update_seq_no,
                 ops: vec![node(a), node(b)],
             })
             .unwrap();
         // seq 2: asymmetric forward edge a -> b only; b's list stays empty.
         graph
             .apply_new(UnstampedMutation {
+                as_of: graph.last_update_seq_no,
                 ops: vec![MutationOp::AddEdges {
                     base: 1,
                     layer: 0,
@@ -1528,6 +1625,7 @@ mod tests {
         // cleanup), so a -> b survives — then AddNode(b) advances content[b] to 3.
         graph
             .apply_new(UnstampedMutation {
+                as_of: graph.last_update_seq_no,
                 ops: vec![MutationOp::RemoveNode { id: b }, node(b)],
             })
             .unwrap();
@@ -1542,7 +1640,10 @@ mod tests {
         // runs against a's prior seq (2) and drops a -> b (content[b] = 3 > 2)
         // before appending d.
         graph
-            .apply_new(UnstampedMutation { ops: vec![node(d)] })
+            .apply_new(UnstampedMutation {
+                as_of: graph.last_update_seq_no,
+                ops: vec![node(d)],
+            })
             .unwrap();
         let touch = MutationOp::AddEdges {
             base: 1,
@@ -1552,6 +1653,7 @@ mod tests {
         };
         let minted = graph
             .apply_new(UnstampedMutation {
+                as_of: graph.last_update_seq_no,
                 ops: vec![touch.clone()],
             })
             .unwrap();
@@ -1562,6 +1664,220 @@ mod tests {
 
         // The drop is not reflected in the op list; it re-derives on replay.
         assert_eq!(minted.ops, vec![touch]);
+    }
+
+    /// Resolution: an `AddEdges` record identified before its target's
+    /// reauth must not re-point at — and certify — the target's new content.
+    /// The record carries the intent verbatim; the reference is void at every
+    /// apply, so replay reproduces the same graph.
+    #[test]
+    fn resolution_drops_edge_ref_to_target_reauthed_after_identification() {
+        let mut graph = GraphMem::new();
+        let mut wal: Vec<GraphMutation> = Vec::new();
+        let x0 = VectorId::new(1, 0);
+        let x1 = VectorId::new(1, 1);
+        let y = VectorId::from_serial_id(2);
+        let node = |id| MutationOp::AddNode {
+            id,
+            height: 1,
+            update_ep: UpdateEntryPoint::False,
+        };
+
+        // seq 1: X enters the graph.
+        wal.push(
+            graph
+                .apply_new(UnstampedMutation {
+                    as_of: graph.last_update_seq_no,
+                    ops: vec![node(x0)],
+                })
+                .unwrap(),
+        );
+        // Y's insert search identified X here.
+        let as_of = graph.last_update_seq_no;
+        // seq 2: X reauths — its content is no longer what the search saw.
+        wal.push(
+            graph
+                .apply_new(UnstampedMutation {
+                    as_of: graph.last_update_seq_no,
+                    ops: vec![MutationOp::RemoveNode { id: x1 }, node(x1)],
+                })
+                .unwrap(),
+        );
+        // seq 3: Y's insert lands with the pre-reauth identification.
+        let ops = vec![
+            node(y),
+            MutationOp::AddEdges {
+                base: 2,
+                neighbors: vec![1],
+                layer: 0,
+                edge_type: EdgeType::All,
+            },
+        ];
+        let minted = graph
+            .apply_new(UnstampedMutation {
+                as_of,
+                ops: ops.clone(),
+            })
+            .unwrap();
+
+        // The record carries the intent verbatim; the void reference is
+        // dropped at apply: no edge in either direction.
+        assert_eq!(minted.ops, ops);
+        assert_eq!(minted.as_of, as_of);
+        assert_eq!(graph.get_active_links(&2, 0), Vec::<VectorId>::new());
+        assert_eq!(graph.get_active_links(&1, 0), Vec::<VectorId>::new());
+
+        // Replay re-resolves to the identical graph.
+        wal.push(minted);
+        let mut replayed = GraphMem::new();
+        replayed.insert_apply_all(&wal).unwrap();
+        assert_eq!(graph.checksum(), replayed.checksum());
+        assert_eq!(replayed.get_active_links(&2, 0), Vec::<VectorId>::new());
+    }
+
+    /// Resolution: a `RemoveEdges` record ranked before its target's reauth
+    /// must not evict the fresh edge the reauth re-added — the removal names
+    /// the old edge, which is already gone. Replay skips it identically.
+    #[test]
+    fn resolution_skips_removal_of_edge_readded_after_identification() {
+        let mut graph = GraphMem::new();
+        let mut wal: Vec<GraphMutation> = Vec::new();
+        let x0 = VectorId::new(1, 0);
+        let x1 = VectorId::new(1, 1);
+        let y = VectorId::from_serial_id(2);
+        let node = |id| MutationOp::AddNode {
+            id,
+            height: 1,
+            update_ep: UpdateEntryPoint::False,
+        };
+
+        // seq 1: Y -> X.
+        wal.push(
+            graph
+                .apply_new(UnstampedMutation {
+                    as_of: graph.last_update_seq_no,
+                    ops: vec![
+                        node(x0),
+                        node(y),
+                        MutationOp::AddEdges {
+                            base: 2,
+                            neighbors: vec![1],
+                            layer: 0,
+                            edge_type: EdgeType::Base,
+                        },
+                    ],
+                })
+                .unwrap(),
+        );
+        // Compaction ranked Y's neighborhood and chose to evict X here.
+        let as_of = graph.last_update_seq_no;
+        // seq 2: X reauths and re-links to Y — Y -> X now points at vetted
+        // fresh content.
+        wal.push(
+            graph
+                .apply_new(UnstampedMutation {
+                    as_of: graph.last_update_seq_no,
+                    ops: vec![
+                        MutationOp::RemoveNode { id: x1 },
+                        node(x1),
+                        MutationOp::AddEdges {
+                            base: 1,
+                            neighbors: vec![2],
+                            layer: 0,
+                            edge_type: EdgeType::All,
+                        },
+                    ],
+                })
+                .unwrap(),
+        );
+        assert_eq!(graph.get_active_links(&2, 0), vec![x1]);
+
+        // seq 3: the stale-ranked eviction lands; the fresh edge survives.
+        let ops = vec![MutationOp::RemoveEdges {
+            base: 2,
+            neighbors: vec![1],
+            layer: 0,
+            edge_type: EdgeType::Base,
+        }];
+        let minted = graph
+            .apply_new(UnstampedMutation {
+                as_of,
+                ops: ops.clone(),
+            })
+            .unwrap();
+        assert_eq!(minted.ops, ops);
+        assert_eq!(graph.get_active_links(&2, 0), vec![x1]);
+
+        // Replay re-resolves to the identical graph — the fresh edge
+        // survives there too.
+        wal.push(minted);
+        let mut replayed = GraphMem::new();
+        replayed.insert_apply_all(&wal).unwrap();
+        assert_eq!(graph.checksum(), replayed.checksum());
+        assert_eq!(replayed.get_active_links(&2, 0), vec![x1]);
+    }
+
+    /// Resolution: an edge record whose *base* was reauthed after
+    /// identification is void — the ranking belonged to content that no
+    /// longer exists, so both halves are dropped (matching main, where the
+    /// VectorId-keyed neighborhood no-ops).
+    #[test]
+    fn resolution_drops_op_whose_base_reauthed_after_identification() {
+        let mut graph = GraphMem::new();
+        let mut wal: Vec<GraphMutation> = Vec::new();
+        let x0 = VectorId::new(1, 0);
+        let x1 = VectorId::new(1, 1);
+        let z = VectorId::from_serial_id(3);
+        let node = |id| MutationOp::AddNode {
+            id,
+            height: 1,
+            update_ep: UpdateEntryPoint::False,
+        };
+
+        // seq 1: X and Z.
+        wal.push(
+            graph
+                .apply_new(UnstampedMutation {
+                    as_of: graph.last_update_seq_no,
+                    ops: vec![node(x0), node(z)],
+                })
+                .unwrap(),
+        );
+        // An edge touch X <-> Z was identified here.
+        let as_of = graph.last_update_seq_no;
+        // seq 2: X reauths.
+        wal.push(
+            graph
+                .apply_new(UnstampedMutation {
+                    as_of: graph.last_update_seq_no,
+                    ops: vec![MutationOp::RemoveNode { id: x1 }, node(x1)],
+                })
+                .unwrap(),
+        );
+        // seq 3: the stale-based touch lands and is void.
+        let ops = vec![MutationOp::AddEdges {
+            base: 1,
+            neighbors: vec![3],
+            layer: 0,
+            edge_type: EdgeType::All,
+        }];
+        let minted = graph
+            .apply_new(UnstampedMutation {
+                as_of,
+                ops: ops.clone(),
+            })
+            .unwrap();
+
+        assert_eq!(minted.ops, ops);
+        assert_eq!(graph.get_active_links(&1, 0), Vec::<VectorId>::new());
+        assert_eq!(graph.get_active_links(&3, 0), Vec::<VectorId>::new());
+
+        // Replay re-resolves to the identical graph.
+        wal.push(minted);
+        let mut replayed = GraphMem::new();
+        replayed.insert_apply_all(&wal).unwrap();
+        assert_eq!(graph.checksum(), replayed.checksum());
+        assert_eq!(replayed.get_active_links(&1, 0), Vec::<VectorId>::new());
     }
 
     /// Read-path skip: `get_active_links` omits a content-stale neighbor even
@@ -1582,6 +1898,7 @@ mod tests {
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 1,
+                as_of: 0,
                 ops: vec![node(a), node(b)],
             })
             .unwrap();
@@ -1589,6 +1906,7 @@ mod tests {
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 2,
+                as_of: 1,
                 ops: vec![MutationOp::AddEdges {
                     base: 1,
                     layer: 0,
@@ -1603,6 +1921,7 @@ mod tests {
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 3,
+                as_of: 2,
                 ops: vec![MutationOp::RemoveNode { id: b }, node(b)],
             })
             .unwrap();
@@ -1633,6 +1952,7 @@ mod tests {
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 1,
+                as_of: 0,
                 ops: vec![node(a), node(b)],
             })
             .unwrap();
@@ -1640,6 +1960,7 @@ mod tests {
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 2,
+                as_of: 1,
                 ops: vec![MutationOp::AddEdges {
                     base: 1,
                     layer: 0,
@@ -1652,6 +1973,7 @@ mod tests {
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 3,
+                as_of: 2,
                 ops: vec![MutationOp::RemoveNode { id: b }],
             })
             .unwrap();
@@ -1684,6 +2006,7 @@ mod tests {
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 1,
+                as_of: 0,
                 ops: vec![node(a), node(b), node(c)],
             })
             .unwrap();
@@ -1691,6 +2014,7 @@ mod tests {
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 2,
+                as_of: 1,
                 ops: vec![MutationOp::AddEdges {
                     base: 1,
                     layer: 0,
@@ -1705,6 +2029,7 @@ mod tests {
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 3,
+                as_of: 2,
                 ops: vec![MutationOp::RemoveNode { id: b }, node(b)],
             })
             .unwrap();
@@ -1735,12 +2060,14 @@ mod tests {
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 1,
+                as_of: 0,
                 ops: vec![node(a), node(b)],
             })
             .unwrap();
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 2,
+                as_of: 1,
                 ops: vec![MutationOp::AddEdges {
                     base: 1,
                     layer: 0,
@@ -1753,6 +2080,7 @@ mod tests {
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 3,
+                as_of: 2,
                 ops: vec![MutationOp::RemoveNode { id: b }, node(b)],
             })
             .unwrap();
@@ -1790,6 +2118,7 @@ mod tests {
         // Build: node 1 spans layers 0,1 (entry point at L1); 2..=4 in layer 0.
         g.insert_apply(&GraphMutation {
             seq_no: 1,
+            as_of: 0,
             ops: vec![
                 MutationOp::AddNode {
                     id: v(1),
@@ -1808,6 +2137,7 @@ mod tests {
         // Mixed edge types at layer 0: All(1<->{2,3}) + Base(3->4).
         g.insert_apply(&GraphMutation {
             seq_no: 2,
+            as_of: 1,
             ops: vec![
                 MutationOp::AddEdges {
                     base: 1,
@@ -1831,11 +2161,13 @@ mod tests {
         // graph carries a non-uniform content clock and a removed node.
         g.insert_apply(&GraphMutation {
             seq_no: 3,
+            as_of: 2,
             ops: vec![MutationOp::RemoveNode { id: v(3) }, node(v(3))],
         })
         .unwrap();
         g.insert_apply(&GraphMutation {
             seq_no: 4,
+            as_of: 3,
             ops: vec![MutationOp::RemoveNode { id: v(4) }],
         })
         .unwrap();
@@ -1877,6 +2209,7 @@ mod tests {
         let v = VectorId::from_serial_id;
         let mut g = GraphMem::new();
         g.apply_new(UnstampedMutation {
+            as_of: g.last_update_seq_no,
             ops: (1..=6).map(|i| node(v(i))).collect(),
         })
         .unwrap();
@@ -1884,6 +2217,7 @@ mod tests {
         // ── EdgeType::Base, forward-half retain. 1 -> {2,3} forward-only, then
         // reauth 3 so 1->3 is content-stale while 1's list is untouched.
         g.apply_new(UnstampedMutation {
+            as_of: g.last_update_seq_no,
             ops: vec![MutationOp::AddEdges {
                 base: 1,
                 neighbors: vec![2, 3],
@@ -1893,6 +2227,7 @@ mod tests {
         })
         .unwrap();
         g.apply_new(UnstampedMutation {
+            as_of: g.last_update_seq_no,
             ops: vec![MutationOp::RemoveNode { id: v(3) }, node(v(3))],
         })
         .unwrap();
@@ -1909,6 +2244,7 @@ mod tests {
         };
         let minted = g
             .apply_new(UnstampedMutation {
+                as_of: g.last_update_seq_no,
                 ops: vec![teardown.clone()],
             })
             .unwrap();
@@ -1922,6 +2258,7 @@ mod tests {
         // ── EdgeType::All, back-half (target-loop) retain. 4<->5 symmetric plus
         // asymmetric 5->6; reauth 6 so 5->6 is stale.
         g.apply_new(UnstampedMutation {
+            as_of: g.last_update_seq_no,
             ops: vec![
                 MutationOp::AddEdges {
                     base: 4,
@@ -1939,6 +2276,7 @@ mod tests {
         })
         .unwrap();
         g.apply_new(UnstampedMutation {
+            as_of: g.last_update_seq_no,
             ops: vec![MutationOp::RemoveNode { id: v(6) }, node(v(6))],
         })
         .unwrap();
@@ -1954,6 +2292,7 @@ mod tests {
         };
         let minted = g
             .apply_new(UnstampedMutation {
+                as_of: g.last_update_seq_no,
                 ops: vec![teardown.clone()],
             })
             .unwrap();
@@ -1980,7 +2319,13 @@ mod tests {
     #[test]
     fn minted_stream_replays_to_identical_graph() {
         fn mint(g: &mut GraphMem, wal: &mut Vec<GraphMutation>, ops: Vec<MutationOp>) {
-            wal.push(g.apply_new(UnstampedMutation { ops }).unwrap());
+            wal.push(
+                g.apply_new(UnstampedMutation {
+                    as_of: g.last_update_seq_no,
+                    ops,
+                })
+                .unwrap(),
+            );
         }
         let node = |s: u32| MutationOp::AddNode {
             id: VectorId::from_serial_id(s),
@@ -2142,6 +2487,7 @@ mod tests {
         // Node 2 carries a non-zero version so the clock has real content.
         g.insert_apply(&GraphMutation {
             seq_no: 1,
+            as_of: 0,
             ops: vec![node(v(1)), node(VectorId::new(2, 7)), node(v(3))],
         })
         .unwrap();
@@ -2149,6 +2495,7 @@ mod tests {
 
         g.insert_apply(&GraphMutation {
             seq_no: 2,
+            as_of: 1,
             ops: vec![MutationOp::AddEdges {
                 base: 1,
                 neighbors: vec![2, 3],
@@ -2170,6 +2517,7 @@ mod tests {
 
         g.insert_apply(&GraphMutation {
             seq_no: 3,
+            as_of: 2,
             ops: vec![MutationOp::RemoveEdges {
                 base: 1,
                 neighbors: vec![2],
@@ -2202,6 +2550,7 @@ mod tests {
         // Node 1 spans layers 0,1 and is the sole entry point (at L1); 2,3 in L0.
         g.insert_apply(&GraphMutation {
             seq_no: 1,
+            as_of: 0,
             ops: vec![
                 MutationOp::AddNode {
                     id: v(1),
@@ -2216,6 +2565,7 @@ mod tests {
         // Symmetric backlinks 1<->2, 1<->3 at layer 0.
         g.insert_apply(&GraphMutation {
             seq_no: 2,
+            as_of: 1,
             ops: vec![MutationOp::AddEdges {
                 base: 1,
                 neighbors: vec![2, 3],
@@ -2228,6 +2578,7 @@ mod tests {
 
         g.insert_apply(&GraphMutation {
             seq_no: 3,
+            as_of: 2,
             ops: vec![MutationOp::RemoveNode { id: v(1) }],
         })
         .unwrap();
@@ -2262,6 +2613,7 @@ mod tests {
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 1,
+                as_of: 0,
                 ops: vec![
                     MutationOp::AddNode {
                         id: a,
@@ -2284,6 +2636,7 @@ mod tests {
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 2,
+                as_of: 1,
                 ops: vec![MutationOp::AddEdges {
                     base: 1,
                     layer: 0,
@@ -2309,6 +2662,7 @@ mod tests {
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 1,
+                as_of: 0,
                 ops: vec![
                     MutationOp::AddNode {
                         id: a,
@@ -2349,6 +2703,7 @@ mod tests {
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 2,
+                as_of: 1,
                 ops: vec![MutationOp::RemoveEdges {
                     base: 1,
                     layer: 0,
@@ -2372,6 +2727,7 @@ mod tests {
         graph
             .insert_apply(&GraphMutation {
                 seq_no: 1,
+                as_of: 0,
                 ops: vec![
                     // Listed first: an edge op that references a node not yet created.
                     MutationOp::AddEdges {
@@ -2417,6 +2773,7 @@ mod tests {
         let a = VectorId::from_serial_id(1);
         let mutation = GraphMutation {
             seq_no: 1,
+            as_of: 0,
             ops: vec![MutationOp::AddNode {
                 id: a,
                 height: 1,
@@ -2435,6 +2792,7 @@ mod tests {
         graph.last_update_seq_no = 5;
         let mutation = GraphMutation {
             seq_no: 5,
+            as_of: 4,
             ops: vec![MutationOp::AddNode {
                 id: VectorId::from_serial_id(1),
                 height: 1,
@@ -2456,6 +2814,7 @@ mod tests {
         graph.last_update_seq_no = 10;
         let mutation = GraphMutation {
             seq_no: 9,
+            as_of: 8,
             ops: vec![MutationOp::AddNode {
                 id: VectorId::from_serial_id(1),
                 height: 1,
@@ -2475,6 +2834,7 @@ mod tests {
         let mutations = vec![
             GraphMutation {
                 seq_no: 1,
+                as_of: 0,
                 ops: vec![MutationOp::AddNode {
                     id: a,
                     height: 1,
@@ -2484,6 +2844,7 @@ mod tests {
             // Equal seq_no — should fail.
             GraphMutation {
                 seq_no: 1,
+                as_of: 0,
                 ops: vec![MutationOp::AddNode {
                     id: b,
                     height: 1,

@@ -81,6 +81,7 @@ impl WalMutationBuilder {
 
             let mut mutation = GraphMutation {
                 seq_no: node_id as u64,
+                as_of: node_id as u64 - 1,
                 ops: vec![],
             };
             mutation.ops.push(MutationOp::AddNode {
@@ -143,6 +144,7 @@ impl WalMutationBuilder {
         }
         let mutation = GraphMutation {
             seq_no: node_id as u64,
+            as_of: node_id as u64 - 1,
             ops,
         };
         self.entries.insert(modification_id, mutation);

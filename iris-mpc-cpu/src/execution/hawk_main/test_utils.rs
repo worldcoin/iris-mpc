@@ -97,6 +97,7 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
             graph
                 .insert_apply(&GraphMutation {
                     seq_no: seq,
+                    as_of: (seq) - 1,
                     ops: vec![MutationOp::AddNode {
                         id: id(i),
                         height: 1,
@@ -111,6 +112,7 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
             graph
                 .insert_apply(&GraphMutation {
                     seq_no: seq,
+                    as_of: (seq) - 1,
                     ops: vec![MutationOp::AddEdges {
                         base: id(i).serial_id(),
                         layer: 0,

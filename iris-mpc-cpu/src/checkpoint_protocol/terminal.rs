@@ -220,6 +220,7 @@ mod tests {
             let mut g = eye.write().await;
             g.insert_apply(&GraphMutation {
                 seq_no: 1,
+                as_of: 0,
                 ops: vec![MutationOp::AddNode {
                     id: vid(99),
                     height: 1,
@@ -236,6 +237,7 @@ mod tests {
             for g in [&mut left, &mut right] {
                 g.insert_apply(&GraphMutation {
                     seq_no: 1,
+                    as_of: 0,
                     ops: vec![MutationOp::AddNode {
                         id: vid(1),
                         height: 1,
@@ -277,6 +279,7 @@ mod tests {
         let mut right = GraphMem::new();
         left.insert_apply(&GraphMutation {
             seq_no: 1,
+            as_of: 0,
             ops: vec![MutationOp::AddNode {
                 id: vid(7),
                 height: 2,
@@ -287,6 +290,7 @@ mod tests {
         right
             .insert_apply(&GraphMutation {
                 seq_no: 1,
+                as_of: 0,
                 ops: vec![MutationOp::AddNode {
                     id: vid(11),
                     height: 1,

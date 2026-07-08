@@ -179,6 +179,7 @@ mod tests {
     fn add_node(n: u32) -> GraphMutation {
         GraphMutation {
             seq_no: n as u64,
+            as_of: (n as u64) - 1,
             ops: vec![MutationOp::AddNode {
                 id: vid(n),
                 height: 1,

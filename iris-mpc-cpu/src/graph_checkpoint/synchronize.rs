@@ -224,6 +224,7 @@ mod tests {
         let seq_no = SEQ_COUNTER.fetch_add(1, Ordering::SeqCst);
         GraphMutation {
             seq_no,
+            as_of: seq_no - 1,
             ops: vec![MutationOp::AddNode {
                 id,
                 height: 1,

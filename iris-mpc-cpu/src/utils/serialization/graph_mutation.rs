@@ -31,8 +31,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GraphMutationFormat {
     /// V1: plain `bincode::serialize(BothEyes<Vec<GraphMutation>>)` with edge
-    /// ops carrying bare serial ids; ops record intent only (staleness cleanup
-    /// re-derives on replay).
+    /// ops carrying bare serial ids; ops record the intent verbatim, anchored
+    /// by `as_of` — reference resolution and staleness cleanup re-derive on
+    /// every apply.
     V1,
 }
 
@@ -174,6 +175,7 @@ impl From<GraphMutationV1> for GraphMutation {
     fn from(value: GraphMutationV1) -> Self {
         GraphMutation {
             seq_no: value.seq_no,
+            as_of: value.as_of,
             ops: value.ops.into_iter().map(|op| op.into()).collect(),
         }
     }
@@ -196,6 +198,7 @@ mod tests {
         let both_eyes: BothEyes<Vec<graph_mutation_v1::GraphMutationV1>> = [
             vec![graph_mutation_v1::GraphMutationV1 {
                 seq_no: 12345,
+                as_of: 12340,
                 ops: vec![
                     graph_mutation_v1::MutationOp::AddNode {
                         id: vid1.clone(),
@@ -226,6 +229,7 @@ mod tests {
         let expected: BothEyes<Vec<GraphMutation>> = [
             vec![GraphMutation {
                 seq_no: 12345,
+                as_of: 12340,
                 ops: vec![
                     MutationOp::AddNode {
                         id: VectorId::new(42, 1),

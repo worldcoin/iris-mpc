@@ -839,6 +839,7 @@ mod tests {
                     query: Aby3Query::new(QueryId::new()),
                     links: links_unstructured,
                     update_ep: UpdateEntryPoint::False,
+                    as_of: 0,
                 },
             };
             VecRotations::from(vec![

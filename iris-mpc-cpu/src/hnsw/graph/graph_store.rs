@@ -833,6 +833,7 @@ mod tests {
 
         let plan_left = GraphMutation {
             seq_no: 1,
+            as_of: 0,
             ops: vec![MutationOp::AddNode {
                 id: VectorId::from_serial_id(1),
                 height: 1,
@@ -841,6 +842,7 @@ mod tests {
         };
         let plan_right = GraphMutation {
             seq_no: 1,
+            as_of: 0,
             ops: vec![MutationOp::AddNode {
                 id: VectorId::from_serial_id(2),
                 height: 1,
@@ -859,11 +861,11 @@ mod tests {
 
         let rows = store.get_hawk_graph_mutations_after(None).await?;
         assert_eq!(rows.len(), 1);
+        // Full-record equality: this is the sole test covering the production
+        // write path (bincode of the current type) read back through the V1
+        // mirror, so it must catch any field drift between the two.
         let back = rows[0].deserialize_mutations()?;
-        assert_eq!(back[0].len(), 1);
-        assert_eq!(back[0][0].seq_no, plan_left.seq_no);
-        assert_eq!(back[1].len(), 1);
-        assert_eq!(back[1][0].seq_no, plan_right.seq_no);
+        assert_eq!(back, both);
 
         store.cleanup().await?;
         Ok(())

@@ -239,7 +239,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                     let identifier = (vector_id, side);
                     let insertion_layer = searcher.gen_layer_prf(&prf_key, &identifier)?;
 
-                    let (links, update_ep) = searcher
+                    let (links, update_ep, as_of) = searcher
                         .search_to_insert(store, graph, &query, insertion_layer)
                         .await?;
 
@@ -255,6 +255,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                         query,
                         links: links_unstructured,
                         update_ep,
+                        as_of,
                     };
 
                     insert::insert(
@@ -339,7 +340,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                 let identifier = (vector_id, side);
                 let insertion_layer = searcher.gen_layer_prf(&prf_key, &identifier)?;
 
-                let (links, update_ep) = searcher
+                let (links, update_ep, as_of) = searcher
                     .search_to_insert(store, graph, &query, insertion_layer)
                     .await?;
 
@@ -355,6 +356,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                     query,
                     links: links_unstructured,
                     update_ep,
+                    as_of,
                 };
 
                 results.push(Some(insert_plan));

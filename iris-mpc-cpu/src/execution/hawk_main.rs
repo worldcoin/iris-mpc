@@ -766,6 +766,7 @@ impl HawkActor {
                 if let Some(rid) = replace_id {
                     slot_mutations.push(GraphMutation {
                         seq_no: 0,
+                        as_of: 0,
                         ops: vec![MutationOp::RemoveNode { id: *rid }],
                     });
                 }
@@ -780,6 +781,7 @@ impl HawkActor {
                     };
                     slot_mutations.push(GraphMutation {
                         seq_no: 0,
+                        as_of: 0,
                         ops: vec![MutationOp::AddNode {
                             id: inserted_vector,
                             height: plan.plan.links.len(),
@@ -2506,6 +2508,7 @@ mod hawk_mutation_tests {
     fn create_test_connect_plan(vector_id: VectorId) -> ConnectPlan {
         GraphMutation {
             seq_no: 0,
+            as_of: 0,
             ops: vec![
                 MutationOp::AddNode {
                     id: vector_id,
@@ -2695,6 +2698,7 @@ mod hawk_mutation_tests {
     fn single_hawk_mutation_per_side_vec_round_trips() {
         let plan_a = GraphMutation {
             seq_no: 5,
+            as_of: 4,
             ops: vec![MutationOp::AddNode {
                 id: VectorId::from_serial_id(1),
                 height: 1,
@@ -2703,6 +2707,7 @@ mod hawk_mutation_tests {
         };
         let plan_b = GraphMutation {
             seq_no: 6,
+            as_of: 5,
             ops: vec![MutationOp::RemoveNode {
                 id: VectorId::from_serial_id(2),
             }],

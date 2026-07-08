@@ -4,6 +4,12 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphMutation {
     pub seq_no: u64,
+    /// Sequence number of the graph state the edge references in `ops` were
+    /// identified against (the search snapshot). Every apply — first or
+    /// replayed — resolves the references against it (see
+    /// `GraphMem::insert_apply`): the record carries the intent verbatim,
+    /// together with the context needed to resolve it.
+    pub as_of: u64,
     pub ops: Vec<MutationOp>,
 }
 
@@ -17,6 +23,15 @@ pub struct GraphMutation {
 /// graph.
 #[derive(Clone, Default, Debug, PartialEq, Eq)]
 pub struct UnstampedMutation {
+    /// Sequence number of the graph state the edge references in `ops` were
+    /// identified against (the search snapshot); carried into the stamped
+    /// record (`GraphMutation::as_of`).
+    ///
+    /// Must come from the graph read that produced the references (search or
+    /// neighborhood-ranking APIs return it alongside their results); minting
+    /// with a later seq re-certifies references against content they never
+    /// saw.
+    pub as_of: u64,
     pub ops: Vec<MutationOp>,
 }
 
@@ -43,8 +58,8 @@ pub enum MutationOp {
     },
     /// Every `base` and `neighbors` node must already exist: its `AddNode`
     /// applied in an earlier mutation, or anywhere in this op list (node ops
-    /// apply before edge ops). An edge to a not-yet-created node is treated as
-    /// stale at read time — see `GraphMem::apply_new` (causal construction).
+    /// apply before edge ops). A reference to a not-yet-created node is void
+    /// and dropped at apply (causal construction).
     ///
     /// Edge ops carry bare serials: node identity/version lives in `AddNode`/
     /// `RemoveNode` (the content-clock source), and edges only select
@@ -335,6 +350,7 @@ mod tests {
     #[test]
     fn expanded_neighborhoods_addedges_all_yields_base_and_neighbors() {
         let mutation = UnstampedMutation {
+            as_of: 0,
             ops: vec![mk_add_edges(1, vec![2, 3], 0, EdgeType::All)],
         };
         let mut got = mutation.expanded_neighborhoods();
@@ -345,6 +361,7 @@ mod tests {
     #[test]
     fn expanded_neighborhoods_addedges_base_yields_only_base() {
         let mutation = UnstampedMutation {
+            as_of: 0,
             ops: vec![mk_add_edges(1, vec![2, 3], 1, EdgeType::Base)],
         };
         assert_eq!(mutation.expanded_neighborhoods(), vec![(1, 1)]);
@@ -353,6 +370,7 @@ mod tests {
     #[test]
     fn expanded_neighborhoods_addedges_neighbors_yields_only_neighbors() {
         let mutation = UnstampedMutation {
+            as_of: 0,
             ops: vec![mk_add_edges(1, vec![2, 3], 2, EdgeType::Neighbors)],
         };
         let mut got = mutation.expanded_neighborhoods();
@@ -363,6 +381,7 @@ mod tests {
     #[test]
     fn expanded_neighborhoods_ignores_non_addedges_ops() {
         let mutation = UnstampedMutation {
+            as_of: 0,
             ops: vec![
                 MutationOp::AddNode {
                     id: VectorId::from_serial_id(1),

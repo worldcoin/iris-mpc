@@ -7,7 +7,13 @@
 //! semantics lazily; the refinement test drives both with generated mutation
 //! streams and asserts their observations agree after every mutation.
 //!
-//! Spec preconditions (asserted here, upheld by production mints): `AddEdges`
+//! A record's edge references resolve against its `as_of` (the graph seq
+//! they were identified at): a reference whose target was (re-)inserted
+//! after `as_of` is void — unless the record's own `AddNode` creates it —
+//! and an op whose `base` is void is dropped whole. The model resolves
+//! eagerly from its node-insertion times; `GraphMem::resolve_ops` must agree.
+//!
+//! Spec preconditions (asserted here, established by resolution): `AddEdges`
 //! endpoints are live at apply time (causal construction); `AddNode` targets
 //! a non-live serial (reauth = `RemoveNode` + `AddNode` in one mutation).
 
@@ -19,8 +25,9 @@ use std::collections::{BTreeMap, BTreeSet};
 /// free of laziness, clocks, and performance concerns.
 #[derive(Default)]
 pub struct ModelGraph {
-    /// Live nodes and the version their insertion carried.
-    nodes: BTreeMap<SerialId, VersionId>,
+    /// Live nodes: the version their insertion carried and the seq at which
+    /// they were (re-)inserted.
+    nodes: BTreeMap<SerialId, (VersionId, u64)>,
     /// Per-layer adjacency: node -> outgoing edge set.
     layers: Vec<BTreeMap<SerialId, BTreeSet<SerialId>>>,
     /// Entry points as (node, layer), in insertion order.
@@ -32,9 +39,69 @@ impl ModelGraph {
         Self::default()
     }
 
-    /// Apply one mutation: node ops first, then edge ops, mirroring the
-    /// two-pass order of `GraphMem::apply_ops`.
-    pub fn apply(&mut self, ops: &[MutationOp]) {
+    /// Apply one record: resolve its edge references at `as_of`, then node
+    /// ops first, edge ops second, mirroring `GraphMem::apply_ops`.
+    pub fn apply(&mut self, seq: u64, as_of: u64, ops: &[MutationOp]) {
+        let minted: BTreeSet<SerialId> = ops
+            .iter()
+            .filter_map(|op| match op {
+                MutationOp::AddNode { id, .. } => Some(id.serial_id()),
+                _ => None,
+            })
+            .collect();
+        let fresh = |nodes: &BTreeMap<SerialId, (VersionId, u64)>, z: SerialId| {
+            minted.contains(&z) || nodes.get(&z).is_some_and(|(_, t)| *t <= as_of)
+        };
+        let resolved: Vec<MutationOp> = ops
+            .iter()
+            .filter_map(|op| match op {
+                MutationOp::AddNode { .. } | MutationOp::RemoveNode { .. } => Some(op.clone()),
+                MutationOp::AddEdges {
+                    base,
+                    neighbors,
+                    layer,
+                    edge_type,
+                } => {
+                    if !fresh(&self.nodes, *base) {
+                        return None;
+                    }
+                    let kept: Vec<SerialId> = neighbors
+                        .iter()
+                        .copied()
+                        .filter(|z| fresh(&self.nodes, *z))
+                        .collect();
+                    (!kept.is_empty()).then(|| MutationOp::AddEdges {
+                        base: *base,
+                        neighbors: kept,
+                        layer: *layer,
+                        edge_type: edge_type.clone(),
+                    })
+                }
+                MutationOp::RemoveEdges {
+                    base,
+                    neighbors,
+                    layer,
+                    edge_type,
+                } => {
+                    if !fresh(&self.nodes, *base) {
+                        return None;
+                    }
+                    let kept: Vec<SerialId> = neighbors
+                        .iter()
+                        .copied()
+                        .filter(|z| fresh(&self.nodes, *z))
+                        .collect();
+                    (!kept.is_empty()).then(|| MutationOp::RemoveEdges {
+                        base: *base,
+                        neighbors: kept,
+                        layer: *layer,
+                        edge_type: edge_type.clone(),
+                    })
+                }
+            })
+            .collect();
+        let ops = &resolved;
+
         for op in ops {
             match op {
                 MutationOp::RemoveNode { id } => self.remove_node(id.serial_id()),
@@ -57,7 +124,7 @@ impl ModelGraph {
                     for layer in self.layers.iter_mut().take(*height) {
                         layer.insert(sid, BTreeSet::new());
                     }
-                    self.nodes.insert(sid, id.version_id());
+                    self.nodes.insert(sid, (id.version_id(), seq));
                 }
                 MutationOp::AddEdges { .. } | MutationOp::RemoveEdges { .. } => {}
             }
@@ -140,7 +207,7 @@ impl ModelGraph {
     /* ---------------------------- observations --------------------------- */
 
     pub fn version_of(&self, sid: SerialId) -> Option<VersionId> {
-        self.nodes.get(&sid).copied()
+        self.nodes.get(&sid).map(|(v, _)| *v)
     }
 
     pub fn is_member(&self, sid: SerialId, layer: usize) -> bool {
@@ -153,7 +220,7 @@ impl ModelGraph {
         let Some(set) = self.layers.get(layer).and_then(|l| l.get(&sid)) else {
             return Vec::new();
         };
-        set.iter().map(|z| (*z, self.nodes[z])).collect()
+        set.iter().map(|z| (*z, self.nodes[z].0)).collect()
     }
 
     pub fn entry_points(&self) -> &[(SerialId, usize)] {
@@ -279,18 +346,22 @@ mod tests {
 
             for step in 0..300 {
                 let live: Vec<SerialId> = UNIVERSE.filter(|s| m.version_of(*s).is_some()).collect();
-                let ops: Vec<MutationOp> = match rng.gen_range(0..100) {
+                let now = g.last_update_seq_no;
+                let (as_of, ops): (u64, Vec<MutationOp>) = match rng.gen_range(0..100) {
                     // Insert a non-live serial (fresh or resurrected).
                     0..=29 => {
                         let free: Vec<SerialId> =
                             UNIVERSE.filter(|s| m.version_of(*s).is_none()).collect();
                         match free.choose(rng) {
-                            Some(&s) => insert_ops(
-                                &m,
-                                s,
-                                rng.gen_range(0..4),
-                                rng.gen_range(1..=MAX_HEIGHT),
-                                rng,
+                            Some(&s) => (
+                                now,
+                                insert_ops(
+                                    &m,
+                                    s,
+                                    rng.gen_range(0..4),
+                                    rng.gen_range(1..=MAX_HEIGHT),
+                                    rng,
+                                ),
                             ),
                             None => continue,
                         }
@@ -309,15 +380,18 @@ mod tests {
                                 rng.gen_range(1..=MAX_HEIGHT),
                                 rng,
                             ));
-                            ops
+                            (now, ops)
                         }
                         None => continue,
                     },
                     // Deletion.
                     50..=64 => match live.choose(rng) {
-                        Some(&s) => vec![MutationOp::RemoveNode {
-                            id: VectorId::new(s, m.version_of(s).unwrap()),
-                        }],
+                        Some(&s) => (
+                            now,
+                            vec![MutationOp::RemoveNode {
+                                id: VectorId::new(s, m.version_of(s).unwrap()),
+                            }],
+                        ),
                         None => continue,
                     },
                     // Edge touch: wire a live base to live targets.
@@ -333,16 +407,19 @@ mod tests {
                             .choose(rng)
                             .unwrap()
                             .clone();
-                        vec![MutationOp::AddEdges {
-                            base,
-                            neighbors: targets,
-                            layer,
-                            edge_type,
-                        }]
+                        (
+                            now,
+                            vec![MutationOp::AddEdges {
+                                base,
+                                neighbors: targets,
+                                layer,
+                                edge_type,
+                            }],
+                        )
                     }
                     // Compaction-shaped RemoveEdges (named serials need not be
                     // present or live).
-                    _ => {
+                    85..=91 => {
                         let layer = rng.gen_range(0..MAX_HEIGHT);
                         let bases = pick_members(&m, layer, 0, 1, rng);
                         let Some(&base) = bases.first() else { continue };
@@ -362,17 +439,111 @@ mod tests {
                         }
                         let edge_type =
                             [EdgeType::Base, EdgeType::All].choose(rng).unwrap().clone();
-                        vec![MutationOp::RemoveEdges {
-                            base,
-                            neighbors: targets,
-                            layer,
-                            edge_type,
-                        }]
+                        (
+                            now,
+                            vec![MutationOp::RemoveEdges {
+                                base,
+                                neighbors: targets,
+                                layer,
+                                edge_type,
+                            }],
+                        )
+                    }
+                    // Drifted intent: identify refs now, let an intervening
+                    // reauth or deletion land, then mint with the stale as_of.
+                    // Linearization must resolve the void refs so the record
+                    // satisfies the spec preconditions (the model panics
+                    // otherwise).
+                    _ => {
+                        let layer = rng.gen_range(0..MAX_HEIGHT);
+                        let bases = pick_members(&m, layer, 0, 1, rng);
+                        let Some(&base) = bases.first() else { continue };
+                        let targets = pick_members(&m, layer, base, rng.gen_range(1..=3), rng);
+                        if targets.is_empty() {
+                            continue;
+                        }
+
+                        // Intervening reauth or deletion of one identified
+                        // serial.
+                        let mut pool = targets.clone();
+                        pool.push(base);
+                        let victim = *pool.choose(rng).unwrap();
+                        let version = m.version_of(victim).unwrap() + 1;
+                        let mut intervening = vec![MutationOp::RemoveNode {
+                            id: VectorId::new(victim, version),
+                        }];
+                        if rng.gen_bool(0.5) {
+                            intervening.extend(insert_ops(
+                                &m,
+                                victim,
+                                version,
+                                rng.gen_range(1..=MAX_HEIGHT),
+                                rng,
+                            ));
+                        }
+                        let minted = g
+                            .apply_new(UnstampedMutation {
+                                as_of: g.last_update_seq_no,
+                                ops: intervening,
+                            })
+                            .unwrap();
+                        m.apply(minted.seq_no, minted.as_of, &minted.ops);
+                        wal.push(minted);
+                        assert_refines(&g, &m, step);
+
+                        // The drifted intent: an insert wiring to the stale
+                        // refs, an edge touch, or a compaction-shaped removal.
+                        let free: Vec<SerialId> = UNIVERSE
+                            .filter(|s| *s != victim && m.version_of(*s).is_none())
+                            .collect();
+                        let ops = match (rng.gen_range(0..3), free.choose(rng)) {
+                            (0, Some(&s)) => {
+                                let height = layer + 1;
+                                let update_ep = if height > m.num_layers() {
+                                    UpdateEntryPoint::Append { layer }
+                                } else {
+                                    UpdateEntryPoint::False
+                                };
+                                vec![
+                                    MutationOp::AddNode {
+                                        id: VectorId::new(s, rng.gen_range(0..4)),
+                                        height,
+                                        update_ep,
+                                    },
+                                    MutationOp::AddEdges {
+                                        base: s,
+                                        neighbors: targets,
+                                        layer,
+                                        edge_type: EdgeType::All,
+                                    },
+                                ]
+                            }
+                            (1, _) => vec![MutationOp::AddEdges {
+                                base,
+                                neighbors: targets,
+                                layer,
+                                edge_type: [EdgeType::Base, EdgeType::Neighbors, EdgeType::All]
+                                    .choose(rng)
+                                    .unwrap()
+                                    .clone(),
+                            }],
+                            _ => vec![MutationOp::RemoveEdges {
+                                base,
+                                neighbors: targets,
+                                layer,
+                                edge_type: [EdgeType::Base, EdgeType::All]
+                                    .choose(rng)
+                                    .unwrap()
+                                    .clone(),
+                            }],
+                        };
+                        (now, ops)
                     }
                 };
 
-                wal.push(g.apply_new(UnstampedMutation { ops: ops.clone() }).unwrap());
-                m.apply(&ops);
+                let minted = g.apply_new(UnstampedMutation { as_of, ops }).unwrap();
+                m.apply(minted.seq_no, minted.as_of, &minted.ops);
+                wal.push(minted);
                 assert_refines(&g, &m, step);
             }
 

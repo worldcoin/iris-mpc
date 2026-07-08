@@ -35,6 +35,9 @@ pub struct InsertPlanV<V: VectorStore> {
     pub query: V::QueryRef,
     pub links: Vec<Vec<VectorId>>,
     pub update_ep: UpdateEntryPoint,
+    /// Graph state `links` was identified against (see
+    /// `UnstampedMutation::as_of`); comes from the search that produced them.
+    pub as_of: u64,
 }
 
 // Manual implementation of Clone for InsertPlanV, since derive(Clone) does not
@@ -45,6 +48,7 @@ impl<V: VectorStore> Clone for InsertPlanV<V> {
             query: self.query.clone(),
             links: self.links.clone(),
             update_ep: self.update_ep.clone(),
+            as_of: self.as_of,
         }
     }
 }
@@ -65,8 +69,8 @@ impl<V: VectorStore> Clone for InsertPlanV<V> {
 ///
 /// Returns a parallel pair of `VecRequests`:
 /// - the per-slot `Vec<ConnectPlanV>` carrying the graph mutations to persist (a slot
-///   may produce 0 to 3 mutations from the per-slot steps, and the last non-empty slot may
-///   additionally carry the batch's single global compaction mutation);
+///   may produce several mutations from the per-slot steps, and the last non-empty slot
+///   may additionally carry the batch's single global compaction mutation);
 /// - the per-slot `Option<VectorId>` identifying the newly inserted vector, or `None`
 ///   for pure deletions and no-op slots.
 pub async fn insert<V: VectorStoreMut>(
@@ -96,7 +100,7 @@ pub async fn insert<V: VectorStoreMut>(
     let insert_plans = join_plans(plans);
     validate_ep_updates(&insert_plans, searcher.max_graph_layer)?;
 
-    let mut intra_batch_inserted = vec![];
+    let mut intra_batch_inserted: Vec<VectorId> = vec![];
     let m = searcher.params.get_M(0);
 
     let mut slot_outputs: Vec<Vec<ConnectPlanV>> = vec![vec![]; insert_plans.len()];
@@ -109,6 +113,7 @@ pub async fn insert<V: VectorStoreMut>(
         // (a) Delete first: own GraphMutation with the lower seq_no.
         if let Some(rid) = replace_id {
             let mutation = graph.apply_new(UnstampedMutation {
+                as_of: graph.last_update_seq_no,
                 ops: vec![MutationOp::RemoveNode { id: *rid }],
             })?;
             slot_outputs[idx].push(mutation);
@@ -118,23 +123,19 @@ pub async fn insert<V: VectorStoreMut>(
         // neighborhoods for the batch compaction.
         if let Some(InsertPlanV {
             query,
-            mut links,
+            links,
             update_ep,
+            as_of,
         }) = plan
         {
-            if let Some(bottom_layer) = links.first_mut() {
-                if bottom_layer.len() < m {
-                    bottom_layer.extend_from_slice(&intra_batch_inserted);
-                }
-            }
-
             // Vector id actually inserted by this update
             let inserted_id = match insert_id {
                 None => store.insert(&query).await,
                 Some(id) => store.insert_at(id, &query).await?,
             };
-            intra_batch_inserted.push(inserted_id);
             slot_inserted_ids[idx] = Some(inserted_id);
+
+            let bottom_needs_links = links.first().is_some_and(|l| l.len() < m);
 
             let mut ops: Vec<MutationOp> = vec![MutationOp::AddNode {
                 id: inserted_id,
@@ -149,23 +150,46 @@ pub async fn insert<V: VectorStoreMut>(
                     edge_type: EdgeType::All,
                 });
             }
-            let unstamped = UnstampedMutation { ops };
+            let unstamped = UnstampedMutation { as_of, ops };
             for pair in unstamped.expanded_neighborhoods() {
                 batch_expanded.insert(pair);
             }
             let mutation = graph.apply_new(unstamped)?;
             slot_outputs[idx].push(mutation);
+
+            // Bootstrap connectivity: a small bottom layer additionally links
+            // to this batch's earlier inserts. Those references are identified
+            // now, not by the plan's search, so they ride their own mutation
+            // at the current seq.
+            if bottom_needs_links && !intra_batch_inserted.is_empty() {
+                let ops = vec![MutationOp::AddEdges {
+                    base: inserted_id.serial_id(),
+                    layer: 0,
+                    neighbors: intra_batch_inserted.iter().map(|v| v.serial_id()).collect(),
+                    edge_type: EdgeType::All,
+                }];
+                let unstamped = UnstampedMutation {
+                    as_of: graph.last_update_seq_no,
+                    ops,
+                };
+                for pair in unstamped.expanded_neighborhoods() {
+                    batch_expanded.insert(pair);
+                }
+                let mutation = graph.apply_new(unstamped)?;
+                slot_outputs[idx].push(mutation);
+            }
+            intra_batch_inserted.push(inserted_id);
         }
     }
 
     // (c) Global compaction across the batch, attributed to the last
     // non-empty slot.
     if !batch_expanded.is_empty() {
-        let ops = searcher
+        let (ops, as_of) = searcher
             .compact_batch(store, graph, &batch_expanded)
             .await?;
         if !ops.is_empty() {
-            let mutation = graph.apply_new(UnstampedMutation { ops })?;
+            let mutation = graph.apply_new(UnstampedMutation { as_of, ops })?;
             let last_idx = slot_outputs
                 .iter()
                 .rposition(|v| !v.is_empty())
@@ -227,6 +251,7 @@ mod tests {
             query: Arc::new(IrisCode::default()),
             links: vec![Vec::new(); ins_layer],
             update_ep: ep_update,
+            as_of: 0,
         }
     }
 
@@ -235,11 +260,13 @@ mod tests {
     fn dummy_insert_plan_with_links(
         ep_update: UpdateEntryPoint,
         links: Vec<Vec<VectorId>>,
+        as_of: u64,
     ) -> InsertPlanV<PlaintextStore> {
         InsertPlanV {
             query: Arc::new(IrisCode::default()),
             links,
             update_ep: ep_update,
+            as_of,
         }
     }
 
@@ -551,6 +578,70 @@ mod tests {
         );
     }
 
+    /// A plan whose searched bottom layer comes back small links to the
+    /// batch's earlier inserts through a follow-up mutation minted at the
+    /// current seq — those references are identified at apply time, not by
+    /// the plan's search.
+    #[tokio::test]
+    async fn test_insert_small_bottom_layer_links_to_intra_batch_inserts() {
+        let mut store = PlaintextStore::default();
+        let mut graph: GraphMem = GraphMem::new();
+        let searcher = HnswSearcher::new_with_test_parameters();
+
+        // Two inserts into an empty graph; both searches found nothing.
+        let plans = vec![
+            Some(dummy_insert_plan_with_links(
+                UpdateEntryPoint::False,
+                vec![vec![]],
+                0,
+            )),
+            Some(dummy_insert_plan_with_links(
+                UpdateEntryPoint::False,
+                vec![vec![]],
+                0,
+            )),
+        ];
+        let insert_ids: VecRequests<Option<VectorId>> = vec![None, None];
+        let replace_ids: VecRequests<Option<VectorId>> = vec![None, None];
+
+        let (grouped, inserted_ids) = insert(
+            &mut store,
+            &mut graph,
+            &searcher,
+            plans,
+            &insert_ids,
+            &replace_ids,
+        )
+        .await
+        .expect("insert should succeed");
+
+        let a = inserted_ids[0].expect("slot 0 inserted");
+        let b = inserted_ids[1].expect("slot 1 inserted");
+
+        // Slot 0 had no earlier inserts to link to; slot 1 carries the
+        // bootstrap AddEdges as its own mutation after the insert.
+        assert_eq!(grouped[0].len(), 1);
+        assert_eq!(grouped[1].len(), 2);
+        assert_eq!(
+            grouped[1][1].ops,
+            vec![MutationOp::AddEdges {
+                base: b.serial_id(),
+                neighbors: vec![a.serial_id()],
+                layer: 0,
+                edge_type: EdgeType::All,
+            }]
+        );
+        assert_eq!(graph.get_active_links(&b.serial_id(), 0), vec![a]);
+        assert_eq!(graph.get_active_links(&a.serial_id(), 0), vec![b]);
+
+        // The recorded stream replays to the identical graph.
+        let mut fresh: GraphMem = GraphMem::new();
+        for m in grouped.iter().flatten() {
+            fresh.insert_apply(m).expect("replay");
+        }
+        assert_eq!(graph.checksum(), fresh.checksum());
+    }
+
     #[tokio::test]
     async fn test_insert_stamps_strictly_increasing_seq_nos_per_slot() {
         let mut store = PlaintextStore::default();
@@ -683,6 +774,7 @@ mod tests {
         }
         let setup = GraphMutation {
             seq_no: graph.next_sequence_number(),
+            as_of: graph.last_update_seq_no,
             ops: setup_ops,
         };
         graph.insert_apply(&setup).expect("setup insert_apply");
@@ -691,8 +783,11 @@ mod tests {
         // With EdgeType::All, each seed's neighborhood gains the new node,
         // pushing each from m_limit → m_limit + 1, which exceeds M_limit and
         // triggers compaction.
-        let new_plan =
-            dummy_insert_plan_with_links(UpdateEntryPoint::False, vec![seed_ids.clone()]);
+        let new_plan = dummy_insert_plan_with_links(
+            UpdateEntryPoint::False,
+            vec![seed_ids.clone()],
+            graph.last_update_seq_no,
+        );
         let plans = vec![Some(new_plan), None];
         let insert_ids: VecRequests<Option<VectorId>> = vec![None, None];
         let replace_ids: VecRequests<Option<VectorId>> = vec![None, None];
@@ -782,6 +877,7 @@ mod tests {
         wal.push(
             graph
                 .apply_new(UnstampedMutation {
+                    as_of: graph.last_update_seq_no,
                     ops: vec![
                         MutationOp::AddNode {
                             id: a,
@@ -800,6 +896,7 @@ mod tests {
         wal.push(
             graph
                 .apply_new(UnstampedMutation {
+                    as_of: graph.last_update_seq_no,
                     ops: vec![MutationOp::AddEdges {
                         base: a.serial_id(),
                         neighbors: vec![b.serial_id()],
@@ -815,6 +912,7 @@ mod tests {
         let plans = vec![Some(dummy_insert_plan_with_links(
             UpdateEntryPoint::False,
             vec![vec![b]],
+            graph.last_update_seq_no,
         ))];
         let insert_ids: VecRequests<Option<VectorId>> = vec![None];
         let replace_ids: VecRequests<Option<VectorId>> = vec![Some(a)];
