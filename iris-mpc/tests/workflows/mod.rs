@@ -130,6 +130,9 @@ pub fn run_sidecar(
                 cycle_interval: Duration::from_secs(config.sidecar.cycle_interval_secs),
                 retry_interval: Duration::from_secs(config.sidecar.retry_interval_secs),
                 peer_round_timeout: Duration::from_secs(config.sidecar.peer_round_timeout_secs),
+                make_connections_timeout: Duration::from_secs(
+                    config.sidecar.make_connections_timeout_secs,
+                ),
                 min_mutations_per_cycle: config.sidecar.min_mutations_per_cycle,
                 checkpoint_window: config.sidecar.checkpoint_window,
                 is_archival: config.sidecar.is_archival,

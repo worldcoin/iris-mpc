@@ -269,6 +269,11 @@ where
     H: GraphHasher,
     Sel: BaseSelector,
 {
+    // Entry barrier: align all parties before the first timed exchange, so
+    // `peer_round_timeout` only has to cover round latency, not cross-party
+    // startup skew (mesh formation is bounded upstream by the caller).
+    transport.barrier().await?;
+
     // Phase 1 — base agreement.
     let my_recent = store.recent_checkpoints(cfg.checkpoint_window).await?;
     tracing::info!(
