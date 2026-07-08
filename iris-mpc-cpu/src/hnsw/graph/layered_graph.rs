@@ -588,6 +588,13 @@ impl GraphMem {
     /// already invalid, and a fresh edge to the target's new content is not
     /// this intent's to evict.
     ///
+    /// `AddEdges` additionally drops self-references (`z == base`): a
+    /// self-edge is never meaningful, and in a minting mutation it can only
+    /// be a stale echo of a search that ran against the node's replaced
+    /// content — the carve-out must not re-admit it. Dropped silently
+    /// (routine on reauth, not a drift signal). `RemoveEdges` keeps
+    /// self-references, so removing an existing self-edge stays expressible.
+    ///
     /// Node ops pass through untouched. The surviving ops all satisfy the
     /// spec preconditions (`model.rs`) at apply time.
     fn linearize(&self, mutation: UnstampedMutation) -> Vec<MutationOp> {
@@ -608,15 +615,23 @@ impl GraphMem {
         let fresh = |z: &SerialId| minted.contains(z) || is_active(&self.node_init, *z, as_of);
 
         let mut dropped = 0usize;
-        // The surviving refs of one op half, or `None` if the op is void.
-        let mut filter_refs = |base: &SerialId, neighbors: Vec<SerialId>| {
+        // The surviving refs of one op, or `None` if the op is void.
+        let mut filter_refs = |base: &SerialId, neighbors: Vec<SerialId>, keep_self: bool| {
             if !fresh(base) {
                 dropped += neighbors.len();
                 return None;
             }
-            let before = neighbors.len();
-            let kept: Vec<SerialId> = neighbors.into_iter().filter(|z| fresh(z)).collect();
-            dropped += before - kept.len();
+            let mut kept = Vec::with_capacity(neighbors.len());
+            for z in neighbors {
+                if !keep_self && z == *base {
+                    continue;
+                }
+                if fresh(&z) {
+                    kept.push(z);
+                } else {
+                    dropped += 1;
+                }
+            }
             (!kept.is_empty()).then_some(kept)
         };
 
@@ -629,7 +644,7 @@ impl GraphMem {
                     neighbors,
                     layer,
                     edge_type,
-                } => filter_refs(&base, neighbors).map(|neighbors| MutationOp::AddEdges {
+                } => filter_refs(&base, neighbors, false).map(|neighbors| MutationOp::AddEdges {
                     base,
                     neighbors,
                     layer,
@@ -640,7 +655,7 @@ impl GraphMem {
                     neighbors,
                     layer,
                     edge_type,
-                } => filter_refs(&base, neighbors).map(|neighbors| MutationOp::RemoveEdges {
+                } => filter_refs(&base, neighbors, true).map(|neighbors| MutationOp::RemoveEdges {
                     base,
                     neighbors,
                     layer,
@@ -1827,6 +1842,83 @@ mod tests {
         assert_eq!(graph.get_active_links(&1, 0), Vec::<VectorId>::new());
         assert_eq!(graph.get_active_links(&3, 0), Vec::<VectorId>::new());
         assert_eq!(minted.ops, vec![]);
+    }
+
+    /// Linearization: a reauth plan's search almost always finds the node's
+    /// own old version, and the serial collapse turns it into a
+    /// self-reference. It was identified against the content the reauth
+    /// replaces, so it must not survive as a self-edge — while legitimate
+    /// neighbors do; the record carries only the survivors.
+    #[test]
+    fn linearization_drops_reauth_self_reference() {
+        let mut graph = GraphMem::new();
+        let s0 = VectorId::new(1, 0);
+        let s1 = VectorId::new(1, 1);
+        let a = VectorId::from_serial_id(2);
+        let node = |id| MutationOp::AddNode {
+            id,
+            height: 1,
+            update_ep: UpdateEntryPoint::False,
+        };
+
+        // seq 1: S and anchor A, linked.
+        graph
+            .apply_new(UnstampedMutation {
+                as_of: graph.last_update_seq_no,
+                ops: vec![
+                    node(s0),
+                    node(a),
+                    MutationOp::AddEdges {
+                        base: 1,
+                        neighbors: vec![2],
+                        layer: 0,
+                        edge_type: EdgeType::All,
+                    },
+                ],
+            })
+            .unwrap();
+        // The reauth's search identified [S(old), A] here.
+        let as_of = graph.last_update_seq_no;
+        // seq 2: teardown, its own mutation (the production shape).
+        graph
+            .apply_new(UnstampedMutation {
+                as_of: graph.last_update_seq_no,
+                ops: vec![MutationOp::RemoveNode { id: s1 }],
+            })
+            .unwrap();
+        // seq 3: re-insert wiring the searched links, self-echo included.
+        let minted = graph
+            .apply_new(UnstampedMutation {
+                as_of,
+                ops: vec![
+                    node(s1),
+                    MutationOp::AddEdges {
+                        base: 1,
+                        neighbors: vec![1, 2],
+                        layer: 0,
+                        edge_type: EdgeType::All,
+                    },
+                ],
+            })
+            .unwrap();
+
+        // No self-edge, physically or actively; the real neighbor survives
+        // in both directions; the record carries only the survivors.
+        assert_eq!(graph.get_raw_links(&1, 0), &[2u32]);
+        assert_eq!(graph.get_active_links(&1, 0), vec![a]);
+        assert_eq!(graph.get_active_links(&2, 0), vec![s1]);
+        assert_eq!(
+            minted.ops,
+            vec![
+                node(s1),
+                MutationOp::AddEdges {
+                    base: 1,
+                    neighbors: vec![2],
+                    layer: 0,
+                    edge_type: EdgeType::All,
+                },
+            ]
+        );
     }
 
     /// Read-path skip: `get_active_links` omits a content-stale neighbor even
