@@ -10,7 +10,7 @@ use crate::{
         InsertPlanV, StoreId,
     },
     hawkers::aby3::aby3_store::{Aby3DistanceRef, Aby3Query, Aby3Store, DistanceOps},
-    hnsw::{graph::UpdateEntryPoint, GraphMem, HnswSearcher},
+    hnsw::{graph::UpdateEntryPoint, GraphMem, HnswSearcher, SortedNeighborhood},
 };
 use eyre::{OptionExt, Result};
 use iris_mpc_common::iris_db::iris::Threshold;
@@ -231,8 +231,9 @@ async fn classify_and_extend(
         );
         metrics::counter!("supermatcher_extended_searches").increment(1);
 
+        let seed_nbhd = SortedNeighborhood::from_ascending_vec(edges.to_vec());
         let supermatch_neighbors = hnsw_supermatch
-            .search(aby3_store, graph_store, query, ef_supermatch)
+            .search_layer_0_seeded(aby3_store, graph_store, query, seed_nbhd, ef_supermatch)
             .await?;
 
         let supermatch_classified = classify_edges(

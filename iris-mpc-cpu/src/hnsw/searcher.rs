@@ -33,6 +33,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     hash::{Hash, Hasher},
     iter::once,
+    time::Instant,
 };
 use tracing::{debug, instrument, trace_span, Instrument};
 
@@ -1379,6 +1380,43 @@ impl HnswSearcher {
         }
 
         W.trim(store, k).await?;
+        Ok(W)
+    }
+
+    /// Extended layer-0-only search, seeded with the neighborhood produced by a
+    /// previous search. Used to confirm/deny a potential supermatcher without
+    /// repeating the upper-layer greedy descent.
+    ///
+    /// `seed_nbhd` is reused directly as the initial candidate frontier `W` (its edges
+    /// must be sorted ascending by distance, with valid distances -- as produced by
+    /// `search()` / `search_to_insert()`). `ef` is the layer-0 exploration factor:
+    /// the neighborhood size used while expanding from the initial neighborhood and the size the result is
+    /// trimmed to.
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
+    pub async fn search_layer_0_seeded<V: VectorStore>(
+        &self,
+        store: &mut V,
+        graph: &GraphMem,
+        query: &V::QueryRef,
+        seed_nbhd: SortedNeighborhood<V>,
+        ef: usize,
+    ) -> Result<SortedNeighborhood<V>> {
+        let start = Instant::now();
+        let mut W = seed_nbhd;
+
+        Self::search_layer(
+            store,
+            graph,
+            query,
+            &mut W,
+            ef,
+            0,
+            self.min_layer_search_batch_size,
+        )
+        .await?;
+
+        W.trim(store, ef).await?;
+        metrics::histogram!("search_layer_0_seeded_duration").record(start.elapsed().as_secs_f64());
         Ok(W)
     }
 
