@@ -671,6 +671,36 @@ impl<'a> BatchProcessor<'a> {
         &mut self,
         ingested_request: &IngestedRequest,
     ) -> Result<(), ReceiveRequestError> {
+        match self.try_process_ingested_request(ingested_request).await {
+            // Content-determined failures are identical bytes on all parties, so
+            // every party quarantines the same row — symmetric by construction.
+            // Without a parseable body there is no request_id to address a
+            // failure result to; the row is skipped (it stays claimed and gets
+            // persisted-marked with the batch, so it never re-forms). Anything
+            // else (SQS/S3/DB errors) stays fatal.
+            Err(
+                err @ (ReceiveRequestError::JsonParseError { .. }
+                | ReceiveRequestError::NoMessageTypeAttribute
+                | ReceiveRequestError::NoStringMessageTypeAttribute
+                | ReceiveRequestError::InvalidMessageType),
+            ) => {
+                tracing::error!(
+                    "db-backed ingest: quarantining poison request sequence_number={}: {}",
+                    ingested_request.sequence_number,
+                    err
+                );
+                metrics::counter!("db_ingest_poison_rows").increment(1);
+                self.msg_counter += 1;
+                Ok(())
+            }
+            other => other,
+        }
+    }
+
+    async fn try_process_ingested_request(
+        &mut self,
+        ingested_request: &IngestedRequest,
+    ) -> Result<(), ReceiveRequestError> {
         let message: SQSMessage = serde_json::from_str(&ingested_request.message_body)
             .map_err(|e| ReceiveRequestError::json_parse_error("ingested SQS body", e))?;
 
