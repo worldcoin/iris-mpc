@@ -1382,6 +1382,45 @@ impl HnswSearcher {
         Ok(W)
     }
 
+    /// Extended layer-0-only search, seeded with the neighborhood produced by a
+    /// previous search. Used to confirm/deny a potential supermatcher without
+    /// repeating the upper-layer greedy descent.
+    ///
+    /// The edges of  `seeded_nbhd` must be sorted ascending by distance.
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
+    pub async fn search_layer_0_seeded<V: VectorStore>(
+        &self,
+        store: &mut V,
+        graph: &GraphMem,
+        query: &V::QueryRef,
+        seeded_nbhd: SortedNeighborhood<V>,
+        ef: usize,
+    ) -> Result<SortedNeighborhood<V>> {
+        let start = Instant::now();
+
+        // `search_layer()` requires a non-empty frontier; fall back to full search init.
+        if seeded_nbhd.is_empty() {
+            let W = self.search(store, graph, query, ef).await?;
+            return Ok(W);
+        }
+
+        let mut W = seeded_nbhd;
+        Self::search_layer(
+            store,
+            graph,
+            query,
+            &mut W,
+            ef,
+            0,
+            self.min_layer_search_batch_size,
+        )
+        .await?;
+
+        W.edges.truncate(ef);
+        metrics::histogram!("search_layer_0_seeded_duration").record(start.elapsed().as_secs_f64());
+        Ok(W)
+    }
+
     /// Insert `query` into the HNSW index represented by `store` and `graph`.
     /// Return a `VectorId` representing the inserted vector.
     #[instrument(level = "trace", skip_all, target = "searcher::network")]
