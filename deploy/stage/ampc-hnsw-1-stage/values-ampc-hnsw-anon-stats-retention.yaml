@@ -20,7 +20,7 @@ env:
     valueFrom:
       fieldRef:
         fieldPath: status.hostIP
-  RETENTION_JOBS: '[{"table":"anon_stats_1d","retention":"14 days","guard":"processed = TRUE"},{"table":"anon_stats_1d_lifted","retention":"14 days","guard":"processed = TRUE"},{"table":"anon_stats_2d","retention":"14 days","guard":"processed = TRUE"},{"table":"anon_stats_2d_lifted","retention":"14 days","guard":"processed = TRUE"},{"table":"anon_stats_face","retention":"14 days","guard":"processed = TRUE"}]'
+  RETENTION_JOBS: '[{"table":"anon_stats_1d","retention":"5 days","guard":"processed = TRUE"},{"table":"anon_stats_1d_lifted","retention":"5 days","guard":"processed = TRUE"},{"table":"anon_stats_2d","retention":"5 days","guard":"processed = TRUE"},{"table":"anon_stats_2d_lifted","retention":"5 days","guard":"processed = TRUE"},{"table":"anon_stats_face","retention":"5 days","guard":"processed = TRUE"}]'
 
 # Lets the pod reach the anon-stats Aurora — mirrors ampc-hnsw-anon-stats-server (same DB, same SG).
 attachSecurityGroupPolicy:

@@ -19,7 +19,7 @@ The CronJob runs daily; no success in >26h means it failed, didn't schedule, or 
 
 ## 2. Oldest-retained exceeds the window  (retention falling behind)
 If the reaper stops deleting (bug, lock contention, guard mistake), the oldest row ages past the window — the direct symptom.
-- **Metric monitor**: `max(last_6h):max:retention.oldest_retained_seconds{env:stage} by {service,table} > 1900800` (= 22 days = the 14-day window + a generous margin for backfilled legacy rows + slack). Page. Tune the margin after observing the first weeks (legacy rows are stamped at migration time and drain over the first window).
+- **Metric monitor**: threshold = **active retention window + 2 days** slack (matching the cross-party tolerance in #5). Stage runs a 5-day window → `max(last_6h):max:retention.oldest_retained_seconds{env:stage} by {service,table} > 604800` (= 7 days). Prod (when enabled, 14-day window) → `> 1382400` (= 16 days). Page. The old backfilled-legacy-rows margin is obsolete once the first live run drains the migration-stamped cohort; if the first run hasn't happened yet, expect this to read ~window-of-backfill until it does.
 
 ## 3. Bloat — dead-tuple ratio climbing  (the DELETE-approach risk)
 The one real failure mode of batched DELETE: autovacuum not keeping up with delete churn → table/index bloat.
