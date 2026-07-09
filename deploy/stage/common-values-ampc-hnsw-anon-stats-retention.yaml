@@ -4,13 +4,14 @@
 # anon-stats Aurora live per-node.
 image: "ghcr.io/worldcoin/retention-reaper:d9a3d33342dfd9e95c7b11e8ef4e4101a3e6ed80"
 
-# STAGE DRY-RUN VALIDATION: enable the reaper in dry-run mode — it logs what it WOULD
-# reap (read-only COUNT, no DELETE). Safe only because the image above is the dry-run
-# build; deep-merges with the per-cluster RETENTION__* env maps. Flip DRY_RUN to "false"
-# to go live once the previewed counts look right.
+# STAGE LIVE: dry-run validated 2026-07-03 → 2026-07-09 (daily runs, all parties, exact
+# delete predicate logged incl. the processed=TRUE guard; 0 rows eligible only because
+# created_at was backfilled at migration time, < 14d ago). Retention is 5 days on stage
+# (per-node RETENTION_JOBS) so the mechanism produces real deletions to validate against
+# rows_deleted / oldest_retained_seconds before prod enablement.
 env:
   RETENTION__ENABLED: "true"
-  RETENTION__DRY_RUN: "true"
+  RETENTION__DRY_RUN: "false"
 
 replicaCount: 1
 
