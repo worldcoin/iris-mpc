@@ -1,0 +1,38 @@
+# POP-3931 — `modifications` retention CronJob (prod, ampc-hnsw clusters). Mirrors the
+# stage deploy (common-cronjob 1.11.0 via wf-cluster-apps). Scope: the HNSW (hawk) DB's
+# modifications copy — the hawk server writes a row per signup-modification into its own
+# DB and nothing deletes it in steady state. The GPU MPCV2 DB's copy gets its own reaper
+# instance in a follow-up (same binary, values + cluster-apps entry only).
+image: "ghcr.io/worldcoin/retention-reaper:f8cb55547b1833ef2ccb0a84c5bd37c9e06b2408"
+
+# SHIPS INERT, doubly: `suspend: true` AND RETENTION__ENABLED unset. Enable path:
+# un-suspend → ENABLED+DRY_RUN → inspect counts + gauges → DRY_RUN off, one party first.
+# NOTE: rows_deleted stays 0 for the first 30 days after the prod created_at migration
+# lands (backfill stamps everything at migration time).
+suspend: true
+
+env: {}
+
+replicaCount: 1
+
+environment: prod
+
+# Daily, 04:00 UTC — offset from the anon-stats reaper (03:30) so the two never overlap.
+schedule: "0 4 * * *"
+backoffLimit: 0
+
+concurrencyPolicy: Forbid
+
+imagePullSecrets:
+  - name: github-secret
+
+resources:
+  limits:
+    cpu: "500m"
+    memory: 256Mi
+  requests:
+    cpu: "100m"
+    memory: 128Mi
+
+nodeSelector:
+  kubernetes.io/arch: amd64

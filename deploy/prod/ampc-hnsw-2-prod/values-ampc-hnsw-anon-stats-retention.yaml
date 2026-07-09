@@ -1,0 +1,28 @@
+# POP-3905 — anon-stats retention (retention-reaper), ampc-hnsw party 2 (prod). Per-node.
+# Schema anon_stats_mpc matches ampc-hnsw-anon-stats-server; guard=processed=TRUE reaps
+# only collected rows. env uses the common-cronjob 1.11.0 map format (renderEnv).
+env:
+  RUST_LOG: "info"
+  RETENTION__DB_SCHEMA: "anon_stats_mpc"
+  RETENTION__PARTY: "2"
+  RETENTION__SERVICE__SERVICE_NAME: "retention-reaper-anon-stats-hnsw-2"
+  RETENTION__SERVICE__METRICS__PORT: "8125"
+  RETENTION__SERVICE__METRICS__QUEUE_SIZE: "5000"
+  RETENTION__SERVICE__METRICS__BUFFER_SIZE: "256"
+  RETENTION__SERVICE__METRICS__PREFIX: "retention-reaper-anon-stats-hnsw-2"
+  RETENTION__DB_URL:
+    valueFrom:
+      secretKeyRef:
+        name: application
+        key: DATABASE_AURORA_URL
+  RETENTION__SERVICE__METRICS__HOST:
+    valueFrom:
+      fieldRef:
+        fieldPath: status.hostIP
+  RETENTION_JOBS: '[{"table":"anon_stats_1d","retention":"14 days","guard":"processed = TRUE"},{"table":"anon_stats_1d_lifted","retention":"14 days","guard":"processed = TRUE"},{"table":"anon_stats_2d","retention":"14 days","guard":"processed = TRUE"},{"table":"anon_stats_2d_lifted","retention":"14 days","guard":"processed = TRUE"},{"table":"anon_stats_face","retention":"14 days","guard":"processed = TRUE"}]'
+
+# Lets the pod reach the anon-stats Aurora — mirrors ampc-hnsw-anon-stats-server (same DB, same SG).
+attachSecurityGroupPolicy:
+  enabled: true
+  groupIds:
+    - sg-05e82288156789940 # ampc-hnsw-2-prod anon-stats pod SG
