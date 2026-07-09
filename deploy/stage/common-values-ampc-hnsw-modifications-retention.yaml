@@ -1,0 +1,49 @@
+# POP-3931 — `modifications` retention CronJob (stage, runs on the ampc-hnsw clusters).
+# common-cronjob chart (1.11.0, worldcoin-foundation/common-cronjob) via wf-cluster-apps,
+# mirroring ampc-hnsw-anon-stats-retention (POP-3905).
+#
+# Scope (for now): the HNSW (hawk) DB's `modifications` copy — the hawk server writes a
+# row per signup-modification into its own DB and nothing deletes it in steady state
+# (genesis Final-Cleanup is a one-off job, not a cadence). Retention here is a plain
+# guarded age-based DELETE — the two systems' copies are disjoint, no cross-DB
+# coordination exists or is needed. The GPU MPCV2 DB's copy grows the same way; its
+# reaper instance FOLLOWS SHORTLY (same binary, values + cluster-apps entry only).
+#
+image: "ghcr.io/worldcoin/retention-reaper:f8cb55547b1833ef2ccb0a84c5bd37c9e06b2408"
+
+# STAGE ENABLE, DRY-RUN: the hawk image bump in this same PR applies the created_at
+# migration to the HNSW DB at boot; the reaper then previews the exact delete predicate
+# (read-only COUNT) daily. Expected counts: 0 for the first 30 days (backfill stamps all
+# rows at migration time) — the dry run proves the query is valid against the migrated
+# schema (created_at present, guard incl. the newest-10k subselect executes). Flip
+# DRY_RUN to "false" after the first clean previews; nothing becomes deletable before
+# the 30d clock matures anyway.
+env:
+  RETENTION__ENABLED: "true"
+  RETENTION__DRY_RUN: "true"
+
+replicaCount: 1
+
+environment: stage
+
+# Daily, 04:00 UTC — offset from the anon-stats reaper (03:30) so the two never overlap
+# on shared node/network capacity. Idempotent; missed runs are caught next day + monitor.
+schedule: "0 4 * * *"
+backoffLimit: 0
+
+# Never run two reapers against the same DB at once.
+concurrencyPolicy: Forbid
+
+imagePullSecrets:
+  - name: github-secret
+
+resources:
+  limits:
+    cpu: "500m"
+    memory: 256Mi
+  requests:
+    cpu: "100m"
+    memory: 128Mi
+
+nodeSelector:
+  kubernetes.io/arch: amd64
