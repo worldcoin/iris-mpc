@@ -42,3 +42,22 @@ Catches a mis-set retention/guard deleting far more than a normal day.
 - [ ] #4 hard-ceiling set from observed staging `rows_deleted`.
 - [ ] Then clone to `env:prod` and flip `suspend: false` **per party, canary one first**.
 - [ ] Re-evaluate #3 thresholds if/when POP-3908 raises volume — that's the trigger to consider pg_partman for the hottest table.
+
+
+---
+
+## POP-3931 addendum — `modifications` retention (same reaper, same monitors)
+
+The modifications job reuses monitors #1–#5 verbatim (service names
+`retention-reaper-modifications-hnsw-{0,1,2}`; metrics carry `table:modifications`).
+Two operational notes specific to this table:
+
+- **30-day dead period:** after the `created_at` migration lands, existing rows are
+  backfilled with the migration timestamp — expect `rows_deleted = 0` for the first 30
+  days; do not treat that as a missing-run signal (#4's anomaly baseline starts after
+  the first non-zero window).
+- **Newest-10k floor:** the guard always retains the newest 10 000 rows (protects the
+  cross-party startup-sync window and the MAX(id)+1 id-assignment trigger), so
+  `oldest_retained_seconds` on a very quiet party can legitimately exceed the retention
+  window — the #2 threshold (22d for anon_stats) should be set per-table with margin
+  for this.
