@@ -164,7 +164,7 @@ impl Store {
             postgres_client.schema_name
         );
 
-        postgres_client.migrate().await;
+        postgres_client.migrate_with_options(true).await;
 
         Ok(Store {
             pool: postgres_client.pool.clone(),
