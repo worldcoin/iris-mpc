@@ -251,6 +251,16 @@ async fn classify_and_extend(
             metrics::counter!("supermatcher_still_saturated_after_extended").increment(1);
         }
 
+        metrics::histogram!("extended_search_new_anon_stats_matches").record(
+            supermatch_classified.anon_stats_matches.results.len() as f64
+                - classified.anon_stats_matches.results.len() as f64,
+        );
+
+        metrics::histogram!("extended_search_new_matches").record(
+            supermatch_classified.matches.results.len() as f64
+                - classified.matches.results.len() as f64,
+        );
+
         return Ok(supermatch_classified);
     }
 
