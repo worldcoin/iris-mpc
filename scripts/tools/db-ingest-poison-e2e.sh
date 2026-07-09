@@ -28,6 +28,11 @@ echo "== baseline =="
 for n in 0 1 2; do BASE[$n]=$(psql_party "$n" "SELECT count(*) FROM ingested_requests"); done
 RUNNING=$(docker ps --format '{{.Names}}' | grep -c hawk_participant) || true
 [ "$RUNNING" = "3" ] || fail "fleet not 3/3 before test"
+# Capture container start times: a crash+auto-restart that recovers within the
+# poll window would otherwise be indistinguishable from "never crashed".
+for n in 0 1 2; do
+  STARTED[$n]=$(docker inspect "iris-mpc-pop4051-db-poc-hawk_participant_$n-1" --format '{{.State.StartedAt}}')
+done
 
 echo "== 1. envelope-level poison (direct to all 3 queues) =="
 for q in smpcv2-0-dev smpcv2-1-dev smpcv2-2-dev; do
@@ -90,6 +95,10 @@ done
 echo "== assertions =="
 RUNNING=$(docker ps --format '{{.Names}}' | grep -c hawk_participant) || true
 [ "$RUNNING" = "3" ] || fail "fleet not 3/3 after poison (crashloop reintroduced?)"
+for n in 0 1 2; do
+  NOW=$(docker inspect "iris-mpc-pop4051-db-poc-hawk_participant_$n-1" --format '{{.State.StartedAt}}')
+  [ "$NOW" = "${STARTED[$n]}" ] || fail "party $n restarted during the test (crash masked by recovery)"
+done
 
 # Hard: authoritative DB end-state (envelope poison added 0 rows, all persisted).
 for n in 0 1 2; do

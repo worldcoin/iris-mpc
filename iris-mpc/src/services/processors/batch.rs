@@ -191,8 +191,14 @@ pub fn spawn_db_backed_ingest_task(
                 }
             }
         }
-        tracing::info!("Stopping DB-backed SQS ingest task");
-        Ok(())
+        tracing::info!("DB-backed SQS ingest task idle: shutdown signaled");
+        // Never return: TaskMonitor::check_tasks() panics on ANY finished task
+        // (even Ok), and abort_all() runs check_tasks() first — so returning
+        // here on the shutdown signal would turn a graceful drain into a panic
+        // if the per-batch check races the flag. Park until abort_all cancels
+        // us (check_tasks_finished ignores cancelled tasks).
+        std::future::pending::<()>().await;
+        unreachable!("pending() never resolves");
     });
 }
 
@@ -257,13 +263,15 @@ async fn ingest_sqs_message(
             sqs_message.message_id,
             reason
         );
-        metrics::counter!("db_ingest_poison_messages").increment(1);
         client
             .delete_message()
             .queue_url(&config.requests_queue_url)
             .receipt_handle(receipt_handle)
             .send()
             .await?;
+        // Count only after the delete succeeds: a failed delete redelivers and
+        // re-quarantines, and counting first would double-count that message.
+        metrics::counter!("db_ingest_poison_messages").increment(1);
         return Ok(());
     }
 

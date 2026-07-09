@@ -530,11 +530,14 @@ WHERE id = $1;
         Ok(result.rows_affected() == 1)
     }
 
-    // Pending = unclaimed AND unpersisted. The persisted_at guard closes a
+    // Pending = unclaimed AND unpersisted. The persisted_at guard narrows a
     // dual-consumer window (rolling-deploy pod overlap): a new pod's boot
     // recovery can release a claim that an old pod's in-flight results tx then
     // persist-marks — without the guard such a row would be re-formed and
-    // re-processed despite its results being committed.
+    // re-processed despite its results being committed. The claim CAS below
+    // carries the same guard so the loser of the residual race (persist
+    // landing between this SELECT and the claim) fails loud instead of
+    // claiming an already-persisted row.
     pub async fn count_pending_ingested_requests(&self) -> Result<i64> {
         let count: (i64,) = sqlx::query_as(
             r#"
@@ -581,6 +584,7 @@ WHERE id = $1;
             SET consumed_batch_id = $1
             WHERE sequence_number = ANY($2::text[])
               AND consumed_batch_id IS NULL
+              AND persisted_at IS NULL
             "#,
         )
         .bind(batch_id as i64)

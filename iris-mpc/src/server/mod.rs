@@ -190,6 +190,14 @@ pub async fn server_main(config: Config) -> Result<()> {
         // symmetric batch" and "claimed but unpersisted because only MY commit
         // failed" are indistinguishable; only the peers' frontier tells them
         // apart.
+        //
+        // SAFETY DEPENDENCY: peers serve their SyncState from a snapshot taken
+        // at THEIR boot, so an exchanged frontier can under-report persists
+        // made after that peer booted. This is sound today only because the
+        // startup unready-gate + heartbeat teardown force full-fleet restarts
+        // (every frontier is rebuilt after its party's last commit). If
+        // coordination is ever relaxed to allow solo restarts, this exchange
+        // must move to a live DB read in the sync endpoint.
         let fleet_frontier = sync_result.max_persisted_sequence_number();
         if let Some(frontier) = &fleet_frontier {
             let marked = iris_store
