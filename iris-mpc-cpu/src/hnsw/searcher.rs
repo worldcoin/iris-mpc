@@ -1398,7 +1398,6 @@ impl HnswSearcher {
     ) -> Result<SortedNeighborhood<V>> {
         let start = Instant::now();
 
-        // `search_layer()` requires a non-empty frontier; fall back to full search init.
         if seeded_nbhd.is_empty() {
             let W = self.search(store, graph, query, ef).await?;
             return Ok(W);
