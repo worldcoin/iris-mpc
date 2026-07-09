@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-cpu:5e28ddf9f9b4bfd138bc125c106270cbd095642a-arm64" # TEMP: POP-4051 db-ingest POC branch pin (repin to merge SHA) — revert before merge
+image: "ghcr.io/worldcoin/iris-mpc-cpu:a3c82c7a29578a3f3cea9791de6065990980b6bf-arm64" # TEMP: POP-4051 db-ingest POC branch pin — revert before merge
 
 environment: stage
 replicaCount: 1
