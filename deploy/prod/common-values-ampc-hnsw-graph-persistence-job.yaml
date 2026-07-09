@@ -11,7 +11,7 @@ env:
   SMPC__CPU_DATABASE__URL:
     valueFrom:
       secretKeyRef:
-        key: DATABASE_AURORA_HNSW_FROM_SNAPSHOT_URL
+        key: DATABASE_AURORA_HNSW_URL
         name: application
   SMPC__TLS__PRIVATE_KEY: "/etc/ssl/private/key.pem"
   SMPC__TLS__LEAF_CERT: "/etc/ssl/private/certificate.crt"
