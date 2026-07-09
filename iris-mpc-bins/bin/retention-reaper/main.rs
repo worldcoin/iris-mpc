@@ -35,11 +35,18 @@ struct RetentionJob {
     /// Postgres interval literal, e.g. "14 days".
     retention: String,
     /// Optional extra predicate, e.g. "processed = TRUE" or
-    /// "status = 'COMPLETED' AND persisted AND id < (SELECT ...)".
+    /// "status = 'COMPLETED' AND persisted". May contain same-DB subqueries (it is
+    /// TRUSTED deploy config), e.g. a newest-N retention floor.
     #[serde(default)]
     guard: Option<String>,
     #[serde(default = "default_batch_size")]
     batch_size: i64,
+    /// Pause between delete batches. The batched DELETE competes with hot write paths —
+    /// e.g. `modifications`' id-assignment trigger takes `LOCK TABLE ... IN EXCLUSIVE
+    /// MODE`, which conflicts with the DELETE's ROW EXCLUSIVE lock — so yielding between
+    /// batches lets writers through instead of starving them for the whole drain.
+    #[serde(default = "default_batch_pause_ms")]
+    batch_pause_ms: u64,
 }
 
 fn default_ts_column() -> String {
@@ -47,6 +54,9 @@ fn default_ts_column() -> String {
 }
 fn default_batch_size() -> i64 {
     DEFAULT_BATCH_SIZE
+}
+fn default_batch_pause_ms() -> u64 {
+    100
 }
 
 /// Self-contained config, deserialized from `RETENTION__*` env via the `config` crate —
@@ -257,7 +267,7 @@ async fn reap(
         .set(would_delete as f64);
         // Read-only health gauges are still useful during a dry run (verify oldest-retained /
         // bloat look sane before enabling live deletes).
-        emit_health_metrics(pool, job, party).await;
+        emit_health_metrics(&mut conn, job, statement_timeout, party).await;
         return Ok(would_delete);
     }
 
@@ -289,6 +299,11 @@ async fn reap(
         if deleted < job.batch_size {
             break;
         }
+        // Yield between full batches so concurrent writers (e.g. the EXCLUSIVE-lock
+        // id-assignment trigger on `modifications`) aren't starved for the whole drain.
+        if job.batch_pause_ms > 0 {
+            tokio::time::sleep(Duration::from_millis(job.batch_pause_ms)).await;
+        }
     }
 
     metrics::counter!(
@@ -298,13 +313,22 @@ async fn reap(
     )
     .increment(total as u64);
     // Health gauges are best-effort: a probe failure must never fail the run or block deletes.
-    emit_health_metrics(pool, job, party).await;
+    emit_health_metrics(&mut conn, job, statement_timeout, party).await;
     Ok(total)
 }
 
 /// Oldest-retained age (retention actually working) + dead-tuple ratio (bloat — the one real
-/// risk of DELETE-based retention). Both best-effort; logged and skipped on error.
-async fn emit_health_metrics(pool: &PgPool, job: &RetentionJob, party: &str) {
+/// risk of DELETE-based retention). Both best-effort; logged and skipped on error. Runs on
+/// the caller's statement_timeout-bounded connection, plus a client-side tokio timeout —
+/// a slow probe (the oldest-retained scan carries the full guard, subqueries and all) must
+/// never hang the pod: with `concurrencyPolicy: Forbid` a hung run would block every
+/// subsequent run and silently stop retention.
+async fn emit_health_metrics(
+    conn: &mut PgConnection,
+    job: &RetentionJob,
+    statement_timeout: Duration,
+    party: &str,
+) {
     // Oldest row *among the retention-eligible rows* — apply the same guard as the delete.
     // Without it, an intentionally-retained old row (e.g. a still-unprocessed anon_stats row
     // under guard `processed = TRUE`) would inflate this gauge and falsely trip the
@@ -320,7 +344,14 @@ async fn emit_health_metrics(pool: &PgPool, job: &RetentionJob, party: &str) {
         table = quote_ident(&job.table),
         guard_where = guard_where,
     );
-    match sqlx::query(&oldest_sql).fetch_one(pool).await {
+    match timeout(
+        statement_timeout + Duration::from_secs(5),
+        sqlx::query(&oldest_sql).fetch_one(&mut *conn),
+    )
+    .await
+    .map_err(eyre::Report::from)
+    .and_then(|r| r.map_err(eyre::Report::from))
+    {
         Ok(row) => {
             if let Ok(age) = row.try_get::<Option<f64>, _>("age") {
                 metrics::gauge!(
@@ -333,11 +364,19 @@ async fn emit_health_metrics(pool: &PgPool, job: &RetentionJob, party: &str) {
         Err(e) => warn!(table = %job.table, error = %e, "oldest_retained probe failed"),
     }
 
-    let bloat_sql = "SELECT n_dead_tup, n_live_tup FROM pg_stat_user_tables WHERE relname = $1";
-    match sqlx::query(bloat_sql)
-        .bind(&job.table)
-        .fetch_optional(pool)
-        .await
+    // schemaname filter: the same table name can exist in several schemas of one DB
+    // (e.g. per-party SMPC_* schemas) — pin the probe to the connection's search_path.
+    let bloat_sql = "SELECT n_dead_tup, n_live_tup FROM pg_stat_user_tables \
+                     WHERE relname = $1 AND schemaname = current_schema()";
+    match timeout(
+        statement_timeout + Duration::from_secs(5),
+        sqlx::query(bloat_sql)
+            .bind(&job.table)
+            .fetch_optional(&mut *conn),
+    )
+    .await
+    .map_err(eyre::Report::from)
+    .and_then(|r| r.map_err(eyre::Report::from))
     {
         Ok(Some(row)) => {
             let dead: i64 = row.try_get("n_dead_tup").unwrap_or(0);
@@ -432,5 +471,14 @@ mod tests {
     #[test]
     fn quotes_identifiers() {
         assert_eq!(quote_ident("anon_stats_1d"), "\"anon_stats_1d\"");
+    }
+
+    #[test]
+    fn parses_job_with_subquery_guard_and_pause_default() {
+        let raw = r#"[{"table":"modifications","retention":"30 days",
+          "guard":"status = 'COMPLETED' AND persisted AND id < (SELECT COALESCE(MIN(id), 0) FROM (SELECT id FROM modifications ORDER BY id DESC LIMIT 10000) newest)"}]"#;
+        let jobs: Vec<RetentionJob> = serde_json::from_str(raw).unwrap();
+        assert!(jobs[0].guard.as_deref().unwrap().contains("LIMIT 10000"));
+        assert_eq!(jobs[0].batch_pause_ms, 100); // defaulted
     }
 }
