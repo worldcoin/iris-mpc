@@ -5,6 +5,7 @@ args:
   - "--peer-round-timeout-secs=120"
   - "--make-connections-timeout-secs=300"
   - "--min-mutations-per-cycle=1"
+  - "--pruning-mode=none"
   - "--one-shot"
 
 env:

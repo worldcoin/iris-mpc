@@ -1,7 +1,7 @@
-image: "ghcr.io/worldcoin/iris-mpc-cpu:eb609d38d29a2e80261d392c9aaf3156704dfa9a-arm64"
+image: "ghcr.io/worldcoin/iris-mpc-cpu:v0.32.5@sha256:9d61c8672ad6bed5e1591dcf9ff57584b4d5dd265bad2961cbd55ce04d7b1ac8"
 
 environment: prod
-schedule: "*/10 * * * *"
+schedule: "0 0 * * *"
 
 env:
   ENV: "prod"
@@ -19,7 +19,7 @@ env:
 
 backoffLimit: 0
 concurrencyPolicy: Forbid
-activeDeadlineSeconds: 1800
+activeDeadlineSeconds: 5400
 ttlSecondsAfterFinished: 3600
 restartPolicy: Never
 
