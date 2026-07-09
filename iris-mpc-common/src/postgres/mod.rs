@@ -74,10 +74,6 @@ impl PostgresClient {
     }
 
     pub async fn migrate(&self) {
-        self.migrate_with_options(false).await
-    }
-
-    pub async fn migrate_with_options(&self, ignore_missing_migrations: bool) {
         tracing::info!("Running migrations...");
 
         if self.access_mode == AccessMode::ReadOnly {
@@ -86,7 +82,7 @@ impl PostgresClient {
         }
 
         sqlx::migrate!("./../migrations")
-            .set_ignore_missing(ignore_missing_migrations)
+            .set_ignore_missing(true)
             .run(&self.pool)
             .await
             .expect("Failed to run migrations");
