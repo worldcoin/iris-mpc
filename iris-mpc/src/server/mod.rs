@@ -89,6 +89,16 @@ pub async fn server_main(config: Config) -> Result<()> {
         );
     }
 
+    if config.db_backed_ingest && !config.enable_modifications_sync {
+        bail!(
+            "db_backed_ingest=true requires enable_modifications_sync=true: the boot-time \
+             fleet-frontier skip-ahead marks rows persisted whose EFFECTS (irises/graph) only \
+             reach this party via the modifications roll-forward. With sync disabled, an \
+             asymmetric-commit recovery would reconcile bookkeeping without the data — silent \
+             cross-party data divergence instead of a loud wedge."
+        );
+    }
+
     let (iris_store, graph_store) = prepare_stores(&config).await?;
 
     let aws_clients = init_aws_services(&config).await?;

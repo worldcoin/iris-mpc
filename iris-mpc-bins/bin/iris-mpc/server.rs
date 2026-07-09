@@ -138,6 +138,15 @@ async fn main() -> Result<()> {
 }
 
 async fn server_main(config: Config) -> Result<()> {
+    if config.db_backed_ingest {
+        bail!(
+            "db_backed_ingest=true is not supported by the GPU server: it has no ingest task, \
+             boot recovery, or persist-mark hook — formation would read an empty/stale \
+             ingested_requests table and silently starve the fleet. Wire the GPU path first \
+             (see PR #2264 production gaps) or unset SMPC__DB_BACKED_INGEST."
+        );
+    }
+
     let shutdown_handler = Arc::new(ShutdownHandler::new(
         config.shutdown_last_results_sync_timeout_secs,
     ));
