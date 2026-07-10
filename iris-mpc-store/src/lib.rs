@@ -1195,6 +1195,135 @@ pub mod tests {
         Ok(())
     }
 
+    // update_iris (no explicit version) with changed content auto-increments version_id.
+    #[tokio::test]
+    async fn test_update_iris_auto_increments_version() -> Result<()> {
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+
+        let iris = StoredIrisRef {
+            id: 1,
+            left_code: &[123_u16; 12800],
+            left_mask: &[456_u16; 6400],
+            right_code: &[789_u16; 12800],
+            right_mask: &[101_u16; 6400],
+        };
+        let mut tx = store.tx().await?;
+        store.insert_irises(&mut tx, &[iris]).await?;
+        tx.commit().await?;
+
+        store
+            .update_iris(
+                None,
+                1,
+                &GaloisRingIrisCodeShare {
+                    id: 1,
+                    coefs: [666_u16; 12800],
+                },
+                &GaloisRingTrimmedMaskCodeShare {
+                    id: 1,
+                    coefs: [777_u16; 6400],
+                },
+                &GaloisRingIrisCodeShare {
+                    id: 1,
+                    coefs: [888_u16; 12800],
+                },
+                &GaloisRingTrimmedMaskCodeShare {
+                    id: 1,
+                    coefs: [999_u16; 6400],
+                },
+            )
+            .await?;
+
+        let got = store.get_iris_data_by_id(1).await?;
+        assert_eq!(got.version_id(), 1);
+
+        cleanup(&postgres_client, &schema_name).await?;
+        Ok(())
+    }
+
+    // update_iris_with_version_id with changed content and an explicit version different from the
+    // current one writes exactly the explicit version (trigger does not override it).
+    #[tokio::test]
+    async fn test_update_iris_with_version_id_respects_explicit_version() -> Result<()> {
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+
+        let iris = StoredIrisRef {
+            id: 1,
+            left_code: &[123_u16; 12800],
+            left_mask: &[456_u16; 6400],
+            right_code: &[789_u16; 12800],
+            right_mask: &[101_u16; 6400],
+        };
+        let mut tx = store.tx().await?;
+        store.insert_irises(&mut tx, &[iris]).await?;
+        tx.commit().await?;
+
+        let updated = StoredIrisRef {
+            id: 1,
+            left_code: &[666_u16; 12800],
+            left_mask: &[777_u16; 6400],
+            right_code: &[888_u16; 12800],
+            right_mask: &[999_u16; 6400],
+        };
+        store.update_iris_with_version_id(None, 5, &updated).await?;
+
+        let got = store.get_iris_data_by_id(1).await?;
+        assert_eq!(got.version_id(), 5);
+        assert_eq!(cast_u8_to_u16(&got.left_code), updated.left_code);
+        assert_eq!(cast_u8_to_u16(&got.left_mask), updated.left_mask);
+        assert_eq!(cast_u8_to_u16(&got.right_code), updated.right_code);
+        assert_eq!(cast_u8_to_u16(&got.right_mask), updated.right_mask);
+
+        cleanup(&postgres_client, &schema_name).await?;
+        Ok(())
+    }
+
+    // Residual: an explicit version equal to the current one is indistinguishable from "unchanged",
+    // so content changes still auto-increment it.
+    #[tokio::test]
+    async fn test_update_iris_with_version_id_equal_version_still_increments() -> Result<()> {
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+
+        let iris = StoredIrisRef {
+            id: 1,
+            left_code: &[123_u16; 12800],
+            left_mask: &[456_u16; 6400],
+            right_code: &[789_u16; 12800],
+            right_mask: &[101_u16; 6400],
+        };
+        let mut tx = store.tx().await?;
+        store.insert_irises(&mut tx, &[iris]).await?;
+        tx.commit().await?;
+
+        // Inserted row has version_id 0; re-request 0 with changed content.
+        let updated = StoredIrisRef {
+            id: 1,
+            left_code: &[666_u16; 12800],
+            left_mask: &[777_u16; 6400],
+            right_code: &[888_u16; 12800],
+            right_mask: &[999_u16; 6400],
+        };
+        store.update_iris_with_version_id(None, 0, &updated).await?;
+
+        let got = store.get_iris_data_by_id(1).await?;
+        assert_eq!(got.version_id(), 1);
+
+        cleanup(&postgres_client, &schema_name).await?;
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_insert_modification() -> Result<()> {
         let schema_name = temporary_name();
