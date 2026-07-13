@@ -30,21 +30,17 @@ pub use s3_importer::{
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::ops::DerefMut;
 
-/// Proof that `app.explicit_version_id = 'on'` is active on the borrowed
-/// transaction, permitting an authoritative `version_id` write.
+/// Proof that `app.explicit_version_id = 'on'` is set on the borrowed transaction,
+/// permitting a verbatim `version_id` write.
 ///
-/// Obtainable only via [`ExplicitVersion::enable`], which sets the flag on the
-/// exact transaction it borrows. The flag is `SET LOCAL`, so it clears when the
-/// transaction commits or rolls back. The `irises` `BEFORE UPDATE` trigger
-/// rejects any hand-set `version_id` while the flag is off, so an explicit write
-/// without a handle fails at the database instead of being silently
-/// auto-incremented.
+/// Obtainable only via [`ExplicitVersion::enable`]. The flag is `SET LOCAL`, so it
+/// clears at commit/rollback; without it the trigger rejects any hand-set `version_id`.
 pub struct ExplicitVersion<'t, 'c> {
     tx: &'t mut Transaction<'c, Postgres>,
 }
 
 impl<'t, 'c> ExplicitVersion<'t, 'c> {
-    /// Enable authoritative `version_id` writes for the remainder of `tx`.
+    /// Enable verbatim `version_id` writes for the rest of `tx`.
     pub async fn enable(tx: &'t mut Transaction<'c, Postgres>) -> Result<Self> {
         sqlx::query("SET LOCAL app.explicit_version_id = 'on'")
             .execute(tx.deref_mut())
@@ -453,10 +449,8 @@ WHERE id = $1;
         Ok(())
     }
 
-    /// Update an existing iris's shares and write `version_id` authoritatively.
-    ///
-    /// The [`ExplicitVersion`] handle bypasses the auto-increment trigger, so
-    /// `version_id` is stored verbatim (any value, including a lower one).
+    /// Update an iris's shares, writing `version_id` verbatim (the [`ExplicitVersion`]
+    /// handle bypasses the auto-increment trigger).
     pub async fn update_iris_with_version_id(
         &self,
         tx: &mut ExplicitVersion<'_, '_>,
@@ -1217,7 +1211,7 @@ pub mod tests {
         Ok(())
     }
 
-    // update_iris (no explicit version) with changed content auto-increments version_id.
+    // update_iris auto-increments version_id on content change.
     #[tokio::test]
     async fn test_update_iris_auto_increments_version() -> Result<()> {
         let schema_name = temporary_name();
@@ -1267,8 +1261,7 @@ pub mod tests {
         Ok(())
     }
 
-    // update_iris_with_version_id with changed content and an explicit version different from the
-    // current one writes exactly the explicit version (trigger does not override it).
+    // A differing explicit version is written verbatim.
     #[tokio::test]
     async fn test_update_iris_with_version_id_respects_explicit_version() -> Result<()> {
         let schema_name = temporary_name();
@@ -1296,11 +1289,12 @@ pub mod tests {
             right_mask: &[999_u16; 6400],
         };
         let mut tx = store.tx().await?;
-        let mut ev = ExplicitVersion::enable(&mut tx).await?;
-        store
-            .update_iris_with_version_id(&mut ev, 5, &updated)
-            .await?;
-        drop(ev);
+        {
+            let mut ev = ExplicitVersion::enable(&mut tx).await?;
+            store
+                .update_iris_with_version_id(&mut ev, 5, &updated)
+                .await?;
+        }
         tx.commit().await?;
 
         let got = store.get_iris_data_by_id(1).await?;
@@ -1314,8 +1308,7 @@ pub mod tests {
         Ok(())
     }
 
-    // With the flag on, an explicit version equal to the current one is honored verbatim (no
-    // auto-increment), even when content changes.
+    // An explicit version equal to the current one is honored verbatim, even on content change.
     #[tokio::test]
     async fn test_update_iris_with_version_id_equal_version_is_honored() -> Result<()> {
         let schema_name = temporary_name();
@@ -1344,11 +1337,12 @@ pub mod tests {
             right_mask: &[999_u16; 6400],
         };
         let mut tx = store.tx().await?;
-        let mut ev = ExplicitVersion::enable(&mut tx).await?;
-        store
-            .update_iris_with_version_id(&mut ev, 0, &updated)
-            .await?;
-        drop(ev);
+        {
+            let mut ev = ExplicitVersion::enable(&mut tx).await?;
+            store
+                .update_iris_with_version_id(&mut ev, 0, &updated)
+                .await?;
+        }
         tx.commit().await?;
 
         let got = store.get_iris_data_by_id(1).await?;
@@ -1358,8 +1352,7 @@ pub mod tests {
         Ok(())
     }
 
-    // With the flag on, version_id may be set to an arbitrary value, including a lower one (for
-    // manual repair).
+    // version_id may be set to an arbitrary value, including a lower one.
     #[tokio::test]
     async fn test_update_iris_with_version_id_allows_arbitrary_version() -> Result<()> {
         let schema_name = temporary_name();
@@ -1389,21 +1382,23 @@ pub mod tests {
 
         // Bump to 5.
         let mut tx = store.tx().await?;
-        let mut ev = ExplicitVersion::enable(&mut tx).await?;
-        store
-            .update_iris_with_version_id(&mut ev, 5, &updated)
-            .await?;
-        drop(ev);
+        {
+            let mut ev = ExplicitVersion::enable(&mut tx).await?;
+            store
+                .update_iris_with_version_id(&mut ev, 5, &updated)
+                .await?;
+        }
         tx.commit().await?;
         assert_eq!(store.get_iris_data_by_id(1).await?.version_id(), 5);
 
         // Set back to 2 (lower).
         let mut tx = store.tx().await?;
-        let mut ev = ExplicitVersion::enable(&mut tx).await?;
-        store
-            .update_iris_with_version_id(&mut ev, 2, &updated)
-            .await?;
-        drop(ev);
+        {
+            let mut ev = ExplicitVersion::enable(&mut tx).await?;
+            store
+                .update_iris_with_version_id(&mut ev, 2, &updated)
+                .await?;
+        }
         tx.commit().await?;
         assert_eq!(store.get_iris_data_by_id(1).await?.version_id(), 2);
 
@@ -1411,8 +1406,7 @@ pub mod tests {
         Ok(())
     }
 
-    // A hand-set version_id without the flag is rejected by the trigger instead of being silently
-    // overwritten.
+    // A hand-set version_id without the flag is rejected.
     #[tokio::test]
     async fn test_update_version_id_without_flag_is_rejected() -> Result<()> {
         let schema_name = temporary_name();

@@ -1292,8 +1292,7 @@ async fn get_results_thread(
                                     right_code: &right_iris.code.coefs,
                                     right_mask: &right_iris.mask.coefs,
                                 };
-                    // We should ensure that the vector_id_to_persist is matching the inserted serial id.
-                    // The handle bypasses the auto-increment trigger so the replayed version is written verbatim.
+                    // Replay the modification's version verbatim; the handle bypasses the auto-increment trigger.
                     {
                         let mut ev = ExplicitVersion::enable(&mut graph_tx.tx).await?;
                         hnsw_iris_store

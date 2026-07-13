@@ -1,11 +1,10 @@
--- version_id is trigger-managed: content changes auto-increment it. A hand-set
--- version_id is rejected unless the caller opts in for the transaction via
--- `SET LOCAL app.explicit_version_id = 'on'` (the ExplicitVersion store API),
--- in which case the value is written verbatim.
+-- Content changes auto-increment version_id. A hand-set version_id is rejected
+-- unless the transaction sets app.explicit_version_id (the ExplicitVersion store
+-- API), which writes it verbatim.
 CREATE OR REPLACE FUNCTION increment_version_id()
 RETURNS TRIGGER AS $$
 BEGIN
-    -- Authoritative write: honor version_id verbatim (any value).
+    -- Flag on: write version_id verbatim.
     IF current_setting('app.explicit_version_id', true) = 'on' THEN
         RETURN NEW;
     END IF;
