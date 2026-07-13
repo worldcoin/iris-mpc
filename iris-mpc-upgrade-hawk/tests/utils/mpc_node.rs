@@ -19,7 +19,7 @@ use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{graph::graph_store::GraphPg as GraphStore, GraphMem},
 };
-use iris_mpc_store::{Store, StoredIrisRef};
+use iris_mpc_store::{ExplicitVersion, Store, StoredIrisRef};
 use itertools::Itertools;
 use tokio::task::JoinSet;
 
@@ -245,8 +245,11 @@ impl MpcNode {
         }
 
         let update_serial_ids = modifications::modifications_extension_updates(last_mods, cur_mods);
-        for serial_id in update_serial_ids {
-            db_ops::increment_iris_version(&mut tx, serial_id).await?;
+        {
+            let mut ev = ExplicitVersion::enable(&mut tx).await?;
+            for serial_id in update_serial_ids {
+                db_ops::increment_iris_version(&mut ev, serial_id).await?;
+            }
         }
 
         tx.commit().await?;
@@ -257,7 +260,10 @@ impl MpcNode {
     #[allow(dead_code)]
     pub async fn increment_iris_version(&self, serial_id: i64) -> Result<()> {
         let mut tx = self.gpu_stores.iris.tx().await?;
-        db_ops::increment_iris_version(&mut tx, serial_id).await?;
+        {
+            let mut ev = ExplicitVersion::enable(&mut tx).await?;
+            db_ops::increment_iris_version(&mut ev, serial_id).await?;
+        }
         tx.commit().await?;
 
         Ok(())
@@ -495,23 +501,24 @@ pub mod db_ops {
 
     use eyre::Result;
     use iris_mpc_common::{helpers::sync::Modification, VectorId};
-    use iris_mpc_store::Store;
+    use iris_mpc_store::{ExplicitVersion, Store};
     use sqlx::{Postgres, Transaction};
 
     /// Test functionality which updates an iris only by incrementing its version,
     /// without changing the underlying iris code.
     pub async fn increment_iris_version(
-        tx: &mut Transaction<'_, Postgres>,
+        tx: &mut ExplicitVersion<'_, '_>,
         serial_id: i64,
     ) -> Result<()> {
-        let query = sqlx::query(
+        sqlx::query(
             r#"
             UPDATE irises SET version_id = version_id + 1
             WHERE id = $1;
             "#,
         )
-        .bind(serial_id);
-        query.execute(tx.deref_mut()).await?;
+        .bind(serial_id)
+        .execute(tx.tx().deref_mut())
+        .await?;
 
         Ok(())
     }

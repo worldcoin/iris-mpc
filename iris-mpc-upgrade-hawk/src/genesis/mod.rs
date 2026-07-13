@@ -47,7 +47,7 @@ use iris_mpc_cpu::{
     hawkers::aby3::aby3_store::{Aby3Store, VectorIdRegistryRef},
     hnsw::{graph::graph_store::GraphPg, GraphMem},
 };
-use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
+use iris_mpc_store::{ExplicitVersion, Store as IrisStore, StoredIrisRef};
 use std::{
     sync::Arc,
     time::{Duration, Instant},
@@ -1292,13 +1292,18 @@ async fn get_results_thread(
                                     right_code: &right_iris.code.coefs,
                                     right_mask: &right_iris.mask.coefs,
                                 };
-                    // We should ensure that the vector_id_to_persist is matching the inserted serial id
-                    hnsw_iris_store.update_iris_with_version_id(
-                            Some(&mut graph_tx.tx),
-                            vector_id_to_persist.version_id(),
-                            &iris_data,
-                        )
-                        .await?;
+                    // We should ensure that the vector_id_to_persist is matching the inserted serial id.
+                    // The handle bypasses the auto-increment trigger so the replayed version is written verbatim.
+                    {
+                        let mut ev = ExplicitVersion::enable(&mut graph_tx.tx).await?;
+                        hnsw_iris_store
+                            .update_iris_with_version_id(
+                                &mut ev,
+                                vector_id_to_persist.version_id(),
+                                &iris_data,
+                            )
+                            .await?;
+                    }
 
                     let mut db_tx = graph_tx.tx;
                     set_last_indexed_modification_id(&mut db_tx, modification_id).await?;
