@@ -103,10 +103,8 @@ impl Handle {
     }
 }
 
-/// Re-search and re-insert `vector_id` for one eye: fetch the iris from the
-/// worker pool, cache it, search for insertion links, and insert the node into
-/// the in-memory store and graph. Shared by the modification-replay and
-/// version-replay job arms. Returns the inserted `VectorId`.
+/// Search + insert `vector_id` for one eye from the worker pool's iris.
+/// Shared by the modification-replay and version-replay job arms.
 async fn replay_serial_for_side(
     session: &HawkSession,
     searcher: &HnswSearcher,
@@ -386,9 +384,8 @@ impl Handle {
                             let session =
                                 sessions.first().ok_or_eyre("Sessions for side are empty")?;
 
-                            // Remove-then-add: prior keys leave the graph before
-                            // the insertion search so it cannot route through
-                            // them or link the new node to them.
+                            // Prior keys leave the graph before the search so
+                            // it cannot route through or link to them.
                             if !remove_keys.is_empty() {
                                 let mut graph = session.graph_store.write().await;
                                 for id in &remove_keys {

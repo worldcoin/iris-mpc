@@ -1,17 +1,13 @@
 //! Pure set computation for the version-join delta mode.
 //!
-//! Given per-serial version state for the materialized graph, the source iris
-//! store, and the HNSW iris store, derive the action sets that drive the
-//! delta. Graph work is uniform surgery — remove every existing key for the
-//! serial, then search + reinsert at the current source version — applied to
-//! any serial whose graph lineage is suspect: version behind or ahead of the
-//! source, several keys for one serial (ghosts), or absent from the graph.
+//! Graph work is uniform surgery — remove every key for the serial, then
+//! search + reinsert at the current source version — applied to any serial
+//! with a suspect lineage: version behind or ahead of the source, several
+//! keys (ghosts), or absent from the graph.
 //!
-//! Deletion is the one case version comparison cannot see: a deletion bumps
-//! the source version and replaces the content with the party's deterministic
-//! dummy shares. [`VersionJoinPlan::split`] therefore separates surgery
-//! serials whose source content is the deletion tombstone (remove only, no
-//! reinsert) from live ones (remove + reinsert).
+//! Deletion is invisible to version comparison (it bumps the source version
+//! and writes dummy shares); [`VersionJoinPlan::split`] separates tombstones
+//! (remove only) from live serials (remove + reinsert).
 
 use iris_mpc_common::{SerialId, VersionId};
 use std::collections::{HashMap, HashSet};
@@ -36,22 +32,20 @@ impl SurgeryReasons {
 }
 
 /// The version-comparison output of [`compute_version_join`]. All serial
-/// vectors are sorted ascending (the function iterates serials in order), so
-/// processing order is identical across parties.
+/// vectors are sorted ascending, so processing order is identical across
+/// parties.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct VersionJoinPlan {
-    /// Serials needing graph surgery: remove every existing key, then search +
-    /// reinsert at the current source version iff the source content is live
-    /// (see [`Self::split`]).
+    /// Serials needing graph surgery: remove every existing key, then reinsert
+    /// at the current source version iff live (see [`Self::split`]).
     pub graph_surgery: Vec<SerialId>,
     /// Per-class breakdown of `graph_surgery`.
     pub surgery_reasons: SurgeryReasons,
     /// Non-surgery serials whose HNSW iris row disagrees with the source.
-    /// Overwrite the row from the pool.
     pub store_repair: Vec<SerialId>,
-    /// Serials (surgery or not) whose HNSW row is missing entirely; INSERTed
-    /// during the store-repair phase so a later replay UPDATE finds a row.
-    /// Always a subset of `store_repair`.
+    /// Serials (surgery or not) with no HNSW row at all; INSERTed during the
+    /// store-repair phase so a later replay UPDATE finds a row. Subset of
+    /// `store_repair`.
     pub missing_hnsw_rows: Vec<SerialId>,
     /// `serial ≤ max_serial` absent from the source pool. Logged, not acted on.
     pub source_missing: Vec<SerialId>,
@@ -71,10 +65,8 @@ pub struct SurgeryPlan {
     pub missing_hnsw_rows: Vec<SerialId>,
 }
 
-/// Fold `(serial, version)` pairs into all versions per serial. The graph can
-/// hold several keys for one serial (ghosts left by prior deltas); the max is
-/// the live candidate and every key is a removal target. Per-serial order
-/// follows the input iterator — sort before deriving ordered operations.
+/// Fold `(serial, version)` pairs into all versions per serial. Per-serial
+/// order follows the input iterator — sort before deriving ordered operations.
 pub fn versions_per_serial(
     pairs: impl IntoIterator<Item = (SerialId, VersionId)>,
 ) -> HashMap<SerialId, Vec<VersionId>> {
@@ -85,13 +77,11 @@ pub fn versions_per_serial(
     out
 }
 
-/// Compute the version-join plan. Pure: no I/O.
+/// Compute the version-join plan over `1..=max_serial`. Pure: no I/O.
 ///
 /// `graph_versions` must carry every graph key per serial (see
-/// [`versions_per_serial`]). Serials are considered over `1..=max_serial`.
-/// Deletions are not distinguished here — a deleted serial classifies by its
-/// (bumped) source version like any other; [`VersionJoinPlan::split`] resolves
-/// the tombstones.
+/// [`versions_per_serial`]). Deletions are not distinguished here;
+/// [`VersionJoinPlan::split`] resolves the tombstones.
 pub fn compute_version_join(
     graph_versions: &HashMap<SerialId, Vec<VersionId>>,
     source_versions: &HashMap<SerialId, VersionId>,
@@ -135,10 +125,9 @@ pub fn compute_version_join(
             plan.graph_surgery.push(serial);
         }
 
-        // Store axis: reconcile the HNSW iris row. A missing row is inserted
-        // even for surgery serials (the replay persistence path is an UPDATE);
-        // a present-but-stale row under surgery is left to that path, except
-        // for tombstones, which `split` routes back to store repair.
+        // Store axis: a missing row is inserted even under surgery (replay
+        // persistence is an UPDATE); a stale row under surgery is left to the
+        // replay, except for tombstones (`split` routes those to store repair).
         match hnsw_versions.get(&serial) {
             None => {
                 plan.store_repair.push(serial);
@@ -156,10 +145,9 @@ pub fn compute_version_join(
 
 impl VersionJoinPlan {
     /// Split surgery into replay vs remove-only using `deleted` (serials whose
-    /// source content equals the deletion tombstone). Tombstones without graph
-    /// presence are dropped (nothing to remove, nothing to insert); tombstones
-    /// with a stale HNSW row are added to `store_repair` (no replay will
-    /// rewrite their row).
+    /// source content is the deletion tombstone). Tombstones without graph
+    /// presence are dropped; tombstones with a stale HNSW row are added to
+    /// `store_repair` (no replay rewrites their row).
     pub fn split(
         &self,
         deleted: &HashSet<SerialId>,

@@ -67,11 +67,9 @@ impl Test {
 
 impl TestRun for Test {
     async fn exec(&mut self) -> Result<()> {
-        // Phase A — build the base graph to BASE_HEIGHT via the default
-        // (modifications) mode, then bake a ghost: bump E1 through a reauth
-        // modification and rerun modifications mode, whose replay inserts the
-        // new version and leaves the old node in the graph. The resulting
-        // checkpoint is the version-join base.
+        // Phase A — build the base graph (modifications mode), then bake a
+        // ghost: bump E1 via a reauth mod and rerun; the replay inserts the new
+        // version and leaves the old node. The result is the version-join base.
         let mut args = DEFAULT_GENESIS_ARGS;
         args.max_indexation_id = BASE_HEIGHT;
         run_genesis!(self, args.clone());
@@ -182,11 +180,10 @@ async fn inject_divergence(node: &MpcNode, party_id: usize) -> Result<()> {
         tx.commit().await?;
     }
 
-    // F1: deletion — source content becomes the party's dummy shares (the
-    // content-change trigger bumps the version). No modification row: the
-    // tombstone is detected from content alone.
-    // G1: deletion followed by reinsertion — the final content is live (copied
-    // from an untouched donor serial, a valid cross-party sharing).
+    // F1: deletion — source content becomes the party's dummy shares (trigger
+    // bumps the version); no modification row.
+    // G1: deletion then reinsertion — final content copied from a donor serial
+    // (a valid cross-party sharing).
     let (dummy_code, dummy_mask) = get_dummy_shares_for_deletion(party_id);
     for serial in [F1, G1] {
         node.gpu_stores

@@ -801,9 +801,9 @@ async fn exec_delta(
 /// source by `(serial → version)` comparison against the base checkpoint.
 ///
 /// The base checkpoint has already been loaded into the in-memory graph and the
-/// HNSW schema reset to it (see `reset_to_checkpoint`). This computes the two
-/// diff sets, applies store repairs directly (no MPC), then replays the stale
-/// graph nodes via the Hawk handle.
+/// HNSW schema reset to it (see `reset_to_checkpoint`). Computes the plan,
+/// applies store repairs directly (no MPC), then runs graph surgery via the
+/// Hawk handle.
 #[allow(clippy::too_many_arguments)]
 async fn exec_delta_version_join(
     config: &Config,
@@ -822,9 +822,7 @@ async fn exec_delta_version_join(
     // S_cp: the checkpoint's last indexed iris id (ctx.last_indexed_id was set
     // to it during reset). Serials are compared over 1..=S_cp.
     let max_serial = ctx.last_indexed_id;
-    // The S3 deletion list is a logged cross-check only: tombstones are
-    // detected from source content, and a listed serial with live content is a
-    // reinsertion after deletion.
+    // Logged cross-check only; tombstones are detected from source content.
     let excluded: HashSet<SerialId> = ctx.excluded_serial_ids.iter().copied().collect();
 
     let res: Result<bool> = async {
@@ -857,10 +855,9 @@ async fn exec_delta_version_join(
         }
         let plan = left_plan;
 
-        // 2. Deletion tombstones among surgery serials: party-local content
-        //    check against the deterministic dummy shares. Deletion writes are
-        //    synchronized, so the classification agrees across parties (checked
-        //    by the set hashes in the comparison log).
+        // 2. Tombstones among surgery serials, by content check against the
+        //    party's dummy shares. Deletion writes are synchronized, so parties
+        //    agree (cross-checked via set hashes in the comparison log).
         let deleted = gather_tombstones(
             config.party_id,
             &plan.graph_surgery,
@@ -882,10 +879,8 @@ async fn exec_delta_version_join(
         apply_store_repairs(&surgery, registries, worker_pools, hnsw_iris_store).await?;
 
         // 5. Graph surgery: replays and removals in serial order, one job per
-        //    serial, syncing periodically. Each job removes every existing key
-        //    for the serial before the (optional) insertion search. Removing an
-        //    entry point is fine: the searcher falls back to
-        //    `get_temporary_entry_point` when the valid-EP set is empty.
+        //    serial, syncing periodically. Removing an entry point is fine
+        //    (the searcher falls back to a temporary EP).
         let mut items: Vec<(SerialId, bool)> = surgery
             .graph_replay
             .iter()
@@ -900,8 +895,8 @@ async fn exec_delta_version_join(
             let end = items.len().saturating_sub(1);
             let mut now = Instant::now();
             for (idx, (serial, reinsert)) in items.iter().enumerate() {
-                // Sorted removal order: per-serial version lists follow hash
-                // iteration order, and mutation order must match across parties.
+                // Version lists follow hash iteration order; mutation order
+                // must match across parties.
                 let removals = [LEFT, RIGHT].map(|side| {
                     let mut keys: Vec<VectorId> = graph_versions[side]
                         .get(serial)
@@ -1032,9 +1027,8 @@ async fn gather_graph_versions(graph_ref: &GraphRef) -> HashMap<SerialId, Vec<Ve
     )
 }
 
-/// Serials whose source content equals the party's deterministic deletion
-/// dummy on both eyes. Party-local, but deletion writes are synchronized, so
-/// the resulting classification is cross-party consistent.
+/// Serials whose source content equals the party's deletion dummy on both
+/// eyes.
 async fn gather_tombstones(
     party_id: usize,
     serials: &[SerialId],
@@ -1090,11 +1084,9 @@ async fn gather_source_versions(
     out
 }
 
-/// Log the join-gated set against the modification-gated set, the deletion
-/// cross-checks against the S3 list, and the per-class metric gauges. The
-/// per-party set hashes are the operational cross-party check for the sets
-/// derived from purely local state (`store_repair`, tombstones), which are not
-/// covered by graph checksums.
+/// Log the join-gated vs modification-gated sets, deletion cross-checks, and
+/// per-class gauges. The set hashes cross-check the locally derived sets
+/// (`store_repair`, tombstones), which graph checksums do not cover.
 fn log_version_join_comparison(
     plan: &VersionJoinPlan,
     surgery: &SurgeryPlan,
@@ -1118,9 +1110,8 @@ fn log_version_join_comparison(
     join_only.sort_unstable();
     mod_all.sort_unstable();
 
-    // S3 deletion list cross-checks. A listed serial with live content was
-    // reinserted after deletion (expected, replayed); an unlisted tombstone is
-    // a deletion the list does not know about.
+    // Listed ∧ live = reinserted after deletion (replayed); tombstone ∉ list =
+    // deletion the list missed.
     let listed_live: Vec<SerialId> = surgery
         .graph_replay
         .iter()
@@ -1896,8 +1887,7 @@ async fn get_results_thread(
                     done_tx,
                 } => {
                     // Remove-only surgery carries no vector id: the graph
-                    // change persists via the S3 checkpoint and the HNSW row
-                    // (if stale) via the store-repair phase.
+                    // persists via the S3 checkpoint, the row via store repair.
                     if let Some(vector_id_to_persist) = vector_id_to_persist {
                         tracing::info!(
                             "Job Results :: Received version replay for serial-id={}",

@@ -59,9 +59,8 @@ pub enum JobRequest {
     },
     /// Graph surgery for one serial (version-join delta mode): remove every
     /// existing graph key, then optionally search + re-insert the current
-    /// source version. Carries no modification id.
+    /// source version.
     VersionReplay {
-        /// Serial id under surgery.
         serial_id: u32,
         /// Existing graph keys per eye, removed before the insertion search.
         removals: BothEyes<Vec<VectorId>>,
@@ -135,8 +134,7 @@ pub enum JobResult {
         done_tx: sync::oneshot::Sender<()>,
     },
     VersionReplay {
-        /// Vector id for persistence (current source version); `None` for
-        /// remove-only surgery, which writes no HNSW row.
+        /// Vector id for persistence; `None` for remove-only surgery.
         vector_id_to_persist: Option<VectorId>,
 
         done_tx: sync::oneshot::Sender<()>,
