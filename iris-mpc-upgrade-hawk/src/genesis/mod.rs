@@ -878,16 +878,14 @@ async fn exec_delta_version_join(
         // 3. Comparison log (join vs modifications, deletion cross-checks) + metrics.
         log_version_join_comparison(&plan, &surgery, &deleted, &excluded, &ctx.modifications);
 
-        // 4. Surgery must not remove a current entry point: there is no
-        //    EP-reassignment path, so removal would leave searches unrooted.
-        ensure_no_entry_point_removal(imem_graph_stores, &graph_versions, &surgery).await?;
-
-        // 5. Store repairs first (no MPC, no in-flight results work yet).
+        // 4. Store repairs first (no MPC, no in-flight results work yet).
         apply_store_repairs(&surgery, registries, worker_pools, hnsw_iris_store).await?;
 
-        // 6. Graph surgery: replays and removals in serial order, one job per
+        // 5. Graph surgery: replays and removals in serial order, one job per
         //    serial, syncing periodically. Each job removes every existing key
-        //    for the serial before the (optional) insertion search.
+        //    for the serial before the (optional) insertion search. Removing an
+        //    entry point is fine: the searcher falls back to
+        //    `get_temporary_entry_point` when the valid-EP set is empty.
         let mut items: Vec<(SerialId, bool)> = surgery
             .graph_replay
             .iter()
@@ -1075,47 +1073,6 @@ async fn gather_tombstones(
         }
     }
     Ok(out)
-}
-
-/// Bail if surgery would remove a current entry point: there is no
-/// EP-reassignment path, and removal would leave subsequent searches unrooted.
-async fn ensure_no_entry_point_removal(
-    imem_graph_stores: &Arc<BothEyes<GraphRef>>,
-    graph_versions: &[HashMap<SerialId, Vec<VersionId>>; 2],
-    surgery: &SurgeryPlan,
-) -> Result<()> {
-    for side in [LEFT, RIGHT] {
-        let entry_points: HashSet<VectorId> = {
-            let graph = imem_graph_stores[side].read().await;
-            graph
-                .get_entry_points()
-                .unwrap_or_default()
-                .into_iter()
-                .collect()
-        };
-        if entry_points.is_empty() {
-            continue;
-        }
-        for serial in surgery
-            .graph_replay
-            .iter()
-            .chain(surgery.graph_remove.iter())
-        {
-            for version in graph_versions[side]
-                .get(serial)
-                .map(Vec::as_slice)
-                .unwrap_or_default()
-            {
-                if entry_points.contains(&VectorId::new(*serial, *version)) {
-                    bail!(
-                        "version-join surgery would remove entry point (serial {serial}, version \
-                         {version}); entry-point migration is not supported"
-                    );
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Build the source `(serial → version)` map from the registry (no DB scan).
