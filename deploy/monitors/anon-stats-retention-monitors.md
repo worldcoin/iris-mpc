@@ -19,7 +19,7 @@ The CronJob runs daily; no success in >26h means it failed, didn't schedule, or 
 
 ## 2. Oldest-retained exceeds the window  (retention falling behind)
 If the reaper stops deleting (bug, lock contention, guard mistake), the oldest row ages past the window — the direct symptom.
-- **Metric monitor**: `max(last_6h):max:retention.oldest_retained_seconds{env:stage} by {service,table} > 1900800` (= 22 days = the 14-day window + a generous margin for backfilled legacy rows + slack). Page. Tune the margin after observing the first weeks (legacy rows are stamped at migration time and drain over the first window).
+- **Metric monitor**: threshold = **active retention window + 2 days** slack (matching the cross-party tolerance in #5). Stage runs a 5-day window → `max(last_6h):max:retention.oldest_retained_seconds{env:stage} by {service,table} > 604800` (= 7 days). Prod (when enabled, 14-day window) → `> 1382400` (= 16 days). Page. The old backfilled-legacy-rows margin is obsolete once the first live run drains the migration-stamped cohort; if the first run hasn't happened yet, expect this to read ~window-of-backfill until it does.
 
 ## 3. Bloat — dead-tuple ratio climbing  (the DELETE-approach risk)
 The one real failure mode of batched DELETE: autovacuum not keeping up with delete churn → table/index bloat.
@@ -42,3 +42,22 @@ Catches a mis-set retention/guard deleting far more than a normal day.
 - [ ] #4 hard-ceiling set from observed staging `rows_deleted`.
 - [ ] Then clone to `env:prod` and flip `suspend: false` **per party, canary one first**.
 - [ ] Re-evaluate #3 thresholds if/when POP-3908 raises volume — that's the trigger to consider pg_partman for the hottest table.
+
+
+---
+
+## POP-3931 addendum — `modifications` retention (same reaper, same monitors)
+
+The modifications job reuses monitors #1–#5 verbatim (service names
+`retention-reaper-modifications-hnsw-{0,1,2}`; metrics carry `table:modifications`).
+Two operational notes specific to this table:
+
+- **30-day dead period:** after the `created_at` migration lands, existing rows are
+  backfilled with the migration timestamp — expect `rows_deleted = 0` for the first 30
+  days; do not treat that as a missing-run signal (#4's anomaly baseline starts after
+  the first non-zero window).
+- **Newest-10k floor:** the guard always retains the newest 10 000 rows (protects the
+  cross-party startup-sync window and the MAX(id)+1 id-assignment trigger), so
+  `oldest_retained_seconds` on a very quiet party can legitimately exceed the retention
+  window — the #2 threshold (22d for anon_stats) should be set per-table with margin
+  for this.

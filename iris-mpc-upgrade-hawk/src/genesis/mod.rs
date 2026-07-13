@@ -50,7 +50,7 @@ use iris_mpc_cpu::{
     hawkers::aby3::aby3_store::{Aby3Store, VectorIdRegistryRef},
     hnsw::{graph::graph_store::GraphPg, GraphMem},
 };
-use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
+use iris_mpc_store::{ExplicitVersion, Store as IrisStore, StoredIrisRef};
 use std::collections::{HashMap, HashSet};
 use std::{
     sync::Arc,
@@ -1276,23 +1276,26 @@ async fn apply_store_repairs(
         let mut tx = hnsw_iris_store.tx().await?;
         let mut insert_vids: Vec<VectorId> = Vec::new();
         let mut insert_refs: Vec<StoredIrisRef> = Vec::new();
-        for (i, vid) in vids.iter().enumerate() {
-            let left_iris = &left_data[i];
-            let right_iris = &right_data[i];
-            let iris_ref = StoredIrisRef {
-                id: vid.serial_id() as i64,
-                left_code: &left_iris.code.coefs,
-                left_mask: &left_iris.mask.coefs,
-                right_code: &right_iris.code.coefs,
-                right_mask: &right_iris.mask.coefs,
-            };
-            if missing.contains(&vid.serial_id()) {
-                insert_vids.push(*vid);
-                insert_refs.push(iris_ref);
-            } else {
-                hnsw_iris_store
-                    .update_iris_with_version_id(Some(&mut tx), vid.version_id(), &iris_ref)
-                    .await?;
+        {
+            let mut ev = ExplicitVersion::enable(&mut tx).await?;
+            for (i, vid) in vids.iter().enumerate() {
+                let left_iris = &left_data[i];
+                let right_iris = &right_data[i];
+                let iris_ref = StoredIrisRef {
+                    id: vid.serial_id() as i64,
+                    left_code: &left_iris.code.coefs,
+                    left_mask: &left_iris.mask.coefs,
+                    right_code: &right_iris.code.coefs,
+                    right_mask: &right_iris.mask.coefs,
+                };
+                if missing.contains(&vid.serial_id()) {
+                    insert_vids.push(*vid);
+                    insert_refs.push(iris_ref);
+                } else {
+                    hnsw_iris_store
+                        .update_iris_with_version_id(&mut ev, vid.version_id(), &iris_ref)
+                        .await?;
+                }
             }
         }
         if !insert_vids.is_empty() {
@@ -1905,13 +1908,17 @@ async fn get_results_thread(
                                     right_code: &right_iris.code.coefs,
                                     right_mask: &right_iris.mask.coefs,
                                 };
-                    // We should ensure that the vector_id_to_persist is matching the inserted serial id
-                    hnsw_iris_store.update_iris_with_version_id(
-                            Some(&mut graph_tx.tx),
-                            vector_id_to_persist.version_id(),
-                            &iris_data,
-                        )
-                        .await?;
+                    // Replay the modification's version verbatim; the handle bypasses the auto-increment trigger.
+                    {
+                        let mut ev = ExplicitVersion::enable(&mut graph_tx.tx).await?;
+                        hnsw_iris_store
+                            .update_iris_with_version_id(
+                                &mut ev,
+                                vector_id_to_persist.version_id(),
+                                &iris_data,
+                            )
+                            .await?;
+                    }
 
                     let mut db_tx = graph_tx.tx;
                     set_last_indexed_modification_id(&mut db_tx, modification_id).await?;
@@ -1957,13 +1964,16 @@ async fn get_results_thread(
                         // No modification-id cursor write here: version replays have
                         // no modification id, and a synthetic value would regress the
                         // cursor. The end-of-delta cursor write handles it once.
-                        hnsw_iris_store
-                            .update_iris_with_version_id(
-                                Some(&mut graph_tx.tx),
-                                vector_id_to_persist.version_id(),
-                                &iris_data,
-                            )
-                            .await?;
+                        {
+                            let mut ev = ExplicitVersion::enable(&mut graph_tx.tx).await?;
+                            hnsw_iris_store
+                                .update_iris_with_version_id(
+                                    &mut ev,
+                                    vector_id_to_persist.version_id(),
+                                    &iris_data,
+                                )
+                                .await?;
+                        }
                         graph_tx.tx.commit().await?;
 
                         tracing::info!(

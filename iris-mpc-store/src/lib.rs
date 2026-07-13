@@ -30,6 +30,30 @@ pub use s3_importer::{
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::ops::DerefMut;
 
+/// Proof that `app.explicit_version_id = 'on'` is set on the borrowed transaction,
+/// permitting a verbatim `version_id` write.
+///
+/// Obtainable only via [`ExplicitVersion::enable`]. The flag is `SET LOCAL`, so it
+/// clears at commit/rollback; without it the trigger rejects any hand-set `version_id`.
+pub struct ExplicitVersion<'t, 'c> {
+    tx: &'t mut Transaction<'c, Postgres>,
+}
+
+impl<'t, 'c> ExplicitVersion<'t, 'c> {
+    /// Enable verbatim `version_id` writes for the rest of `tx`.
+    pub async fn enable(tx: &'t mut Transaction<'c, Postgres>) -> Result<Self> {
+        sqlx::query("SET LOCAL app.explicit_version_id = 'on'")
+            .execute(tx.deref_mut())
+            .await?;
+        Ok(Self { tx })
+    }
+
+    /// The underlying transaction, for other statements in the same unit of work.
+    pub fn tx(&mut self) -> &mut Transaction<'c, Postgres> {
+        &mut *self.tx
+    }
+}
+
 /// The unified type that can hold either DB or S3 variants.
 pub enum StoredIris {
     // DB stores the shares in their original form
@@ -425,16 +449,17 @@ WHERE id = $1;
         Ok(())
     }
 
-    // Update existing iris with given shares.
+    /// Update an iris's shares, writing `version_id` verbatim (the [`ExplicitVersion`]
+    /// handle bypasses the auto-increment trigger).
     pub async fn update_iris_with_version_id(
         &self,
-        external_tx: Option<&mut Transaction<'_, Postgres>>,
+        tx: &mut ExplicitVersion<'_, '_>,
         version_id: i16,
         codes_and_masks: &StoredIrisRef<'_>,
     ) -> Result<()> {
-        let query = sqlx::query(
+        sqlx::query(
             r#"
-UPDATE irises SET (version_id, left_code, left_mask, right_code, right_mask) = ($2, $3, $4, $5  , $6)
+UPDATE irises SET (version_id, left_code, left_mask, right_code, right_mask) = ($2, $3, $4, $5, $6)
 WHERE id = $1;
 "#,
         )
@@ -443,18 +468,9 @@ WHERE id = $1;
         .bind(cast_slice::<u16, u8>(codes_and_masks.left_code))
         .bind(cast_slice::<u16, u8>(codes_and_masks.left_mask))
         .bind(cast_slice::<u16, u8>(codes_and_masks.right_code))
-        .bind(cast_slice::<u16, u8>(codes_and_masks.right_mask));
-
-        match external_tx {
-            Some(external_tx) => {
-                query.execute(external_tx.deref_mut()).await?;
-            }
-            None => {
-                let mut new_tx = self.pool.begin().await?;
-                query.execute(&mut *new_tx).await?;
-                new_tx.commit().await?;
-            }
-        }
+        .bind(cast_slice::<u16, u8>(codes_and_masks.right_mask))
+        .execute(tx.tx().deref_mut())
+        .await?;
 
         Ok(())
     }
@@ -1190,6 +1206,237 @@ pub mod tests {
             updated_right_mask.coefs
         );
         assert_eq!(got_second_update[0].version_id(), 1);
+
+        cleanup(&postgres_client, &schema_name).await?;
+        Ok(())
+    }
+
+    // update_iris auto-increments version_id on content change.
+    #[tokio::test]
+    async fn test_update_iris_auto_increments_version() -> Result<()> {
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+
+        let iris = StoredIrisRef {
+            id: 1,
+            left_code: &[123_u16; 12800],
+            left_mask: &[456_u16; 6400],
+            right_code: &[789_u16; 12800],
+            right_mask: &[101_u16; 6400],
+        };
+        let mut tx = store.tx().await?;
+        store.insert_irises(&mut tx, &[iris]).await?;
+        tx.commit().await?;
+
+        store
+            .update_iris(
+                None,
+                1,
+                &GaloisRingIrisCodeShare {
+                    id: 1,
+                    coefs: [666_u16; 12800],
+                },
+                &GaloisRingTrimmedMaskCodeShare {
+                    id: 1,
+                    coefs: [777_u16; 6400],
+                },
+                &GaloisRingIrisCodeShare {
+                    id: 1,
+                    coefs: [888_u16; 12800],
+                },
+                &GaloisRingTrimmedMaskCodeShare {
+                    id: 1,
+                    coefs: [999_u16; 6400],
+                },
+            )
+            .await?;
+
+        let got = store.get_iris_data_by_id(1).await?;
+        assert_eq!(got.version_id(), 1);
+
+        cleanup(&postgres_client, &schema_name).await?;
+        Ok(())
+    }
+
+    // A differing explicit version is written verbatim.
+    #[tokio::test]
+    async fn test_update_iris_with_version_id_respects_explicit_version() -> Result<()> {
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+
+        let iris = StoredIrisRef {
+            id: 1,
+            left_code: &[123_u16; 12800],
+            left_mask: &[456_u16; 6400],
+            right_code: &[789_u16; 12800],
+            right_mask: &[101_u16; 6400],
+        };
+        let mut tx = store.tx().await?;
+        store.insert_irises(&mut tx, &[iris]).await?;
+        tx.commit().await?;
+
+        let updated = StoredIrisRef {
+            id: 1,
+            left_code: &[666_u16; 12800],
+            left_mask: &[777_u16; 6400],
+            right_code: &[888_u16; 12800],
+            right_mask: &[999_u16; 6400],
+        };
+        let mut tx = store.tx().await?;
+        {
+            let mut ev = ExplicitVersion::enable(&mut tx).await?;
+            store
+                .update_iris_with_version_id(&mut ev, 5, &updated)
+                .await?;
+        }
+        tx.commit().await?;
+
+        let got = store.get_iris_data_by_id(1).await?;
+        assert_eq!(got.version_id(), 5);
+        assert_eq!(cast_u8_to_u16(&got.left_code), updated.left_code);
+        assert_eq!(cast_u8_to_u16(&got.left_mask), updated.left_mask);
+        assert_eq!(cast_u8_to_u16(&got.right_code), updated.right_code);
+        assert_eq!(cast_u8_to_u16(&got.right_mask), updated.right_mask);
+
+        cleanup(&postgres_client, &schema_name).await?;
+        Ok(())
+    }
+
+    // An explicit version equal to the current one is honored verbatim, even on content change.
+    #[tokio::test]
+    async fn test_update_iris_with_version_id_equal_version_is_honored() -> Result<()> {
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+
+        let iris = StoredIrisRef {
+            id: 1,
+            left_code: &[123_u16; 12800],
+            left_mask: &[456_u16; 6400],
+            right_code: &[789_u16; 12800],
+            right_mask: &[101_u16; 6400],
+        };
+        let mut tx = store.tx().await?;
+        store.insert_irises(&mut tx, &[iris]).await?;
+        tx.commit().await?;
+
+        // Inserted row has version_id 0; re-request 0 with changed content.
+        let updated = StoredIrisRef {
+            id: 1,
+            left_code: &[666_u16; 12800],
+            left_mask: &[777_u16; 6400],
+            right_code: &[888_u16; 12800],
+            right_mask: &[999_u16; 6400],
+        };
+        let mut tx = store.tx().await?;
+        {
+            let mut ev = ExplicitVersion::enable(&mut tx).await?;
+            store
+                .update_iris_with_version_id(&mut ev, 0, &updated)
+                .await?;
+        }
+        tx.commit().await?;
+
+        let got = store.get_iris_data_by_id(1).await?;
+        assert_eq!(got.version_id(), 0);
+
+        cleanup(&postgres_client, &schema_name).await?;
+        Ok(())
+    }
+
+    // version_id may be set to an arbitrary value, including a lower one.
+    #[tokio::test]
+    async fn test_update_iris_with_version_id_allows_arbitrary_version() -> Result<()> {
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+
+        let iris = StoredIrisRef {
+            id: 1,
+            left_code: &[123_u16; 12800],
+            left_mask: &[456_u16; 6400],
+            right_code: &[789_u16; 12800],
+            right_mask: &[101_u16; 6400],
+        };
+        let mut tx = store.tx().await?;
+        store.insert_irises(&mut tx, &[iris]).await?;
+        tx.commit().await?;
+
+        let updated = StoredIrisRef {
+            id: 1,
+            left_code: &[666_u16; 12800],
+            left_mask: &[777_u16; 6400],
+            right_code: &[888_u16; 12800],
+            right_mask: &[999_u16; 6400],
+        };
+
+        // Bump to 5.
+        let mut tx = store.tx().await?;
+        {
+            let mut ev = ExplicitVersion::enable(&mut tx).await?;
+            store
+                .update_iris_with_version_id(&mut ev, 5, &updated)
+                .await?;
+        }
+        tx.commit().await?;
+        assert_eq!(store.get_iris_data_by_id(1).await?.version_id(), 5);
+
+        // Set back to 2 (lower).
+        let mut tx = store.tx().await?;
+        {
+            let mut ev = ExplicitVersion::enable(&mut tx).await?;
+            store
+                .update_iris_with_version_id(&mut ev, 2, &updated)
+                .await?;
+        }
+        tx.commit().await?;
+        assert_eq!(store.get_iris_data_by_id(1).await?.version_id(), 2);
+
+        cleanup(&postgres_client, &schema_name).await?;
+        Ok(())
+    }
+
+    // A hand-set version_id without the flag is rejected.
+    #[tokio::test]
+    async fn test_update_version_id_without_flag_is_rejected() -> Result<()> {
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+
+        let iris = StoredIrisRef {
+            id: 1,
+            left_code: &[123_u16; 12800],
+            left_mask: &[456_u16; 6400],
+            right_code: &[789_u16; 12800],
+            right_mask: &[101_u16; 6400],
+        };
+        let mut tx = store.tx().await?;
+        store.insert_irises(&mut tx, &[iris]).await?;
+        tx.commit().await?;
+
+        let res = sqlx::query("UPDATE irises SET version_id = 42 WHERE id = $1")
+            .bind(1_i64)
+            .execute(&store.pool)
+            .await;
+        assert!(
+            res.is_err(),
+            "hand-set version_id without the flag must be rejected"
+        );
+
+        // Row is unchanged.
+        assert_eq!(store.get_iris_data_by_id(1).await?.version_id(), 0);
 
         cleanup(&postgres_client, &schema_name).await?;
         Ok(())
