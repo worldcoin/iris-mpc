@@ -6,7 +6,10 @@ use crate::{
         LEFT, RIGHT, STORE_IDS,
     },
     hawkers::aby3::aby3_store::Aby3Query,
-    hnsw::HnswSearcher,
+    hnsw::{
+        graph::{mutation::UnstampedMutation, MutationOp},
+        HnswSearcher,
+    },
 };
 use eyre::{bail, eyre, OptionExt, Result};
 use iris_mpc_common::{helpers::smpc_request, VectorId};
@@ -111,8 +114,6 @@ async fn replay_serial_for_side(
     vector_id: VectorId,
 ) -> Result<VectorId> {
     let identifier = (vector_id, side);
-
-    // TODO remove any prior versions of this vector id from graph
 
     // Fetch the iris from the worker pool and cache it before search.
     let query_id = QueryId::new();
@@ -331,6 +332,7 @@ impl Handle {
                                     let vector_id = vector_id_.ok_or_eyre(
                                         "Expected vector serial id of update is missing from store",
                                     )?;
+                                    // TODO remove any prior versions of this vector id from graph
                                     replay_serial_for_side(session, &searcher, side, vector_id).await
                                 }
                                 smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
@@ -369,9 +371,13 @@ impl Handle {
                     JobResult::new_modification_result(modification.id, left_vector, done_tx),
                 ))
             }
-            JobRequest::VersionReplay { serial_id } => {
-                let jobs_per_side =
-                    izip!(STORE_IDS, sessions.iter()).map(|(side, sessions_side)| {
+            JobRequest::VersionReplay {
+                serial_id,
+                removals,
+                reinsert,
+            } => {
+                let jobs_per_side = izip!(STORE_IDS, sessions.iter(), removals).map(
+                    |(side, sessions_side, remove_keys)| {
                         let sessions = sessions_side.clone();
                         let registry = actor.registry(side);
                         let searcher = actor.searcher();
@@ -379,20 +385,38 @@ impl Handle {
                         async move {
                             let session =
                                 sessions.first().ok_or_eyre("Sessions for side are empty")?;
+
+                            // Remove-then-add: prior keys leave the graph before
+                            // the insertion search so it cannot route through
+                            // them or link the new node to them.
+                            if !remove_keys.is_empty() {
+                                let mut graph = session.graph_store.write().await;
+                                for id in &remove_keys {
+                                    graph.apply_new(UnstampedMutation {
+                                        ops: vec![MutationOp::RemoveNode { id: *id }],
+                                    })?;
+                                }
+                            }
+
+                            if !reinsert {
+                                return Ok(None);
+                            }
                             let vector_id = registry.get_vector_id(serial_id).await.ok_or_eyre(
                                 "Expected vector serial id of replay is missing from store",
                             )?;
-                            replay_serial_for_side(session, &searcher, side, vector_id).await
+                            replay_serial_for_side(session, &searcher, side, vector_id)
+                                .await
+                                .map(Some)
                         }
-                    });
+                    },
+                );
 
                 let results_ = parallelize(jobs_per_side.into_iter()).await?;
                 let results: [_; 2] = results_.try_into().unwrap();
 
                 let [left_vector, right_vector] = results;
 
-                assert_eq!(left_vector.version_id(), right_vector.version_id());
-                assert_eq!(left_vector.serial_id(), right_vector.serial_id());
+                assert_eq!(left_vector, right_vector);
 
                 metrics::histogram!("genesis_version_replay_duration")
                     .record(now.elapsed().as_secs_f64());

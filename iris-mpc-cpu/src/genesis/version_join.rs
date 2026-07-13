@@ -1,244 +1,321 @@
 //! Pure set computation for the version-join delta mode.
 //!
-//! Given `(serial → version)` maps for the materialized graph, the source iris
-//! store, and the HNSW iris store, derive the two action sets that drive the
-//! delta: `graph_replay` (nodes whose content is stale in the graph and must be
-//! re-searched + re-inserted) and `store_repair` (HNSW iris rows that disagree
-//! with the source but need no graph work). Anomalies that the version
-//! comparison cannot safely act on are collected separately.
+//! Given per-serial version state for the materialized graph, the source iris
+//! store, and the HNSW iris store, derive the action sets that drive the
+//! delta. Graph work is uniform surgery — remove every existing key for the
+//! serial, then search + reinsert at the current source version — applied to
+//! any serial whose graph lineage is suspect: version behind or ahead of the
+//! source, several keys for one serial (ghosts), or absent from the graph.
+//!
+//! Deletion is the one case version comparison cannot see: a deletion bumps
+//! the source version and replaces the content with the party's deterministic
+//! dummy shares. [`VersionJoinPlan::split`] therefore separates surgery
+//! serials whose source content is the deletion tombstone (remove only, no
+//! reinsert) from live ones (remove + reinsert).
 
 use iris_mpc_common::{SerialId, VersionId};
 use std::collections::{HashMap, HashSet};
 
-/// Anomaly classes surfaced by [`compute_version_join`]. Each is logged and
-/// counted; only `missing_hnsw_row` is acted upon (via INSERT — see
-/// [`VersionJoinPlan::missing_hnsw_rows`]).
+/// Why serials entered the surgery set; one exclusive class per serial.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct VersionJoinAnomalies {
-    /// `source_version < graph_version` — graph ahead of source (impossible in a
-    /// source-built lineage).
-    pub graph_ahead: Vec<SerialId>,
-    /// Present in source but absent from the graph — never indexed.
-    pub graph_missing: Vec<SerialId>,
-    /// Present in source but absent from the HNSW iris store — repaired via
-    /// INSERT rather than UPDATE.
-    pub missing_hnsw_row: Vec<SerialId>,
-    /// `serial ≤ max_serial` absent from the source pool.
-    pub source_missing: Vec<SerialId>,
+pub struct SurgeryReasons {
+    /// `max graph version < source version`.
+    pub version_behind: usize,
+    /// `max graph version > source version`.
+    pub version_ahead: usize,
+    /// Several graph keys for the serial, max version agreeing with source.
+    pub multi_version: usize,
+    /// Present in source but absent from the graph.
+    pub graph_missing: usize,
 }
 
-impl VersionJoinAnomalies {
-    /// Total number of anomalous serials across all classes.
+impl SurgeryReasons {
     pub fn total(&self) -> usize {
-        self.graph_ahead.len()
-            + self.graph_missing.len()
-            + self.missing_hnsw_row.len()
-            + self.source_missing.len()
+        self.version_behind + self.version_ahead + self.multi_version + self.graph_missing
     }
 }
 
-/// The plan produced by [`compute_version_join`]. All serial vectors are sorted
-/// ascending (the function iterates serials in order), so replay order is
-/// identical across parties.
+/// The version-comparison output of [`compute_version_join`]. All serial
+/// vectors are sorted ascending (the function iterates serials in order), so
+/// processing order is identical across parties.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct VersionJoinPlan {
-    /// Serials whose graph node is stale: MPC search + insert at the current
-    /// source version, then persist the HNSW row.
-    pub graph_replay: Vec<SerialId>,
-    /// Serials whose HNSW iris row disagrees with the source but need no graph
-    /// work. Overwrite the row from the pool.
+    /// Serials needing graph surgery: remove every existing key, then search +
+    /// reinsert at the current source version iff the source content is live
+    /// (see [`Self::split`]).
+    pub graph_surgery: Vec<SerialId>,
+    /// Per-class breakdown of `graph_surgery`.
+    pub surgery_reasons: SurgeryReasons,
+    /// Non-surgery serials whose HNSW iris row disagrees with the source.
+    /// Overwrite the row from the pool.
     pub store_repair: Vec<SerialId>,
-    /// Subset of `store_repair` whose HNSW row is missing entirely; INSERT
-    /// instead of UPDATE.
+    /// Serials (surgery or not) whose HNSW row is missing entirely; INSERTed
+    /// during the store-repair phase so a later replay UPDATE finds a row.
+    /// Always a subset of `store_repair`.
     pub missing_hnsw_rows: Vec<SerialId>,
-    /// Anomalies to log; not acted upon (except `missing_hnsw_row`).
-    pub anomalies: VersionJoinAnomalies,
+    /// `serial ≤ max_serial` absent from the source pool. Logged, not acted on.
+    pub source_missing: Vec<SerialId>,
 }
 
-/// Fold `(serial, version)` pairs into a map keeping the **maximum** version per
-/// serial. The base graph can hold several versions of one serial (ghosts left
-/// by prior delta runs), so the live version is the maximum.
-pub fn max_version_per_serial(
+/// Final action sets after the deletion split.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct SurgeryPlan {
+    /// Live serials: remove all existing keys, then MPC search + insert at the
+    /// current source version, and persist the HNSW row.
+    pub graph_replay: Vec<SerialId>,
+    /// Deletion tombstones with graph presence: remove all keys, no reinsert.
+    pub graph_remove: Vec<SerialId>,
+    /// Serials whose HNSW iris row is overwritten from the pool.
+    pub store_repair: Vec<SerialId>,
+    /// Subset of `store_repair` to INSERT instead of UPDATE.
+    pub missing_hnsw_rows: Vec<SerialId>,
+}
+
+/// Fold `(serial, version)` pairs into all versions per serial. The graph can
+/// hold several keys for one serial (ghosts left by prior deltas); the max is
+/// the live candidate and every key is a removal target. Per-serial order
+/// follows the input iterator — sort before deriving ordered operations.
+pub fn versions_per_serial(
     pairs: impl IntoIterator<Item = (SerialId, VersionId)>,
-) -> HashMap<SerialId, VersionId> {
-    let mut out: HashMap<SerialId, VersionId> = HashMap::new();
+) -> HashMap<SerialId, Vec<VersionId>> {
+    let mut out: HashMap<SerialId, Vec<VersionId>> = HashMap::new();
     for (serial, version) in pairs {
-        out.entry(serial)
-            .and_modify(|v| {
-                if version > *v {
-                    *v = version;
-                }
-            })
-            .or_insert(version);
+        out.entry(serial).or_default().push(version);
     }
     out
 }
 
 /// Compute the version-join plan. Pure: no I/O.
 ///
-/// `graph_versions` must already carry the max version per serial (see
-/// [`max_version_per_serial`]). `excluded` serials are dropped from every set
-/// (deletion is the one case version comparison cannot see). Serials are
-/// considered over `1..=max_serial`.
+/// `graph_versions` must carry every graph key per serial (see
+/// [`versions_per_serial`]). Serials are considered over `1..=max_serial`.
+/// Deletions are not distinguished here — a deleted serial classifies by its
+/// (bumped) source version like any other; [`VersionJoinPlan::split`] resolves
+/// the tombstones.
 pub fn compute_version_join(
-    graph_versions: &HashMap<SerialId, VersionId>,
+    graph_versions: &HashMap<SerialId, Vec<VersionId>>,
     source_versions: &HashMap<SerialId, VersionId>,
     hnsw_versions: &HashMap<SerialId, VersionId>,
-    excluded: &HashSet<SerialId>,
     max_serial: SerialId,
 ) -> VersionJoinPlan {
     let mut plan = VersionJoinPlan::default();
 
     for serial in 1..=max_serial {
-        if excluded.contains(&serial) {
-            continue;
-        }
-
         let Some(&v_src) = source_versions.get(&serial) else {
-            plan.anomalies.source_missing.push(serial);
+            plan.source_missing.push(serial);
             continue;
         };
 
-        // Graph axis: decide whether the node's content is stale.
-        let in_replay = match graph_versions.get(&serial) {
+        // Graph axis: any suspect lineage goes to surgery.
+        let surgery = match graph_versions.get(&serial) {
             None => {
-                plan.anomalies.graph_missing.push(serial);
-                false
+                plan.surgery_reasons.graph_missing += 1;
+                true
             }
-            Some(&v_graph) => {
-                if v_src > v_graph {
-                    plan.graph_replay.push(serial);
+            Some(versions) => {
+                let v_max = *versions
+                    .iter()
+                    .max()
+                    .expect("versions_per_serial: non-empty");
+                if v_max < v_src {
+                    plan.surgery_reasons.version_behind += 1;
+                    true
+                } else if v_max > v_src {
+                    plan.surgery_reasons.version_ahead += 1;
+                    true
+                } else if versions.len() > 1 {
+                    plan.surgery_reasons.multi_version += 1;
                     true
                 } else {
-                    if v_src < v_graph {
-                        plan.anomalies.graph_ahead.push(serial);
-                    }
                     false
                 }
             }
         };
+        if surgery {
+            plan.graph_surgery.push(serial);
+        }
 
-        // Store axis: reconcile the HNSW iris row. Replay serials get their row
-        // rewritten by the replay-result persistence path, so skip them here.
-        if !in_replay {
-            match hnsw_versions.get(&serial) {
-                None => {
-                    plan.store_repair.push(serial);
-                    plan.missing_hnsw_rows.push(serial);
-                    plan.anomalies.missing_hnsw_row.push(serial);
-                }
-                Some(&v_hnsw) if v_hnsw != v_src => {
-                    plan.store_repair.push(serial);
-                }
-                Some(_) => {}
+        // Store axis: reconcile the HNSW iris row. A missing row is inserted
+        // even for surgery serials (the replay persistence path is an UPDATE);
+        // a present-but-stale row under surgery is left to that path, except
+        // for tombstones, which `split` routes back to store repair.
+        match hnsw_versions.get(&serial) {
+            None => {
+                plan.store_repair.push(serial);
+                plan.missing_hnsw_rows.push(serial);
             }
+            Some(&v_hnsw) if v_hnsw != v_src && !surgery => {
+                plan.store_repair.push(serial);
+            }
+            Some(_) => {}
         }
     }
 
     plan
 }
 
+impl VersionJoinPlan {
+    /// Split surgery into replay vs remove-only using `deleted` (serials whose
+    /// source content equals the deletion tombstone). Tombstones without graph
+    /// presence are dropped (nothing to remove, nothing to insert); tombstones
+    /// with a stale HNSW row are added to `store_repair` (no replay will
+    /// rewrite their row).
+    pub fn split(
+        &self,
+        deleted: &HashSet<SerialId>,
+        graph_versions: &HashMap<SerialId, Vec<VersionId>>,
+        source_versions: &HashMap<SerialId, VersionId>,
+        hnsw_versions: &HashMap<SerialId, VersionId>,
+    ) -> SurgeryPlan {
+        let mut out = SurgeryPlan {
+            store_repair: self.store_repair.clone(),
+            missing_hnsw_rows: self.missing_hnsw_rows.clone(),
+            ..Default::default()
+        };
+
+        for &serial in &self.graph_surgery {
+            if !deleted.contains(&serial) {
+                out.graph_replay.push(serial);
+                continue;
+            }
+            if graph_versions.contains_key(&serial) {
+                out.graph_remove.push(serial);
+            }
+            let stale_row = match (hnsw_versions.get(&serial), source_versions.get(&serial)) {
+                (Some(v_hnsw), Some(v_src)) => v_hnsw != v_src,
+                _ => false,
+            };
+            if stale_row {
+                out.store_repair.push(serial);
+            }
+        }
+        out.store_repair.sort_unstable();
+
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn graph(entries: &[(SerialId, &[VersionId])]) -> HashMap<SerialId, Vec<VersionId>> {
+        entries.iter().map(|(s, vs)| (*s, vs.to_vec())).collect()
+    }
 
     fn map(pairs: &[(SerialId, VersionId)]) -> HashMap<SerialId, VersionId> {
         pairs.iter().copied().collect()
     }
 
-    fn excl(serials: &[SerialId]) -> HashSet<SerialId> {
+    fn set(serials: &[SerialId]) -> HashSet<SerialId> {
         serials.iter().copied().collect()
     }
 
     #[test]
-    fn source_bump_triggers_graph_replay_not_double_counted_store_repair() {
-        // serial 1: source ahead of graph AND hnsw stale → replay only.
-        let graph = map(&[(1, 3)]);
-        let source = map(&[(1, 4)]);
-        let hnsw = map(&[(1, 3)]);
-        let plan = compute_version_join(&graph, &source, &hnsw, &excl(&[]), 1);
-        assert_eq!(plan.graph_replay, vec![1]);
-        assert!(
-            plan.store_repair.is_empty(),
-            "replay serial must not also be store_repair"
-        );
-        assert_eq!(plan.anomalies.total(), 0);
+    fn versions_per_serial_collects_all_keys() {
+        let m = versions_per_serial([(1u32, 3i16), (1, 1), (2, 5)]);
+        assert_eq!(m.get(&1), Some(&vec![3, 1]));
+        assert_eq!(m.get(&2), Some(&vec![5]));
+    }
+
+    #[test]
+    fn version_behind_is_surgery_without_store_repair() {
+        // Graph behind source; stale HNSW row is left to the replay path.
+        let g = graph(&[(1, &[3])]);
+        let plan = compute_version_join(&g, &map(&[(1, 4)]), &map(&[(1, 3)]), 1);
+        assert_eq!(plan.graph_surgery, vec![1]);
+        assert_eq!(plan.surgery_reasons.version_behind, 1);
+        assert!(plan.store_repair.is_empty());
+    }
+
+    #[test]
+    fn version_ahead_and_multi_version_are_surgery() {
+        // 1: graph ahead of source; 2: ghost + live agreeing on max.
+        let g = graph(&[(1, &[5]), (2, &[2, 4])]);
+        let source = map(&[(1, 4), (2, 4)]);
+        let hnsw = map(&[(1, 4), (2, 4)]);
+        let plan = compute_version_join(&g, &source, &hnsw, 2);
+        assert_eq!(plan.graph_surgery, vec![1, 2]);
+        assert_eq!(plan.surgery_reasons.version_ahead, 1);
+        assert_eq!(plan.surgery_reasons.multi_version, 1);
+        assert!(plan.store_repair.is_empty());
+    }
+
+    #[test]
+    fn graph_missing_is_surgery() {
+        let plan = compute_version_join(&graph(&[]), &map(&[(1, 1)]), &map(&[(1, 1)]), 1);
+        assert_eq!(plan.graph_surgery, vec![1]);
+        assert_eq!(plan.surgery_reasons.graph_missing, 1);
     }
 
     #[test]
     fn hnsw_mismatch_both_directions_is_store_repair() {
-        // serial 1: hnsw behind source; serial 2: hnsw ahead of source.
-        // Graph matches source for both → no replay.
-        let graph = map(&[(1, 5), (2, 5)]);
+        // Clean graph; HNSW row behind (1) and ahead (2) of source.
+        let g = graph(&[(1, &[5]), (2, &[5])]);
         let source = map(&[(1, 5), (2, 5)]);
         let hnsw = map(&[(1, 4), (2, 6)]);
-        let plan = compute_version_join(&graph, &source, &hnsw, &excl(&[]), 2);
-        assert!(plan.graph_replay.is_empty());
+        let plan = compute_version_join(&g, &source, &hnsw, 2);
+        assert!(plan.graph_surgery.is_empty());
         assert_eq!(plan.store_repair, vec![1, 2]);
         assert!(plan.missing_hnsw_rows.is_empty());
-        assert_eq!(plan.anomalies.total(), 0);
     }
 
     #[test]
-    fn max_version_semantics_ghost_and_live() {
-        // Graph holds ghost at v=1 and live at v=2 for serial 1; collapsed to max=2.
-        let graph = max_version_per_serial([(1u32, 1i16), (1, 2)]);
-        assert_eq!(graph.get(&1), Some(&2));
-
-        // source at v+1 (==2) → no replay.
-        let source_current = map(&[(1, 2)]);
-        let hnsw = map(&[(1, 2)]);
-        let plan = compute_version_join(&graph, &source_current, &hnsw, &excl(&[]), 1);
-        assert!(plan.graph_replay.is_empty());
-        assert_eq!(plan.anomalies.total(), 0);
-
-        // source at v+2 (==3) → replay.
-        let source_ahead = map(&[(1, 3)]);
-        let plan = compute_version_join(&graph, &source_ahead, &hnsw, &excl(&[]), 1);
-        assert_eq!(plan.graph_replay, vec![1]);
-    }
-
-    #[test]
-    fn excluded_serials_dropped_from_both_sets() {
-        // serial 1 would replay, serial 2 would store_repair — both excluded.
-        let graph = map(&[(1, 1), (2, 2)]);
+    fn missing_hnsw_row_is_inserted_even_under_surgery() {
+        // 1: surgery + missing row; 2: clean graph + missing row.
+        let g = graph(&[(1, &[1]), (2, &[2])]);
         let source = map(&[(1, 2), (2, 2)]);
-        let hnsw = map(&[(1, 1), (2, 1)]);
-        let plan = compute_version_join(&graph, &source, &hnsw, &excl(&[1, 2]), 2);
-        assert!(plan.graph_replay.is_empty());
-        assert!(plan.store_repair.is_empty());
-        assert_eq!(plan.anomalies.total(), 0);
+        let plan = compute_version_join(&g, &source, &map(&[]), 2);
+        assert_eq!(plan.graph_surgery, vec![1]);
+        assert_eq!(plan.store_repair, vec![1, 2]);
+        assert_eq!(plan.missing_hnsw_rows, vec![1, 2]);
     }
 
     #[test]
-    fn each_anomaly_class_lands_in_anomalies_not_action_sets() {
-        // 1: graph ahead of source.
-        // 2: in source, absent from graph.
-        // 3: in source, absent from hnsw (acted on via insert + counted).
-        // 4: absent from source pool.
-        let graph = map(&[(1, 5), (4, 1)]);
-        let source = map(&[(1, 4), (2, 2), (3, 2)]);
-        let hnsw = map(&[(1, 4), (2, 2), (4, 1)]);
-        let plan = compute_version_join(&graph, &source, &hnsw, &excl(&[]), 4);
-
-        assert_eq!(plan.anomalies.graph_ahead, vec![1]);
-        assert_eq!(plan.anomalies.graph_missing, vec![2, 3]);
-        assert_eq!(plan.anomalies.missing_hnsw_row, vec![3]);
-        assert_eq!(plan.anomalies.source_missing, vec![4]);
-
-        // graph_ahead does not replay; store axis matched (1) so no repair for 1.
-        assert!(plan.graph_replay.is_empty());
-        // serial 3 missing from hnsw → store_repair + missing_hnsw_rows.
-        assert_eq!(plan.store_repair, vec![3]);
-        assert_eq!(plan.missing_hnsw_rows, vec![3]);
+    fn source_missing_is_logged_not_acted_on() {
+        let g = graph(&[(2, &[1])]);
+        let plan = compute_version_join(&g, &map(&[(2, 1)]), &map(&[(2, 1)]), 2);
+        assert_eq!(plan.source_missing, vec![1]);
+        assert!(plan.graph_surgery.is_empty());
+        assert!(plan.store_repair.is_empty());
     }
 
     #[test]
     fn empty_diff_yields_empty_plan() {
-        let graph = map(&[(1, 1), (2, 1), (3, 1)]);
-        let source = map(&[(1, 1), (2, 1), (3, 1)]);
-        let hnsw = map(&[(1, 1), (2, 1), (3, 1)]);
-        let plan = compute_version_join(&graph, &source, &hnsw, &excl(&[]), 3);
+        let g = graph(&[(1, &[1]), (2, &[1]), (3, &[1])]);
+        let versions = map(&[(1, 1), (2, 1), (3, 1)]);
+        let plan = compute_version_join(&g, &versions, &versions, 3);
         assert_eq!(plan, VersionJoinPlan::default());
+    }
+
+    #[test]
+    fn split_routes_live_and_tombstone_surgery() {
+        // 1: live, behind → replay. 2: tombstone with ghosts → remove-only,
+        // stale row → store repair. 3: tombstone never indexed → dropped.
+        let g = graph(&[(1, &[1]), (2, &[1, 2])]);
+        let source = map(&[(1, 2), (2, 3), (3, 2)]);
+        let hnsw = map(&[(1, 1), (2, 1)]);
+        let plan = compute_version_join(&g, &source, &hnsw, 3);
+        assert_eq!(plan.graph_surgery, vec![1, 2, 3]);
+        // 3 has no HNSW row → inserted (with tombstone content) via store repair.
+        assert_eq!(plan.missing_hnsw_rows, vec![3]);
+
+        let surgery = plan.split(&set(&[2, 3]), &g, &source, &hnsw);
+        assert_eq!(surgery.graph_replay, vec![1]);
+        assert_eq!(surgery.graph_remove, vec![2]);
+        assert_eq!(surgery.store_repair, vec![2, 3]);
+        assert_eq!(surgery.missing_hnsw_rows, vec![3]);
+    }
+
+    #[test]
+    fn split_without_tombstones_is_all_replay() {
+        let g = graph(&[(1, &[1])]);
+        let source = map(&[(1, 2)]);
+        let hnsw = map(&[(1, 2)]);
+        let plan = compute_version_join(&g, &source, &hnsw, 1);
+        let surgery = plan.split(&set(&[]), &g, &source, &hnsw);
+        assert_eq!(surgery.graph_replay, vec![1]);
+        assert!(surgery.graph_remove.is_empty());
+        assert!(surgery.store_repair.is_empty());
     }
 }

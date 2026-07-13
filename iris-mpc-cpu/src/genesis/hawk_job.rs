@@ -57,11 +57,16 @@ pub enum JobRequest {
         /// Modification entry for processing.
         modification: Modification,
     },
-    /// Re-search and re-insert the current version of a serial whose graph node
-    /// is stale (version-join delta mode). Carries no modification id.
+    /// Graph surgery for one serial (version-join delta mode): remove every
+    /// existing graph key, then optionally search + re-insert the current
+    /// source version. Carries no modification id.
     VersionReplay {
-        /// Serial id whose current source version is to be replayed.
+        /// Serial id under surgery.
         serial_id: u32,
+        /// Existing graph keys per eye, removed before the insertion search.
+        removals: BothEyes<Vec<VectorId>>,
+        /// False for deletion tombstones: remove only.
+        reinsert: bool,
     },
     /// Acts as a code barrier for inter-node synchronization.
     SyncState {
@@ -88,8 +93,16 @@ impl JobRequest {
         Self::Modification { modification }
     }
 
-    pub fn new_version_replay(serial_id: u32) -> Self {
-        Self::VersionReplay { serial_id }
+    pub fn new_version_replay(
+        serial_id: u32,
+        removals: BothEyes<Vec<VectorId>>,
+        reinsert: bool,
+    ) -> Self {
+        Self::VersionReplay {
+            serial_id,
+            removals,
+            reinsert,
+        }
     }
 }
 
@@ -122,8 +135,9 @@ pub enum JobResult {
         done_tx: sync::oneshot::Sender<()>,
     },
     VersionReplay {
-        /// Vector id for persistence (current source version).
-        vector_id_to_persist: VectorId,
+        /// Vector id for persistence (current source version); `None` for
+        /// remove-only surgery, which writes no HNSW row.
+        vector_id_to_persist: Option<VectorId>,
 
         done_tx: sync::oneshot::Sender<()>,
     },
@@ -173,7 +187,7 @@ impl JobResult {
     }
 
     pub(crate) fn new_version_replay_result(
-        vector_id_to_persist: VectorId,
+        vector_id_to_persist: Option<VectorId>,
         done_tx: sync::oneshot::Sender<()>,
     ) -> Self {
         Self::VersionReplay {
@@ -225,14 +239,15 @@ impl fmt::Display for JobResult {
             JobResult::VersionReplay {
                 vector_id_to_persist,
                 ..
-            } => {
-                write!(
+            } => match vector_id_to_persist {
+                Some(vid) => write!(
                     f,
                     "JobResult::VersionReplay: serial-id={}, version-id={}",
-                    vector_id_to_persist.serial_id(),
-                    vector_id_to_persist.version_id()
-                )
-            }
+                    vid.serial_id(),
+                    vid.version_id()
+                ),
+                None => write!(f, "JobResult::VersionReplay: remove-only"),
+            },
             JobResult::SyncState { mismatched } => {
                 write!(f, "JobResult::SyncState: mismatched={}", mismatched)
             }
