@@ -1,11 +1,13 @@
 #![allow(clippy::needless_range_loop)]
 pub mod config;
+pub mod consistency_canary;
 pub mod error;
 pub mod galois_engine;
 pub mod helpers;
 pub mod iris_db;
 pub mod job;
 pub mod postgres;
+pub mod rerand_offsets;
 pub mod shamir;
 #[cfg(feature = "helpers")]
 pub mod test;

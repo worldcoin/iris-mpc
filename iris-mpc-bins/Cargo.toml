@@ -208,6 +208,11 @@ path = "bin/iris-mpc-upgrade/reshare-client.rs"
 name = "rerandomize-db"
 path = "bin/iris-mpc-upgrade/rerandomize_db.rs"
 
+[[bin]]
+name = "rerand-sweeper"
+path = "bin/iris-mpc-upgrade/rerand_sweeper.rs"
+required-features = ["helpers"]
+
 
 # ---------------------
 # binaries for iris-mpc-upgrade-hawk

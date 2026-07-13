@@ -33,6 +33,7 @@ use cudarc::{
         sys::CUevent,
         CudaDevice, CudaSlice, CudaStream, DevicePtr, DeviceSlice,
     },
+    nccl::result as nccl_result,
 };
 use eyre::{bail, eyre, Result};
 use futures::{Future, FutureExt};
@@ -40,6 +41,10 @@ use iris_mpc_common::galois_engine::degree4::{
     GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
 };
 use iris_mpc_common::{
+    consistency_canary::{
+        boolean_mpc_max_frame_len, derive_challenge, fresh_challenge_contribution,
+        private_any_nonzero, BooleanMpcTransport, CanaryAccumulator,
+    },
     helpers::{
         inmemory_store::InMemoryStore,
         sha256::sha256_bytes,
@@ -57,6 +62,7 @@ use iris_mpc_cpu::shares::{
     RingElement,
 };
 use itertools::{izip, Itertools};
+use rayon::prelude::*;
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{
     collections::{HashMap, HashSet},
@@ -90,9 +96,19 @@ struct ServerJob {
     pub return_channel: oneshot::Sender<ServerJobResult>,
 }
 
+#[derive(Debug)]
+enum ServerCommand {
+    Job(ServerJob),
+    ConsistencyCanary {
+        repetitions: usize,
+        context: [u8; 32],
+        return_channel: oneshot::Sender<Result<()>>,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub struct ServerActorHandle {
-    job_queue: mpsc::Sender<ServerJob>,
+    job_queue: mpsc::Sender<ServerCommand>,
 }
 
 impl JobSubmissionHandle for ServerActorHandle {
@@ -107,8 +123,83 @@ impl JobSubmissionHandle for ServerActorHandle {
             batch,
             return_channel: tx,
         };
-        self.job_queue.send(job).await.unwrap();
+        self.job_queue.send(ServerCommand::Job(job)).await.unwrap();
         rx.map(|x| Ok(x?))
+    }
+}
+
+impl ServerActorHandle {
+    pub async fn run_consistency_canary(
+        &self,
+        repetitions: usize,
+        context: [u8; 32],
+    ) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.job_queue
+            .send(ServerCommand::ConsistencyCanary {
+                repetitions,
+                context,
+                return_channel: tx,
+            })
+            .await?;
+        rx.await?
+    }
+}
+
+struct GpuBooleanTransport<'a> {
+    party_id: usize,
+    comm: &'a NcclComm,
+    device: Arc<CudaDevice>,
+    stream: &'a CudaStream,
+    send_buffer: CudaSlice<u8>,
+    receive_buffer: CudaSlice<u8>,
+}
+
+impl GpuBooleanTransport<'_> {
+    fn exchange(
+        &mut self,
+        send_to: usize,
+        receive_from: usize,
+        message: Vec<u8>,
+    ) -> Result<Vec<u8>> {
+        eyre::ensure!(
+            message.len() <= self.send_buffer.len() && message.len() <= self.receive_buffer.len(),
+            "GPU canary exchange exceeds its preallocated buffer"
+        );
+        unsafe {
+            result::memcpy_htod_sync(*self.send_buffer.device_ptr(), &message)?;
+        }
+        let send = self.send_buffer.slice(..message.len());
+        let mut receive = self.receive_buffer.slice(..message.len());
+        nccl_result::group_start()
+            .map_err(|error| eyre!("GPU canary exchange group start failed: {error:?}"))?;
+        let receive_result = self
+            .comm
+            .receive_view(&mut receive, receive_from, self.stream);
+        let send_result = self.comm.send_view(&send, send_to, self.stream);
+        let group_end_result = nccl_result::group_end();
+        receive_result.map_err(|error| eyre!("GPU canary exchange receive failed: {error:?}"))?;
+        send_result.map_err(|error| eyre!("GPU canary exchange send failed: {error:?}"))?;
+        group_end_result
+            .map_err(|error| eyre!("GPU canary exchange group end failed: {error:?}"))?;
+        self.device.synchronize()?;
+        let mut output = self.device.dtoh_sync_copy(&self.receive_buffer)?;
+        output.truncate(message.len());
+        Ok(output)
+    }
+}
+
+impl BooleanMpcTransport for GpuBooleanTransport<'_> {
+    fn party_id(&self) -> usize {
+        self.party_id
+    }
+
+    async fn exchange_next(&mut self, message: Vec<u8>) -> Result<Vec<u8>> {
+        self.exchange((self.party_id + 1) % 3, (self.party_id + 2) % 3, message)
+    }
+
+    async fn exchange_previous(&mut self, message: Vec<u8>) -> Result<Vec<u8>> {
+        self.exchange((self.party_id + 2) % 3, (self.party_id + 1) % 3, message)
     }
 }
 
@@ -135,7 +226,7 @@ impl fmt::Display for Orientation {
 }
 
 pub struct ServerActor {
-    job_queue: mpsc::Receiver<ServerJob>,
+    job_queue: mpsc::Receiver<ServerCommand>,
     pub device_manager: Arc<DeviceManager>,
     party_id: usize,
     // engines
@@ -359,7 +450,7 @@ impl ServerActor {
         chacha_seeds: ([u32; 8], [u32; 8]),
         device_manager: Arc<DeviceManager>,
         comms: Vec<Arc<NcclComm>>,
-        job_queue: mpsc::Receiver<ServerJob>,
+        job_queue: mpsc::Receiver<ServerCommand>,
         max_db_size: usize,
         max_batch_size: usize,
         match_distances_buffer_size: usize,
@@ -581,8 +672,239 @@ impl ServerActor {
         })
     }
 
+    fn read_canary_record(
+        database: &CudaVec2DSlicerRawPointer,
+        length: usize,
+        shards: usize,
+        index: usize,
+        output: &mut Vec<u16>,
+    ) {
+        let shard = index % shards;
+        let local_index = index / shards;
+        let offset = local_index * length;
+        // SAFETY: the actor serializes all mutations with this scan, and the
+        // host-backed mappings outlive the scan.
+        let (low, high) = unsafe {
+            (
+                std::slice::from_raw_parts(
+                    (database.limb_0[shard] + offset as u64) as *const u8,
+                    length,
+                ),
+                std::slice::from_raw_parts(
+                    (database.limb_1[shard] + offset as u64) as *const u8,
+                    length,
+                ),
+            )
+        };
+        output.clear();
+        output.extend(
+            low.iter()
+                .zip(high)
+                .map(|(&low, &high)| u16::from_le_bytes([low ^ 0x80, high ^ 0x80])),
+        );
+    }
+
+    /// One full GPU serving-memory canary operation: readiness/inventory
+    /// barrier with fresh common randomness, full host-backed scan, and a
+    /// replicated Boolean zero-test which opens only its final result bit.
+    pub fn run_consistency_canary(&mut self, repetitions: usize, context: [u8; 32]) -> Result<()> {
+        const BARRIER_LEN: usize = 8 + 32 + 32;
+        let shards = self.device_manager.device_count();
+        eyre::ensure!(shards > 0, "GPU canary requires a CUDA device");
+        let comm = self
+            .comms
+            .first()
+            .ok_or_else(|| eyre!("GPU canary requires an NCCL communicator"))?;
+        let world = comm.world_size();
+        eyre::ensure!(
+            world == 3 && self.party_id < 3 && comm.rank() == self.party_id,
+            "GPU canary requires three ranks matching party IDs"
+        );
+        let stream = self
+            .streams
+            .first()
+            .and_then(|streams| streams.first())
+            .ok_or_else(|| eyre!("GPU canary requires an NCCL stream"))?;
+        for device in self.device_manager.devices() {
+            device.synchronize()?;
+        }
+
+        let rows = self.current_db_sizes.iter().sum::<usize>();
+        let layout_valid =
+            (0..rows).all(|index| index / shards < self.current_db_sizes[index % shards]);
+        let mut inventory_input = b"iris-mpc/gpu-canary/inventory/v1\0".to_vec();
+        inventory_input.extend_from_slice(&(rows as u64).to_le_bytes());
+        let inventory_digest = sha256_bytes(inventory_input);
+
+        let dev = self.device_manager.device(0);
+        let mut barrier_send = dev.alloc_zeros::<u8>(BARRIER_LEN)?;
+        let mut barrier_receive = dev.alloc_zeros::<u8>(BARRIER_LEN * world)?;
+        let transport_capacity = boolean_mpc_max_frame_len(repetitions)?;
+        let transport_buffers: Result<_> = (|| {
+            Ok((
+                dev.alloc_zeros::<u8>(transport_capacity)?,
+                dev.alloc_zeros::<u8>(transport_capacity)?,
+            ))
+        })();
+
+        let contribution = fresh_challenge_contribution();
+        let locally_ready = layout_valid && transport_buffers.is_ok();
+        let mut packet = [0u8; BARRIER_LEN];
+        packet[..8]
+            .copy_from_slice(&if locally_ready { rows as u64 } else { u64::MAX }.to_le_bytes());
+        packet[8..40].copy_from_slice(if locally_ready {
+            &inventory_digest
+        } else {
+            &[0xff; 32]
+        });
+        packet[40..].copy_from_slice(&contribution);
+        dev.htod_sync_copy_into(&packet, &mut barrier_send)?;
+        comm.all_gather(&barrier_send, &mut barrier_receive)
+            .map_err(|error| eyre!("GPU canary readiness barrier failed: {error:?}"))?;
+        dev.synchronize()?;
+        let gathered = dev.dtoh_sync_copy(&barrier_receive)?;
+        let mut contributions = Vec::with_capacity(world);
+        for rank in 0..world {
+            let packet = &gathered[rank * BARRIER_LEN..(rank + 1) * BARRIER_LEN];
+            let peer_rows = u64::from_le_bytes(packet[..8].try_into().expect("fixed length"));
+            let peer_digest: [u8; 32] = packet[8..40].try_into().expect("fixed length");
+            eyre::ensure!(
+                peer_rows == rows as u64 && peer_digest == inventory_digest,
+                "GPU canary inventory/readiness mismatch at rank {rank}"
+            );
+            contributions.push(packet[40..].try_into().expect("fixed length"));
+        }
+        let challenge = derive_challenge(context, contributions);
+        let (send_buffer, receive_buffer) = transport_buffers?;
+
+        let left_code = self.left_code_db_slices.code_gr.clone();
+        let left_mask = self.left_mask_db_slices.code_gr.clone();
+        let right_code = self.right_code_db_slices.code_gr.clone();
+        let right_mask = self.right_mask_db_slices.code_gr.clone();
+        let party_id = self.party_id;
+        struct Fold {
+            accumulator: CanaryAccumulator,
+            left_code: Vec<u16>,
+            left_mask: Vec<u16>,
+            right_code: Vec<u16>,
+            right_mask: Vec<u16>,
+        }
+        let scan: Result<CanaryAccumulator> = (0..rows)
+            .into_par_iter()
+            .try_fold(
+                || Fold {
+                    accumulator: CanaryAccumulator::new(party_id, repetitions, challenge),
+                    left_code: Vec::with_capacity(IRIS_CODE_LENGTH),
+                    left_mask: Vec::with_capacity(MASK_CODE_LENGTH),
+                    right_code: Vec::with_capacity(IRIS_CODE_LENGTH),
+                    right_mask: Vec::with_capacity(MASK_CODE_LENGTH),
+                },
+                |mut fold, index| -> Result<_> {
+                    Self::read_canary_record(
+                        &left_code,
+                        IRIS_CODE_LENGTH,
+                        shards,
+                        index,
+                        &mut fold.left_code,
+                    );
+                    Self::read_canary_record(
+                        &left_mask,
+                        MASK_CODE_LENGTH,
+                        shards,
+                        index,
+                        &mut fold.left_mask,
+                    );
+                    Self::read_canary_record(
+                        &right_code,
+                        IRIS_CODE_LENGTH,
+                        shards,
+                        index,
+                        &mut fold.right_code,
+                    );
+                    Self::read_canary_record(
+                        &right_mask,
+                        MASK_CODE_LENGTH,
+                        shards,
+                        index,
+                        &mut fold.right_mask,
+                    );
+                    fold.accumulator.accumulate(
+                        index as u32 + 1,
+                        &fold.left_code,
+                        &fold.left_mask,
+                        &fold.right_code,
+                        &fold.right_mask,
+                    )?;
+                    Ok(fold)
+                },
+            )
+            .try_reduce(
+                || Fold {
+                    accumulator: CanaryAccumulator::new(party_id, repetitions, challenge),
+                    left_code: Vec::new(),
+                    left_mask: Vec::new(),
+                    right_code: Vec::new(),
+                    right_mask: Vec::new(),
+                },
+                |mut left, right| -> Result<_> {
+                    left.accumulator.merge(right.accumulator)?;
+                    Ok(left)
+                },
+            )
+            .map(|fold| fold.accumulator);
+
+        let local_scan_failed = scan.is_err();
+        let checked_rows = scan.as_ref().map_or(0, CanaryAccumulator::rows);
+        let mut my_share = scan.map_or_else(
+            |_| vec![0; repetitions * 4],
+            CanaryAccumulator::into_syndrome_share,
+        );
+        my_share.push(u16::from(local_scan_failed));
+        let mut transport = GpuBooleanTransport {
+            party_id: self.party_id,
+            comm,
+            device: dev,
+            stream,
+            send_buffer,
+            receive_buffer,
+        };
+        let nonzero = futures::executor::block_on(private_any_nonzero(
+            my_share,
+            repetitions,
+            challenge,
+            &mut transport,
+        ))?;
+        eyre::ensure!(
+            !nonzero,
+            "CONSISTENCY CANARY FAILED after checking {checked_rows} GPU rows; refusing to serve"
+        );
+        tracing::info!(
+            checked_rows,
+            repetitions,
+            "Full GPU consistency canary passed"
+        );
+        Ok(())
+    }
+
     pub fn run(mut self) {
-        while let Some(job) = self.job_queue.blocking_recv() {
+        while let Some(command) = self.job_queue.blocking_recv() {
+            let job = match command {
+                ServerCommand::Job(job) => job,
+                ServerCommand::ConsistencyCanary {
+                    repetitions,
+                    context,
+                    return_channel,
+                } => {
+                    let result = self.run_consistency_canary(repetitions, context);
+                    let failed = result.is_err();
+                    let _ = return_channel.send(result);
+                    if failed {
+                        tracing::error!("Stopping GPU ServerActor after canary failure");
+                        break;
+                    }
+                    continue;
+                }
+            };
             let ServerJob {
                 batch,
                 return_channel,

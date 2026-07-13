@@ -1425,6 +1425,7 @@ async fn init_graph_from_stores(
                 parallelism: iris_db_parallelism,
                 s3_max_serial_id: Some(max_index),
                 shutdown_handler,
+                rerand: None,
             },
         ));
 

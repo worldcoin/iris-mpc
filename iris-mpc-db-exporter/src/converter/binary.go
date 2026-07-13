@@ -3,16 +3,19 @@ package converter
 import (
 	"encoding/binary"
 	"fmt"
+	"math"
 
 	"github.com/worldcoin/iris-mpc-db-exporter/src/iris"
 )
 
 type BinaryConverter struct {
-	SingleRowTotalSize  int
-	SingleCodeSize      int
-	SingleMaskSize      int
-	SingleIdSize        int
-	SingleVersionIdSize int
+	SingleRowTotalSize    int
+	SingleCodeSize        int
+	SingleMaskSize        int
+	SingleIdSize          int
+	SingleVersionIdSize   int
+	SingleRerandEpochSize int
+	SingleSemanticIDSize  int
 }
 
 func NewBinaryConverter(codeSize, maskSize, idSize, versionIdSize int) *BinaryConverter {
@@ -25,7 +28,30 @@ func NewBinaryConverter(codeSize, maskSize, idSize, versionIdSize int) *BinaryCo
 	}
 }
 
+// NewRerandBinaryConverter emits snapshot format v3: the legacy record followed
+// by a big-endian u32 rerandomization epoch and the 16 raw UUID bytes of the
+// semantic incarnation.
+func NewRerandBinaryConverter(codeSize, maskSize, idSize, versionIdSize int) *BinaryConverter {
+	c := NewBinaryConverter(codeSize, maskSize, idSize, versionIdSize)
+	c.SingleRerandEpochSize = 4
+	c.SingleSemanticIDSize = 16
+	c.SingleRowTotalSize += c.SingleRerandEpochSize + c.SingleSemanticIDSize
+	return c
+}
+
 func (c *BinaryConverter) validateStoredIris(iris iris.StoredIris) error {
+	if iris.ID < 1 || iris.ID > math.MaxUint32 {
+		return fmt.Errorf("iris ID %d does not fit the snapshot format", iris.ID)
+	}
+	if iris.VersionID < 0 || iris.RerandEpoch < 0 {
+		return fmt.Errorf("iris %d has a negative version or rerandomization epoch", iris.ID)
+	}
+	if c.SingleRerandEpochSize == 0 && iris.RerandEpoch != 0 {
+		return fmt.Errorf("iris %d is rerandomized; refusing legacy snapshot encoding", iris.ID)
+	}
+	if c.SingleSemanticIDSize != 0 && len(iris.SemanticID) != c.SingleSemanticIDSize {
+		return fmt.Errorf("iris %d has an invalid semantic ID length", iris.ID)
+	}
 	validate := func(data []byte, name string, expectedSize int) error {
 		if len(data) != expectedSize {
 			return fmt.Errorf("invalid %s size, expected %d bytes, got %d, (ID: %d)", name, expectedSize, len(data), iris.ID)
@@ -56,6 +82,10 @@ func (c *BinaryConverter) GetExtension() string {
 	return "bin"
 }
 
+func (c *BinaryConverter) GetRecordSize() int {
+	return c.SingleRowTotalSize
+}
+
 func (c *BinaryConverter) Convert(data []iris.StoredIris) ([]byte, error) {
 	outputArray := make([]byte, c.SingleRowTotalSize*len(data))
 
@@ -84,6 +114,15 @@ func (c *BinaryConverter) Convert(data []iris.StoredIris) ([]byte, error) {
 		versionIdBytes := make([]byte, c.SingleVersionIdSize)
 		binary.BigEndian.PutUint16(versionIdBytes, uint16(item.VersionID))
 		copy(outputArray[offset:offset+c.SingleVersionIdSize], versionIdBytes)
+		offset += c.SingleVersionIdSize
+
+		if c.SingleRerandEpochSize != 0 {
+			epochBytes := make([]byte, c.SingleRerandEpochSize)
+			binary.BigEndian.PutUint32(epochBytes, uint32(item.RerandEpoch))
+			copy(outputArray[offset:offset+c.SingleRerandEpochSize], epochBytes)
+			offset += c.SingleRerandEpochSize
+			copy(outputArray[offset:offset+c.SingleSemanticIDSize], item.SemanticID)
+		}
 	}
 
 	return outputArray, nil
@@ -113,6 +152,15 @@ func (c *BinaryConverter) ConvertSingle(item iris.StoredIris) ([]byte, error) {
 	versionIdBytes := make([]byte, c.SingleVersionIdSize)
 	binary.BigEndian.PutUint16(versionIdBytes, uint16(item.VersionID))
 	copy(outputArray[offset:offset+c.SingleVersionIdSize], versionIdBytes)
+	offset += c.SingleVersionIdSize
+
+	if c.SingleRerandEpochSize != 0 {
+		epochBytes := make([]byte, c.SingleRerandEpochSize)
+		binary.BigEndian.PutUint32(epochBytes, uint32(item.RerandEpoch))
+		copy(outputArray[offset:offset+c.SingleRerandEpochSize], epochBytes)
+		offset += c.SingleRerandEpochSize
+		copy(outputArray[offset:offset+c.SingleSemanticIDSize], item.SemanticID)
+	}
 
 	return outputArray, nil
 }

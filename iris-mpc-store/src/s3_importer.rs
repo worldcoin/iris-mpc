@@ -4,10 +4,12 @@ use aws_config::{retry::RetryConfig, timeout::TimeoutConfig};
 use aws_sdk_s3::config::StalledStreamProtectionConfig;
 use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
 use aws_sdk_s3::{primitives::ByteStream, Client};
-use eyre::{bail, eyre, Result};
+use eyre::{bail, ensure, eyre, Result, WrapErr};
 use futures::{stream, StreamExt};
 use iris_mpc_common::{VectorId, IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
-use std::{mem, sync::Arc, time::Duration};
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
+use std::{collections::HashSet, mem, sync::Arc, time::Duration};
 use tokio::{io::AsyncReadExt, sync::mpsc::Sender};
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -15,20 +17,27 @@ const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
     + mem::size_of::<u32>()
     + mem::size_of::<u16>(); // 75 KB
 
+const SEMANTIC_ID_SIZE: usize = 16;
+const SAFE_ELEMENT_SIZE: usize = SINGLE_ELEMENT_SIZE + mem::size_of::<u32>() + SEMANTIC_ID_SIZE;
+const SAFE_SNAPSHOT_FORMAT: u32 = 3;
+
 const MAX_RANGE_SIZE: usize = 200; // Download chunks in sub-chunks of 200 elements = 15 MB
+const MAX_MANIFEST_SIZE: usize = 16 * 1024 * 1024;
 
 pub struct S3StoredIris {
     #[allow(dead_code)]
-    id: i64,
-    left_code_even: Vec<u8>,
-    left_code_odd: Vec<u8>,
-    left_mask_even: Vec<u8>,
-    left_mask_odd: Vec<u8>,
-    right_code_even: Vec<u8>,
-    right_code_odd: Vec<u8>,
-    right_mask_even: Vec<u8>,
-    right_mask_odd: Vec<u8>,
-    version_id: i16,
+    pub(crate) id: i64,
+    pub(crate) left_code_even: Vec<u8>,
+    pub(crate) left_code_odd: Vec<u8>,
+    pub(crate) left_mask_even: Vec<u8>,
+    pub(crate) left_mask_odd: Vec<u8>,
+    pub(crate) right_code_even: Vec<u8>,
+    pub(crate) right_code_odd: Vec<u8>,
+    pub(crate) right_mask_even: Vec<u8>,
+    pub(crate) right_mask_odd: Vec<u8>,
+    pub(crate) version_id: i16,
+    pub(crate) rerand_epoch: i32,
+    pub(crate) semantic_id: Option<[u8; SEMANTIC_ID_SIZE]>,
 }
 
 impl S3StoredIris {
@@ -72,6 +81,33 @@ impl S3StoredIris {
                 .map_err(|_| eyre!("Failed to convert version id bytes to i16"))?,
         ) as i16;
 
+        let (rerand_epoch, semantic_id) = if cursor == bytes.len() {
+            // Legacy non-rerandomized S3 chunks have no epoch or semantic ID.
+            (0, None)
+        } else {
+            let epoch_bytes = extract_slice(bytes, &mut cursor, 4)?;
+            let rerand_epoch = i32::try_from(u32::from_be_bytes(
+                epoch_bytes
+                    .try_into()
+                    .map_err(|_| eyre!("Failed to convert rerand epoch bytes to u32"))?,
+            ))
+            .wrap_err("rerandomization epoch exceeds PostgreSQL INTEGER")?;
+            let semantic_id = if cursor == bytes.len() {
+                // Accepted only for direct compatibility with the old parser;
+                // safe manifests require v3's exact record size below.
+                None
+            } else {
+                let semantic_id = extract_slice(bytes, &mut cursor, SEMANTIC_ID_SIZE)?;
+                Some(
+                    semantic_id
+                        .try_into()
+                        .map_err(|_| eyre!("S3 semantic id must be exactly 16 bytes"))?,
+                )
+            };
+            (rerand_epoch, semantic_id)
+        };
+        ensure!(cursor == bytes.len(), "Unexpected trailing S3 iris bytes");
+
         Ok(S3StoredIris {
             id,
             left_code_even,
@@ -83,6 +119,8 @@ impl S3StoredIris {
             right_mask_even,
             right_mask_odd,
             version_id,
+            rerand_epoch,
+            semantic_id,
         })
     }
 
@@ -92,6 +130,14 @@ impl S3StoredIris {
 
     pub fn version_id(&self) -> i16 {
         self.version_id
+    }
+
+    pub fn rerand_epoch(&self) -> i32 {
+        self.rerand_epoch
+    }
+
+    pub fn semantic_id(&self) -> Option<[u8; SEMANTIC_ID_SIZE]> {
+        self.semantic_id
     }
 
     pub fn vector_id(&self) -> VectorId {
@@ -223,6 +269,373 @@ impl ObjectStore for S3Store {
 
         Ok(objects)
     }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SafeSnapshotChunk {
+    pub first_id: usize,
+    pub last_id: usize,
+    pub key: String,
+    pub sha256: String,
+    pub size_bytes: usize,
+    pub record_count: usize,
+    pub epochs: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SafeSnapshotManifest {
+    pub format_version: u32,
+    pub store_id: String,
+    pub row_count: usize,
+    pub record_size: usize,
+    pub epochs: Vec<u32>,
+    pub chunks: Vec<SafeSnapshotChunk>,
+}
+
+impl SafeSnapshotManifest {
+    fn validate_epochs(epochs: &[u32]) -> Result<()> {
+        ensure!(!epochs.is_empty(), "snapshot epoch inventory is empty");
+        ensure!(
+            epochs.windows(2).all(|pair| pair[0] < pair[1]),
+            "snapshot epochs must be sorted and unique"
+        );
+        ensure!(
+            epochs.iter().all(|epoch| *epoch <= i32::MAX as u32),
+            "snapshot epoch exceeds PostgreSQL INTEGER"
+        );
+        Ok(())
+    }
+
+    fn validate(&self, prefix: &str, expected_store_id: &str) -> Result<()> {
+        ensure!(
+            self.format_version == SAFE_SNAPSHOT_FORMAT,
+            "unsupported safe snapshot format {}",
+            self.format_version
+        );
+        ensure!(
+            !expected_store_id.is_empty() && self.store_id == expected_store_id,
+            "snapshot store identity {:?} does not match expected {:?}",
+            self.store_id,
+            expected_store_id
+        );
+        ensure!(self.row_count > 0, "snapshot row count must be positive");
+        ensure!(
+            self.record_size == SAFE_ELEMENT_SIZE,
+            "snapshot record size {} does not match compiled size {SAFE_ELEMENT_SIZE}",
+            self.record_size
+        );
+        ensure!(!self.chunks.is_empty(), "snapshot has no chunks");
+        Self::validate_epochs(&self.epochs)?;
+
+        let data_prefix = format!("{prefix}/snapshots/data/");
+        let mut next_id = 1usize;
+        let mut keys = HashSet::new();
+        let mut all_epochs = HashSet::new();
+        for chunk in &self.chunks {
+            Self::validate_epochs(&chunk.epochs)?;
+            all_epochs.extend(chunk.epochs.iter().copied());
+            ensure!(
+                chunk.first_id == next_id,
+                "snapshot inventory is not contiguous: expected id {next_id}, got {}",
+                chunk.first_id
+            );
+            ensure!(
+                chunk.last_id >= chunk.first_id,
+                "snapshot chunk has an invalid id range"
+            );
+            let record_count = chunk
+                .last_id
+                .checked_sub(chunk.first_id)
+                .and_then(|n| n.checked_add(1))
+                .ok_or_else(|| eyre!("snapshot chunk id range overflow"))?;
+            ensure!(
+                chunk.record_count == record_count,
+                "snapshot chunk record count does not match its id range"
+            );
+            let expected_size = record_count
+                .checked_mul(SAFE_ELEMENT_SIZE)
+                .ok_or_else(|| eyre!("snapshot chunk size overflow"))?;
+            ensure!(
+                chunk.size_bytes == expected_size,
+                "snapshot chunk size does not match its id range"
+            );
+            ensure!(
+                chunk.key.starts_with(&data_prefix),
+                "snapshot chunk key is outside the snapshot data prefix"
+            );
+            ensure!(keys.insert(&chunk.key), "snapshot repeats a chunk key");
+            ensure!(
+                chunk.sha256.len() == 64
+                    && chunk
+                        .sha256
+                        .bytes()
+                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+                "snapshot chunk has an invalid SHA-256 digest"
+            );
+            next_id = chunk
+                .last_id
+                .checked_add(1)
+                .ok_or_else(|| eyre!("snapshot row id overflow"))?;
+        }
+        ensure!(
+            next_id == self.row_count + 1,
+            "snapshot chunks cover {} rows but manifest declares {}",
+            next_id - 1,
+            self.row_count
+        );
+        let mut all_epochs: Vec<_> = all_epochs.into_iter().collect();
+        all_epochs.sort_unstable();
+        ensure!(
+            all_epochs == self.epochs,
+            "snapshot epoch inventory does not match its chunks"
+        );
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct CompletionMarker {
+    timestamp: u64,
+    digest: String,
+    manifest_size: usize,
+}
+
+impl CompletionMarker {
+    fn parse(key: &str) -> Result<Self> {
+        let name = key
+            .rsplit('/')
+            .next()
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| eyre!("empty safe snapshot completion key"))?;
+        let parts: Vec<_> = name.split('_').collect();
+        ensure!(parts.len() == 3, "invalid safe snapshot completion marker");
+        let timestamp = parts[0].parse().wrap_err("invalid completion timestamp")?;
+        let digest = parts[1].to_owned();
+        ensure!(
+            digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+            "invalid manifest digest"
+        );
+        let manifest_size = parts[2].parse().wrap_err("invalid manifest size")?;
+        ensure!(
+            manifest_size > 0 && manifest_size <= MAX_MANIFEST_SIZE,
+            "manifest size is outside the allowed range"
+        );
+        Ok(Self {
+            timestamp,
+            digest,
+            manifest_size,
+        })
+    }
+}
+
+async fn read_object_exact(store: &impl ObjectStore, key: &str, size: usize) -> Result<Vec<u8>> {
+    read_object_range_exact(store, key, 0, size).await
+}
+
+async fn read_object_range_exact(
+    store: &impl ObjectStore,
+    key: &str,
+    start: usize,
+    end: usize,
+) -> Result<Vec<u8>> {
+    ensure!(end >= start, "invalid S3 byte range");
+    let expected = end - start;
+    let mut reader = store.get_object(key, (start, end)).await?.into_async_read();
+    let mut bytes = Vec::with_capacity(expected);
+    reader.read_to_end(&mut bytes).await?;
+    ensure!(
+        bytes.len() == expected,
+        "S3 object {key:?} range {start}..{end} has {} bytes, expected {expected}",
+        bytes.len()
+    );
+    Ok(bytes)
+}
+
+async fn read_object_range_with_retry(
+    store: &impl ObjectStore,
+    key: &str,
+    start: usize,
+    end: usize,
+    max_retries: usize,
+    initial_backoff_ms: u64,
+) -> Result<Vec<u8>> {
+    let mut backoff_ms = initial_backoff_ms;
+    for attempt in 1..=max_retries {
+        match read_object_range_exact(store, key, start, end).await {
+            Ok(bytes) => return Ok(bytes),
+            Err(error) if attempt < max_retries => {
+                tracing::warn!(
+                    ?error,
+                    attempt,
+                    %key,
+                    start,
+                    end,
+                    "Retrying safe snapshot range"
+                );
+                tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
+                backoff_ms = backoff_ms.saturating_mul(2);
+            }
+            Err(error) => {
+                return Err(error).wrap_err_with(|| {
+                    format!("failed to read safe snapshot range {key:?} {start}..{end}")
+                })
+            }
+        }
+    }
+    unreachable!("positive retry count was validated by the caller")
+}
+
+/// Finds the newest content-addressed snapshot for this exact physical store.
+/// Invalid or foreign candidates are skipped; absence is a normal cache miss.
+pub async fn latest_safe_snapshot(
+    store: &impl ObjectStore,
+    prefix: &str,
+    expected_store_id: &str,
+) -> Result<SafeSnapshotManifest> {
+    let completion_prefix = format!("{prefix}/snapshots/complete/");
+    let mut markers: Vec<_> = store
+        .list_objects(&completion_prefix)
+        .await?
+        .into_iter()
+        .filter_map(|key| match CompletionMarker::parse(&key) {
+            Ok(marker) => Some(marker),
+            Err(error) => {
+                tracing::warn!(?error, %key, "Ignoring invalid safe snapshot marker");
+                None
+            }
+        })
+        .collect();
+    markers.sort_unstable_by_key(|marker| std::cmp::Reverse(marker.timestamp));
+
+    for marker in markers {
+        let key = format!("{prefix}/snapshots/manifests/{}.json", marker.digest);
+        let candidate: Result<SafeSnapshotManifest> = async {
+            let bytes = read_object_exact(store, &key, marker.manifest_size).await?;
+            ensure!(
+                hex::encode(Sha256::digest(&bytes)) == marker.digest,
+                "snapshot manifest digest mismatch"
+            );
+            let manifest: SafeSnapshotManifest =
+                serde_json::from_slice(&bytes).wrap_err("invalid snapshot manifest JSON")?;
+            manifest.validate(prefix, expected_store_id)?;
+            Ok(manifest)
+        }
+        .await;
+        match candidate {
+            Ok(manifest) => return Ok(manifest),
+            Err(error) => {
+                tracing::warn!(?error, %key, "Ignoring unusable safe snapshot candidate");
+            }
+        }
+    }
+    bail!("no valid safe snapshot exists for store {expected_store_id:?}")
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn fetch_and_parse_safe_snapshot(
+    store: Arc<impl ObjectStore>,
+    concurrency: usize,
+    manifest: SafeSnapshotManifest,
+    max_serial_id_to_load: usize,
+    tx: Sender<S3StoredIris>,
+    max_retries: usize,
+    initial_backoff_ms: u64,
+    shutdown_handler: Arc<ShutdownHandler>,
+) -> Result<()> {
+    ensure!(concurrency > 0, "S3 import concurrency must be positive");
+    ensure!(max_retries > 0, "S3 import retry count must be positive");
+    let effective_max = manifest.row_count.min(max_serial_id_to_load);
+    let chunks = manifest
+        .chunks
+        .into_iter()
+        .take_while(|chunk| chunk.first_id <= effective_max);
+    let tasks = stream::iter(chunks).map(|chunk| {
+        let store = Arc::clone(&store);
+        let tx = tx.clone();
+        let shutdown = Arc::clone(&shutdown_handler);
+        async move {
+            tokio::select! {
+                result = fetch_safe_chunk(store, chunk, effective_max, tx, max_retries, initial_backoff_ms) => result,
+                _ = shutdown.wait_for_shutdown() => bail!("Shutdown requested"),
+            }
+        }
+    });
+    tokio::pin!(tasks);
+    let mut tasks = tasks.buffer_unordered(concurrency);
+    while let Some(result) = tasks.next().await {
+        result?;
+    }
+    Ok(())
+}
+
+async fn fetch_safe_chunk(
+    store: Arc<impl ObjectStore>,
+    chunk: SafeSnapshotChunk,
+    effective_max: usize,
+    tx: Sender<S3StoredIris>,
+    max_retries: usize,
+    initial_backoff_ms: u64,
+) -> Result<()> {
+    let mut digest = Sha256::new();
+    let mut epochs = HashSet::new();
+
+    for first_record in (0..chunk.record_count).step_by(MAX_RANGE_SIZE) {
+        let record_count = (chunk.record_count - first_record).min(MAX_RANGE_SIZE);
+        let start = first_record
+            .checked_mul(SAFE_ELEMENT_SIZE)
+            .ok_or_else(|| eyre!("snapshot chunk byte offset overflow"))?;
+        let end = first_record
+            .checked_add(record_count)
+            .and_then(|value| value.checked_mul(SAFE_ELEMENT_SIZE))
+            .ok_or_else(|| eyre!("snapshot chunk byte range overflow"))?;
+
+        let bytes = read_object_range_with_retry(
+            store.as_ref(),
+            &chunk.key,
+            start,
+            end,
+            max_retries,
+            initial_backoff_ms,
+        )
+        .await?;
+
+        digest.update(&bytes);
+        for (offset, row) in bytes.chunks_exact(SAFE_ELEMENT_SIZE).enumerate() {
+            let expected_id = chunk
+                .first_id
+                .checked_add(first_record)
+                .and_then(|value| value.checked_add(offset))
+                .ok_or_else(|| eyre!("snapshot row id overflow"))?;
+            let iris = S3StoredIris::from_bytes(row)?;
+            epochs.insert(iris.rerand_epoch() as u32);
+            ensure!(
+                iris.serial_id() == expected_id,
+                "snapshot chunk {:?} expected id {expected_id}, got {}",
+                chunk.key,
+                iris.serial_id()
+            );
+            if expected_id <= effective_max {
+                tx.send(iris).await?;
+            }
+        }
+    }
+
+    ensure!(
+        hex::encode(digest.finalize()) == chunk.sha256,
+        "snapshot chunk {:?} digest mismatch",
+        chunk.key
+    );
+    let mut epochs: Vec<_> = epochs.into_iter().collect();
+    epochs.sort_unstable();
+    ensure!(
+        epochs == chunk.epochs,
+        "snapshot chunk {:?} epoch inventory mismatch",
+        chunk.key
+    );
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -439,6 +852,7 @@ mod tests {
     #[derive(Default, Clone)]
     pub struct MockStore {
         objects: HashMap<String, Vec<u8>>,
+        requested_ranges: Arc<std::sync::Mutex<Vec<(String, (usize, usize))>>>,
     }
 
     impl MockStore {
@@ -467,6 +881,10 @@ mod tests {
     #[async_trait]
     impl ObjectStore for MockStore {
         async fn get_object(&self, key: &str, range: (usize, usize)) -> Result<ByteStream> {
+            self.requested_ranges
+                .lock()
+                .expect("range log lock poisoned")
+                .push((key.to_owned(), range));
             let bytes = self
                 .objects
                 .get(key)
@@ -558,6 +976,7 @@ mod tests {
             left_mask: random_bytes(MASK_CODE_LENGTH * mem::size_of::<u16>()),
             right_code: random_bytes(IRIS_CODE_LENGTH * mem::size_of::<u16>()),
             right_mask: random_bytes(MASK_CODE_LENGTH * mem::size_of::<u16>()),
+            rerand_epoch: 0,
         }
     }
 
@@ -568,6 +987,182 @@ mod tests {
             last_serial_id: n as i64,
             chunk_size: chunk_size as i64,
         }
+    }
+
+    fn safe_manifest(
+        store_id: &str,
+        chunks: Vec<SafeSnapshotChunk>,
+        rows: usize,
+    ) -> SafeSnapshotManifest {
+        SafeSnapshotManifest {
+            format_version: SAFE_SNAPSHOT_FORMAT,
+            store_id: store_id.to_owned(),
+            row_count: rows,
+            record_size: SAFE_ELEMENT_SIZE,
+            epochs: vec![0],
+            chunks,
+        }
+    }
+
+    #[test]
+    fn safe_manifest_requires_exact_inventory_and_identity() {
+        let chunk = SafeSnapshotChunk {
+            first_id: 1,
+            last_id: 2,
+            key: "out/snapshots/data/run/1.bin".to_owned(),
+            sha256: "a".repeat(64),
+            size_bytes: SAFE_ELEMENT_SIZE * 2,
+            record_count: 2,
+            epochs: vec![0],
+        };
+        assert!(safe_manifest("gpu-0", vec![chunk.clone()], 2)
+            .validate("out", "gpu-0")
+            .is_ok());
+        assert!(safe_manifest("gpu-0", vec![chunk.clone()], 2)
+            .validate("out", "gpu-1")
+            .is_err());
+
+        let mut gap = chunk;
+        gap.first_id = 2;
+        assert!(safe_manifest("gpu-0", vec![gap], 2)
+            .validate("out", "gpu-0")
+            .is_err());
+    }
+
+    #[test]
+    fn safe_record_rejects_epoch_outside_postgres_integer() {
+        let mut bytes = vec![0u8; SAFE_ELEMENT_SIZE];
+        bytes[SINGLE_ELEMENT_SIZE..SINGLE_ELEMENT_SIZE + 4]
+            .copy_from_slice(&u32::MAX.to_be_bytes());
+        assert!(S3StoredIris::from_bytes(&bytes).is_err());
+    }
+
+    #[test]
+    fn safe_record_requires_exact_semantic_id_length() {
+        let bytes = vec![0u8; SAFE_ELEMENT_SIZE - 1];
+        assert!(S3StoredIris::from_bytes(&bytes).is_err());
+    }
+
+    #[tokio::test]
+    async fn safe_snapshot_verifies_manifest_chunk_and_epoch_inventory() {
+        let mut store = MockStore::new();
+        let mut bytes = Vec::new();
+        for (id, epoch) in [(1usize, 0u32), (2, 7)] {
+            let record = dummy_entry(id);
+            let semantic_id = [id as u8; SEMANTIC_ID_SIZE];
+            bytes.extend_from_slice(&(record.id as u32).to_be_bytes());
+            bytes.extend_from_slice(&record.left_code);
+            bytes.extend_from_slice(&record.left_mask);
+            bytes.extend_from_slice(&record.right_code);
+            bytes.extend_from_slice(&record.right_mask);
+            bytes.extend_from_slice(&(record.version_id as u16).to_be_bytes());
+            bytes.extend_from_slice(&epoch.to_be_bytes());
+            bytes.extend_from_slice(&semantic_id);
+        }
+        let chunk_digest = hex::encode(Sha256::digest(&bytes));
+        let chunk_key = "out/snapshots/data/run/1.bin";
+        store.objects.insert(chunk_key.to_owned(), bytes.clone());
+        let manifest = serde_json::json!({
+            "format_version": SAFE_SNAPSHOT_FORMAT,
+            "store_id": "gpu-0",
+            "row_count": 2,
+            "record_size": SAFE_ELEMENT_SIZE,
+            "epochs": [0, 7],
+            "chunks": [{
+                "first_id": 1,
+                "last_id": 2,
+                "key": chunk_key,
+                "sha256": chunk_digest,
+                "size_bytes": bytes.len(),
+                "record_count": 2,
+                "epochs": [0, 7]
+            }]
+        });
+        let manifest_bytes = serde_json::to_vec(&manifest).unwrap();
+        let manifest_digest = hex::encode(Sha256::digest(&manifest_bytes));
+        store.objects.insert(
+            format!("out/snapshots/manifests/{manifest_digest}.json"),
+            manifest_bytes.clone(),
+        );
+        store.objects.insert(
+            format!(
+                "out/snapshots/complete/1_{manifest_digest}_{}",
+                manifest_bytes.len()
+            ),
+            Vec::new(),
+        );
+
+        let manifest = latest_safe_snapshot(&store, "out", "gpu-0").await.unwrap();
+        assert_eq!(manifest.epochs, vec![0, 7]);
+        let (tx, mut rx) = mpsc::channel(2);
+        fetch_and_parse_safe_snapshot(
+            Arc::new(store),
+            1,
+            manifest,
+            2,
+            tx,
+            1,
+            0,
+            Arc::new(ShutdownHandler::new(1)),
+        )
+        .await
+        .unwrap();
+        let mut rows = vec![rx.recv().await.unwrap(), rx.recv().await.unwrap()];
+        rows.sort_unstable_by_key(S3StoredIris::serial_id);
+        assert_eq!(rows[0].rerand_epoch(), 0);
+        assert_eq!(rows[1].rerand_epoch(), 7);
+        assert_eq!(rows[0].semantic_id(), Some([1; SEMANTIC_ID_SIZE]));
+        assert_eq!(rows[1].semantic_id(), Some([2; SEMANTIC_ID_SIZE]));
+    }
+
+    #[tokio::test]
+    async fn safe_snapshot_chunks_are_fetched_in_bounded_ranges() {
+        let record_count = MAX_RANGE_SIZE + 1;
+        let key = "out/snapshots/data/run/1.bin";
+        let mut store = MockStore::new();
+        let mut bytes = Vec::with_capacity(record_count * SAFE_ELEMENT_SIZE);
+        for id in 1..=record_count {
+            let record = dummy_entry(id);
+            bytes.extend_from_slice(&(record.id as u32).to_be_bytes());
+            bytes.extend_from_slice(&record.left_code);
+            bytes.extend_from_slice(&record.left_mask);
+            bytes.extend_from_slice(&record.right_code);
+            bytes.extend_from_slice(&record.right_mask);
+            bytes.extend_from_slice(&(record.version_id as u16).to_be_bytes());
+            bytes.extend_from_slice(&0u32.to_be_bytes());
+            bytes.extend_from_slice(&[id as u8; SEMANTIC_ID_SIZE]);
+        }
+        let chunk = SafeSnapshotChunk {
+            first_id: 1,
+            last_id: record_count,
+            key: key.to_owned(),
+            sha256: hex::encode(Sha256::digest(&bytes)),
+            size_bytes: bytes.len(),
+            record_count,
+            epochs: vec![0],
+        };
+        store.objects.insert(key.to_owned(), bytes);
+        let range_log = Arc::clone(&store.requested_ranges);
+        let (tx, mut rx) = mpsc::channel(record_count);
+
+        fetch_safe_chunk(Arc::new(store), chunk, record_count, tx, 1, 0)
+            .await
+            .unwrap();
+        let mut received = 0;
+        while rx.recv().await.is_some() {
+            received += 1;
+        }
+        assert_eq!(received, record_count);
+        let ranges = range_log.lock().unwrap();
+        let data_ranges = ranges
+            .iter()
+            .filter(|(requested_key, _)| requested_key == key)
+            .map(|(_, range)| *range)
+            .collect::<Vec<_>>();
+        assert_eq!(data_ranges.len(), 2);
+        assert!(data_ranges
+            .iter()
+            .all(|(start, end)| end - start <= MAX_RANGE_SIZE * SAFE_ELEMENT_SIZE));
     }
 
     #[tokio::test]

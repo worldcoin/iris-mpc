@@ -18,6 +18,7 @@ use iris_mpc_common::config::Config;
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::VectorId;
 use iris_mpc_store::loader::load_iris_db;
+use iris_mpc_store::rerand::RerandContext;
 use iris_mpc_store::Store;
 use itertools::izip;
 use std::sync::Arc;
@@ -44,6 +45,7 @@ pub struct DbLoadParams {
     pub parallelism: usize,
     pub s3_max_serial_id: Option<usize>,
     pub shutdown_handler: Arc<ShutdownHandler>,
+    pub rerand: Option<RerandContext>,
 }
 
 /// Strategy for populating the local pools' iris stores at startup.
@@ -150,6 +152,7 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                     parallelism,
                     s3_max_serial_id,
                     shutdown_handler,
+                    rerand,
                 } = params;
                 let mut adapter = FanoutLoader {
                     party_id,
@@ -164,6 +167,7 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                     s3_max_serial_id,
                     &config,
                     shutdown_handler,
+                    rerand.as_ref(),
                 )
                 .await?;
                 // Drain the channels so every fire-and-forget `Insert` lands

@@ -153,6 +153,7 @@ type PartialDistancesMap = BTreeMap<
     ),
 >;
 
+mod consistency_canary;
 mod identity_update;
 pub mod insert;
 mod intra_batch;
@@ -613,6 +614,47 @@ impl HawkActor {
         self.graph_store[store_id as usize].clone()
     }
 
+    async fn canary_inventory(&self) -> (Vec<VectorId>, bool) {
+        async fn read(registry: &VectorIdRegistryRef) -> Vec<VectorId> {
+            let registry = registry.read().await;
+            registry
+                .get_sorted_serial_ids()
+                .into_iter()
+                .map(|serial_id| {
+                    VectorId::new(
+                        serial_id,
+                        registry
+                            .get_current_version(serial_id)
+                            .expect("serial ID came from this registry"),
+                    )
+                })
+                .collect()
+        }
+        let left = read(&self.registry[LEFT]).await;
+        let right = read(&self.registry[RIGHT]).await;
+        let consistent = left == right;
+        (left, consistent)
+    }
+
+    async fn run_consistency_canary(
+        &self,
+        repetitions: usize,
+        context: [u8; 32],
+        network: &mut NetworkSession,
+    ) -> Result<()> {
+        let (inventory, registry_consistent) = self.canary_inventory().await;
+        consistency_canary::run_consistency_canary(
+            &self.worker_pools,
+            &inventory,
+            registry_consistent,
+            self.party_id,
+            repetitions,
+            context,
+            network,
+        )
+        .await
+    }
+
     pub async fn db_size(&self) -> usize {
         self.registry[LEFT].read().await.db_size()
     }
@@ -1069,6 +1111,15 @@ impl<'a> GraphLoader<'a> {
 struct HawkJob {
     request: HawkRequest,
     return_channel: oneshot::Sender<Result<HawkResult>>,
+}
+
+enum HawkCommand {
+    Job(HawkJob),
+    ConsistencyCanary {
+        repetitions: usize,
+        context: [u8; 32],
+        return_channel: oneshot::Sender<Result<()>>,
+    },
 }
 
 /// Represents a batch of queries to be processed by the `HawkActor`.
@@ -1678,7 +1729,7 @@ impl HawkMutation {
 /// HawkHandle is a handle to the HawkActor managing concurrency.
 #[derive(Clone, Debug)]
 pub struct HawkHandle {
-    job_queue: mpsc::Sender<HawkJob>,
+    job_queue: mpsc::Sender<HawkCommand>,
 }
 
 impl JobSubmissionHandle for HawkHandle {
@@ -1696,7 +1747,7 @@ impl JobSubmissionHandle for HawkHandle {
         };
 
         // Wait for the job to be sent for backpressure.
-        let sent = self.job_queue.send(job).await;
+        let sent = self.job_queue.send(HawkCommand::Job(job)).await;
 
         let span = Span::current();
         async move {
@@ -1710,6 +1761,22 @@ impl JobSubmissionHandle for HawkHandle {
 }
 
 impl HawkHandle {
+    pub async fn run_consistency_canary(
+        &self,
+        repetitions: usize,
+        context: [u8; 32],
+    ) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.job_queue
+            .send(HawkCommand::ConsistencyCanary {
+                repetitions,
+                context,
+                return_channel: tx,
+            })
+            .await?;
+        rx.await?
+    }
+
     pub async fn new(mut hawk_actor: HawkActor) -> Result<Self> {
         let request_handler_span = Span::current();
         let job_handler_span = request_handler_span.clone();
@@ -1722,36 +1789,68 @@ impl HawkHandle {
         // Validate the common state before starting.
         HawkSession::state_check(sessions.for_state_check()).await?;
 
-        let (tx, mut rx) = mpsc::channel::<HawkJob>(1);
+        let (tx, mut rx) = mpsc::channel::<HawkCommand>(1);
 
         // ---- Request Handler ----
         tokio::spawn(async move {
             let mut batch_count: u32 = 0;
-            while let Some(job) = rx.recv().await {
-                batch_count += 1;
-                // check if there was a networking error
-                let error_ct = hawk_actor.error_ct.clone();
-                let span = job_handler_span.clone();
-                let job_result = tokio::select! {
-                    r = Self::handle_job(&mut hawk_actor, &mut sessions, job.request, batch_count).instrument(span)=> r,
-                    _ = error_ct.cancelled() => Err(eyre!("networking error")),
-                };
-
-                let health =
-                    Self::health_check(&mut hawk_actor, &mut sessions, job_result.is_err()).await;
-
-                let stop = health.is_err();
-                let _ = job.return_channel.send(health.and(job_result));
-
-                if stop {
-                    tracing::error!("Stopping HawkActor in inconsistent state.");
-                    break;
+            while let Some(command) = rx.recv().await {
+                match command {
+                    HawkCommand::Job(job) => {
+                        batch_count += 1;
+                        let error_ct = hawk_actor.error_ct.clone();
+                        let span = job_handler_span.clone();
+                        let job_result = tokio::select! {
+                            r = Self::handle_job(&mut hawk_actor, &mut sessions, job.request, batch_count).instrument(span)=> r,
+                            _ = error_ct.cancelled() => Err(eyre!("networking error")),
+                        };
+                        let health = Self::health_check(
+                            &mut hawk_actor,
+                            &mut sessions,
+                            job_result.is_err(),
+                        )
+                        .await;
+                        let stop = health.is_err();
+                        let _ = job.return_channel.send(health.and(job_result));
+                        if stop {
+                            tracing::error!("Stopping HawkActor in inconsistent state.");
+                            break;
+                        }
+                    }
+                    HawkCommand::ConsistencyCanary {
+                        repetitions,
+                        context,
+                        return_channel,
+                    } => {
+                        let state_check_sessions = sessions.for_state_check();
+                        let mut store = state_check_sessions[LEFT].aby3_store.write().await;
+                        let result = hawk_actor
+                            .run_consistency_canary(
+                                repetitions,
+                                context,
+                                &mut store.session.network_session,
+                            )
+                            .await;
+                        let failed = result.is_err();
+                        let _ = return_channel.send(result);
+                        if failed {
+                            tracing::error!("Stopping HawkActor after canary failure.");
+                            break;
+                        }
+                    }
                 }
             }
 
             rx.close();
-            while let Some(job) = rx.recv().await {
-                let _ = job.return_channel.send(Err(eyre::eyre!("stopping")));
+            while let Some(command) = rx.recv().await {
+                match command {
+                    HawkCommand::Job(job) => {
+                        let _ = job.return_channel.send(Err(eyre::eyre!("stopping")));
+                    }
+                    HawkCommand::ConsistencyCanary { return_channel, .. } => {
+                        let _ = return_channel.send(Err(eyre::eyre!("stopping")));
+                    }
+                }
             }
         }.instrument(request_handler_span));
 

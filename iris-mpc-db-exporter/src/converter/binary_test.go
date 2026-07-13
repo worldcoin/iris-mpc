@@ -168,6 +168,37 @@ func TestBinaryConverter_ConvertSingle(t *testing.T) {
 	}
 }
 
+func TestRerandBinaryConverterAppendsEpochAndSemanticID(t *testing.T) {
+	c := NewRerandBinaryConverter(8, 4, 4, 2)
+	semanticID := bytes.Repeat([]byte{0xab}, 16)
+	item := iris.StoredIris{
+		ID: 1, LeftCode: make([]byte, 8), LeftMask: make([]byte, 4),
+		RightCode: make([]byte, 8), RightMask: make([]byte, 4),
+		VersionID: 2, RerandEpoch: 7, SemanticID: semanticID,
+	}
+
+	output, err := c.ConvertSingle(item)
+	assert.NoError(t, err)
+	assert.Equal(t, uint32(7), binary.BigEndian.Uint32(output[len(output)-20:len(output)-16]))
+	assert.Equal(t, semanticID, output[len(output)-16:])
+
+	item.SemanticID = nil
+	_, err = c.ConvertSingle(item)
+	assert.ErrorContains(t, err, "invalid semantic ID length")
+}
+
+func TestLegacyBinaryConverterRejectsRerandomizedRow(t *testing.T) {
+	c := NewBinaryConverter(8, 4, 4, 2)
+	item := iris.StoredIris{
+		ID: 1, LeftCode: make([]byte, 8), LeftMask: make([]byte, 4),
+		RightCode: make([]byte, 8), RightMask: make([]byte, 4),
+		VersionID: 2, RerandEpoch: 1,
+	}
+
+	_, err := c.ConvertSingle(item)
+	assert.ErrorContains(t, err, "refusing legacy snapshot encoding")
+}
+
 // TestStoreAsEvenOddPairs_OddLengthInput ensures the function panics if input length is odd.
 func TestStoreAsEvenOddPairs_OddLengthInput(t *testing.T) {
 	defer func() {

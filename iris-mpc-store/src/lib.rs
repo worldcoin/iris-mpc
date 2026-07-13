@@ -1,5 +1,7 @@
 pub mod loader;
+pub mod rerand;
 mod s3_importer;
+mod snapshot_reconcile;
 
 use bytemuck::cast_slice;
 use eyre::{eyre, Result};
@@ -25,7 +27,8 @@ use iris_mpc_common::{
 use itertools::izip;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{
-    fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
+    fetch_and_parse_chunks, fetch_and_parse_safe_snapshot, last_snapshot_timestamp,
+    latest_safe_snapshot, ObjectStore, S3Store, S3StoredIris, SafeSnapshotManifest,
 };
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::ops::DerefMut;
@@ -50,12 +53,14 @@ impl StoredIris {
 
 #[derive(sqlx::FromRow, Debug, Default, PartialEq, Eq)]
 pub struct DbStoredIris {
-    id: i64,             // BIGSERIAL
-    version_id: i16,     // SMALLINT
-    left_code: Vec<u8>,  // BYTEA
-    left_mask: Vec<u8>,  // BYTEA
-    right_code: Vec<u8>, // BYTEA
-    right_mask: Vec<u8>, // BYTEA
+    pub(crate) id: i64,             // BIGSERIAL
+    pub(crate) version_id: i16,     // SMALLINT
+    pub(crate) left_code: Vec<u8>,  // BYTEA
+    pub(crate) left_mask: Vec<u8>,  // BYTEA
+    pub(crate) right_code: Vec<u8>, // BYTEA
+    pub(crate) right_mask: Vec<u8>, // BYTEA
+    /// Offset epoch carried by the stored bytes; zero means raw shares.
+    pub(crate) rerand_epoch: i32,
 }
 
 impl DbStoredIris {
@@ -90,6 +95,10 @@ impl DbStoredIris {
     pub fn id(&self) -> i64 {
         self.id
     }
+
+    pub fn rerand_epoch(&self) -> i32 {
+        self.rerand_epoch
+    }
     /// Not really intended to be used directly, use StoredIrisRef instead.
     pub fn new(
         id: i64,
@@ -106,6 +115,27 @@ impl DbStoredIris {
             left_mask,
             right_code,
             right_mask,
+            rerand_epoch: 0,
+        }
+    }
+
+    pub fn new_at_epoch(
+        id: i64,
+        version_id: i16,
+        left_code: Vec<u8>,
+        left_mask: Vec<u8>,
+        right_code: Vec<u8>,
+        right_mask: Vec<u8>,
+        rerand_epoch: i32,
+    ) -> Self {
+        Self {
+            id,
+            version_id,
+            left_code,
+            left_mask,
+            right_code,
+            right_mask,
+            rerand_epoch,
         }
     }
 }
@@ -123,6 +153,15 @@ pub struct StoredIrisRef<'a> {
 impl From<&DbStoredIris> for VectorId {
     fn from(value: &DbStoredIris) -> Self {
         VectorId::new(value.serial_id() as SerialId, value.version_id())
+    }
+}
+
+fn iris_stream_query(has_modified_filter: bool, has_rerand_metadata: bool) -> &'static str {
+    match (has_modified_filter, has_rerand_metadata) {
+        (true, true) => "SELECT id, version_id, left_code, left_mask, right_code, right_mask, rerand_epoch FROM irises WHERE id BETWEEN $1 AND $2 AND last_modified_at >= $3",
+        (true, false) => "SELECT id, version_id, left_code, left_mask, right_code, right_mask, 0::integer AS rerand_epoch FROM irises WHERE id BETWEEN $1 AND $2 AND last_modified_at >= $3",
+        (false, true) => "SELECT id, version_id, left_code, left_mask, right_code, right_mask, rerand_epoch FROM irises WHERE id BETWEEN $1 AND $2",
+        (false, false) => "SELECT id, version_id, left_code, left_mask, right_code, right_mask, 0::integer AS rerand_epoch FROM irises WHERE id BETWEEN $1 AND $2",
     }
 }
 
@@ -244,6 +283,16 @@ impl Store {
         max_serial_id_to_load: Option<usize>,
     ) -> impl Stream<Item = Result<DbStoredIris>> + '_ {
         let count = self.count_irises().await.expect("Failed count_irises");
+        let has_rerand_metadata: bool = sqlx::query_scalar(
+            "SELECT EXISTS (\
+				 SELECT 1 FROM information_schema.columns \
+				  WHERE table_schema = current_schema() AND table_name = 'irises' \
+				    AND column_name = 'rerand_epoch'\
+			 )",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .expect("Failed to discover rerandomization metadata");
         let effective_count = max_serial_id_to_load
             .map(|max| count.min(max))
             .unwrap_or(count);
@@ -259,24 +308,19 @@ impl Store {
             let end_id = (start_id + partition_size - 1).min(effective_count);
 
             // This base query yields `DbStoredIris`
+            let query = iris_stream_query(min_last_modified_at.is_some(), has_rerand_metadata);
             let stream = match min_last_modified_at {
-                Some(min_last_modified_at) => sqlx::query_as::<_, DbStoredIris>(
-                    "SELECT id, version_id, left_code, left_mask, right_code, right_mask FROM irises WHERE id \
-                     BETWEEN $1 AND $2 AND last_modified_at >= $3",
-                )
-                .bind(start_id as i64)
-                .bind(end_id as i64)
-                .bind(min_last_modified_at)
-                .fetch(&self.pool)
-                .map_err(Into::into),
-                None => sqlx::query_as::<_, DbStoredIris>(
-                    "SELECT id, version_id, left_code, left_mask, right_code, right_mask FROM irises WHERE id \
-                     BETWEEN $1 AND $2",
-                )
-                .bind(start_id as i64)
-                .bind(end_id as i64)
-                .fetch(&self.pool)
-                .map_err(Into::into),
+                Some(min_last_modified_at) => sqlx::query_as::<_, DbStoredIris>(query)
+                    .bind(start_id as i64)
+                    .bind(end_id as i64)
+                    .bind(min_last_modified_at)
+                    .fetch(&self.pool)
+                    .map_err(Into::into),
+                None => sqlx::query_as::<_, DbStoredIris>(query)
+                    .bind(start_id as i64)
+                    .bind(end_id as i64)
+                    .fetch(&self.pool)
+                    .map_err(Into::into),
             }
             .boxed();
 
@@ -805,6 +849,18 @@ fn cast_u8_to_u16(s: &[u8]) -> &[u16] {
         &[] // A literal empty &[u8] may be unaligned.
     } else {
         cast_slice(s)
+    }
+}
+
+#[cfg(test)]
+mod query_tests {
+    use super::iris_stream_query;
+
+    #[test]
+    fn pre_migration_stream_projects_epoch_zero() {
+        assert!(iris_stream_query(false, false).contains("0::integer AS rerand_epoch"));
+        assert!(iris_stream_query(true, false).contains("0::integer AS rerand_epoch"));
+        assert!(!iris_stream_query(false, true).contains("0::integer AS rerand_epoch"));
     }
 }
 

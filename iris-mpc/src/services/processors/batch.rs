@@ -3,8 +3,7 @@ use crate::services::processors::get_iris_shares_parse_task;
 use crate::services::processors::result_message::send_error_results_to_sns;
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use ampc_server_utils::{
-    get_approximate_number_of_messages, get_batch_sync_states, BatchSyncResult,
-    BatchSyncSharedState, BatchSyncState,
+    get_approximate_number_of_messages, get_batch_sync_states, BatchSyncSharedState, BatchSyncState,
 };
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sns::types::MessageAttributeValue;
@@ -12,6 +11,7 @@ use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::Client;
 use eyre::Result;
 use iris_mpc_common::config::Config;
+use iris_mpc_common::consistency_canary::PeriodicCanarySchedule;
 use iris_mpc_common::galois_engine::degree4::{
     GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare, GaloisShares,
 };
@@ -41,10 +41,90 @@ use iris_mpc_common::job::{BatchMetadata, BatchQuery, GaloisSharesBothSides};
 use iris_mpc_store::Store;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinHandle;
+
+const CANARY_DUE_FLAG: u32 = 1 << 31;
+const RERAND_BATCH_ID_FLAG: u64 = 1 << 63;
+
+pub type SharedCanarySchedule = Arc<Mutex<PeriodicCanarySchedule>>;
+
+#[derive(Debug)]
+pub enum BatchStreamEvent {
+    Batch { query: BatchQuery, canary_due: bool },
+    MaintenanceDue { batch_id: u64 },
+}
+
+pub async fn complete_canary_maintenance(
+    schedule: &SharedCanarySchedule,
+    shared_state: &Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
+) {
+    schedule
+        .lock()
+        .expect("canary schedule lock poisoned")
+        .mark_completed();
+    shared_state.lock().await.messages_to_poll &= !CANARY_DUE_FLAG;
+}
+
+fn wire_batch_id(raw_batch_id: u64, rerand_enabled: bool) -> Result<u64> {
+    eyre::ensure!(
+        raw_batch_id & RERAND_BATCH_ID_FLAG == 0,
+        "raw batch ID uses the rerandomization protocol bit"
+    );
+    Ok(if rerand_enabled {
+        raw_batch_id | RERAND_BATCH_ID_FLAG
+    } else {
+        raw_batch_id
+    })
+}
+
+fn poll_count(value: u32) -> u32 {
+    value & !CANARY_DUE_FLAG
+}
+
+fn synchronized_poll_decision(states: &[BatchSyncState]) -> (u32, bool) {
+    let maintenance_due = states
+        .iter()
+        .any(|state| state.messages_to_poll & CANARY_DUE_FLAG != 0);
+    let messages_to_poll = states
+        .iter()
+        .map(|state| poll_count(state.messages_to_poll))
+        .min()
+        .unwrap_or(0);
+    (messages_to_poll, maintenance_due)
+}
+
+fn should_run_idle_maintenance(messages_to_poll: u32, maintenance_due: bool) -> bool {
+    messages_to_poll == 0 && maintenance_due
+}
+
+fn schedule_is_due(schedule: Option<&SharedCanarySchedule>) -> bool {
+    schedule.is_some_and(|schedule| {
+        schedule
+            .lock()
+            .expect("canary schedule lock poisoned")
+            .is_due()
+    })
+}
+
+async fn sleep_until_poll_or_deadline(schedule: Option<&SharedCanarySchedule>) {
+    let poll = tokio::time::sleep(std::time::Duration::from_secs(3));
+    tokio::pin!(poll);
+    if let Some(schedule) = schedule {
+        let deadline = schedule
+            .lock()
+            .expect("canary schedule lock poisoned")
+            .due_at();
+        tokio::select! {
+            _ = &mut poll => {}
+            _ = tokio::time::sleep_until(deadline) => {}
+        }
+    } else {
+        poll.await;
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn receive_batch_stream(
@@ -65,8 +145,9 @@ pub fn receive_batch_stream(
     current_batch_id_atomic: Arc<AtomicU64>,
     iris_store: Store,
     batch_sync_shared_state: Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
+    periodic_canary: Option<SharedCanarySchedule>,
 ) -> (
-    Receiver<Result<Option<BatchQuery>, ReceiveRequestError>>,
+    Receiver<Result<Option<BatchStreamEvent>, ReceiveRequestError>>,
     Arc<Semaphore>,
 ) {
     let (tx, rx) = mpsc::channel(1);
@@ -110,6 +191,7 @@ pub fn receive_batch_stream(
                     current_batch_id_atomic.clone(),
                     &iris_store,
                     batch_sync_shared_state.clone(),
+                    periodic_canary.as_ref(),
                 )
                 .await;
 
@@ -146,7 +228,8 @@ async fn receive_batch(
     current_batch_id_atomic: Arc<AtomicU64>,
     iris_store: &Store,
     batch_sync_shared_state: Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
-) -> Result<Option<BatchQuery>, ReceiveRequestError> {
+    periodic_canary: Option<&SharedCanarySchedule>,
+) -> Result<Option<BatchStreamEvent>, ReceiveRequestError> {
     let mut processor = BatchProcessor::new(
         party_id,
         client,
@@ -165,6 +248,7 @@ async fn receive_batch(
         current_batch_id_atomic,
         iris_store,
         batch_sync_shared_state,
+        periodic_canary,
     );
 
     processor.receive_batch().await
@@ -192,6 +276,7 @@ pub struct BatchProcessor<'a> {
     current_batch_id_atomic: Arc<AtomicU64>,
     iris_store: &'a Store,
     batch_sync_shared_state: Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
+    periodic_canary: Option<&'a SharedCanarySchedule>,
 }
 
 impl<'a> BatchProcessor<'a> {
@@ -214,6 +299,7 @@ impl<'a> BatchProcessor<'a> {
         current_batch_id_atomic: Arc<AtomicU64>,
         iris_store: &'a Store,
         batch_sync_shared_state: Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
+        periodic_canary: Option<&'a SharedCanarySchedule>,
     ) -> Self {
         Self {
             party_id,
@@ -237,15 +323,17 @@ impl<'a> BatchProcessor<'a> {
             current_batch_id_atomic,
             iris_store,
             batch_sync_shared_state,
+            periodic_canary,
         }
     }
 
-    pub async fn receive_batch(&mut self) -> Result<Option<BatchQuery>, ReceiveRequestError> {
+    pub async fn receive_batch(&mut self) -> Result<Option<BatchStreamEvent>, ReceiveRequestError> {
         if self.shutdown_handler.is_shutting_down() {
             tracing::info!("Stopping batch receive due to shutdown signal...");
             return Ok(None);
         }
 
+        let mut canary_due_during_intake = false;
         loop {
             let current_batch_id = self.current_batch_id_atomic.load(Ordering::SeqCst);
 
@@ -254,6 +342,16 @@ impl<'a> BatchProcessor<'a> {
                 get_own_batch_sync_state(self.config, self.client, current_batch_id)
                     .await
                     .map_err(ReceiveRequestError::BatchSyncError)?;
+            own_state.batch_id = wire_batch_id(current_batch_id, self.config.rerand_enabled)
+                .map_err(ReceiveRequestError::BatchSyncError)?;
+            if own_state.messages_to_poll & CANARY_DUE_FLAG != 0 {
+                return Err(ReceiveRequestError::BatchSyncError(eyre::eyre!(
+                    "batch size uses the canary-due protocol bit"
+                )));
+            }
+            if schedule_is_due(self.periodic_canary) {
+                own_state.messages_to_poll |= CANARY_DUE_FLAG;
+            }
 
             // Update the shared state with our current state
             {
@@ -262,11 +360,18 @@ impl<'a> BatchProcessor<'a> {
                 if shared_state.batch_id != own_state.batch_id {
                     shared_state.batch_id = own_state.batch_id;
                     shared_state.messages_to_poll = own_state.messages_to_poll;
-                } else if shared_state.messages_to_poll == 0 {
-                    // we have been here before, only update messages_to_poll if it was 0, otherwise other parties could have state mismatches
-                    shared_state.messages_to_poll = own_state.messages_to_poll;
                 } else {
-                    // we have already set this for this batch, so it might have gone out to other parties, so we need to update our own state to match what we already sent out
+                    // Keep an already-published nonzero poll count stable, but
+                    // monotonically latch a newly due maintenance bit.
+                    let due = (shared_state.messages_to_poll | own_state.messages_to_poll)
+                        & CANARY_DUE_FLAG;
+                    let shared_count = poll_count(shared_state.messages_to_poll);
+                    let count = if shared_count == 0 {
+                        poll_count(own_state.messages_to_poll)
+                    } else {
+                        shared_count
+                    };
+                    shared_state.messages_to_poll = count | due;
                     own_state.messages_to_poll = shared_state.messages_to_poll;
                 }
 
@@ -274,7 +379,7 @@ impl<'a> BatchProcessor<'a> {
                     "Updated shared batch sync state: batch_id={}, messages_to_poll={}",
                     shared_state.batch_id, shared_state.messages_to_poll,
                 );
-                match shared_state.messages_to_poll {
+                match poll_count(shared_state.messages_to_poll) {
                     0 => tracing::debug!(log_msg),
                     _ => tracing::info!(log_msg),
                 };
@@ -294,8 +399,30 @@ impl<'a> BatchProcessor<'a> {
             .await
             .map_err(ReceiveRequestError::BatchSyncError)?;
 
-            let batch_sync_result = BatchSyncResult::new(own_state, all_states);
-            let messages_to_poll = batch_sync_result.messages_to_poll();
+            let (messages_to_poll, maintenance_due) = synchronized_poll_decision(&all_states);
+
+            if should_run_idle_maintenance(messages_to_poll, maintenance_due) {
+                tracing::info!(
+                    current_batch_id,
+                    "Canary maintenance is due before batch intake"
+                );
+                return Ok(Some(BatchStreamEvent::MaintenanceDue {
+                    batch_id: current_batch_id,
+                }));
+            }
+            // Once this batch has a nonzero synchronized poll count, every
+            // party must form it. Carry a due observation into the ordinary
+            // batch-entry barrier instead of splitting maintenance from intake.
+            canary_due_during_intake |= maintenance_due;
+
+            // The deadline may have elapsed while fetching peer states. Latch
+            // it and repeat the public state barrier instead of starting SQS
+            // intake from a stale pre-deadline decision.
+            if !maintenance_due && schedule_is_due(self.periodic_canary) {
+                let mut shared_state = self.batch_sync_shared_state.lock().await;
+                shared_state.messages_to_poll |= CANARY_DUE_FLAG;
+                continue;
+            }
 
             let log_msg = format!(
                 "Batch ID: {}. Agreed to poll {} messages (max_batch_size: {}).",
@@ -322,7 +449,7 @@ impl<'a> BatchProcessor<'a> {
                     return Ok(None);
                 }
                 // Reduce sleep time when no messages are available
-                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                sleep_until_poll_or_deadline(self.periodic_canary).await;
             }
         }
 
@@ -377,7 +504,10 @@ impl<'a> BatchProcessor<'a> {
             );
         }
 
-        Ok(Some(self.batch_query.clone()))
+        Ok(Some(BatchStreamEvent::Batch {
+            query: self.batch_query.clone(),
+            canary_due: canary_due_during_intake,
+        }))
     }
 
     async fn poll_exact_messages(&mut self, num_to_poll: u32) -> Result<(), ReceiveRequestError> {
@@ -1367,4 +1497,44 @@ pub async fn get_own_batch_sync_state(
         batch_id: current_batch_id,
     };
     Ok(batch_sync_state)
+}
+
+#[cfg(test)]
+mod rerand_protocol_tests {
+    use super::*;
+
+    #[test]
+    fn wire_batch_id_is_legacy_compatible_only_when_disabled() {
+        assert_eq!(wire_batch_id(7, false).unwrap(), 7);
+        assert_eq!(wire_batch_id(7, true).unwrap(), 7 | RERAND_BATCH_ID_FLAG);
+        assert!(wire_batch_id(RERAND_BATCH_ID_FLAG, true).is_err());
+    }
+
+    #[test]
+    fn due_flag_does_not_change_the_public_poll_count() {
+        assert_eq!(poll_count(23), 23);
+        assert_eq!(poll_count(23 | CANARY_DUE_FLAG), 23);
+    }
+
+    #[test]
+    fn one_party_due_is_carried_with_the_agreed_batch() {
+        let states = [
+            BatchSyncState {
+                batch_id: 9,
+                messages_to_poll: 23,
+            },
+            BatchSyncState {
+                batch_id: 9,
+                messages_to_poll: 12 | CANARY_DUE_FLAG,
+            },
+            BatchSyncState {
+                batch_id: 9,
+                messages_to_poll: 19,
+            },
+        ];
+        assert_eq!(synchronized_poll_decision(&states), (12, true));
+        assert!(!should_run_idle_maintenance(12, true));
+        assert!(should_run_idle_maintenance(0, true));
+        assert!(!should_run_idle_maintenance(0, false));
+    }
 }

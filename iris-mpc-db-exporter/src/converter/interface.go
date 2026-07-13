@@ -6,4 +6,5 @@ type Converter interface {
 	GetExtension() string
 	Convert(data []iris.StoredIris) ([]byte, error)
 	ConvertSingle(data iris.StoredIris) ([]byte, error)
+	GetRecordSize() int
 }

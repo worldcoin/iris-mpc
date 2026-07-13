@@ -267,6 +267,33 @@ pub struct Config {
     #[serde(default)]
     pub enable_modifications_replay: bool,
 
+    /// Enable continuous rerandomization and its mandatory serving-memory
+    /// consistency checks. This is shared by all parties.
+    #[serde(default)]
+    pub rerand_enabled: bool,
+
+    /// S3 bucket containing immutable rerandomization seeds and snapshots.
+    /// This is shared by all parties.
+    #[serde(default)]
+    pub rerand_s3_bucket: String,
+
+    /// Immutable identity of this local GPU or HNSW store. It intentionally is
+    /// not part of `CommonConfig`, because each party/store has a distinct ID.
+    #[serde(default)]
+    pub rerand_store_id: String,
+
+    /// Globally unique, never-reused coordination generation. This is shared
+    /// by all six stores and prevents immutable epoch objects from a replaced
+    /// deployment being accepted or blocking progress.
+    #[serde(default)]
+    pub rerand_coordination_id: String,
+
+    /// Run a full serving-memory canary at the first synchronized batch
+    /// boundary after this interval. Rerandomization requires a nonzero value;
+    /// startup checking is unconditional and has no separate toggle.
+    #[serde(default = "default_consistency_check_interval_secs")]
+    pub consistency_check_interval_secs: u64,
+
     #[serde(default = "default_pprof_s3_bucket")]
     pub pprof_s3_bucket: String,
 
@@ -339,6 +366,10 @@ fn default_load_chunks_parallelism() -> usize {
 
 fn default_processing_timeout_secs() -> u64 {
     60
+}
+
+fn default_consistency_check_interval_secs() -> u64 {
+    24 * 60 * 60
 }
 
 fn default_max_batch_size() -> usize {
@@ -545,7 +576,45 @@ impl Config {
         if let Some(service_coordination) = &mut config.server_coordination {
             config.party_id = service_coordination.party_id;
         }
+        config.validate()?;
         Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        if !self.rerand_enabled {
+            return Ok(());
+        }
+        eyre::ensure!(
+            !self.rerand_s3_bucket.is_empty(),
+            "rerand_enabled=true requires rerand_s3_bucket"
+        );
+        eyre::ensure!(
+            !self.rerand_store_id.is_empty()
+                && self.rerand_store_id.len() <= 128
+                && self
+                    .rerand_store_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"._-:".contains(&byte)),
+            "rerand_enabled=true requires a valid rerand_store_id (1..=128 ASCII letters, digits, '.', '_', '-', or ':')"
+        );
+        eyre::ensure!(
+            !self.rerand_coordination_id.is_empty()
+                && self.rerand_coordination_id.len() <= 128
+                && self
+                    .rerand_coordination_id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte)),
+            "rerand_enabled=true requires a valid rerand_coordination_id (1..=128 ASCII letters, digits, '.', '_', or '-')"
+        );
+        eyre::ensure!(
+            self.consistency_check_interval_secs > 0,
+            "rerand_enabled=true requires consistency_check_interval_secs > 0"
+        );
+        eyre::ensure!(
+            self.fake_db_size == 0,
+            "rerand_enabled=true is incompatible with fake_db_size"
+        );
+        Ok(())
     }
 
     pub fn overwrite_defaults_with_cli_args(&mut self, opts: Opt) {
@@ -724,6 +793,14 @@ pub struct CommonConfig {
     max_modifications_lookback: usize,
     enable_modifications_sync: bool,
     enable_modifications_replay: bool,
+    #[serde(default)]
+    rerand_enabled: bool,
+    #[serde(default)]
+    rerand_s3_bucket: String,
+    #[serde(default)]
+    rerand_coordination_id: String,
+    #[serde(default = "default_consistency_check_interval_secs")]
+    consistency_check_interval_secs: u64,
     sqs_sync_long_poll_seconds: i32,
     schema_name: String,
     hnsw_schema_name_suffix: String,
@@ -811,6 +888,11 @@ impl From<Config> for CommonConfig {
             max_modifications_lookback,
             enable_modifications_sync,
             enable_modifications_replay,
+            rerand_enabled,
+            rerand_s3_bucket,
+            rerand_store_id: _, // local identity differs on every party/store
+            rerand_coordination_id,
+            consistency_check_interval_secs,
             sqs_sync_long_poll_seconds,
             schema_name,
             hnsw_schema_name_suffix,
@@ -884,6 +966,10 @@ impl From<Config> for CommonConfig {
             max_modifications_lookback,
             enable_modifications_sync,
             enable_modifications_replay,
+            rerand_enabled,
+            rerand_s3_bucket,
+            rerand_coordination_id,
+            consistency_check_interval_secs,
             sqs_sync_long_poll_seconds,
             schema_name,
             hnsw_schema_name_suffix,
@@ -893,6 +979,38 @@ impl From<Config> for CommonConfig {
             batch_polling_timeout_secs,
             sqs_long_poll_wait_time,
             batch_sync_polling_timeout_secs,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rerand_requires_all_safety_configuration() {
+        let disabled: Config = serde_json::from_str("{}").unwrap();
+        disabled.validate().unwrap();
+
+        let enabled: Config = serde_json::from_str(
+            r#"{"rerand_enabled":true,"rerand_s3_bucket":"rerand","rerand_store_id":"gpu-party-0","rerand_coordination_id":"generation-2026-07"}"#,
+        )
+        .unwrap();
+        enabled.validate().unwrap();
+
+        for invalid in [
+            r#"{"rerand_enabled":true,"rerand_store_id":"gpu-party-0"}"#,
+            r#"{"rerand_enabled":true,"rerand_s3_bucket":"rerand"}"#,
+            r#"{"rerand_enabled":true,"rerand_s3_bucket":"rerand","rerand_store_id":"gpu-party-0"}"#,
+            r#"{"rerand_enabled":true,"rerand_s3_bucket":"rerand","rerand_store_id":"bad/id","rerand_coordination_id":"generation-1"}"#,
+            r#"{"rerand_enabled":true,"rerand_s3_bucket":"rerand","rerand_store_id":"gpu-party-0","rerand_coordination_id":"bad/id"}"#,
+            r#"{"rerand_enabled":true,"rerand_s3_bucket":"rerand","rerand_store_id":"gpu-party-0","rerand_coordination_id":"generation-1","consistency_check_interval_secs":0}"#,
+        ] {
+            let config: Config = serde_json::from_str(invalid).unwrap();
+            assert!(
+                config.validate().is_err(),
+                "accepted invalid config: {invalid}"
+            );
         }
     }
 }

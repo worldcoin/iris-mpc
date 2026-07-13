@@ -119,7 +119,11 @@ func exportCommand() *cobra.Command {
 			// Avoid blocking producers by defining a chan buffer in case consumers are slower
 			chanBufferLen := cfg.MaxItemsPerUploadPart * 2
 
-			commands.ExportCommand(ctx, exportMode, outputFolder, *store, converter.NewBinaryConverter(CodeSize, MaskSize, IdSize, VersionIdSize), writer, reader, batchSize, parallelism, endIndex, chanBufferLen)
+			binaryConverter := converter.NewBinaryConverter(CodeSize, MaskSize, IdSize, VersionIdSize)
+			if exportMode == commands.CompleteExport && cfg.RerandStoreID != "" {
+				binaryConverter = converter.NewRerandBinaryConverter(CodeSize, MaskSize, IdSize, VersionIdSize)
+			}
+			commands.ExportCommand(ctx, exportMode, outputFolder, cfg.RerandStoreID, *store, binaryConverter, writer, reader, batchSize, parallelism, endIndex, chanBufferLen)
 		},
 	}
 

@@ -1,10 +1,12 @@
+use crate::rerand::RerandContext;
 use crate::s3_importer::create_db_chunks_s3_client;
 use crate::{
-    fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, S3Store, S3StoredIris, Store,
+    fetch_and_parse_chunks, fetch_and_parse_safe_snapshot, last_snapshot_timestamp,
+    latest_safe_snapshot, DbStoredIris, S3Store, S3StoredIris, Store,
 };
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use aws_config::Region;
-use eyre::{bail, Result};
+use eyre::{bail, ensure, Result, WrapErr};
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use iris_mpc_common::config::Config;
@@ -13,6 +15,418 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+
+const METADATA_PAGE_SIZE: i64 = 2_000;
+
+fn validate_authoritative_count(expected: usize, authoritative: usize) -> Result<()> {
+    ensure!(
+        authoritative == expected,
+        "Aurora snapshot inventory contains {authoritative} rows, but the loader allocated for {expected}"
+    );
+    Ok(())
+}
+
+#[derive(Debug, Default)]
+struct RawLoadRerandState {
+    store_id: Option<String>,
+    last_completed_epoch: i32,
+    active_epoch: Option<i32>,
+    has_positive_rows: bool,
+}
+
+fn validate_raw_load_rerand_state(state: Option<&RawLoadRerandState>) -> Result<()> {
+    if let Some(state) = state {
+        ensure!(
+            state.store_id.is_none()
+                && state.last_completed_epoch == 0
+                && state.active_epoch.is_none()
+                && !state.has_positive_rows,
+            "raw database loading is forbidden after rerandomization initialization or positive state"
+        );
+    }
+    Ok(())
+}
+
+async fn raw_load_rerand_state(store: &Store) -> Result<Option<RawLoadRerandState>> {
+    let has_metadata: bool = sqlx::query_scalar(
+        "SELECT EXISTS (\
+             SELECT 1 FROM information_schema.columns \
+              WHERE table_schema = current_schema() AND table_name = 'irises' \
+                AND column_name = 'rerand_epoch'\
+         )",
+    )
+    .fetch_one(&store.pool)
+    .await?;
+    if !has_metadata {
+        return Ok(None);
+    }
+
+    let (store_id, last_completed_epoch, active_epoch, has_positive_rows) =
+        sqlx::query_as::<_, (Option<String>, i32, Option<i32>, bool)>(
+            "SELECT state.store_id, state.last_completed_epoch, state.active_epoch, \
+                    CASE WHEN state.store_id IS NULL \
+                              AND state.last_completed_epoch = 0 \
+                              AND state.active_epoch IS NULL \
+                         THEN EXISTS (SELECT 1 FROM irises WHERE rerand_epoch <> 0) \
+                         ELSE FALSE \
+                    END \
+               FROM get_rerand_store_state() AS state",
+        )
+        .fetch_one(&store.pool)
+        .await?;
+    Ok(Some(RawLoadRerandState {
+        store_id,
+        last_completed_epoch,
+        active_epoch,
+        has_positive_rows,
+    }))
+}
+
+async fn ensure_raw_load_allowed(store: &Store) -> Result<()> {
+    let state = raw_load_rerand_state(store).await?;
+    validate_raw_load_rerand_state(state.as_ref())
+}
+
+#[derive(Clone, Copy)]
+struct CachedRow {
+    version_id: i16,
+    semantic_id: [u8; 16],
+    usable: bool,
+}
+
+struct SafeLoadState {
+    cache: Vec<Option<CachedRow>>,
+    counted: Vec<bool>,
+    authoritative: Vec<bool>,
+    loaded_count: usize,
+}
+
+impl SafeLoadState {
+    fn new(rows: usize) -> Self {
+        Self {
+            cache: vec![None; rows],
+            counted: vec![false; rows],
+            authoritative: vec![false; rows],
+            loaded_count: 0,
+        }
+    }
+
+    fn index(&self, id: usize) -> Result<usize> {
+        ensure!(
+            id > 0 && id <= self.cache.len(),
+            "iris id {id} is outside 1..={}",
+            self.cache.len()
+        );
+        Ok(id - 1)
+    }
+
+    fn record_cache(
+        &mut self,
+        id: usize,
+        version_id: i16,
+        semantic_id: [u8; 16],
+        usable: bool,
+    ) -> Result<bool> {
+        let index = self.index(id)?;
+        ensure!(self.cache[index].is_none(), "S3 cache repeats iris id {id}");
+        self.cache[index] = Some(CachedRow {
+            version_id,
+            semantic_id,
+            usable,
+        });
+        if usable && !self.counted[index] {
+            self.counted[index] = true;
+            self.loaded_count += 1;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn discard_cache(&mut self) {
+        // Already materialized slots are overwritten from Aurora, but remain
+        // counted so actor sizes are not incremented twice.
+        self.cache.fill(None);
+    }
+
+    fn needs_aurora(&self, id: usize, version_id: i16, semantic_id: Option<[u8; 16]>) -> bool {
+        !matches!(
+            (self.cache[id - 1], semantic_id),
+            (
+                Some(CachedRow {
+                    version_id: cached_version,
+                    semantic_id: cached_semantic_id,
+                    usable: true,
+                }),
+                Some(authoritative_semantic_id),
+            ) if cached_version == version_id
+                && cached_semantic_id == authoritative_semantic_id
+        )
+    }
+
+    fn record_authoritative(&mut self, id: usize) -> Result<bool> {
+        let index = self.index(id)?;
+        ensure!(!self.authoritative[index], "Aurora repeats iris id {id}");
+        self.authoritative[index] = true;
+        if self.counted[index] {
+            Ok(false)
+        } else {
+            self.counted[index] = true;
+            self.loaded_count += 1;
+            Ok(true)
+        }
+    }
+
+    fn finish(&self) -> Result<()> {
+        if let Some(index) = self.authoritative.iter().position(|seen| !seen) {
+            bail!("Aurora inventory is missing iris id {}", index + 1);
+        }
+        Ok(())
+    }
+}
+
+fn load_s3_record(actor: &mut impl InMemoryStore, iris: &S3StoredIris) {
+    actor.load_single_record_from_s3(
+        iris.serial_id() - 1,
+        iris.vector_id(),
+        iris.left_code_odd(),
+        iris.left_code_even(),
+        iris.right_code_odd(),
+        iris.right_code_even(),
+        iris.left_mask_odd(),
+        iris.left_mask_even(),
+        iris.right_mask_odd(),
+        iris.right_mask_even(),
+    );
+}
+
+fn load_db_record(actor: &mut impl InMemoryStore, iris: &DbStoredIris) {
+    actor.load_single_record_from_db(
+        iris.serial_id() - 1,
+        iris.vector_id(),
+        iris.left_code(),
+        iris.left_mask(),
+        iris.right_code(),
+        iris.right_mask(),
+    );
+}
+
+/// Discover the cache candidate before seeds are loaded. Callers use its exact
+/// epoch inventory to build the normalization context. Failure is a cache miss,
+/// not a database-authority failure.
+pub async fn safe_snapshot_manifest(config: &Config) -> Result<crate::SafeSnapshotManifest> {
+    ensure!(config.enable_s3_importer, "S3 importer is disabled");
+    let region_provider = Region::new(config.db_chunks_bucket_region.clone());
+    let shared_config = aws_config::from_env().region(region_provider).load().await;
+    let s3 = S3Store::new(
+        create_db_chunks_s3_client(&shared_config, true),
+        config.db_chunks_bucket_name.clone(),
+    );
+    latest_safe_snapshot(&s3, &config.db_chunks_folder_name, &config.rerand_store_id).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn try_load_safe_cache(
+    actor: &mut impl InMemoryStore,
+    state: &mut SafeLoadState,
+    max_serial_id_to_load: usize,
+    s3_max_serial_id_to_load: Option<usize>,
+    config: &Config,
+    shutdown: Arc<ShutdownHandler>,
+    rerand: &RerandContext,
+) -> Result<()> {
+    let region_provider = Region::new(config.db_chunks_bucket_region.clone());
+    let shared_config = aws_config::from_env().region(region_provider).load().await;
+    let s3 = Arc::new(S3Store::new(
+        create_db_chunks_s3_client(&shared_config, true),
+        config.db_chunks_bucket_name.clone(),
+    ));
+    let manifest = latest_safe_snapshot(
+        s3.as_ref(),
+        &config.db_chunks_folder_name,
+        &config.rerand_store_id,
+    )
+    .await?;
+    let cache_rows = manifest
+        .row_count
+        .min(max_serial_id_to_load)
+        .min(s3_max_serial_id_to_load.unwrap_or(max_serial_id_to_load));
+    let (tx, mut rx) = mpsc::channel(config.load_chunks_buffer_size);
+    let fetch = fetch_and_parse_safe_snapshot(
+        s3,
+        config.load_chunks_parallelism,
+        manifest,
+        cache_rows,
+        tx,
+        config.load_chunks_max_retries,
+        config.load_chunks_initial_backoff_ms,
+        shutdown,
+    );
+    tokio::pin!(fetch);
+    let mut fetch_done = false;
+    loop {
+        let mut iris = tokio::select! {
+            biased;
+            result = &mut fetch, if !fetch_done => {
+                fetch_done = true;
+                result?;
+                continue;
+            }
+            row = rx.recv() => match row {
+                Some(row) => row,
+                None => break,
+            }
+        };
+        let id = iris.serial_id();
+        let version_id = iris.version_id();
+        let semantic_id = iris
+            .semantic_id()
+            .ok_or_else(|| eyre::eyre!("safe S3 row {id} has no semantic id"))?;
+        let usable = match rerand.normalize_s3_iris(&mut iris) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::info!(id, ?error, "S3 row requires authoritative Aurora fallback");
+                false
+            }
+        };
+        let increment = state.record_cache(id, version_id, semantic_id, usable)?;
+        if usable {
+            load_s3_record(actor, &iris);
+            if increment {
+                actor.increment_db_size(id - 1);
+            }
+        }
+    }
+    if !fetch_done {
+        fetch.await?;
+    }
+    if let Some(index) = state.cache[..cache_rows].iter().position(Option::is_none) {
+        bail!("S3 cache is missing iris id {}", index + 1);
+    }
+    Ok(())
+}
+
+async fn reconcile_with_aurora(
+    actor: &mut impl InMemoryStore,
+    state: &mut SafeLoadState,
+    snapshot: &mut crate::snapshot_reconcile::AuroraSnapshot,
+    max_serial_id_to_load: usize,
+    rerand: &RerandContext,
+) -> Result<()> {
+    let max_id = i64::try_from(max_serial_id_to_load).wrap_err("iris count does not fit i64")?;
+    let mut after_id = 0i64;
+    while after_id < max_id {
+        let metadata = snapshot
+            .metadata_page(after_id, max_id, METADATA_PAGE_SIZE)
+            .await?;
+        ensure!(
+            !metadata.is_empty(),
+            "Aurora inventory ends after iris id {after_id}, expected {max_id}"
+        );
+
+        let mut missing_ids = Vec::new();
+        let mut expected_id = after_id + 1;
+        for row in &metadata {
+            ensure!(
+                row.id == expected_id,
+                "Aurora inventory is not contiguous: expected iris id {expected_id}, got {}",
+                row.id
+            );
+            let id = usize::try_from(row.id).wrap_err("negative Aurora iris id")?;
+            if state.needs_aurora(id, row.version_id, row.semantic_id) {
+                missing_ids.push(row.id);
+            } else {
+                state.record_authoritative(id)?;
+            }
+            expected_id += 1;
+        }
+
+        let mut rows = snapshot.irises(&missing_ids).await?.into_iter();
+        for metadata in metadata
+            .iter()
+            .filter(|row| missing_ids.binary_search(&row.id).is_ok())
+        {
+            let mut iris = rows
+                .next()
+                .ok_or_else(|| eyre::eyre!("Aurora did not return iris {}", metadata.id))?;
+            ensure!(
+                iris.id() == metadata.id
+                    && iris.version_id() == metadata.version_id
+                    && iris.rerand_epoch() == metadata.rerand_epoch,
+                "Aurora metadata/blob mismatch for iris {}",
+                metadata.id
+            );
+            rerand.normalize_db_iris(&mut iris)?;
+            let id = iris.serial_id();
+            load_db_record(actor, &iris);
+            if state.record_authoritative(id)? {
+                actor.increment_db_size(id - 1);
+            }
+        }
+        ensure!(
+            rows.next().is_none(),
+            "Aurora returned an unexpected iris row"
+        );
+        after_id = metadata.last().unwrap().id;
+    }
+    state.finish()
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn load_rerand_db(
+    actor: &mut impl InMemoryStore,
+    store: &Store,
+    max_serial_id_to_load: usize,
+    s3_max_serial_id_to_load: Option<usize>,
+    config: &Config,
+    shutdown: Arc<ShutdownHandler>,
+    rerand: &RerandContext,
+) -> Result<()> {
+    let started = Instant::now();
+    ensure!(
+        max_serial_id_to_load <= config.max_db_size,
+        "requested iris inventory {max_serial_id_to_load} exceeds max_db_size {}",
+        config.max_db_size
+    );
+    let mut state = SafeLoadState::new(max_serial_id_to_load);
+    actor.reserve(max_serial_id_to_load);
+    if config.enable_s3_importer {
+        if let Err(error) = try_load_safe_cache(
+            actor,
+            &mut state,
+            max_serial_id_to_load,
+            s3_max_serial_id_to_load,
+            config,
+            shutdown,
+            rerand,
+        )
+        .await
+        {
+            tracing::warn!(?error, "Safe S3 cache is unusable; loading from Aurora");
+            state.discard_cache();
+        }
+    }
+    // Open the authoritative view as late as possible so a potentially long
+    // S3 download neither pins an old database view nor retains MVCC history.
+    // A count change since the caller allocated the actor is a hard startup
+    // failure; silently adapting it could leave already loaded cache slots or
+    // serving capacity inconsistent with Aurora.
+    let mut snapshot = store.begin_aurora_snapshot().await?;
+    let authoritative_rows = snapshot.authoritative_row_count().await?;
+    validate_authoritative_count(max_serial_id_to_load, authoritative_rows)?;
+    reconcile_with_aurora(
+        actor,
+        &mut state,
+        &mut snapshot,
+        max_serial_id_to_load,
+        rerand,
+    )
+    .await?;
+    snapshot.finish().await?;
+    actor.preprocess_db();
+    tracing::info!(rows = state.loaded_count, elapsed = ?started.elapsed(), "Loaded rerandomized database");
+    Ok(())
+}
 
 /// Helper function to load Aurora db records from the stream into memory
 #[allow(clippy::needless_lifetimes)]
@@ -74,6 +488,7 @@ pub async fn load_iris_db(
     s3_max_serial_id_to_load: Option<usize>,
     config: &Config,
     download_shutdown_handler: Arc<ShutdownHandler>,
+    rerand: Option<&RerandContext>,
 ) -> Result<()> {
     let shutdown = download_shutdown_handler.clone();
     tokio::select! {
@@ -84,7 +499,8 @@ pub async fn load_iris_db(
             store_load_parallelism,
             s3_max_serial_id_to_load,
             config,
-            download_shutdown_handler
+            download_shutdown_handler,
+            rerand,
         ) => r,
         _ = shutdown.wait_for_shutdown() => {
             tracing::warn!("Shutdown requested by shutdown_handler.");
@@ -101,7 +517,25 @@ async fn load_iris_db_internal(
     s3_max_serial_id_to_load: Option<usize>,
     config: &Config,
     download_shutdown_handler: Arc<ShutdownHandler>,
+    rerand: Option<&RerandContext>,
 ) -> Result<()> {
+    if let Some(rerand) = rerand {
+        return load_rerand_db(
+            actor,
+            store,
+            max_serial_id_to_load,
+            s3_max_serial_id_to_load,
+            config,
+            download_shutdown_handler,
+            rerand,
+        )
+        .await;
+    }
+    ensure!(
+        !config.rerand_enabled,
+        "rerandomization is enabled but no normalization context was provided"
+    );
+    ensure_raw_load_allowed(store).await?;
     let total_load_time = Instant::now();
     let now = Instant::now();
 
@@ -294,6 +728,10 @@ async fn load_iris_db_internal(
         bail!("Not all serial_ids were loaded: {:?}", all_serial_ids);
     }
 
+    // Recheck after the potentially long S3/Aurora load. If initialization or
+    // a positive pass raced this legacy load, the actor is discarded before it
+    // can become ready.
+    ensure_raw_load_allowed(store).await?;
     tracing::info!("Preprocessing db");
     actor.preprocess_db();
 
@@ -305,4 +743,67 @@ async fn load_iris_db_internal(
     );
 
     eyre::Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn safe_cache_accepts_only_exact_usable_row_identity() -> Result<()> {
+        let semantic_id = [1; 16];
+        let replaced_semantic_id = [2; 16];
+        let mut state = SafeLoadState::new(3);
+        assert!(state.record_cache(1, 4, semantic_id, true)?);
+        assert!(!state.record_cache(2, 5, semantic_id, false)?);
+        assert!(!state.needs_aurora(1, 4, Some(semantic_id)));
+        assert!(state.needs_aurora(1, 5, Some(semantic_id)));
+        assert!(state.needs_aurora(1, 4, Some(replaced_semantic_id)));
+        assert!(state.needs_aurora(1, 4, None));
+        assert!(state.needs_aurora(2, 5, Some(semantic_id)));
+        assert!(state.record_cache(1, 4, semantic_id, true).is_err());
+
+        state.discard_cache();
+        assert!(state.needs_aurora(1, 4, Some(semantic_id)));
+        assert!(!state.record_authoritative(1)?);
+        assert!(state.record_authoritative(2)?);
+        assert!(state.record_authoritative(3)?);
+        state.finish()?;
+        assert_eq!(state.loaded_count, 3);
+        Ok(())
+    }
+
+    #[test]
+    fn empty_earlier_count_cannot_hide_authoritative_rows() {
+        assert!(validate_authoritative_count(0, 1).is_err());
+        assert!(validate_authoritative_count(1, 0).is_err());
+        assert!(validate_authoritative_count(0, 0).is_ok());
+    }
+
+    #[test]
+    fn raw_loader_refuses_initialized_or_positive_rerandomization_state() {
+        assert!(validate_raw_load_rerand_state(None).is_ok());
+        assert!(validate_raw_load_rerand_state(Some(&RawLoadRerandState::default())).is_ok());
+
+        for state in [
+            RawLoadRerandState {
+                store_id: Some("store-1".to_owned()),
+                ..Default::default()
+            },
+            RawLoadRerandState {
+                last_completed_epoch: 1,
+                ..Default::default()
+            },
+            RawLoadRerandState {
+                active_epoch: Some(1),
+                ..Default::default()
+            },
+            RawLoadRerandState {
+                has_positive_rows: true,
+                ..Default::default()
+            },
+        ] {
+            assert!(validate_raw_load_rerand_state(Some(&state)).is_err());
+        }
+    }
 }

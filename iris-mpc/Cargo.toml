@@ -28,6 +28,7 @@ uuid.workspace = true
 sodiumoxide.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
+iris-mpc-upgrade = { path = "../iris-mpc-upgrade" }
 itertools.workspace = true
 metrics.workspace = true
 serde = { version = "1.0.214", features = ["derive"] }

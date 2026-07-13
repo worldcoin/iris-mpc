@@ -4,9 +4,7 @@
 use ampc_anon_stats::store::postgres::AccessMode as AnonStatsAccessMode;
 use ampc_anon_stats::store::postgres::PostgresClient as AnonStatsPgClient;
 use ampc_anon_stats::AnonStatsStore;
-use ampc_server_utils::batch_sync::{
-    BatchSyncSharedState, CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRIES,
-};
+use ampc_server_utils::batch_sync::BatchSyncSharedState;
 use ampc_server_utils::{
     delete_messages_until_sequence_num, get_next_sns_seq_num, get_others_sync_state,
     init_heartbeat_task, set_node_ready, shutdown_handler::ShutdownHandler,
@@ -21,7 +19,9 @@ use eyre::{bail, eyre, Context, Report, Result};
 use futures::{stream::BoxStream, StreamExt};
 use iris_mpc::services::aws::clients::AwsClients;
 use iris_mpc::services::init::initialize_chacha_seeds;
-use iris_mpc::services::processors::batch::receive_batch_stream;
+use iris_mpc::services::processors::batch::{
+    complete_canary_maintenance, receive_batch_stream, BatchStreamEvent, SharedCanarySchedule,
+};
 use iris_mpc::services::processors::get_iris_shares_parse_task;
 use iris_mpc::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,
@@ -32,7 +32,10 @@ use iris_mpc::services::processors::result_message::{
 use iris_mpc_common::config::CommonConfig;
 use iris_mpc_common::galois_engine::degree4::GaloisShares;
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
-use iris_mpc_common::job::{GaloisSharesBothSides, RequestIndex};
+use iris_mpc_common::job::{
+    batch_sync_hash, publish_canary_maintenance_complete, sync_canary_maintenance,
+    GaloisSharesBothSides, RequestIndex,
+};
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::tracing::initialize_tracing;
 use iris_mpc_common::{
@@ -62,12 +65,14 @@ use iris_mpc_common::{
     iris_db::get_dummy_shares_for_deletion,
     job::{BatchMetadata, BatchQuery, JobSubmissionHandle, ServerJobResult},
 };
-use iris_mpc_gpu::server::ServerActor;
+use iris_mpc_gpu::server::{ServerActor, ServerActorHandle};
 use iris_mpc_store::loader::load_iris_db;
+use iris_mpc_store::rerand::RerandContext;
 use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
     S3StoredIris, Store, StoredIrisRef,
 };
+use iris_mpc_upgrade::rerand_v2::epoch::build_verified_context;
 use itertools::{cloned, izip, Itertools};
 use metrics_exporter_statsd::StatsdBuilder;
 use serde::{Deserialize, Serialize};
@@ -138,6 +143,7 @@ async fn main() -> Result<()> {
 }
 
 async fn server_main(config: Config) -> Result<()> {
+    config.validate()?;
     let shutdown_handler = Arc::new(ShutdownHandler::new(
         config.shutdown_last_results_sync_timeout_secs,
     ));
@@ -362,6 +368,7 @@ async fn server_main(config: Config) -> Result<()> {
     // refetch store_len in case we rolled back
     let store_len = store.count_irises().await?;
     tracing::info!("Database store length after sync: {}", store_len);
+    let rerand_context = prepare_rerand_context(&config, &store, &aws_clients).await?;
 
     let runtime_handle = tokio::runtime::Handle::current();
     let anon_stats_writer = if let Some(url) = config.get_anon_stats_db_url() {
@@ -421,6 +428,7 @@ async fn server_main(config: Config) -> Result<()> {
                             None,
                             &config,
                             download_shutdown_handler,
+                            rerand_context.as_ref(),
                         )
                         .await
                     })
@@ -449,6 +457,16 @@ async fn server_main(config: Config) -> Result<()> {
     let (mut handle, store) = rx.await??;
 
     background_tasks.check_tasks();
+
+    if config.rerand_enabled {
+        tracing::info!("⚓️ ANCHOR: Running mandatory startup consistency canary");
+        handle
+            .run_consistency_canary(
+                iris_mpc_common::consistency_canary::DEFAULT_CANARY_REPETITIONS,
+                iris_mpc_common::consistency_canary::STARTUP_CANARY_CONTEXT,
+            )
+            .await?;
+    }
 
     // Start thread that will be responsible for communicating back the results
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
@@ -983,6 +1001,13 @@ async fn server_main(config: Config) -> Result<()> {
     tracing::info!("⚓️ ANCHOR: Start the main loop");
 
     let processing_timeout = Duration::from_secs(config.processing_timeout_secs);
+    let periodic_canary = config.rerand_enabled.then(|| {
+        Arc::new(Mutex::new(
+            iris_mpc_common::consistency_canary::PeriodicCanarySchedule::new(
+                config.consistency_check_interval_secs,
+            ),
+        ))
+    });
     let uniqueness_error_result_attribute =
         create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let reauth_error_result_attribute = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
@@ -1031,13 +1056,14 @@ async fn server_main(config: Config) -> Result<()> {
             current_batch_id_atomic.clone(),
             store.clone(),
             batch_sync_shared_state.clone(),
+            periodic_canary.clone(),
         );
         current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
 
         loop {
             let now = Instant::now();
 
-            let mut batch = match batch_stream.recv().await {
+            let event = match batch_stream.recv().await {
                 Some(Ok(None)) | None => {
                     tracing::info!("No more batches to process, exiting main loop");
                     return Ok(());
@@ -1045,32 +1071,59 @@ async fn server_main(config: Config) -> Result<()> {
                 Some(Err(e)) => {
                     return Err(e.into());
                 }
-                Some(Ok(Some(batch))) => batch,
+                Some(Ok(Some(event))) => event,
+            };
+            let (mut batch, intake_canary_due) = match event {
+                BatchStreamEvent::MaintenanceDue { batch_id } => {
+                    run_gpu_canary_maintenance(
+                        &config,
+                        &handle,
+                        periodic_canary
+                            .as_ref()
+                            .expect("maintenance event requires an enabled schedule"),
+                        &batch_sync_shared_state,
+                        &shutdown_handler,
+                        CanaryBarrierContext::IdleBatch(batch_id),
+                    )
+                    .await?;
+                    // Advance the coordination generation before intake can
+                    // resume. An early finisher must wait for peers to leave
+                    // the old idle-maintenance barrier instead of re-entering
+                    // it through a still-published due bit.
+                    current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
+                    sem.add_permits(1);
+                    continue;
+                }
+                BatchStreamEvent::Batch { query, canary_due } => (query, canary_due),
             };
 
             let batch_hash = sha256_bytes(batch.sns_message_ids.join(""));
-            let batch_valid_entries = batch.valid_entries.clone();
-            *CURRENT_BATCH_SHA
-                .lock()
-                .expect("Failed to lock CURRENT_BATCH_SHA") = batch_hash;
-            *CURRENT_BATCH_VALID_ENTRIES
-                .lock()
-                .expect("Failed to lock CURRENT_BATCH_VALID_ENTRIES") = batch_valid_entries;
+            let synchronized_batch_hash = batch_sync_hash(batch_hash, config.rerand_enabled);
 
-            loop {
+            // Freeze the control bit for every retry of this batch barrier.
+            let local_canary_due = intake_canary_due
+                || periodic_canary.as_ref().is_some_and(|schedule| {
+                    schedule
+                        .lock()
+                        .expect("canary schedule lock poisoned")
+                        .is_due()
+                });
+            let canary_due = loop {
                 if shutdown_handler.is_shutting_down() {
                     tracing::info!("Shutdown requested during batch sync retry, exiting");
                     return Ok(());
                 }
 
-                match batch.sync_batch_entries(&config).await {
-                    Ok(()) => break,
+                match batch
+                    .sync_batch_entries(&config, synchronized_batch_hash, local_canary_due)
+                    .await
+                {
+                    Ok(canary_due) => break canary_due,
                     Err(e) => {
                         tracing::warn!("Batch sync entries failed: {:?}. Retrying...", e);
                     }
                 }
-            }
-
+            };
             // start trace span - with single TraceId and single ParentTraceID
             tracing::info!("Received batch in {:?}", now.elapsed());
 
@@ -1089,8 +1142,10 @@ async fn server_main(config: Config) -> Result<()> {
             }
 
             background_tasks.check_tasks();
-            current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
-            sem.add_permits(1);
+            if !canary_due {
+                current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
+                sem.add_permits(1);
+            }
 
             let result_future = handle.submit_batch_query(batch);
 
@@ -1099,15 +1154,33 @@ async fn server_main(config: Config) -> Result<()> {
                 .await
                 .map_err(|e| eyre!("ServerActor processing timeout: {:?}", e))??;
 
-            tx.send(result).await?;
+            shutdown_handler.increment_batches_pending_completion();
+            if let Err(error) = tx.send(result).await {
+                shutdown_handler.decrement_batches_pending_completion();
+                return Err(error.into());
+            }
+            if canary_due {
+                run_gpu_canary_maintenance(
+                    &config,
+                    &handle,
+                    periodic_canary
+                        .as_ref()
+                        .expect("a synchronized due bit requires an enabled schedule"),
+                    &batch_sync_shared_state,
+                    &shutdown_handler,
+                    CanaryBarrierContext::SynchronizedBatch(synchronized_batch_hash),
+                )
+                .await?;
+                current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
+                sem.add_permits(1);
+            }
 
-            shutdown_handler.increment_batches_pending_completion()
             // wrap up span context
         }
     }
     .await;
 
-    match res {
+    match &res {
         Ok(_) => {
             tracing::info!(
                 "Main loop exited normally. Waiting for last batch results to be processed before \
@@ -1129,7 +1202,95 @@ async fn server_main(config: Config) -> Result<()> {
             background_tasks.check_tasks_finished();
         }
     }
+    res
+}
+
+enum CanaryBarrierContext {
+    SynchronizedBatch([u8; 32]),
+    IdleBatch(u64),
+}
+
+async fn run_gpu_canary_maintenance(
+    config: &Config,
+    handle: &ServerActorHandle,
+    schedule: &SharedCanarySchedule,
+    batch_sync_shared_state: &Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
+    shutdown_handler: &Arc<ShutdownHandler>,
+    barrier_context: CanaryBarrierContext,
+) -> Result<()> {
+    shutdown_handler
+        .wait_for_pending_batches_completion()
+        .await?;
+    let (context, idle_batch_id) = match barrier_context {
+        CanaryBarrierContext::SynchronizedBatch(context) => (context, None),
+        CanaryBarrierContext::IdleBatch(batch_id) => {
+            let context = loop {
+                if shutdown_handler.is_shutting_down() {
+                    return Err(eyre!("shutdown during canary maintenance synchronization"));
+                }
+                match sync_canary_maintenance(config, batch_id).await {
+                    Ok(context) => break context,
+                    Err(error) => tracing::warn!(
+                        ?error,
+                        batch_id,
+                        "Canary maintenance peer is not at the barrier yet; retrying"
+                    ),
+                }
+            };
+            (context, Some(batch_id))
+        }
+    };
+    handle
+        .run_consistency_canary(
+            iris_mpc_common::consistency_canary::DEFAULT_CANARY_REPETITIONS,
+            context,
+        )
+        .await?;
+    if let Some(batch_id) = idle_batch_id {
+        publish_canary_maintenance_complete(config, batch_id);
+    }
+    complete_canary_maintenance(schedule, batch_sync_shared_state).await;
     Ok(())
+}
+
+async fn prepare_rerand_context(
+    config: &Config,
+    store: &Store,
+    aws: &AwsClients,
+) -> Result<Option<RerandContext>> {
+    if !config.rerand_enabled {
+        return Ok(None);
+    }
+
+    let cache_epochs = if config.enable_s3_importer {
+        match iris_mpc_store::loader::safe_snapshot_manifest(config).await {
+            Ok(manifest) => manifest.epochs,
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    "Safe S3 snapshot is unavailable; loading from Aurora"
+                );
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    let party_id = u8::try_from(config.party_id).map_err(|_| eyre!("party ID does not fit u8"))?;
+    let context = build_verified_context(
+        store,
+        &config.rerand_store_id,
+        "gpu",
+        &aws.secrets_manager_client,
+        &aws.s3_client,
+        &config.rerand_s3_bucket,
+        &config.environment,
+        &config.rerand_coordination_id,
+        party_id,
+        &cache_epochs,
+    )
+    .await?;
+    Ok(Some(context))
 }
 
 fn is_enabled(request_type: &str, config: &Config) -> bool {

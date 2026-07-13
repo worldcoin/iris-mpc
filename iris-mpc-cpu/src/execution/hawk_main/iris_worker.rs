@@ -1,7 +1,7 @@
 use crate::{
     execution::hawk_main::HAWK_MIN_DIST_ROTATIONS,
     hawkers::aby3::aby3_store::DistanceMode,
-    hawkers::shared_irises::SharedIrisesRef,
+    hawkers::shared_irises::{SharedIrises, SharedIrisesRef},
     protocol::{
         ops::{
             galois_ring_pairwise_distance, non_existent_distance, pairwise_distance,
@@ -33,6 +33,30 @@ use std::{
 };
 use tokio::sync::oneshot;
 use tracing::info;
+
+const WORKER_INVENTORY_DOMAIN: &str = "iris-mpc/hawk-worker/inventory/v1";
+
+/// Commitment to every exact `(serial_id, version_id)` in a worker store.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IrisWorkerInventory {
+    pub entries: u64,
+    pub digest: [u8; 32],
+}
+
+impl IrisWorkerInventory {
+    pub fn from_sorted_ids(ids: &[VectorId]) -> Self {
+        let mut hasher = blake3::Hasher::new_derive_key(WORKER_INVENTORY_DOMAIN);
+        hasher.update(&(ids.len() as u64).to_le_bytes());
+        for id in ids {
+            hasher.update(&id.serial_id().to_le_bytes());
+            hasher.update(&id.version_id().to_le_bytes());
+        }
+        Self {
+            entries: ids.len() as u64,
+            digest: *hasher.finalize().as_bytes(),
+        }
+    }
+}
 
 /// Defines the types of tasks that can be offloaded to an `IrisWorker`.
 ///
@@ -606,6 +630,13 @@ pub trait IrisWorkerPool: Debug + Send + Sync {
     /// max-distance in dot products).
     fn fetch_irises<'a>(&'a self, ids: Vec<VectorId>) -> BoxFuture<'a, Result<Vec<ArcIris>>>;
 
+    /// Fetch exact IDs without substituting the default empty iris.
+    fn fetch_irises_strict<'a>(&'a self, ids: Vec<VectorId>)
+        -> BoxFuture<'a, Result<Vec<ArcIris>>>;
+
+    /// Commit to the complete payload inventory, including extra entries.
+    fn iris_inventory<'a>(&'a self) -> BoxFuture<'a, Result<IrisWorkerInventory>>;
+
     /// Insert a cached iris into the worker's persistent store.
     ///
     /// The worker looks up the original (un-rotated) iris from the cache
@@ -653,6 +684,15 @@ impl<T: ?Sized + IrisWorkerPool> IrisWorkerPool for Arc<T> {
     }
     fn fetch_irises<'a>(&'a self, ids: Vec<VectorId>) -> BoxFuture<'a, Result<Vec<ArcIris>>> {
         (**self).fetch_irises(ids)
+    }
+    fn fetch_irises_strict<'a>(
+        &'a self,
+        ids: Vec<VectorId>,
+    ) -> BoxFuture<'a, Result<Vec<ArcIris>>> {
+        (**self).fetch_irises_strict(ids)
+    }
+    fn iris_inventory<'a>(&'a self) -> BoxFuture<'a, Result<IrisWorkerInventory>> {
+        (**self).iris_inventory()
     }
     fn insert_irises<'a>(
         &'a self,
@@ -769,6 +809,37 @@ fn zip_rotations(
         .zip(mask_rots)
         .map(|(code, mask)| Arc::new(GaloisRingSharedIris { code, mask }))
         .collect()
+}
+
+fn fetch_irises_strict_from_store(
+    store: &SharedIrises<ArcIris>,
+    ids: &[VectorId],
+) -> Result<Vec<ArcIris>> {
+    ids.iter()
+        .map(|id| {
+            store.get_vector(id).cloned().ok_or_else(|| {
+                eyre::eyre!(
+                    "strict iris fetch: worker store is missing serial ID {} at version {}",
+                    id.serial_id(),
+                    id.version_id()
+                )
+            })
+        })
+        .collect()
+}
+
+fn iris_inventory_from_store(store: &SharedIrises<ArcIris>) -> IrisWorkerInventory {
+    let ids = store
+        .get_points()
+        .iter()
+        .enumerate()
+        .filter_map(|(serial_id, entry)| {
+            entry
+                .as_ref()
+                .map(|(version, _)| VectorId::new(serial_id as u32, *version))
+        })
+        .collect::<Vec<_>>();
+    IrisWorkerInventory::from_sorted_ids(&ids)
 }
 
 impl IrisWorkerPool for LocalIrisWorkerPool {
@@ -916,6 +987,25 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
         })
     }
 
+    fn fetch_irises_strict<'a>(
+        &'a self,
+        ids: Vec<VectorId>,
+    ) -> BoxFuture<'a, Result<Vec<ArcIris>>> {
+        let iris_store = self.iris_store.clone();
+        Box::pin(async move {
+            let store = iris_store.data.read().await;
+            fetch_irises_strict_from_store(&store, &ids)
+        })
+    }
+
+    fn iris_inventory<'a>(&'a self) -> BoxFuture<'a, Result<IrisWorkerInventory>> {
+        let iris_store = self.iris_store.clone();
+        Box::pin(async move {
+            let store = iris_store.data.read().await;
+            Ok(iris_inventory_from_store(&store))
+        })
+    }
+
     fn insert_irises<'a>(
         &'a self,
         inserts: Vec<(QueryId, VectorId)>,
@@ -1038,4 +1128,28 @@ pub fn select_core_ids(shard_index: usize) -> Vec<CoreId> {
     );
 
     cpu_ids.into_iter().map(|id| CoreId { id }).collect()
+}
+
+#[cfg(test)]
+mod strict_fetch_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn strict_fetch_and_inventory_reject_missing_entries() {
+        let id = VectorId::new(7, 3);
+        let iris = Arc::new(GaloisRingSharedIris::default_for_party(0));
+        let store = SharedIrises::new(HashMap::from([(id, iris.clone())]), iris.clone());
+
+        assert_eq!(
+            fetch_irises_strict_from_store(&store, &[id]).unwrap(),
+            vec![iris]
+        );
+        assert_eq!(
+            iris_inventory_from_store(&store),
+            IrisWorkerInventory::from_sorted_ids(&[id])
+        );
+        assert!(fetch_irises_strict_from_store(&store, &[VectorId::new(8, 0)]).is_err());
+        assert!(fetch_irises_strict_from_store(&store, &[VectorId::new(7, 2)]).is_err());
+    }
 }

@@ -12,18 +12,23 @@ ark-bls12-381 = "0.5.0"
 ark-ff = "0.5.0"
 ark-ec = "0.5.0"
 ark-serialize = "0.5.0"
+aws-sdk-s3.workspace = true
+aws-sdk-secretsmanager.workspace = true
 axum.workspace = true
+base64.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
 clap = { workspace = true, features = ["env"] }
 eyre.workspace = true
 bytemuck.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 serde-big-array = "0.5"
 tracing.workspace = true
 itertools.workspace = true
 rand.workspace = true
 rand_chacha = "0.3"
+hex.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true
 

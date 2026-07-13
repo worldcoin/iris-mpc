@@ -1,4 +1,4 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use iris_mpc_common::id::PartyID;
 use std::{
     fmt::{self, Display, Formatter},
@@ -9,6 +9,78 @@ use std::{
 pub const BATCH_TIMEOUT_SECONDS: u64 = 60;
 pub const BATCH_SUCCESSFUL_ACK: u8 = 1;
 pub const FINAL_BATCH_SUCCESSFUL_ACK: u8 = 42;
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum RerandStoreKind {
+    Gpu,
+    Hnsw,
+}
+
+impl Display for RerandStoreKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Gpu => f.write_str("gpu"),
+            Self::Hnsw => f.write_str("hnsw"),
+        }
+    }
+}
+
+/// One invocation advances one physical store by at most one epoch. Epoch
+/// `e+1` is globally gated on completion of epoch `e` by all six stores.
+#[derive(Parser, Clone)]
+pub struct RerandSweeperConfig {
+    #[clap(long, env = "PARTY_ID")]
+    pub party_id: u8,
+    #[clap(long, env = "RERAND_DB_URL")]
+    pub db_url: String,
+    #[clap(long, env = "RERAND_SCHEMA_NAME")]
+    pub schema_name: String,
+    #[clap(long, env = "RERAND_STORE_ID")]
+    pub store_id: String,
+    #[clap(long, env = "RERAND_STORE_KIND")]
+    pub store_kind: RerandStoreKind,
+    #[clap(long, env = "ENVIRONMENT")]
+    pub environment: String,
+    #[clap(long, env = "RERAND_COORDINATION_ID")]
+    pub coordination_id: String,
+    #[clap(long, env = "RERAND_S3_BUCKET")]
+    pub s3_bucket: String,
+    /// JSON array containing exactly one globally unique binding for every
+    /// party (0..2) and store kind (gpu, hnsw).
+    #[clap(long, env = "RERAND_EXPECTED_STORE_REGISTRY")]
+    pub expected_store_registry: String,
+    #[clap(long, env = "RERAND_ENABLED", default_value = "false")]
+    pub rerand_enabled: bool,
+    #[clap(long, env = "RERAND_CHUNK_SIZE", default_value = "512")]
+    pub chunk_size: usize,
+    #[clap(long, env = "RERAND_ROWS_PER_SECOND", default_value = "500")]
+    pub rows_per_second: u64,
+    #[clap(long, env = "RERAND_POLL_INTERVAL_MS", default_value = "5000")]
+    pub poll_interval_ms: u64,
+}
+
+impl fmt::Debug for RerandSweeperConfig {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RerandSweeperConfig")
+            .field("party_id", &self.party_id)
+            .field("db_url", &"<redacted>")
+            .field("schema_name", &self.schema_name)
+            .field("store_id", &self.store_id)
+            .field("store_kind", &self.store_kind)
+            .field("environment", &self.environment)
+            .field("coordination_id", &self.coordination_id)
+            .field("s3_bucket", &self.s3_bucket)
+            .field("expected_store_registry", &"<validated JSON>")
+            .field("rerand_enabled", &self.rerand_enabled)
+            .field("chunk_size", &self.chunk_size)
+            .field("rows_per_second", &self.rows_per_second)
+            .field("poll_interval_ms", &self.poll_interval_ms)
+            .finish()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
