@@ -15,8 +15,8 @@ use crate::{
 use eyre::{OptionExt, Result};
 use iris_mpc_common::iris_db::iris::Threshold;
 use iris_mpc_common::VectorId;
-use std::sync::Arc;
 use std::time::Instant;
+use std::{collections::HashSet, sync::Arc};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use tracing::instrument;
 
@@ -213,9 +213,7 @@ async fn classify_and_extend(
     let classified = classify_edges(edges, aby3_store, ef, margin).await?;
 
     // Extended search if anon stats threshold is saturated (supermatcher)
-    if let Some((ef_supermatch, hnsw_supermatch)) = classified
-        .anon_stats_matches
-        .saturated
+    if let Some((ef_supermatch, hnsw_supermatch)) = true
         .then(|| {
             search_params
                 .hnsw_supermatch
@@ -232,9 +230,29 @@ async fn classify_and_extend(
         metrics::counter!("supermatcher_extended_searches").increment(1);
 
         let seeded_nbhd = SortedNeighborhood::from_ascending_vec(edges.to_vec());
+        let start = Instant::now();
         let supermatch_neighbors = hnsw_supermatch
             .search_layer_0_seeded(aby3_store, graph_store, query, seeded_nbhd, ef_supermatch)
             .await?;
+        let sm_l0_search = start.elapsed();
+
+        let full_search = hnsw_supermatch
+            .search(aby3_store, graph_store, query, ef_supermatch)
+            .await?;
+        let sm_full_search = start.elapsed() - sm_l0_search;
+
+        metrics::histogram!("sm_full_search_ms").record(sm_full_search.as_millis() as f64);
+        metrics::histogram!("sm_l0_search_ms").record(sm_l0_search.as_millis() as f64);
+
+        let edges_full: HashSet<VectorId> =
+            HashSet::from_iter(full_search.edges.iter().map(|(id, _dist)| *id));
+        let edges_l0: HashSet<VectorId> =
+            HashSet::from_iter(supermatch_neighbors.edges.iter().map(|(id, _dist)| *id));
+        assert_eq!(edges_full.len(), edges_l0.len());
+
+        let union: HashSet<&VectorId> =
+            HashSet::from_iter(edges_l0.iter().chain(edges_full.iter()));
+        metrics::histogram!("sm_union").record(union.len() as f64);
 
         let supermatch_classified = classify_edges(
             &supermatch_neighbors.edges,

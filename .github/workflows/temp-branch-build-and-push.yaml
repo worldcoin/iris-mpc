@@ -5,7 +5,8 @@ on:
     branches:
       - "dev"
       - "allow-unknown-migrations"
-
+      - "sw/test_supermatcher_seeding"
+      
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
   cancel-in-progress: true
