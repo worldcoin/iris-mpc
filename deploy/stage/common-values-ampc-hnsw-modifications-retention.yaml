@@ -9,13 +9,18 @@
 # coordination exists or is needed. The GPU MPCV2 DB's copy grows the same way; its
 # reaper instance FOLLOWS SHORTLY (same binary, values + cluster-apps entry only).
 #
-# NOTE: bump the pin to a post-POP-3931 build before enabling — the batch-pause and
-# bounded-health-probe behavior land with this PR's image.
-image: "ghcr.io/worldcoin/retention-reaper:d9a3d33342dfd9e95c7b11e8ef4e4101a3e6ed80"
+image: "ghcr.io/worldcoin/retention-reaper:f8cb55547b1833ef2ccb0a84c5bd37c9e06b2408"
 
-# Disabled by default (RETENTION__ENABLED unset → false): deploys as a no-op. The enable
-# path is the same as anon-stats: bump image → RETENTION__ENABLED+DRY_RUN → inspect
-# previewed counts + health gauges → flip DRY_RUN off, one party first.
+# STAGE ENABLE, DRY-RUN: the hawk image bump in this same PR applies the created_at
+# migration to the HNSW DB at boot; the reaper then previews the exact delete predicate
+# (read-only COUNT) daily. Expected counts: 0 for the first 30 days (backfill stamps all
+# rows at migration time) — the dry run proves the query is valid against the migrated
+# schema (created_at present, guard incl. the newest-10k subselect executes). Flip
+# DRY_RUN to "false" after the first clean previews; nothing becomes deletable before
+# the 30d clock matures anyway.
+env:
+  RETENTION__ENABLED: "true"
+  RETENTION__DRY_RUN: "true"
 
 replicaCount: 1
 

@@ -1,5 +1,5 @@
 use crate::config::json_wrapper::JsonStrWrapper;
-use ampc_actor_utils::network::tcp::config::deserialize_yaml_json_string;
+use ampc_actor_utils::network::tcp::deserialize_yaml_json_string;
 use ampc_actor_utils::network::tcp::TlsConfig;
 use ampc_anon_stats::types::Eye;
 use ampc_server_utils::{AwsConfig, ServerCoordinationConfig, ServiceConfig};
