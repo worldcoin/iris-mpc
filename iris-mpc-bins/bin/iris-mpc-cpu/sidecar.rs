@@ -49,6 +49,18 @@ pub struct SidecarArgs {
     #[clap(long, env = "SMPC__CPU_DATABASE__SCHEMA")]
     pub db_schema: String,
 
+    /// Ignore migration versions recorded in the database but absent from this
+    /// binary. Defaults to `false` so a rolled-back sidecar tolerates a newer
+    /// schema instead of aborting with `VersionMissing`; set to `false` to
+    /// strictly validate migrations.
+    #[clap(
+        long,
+        env = "SMPC__CPU_DATABASE__MIGRATE_IGNORE_MISSING",
+        default_value_t = false,
+        action = clap::ArgAction::Set
+    )]
+    pub migrate_ignore_missing: bool,
+
     /// S3 bucket holding graph checkpoint objects.
     #[clap(long, env = "SMPC__GRAPH_CHECKPOINT_BUCKET_NAME")]
     pub bucket: String,
@@ -186,7 +198,7 @@ async fn main() -> Result<()> {
 
     let postgres =
         PostgresClient::new(&args.db_url, &args.db_schema, AccessMode::ReadWrite).await?;
-    run_migrations(&postgres.pool, false).await?;
+    run_migrations(&postgres.pool, args.migrate_ignore_missing).await?;
     let graph_store: GraphPg<iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store> =
         GraphPg::new(&postgres).await?;
 
