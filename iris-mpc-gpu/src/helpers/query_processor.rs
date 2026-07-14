@@ -1,6 +1,6 @@
 use crate::{
     dot::{
-        share_db::{DBChunkBuffers, ShareDB, SlicedProcessedDatabase},
+        share_db::{DBChunkBuffers, ShareDB},
         IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
     },
     helpers::device_manager::DeviceManager,
@@ -102,7 +102,6 @@ pub struct CudaVec2DSlicer<T> {
     pub limb_1: Vec<StreamAwareCudaSlice<T>>,
 }
 
-pub type CudaVec2DSlicerU32 = CudaVec2DSlicer<u32>;
 pub type CudaVec2DSlicerU8 = CudaVec2DSlicer<u8>;
 pub type CudaVec2DSlicerI8 = CudaVec2DSlicer<i8>;
 
@@ -157,21 +156,6 @@ pub struct DeviceCompactQuery {
 }
 
 impl DeviceCompactQuery {
-    pub fn query_sums(
-        &self,
-        code_engine: &ShareDB,
-        mask_engine: &ShareDB,
-        streams: &[CudaStream],
-        blass: &[CudaBlas],
-    ) -> Result<DeviceCompactSums> {
-        Ok(DeviceCompactSums {
-            code_query: code_engine.query_sums(&self.code_query, streams, blass),
-            mask_query: mask_engine.query_sums(&self.mask_query, streams, blass),
-            code_query_insert: code_engine.query_sums(&self.code_query_insert, streams, blass),
-            mask_query_insert: mask_engine.query_sums(&self.mask_query_insert, streams, blass),
-        })
-    }
-
     pub fn compute_dot_products(
         &self,
         code_engine: &mut ShareDB,
@@ -233,85 +217,15 @@ impl DeviceCompactQuery {
         );
     }
 }
-pub struct DeviceCompactSums {
-    code_query: CudaVec2DSlicerU32,
-    mask_query: CudaVec2DSlicerU32,
-    pub code_query_insert: CudaVec2DSlicerU32,
-    pub mask_query_insert: CudaVec2DSlicerU32,
-}
 
-impl DeviceCompactSums {
-    pub fn compute_dot_reducers(
-        &self,
-        code_engine: &mut ShareDB,
-        mask_engine: &mut ShareDB,
-        db_sizes: &[usize],
-        offset: usize,
-        streams: &[CudaStream],
-    ) {
-        code_engine.dot_reduce(
-            &self.code_query,
-            &self.code_query_insert,
-            db_sizes,
-            offset,
-            streams,
-        );
-        mask_engine.dot_reduce_and_multiply(
-            &self.mask_query,
-            &self.mask_query_insert,
-            db_sizes,
-            offset,
-            streams,
-            2,
-        );
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn compute_dot_reducer_against_db(
-        &self,
-        code_engine: &mut ShareDB,
-        mask_engine: &mut ShareDB,
-        sliced_code_db: &SlicedProcessedDatabase,
-        sliced_mask_db: &SlicedProcessedDatabase,
-        database_sizes: &[usize],
-        offset: usize,
-        streams: &[CudaStream],
-    ) {
-        code_engine.dot_reduce(
-            &self.code_query,
-            &sliced_code_db.code_sums_gr,
-            database_sizes,
-            offset,
-            streams,
-        );
-        mask_engine.dot_reduce_and_multiply(
-            &self.mask_query,
-            &sliced_mask_db.code_sums_gr,
-            database_sizes,
-            offset,
-            streams,
-            2,
-        );
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn compute_dot_reducer_against_prepared_db(
-        &self,
-        code_engine: &mut ShareDB,
-        mask_engine: &mut ShareDB,
-        code_sums_gr: &CudaVec2DSlicer<u32>,
-        mask_sums_gr: &CudaVec2DSlicer<u32>,
-        database_sizes: &[usize],
-        streams: &[CudaStream],
-    ) {
-        code_engine.dot_reduce(&self.code_query, code_sums_gr, database_sizes, 0, streams);
-        mask_engine.dot_reduce_and_multiply(
-            &self.mask_query,
-            mask_sums_gr,
-            database_sizes,
-            0,
-            streams,
-            2,
-        );
-    }
+/// Reduce the accumulated dot products of both engines into u16 result
+/// shares (masks are multiplied by 2 as required by the protocol).
+pub fn compute_dot_reducers(
+    code_engine: &mut ShareDB,
+    mask_engine: &mut ShareDB,
+    db_sizes: &[usize],
+    streams: &[CudaStream],
+) {
+    code_engine.dot_reduce(db_sizes, streams);
+    mask_engine.dot_reduce_and_multiply(db_sizes, streams, 2);
 }
