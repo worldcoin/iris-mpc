@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:a3c82c7a29578a3f3cea9791de6065990980b6bf" # TEMP: POP-4051 db-ingest POC branch pin (repin to merge SHA) — revert before merge
+image: "ghcr.io/worldcoin/iris-mpc:a3c82c7a29578a3f3cea9791de6065990980b6bf"
 
 environment: stage
 replicaCount: 1
@@ -21,7 +21,7 @@ env:
   SMPC__DATABASE__CREATE: "true"
   SMPC__DATABASE__LOAD_PARALLELISM: "8"
   SMPC__DISABLE_PERSISTENCE: "false"
-  SMPC__DB_BACKED_INGEST: "true" # TEMP: POP-4051 db-ingest POC — revert before merge
+  SMPC__DB_BACKED_INGEST: "true" # POP-4051 DB-backed ingest (stage rollout 2026-07)
   SMPC__ANON_STATS_DATABASE__URL:
     valueFrom:
       secretKeyRef:

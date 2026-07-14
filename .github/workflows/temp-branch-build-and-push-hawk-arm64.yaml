@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - "dev"
-      - "carlomazzaferro/pop-4051-db-ingest-poc" # TEMP: revert before merge (POP-4051 stage test)
 
     paths-ignore:
       - "deploy/**"
