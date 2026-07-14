@@ -95,6 +95,11 @@ pub struct BatchQuery {
     // SNS message ids to assert identical batch processing across parties
     pub sns_message_ids: Vec<String>,
 
+    // Sequence numbers of the ingested_requests rows claimed for this batch
+    // (db_backed_ingest only; empty otherwise). Batch-level metadata, NOT a
+    // per-request parallel array — used to mark rows persisted in the results tx.
+    pub sqs_sequence_numbers: Vec<String>,
+
     // Identity Update specific fields (reset_update and recovery_update)
     pub identity_update_indices: Vec<u32>,
     pub identity_update_request_ids: Vec<String>,
@@ -359,6 +364,10 @@ pub enum RequestIndex {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ServerJobResult<A = ()> {
     pub merged_results: Vec<u32>,
+    // Sequence numbers of the ingested_requests rows claimed for this batch
+    // (db_backed_ingest only; empty otherwise). Batch-level metadata, NOT a
+    // per-request parallel array.
+    pub sqs_sequence_numbers: Vec<String>,
     // As defined in the BatchQuery - should be ordered in the same way
     pub request_ids: Vec<String>,
     // As defined in the BatchQuery

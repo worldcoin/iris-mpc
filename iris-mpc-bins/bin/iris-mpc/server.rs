@@ -21,7 +21,7 @@ use eyre::{bail, eyre, Context, Report, Result};
 use futures::{stream::BoxStream, StreamExt};
 use iris_mpc::services::aws::clients::AwsClients;
 use iris_mpc::services::init::initialize_chacha_seeds;
-use iris_mpc::services::processors::batch::receive_batch_stream;
+use iris_mpc::services::processors::batch::{receive_batch_stream, spawn_db_backed_ingest_task};
 use iris_mpc::services::processors::get_iris_shares_parse_task;
 use iris_mpc::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,
@@ -138,6 +138,29 @@ async fn main() -> Result<()> {
 }
 
 async fn server_main(config: Config) -> Result<()> {
+    if config.db_backed_ingest && config.disable_persistence {
+        bail!(
+            "db_backed_ingest=true is incompatible with disable_persistence=true: ingested request claims would never be marked persisted and would be re-formed on every restart"
+        );
+    }
+
+    if config.db_backed_ingest && !(0..=20).contains(&config.db_ingest_sqs_wait_secs) {
+        bail!(
+            "db_ingest_sqs_wait_secs must be within SQS's accepted 0..=20 range, got {}: every receive would fail and ingest would idle with warn-only logs",
+            config.db_ingest_sqs_wait_secs
+        );
+    }
+
+    if config.db_backed_ingest && !config.enable_modifications_sync {
+        bail!(
+            "db_backed_ingest=true requires enable_modifications_sync=true: the boot-time \
+             fleet-frontier skip-ahead marks rows persisted whose EFFECTS only reach this \
+             party via the modifications roll-forward. With sync disabled, an asymmetric-commit \
+             recovery would reconcile bookkeeping without the data — silent cross-party data \
+             divergence instead of a loud wedge."
+        );
+    }
+
     let shutdown_handler = Arc::new(ShutdownHandler::new(
         config.shutdown_last_results_sync_timeout_secs,
     ));
@@ -164,11 +187,21 @@ async fn server_main(config: Config) -> Result<()> {
 
     tracing::info!("Initialising AWS services");
     let aws_clients = AwsClients::new(&config.clone()).await?;
-    let next_sns_seq_number_future = get_next_sns_seq_num(
-        &aws_clients.sqs_client,
-        &config.requests_queue_url,
-        config.sqs_sync_long_poll_seconds,
-    );
+    // Under DB-backed ingest the queue head is party-local state (see the
+    // hawk main): the peek's only consumer, the startup queue trim, is skipped,
+    // and the peek itself hard-errors on a corrupt head message.
+    let next_sns_seq_number_future = async {
+        if config.db_backed_ingest {
+            Ok(None)
+        } else {
+            get_next_sns_seq_num(
+                &aws_clients.sqs_client,
+                &config.requests_queue_url,
+                config.sqs_sync_long_poll_seconds,
+            )
+            .await
+        }
+    };
 
     let shares_encryption_key_pair = match SharesEncryptionKeyPairs::from_storage(
         aws_clients.secrets_manager_client.clone(),
@@ -265,6 +298,11 @@ async fn server_main(config: Config) -> Result<()> {
         next_sns_sequence_num: next_sns_seq_number_future.await?,
         common_config: CommonConfig::from(config.clone()),
         graph_mutation_bytes: vec![],
+        max_persisted_sequence_number: if config.db_backed_ingest {
+            store.max_persisted_sequence_number().await?
+        } else {
+            None
+        },
     };
 
     tracing::info!("Sync state: {:?}", my_state);
@@ -315,16 +353,32 @@ async fn server_main(config: Config) -> Result<()> {
     // check if common part of the config is the same across all nodes
     sync_result.check_common_config()?;
 
-    // sync the queues
-    let max_sqs_sequence_num = sync_result.max_sns_sequence_num();
-    delete_messages_until_sequence_num(
-        &aws_clients.sqs_client,
-        &config.requests_queue_url,
-        my_state.next_sns_sequence_num,
-        max_sqs_sequence_num,
-        config.sqs_sync_long_poll_seconds,
-    )
-    .await?;
+    // Fleet persisted frontier for boot recovery (computed here because
+    // sync_modifications below consumes sync_result). See the hawk main for
+    // the full skip-ahead rationale + the boot-snapshot SAFETY DEPENDENCY.
+    let fleet_frontier = if config.db_backed_ingest {
+        sync_result.max_persisted_sequence_number()
+    } else {
+        None
+    };
+
+    if config.db_backed_ingest {
+        // Skip the startup queue trim: queues are transient buffers with
+        // party-dependent ingest offsets; cross-party queue-position comparison
+        // is meaningless and the trim could delete not-yet-ingested messages.
+        tracing::info!("db-backed ingest enabled; skipping startup SQS queue sync/trim");
+    } else {
+        // sync the queues
+        let max_sqs_sequence_num = sync_result.max_sns_sequence_num();
+        delete_messages_until_sequence_num(
+            &aws_clients.sqs_client,
+            &config.requests_queue_url,
+            my_state.next_sns_sequence_num,
+            max_sqs_sequence_num,
+            config.sqs_sync_long_poll_seconds,
+        )
+        .await?;
+    }
 
     let dummy_shares_for_deletions = get_dummy_shares_for_deletion(party_id);
 
@@ -351,6 +405,42 @@ async fn server_main(config: Config) -> Result<()> {
         .await
         {
             tracing::error!("Failed to replay last modifications: {:?}", e);
+        }
+    }
+
+    if config.db_backed_ingest {
+        // Two-step boot recovery — mirror of the hawk main (see its comments
+        // for the full C2/asymmetric-commit rationale).
+        // Step 1: skip-ahead to the fleet's persisted frontier (rows completed
+        // on a peer; effects arrived via the modifications sync above).
+        if let Some(frontier) = &fleet_frontier {
+            let marked = store
+                .mark_ingested_requests_persisted_up_to(frontier)
+                .await
+                .context("failed to skip-ahead ingested rows to fleet frontier")?;
+            if marked > 0 {
+                tracing::warn!(
+                    "Skip-ahead: marked {} ingested row(s) persisted up to fleet frontier {} (completed on a peer; effects arrived via modifications sync)",
+                    marked,
+                    frontier
+                );
+                metrics::counter!("db_ingest_frontier_skip_ahead").increment(marked);
+            }
+        }
+        // Step 2: release remaining unpersisted claims (symmetric-crash case;
+        // deterministic re-formation picks them up identically everywhere).
+        let released = store
+            .reset_unpersisted_ingested_claims()
+            .await
+            .context("failed to reset unpersisted ingested claims on startup")?;
+        if released > 0 {
+            tracing::warn!(
+                "Released {} unpersisted ingested request claim(s) from a crashed/restarted batch; they will be re-formed",
+                released
+            );
+            metrics::counter!("db_ingest_claims_released").increment(released);
+        } else {
+            tracing::info!("No unpersisted ingested request claims to release on startup");
         }
     }
 
@@ -460,6 +550,7 @@ async fn server_main(config: Config) -> Result<()> {
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
             merged_results,
+            sqs_sequence_numbers,
             request_ids,
             request_types,
             metadata,
@@ -846,6 +937,26 @@ async fn server_main(config: Config) -> Result<()> {
                 }
             }
 
+            if config_bg.db_backed_ingest {
+                let marked = store_bg
+                    .mark_ingested_requests_persisted_tx(&mut tx, &sqs_sequence_numbers)
+                    .await?;
+                if marked != sqs_sequence_numbers.len() as u64 {
+                    tracing::error!(
+                        "db-backed ingest: batch carried {} claimed sequence number(s) but marked {} persisted; claimed rows may be re-formed",
+                        sqs_sequence_numbers.len(),
+                        marked
+                    );
+                    metrics::counter!("db_ingest_persist_mark_mismatch").increment(1);
+                } else {
+                    tracing::info!(
+                        "db-backed ingest: marked {} ingested request(s) persisted",
+                        marked
+                    );
+                }
+                metrics::counter!("db_ingest_rows_persisted").increment(marked);
+            }
+
             tx.commit().await?;
 
             for memory_serial_id in memory_serial_ids {
@@ -1010,6 +1121,16 @@ async fn server_main(config: Config) -> Result<()> {
         //   - One batch: many queries.
         // - The outer Vec is the dimension of the Galois Ring (2):
         //   - A decomposition of each iris bit into two u8 limbs.
+
+        if config.db_backed_ingest {
+            spawn_db_backed_ingest_task(
+                &mut background_tasks,
+                aws_clients.sqs_client.clone(),
+                config.clone(),
+                store.clone(),
+                shutdown_handler.clone(),
+            );
+        }
 
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
