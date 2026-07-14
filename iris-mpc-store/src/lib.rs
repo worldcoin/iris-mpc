@@ -30,6 +30,22 @@ pub use s3_importer::{
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::ops::DerefMut;
 
+pub const SNS_SEQUENCE_NUMBER_WIDTH: usize = 40;
+
+#[derive(sqlx::FromRow, Debug, Clone, PartialEq, Eq)]
+pub struct IngestedRequest {
+    pub sequence_number: String,
+    pub message_body: String,
+}
+
+pub fn normalize_sns_sequence_number(sequence_number: &str) -> Result<String> {
+    let parsed = sequence_number.parse::<u128>()?;
+    Ok(format!(
+        "{parsed:0width$}",
+        width = SNS_SEQUENCE_NUMBER_WIDTH
+    ))
+}
+
 /// The unified type that can hold either DB or S3 variants.
 pub enum StoredIris {
     // DB stores the shares in their original form
@@ -484,6 +500,193 @@ WHERE id = $1;
         Ok(id.0.unwrap_or(0) as usize)
     }
 
+    /// Inserts an SQS message into `ingested_requests`, keyed by its SNS FIFO
+    /// sequence number. Idempotent via `ON CONFLICT DO NOTHING`.
+    ///
+    /// Returns `Ok(true)` if a new row was inserted, `Ok(false)` if a row with
+    /// this sequence number already existed (duplicate delivery / re-receive —
+    /// safe to delete the SQS message either way), and `Err` on DB failure
+    /// (message must NOT be deleted from SQS; it will be re-received).
+    pub async fn insert_ingested_request(
+        &self,
+        sequence_number: &str,
+        message_body: &str,
+    ) -> Result<bool> {
+        let normalized_sequence_number = normalize_sns_sequence_number(sequence_number)?;
+        let result = sqlx::query(
+            r#"
+            INSERT INTO ingested_requests (sequence_number, message_body)
+            VALUES ($1, $2)
+            ON CONFLICT (sequence_number) DO NOTHING
+            "#,
+        )
+        .bind(normalized_sequence_number)
+        .bind(message_body)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected() == 1)
+    }
+
+    // Pending = unclaimed AND unpersisted. The persisted_at guard narrows a
+    // dual-consumer window (rolling-deploy pod overlap): a new pod's boot
+    // recovery can release a claim that an old pod's in-flight results tx then
+    // persist-marks — without the guard such a row would be re-formed and
+    // re-processed despite its results being committed. The claim CAS below
+    // carries the same guard so the loser of the residual race (persist
+    // landing between this SELECT and the claim) fails loud instead of
+    // claiming an already-persisted row.
+    pub async fn count_pending_ingested_requests(&self) -> Result<i64> {
+        let count: (i64,) = sqlx::query_as(
+            r#"
+            SELECT COUNT(*)
+            FROM ingested_requests
+            WHERE consumed_batch_id IS NULL
+              AND persisted_at IS NULL
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(count.0)
+    }
+
+    pub async fn pending_ingested_requests(&self, limit: u32) -> Result<Vec<IngestedRequest>> {
+        let rows = sqlx::query_as::<_, IngestedRequest>(
+            r#"
+            SELECT sequence_number, message_body
+            FROM ingested_requests
+            WHERE consumed_batch_id IS NULL
+              AND persisted_at IS NULL
+            ORDER BY sequence_number
+            LIMIT $1
+            "#,
+        )
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    pub async fn mark_ingested_requests_consumed(
+        &self,
+        sequence_numbers: &[String],
+        batch_id: u64,
+    ) -> Result<()> {
+        if sequence_numbers.is_empty() {
+            return Ok(());
+        }
+
+        let result = sqlx::query(
+            r#"
+            UPDATE ingested_requests
+            SET consumed_batch_id = $1
+            WHERE sequence_number = ANY($2::text[])
+              AND consumed_batch_id IS NULL
+              AND persisted_at IS NULL
+            "#,
+        )
+        .bind(batch_id as i64)
+        .bind(sequence_numbers)
+        .execute(&self.pool)
+        .await?;
+
+        if result.rows_affected() != sequence_numbers.len() as u64 {
+            return Err(eyre!(
+                "marked {} ingested request rows consumed, expected {}",
+                result.rows_affected(),
+                sequence_numbers.len()
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Marks the given claimed rows as persisted, on the caller's transaction,
+    /// so the mark is atomic with the batch's result commit. Keyed by sequence
+    /// number (the PK) rather than batch id: batch ids restart per boot and the
+    /// shared batch-id atomic advances under prefetch, so they cannot reliably
+    /// correlate a claim with its persist. Returns rows affected.
+    pub async fn mark_ingested_requests_persisted_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        sequence_numbers: &[String],
+    ) -> Result<u64> {
+        if sequence_numbers.is_empty() {
+            return Ok(0);
+        }
+
+        let result = sqlx::query(
+            r#"
+            UPDATE ingested_requests
+            SET persisted_at = now()
+            WHERE sequence_number = ANY($1::text[])
+              AND persisted_at IS NULL
+            "#,
+        )
+        .bind(sequence_numbers)
+        .execute(tx.deref_mut())
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// This party's persisted frontier: the highest sequence number with a
+    /// persist mark. The persisted set is a contiguous prefix of the sequence
+    /// order (formation consumes lowest-first in FIFO ingest order), so this
+    /// single value fully describes local progress. Exchanged via SyncState.
+    pub async fn max_persisted_sequence_number(&self) -> Result<Option<String>> {
+        let row: (Option<String>,) = sqlx::query_as(
+            r#"
+            SELECT MAX(sequence_number)
+            FROM ingested_requests
+            WHERE persisted_at IS NOT NULL
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.0)
+    }
+
+    /// Startup skip-ahead (DB analog of the SQS queue trim): marks every
+    /// unpersisted row at or below the fleet's persisted frontier as persisted,
+    /// regardless of claim state. A row at or below the frontier was part of a
+    /// batch that completed on at least one peer — its effects reach this party
+    /// via the modifications roll-forward, and re-forming it locally would
+    /// diverge the batches (peers will never co-form it). Returns rows affected.
+    pub async fn mark_ingested_requests_persisted_up_to(&self, frontier: &str) -> Result<u64> {
+        let result = sqlx::query(
+            r#"
+            UPDATE ingested_requests
+            SET persisted_at = now()
+            WHERE sequence_number <= $1
+              AND persisted_at IS NULL
+            "#,
+        )
+        .bind(frontier)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Releases claims that were never persisted (crash/restart recovery). Batch ids
+    /// restart at 1 on boot, so a claim without a persist mark can never be trusted.
+    /// Returns rows affected.
+    pub async fn reset_unpersisted_ingested_claims(&self) -> Result<u64> {
+        let result = sqlx::query(
+            r#"
+            UPDATE ingested_requests
+            SET consumed_batch_id = NULL
+            WHERE consumed_batch_id IS NOT NULL
+              AND persisted_at IS NULL
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
     pub async fn insert_modification(
         &self,
         serial_id: Option<i64>,
@@ -916,6 +1119,198 @@ pub mod tests {
         let mut tx = store.tx().await?;
         store.insert_irises(&mut tx, &[]).await?;
         tx.commit().await?;
+
+        cleanup(&postgres_client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ingested_requests_idempotency() -> Result<()> {
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+
+        let sequence_number = "42";
+        let normalized_sequence_number = normalize_sns_sequence_number(sequence_number)?;
+
+        assert!(
+            store
+                .insert_ingested_request(sequence_number, "message body")
+                .await?
+        );
+        assert!(
+            !store
+                .insert_ingested_request(sequence_number, "message body")
+                .await?
+        );
+
+        assert_eq!(store.count_pending_ingested_requests().await?, 1);
+
+        let pending = store.pending_ingested_requests(10).await?;
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].sequence_number, normalized_sequence_number);
+        assert_eq!(pending[0].message_body, "message body");
+
+        let sequence_numbers = vec![pending[0].sequence_number.clone()];
+        store
+            .mark_ingested_requests_consumed(&sequence_numbers, 7)
+            .await?;
+
+        assert_eq!(store.count_pending_ingested_requests().await?, 0);
+
+        cleanup(&postgres_client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ingested_requests_two_phase_claim_recovery() -> Result<()> {
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+
+        assert!(
+            store
+                .insert_ingested_request("42", "first message body")
+                .await?
+        );
+        assert!(
+            store
+                .insert_ingested_request("43", "second message body")
+                .await?
+        );
+
+        let pending = store.pending_ingested_requests(10).await?;
+        assert_eq!(pending.len(), 2);
+        let sequence_numbers = pending
+            .iter()
+            .map(|request| request.sequence_number.clone())
+            .collect::<Vec<_>>();
+
+        store
+            .mark_ingested_requests_consumed(&sequence_numbers, 7)
+            .await?;
+        assert_eq!(store.count_pending_ingested_requests().await?, 0);
+
+        assert_eq!(store.reset_unpersisted_ingested_claims().await?, 2);
+        assert_eq!(store.count_pending_ingested_requests().await?, 2);
+
+        store
+            .mark_ingested_requests_consumed(&sequence_numbers, 1)
+            .await?;
+        assert_eq!(store.count_pending_ingested_requests().await?, 0);
+
+        let mut tx = store.tx().await?;
+        let marked = store
+            .mark_ingested_requests_persisted_tx(&mut tx, &sequence_numbers)
+            .await?;
+        assert_eq!(marked, 2);
+        tx.commit().await?;
+
+        assert_eq!(store.reset_unpersisted_ingested_claims().await?, 0);
+        assert_eq!(store.count_pending_ingested_requests().await?, 0);
+
+        cleanup(&postgres_client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ingested_requests_double_claim_fails_loud() -> Result<()> {
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+
+        for seq in ["20", "21", "22"] {
+            assert!(store.insert_ingested_request(seq, "body").await?);
+        }
+        let all = store.pending_ingested_requests(10).await?;
+        let seqs: Vec<String> = all.iter().map(|r| r.sequence_number.clone()).collect();
+
+        // First claimer takes rows 20,21.
+        store
+            .mark_ingested_requests_consumed(&seqs[0..2], 1)
+            .await?;
+
+        // Second claimer (dual-consumer race: e.g. rolling-deploy pod overlap)
+        // tries an overlapping set {21,22}: the claim is compare-and-swap
+        // (WHERE consumed_batch_id IS NULL), so it must fail loud, not
+        // silently steal row 21 from the in-flight batch.
+        let overlap = vec![seqs[1].clone(), seqs[2].clone()];
+        assert!(store
+            .mark_ingested_requests_consumed(&overlap, 2)
+            .await
+            .is_err());
+
+        // Pinned side effect of the failed partial UPDATE: the non-overlapping
+        // row 22 WAS claimed by the losing call and now sits claimed with no
+        // batch to persist it — boot recovery is what releases it.
+        assert_eq!(store.count_pending_ingested_requests().await?, 0);
+        assert_eq!(store.reset_unpersisted_ingested_claims().await?, 3);
+        assert_eq!(store.count_pending_ingested_requests().await?, 3);
+
+        cleanup(&postgres_client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ingested_requests_frontier_skip_ahead() -> Result<()> {
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+
+        // The C2 state: rows 10,11 persisted somewhere in the fleet (this
+        // party's commit was the one that failed: claimed, unpersisted), row 12
+        // claimed above the fleet frontier (nobody persisted), row 13 pending.
+        for seq in ["10", "11", "12", "13"] {
+            assert!(store.insert_ingested_request(seq, "body").await?);
+        }
+        let all = store.pending_ingested_requests(10).await?;
+        let seqs: Vec<String> = all.iter().map(|r| r.sequence_number.clone()).collect();
+        store
+            .mark_ingested_requests_consumed(&seqs[0..3], 1)
+            .await?;
+
+        assert_eq!(store.max_persisted_sequence_number().await?, None);
+
+        // Fleet frontier says a peer persisted through row 11.
+        let frontier = normalize_sns_sequence_number("11")?;
+        assert_eq!(
+            store
+                .mark_ingested_requests_persisted_up_to(&frontier)
+                .await?,
+            2
+        );
+        // Skip-ahead is idempotent.
+        assert_eq!(
+            store
+                .mark_ingested_requests_persisted_up_to(&frontier)
+                .await?,
+            0
+        );
+        assert_eq!(
+            store.max_persisted_sequence_number().await?.as_deref(),
+            Some(frontier.as_str())
+        );
+
+        // Release: only row 12 (claimed above the frontier) goes back to
+        // pending; rows 10,11 stay persisted forever.
+        assert_eq!(store.reset_unpersisted_ingested_claims().await?, 1);
+        let pending = store.pending_ingested_requests(10).await?;
+        let pending_seqs: Vec<&str> = pending.iter().map(|r| r.sequence_number.as_str()).collect();
+        assert_eq!(
+            pending_seqs,
+            vec![
+                normalize_sns_sequence_number("12")?.as_str(),
+                normalize_sns_sequence_number("13")?.as_str()
+            ]
+        );
 
         cleanup(&postgres_client, &schema_name).await?;
         Ok(())

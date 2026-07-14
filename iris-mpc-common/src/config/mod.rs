@@ -312,6 +312,18 @@ pub struct Config {
     #[serde(default = "default_batch_sync_polling_timeout_secs")]
     pub batch_sync_polling_timeout_secs: u64,
 
+    #[serde(default = "default_db_backed_ingest")]
+    pub db_backed_ingest: bool,
+
+    #[serde(default = "default_db_ingest_sqs_wait_secs")]
+    pub db_ingest_sqs_wait_secs: i32,
+
+    #[serde(default = "default_db_ingest_backoff_initial_ms")]
+    pub db_ingest_backoff_initial_ms: u64,
+
+    #[serde(default = "default_db_ingest_backoff_max_ms")]
+    pub db_ingest_backoff_max_ms: u64,
+
     #[serde(default = "default_separate_tokio_cores_per_node")]
     pub separate_tokio_cores_per_node: Option<usize>,
 
@@ -475,6 +487,22 @@ fn default_sqs_long_poll_wait_time() -> usize {
 
 fn default_batch_sync_polling_timeout_secs() -> u64 {
     10
+}
+
+fn default_db_backed_ingest() -> bool {
+    false
+}
+
+fn default_db_ingest_sqs_wait_secs() -> i32 {
+    10
+}
+
+fn default_db_ingest_backoff_initial_ms() -> u64 {
+    200
+}
+
+fn default_db_ingest_backoff_max_ms() -> u64 {
+    5_000
 }
 
 fn default_full_scan_side_switching_enabled() -> bool {
@@ -738,6 +766,7 @@ pub struct CommonConfig {
     batch_polling_timeout_secs: i32,
     sqs_long_poll_wait_time: usize,
     batch_sync_polling_timeout_secs: u64,
+    db_backed_ingest: bool,
 }
 
 impl CommonConfig {
@@ -825,6 +854,10 @@ impl From<Config> for CommonConfig {
             batch_polling_timeout_secs,
             sqs_long_poll_wait_time,
             batch_sync_polling_timeout_secs,
+            db_backed_ingest,
+            db_ingest_sqs_wait_secs: _,
+            db_ingest_backoff_initial_ms: _,
+            db_ingest_backoff_max_ms: _,
             // pprof collector (not part of common hash)
             pprof_s3_bucket: _,
             pprof_prefix: _,
@@ -898,6 +931,28 @@ impl From<Config> for CommonConfig {
             batch_polling_timeout_secs,
             sqs_long_poll_wait_time,
             batch_sync_polling_timeout_secs,
+            db_backed_ingest,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn db_backed_ingest_is_part_of_common_config_equality() {
+        // The equality check across parties is the gate that prevents mixed
+        // ingestion modes (one party counting SQS, others counting DB rows).
+        // If this field ever leaves CommonConfig, that gate silently vanishes.
+        let base = CommonConfig::default();
+        let flag_on = CommonConfig {
+            db_backed_ingest: true,
+            ..Default::default()
+        };
+        assert_ne!(base, flag_on);
+        // The ingest tuning knobs (db_ingest_sqs_wait_secs, backoff params)
+        // deliberately live only on Config, not CommonConfig: they may skew
+        // across parties during rolling deploys without splitting the fleet.
     }
 }
