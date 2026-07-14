@@ -5,6 +5,7 @@ on:
     branches:
       - "dev"
       - "carlomazzaferro/pop-4051-db-ingest-poc" # TEMP: revert before merge (POP-4051 stage test)
+      - "allow-unknown-migrations"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
