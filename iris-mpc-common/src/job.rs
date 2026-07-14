@@ -14,11 +14,6 @@ use eyre::{eyre, Result};
 use std::{collections::HashMap, future::Future};
 
 const RERAND_BATCH_SYNC_DOMAIN: &[u8] = b"iris-mpc/rerand/batch-sync/v1\0";
-const RERAND_MAINTENANCE_SYNC_DOMAIN: &[u8] = b"iris-mpc/rerand/maintenance-sync/v1\0";
-const RERAND_MAINTENANCE_COMPLETE_SYNC_DOMAIN: &[u8] =
-    b"iris-mpc/rerand/maintenance-complete-sync/v1\0";
-const MAINTENANCE_VALID_ENTRIES: [bool; 4] = [true, false, true, false];
-const MAINTENANCE_COMPLETE_VALID_ENTRIES: [bool; 4] = [false, true, false, true];
 
 /// Domain-separate the ordinary batch barrier when rerandomization is enabled.
 /// Disabled deployments retain the exact legacy hash and entry-vector shape.
@@ -34,36 +29,6 @@ pub fn batch_sync_hash(batch_hash: [u8; 32], rerand_enabled: bool) -> [u8; 32] {
     sha256_bytes(input)
 }
 
-fn maintenance_sync_hash(coordination_id: &str, batch_id: u64) -> [u8; 32] {
-    let mut input = Vec::with_capacity(
-        RERAND_MAINTENANCE_SYNC_DOMAIN.len() + coordination_id.len() + std::mem::size_of::<u64>(),
-    );
-    input.extend_from_slice(RERAND_MAINTENANCE_SYNC_DOMAIN);
-    input.extend_from_slice(coordination_id.as_bytes());
-    input.extend_from_slice(&batch_id.to_le_bytes());
-    sha256_bytes(input)
-}
-
-fn maintenance_complete_sync_hash(coordination_id: &str, batch_id: u64) -> [u8; 32] {
-    let mut input = Vec::with_capacity(
-        RERAND_MAINTENANCE_COMPLETE_SYNC_DOMAIN.len()
-            + coordination_id.len()
-            + std::mem::size_of::<u64>(),
-    );
-    input.extend_from_slice(RERAND_MAINTENANCE_COMPLETE_SYNC_DOMAIN);
-    input.extend_from_slice(coordination_id.as_bytes());
-    input.extend_from_slice(&batch_id.to_le_bytes());
-    sha256_bytes(input)
-}
-
-fn published_batch_entries(entries: &[bool], rerand_enabled: bool, canary_due: bool) -> Vec<bool> {
-    let mut published = entries.to_vec();
-    if rerand_enabled {
-        published.push(!canary_due);
-    }
-    published
-}
-
 fn publish_batch_sync_entries(batch_hash: [u8; 32], valid_entries: Vec<bool>) {
     // The coordination endpoint holds these two locks in this order while it
     // snapshots both fields. Use the same order so it can never observe a
@@ -76,43 +41,6 @@ fn publish_batch_sync_entries(batch_hash: [u8; 32], valid_entries: Vec<bool>) {
         .expect("failed to lock CURRENT_BATCH_SHA");
     *current_valid_entries = valid_entries;
     *current_batch_hash = batch_hash;
-}
-
-/// One attempt at the pre-canary maintenance rendezvous. Callers retry because
-/// a peer may still be finishing the last pre-deadline batch. The fixed marker
-/// is intentionally not a valid ordinary-batch protocol extension.
-pub async fn sync_canary_maintenance(config: &Config, batch_id: u64) -> Result<[u8; 32]> {
-    let hash = maintenance_sync_hash(&config.rerand_coordination_id, batch_id);
-    publish_batch_sync_entries(hash, MAINTENANCE_VALID_ENTRIES.to_vec());
-
-    let own = get_own_batch_sync_entries().await;
-    let server_coord_config = config
-        .server_coordination
-        .as_ref()
-        .ok_or_else(|| eyre!("server coordination config is missing"))?;
-    let peers = get_batch_sync_entries(server_coord_config, Some(own.clone())).await?;
-    let result = BatchSyncEntriesResult::new(own.clone(), peers);
-    eyre::ensure!(
-        result.sha_matches(),
-        "canary maintenance synchronization hash mismatch"
-    );
-    eyre::ensure!(
-        own.valid_entries == MAINTENANCE_VALID_ENTRIES
-            && result
-                .all_states
-                .iter()
-                .all(|state| state.valid_entries == MAINTENANCE_VALID_ENTRIES),
-        "canary maintenance synchronization marker mismatch"
-    );
-    Ok(hash)
-}
-
-/// Stop advertising the active idle-maintenance rendezvous after its canary
-/// succeeds. A later check may use the same idle batch ID, so leaving the
-/// active marker published would let stale peer endpoints satisfy it.
-pub fn publish_canary_maintenance_complete(config: &Config, batch_id: u64) {
-    let hash = maintenance_complete_sync_hash(&config.rerand_coordination_id, batch_id);
-    publish_batch_sync_entries(hash, MAINTENANCE_COMPLETE_VALID_ENTRIES.to_vec());
 }
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
@@ -321,19 +249,14 @@ impl BatchQuery {
         self.valid_entries.push(valid);
     }
 
-    /// Synchronize ordinary validity entries. Enabled rerandomization appends a
-    /// due control bit; its domain-tagged batch hash makes mixed protocols fail
-    /// symmetrically before either side interprets the different vector shape.
+    /// Synchronize ordinary validity entries. The caller supplies a
+    /// domain-tagged hash so mixed rerandomization protocols fail symmetrically.
     pub async fn sync_batch_entries(
         &mut self,
         config: &Config,
         synchronized_batch_hash: [u8; 32],
-        local_canary_due: bool,
-    ) -> Result<bool, eyre::Error> {
-        // The existing validity intersection computes !OR(due).
-        let published =
-            published_batch_entries(&self.valid_entries, config.rerand_enabled, local_canary_due);
-        publish_batch_sync_entries(synchronized_batch_hash, published);
+    ) -> Result<(), eyre::Error> {
+        publish_batch_sync_entries(synchronized_batch_hash, self.valid_entries.clone());
         let own_sync_state = get_own_batch_sync_entries().await;
         let server_coord_config = config.server_coordination.as_ref().unwrap();
         let batch_sync_entries =
@@ -362,14 +285,7 @@ impl BatchQuery {
             batch_sync_entries_result.all_shas_pretty()
         );
 
-        let mut valid_entries = batch_sync_entries_result.valid_entries();
-        let canary_due = if config.rerand_enabled {
-            !valid_entries
-                .pop()
-                .ok_or_else(|| eyre!("Batch sync entries missing canary control bit"))?
-        } else {
-            false
-        };
+        let valid_entries = batch_sync_entries_result.valid_entries();
         tracing::info!(
             "Batch sync entries valid entries: {}",
             valid_entries.clone().into_iter().filter(|b| *b).count()
@@ -383,7 +299,7 @@ impl BatchQuery {
             );
             self.valid_entries = valid_entries;
         }
-        Ok(canary_due)
+        Ok(())
     }
 
     pub fn retain_valid_entries(&mut self) {
@@ -576,28 +492,6 @@ mod tests {
         assert_eq!(batch_sync_hash(legacy, false), legacy);
         assert_ne!(batch_sync_hash(legacy, true), legacy);
         assert_eq!(batch_sync_hash(legacy, true), batch_sync_hash(legacy, true));
-    }
-
-    #[test]
-    fn disabled_batch_sync_does_not_add_a_control_entry() {
-        let ordinary = vec![true, false, true];
-        assert_eq!(published_batch_entries(&ordinary, false, false), ordinary);
-        assert_eq!(
-            published_batch_entries(&ordinary, true, false),
-            vec![true, false, true, true]
-        );
-        assert_eq!(
-            published_batch_entries(&ordinary, true, true),
-            vec![true, false, true, false]
-        );
-    }
-
-    #[test]
-    fn maintenance_hash_binds_batch_and_coordination_id() {
-        let first = maintenance_sync_hash("deployment-a", 1);
-        assert_ne!(first, maintenance_sync_hash("deployment-a", 2));
-        assert_ne!(first, maintenance_sync_hash("deployment-b", 1));
-        assert_ne!(first, maintenance_complete_sync_hash("deployment-a", 1));
     }
 
     #[test]

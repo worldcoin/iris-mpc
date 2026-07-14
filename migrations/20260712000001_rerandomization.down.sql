@@ -50,7 +50,7 @@ DROP TRIGGER protect_rerand_control_trigger ON rerand_control;
 DROP FUNCTION protect_rerand_control();
 DROP FUNCTION begin_rerand_pass(INTEGER, BIGINT, BYTEA);
 DROP FUNCTION advance_rerand_pass(INTEGER, BIGINT);
-DROP FUNCTION complete_rerand_pass(INTEGER);
+DROP FUNCTION complete_rerand_pass(INTEGER, INTEGER);
 DROP FUNCTION apply_rerand_updates(
     BIGINT[], SMALLINT[], TEXT[], INTEGER[], BYTEA[], BYTEA[], BYTEA[], BYTEA[], INTEGER
 );

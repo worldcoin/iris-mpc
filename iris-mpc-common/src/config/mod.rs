@@ -267,8 +267,8 @@ pub struct Config {
     #[serde(default)]
     pub enable_modifications_replay: bool,
 
-    /// Enable continuous rerandomization and its mandatory serving-memory
-    /// consistency checks. This is shared by all parties.
+    /// Enable continuous rerandomization and its mandatory startup
+    /// serving-memory consistency check. This is shared by all parties.
     #[serde(default)]
     pub rerand_enabled: bool,
 
@@ -287,12 +287,6 @@ pub struct Config {
     /// deployment being accepted or blocking progress.
     #[serde(default)]
     pub rerand_coordination_id: String,
-
-    /// Run a full serving-memory canary at the first synchronized batch
-    /// boundary after this interval. Rerandomization requires a nonzero value;
-    /// startup checking is unconditional and has no separate toggle.
-    #[serde(default = "default_consistency_check_interval_secs")]
-    pub consistency_check_interval_secs: u64,
 
     #[serde(default = "default_pprof_s3_bucket")]
     pub pprof_s3_bucket: String,
@@ -366,10 +360,6 @@ fn default_load_chunks_parallelism() -> usize {
 
 fn default_processing_timeout_secs() -> u64 {
     60
-}
-
-fn default_consistency_check_interval_secs() -> u64 {
-    24 * 60 * 60
 }
 
 fn default_max_batch_size() -> usize {
@@ -607,10 +597,6 @@ impl Config {
             "rerand_enabled=true requires a valid rerand_coordination_id (1..=128 ASCII letters, digits, '.', '_', or '-')"
         );
         eyre::ensure!(
-            self.consistency_check_interval_secs > 0,
-            "rerand_enabled=true requires consistency_check_interval_secs > 0"
-        );
-        eyre::ensure!(
             self.fake_db_size == 0,
             "rerand_enabled=true is incompatible with fake_db_size"
         );
@@ -799,8 +785,6 @@ pub struct CommonConfig {
     rerand_s3_bucket: String,
     #[serde(default)]
     rerand_coordination_id: String,
-    #[serde(default = "default_consistency_check_interval_secs")]
-    consistency_check_interval_secs: u64,
     sqs_sync_long_poll_seconds: i32,
     schema_name: String,
     hnsw_schema_name_suffix: String,
@@ -892,7 +876,6 @@ impl From<Config> for CommonConfig {
             rerand_s3_bucket,
             rerand_store_id: _, // local identity differs on every party/store
             rerand_coordination_id,
-            consistency_check_interval_secs,
             sqs_sync_long_poll_seconds,
             schema_name,
             hnsw_schema_name_suffix,
@@ -969,7 +952,6 @@ impl From<Config> for CommonConfig {
             rerand_enabled,
             rerand_s3_bucket,
             rerand_coordination_id,
-            consistency_check_interval_secs,
             sqs_sync_long_poll_seconds,
             schema_name,
             hnsw_schema_name_suffix,
@@ -1004,7 +986,6 @@ mod tests {
             r#"{"rerand_enabled":true,"rerand_s3_bucket":"rerand","rerand_store_id":"gpu-party-0"}"#,
             r#"{"rerand_enabled":true,"rerand_s3_bucket":"rerand","rerand_store_id":"bad/id","rerand_coordination_id":"generation-1"}"#,
             r#"{"rerand_enabled":true,"rerand_s3_bucket":"rerand","rerand_store_id":"gpu-party-0","rerand_coordination_id":"bad/id"}"#,
-            r#"{"rerand_enabled":true,"rerand_s3_bucket":"rerand","rerand_store_id":"gpu-party-0","rerand_coordination_id":"generation-1","consistency_check_interval_secs":0}"#,
         ] {
             let config: Config = serde_json::from_str(invalid).unwrap();
             assert!(

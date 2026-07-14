@@ -3409,6 +3409,7 @@ dependencies = [
 name = "iris-mpc-upgrade"
 version = "0.1.0"
 dependencies = [
+ "ampc-actor-utils",
  "ark-bls12-381",
  "ark-ec",
  "ark-ff",
@@ -3436,6 +3437,7 @@ dependencies = [
  "sha2 0.10.9",
  "thiserror 1.0.69",
  "tokio",
+ "tokio-util",
  "tonic",
  "tonic-build",
  "tracing",

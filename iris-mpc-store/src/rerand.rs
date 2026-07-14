@@ -4,10 +4,18 @@ use std::collections::{HashMap, HashSet};
 
 use bytemuck::cast_slice;
 use eyre::{ensure, eyre, Result};
+use futures::TryStreamExt;
+use iris_mpc_common::consistency_canary::CanaryAccumulator;
 use iris_mpc_common::rerand_offsets::{retarget_shares, EpochKey, EpochSeed};
+use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
+use sha2::{Digest, Sha256};
 use sqlx::{pool::PoolConnection, PgPool, Postgres};
 
 use crate::{DbStoredIris, S3StoredIris};
+
+pub const RERAND_CHECK_PROTOCOL_VERSION: u32 = 1;
+
+const VERIFICATION_INVENTORY_DOMAIN: &[u8] = b"iris-mpc/rerand-v2/verification-inventory/v1\0";
 
 pub struct RerandRowUpdate {
     pub id: i64,
@@ -41,6 +49,29 @@ pub struct RerandStoreState {
     pub active_seed_commitment: Option<[u8; 32]>,
     pub next_id: Option<i64>,
     pub max_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RerandVerificationInventory {
+    pub rows: u64,
+    pub digest: [u8; 32],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RerandVerificationBinding {
+    pub epoch: u32,
+    pub seed_commitment: [u8; 32],
+}
+
+/// An owned repeatable-read snapshot. Dropping it closes its dedicated
+/// backend, which rolls back the transaction instead of returning a snapshot
+/// transaction to the pool.
+pub struct RerandVerificationSnapshot {
+    connection: Option<PoolConnection<Postgres>>,
+    binding: RerandVerificationBinding,
+    inventory: RerandVerificationInventory,
+    party_id: usize,
+    accumulated: bool,
 }
 
 /// Verify the immutable identity before a loader or worker uses this database.
@@ -125,6 +156,240 @@ pub async fn get_rerand_epoch_inventory(pool: &PgPool) -> Result<Vec<(i32, i64)>
     )
     .fetch_all(pool)
     .await?)
+}
+
+/// Open one repeatable-read, read-only view and validate its exact public
+/// inventory before a fresh challenge is derived. Only a fully traversed,
+/// still-active pass may be checked.
+pub async fn begin_rerand_verification_snapshot(
+    pool: &PgPool,
+    target_epoch: u32,
+) -> Result<RerandVerificationSnapshot> {
+    ensure!(
+        target_epoch > 0 && target_epoch <= i32::MAX as u32,
+        "invalid verification epoch"
+    );
+    let mut connection = pool.acquire().await?;
+    connection.close_on_drop();
+    sqlx::query("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .execute(&mut *connection)
+        .await?;
+
+    let state = load_state(&mut connection).await?;
+    ensure!(
+        state.party_id < 3,
+        "verification store has an invalid party"
+    );
+    let active_ready = state.active_epoch == Some(target_epoch)
+        && state.next_id.is_some()
+        && state.max_id.is_some()
+        && state.next_id == state.max_id.and_then(|max_id| max_id.checked_add(1));
+    ensure!(
+        active_ready,
+        "rerandomization epoch {target_epoch} is not ready for verification"
+    );
+    let seed_commitment = state
+        .active_seed_commitment
+        .ok_or_else(|| eyre!("verification epoch has no seed commitment"))?;
+    let inventory = scan_verification_inventory(&mut connection, target_epoch).await?;
+    Ok(RerandVerificationSnapshot {
+        connection: Some(connection),
+        binding: RerandVerificationBinding {
+            epoch: target_epoch,
+            seed_commitment,
+        },
+        inventory,
+        party_id: state.party_id as usize,
+        accumulated: false,
+    })
+}
+
+impl RerandVerificationSnapshot {
+    pub fn binding(&self) -> RerandVerificationBinding {
+        self.binding
+    }
+
+    pub fn inventory(&self) -> RerandVerificationInventory {
+        self.inventory
+    }
+
+    /// Scan the share blobs from the same snapshot used for the inventory,
+    /// normalize each row to epoch zero, and compress it with the agreed fresh
+    /// challenge. The caller must finish the snapshot after all peers have
+    /// completed the scan phase.
+    pub async fn accumulate(
+        &mut self,
+        rerand: &RerandContext,
+        repetitions: usize,
+        challenge: [u8; 32],
+    ) -> Result<CanaryAccumulator> {
+        ensure!(
+            repetitions > 0,
+            "verification needs at least one repetition"
+        );
+        ensure!(
+            !self.accumulated,
+            "verification snapshot was already scanned"
+        );
+        ensure!(
+            rerand.party_id() == self.party_id,
+            "normalization context belongs to another party"
+        );
+        let connection = self
+            .connection
+            .as_mut()
+            .ok_or_else(|| eyre!("verification snapshot is closed"))?;
+        let accumulator = scan_verification_rows(
+            connection,
+            self.binding.epoch,
+            self.inventory,
+            rerand,
+            repetitions,
+            challenge,
+            self.party_id,
+        )
+        .await?;
+        self.accumulated = true;
+        Ok(accumulator)
+    }
+
+    pub async fn finish(mut self) -> Result<()> {
+        ensure!(self.accumulated, "verification snapshot was not scanned");
+        if let Some(mut connection) = self.connection.take() {
+            sqlx::query("COMMIT").execute(&mut *connection).await?;
+            connection.close().await?;
+        }
+        Ok(())
+    }
+
+    pub async fn close(mut self) -> Result<()> {
+        if let Some(mut connection) = self.connection.take() {
+            sqlx::query("ROLLBACK").execute(&mut *connection).await?;
+            connection.close().await?;
+        }
+        Ok(())
+    }
+}
+
+async fn scan_verification_inventory(
+    connection: &mut PoolConnection<Postgres>,
+    target_epoch: u32,
+) -> Result<RerandVerificationInventory> {
+    let mut rows = sqlx::query_as::<_, (i64, i16, i32, bool)>(
+        "SELECT id, version_id, rerand_epoch, semantic_id IS NOT NULL \
+           FROM irises ORDER BY id",
+    )
+    .fetch(&mut **connection);
+    let mut hasher = verification_inventory_hasher();
+    let mut count = 0u64;
+    let mut previous_id = None;
+    while let Some((id, version_id, epoch, semantic_id_present)) = rows.try_next().await? {
+        validate_verification_metadata(
+            id,
+            epoch,
+            semantic_id_present,
+            target_epoch,
+            &mut previous_id,
+        )?;
+        update_verification_inventory(&mut hasher, id, version_id);
+        count = count
+            .checked_add(1)
+            .ok_or_else(|| eyre!("verification row count overflow"))?;
+    }
+    Ok(finish_verification_inventory(hasher, count))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn scan_verification_rows(
+    connection: &mut PoolConnection<Postgres>,
+    target_epoch: u32,
+    expected_inventory: RerandVerificationInventory,
+    rerand: &RerandContext,
+    repetitions: usize,
+    challenge: [u8; 32],
+    party_id: usize,
+) -> Result<CanaryAccumulator> {
+    let mut rows = sqlx::query_as::<_, DbStoredIris>(
+        "SELECT id, version_id, left_code, left_mask, right_code, right_mask, rerand_epoch \
+           FROM irises ORDER BY id",
+    )
+    .fetch(&mut **connection);
+    let mut accumulator = CanaryAccumulator::new(party_id, repetitions, challenge);
+    let mut inventory_hasher = verification_inventory_hasher();
+    let mut count = 0u64;
+    let mut previous_id = None;
+    while let Some(row) = rows.try_next().await? {
+        validate_verification_metadata(
+            row.id(),
+            row.rerand_epoch(),
+            true,
+            target_epoch,
+            &mut previous_id,
+        )?;
+        let row_id = u32::try_from(row.id())
+            .map_err(|_| eyre!("verification row ID {} exceeds serving bounds", row.id()))?;
+        let (left_code, left_mask, right_code, right_mask) =
+            rerand.normalized_db_coefficients(&row)?;
+        accumulator.accumulate(row_id, &left_code, &left_mask, &right_code, &right_mask)?;
+        update_verification_inventory(&mut inventory_hasher, row.id(), row.version_id());
+        count = count
+            .checked_add(1)
+            .ok_or_else(|| eyre!("verification row count overflow"))?;
+    }
+    ensure!(
+        finish_verification_inventory(inventory_hasher, count) == expected_inventory,
+        "verification inventory changed within its repeatable-read snapshot"
+    );
+    ensure!(
+        accumulator.rows() == expected_inventory.rows,
+        "verification accumulator omitted rows"
+    );
+    Ok(accumulator)
+}
+
+fn validate_verification_metadata(
+    id: i64,
+    epoch: i32,
+    semantic_id_present: bool,
+    target_epoch: u32,
+    previous_id: &mut Option<i64>,
+) -> Result<()> {
+    ensure!(id > 0, "verification row IDs must be positive");
+    if let Some(previous) = *previous_id {
+        ensure!(
+            id > previous,
+            "verification inventory is not strictly ordered"
+        );
+    }
+    ensure!(
+        semantic_id_present,
+        "verification row {id} has no semantic ID"
+    );
+    ensure!(
+        epoch == 0 || epoch == target_epoch as i32,
+        "verification row {id} references impossible epoch {epoch}"
+    );
+    *previous_id = Some(id);
+    Ok(())
+}
+
+fn verification_inventory_hasher() -> Sha256 {
+    let mut hasher = Sha256::new();
+    hasher.update(VERIFICATION_INVENTORY_DOMAIN);
+    hasher
+}
+
+fn update_verification_inventory(hasher: &mut Sha256, id: i64, version_id: i16) {
+    hasher.update(id.to_le_bytes());
+    hasher.update(version_id.to_le_bytes());
+}
+
+fn finish_verification_inventory(mut hasher: Sha256, rows: u64) -> RerandVerificationInventory {
+    hasher.update(rows.to_le_bytes());
+    RerandVerificationInventory {
+        rows,
+        digest: hasher.finalize().into(),
+    }
 }
 
 /// A session-level singleton lock. All pass reads, state transitions, and CAS
@@ -279,13 +544,18 @@ impl RerandPass {
         Ok(())
     }
 
-    pub async fn complete(mut self) -> Result<RerandStoreState> {
+    pub async fn complete(mut self, check_protocol_version: u32) -> Result<RerandStoreState> {
+        ensure!(
+            check_protocol_version == RERAND_CHECK_PROTOCOL_VERSION,
+            "unsupported rerandomization check protocol version"
+        );
         let epoch = self
             .state
             .active_epoch
             .ok_or_else(|| eyre!("no active pass"))?;
-        sqlx::query("SELECT complete_rerand_pass($1)")
+        sqlx::query("SELECT complete_rerand_pass($1, $2)")
             .bind(epoch as i32)
+            .bind(check_protocol_version as i32)
             .fetch_optional(&mut *self.connection)
             .await?;
         let state = load_state(&mut self.connection).await?;
@@ -372,6 +642,10 @@ pub struct RerandContext {
 }
 
 impl RerandContext {
+    pub fn party_id(&self) -> usize {
+        self.party_id
+    }
+
     pub fn serving_epoch(&self) -> u32 {
         0
     }
@@ -405,29 +679,49 @@ impl RerandContext {
     pub fn normalize_db_iris(&self, iris: &mut DbStoredIris) -> Result<()> {
         ensure!(iris.rerand_epoch >= 0, "negative row epoch");
         let epoch = iris.rerand_epoch as u32;
+        let (lc, lm, rc, rm) = self.normalized_db_coefficients(iris)?;
         if epoch == 0 {
             return Ok(());
         }
-        let mut lc = bytes_to_u16(&iris.left_code)?;
-        let mut lm = bytes_to_u16(&iris.left_mask)?;
-        let mut rc = bytes_to_u16(&iris.right_code)?;
-        let mut rm = bytes_to_u16(&iris.right_mask)?;
-        retarget_shares(
-            self.party_id,
-            iris.id,
-            self.key(epoch)?,
-            EpochKey::new(0, None),
-            &mut lc,
-            &mut lm,
-            &mut rc,
-            &mut rm,
-        )?;
         iris.left_code = u16_to_bytes(&lc);
         iris.left_mask = u16_to_bytes(&lm);
         iris.right_code = u16_to_bytes(&rc);
         iris.right_mask = u16_to_bytes(&rm);
         iris.rerand_epoch = 0;
         Ok(())
+    }
+
+    fn normalized_db_coefficients(
+        &self,
+        iris: &DbStoredIris,
+    ) -> Result<(Vec<u16>, Vec<u16>, Vec<u16>, Vec<u16>)> {
+        ensure!(iris.rerand_epoch >= 0, "negative row epoch");
+        let epoch = iris.rerand_epoch as u32;
+        let mut lc = bytes_to_u16(&iris.left_code)?;
+        let mut lm = bytes_to_u16(&iris.left_mask)?;
+        let mut rc = bytes_to_u16(&iris.right_code)?;
+        let mut rm = bytes_to_u16(&iris.right_mask)?;
+        ensure!(
+            lc.len() == IRIS_CODE_LENGTH
+                && rc.len() == IRIS_CODE_LENGTH
+                && lm.len() == MASK_CODE_LENGTH
+                && rm.len() == MASK_CODE_LENGTH,
+            "row {} has unexpected share lengths",
+            iris.id
+        );
+        if epoch > 0 {
+            retarget_shares(
+                self.party_id,
+                iris.id,
+                self.key(epoch)?,
+                EpochKey::new(0, None),
+                &mut lc,
+                &mut lm,
+                &mut rc,
+                &mut rm,
+            )?;
+        }
+        Ok((lc, lm, rc, rm))
     }
 
     pub fn normalize_s3_iris(&self, iris: &mut S3StoredIris) -> Result<()> {
@@ -579,6 +873,13 @@ mod tests {
     #[test]
     fn context_rejects_missing_seed() {
         assert!(build_epoch_zero_rerand_context(0, HashMap::new(), &[(4, 9)]).is_err());
+    }
+
+    #[test]
+    fn epoch_zero_database_rows_still_validate_share_lengths() {
+        let context = build_epoch_zero_rerand_context(0, HashMap::new(), &[(0, 1)]).unwrap();
+        let mut database = DbStoredIris::new_at_epoch(1, 0, vec![0], vec![0], vec![0], vec![0], 0);
+        assert!(context.normalize_db_iris(&mut database).is_err());
     }
 
     #[cfg(feature = "db_dependent")]
@@ -759,7 +1060,7 @@ mod tests {
             .await
             .is_err());
             assert!(sqlx::query(&format!(
-                "SELECT \"{schema}\".complete_rerand_pass(NULL::integer)"
+                "SELECT \"{schema}\".complete_rerand_pass(NULL::integer, 1)"
             ))
             .execute(&mut *writer)
             .await
@@ -865,7 +1166,7 @@ mod tests {
                 .execute(&mut *writer)
                 .await?;
             assert!(
-                sqlx::query(&format!("SELECT \"{schema}\".complete_rerand_pass(1)"))
+                sqlx::query(&format!("SELECT \"{schema}\".complete_rerand_pass(1, 1)"))
                     .execute(&mut *writer)
                     .await
                     .is_err()
@@ -880,9 +1181,37 @@ mod tests {
             .fetch_one(&mut *writer)
             .await?;
             ensure!(backfilled == 1, "legacy semantic ID backfill did not apply");
-            sqlx::query(&format!("SELECT \"{schema}\".complete_rerand_pass(1)"))
+
+            let snapshot = begin_rerand_verification_snapshot(&store.pool, 1).await?;
+            ensure!(
+                snapshot.binding()
+                    == RerandVerificationBinding {
+                        epoch: 1,
+                        seed_commitment: [1; 32],
+                    }
+                    && snapshot.inventory().rows == 2,
+                "verification snapshot is not bound to the ready pass"
+            );
+            snapshot.close().await?;
+
+            assert!(
+                sqlx::query(&format!("SELECT \"{schema}\".complete_rerand_pass(1)"))
+                    .execute(&mut *writer)
+                    .await
+                    .is_err()
+            );
+            assert!(sqlx::query(&format!(
+                "SELECT \"{schema}\".complete_rerand_pass(1, 2)"
+            ))
+            .execute(&mut *writer)
+            .await
+            .is_err());
+            sqlx::query(&format!("SELECT \"{schema}\".complete_rerand_pass(1, 1)"))
                 .execute(&mut *writer)
                 .await?;
+            assert!(begin_rerand_verification_snapshot(&store.pool, 1)
+                .await
+                .is_err());
             assert!(
                 sqlx::query_scalar::<_, bool>(&format!(
                     "SELECT \"{schema}\".unlock_rerand_pass_lock()"

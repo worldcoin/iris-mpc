@@ -186,7 +186,7 @@ BEGIN
     EXECUTE pg_catalog.format('GRANT EXECUTE ON FUNCTION %I.unlock_rerand_pass_lock() TO %I', schema_name, p_writer_role);
     EXECUTE pg_catalog.format('GRANT EXECUTE ON FUNCTION %I.begin_rerand_pass(integer, bigint, bytea) TO %I', schema_name, p_writer_role);
     EXECUTE pg_catalog.format('GRANT EXECUTE ON FUNCTION %I.advance_rerand_pass(integer, bigint) TO %I', schema_name, p_writer_role);
-    EXECUTE pg_catalog.format('GRANT EXECUTE ON FUNCTION %I.complete_rerand_pass(integer) TO %I', schema_name, p_writer_role);
+    EXECUTE pg_catalog.format('GRANT EXECUTE ON FUNCTION %I.complete_rerand_pass(integer, integer) TO %I', schema_name, p_writer_role);
 END;
 $$ LANGUAGE plpgsql;
 
@@ -271,11 +271,15 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
-CREATE FUNCTION complete_rerand_pass(p_epoch INTEGER)
+-- Protocol version 1 is the persisted end-of-epoch masked linear check. The
+-- immutable common success marker is validated by the caller before this
+-- transition. Keeping the version in the signature makes old binaries fail
+-- closed instead of completing an unchecked pass.
+CREATE FUNCTION complete_rerand_pass(p_epoch INTEGER, p_check_protocol_version INTEGER)
 RETURNS VOID AS $$
 BEGIN
-    IF p_epoch IS NULL THEN
-        RAISE EXCEPTION 'rerandomization completion epoch must be non-null';
+    IF p_epoch IS NULL OR p_check_protocol_version IS DISTINCT FROM 1 THEN
+        RAISE EXCEPTION 'invalid rerandomization completion check binding';
     END IF;
     UPDATE rerand_control
        SET last_completed_epoch = active_epoch,
@@ -295,7 +299,7 @@ REVOKE ALL ON FUNCTION try_rerand_pass_lock() FROM PUBLIC;
 REVOKE ALL ON FUNCTION unlock_rerand_pass_lock() FROM PUBLIC;
 REVOKE ALL ON FUNCTION begin_rerand_pass(INTEGER, BIGINT, BYTEA) FROM PUBLIC;
 REVOKE ALL ON FUNCTION advance_rerand_pass(INTEGER, BIGINT) FROM PUBLIC;
-REVOKE ALL ON FUNCTION complete_rerand_pass(INTEGER) FROM PUBLIC;
+REVOKE ALL ON FUNCTION complete_rerand_pass(INTEGER, INTEGER) FROM PUBLIC;
 
 -- The writer has no direct UPDATE privilege on irises. This schema-bound
 -- function is the only representation-write surface and makes the
@@ -596,7 +600,7 @@ BEGIN
     EXECUTE pg_catalog.format('ALTER FUNCTION %1$I.unlock_rerand_pass_lock() SET search_path TO pg_catalog, %1$I, pg_temp', schema_name);
     EXECUTE pg_catalog.format('ALTER FUNCTION %1$I.begin_rerand_pass(INTEGER, BIGINT, BYTEA) SET search_path TO pg_catalog, %1$I, pg_temp', schema_name);
     EXECUTE pg_catalog.format('ALTER FUNCTION %1$I.advance_rerand_pass(INTEGER, BIGINT) SET search_path TO pg_catalog, %1$I, pg_temp', schema_name);
-    EXECUTE pg_catalog.format('ALTER FUNCTION %1$I.complete_rerand_pass(INTEGER) SET search_path TO pg_catalog, %1$I, pg_temp', schema_name);
+    EXECUTE pg_catalog.format('ALTER FUNCTION %1$I.complete_rerand_pass(INTEGER, INTEGER) SET search_path TO pg_catalog, %1$I, pg_temp', schema_name);
     EXECUTE pg_catalog.format('ALTER FUNCTION %1$I.apply_rerand_updates(BIGINT[], SMALLINT[], TEXT[], INTEGER[], BYTEA[], BYTEA[], BYTEA[], BYTEA[], INTEGER) SET search_path TO pg_catalog, %1$I, pg_temp', schema_name);
     EXECUTE pg_catalog.format('ALTER FUNCTION %1$I.get_rerand_store_state() SET search_path TO pg_catalog, %1$I, pg_temp', schema_name);
     EXECUTE pg_catalog.format('ALTER FUNCTION %1$I.protect_rerand_control() SET search_path TO pg_catalog, %1$I, pg_temp', schema_name);
@@ -612,7 +616,7 @@ BEGIN
     EXECUTE pg_catalog.format('ALTER FUNCTION %1$I.unlock_rerand_pass_lock() OWNER TO %2$I', schema_name, iris_owner);
     EXECUTE pg_catalog.format('ALTER FUNCTION %1$I.begin_rerand_pass(INTEGER, BIGINT, BYTEA) OWNER TO %2$I', schema_name, iris_owner);
     EXECUTE pg_catalog.format('ALTER FUNCTION %1$I.advance_rerand_pass(INTEGER, BIGINT) OWNER TO %2$I', schema_name, iris_owner);
-    EXECUTE pg_catalog.format('ALTER FUNCTION %1$I.complete_rerand_pass(INTEGER) OWNER TO %2$I', schema_name, iris_owner);
+    EXECUTE pg_catalog.format('ALTER FUNCTION %1$I.complete_rerand_pass(INTEGER, INTEGER) OWNER TO %2$I', schema_name, iris_owner);
     EXECUTE pg_catalog.format('ALTER FUNCTION %1$I.apply_rerand_updates(BIGINT[], SMALLINT[], TEXT[], INTEGER[], BYTEA[], BYTEA[], BYTEA[], BYTEA[], INTEGER) OWNER TO %2$I', schema_name, iris_owner);
     EXECUTE pg_catalog.format('ALTER FUNCTION %1$I.get_rerand_store_state() OWNER TO %2$I', schema_name, iris_owner);
     EXECUTE pg_catalog.format('ALTER FUNCTION %1$I.protect_rerand_control() OWNER TO %2$I', schema_name, iris_owner);

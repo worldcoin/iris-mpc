@@ -1,4 +1,4 @@
-//! Full serving-memory consistency check for rerandomized iris shares.
+//! Private full-database consistency check for rerandomized iris shares.
 //!
 //! Each party compresses its complete two-eye database to a small additive
 //! syndrome share. The syndrome is never opened. Instead, a replicated Boolean
@@ -6,9 +6,9 @@
 //! and opens only the final one-bit "nonzero" result.
 
 use std::io::Read;
-use std::time::Duration;
 
-use eyre::{ensure, Result};
+use ampc_actor_utils::{execution::session::NetworkSession, network::mpc::NetworkValue};
+use eyre::{bail, ensure, Result};
 use rand::RngCore;
 
 use crate::galois::degree4::{basis::Monomial, GaloisRingElement};
@@ -39,46 +39,6 @@ const PHASE_MASKED_SHARE: u8 = 2;
 const PHASE_AND_RANDOMNESS: u8 = 3;
 const PHASE_AND_SHARE: u8 = 4;
 const PHASE_FINAL_OPEN: u8 = 5;
-
-#[derive(Debug, Clone)]
-pub struct PeriodicCanarySchedule {
-    interval: Duration,
-    due_at: tokio::time::Instant,
-}
-
-impl PeriodicCanarySchedule {
-    pub fn new(interval_secs: u64) -> Self {
-        Self::new_at(interval_secs, tokio::time::Instant::now())
-    }
-
-    fn new_at(interval_secs: u64, now: tokio::time::Instant) -> Self {
-        let interval = Duration::from_secs(interval_secs);
-        Self {
-            interval,
-            due_at: now + interval,
-        }
-    }
-
-    pub fn is_due(&self) -> bool {
-        self.is_due_at(tokio::time::Instant::now())
-    }
-
-    pub fn due_at(&self) -> tokio::time::Instant {
-        self.due_at
-    }
-
-    fn is_due_at(&self, now: tokio::time::Instant) -> bool {
-        now >= self.due_at
-    }
-
-    pub fn mark_completed(&mut self) {
-        self.mark_completed_at(tokio::time::Instant::now());
-    }
-
-    fn mark_completed_at(&mut self, now: tokio::time::Instant) {
-        self.due_at = now + self.interval;
-    }
-}
 
 pub fn fresh_challenge_contribution() -> [u8; 32] {
     let mut contribution = [0; 32];
@@ -226,6 +186,42 @@ pub trait BooleanMpcTransport {
     fn party_id(&self) -> usize;
     async fn exchange_next(&mut self, message: Vec<u8>) -> Result<Vec<u8>>;
     async fn exchange_previous(&mut self, message: Vec<u8>) -> Result<Vec<u8>>;
+}
+
+/// Adapter for the private point-to-point sessions used by the CPU service and
+/// standalone maintenance protocols. The underlying network preserves message
+/// boundaries and is configured with mutual TLS in production.
+pub struct NetworkSessionBooleanTransport<'a> {
+    party_id: usize,
+    session: &'a mut NetworkSession,
+}
+
+impl<'a> NetworkSessionBooleanTransport<'a> {
+    pub fn new(party_id: usize, session: &'a mut NetworkSession) -> Self {
+        Self { party_id, session }
+    }
+}
+
+impl BooleanMpcTransport for NetworkSessionBooleanTransport<'_> {
+    fn party_id(&self) -> usize {
+        self.party_id
+    }
+
+    async fn exchange_next(&mut self, message: Vec<u8>) -> Result<Vec<u8>> {
+        self.session.send_next(NetworkValue::Bytes(message)).await?;
+        match self.session.receive_prev().await? {
+            NetworkValue::Bytes(message) => Ok(message),
+            _ => bail!("canary Boolean MPC received an unexpected message"),
+        }
+    }
+
+    async fn exchange_previous(&mut self, message: Vec<u8>) -> Result<Vec<u8>> {
+        self.session.send_prev(NetworkValue::Bytes(message)).await?;
+        match self.session.receive_next().await? {
+            NetworkValue::Bytes(message) => Ok(message),
+            _ => bail!("canary Boolean MPC received an unexpected message"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -708,16 +704,5 @@ mod tests {
                 .fold(0u16, u16::wrapping_add)
                 != 0
         }));
-    }
-
-    #[test]
-    fn schedule_resets_only_after_completion() {
-        let start = tokio::time::Instant::now();
-        let mut schedule = PeriodicCanarySchedule::new_at(100, start);
-        assert!(!schedule.is_due_at(start + Duration::from_secs(99)));
-        assert!(schedule.is_due_at(start + Duration::from_secs(100)));
-        schedule.mark_completed_at(start + Duration::from_secs(100));
-        assert!(!schedule.is_due_at(start + Duration::from_secs(199)));
-        assert!(schedule.is_due_at(start + Duration::from_secs(200)));
     }
 }

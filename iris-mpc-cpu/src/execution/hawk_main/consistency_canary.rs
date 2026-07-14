@@ -5,8 +5,8 @@ use std::sync::Arc;
 use ampc_actor_utils::execution::session::NetworkSession;
 use eyre::{bail, ensure, Result};
 use iris_mpc_common::consistency_canary::{
-    derive_challenge, fresh_challenge_contribution, private_any_nonzero, BooleanMpcTransport,
-    CanaryAccumulator,
+    derive_challenge, fresh_challenge_contribution, private_any_nonzero, CanaryAccumulator,
+    NetworkSessionBooleanTransport,
 };
 use iris_mpc_common::VectorId;
 use rayon::prelude::*;
@@ -91,33 +91,6 @@ async fn agree_inventory_and_challenge(
     Ok(derive_challenge(context, [mine, previous, next]))
 }
 
-struct SessionBooleanTransport<'a> {
-    party_id: usize,
-    net: &'a mut NetworkSession,
-}
-
-impl BooleanMpcTransport for SessionBooleanTransport<'_> {
-    fn party_id(&self) -> usize {
-        self.party_id
-    }
-
-    async fn exchange_next(&mut self, message: Vec<u8>) -> Result<Vec<u8>> {
-        self.net.send_next(NetworkValue::Bytes(message)).await?;
-        match self.net.receive_prev().await? {
-            NetworkValue::Bytes(message) => Ok(message),
-            _ => bail!("canary Boolean MPC received an unexpected message"),
-        }
-    }
-
-    async fn exchange_previous(&mut self, message: Vec<u8>) -> Result<Vec<u8>> {
-        self.net.send_prev(NetworkValue::Bytes(message)).await?;
-        match self.net.receive_next().await? {
-            NetworkValue::Bytes(message) => Ok(message),
-            _ => bail!("canary Boolean MPC received an unexpected message"),
-        }
-    }
-}
-
 fn accumulate_row(
     accumulator: &mut CanaryAccumulator,
     id: VectorId,
@@ -200,7 +173,7 @@ pub async fn run_consistency_canary(
         CanaryAccumulator::into_syndrome_share,
     );
     share.push(u16::from(local_scan_failed));
-    let mut transport = SessionBooleanTransport { party_id, net };
+    let mut transport = NetworkSessionBooleanTransport::new(party_id, net);
     let nonzero = private_any_nonzero(share, repetitions, challenge, &mut transport).await?;
     ensure!(
         !nonzero,
@@ -275,10 +248,7 @@ mod tests {
                 }
                 let mut share = accumulator.into_syndrome_share();
                 share.push(0);
-                let mut transport = SessionBooleanTransport {
-                    party_id: party,
-                    net,
-                };
+                let mut transport = NetworkSessionBooleanTransport::new(party, net);
                 let nonzero = private_any_nonzero(
                     share,
                     DEFAULT_CANARY_REPETITIONS,
@@ -353,10 +323,8 @@ mod tests {
                 let mut guard = session.lock().await;
                 let mut share = vec![0; DEFAULT_CANARY_REPETITIONS * 4];
                 share.push(u16::from(party == 1));
-                let mut transport = SessionBooleanTransport {
-                    party_id: party,
-                    net: &mut guard.network_session,
-                };
+                let mut transport =
+                    NetworkSessionBooleanTransport::new(party, &mut guard.network_session);
                 private_any_nonzero(share, DEFAULT_CANARY_REPETITIONS, [5; 32], &mut transport)
                     .await
             });

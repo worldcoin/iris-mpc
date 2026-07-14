@@ -6,6 +6,7 @@ use std::time::Duration;
 use aws_sdk_s3::error::ProvideErrorMetadata;
 use aws_sdk_s3::Client;
 use eyre::{ensure, eyre, Result};
+use iris_mpc_store::rerand::RERAND_CHECK_PROTOCOL_VERSION;
 use serde::{Deserialize, Serialize};
 use tokio::time::{sleep, Instant};
 
@@ -65,6 +66,18 @@ fn completion_key(
 ) -> String {
     format!(
         "{}/party-{party}/store-{kind}-complete",
+        prefix(environment, coordination_id, epoch)
+    )
+}
+
+fn epoch_check_key(
+    environment: &str,
+    coordination_id: &str,
+    epoch: u32,
+    kind: RerandStoreKind,
+) -> String {
+    format!(
+        "{}/store-{kind}-check-passed",
         prefix(environment, coordination_id, epoch)
     )
 }
@@ -162,6 +175,22 @@ pub struct Completion {
     pub seed_commitment: String,
 }
 
+/// Durable common evidence that one participant reconstructed a successful
+/// private persisted-data check. Every participant writes the same body. The
+/// marker deliberately contains no syndrome, challenge, or row inventory.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct EpochCheckPassed {
+    pub environment: String,
+    pub coordination_id: String,
+    pub offset_generation: u32,
+    pub check_protocol: u32,
+    pub epoch: u32,
+    pub store_kind: RerandStoreKind,
+    pub store_registry_commitment: String,
+    pub seed_commitment: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct StoreBinding {
@@ -222,6 +251,26 @@ impl StoreRegistry {
             .find(|entry| entry.party_id == party && entry.store_kind == kind)
             .ok_or_else(|| eyre!("missing party/store-kind registry entry"))
     }
+
+    /// Canonical public binding for the exact three physical stores taking
+    /// part in one same-kind epoch check.
+    pub fn store_kind_commitment(&self, kind: RerandStoreKind) -> Result<[u8; 32]> {
+        let mut hasher =
+            blake3::Hasher::new_derive_key("iris-mpc/rerand-v2/epoch-check-store-registry/v1");
+        hasher.update(&[match kind {
+            RerandStoreKind::Gpu => 0,
+            RerandStoreKind::Hnsw => 1,
+        }]);
+        for party_id in 0..PARTY_COUNT {
+            let entry = self.expected(party_id, kind)?;
+            hasher.update(&[party_id]);
+            for value in [&entry.store_id, &entry.writer_role] {
+                hasher.update(&(value.len() as u64).to_le_bytes());
+                hasher.update(value.as_bytes());
+            }
+        }
+        Ok(*hasher.finalize().as_bytes())
+    }
 }
 
 pub async fn publish_completion(
@@ -253,6 +302,118 @@ pub async fn publish_completion(
     .await
 }
 
+fn validate_epoch_check_passed(
+    marker: &EpochCheckPassed,
+    key: &str,
+    environment: &str,
+    coordination_id: &str,
+    epoch: u32,
+    store_kind: RerandStoreKind,
+    expected_registry_commitment: &str,
+    expected_commitment: &str,
+) -> Result<()> {
+    ensure!(
+        marker.environment == environment
+            && marker.coordination_id == coordination_id
+            && marker.offset_generation == OFFSET_GENERATION
+            && marker.check_protocol == RERAND_CHECK_PROTOCOL_VERSION
+            && marker.epoch == epoch
+            && marker.store_kind == store_kind
+            && marker.store_registry_commitment == expected_registry_commitment
+            && marker.seed_commitment == expected_commitment,
+        "invalid epoch-check marker {key}"
+    );
+    Ok(())
+}
+
+pub async fn publish_epoch_check_passed(
+    client: &Client,
+    bucket: &str,
+    environment: &str,
+    coordination_id: &str,
+    marker: &EpochCheckPassed,
+) -> Result<()> {
+    ensure!(
+        marker.environment == environment
+            && marker.coordination_id == coordination_id
+            && marker.offset_generation == OFFSET_GENERATION
+            && marker.check_protocol == RERAND_CHECK_PROTOCOL_VERSION,
+        "epoch-check marker generation mismatch"
+    );
+    let body = serde_json::to_vec(marker)?;
+    put_immutable(
+        client,
+        bucket,
+        &epoch_check_key(
+            environment,
+            coordination_id,
+            marker.epoch,
+            marker.store_kind,
+        ),
+        &body,
+    )
+    .await
+}
+
+/// Return whether the immutable common success marker exists and exactly
+/// matches this epoch. Under the protocol's honest-but-curious model, any one
+/// participant that reconstructed zero proves all three joined the check.
+pub async fn epoch_check_passed(
+    client: &Client,
+    bucket: &str,
+    environment: &str,
+    coordination_id: &str,
+    epoch: u32,
+    expected_commitment: &[u8; 32],
+    registry: &StoreRegistry,
+    store_kind: RerandStoreKind,
+) -> Result<bool> {
+    let expected_commitment = hex::encode(expected_commitment);
+    let expected_registry_commitment = hex::encode(registry.store_kind_commitment(store_kind)?);
+    let key = epoch_check_key(environment, coordination_id, epoch, store_kind);
+    let Some(body) = get_optional(client, bucket, &key).await? else {
+        return Ok(false);
+    };
+    let marker: EpochCheckPassed = serde_json::from_slice(&body)?;
+    validate_epoch_check_passed(
+        &marker,
+        &key,
+        environment,
+        coordination_id,
+        epoch,
+        store_kind,
+        &expected_registry_commitment,
+        &expected_commitment,
+    )?;
+    Ok(true)
+}
+
+fn validate_completion(
+    marker: &Completion,
+    key: &str,
+    environment: &str,
+    coordination_id: &str,
+    epoch: u32,
+    party_id: u8,
+    store_kind: RerandStoreKind,
+    expected: &StoreBinding,
+    expected_commitment: &str,
+) -> Result<()> {
+    ensure!(
+        marker.environment == environment
+            && marker.coordination_id == coordination_id
+            && marker.offset_generation == OFFSET_GENERATION
+            && marker.epoch == epoch
+            && marker.party_id == party_id
+            && marker.store_kind == store_kind
+            && marker.store_id == expected.store_id
+            && marker.writer_role == expected.writer_role
+            && marker.seed_commitment == expected_commitment,
+        "invalid completion marker {key}"
+    );
+    Ok(())
+}
+
 /// Require exact completion by GPU and HNSW stores of all three parties.
 pub async fn wait_for_epoch_completion(
     client: &Client,
@@ -264,26 +425,41 @@ pub async fn wait_for_epoch_completion(
     registry: &StoreRegistry,
     poll_interval: Duration,
 ) -> Result<()> {
-    let expected_commitment = hex::encode(expected_commitment);
+    let expected_commitment_hex = hex::encode(expected_commitment);
     for party_id in 0..PARTY_COUNT {
         for store_kind in [RerandStoreKind::Gpu, RerandStoreKind::Hnsw] {
             let expected = registry.expected(party_id, store_kind)?;
             let key = completion_key(environment, coordination_id, epoch, party_id, store_kind);
             let body = wait_for(client, bucket, &key, poll_interval).await?;
             let marker: Completion = serde_json::from_slice(&body)?;
-            ensure!(
-                marker.environment == environment
-                    && marker.coordination_id == coordination_id
-                    && marker.offset_generation == OFFSET_GENERATION
-                    && marker.epoch == epoch
-                    && marker.party_id == party_id
-                    && marker.store_kind == store_kind
-                    && marker.store_id == expected.store_id
-                    && marker.writer_role == expected.writer_role
-                    && marker.seed_commitment == expected_commitment,
-                "invalid completion marker {key}"
-            );
+            validate_completion(
+                &marker,
+                &key,
+                environment,
+                coordination_id,
+                epoch,
+                party_id,
+                store_kind,
+                expected,
+                &expected_commitment_hex,
+            )?;
         }
+    }
+    for store_kind in [RerandStoreKind::Gpu, RerandStoreKind::Hnsw] {
+        ensure!(
+            epoch_check_passed(
+                client,
+                bucket,
+                environment,
+                coordination_id,
+                epoch,
+                expected_commitment,
+                registry,
+                store_kind,
+            )
+            .await?,
+            "epoch {epoch} {store_kind} completed without a valid persisted-data check marker"
+        );
     }
     Ok(())
 }
@@ -323,5 +499,86 @@ mod tests {
         duplicate[5].store_id = duplicate[0].store_id.clone();
         assert!(StoreRegistry::parse(&serde_json::to_string(&duplicate).unwrap()).is_err());
         assert!(StoreRegistry::parse(&serde_json::to_string(&entries[..5]).unwrap()).is_err());
+    }
+
+    #[test]
+    fn same_kind_registry_commitment_is_canonical_and_exact() {
+        let entries = registry_entries();
+        let expected = StoreRegistry::parse(&serde_json::to_string(&entries).unwrap()).unwrap();
+        let mut reordered = entries.clone();
+        reordered.reverse();
+        let reordered = StoreRegistry::parse(&serde_json::to_string(&reordered).unwrap()).unwrap();
+        assert_eq!(
+            expected
+                .store_kind_commitment(RerandStoreKind::Gpu)
+                .unwrap(),
+            reordered
+                .store_kind_commitment(RerandStoreKind::Gpu)
+                .unwrap()
+        );
+        assert_ne!(
+            expected
+                .store_kind_commitment(RerandStoreKind::Gpu)
+                .unwrap(),
+            expected
+                .store_kind_commitment(RerandStoreKind::Hnsw)
+                .unwrap()
+        );
+
+        let mut changed = entries;
+        changed[0].writer_role.push_str("_replacement");
+        let changed = StoreRegistry::parse(&serde_json::to_string(&changed).unwrap()).unwrap();
+        assert_ne!(
+            expected
+                .store_kind_commitment(RerandStoreKind::Gpu)
+                .unwrap(),
+            changed.store_kind_commitment(RerandStoreKind::Gpu).unwrap()
+        );
+    }
+
+    #[test]
+    fn common_epoch_check_marker_binds_protocol_registry_and_seed() {
+        let registry =
+            StoreRegistry::parse(&serde_json::to_string(&registry_entries()).unwrap()).unwrap();
+        let registry_commitment = hex::encode(
+            registry
+                .store_kind_commitment(RerandStoreKind::Gpu)
+                .unwrap(),
+        );
+        let marker = EpochCheckPassed {
+            environment: "stage".into(),
+            coordination_id: "generation-7".into(),
+            offset_generation: OFFSET_GENERATION,
+            check_protocol: RERAND_CHECK_PROTOCOL_VERSION,
+            epoch: 4,
+            store_kind: RerandStoreKind::Gpu,
+            store_registry_commitment: registry_commitment.clone(),
+            seed_commitment: hex::encode([9; 32]),
+        };
+        validate_epoch_check_passed(
+            &marker,
+            "key",
+            "stage",
+            "generation-7",
+            4,
+            RerandStoreKind::Gpu,
+            &registry_commitment,
+            &hex::encode([9; 32]),
+        )
+        .unwrap();
+
+        let mut wrong_protocol = marker;
+        wrong_protocol.check_protocol += 1;
+        assert!(validate_epoch_check_passed(
+            &wrong_protocol,
+            "key",
+            "stage",
+            "generation-7",
+            4,
+            RerandStoreKind::Gpu,
+            &registry_commitment,
+            &hex::encode([9; 32]),
+        )
+        .is_err());
     }
 }

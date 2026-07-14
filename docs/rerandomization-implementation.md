@@ -30,8 +30,8 @@ The implementation maintains these invariants:
 8. Epoch seeds are retained. This implementation has no automatic deletion
    path, so incomplete or unavailable coordination evidence cannot make a
    persisted or cached row undecodable.
-9. A private three-party consistency check passes before readiness and at
-   each configured recurring boundary.
+9. A private three-party serving-memory check passes before readiness, and a
+   private persisted-data check passes before each epoch may complete.
 
 The design does not require three databases to update a row atomically. A
 party may safely be at a different persisted epoch because load-time
@@ -123,8 +123,16 @@ For one store, a pass:
 7. Applies bounded batches through
    `(id, version_id, semantic_id, old_epoch)` CAS.
 8. Advances the cursor only after the batch commits.
-9. Performs a final inventory check, advances the monotonic completion state,
-   clears the cursor, and publishes the immutable store completion record.
+9. Joins the other two parties of the same store kind, fixes one
+   repeatable-read snapshot per party, compares the ordered `(id, version_id)`
+   inventory, normalizes every persisted row to epoch `0`, and runs the private
+   random-linear-combination check.
+10. Every participant that reconstructs success may create the same immutable,
+    common S3 success marker. The marker binds the protocol, deployment,
+    shared seed commitment, store kind, and exact three-store registry.
+11. After validating that marker, the sweeper calls the protocol-versioned
+    completion function, clears the cursor, and publishes the immutable local
+    store completion record.
 
 A CAS miss means a concurrent semantic write won. That write is truthfully at
 epoch `0`; it is not overwritten and a later pass rerandomizes it. A crash may
@@ -205,7 +213,7 @@ small metadata for cache hits; it does not transfer Aurora share blobs for the
 whole database. Large S3 chunks are fetched and hashed in ordered ranges of at
 most 200 records, preserving the legacy loader's bounded memory profile.
 
-## 7. Full consistency check
+## 7. Full consistency checks
 
 The check covers every loaded code and mask coefficient plus a public constant
 inventory sentinel keyed by the row ID. Fresh common challenges generate an
@@ -215,6 +223,13 @@ repetition: 48 `u16` coefficients for twelve repetitions. Under the
 BLAKE3-XOF-as-PRF assumption, a non-zero error survives one compression with
 probability at least `15/16`; twelve independent repetitions therefore bound
 the false-negative probability by `2^-48`.
+
+This proves that the normalized rows form consistent three-party sharings for
+the agreed inventory. It is not a commitment to the pre-pass plaintext: a
+common implementation error that maps all three parties to a different but
+internally valid sharing can pass. Deterministic offset golden vectors,
+composition/inversion tests, shared retargeting code, and the guarded CAS path
+separately protect that transformation.
 
 The compressed syndrome is never opened. The parties first add fresh
 pairwise-cancelling arithmetic masks, making each local `u16` contribution
@@ -236,31 +251,56 @@ fresh challenge and circuit step. The readiness barrier compares inventories
 and agrees the challenge; a later local scan failure enters the same private
 zero-test instead of leaving peers blocked.
 
-When rerandomization is enabled, the startup check is mandatory and runs after
-normalization but before readiness.
+When rerandomization is enabled, the startup serving-memory check is mandatory
+and runs after normalization but before readiness. It validates the loader,
+S3/Aurora reconciliation, normalization, and the shares actually used for
+requests.
 
-For recurring checks:
+The sweeper performs a second check at the end of every epoch, before changing
+the local control row from active to completed:
 
-1. Pre-intake synchronization exchanges a latched `due` bit and uses the
-   global OR. With no messages, parties enter an idle maintenance rendezvous;
-   with a nonzero agreed count, they all form the same boundary batch.
-2. A due boundary withholds the receive permit, so no following batch is
-   prefetched.
-3. An already-received boundary batch is processed normally and its result is
-   made durable.
-4. The actor performs the same full scan and private one-bit zero-test.
-5. Successful idle checks replace their active rendezvous marker with a
-   distinct inactive marker, so a later check at the same idle batch ID cannot
-   accept stale peer state.
-6. Idle success advances the synchronized batch generation before receive is
-   released, so an early finisher waits for every peer to leave the old
-   maintenance boundary.
-7. Success resets the deadline and resumes receive; failure stops serving.
+1. The three sweepers for one store kind establish a dedicated mutually
+   authenticated TLS MPC session. Plain S3 objects are never used for private
+   MPC frames.
+2. Each party opens a read-only repeatable-read database snapshot after its
+   cursor has reached `max_id + 1`. The snapshot includes rows inserted after
+   the pass began.
+3. Parties compare the exact ordered `(id, version_id)` inventory. Local
+   `semantic_id` values are intentionally different, and persisted epochs may
+   legitimately differ after semantic-write races, so neither is compared
+   across parties; both are validated locally.
+4. Fresh challenge contributions are bound to the environment, coordination
+   ID, exact same-kind three-store registry, store kind, epoch, seed
+   commitment, and agreed inventory.
+5. Each party commitment-verifies the required seeds, normalizes every row in
+   its fixed snapshot to epoch `0`, and streams it through the same random
+   linear accumulator. A local scan failure enters the private failure word.
+6. The Boolean MPC opens only the final one-bit result. Failure leaves the
+   epoch active. On success, any participant may idempotently write the same
+   immutable common check marker; one successful reconstruction proves that
+   all three parties contributed under the protocol's honest-but-curious
+   model.
+7. A sweeper validates that marker before calling
+   `complete_rerand_pass(epoch, check_protocol_version)`. The database accepts
+   only the current check protocol, so a pre-check binary using the old
+   completion signature fails closed.
 
-This ordering needs no SQS acknowledgement redesign and cannot strand an
-acknowledged but unprocessed boundary batch. If an approximate SQS count
-overestimates available messages, exact batch formation can delay the check;
-no actor work is submitted while that boundary is still forming.
+The session advisory lock prevents another sweeper from changing the
+rerandomized representation between the scan and completion. Later ordinary
+semantic writes remain safe: they create fresh epoch-`0` shares and do not use
+the rerandomizer.
+The common marker is also the crash boundary: if any successful participant
+publishes it, every party can validate it and finish after restart; if none
+publishes it, no party can complete and all three active passes rerun the
+check. This needs no transient per-party checked state or completed-party
+helper protocol.
+
+The marker is evidence in the documented one-corruption honest-but-curious
+model, not a malicious-secure signature. S3 policy must prevent untrusted
+principals from writing, overwriting, or deleting the coordination namespace.
+After a database rollback or replacement, the deployment must use a new
+coordination ID so a success marker from the old physical stores cannot be
+replayed.
 
 ## 8. Recovery and restore
 
@@ -297,7 +337,8 @@ Focused verification must cover:
 - Aurora and S3 normalization producing identical epoch-zero rows;
 - private one-bit zero-testing for valid, missing, and corrupt one-row states,
   scan failures, and inventory mismatch;
-- startup gating and recurring boundary durability.
+- startup serving-memory gating and epoch-end persisted-data gating, including
+  crash retry before completion.
 
 Deployment ordering is strict because only the rerandomization-aware exporter
 and loader enforce the fail-closed guards. Deploy them while rerandomization is
@@ -307,8 +348,9 @@ Do not leave an old exporter or server available to restart across store
 initialization. Across that transition, rerandomization-aware legacy exporters,
 initialization, and newly started sweepers are mutually exclusive through their
 shared database lock; an export that cannot acquire it must be retried, not
-bypassed. Enable
-complete safe exports only after the first pass has completed. A safe export
+bypassed. Configure the dedicated three-party sweeper check addresses and
+mutual-TLS credentials before starting a pass. Enable complete safe exports
+only after the first pass has completed. A safe export
 refuses rows whose `semantic_id` is still NULL. Once a store identity is
 initialized, the exporter refuses legacy complete and incremental publication,
 and a server with rerandomization disabled refuses to load that store raw.

@@ -1,7 +1,5 @@
 use crate::services::aws::clients::AwsClients;
-use crate::services::processors::batch::{
-    complete_canary_maintenance, receive_batch_stream, BatchStreamEvent, SharedCanarySchedule,
-};
+use crate::services::processors::batch::receive_batch_stream;
 use crate::services::processors::job::{process_job_result, BatchTimings};
 use aws_sdk_s3::Client;
 use aws_sdk_sns::types::MessageAttributeValue;
@@ -37,10 +35,7 @@ use iris_mpc_common::helpers::smpc_request::{
 use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
 use iris_mpc_common::helpers::sqs_s3_helper::upload_file_to_s3;
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
-use iris_mpc_common::job::{
-    batch_sync_hash, publish_canary_maintenance_complete, sync_canary_maintenance,
-    JobSubmissionHandle,
-};
+use iris_mpc_common::job::{batch_sync_hash, JobSubmissionHandle};
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_cpu::checkpoint_protocol::runner::SidecarConfigWrapper;
 use iris_mpc_cpu::execution::hawk_main::worker_pool_initializer::{
@@ -817,54 +812,6 @@ async fn start_results_thread(
 /// to execute appropriate computations via MPC.  Once a batch is processed,
 /// the results are passed to the results processing thread to be finalized
 /// and communicated out.
-enum CanaryBarrierContext {
-    SynchronizedBatch([u8; 32]),
-    IdleBatch(u64),
-}
-
-async fn run_hawk_canary_maintenance(
-    config: &Config,
-    hawk_handle: &HawkHandle,
-    schedule: &SharedCanarySchedule,
-    batch_sync_shared_state: &Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
-    shutdown_handler: &Arc<ShutdownHandler>,
-    barrier_context: CanaryBarrierContext,
-) -> Result<()> {
-    shutdown_handler
-        .wait_for_pending_batches_completion()
-        .await?;
-    let (context, idle_batch_id) = match barrier_context {
-        CanaryBarrierContext::SynchronizedBatch(context) => (context, None),
-        CanaryBarrierContext::IdleBatch(batch_id) => {
-            let context = loop {
-                if shutdown_handler.is_shutting_down() {
-                    return Err(eyre!("shutdown during canary maintenance synchronization"));
-                }
-                match sync_canary_maintenance(config, batch_id).await {
-                    Ok(context) => break context,
-                    Err(error) => tracing::warn!(
-                        ?error,
-                        batch_id,
-                        "Canary maintenance peer is not at the barrier yet; retrying"
-                    ),
-                }
-            };
-            (context, Some(batch_id))
-        }
-    };
-    hawk_handle
-        .run_consistency_canary(
-            iris_mpc_common::consistency_canary::DEFAULT_CANARY_REPETITIONS,
-            context,
-        )
-        .await?;
-    if let Some(batch_id) = idle_batch_id {
-        publish_canary_maintenance_complete(config, batch_id);
-    }
-    complete_canary_maintenance(schedule, batch_sync_shared_state).await;
-    Ok(())
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn run_main_server_loop(
     config: &Config,
@@ -882,14 +829,6 @@ async fn run_main_server_loop(
     // ANCHOR: Start the main loop
     // --------------------------------------------------------------------------
     tracing::info!("⚓️ ANCHOR: Start the main loop");
-
-    let periodic_canary = config.rerand_enabled.then(|| {
-        Arc::new(std::sync::Mutex::new(
-            iris_mpc_common::consistency_canary::PeriodicCanarySchedule::new(
-                config.consistency_check_interval_secs,
-            ),
-        ))
-    });
 
     let party_id = config.party_id;
 
@@ -929,7 +868,6 @@ async fn run_main_server_loop(
             current_batch_id_atomic.clone(),
             iris_store.clone(),
             batch_sync_shared_state.clone(),
-            periodic_canary.clone(),
         );
 
         current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
@@ -938,7 +876,7 @@ async fn run_main_server_loop(
 
             let now = Instant::now();
 
-            let event = match batch_stream.recv().await {
+            let mut batch = match batch_stream.recv().await {
                 Some(Ok(None)) | None => {
                     tracing::info!("No more batches to process, exiting main loop");
                     return Ok(());
@@ -946,31 +884,7 @@ async fn run_main_server_loop(
                 Some(Err(e)) => {
                     return Err(e.into());
                 }
-                Some(Ok(Some(event))) => event,
-            };
-            let (mut batch, intake_canary_due) = match event {
-                BatchStreamEvent::MaintenanceDue { batch_id } => {
-                    let schedule = periodic_canary
-                        .as_ref()
-                        .expect("maintenance event requires an enabled schedule");
-                    run_hawk_canary_maintenance(
-                        config,
-                        &hawk_handle,
-                        schedule,
-                        &batch_sync_shared_state,
-                        shutdown_handler,
-                        CanaryBarrierContext::IdleBatch(batch_id),
-                    )
-                    .await?;
-                    // Advance the coordination generation before intake can
-                    // resume. An early finisher must wait for peers to leave
-                    // the old idle-maintenance barrier instead of re-entering
-                    // it through a still-published due bit.
-                    current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
-                    sem.add_permits(1);
-                    continue;
-                }
-                BatchStreamEvent::Batch { query, canary_due } => (query, canary_due),
+                Some(Ok(Some(batch))) => batch,
             };
             tracing::info!("SNS message IDs: {:?}", batch.sns_message_ids);
 
@@ -986,25 +900,17 @@ async fn run_main_server_loop(
             // Retrying instead of crashing lets us keep processing.
             let sync_start = Instant::now();
             let mut sync_attempts = 0u32;
-            // Freeze the control bit for every retry of this batch barrier.
-            let local_canary_due = intake_canary_due
-                || periodic_canary.as_ref().is_some_and(|schedule| {
-                    schedule
-                        .lock()
-                        .expect("canary schedule lock poisoned")
-                        .is_due()
-                });
-            let canary_due = loop {
+            loop {
                 if shutdown_handler.is_shutting_down() {
                     tracing::info!("Shutdown requested during batch sync retry, exiting");
                     return Ok(());
                 }
                 sync_attempts += 1;
                 match batch
-                    .sync_batch_entries(config, synchronized_batch_hash, local_canary_due)
+                    .sync_batch_entries(config, synchronized_batch_hash)
                     .await
                 {
-                    Ok(canary_due) => break canary_due,
+                    Ok(()) => break,
                     Err(e) => {
                         tracing::warn!(
                             "Batch sync entries attempt {} failed after {:.1}s: {:?}. Retrying...",
@@ -1058,10 +964,8 @@ async fn run_main_server_loop(
 
             // we are done with the batch sync, so we can release the semaphore permit
             // This will allow the next batch to be received
-            if !canary_due {
-                current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
-                sem.add_permits(1);
-            }
+            current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
+            sem.add_permits(1);
 
             // Optionally start per-batch pprof guard just before compute begins
             let mut pprof_guard = None;
@@ -1091,22 +995,6 @@ async fn run_main_server_loop(
                 shutdown_handler.decrement_batches_pending_completion();
                 return Err(error.into());
             }
-            if canary_due {
-                run_hawk_canary_maintenance(
-                    config,
-                    &hawk_handle,
-                    periodic_canary
-                        .as_ref()
-                        .expect("a synchronized due bit requires an enabled schedule"),
-                    &batch_sync_shared_state,
-                    shutdown_handler,
-                    CanaryBarrierContext::SynchronizedBatch(synchronized_batch_hash),
-                )
-                .await?;
-                current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
-                sem.add_permits(1);
-            }
-
             // If enabled, stop pprof and upload artifacts tagged with batch info
             if let Some(guard) = pprof_guard.take() {
                 let dur_secs = pprof_start.elapsed().as_secs();

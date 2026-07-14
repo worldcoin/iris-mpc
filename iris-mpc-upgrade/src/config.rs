@@ -1,3 +1,4 @@
+use ampc_actor_utils::network::tcp::TlsConfig;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use iris_mpc_common::id::PartyID;
 use std::{
@@ -25,6 +26,55 @@ impl Display for RerandStoreKind {
             Self::Gpu => f.write_str("gpu"),
             Self::Hnsw => f.write_str("hnsw"),
         }
+    }
+}
+
+/// Dedicated mutual-TLS files for the private persisted-epoch check network.
+/// These use rerandomization-specific environment names so the sweeper does
+/// not accidentally inherit credentials for another listener.
+#[derive(Args, Clone, Default)]
+pub struct RerandCheckTlsConfig {
+    #[clap(
+        long = "rerand-check-tls-private-key",
+        env = "RERAND_CHECK_TLS_PRIVATE_KEY"
+    )]
+    pub private_key: Option<String>,
+    #[clap(
+        long = "rerand-check-tls-leaf-cert",
+        env = "RERAND_CHECK_TLS_LEAF_CERT"
+    )]
+    pub leaf_cert: Option<String>,
+    #[clap(
+        long = "rerand-check-tls-root-certs",
+        env = "RERAND_CHECK_TLS_ROOT_CERTS",
+        value_delimiter = ','
+    )]
+    pub root_certs: Vec<String>,
+}
+
+impl fmt::Debug for RerandCheckTlsConfig {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RerandCheckTlsConfig")
+            .field(
+                "private_key",
+                &self.private_key.as_ref().map(|_| "<configured>"),
+            )
+            .field("leaf_cert", &self.leaf_cert)
+            .field("root_certs", &self.root_certs)
+            .finish()
+    }
+}
+
+impl RerandCheckTlsConfig {
+    pub fn as_tls_config(&self) -> Option<TlsConfig> {
+        if self.private_key.is_none() && self.leaf_cert.is_none() && self.root_certs.is_empty() {
+            return None;
+        }
+        Some(TlsConfig {
+            private_key: self.private_key.clone(),
+            leaf_cert: self.leaf_cert.clone(),
+            root_certs: self.root_certs.clone(),
+        })
     }
 }
 
@@ -60,6 +110,15 @@ pub struct RerandSweeperConfig {
     pub rows_per_second: u64,
     #[clap(long, env = "RERAND_POLL_INTERVAL_MS", default_value = "5000")]
     pub poll_interval_ms: u64,
+    /// Dedicated private MPC endpoints for the three same-kind sweepers.
+    #[clap(long, env = "RERAND_CHECK_ADDRESSES", value_delimiter = ',')]
+    pub check_addresses: Vec<String>,
+    /// Dial endpoints corresponding one-to-one with `check_addresses`.
+    #[clap(long, env = "RERAND_CHECK_OUTBOUND_ADDRESSES", value_delimiter = ',')]
+    pub check_outbound_addresses: Vec<String>,
+    /// Mutual-TLS credentials for the end-of-epoch private check network.
+    #[clap(flatten)]
+    pub check_tls: RerandCheckTlsConfig,
 }
 
 impl fmt::Debug for RerandSweeperConfig {
@@ -78,6 +137,9 @@ impl fmt::Debug for RerandSweeperConfig {
             .field("chunk_size", &self.chunk_size)
             .field("rows_per_second", &self.rows_per_second)
             .field("poll_interval_ms", &self.poll_interval_ms)
+            .field("check_addresses", &self.check_addresses)
+            .field("check_outbound_addresses", &self.check_outbound_addresses)
+            .field("check_tls", &self.check_tls)
             .finish()
     }
 }

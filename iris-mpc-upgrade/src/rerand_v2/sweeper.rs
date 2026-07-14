@@ -5,12 +5,16 @@ use aws_sdk_s3::Client as S3Client;
 use aws_sdk_secretsmanager::Client as SecretsClient;
 use eyre::{ensure, Result};
 use iris_mpc_common::rerand_offsets::{retarget_shares, EpochKey, EpochSeed};
-use iris_mpc_store::rerand::{RerandPass, RerandRowUpdate};
+use iris_mpc_store::rerand::{
+    build_epoch_zero_rerand_context, get_rerand_epoch_inventory, RerandPass, RerandRowUpdate,
+    RERAND_CHECK_PROTOCOL_VERSION,
+};
 use iris_mpc_store::Store;
 use tokio::time::Instant;
 
-use super::coordination::{self, Completion, StoreRegistry, OFFSET_GENERATION};
+use super::coordination::{self, Completion, EpochCheckPassed, StoreRegistry, OFFSET_GENERATION};
 use super::epoch;
+use super::epoch_check::{self, EpochCheckBinding};
 use super::RerandSweeperConfig;
 
 #[derive(Debug, Default)]
@@ -71,6 +75,7 @@ pub async fn run_single_pass(
     ensure!(config.rerand_enabled, "rerandomization is disabled");
     ensure!(config.party_id < 3, "party id must be 0, 1, or 2");
     ensure!(config.chunk_size > 0, "chunk size must be positive");
+    epoch_check::validate_epoch_check_config(config).await?;
     coordination::validate_environment(&config.environment)?;
     coordination::validate_coordination_id(&config.coordination_id)?;
     ensure!(
@@ -106,6 +111,20 @@ pub async fn run_single_pass(
             .state
             .last_seed_commitment
             .ok_or_else(|| eyre::eyre!("completed epoch has no seed commitment"))?;
+        ensure!(
+            coordination::epoch_check_passed(
+                s3,
+                &config.s3_bucket,
+                &config.environment,
+                &config.coordination_id,
+                pass.state.last_completed_epoch,
+                &completed_commitment,
+                &registry,
+                config.store_kind,
+            )
+            .await?,
+            "completed rerandomization epoch has no validated check marker"
+        );
         if pass.state.last_completed_epoch > 1 {
             let previous_seed = epoch::load_verified_epoch_seed(
                 secrets,
@@ -180,6 +199,26 @@ pub async fn run_single_pass(
     .await?;
 
     let (mut next_id, max_id) = pass.begin_or_resume(pass_epoch, target_commitment).await?;
+    let store_registry_commitment = registry.store_kind_commitment(config.store_kind)?;
+    let epoch_check_already_passed = coordination::epoch_check_passed(
+        s3,
+        &config.s3_bucket,
+        &config.environment,
+        &config.coordination_id,
+        pass_epoch,
+        &target_commitment,
+        &registry,
+        config.store_kind,
+    )
+    .await?;
+    ensure!(
+        !epoch_check_already_passed
+            || next_id
+                == max_id.checked_add(1).ok_or_else(|| eyre::eyre!(
+                    "rerandomization cursor overflow while validating epoch-check marker"
+                ))?,
+        "epoch-check marker exists for a pass whose durable cursor is not complete"
+    );
     let mut seeds = HashMap::<u32, EpochSeed>::from([(pass_epoch, target_seed)]);
     let mut outcome = SweepOutcome {
         epoch: pass_epoch,
@@ -267,7 +306,50 @@ pub async fn run_single_pass(
         next_id = end;
     }
 
-    let completed = pass.complete().await?;
+    if !epoch_check_already_passed {
+        let inventory = get_rerand_epoch_inventory(&store.pool).await?;
+        let rerand = build_epoch_zero_rerand_context(config.party_id as usize, seeds, &inventory)?;
+        let binding = EpochCheckBinding::new(
+            config,
+            store_registry_commitment,
+            pass_epoch,
+            target_commitment,
+        );
+        epoch_check::run_store_persisted_epoch_check(config, &binding, store, &rerand).await?;
+        coordination::publish_epoch_check_passed(
+            s3,
+            &config.s3_bucket,
+            &config.environment,
+            &config.coordination_id,
+            &EpochCheckPassed {
+                environment: config.environment.clone(),
+                coordination_id: config.coordination_id.clone(),
+                offset_generation: OFFSET_GENERATION,
+                check_protocol: RERAND_CHECK_PROTOCOL_VERSION,
+                epoch: pass_epoch,
+                store_kind: config.store_kind,
+                store_registry_commitment: hex::encode(store_registry_commitment),
+                seed_commitment: hex::encode(target_commitment),
+            },
+        )
+        .await?;
+    }
+
+    ensure!(
+        coordination::epoch_check_passed(
+            s3,
+            &config.s3_bucket,
+            &config.environment,
+            &config.coordination_id,
+            pass_epoch,
+            &target_commitment,
+            &registry,
+            config.store_kind,
+        )
+        .await?,
+        "rerandomization epoch cannot complete without its validated check marker"
+    );
+    let completed = pass.complete(RERAND_CHECK_PROTOCOL_VERSION).await?;
     ensure!(
         completed.last_completed_epoch == pass_epoch
             && completed.last_seed_commitment == Some(target_commitment),
