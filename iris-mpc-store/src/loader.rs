@@ -11,7 +11,9 @@ use futures::stream::BoxStream;
 use futures::StreamExt;
 use iris_mpc_common::config::Config;
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
+use sqlx::Connection;
 use std::collections::HashSet;
+use std::ops::Range;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -47,7 +49,9 @@ fn validate_raw_load_rerand_state(state: Option<&RawLoadRerandState>) -> Result<
     Ok(())
 }
 
-async fn raw_load_rerand_state(store: &Store) -> Result<Option<RawLoadRerandState>> {
+async fn raw_load_rerand_state_on_connection(
+    connection: &mut sqlx::PgConnection,
+) -> Result<Option<RawLoadRerandState>> {
     let has_metadata: bool = sqlx::query_scalar(
         "SELECT EXISTS (\
              SELECT 1 FROM information_schema.columns \
@@ -55,7 +59,7 @@ async fn raw_load_rerand_state(store: &Store) -> Result<Option<RawLoadRerandStat
                 AND column_name = 'rerand_epoch'\
          )",
     )
-    .fetch_one(&store.pool)
+    .fetch_one(&mut *connection)
     .await?;
     if !has_metadata {
         return Ok(None);
@@ -72,7 +76,7 @@ async fn raw_load_rerand_state(store: &Store) -> Result<Option<RawLoadRerandStat
                     END \
                FROM get_rerand_store_state() AS state",
         )
-        .fetch_one(&store.pool)
+        .fetch_one(&mut *connection)
         .await?;
     Ok(Some(RawLoadRerandState {
         store_id,
@@ -82,9 +86,79 @@ async fn raw_load_rerand_state(store: &Store) -> Result<Option<RawLoadRerandStat
     }))
 }
 
-async fn ensure_raw_load_allowed(store: &Store) -> Result<()> {
-    let state = raw_load_rerand_state(store).await?;
+/// Refuse legacy code paths that consume or rewrite raw shares once a store
+/// has been initialized for continuous rerandomization.
+pub async fn ensure_legacy_raw_access_allowed(store: &Store) -> Result<()> {
+    let mut connection = store.pool.acquire().await?;
+    let state = raw_load_rerand_state_on_connection(&mut connection).await?;
     validate_raw_load_rerand_state(state.as_ref())
+}
+
+/// Session guard for a long-running legacy raw-share operation. It uses the
+/// same schema-scoped advisory lock as rerandomization initialization and
+/// passes, closing the underlying connection on drop so the lock cannot leak
+/// back into the pool.
+pub struct LegacyRawAccessGuard {
+    connection: sqlx::pool::PoolConnection<sqlx::Postgres>,
+}
+
+impl LegacyRawAccessGuard {
+    /// Stream legacy raw shares on the same physical session that owns the
+    /// exclusion lock. If that session is lost, the stream fails instead of
+    /// reconnecting without the lock.
+    pub fn stream_irises_in_range(
+        &mut self,
+        id_range: Range<u64>,
+    ) -> impl futures::Stream<Item = sqlx::Result<DbStoredIris>> + '_ {
+        sqlx::query_as(
+            r#"
+            SELECT *
+            FROM irises
+            WHERE id >= $1 AND id < $2
+            ORDER BY id ASC
+            "#,
+        )
+        .bind(i64::try_from(id_range.start).expect("id fits into i64"))
+        .bind(i64::try_from(id_range.end).expect("id fits into i64"))
+        .fetch(&mut *self.connection)
+    }
+
+    /// Begin a legacy raw-share write on the lock-owning session. Rechecking
+    /// the state on that session also proves it is still live before the write.
+    pub async fn transaction(&mut self) -> Result<sqlx::Transaction<'_, sqlx::Postgres>> {
+        let state = raw_load_rerand_state_on_connection(&mut self.connection).await?;
+        ensure!(
+            state.is_some(),
+            "guarded legacy raw access requires the rerandomization migration"
+        );
+        validate_raw_load_rerand_state(state.as_ref())?;
+        Ok(self.connection.begin().await?)
+    }
+}
+
+pub async fn acquire_legacy_raw_access_guard(store: &Store) -> Result<LegacyRawAccessGuard> {
+    let mut connection = store.pool.acquire().await?;
+    connection.close_on_drop();
+    let acquired: bool = sqlx::query_scalar(
+        "SELECT pg_catalog.pg_try_advisory_lock(\
+             1381126734, \
+             (SELECT relnamespace::integer FROM pg_catalog.pg_class \
+               WHERE oid = 'irises'::regclass)\
+         )",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    ensure!(
+        acquired,
+        "legacy raw database access is blocked by rerandomization initialization or an active pass"
+    );
+    let state = raw_load_rerand_state_on_connection(&mut connection).await?;
+    ensure!(
+        state.is_some(),
+        "guarded legacy raw access requires the rerandomization migration"
+    );
+    validate_raw_load_rerand_state(state.as_ref())?;
+    Ok(LegacyRawAccessGuard { connection })
 }
 
 #[derive(Clone, Copy)]
@@ -325,8 +399,7 @@ async fn reconcile_with_aurora(
         );
 
         let mut missing_ids = Vec::new();
-        let mut expected_id = after_id + 1;
-        for row in &metadata {
+        for (expected_id, row) in (after_id + 1..).zip(&metadata) {
             ensure!(
                 row.id == expected_id,
                 "Aurora inventory is not contiguous: expected iris id {expected_id}, got {}",
@@ -338,7 +411,6 @@ async fn reconcile_with_aurora(
             } else {
                 state.record_authoritative(id)?;
             }
-            expected_id += 1;
         }
 
         let mut rows = snapshot.irises(&missing_ids).await?.into_iter();
@@ -479,29 +551,25 @@ async fn load_db_records_from_aurora<'a>(
     Ok(())
 }
 
+/// Options controlling an iris database load.
+pub struct LoadIrisDbOptions<'a> {
+    pub max_serial_id_to_load: usize,
+    pub store_load_parallelism: usize,
+    pub s3_max_serial_id_to_load: Option<usize>,
+    pub config: &'a Config,
+    pub download_shutdown_handler: Arc<ShutdownHandler>,
+    pub rerand: Option<&'a RerandContext>,
+}
+
 /// Main iris loader method into memory. Load from either S3 + Aurora or only Aurora based on the config.
 pub async fn load_iris_db(
     actor: &mut impl InMemoryStore,
     store: &Store,
-    max_serial_id_to_load: usize,
-    store_load_parallelism: usize,
-    s3_max_serial_id_to_load: Option<usize>,
-    config: &Config,
-    download_shutdown_handler: Arc<ShutdownHandler>,
-    rerand: Option<&RerandContext>,
+    options: LoadIrisDbOptions<'_>,
 ) -> Result<()> {
-    let shutdown = download_shutdown_handler.clone();
+    let shutdown = options.download_shutdown_handler.clone();
     tokio::select! {
-        r = load_iris_db_internal(
-            actor,
-            store,
-            max_serial_id_to_load,
-            store_load_parallelism,
-            s3_max_serial_id_to_load,
-            config,
-            download_shutdown_handler,
-            rerand,
-        ) => r,
+        r = load_iris_db_internal(actor, store, options) => r,
         _ = shutdown.wait_for_shutdown() => {
             tracing::warn!("Shutdown requested by shutdown_handler.");
             Err(eyre::eyre!("Shutdown requested"))
@@ -512,13 +580,16 @@ pub async fn load_iris_db(
 async fn load_iris_db_internal(
     actor: &mut impl InMemoryStore,
     store: &Store,
-    max_serial_id_to_load: usize,
-    store_load_parallelism: usize,
-    s3_max_serial_id_to_load: Option<usize>,
-    config: &Config,
-    download_shutdown_handler: Arc<ShutdownHandler>,
-    rerand: Option<&RerandContext>,
+    options: LoadIrisDbOptions<'_>,
 ) -> Result<()> {
+    let LoadIrisDbOptions {
+        max_serial_id_to_load,
+        store_load_parallelism,
+        s3_max_serial_id_to_load,
+        config,
+        download_shutdown_handler,
+        rerand,
+    } = options;
     if let Some(rerand) = rerand {
         return load_rerand_db(
             actor,
@@ -535,7 +606,7 @@ async fn load_iris_db_internal(
         !config.rerand_enabled,
         "rerandomization is enabled but no normalization context was provided"
     );
-    ensure_raw_load_allowed(store).await?;
+    ensure_legacy_raw_access_allowed(store).await?;
     let total_load_time = Instant::now();
     let now = Instant::now();
 
@@ -731,7 +802,7 @@ async fn load_iris_db_internal(
     // Recheck after the potentially long S3/Aurora load. If initialization or
     // a positive pass raced this legacy load, the actor is discarded before it
     // can become ready.
-    ensure_raw_load_allowed(store).await?;
+    ensure_legacy_raw_access_allowed(store).await?;
     tracing::info!("Preprocessing db");
     actor.preprocess_db();
 

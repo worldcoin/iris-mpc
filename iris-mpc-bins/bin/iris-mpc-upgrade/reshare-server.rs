@@ -2,6 +2,7 @@ use ampc_server_utils::TaskMonitor;
 use clap::Parser;
 use eyre::Result;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_store::loader::acquire_legacy_raw_access_guard;
 use iris_mpc_store::Store;
 use iris_mpc_upgrade::{
     config::ReShareServerConfig,
@@ -41,6 +42,7 @@ async fn main() -> Result<()> {
     let postgres_client =
         PostgresClient::new(&config.db_url, &schema_name, AccessMode::ReadWrite).await?;
     let store = Store::new(&postgres_client).await?;
+    let legacy_raw_access_guard = acquire_legacy_raw_access_guard(&store).await?;
 
     let receiver_helper = IrisCodeReshareReceiverHelper::new(
         config.party_id as usize,
@@ -58,10 +60,13 @@ async fn main() -> Result<()> {
         );
     }
     let encoded_message_size_with_buf = (encoded_message_size as f64 * 1.1) as usize;
-    let iris_reshare_service =
-        IrisCodeReShareServiceServer::new(GrpcReshareServer::new(store, receiver_helper))
-            .max_decoding_message_size(encoded_message_size_with_buf)
-            .max_encoding_message_size(encoded_message_size_with_buf);
+    let iris_reshare_service = IrisCodeReShareServiceServer::new(GrpcReshareServer::new(
+        store,
+        receiver_helper,
+        legacy_raw_access_guard,
+    ))
+    .max_decoding_message_size(encoded_message_size_with_buf)
+    .max_encoding_message_size(encoded_message_size_with_buf);
 
     Server::builder()
         .add_service(iris_reshare_service)

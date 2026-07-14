@@ -61,7 +61,7 @@ use iris_mpc_common::{
     job::{BatchMetadata, BatchQuery, JobSubmissionHandle, ServerJobResult},
 };
 use iris_mpc_gpu::server::ServerActor;
-use iris_mpc_store::loader::load_iris_db;
+use iris_mpc_store::loader::{load_iris_db, LoadIrisDbOptions};
 use iris_mpc_store::rerand::RerandContext;
 use iris_mpc_store::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
@@ -418,12 +418,14 @@ async fn server_main(config: Config) -> Result<()> {
                         load_iris_db(
                             &mut actor,
                             &store,
-                            store_len,
-                            parallelism,
-                            None,
-                            &config,
-                            download_shutdown_handler,
-                            rerand_context.as_ref(),
+                            LoadIrisDbOptions {
+                                max_serial_id_to_load: store_len,
+                                store_load_parallelism: parallelism,
+                                s3_max_serial_id_to_load: None,
+                                config: &config,
+                                download_shutdown_handler,
+                                rerand: rerand_context.as_ref(),
+                            },
                         )
                         .await
                     })

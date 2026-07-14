@@ -7,6 +7,7 @@ use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::kms_dh::derive_shared_secret,
 };
+use iris_mpc_store::loader::acquire_legacy_raw_access_guard;
 use iris_mpc_store::Store;
 use iris_mpc_upgrade::{
     config::ReShareClientConfig,
@@ -58,10 +59,12 @@ async fn main() -> Result<()> {
 
     let schema_name = format!("{}_{}_{}", APP_NAME, config.environment, config.party_id);
     let postgres_client =
-        PostgresClient::new(&config.db_url, &schema_name, AccessMode::ReadWrite).await?;
+        PostgresClient::new(&config.db_url, &schema_name, AccessMode::ReadOnly).await?;
     let store = Store::new(&postgres_client).await?;
+    let mut legacy_raw_access_guard = acquire_legacy_raw_access_guard(&store).await?;
 
-    let iris_stream = store.stream_irises_in_range(config.db_start..config.db_end);
+    let iris_stream =
+        legacy_raw_access_guard.stream_irises_in_range(config.db_start..config.db_end);
     let mut iris_stream_chunks = iris_stream.chunks(config.batch_size as usize);
 
     let mut iris_reshare_helper = IrisCodeReshareSenderHelper::new(

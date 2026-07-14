@@ -6,7 +6,15 @@ on:
       - main
     paths:
       - Dockerfile.reshare-protocol
+      - Cargo.lock
+      - Cargo.toml
+      - rust-toolchain.toml
+      - iris-mpc-bins/Cargo.toml
+      - iris-mpc-bins/bin/iris-mpc-upgrade/**
+      - iris-mpc-common/**
+      - iris-mpc-store/**
       - iris-mpc-upgrade/**
+      - migrations/**
       - scripts/reshare-client.sh
       - .github/workflows/build-and-push-reshare-protocol.yaml
 

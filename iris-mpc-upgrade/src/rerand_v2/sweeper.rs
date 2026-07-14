@@ -12,7 +12,9 @@ use iris_mpc_store::rerand::{
 use iris_mpc_store::Store;
 use tokio::time::Instant;
 
-use super::coordination::{self, Completion, EpochCheckPassed, StoreRegistry, OFFSET_GENERATION};
+use super::coordination::{
+    self, Completion, EpochCheckPassed, EpochCoordinationBinding, StoreRegistry, OFFSET_GENERATION,
+};
 use super::epoch;
 use super::epoch_check::{self, EpochCheckBinding};
 use super::RerandSweeperConfig;
@@ -115,11 +117,13 @@ pub async fn run_single_pass(
             coordination::epoch_check_passed(
                 s3,
                 &config.s3_bucket,
-                &config.environment,
-                &config.coordination_id,
-                pass.state.last_completed_epoch,
-                &completed_commitment,
-                &registry,
+                EpochCoordinationBinding::new(
+                    &config.environment,
+                    &config.coordination_id,
+                    pass.state.last_completed_epoch,
+                    &completed_commitment,
+                    &registry,
+                ),
                 config.store_kind,
             )
             .await?,
@@ -141,11 +145,13 @@ pub async fn run_single_pass(
             coordination::wait_for_epoch_completion(
                 s3,
                 &config.s3_bucket,
-                &config.environment,
-                &config.coordination_id,
-                pass.state.last_completed_epoch - 1,
-                &previous_commitment,
-                &registry,
+                EpochCoordinationBinding::new(
+                    &config.environment,
+                    &config.coordination_id,
+                    pass.state.last_completed_epoch - 1,
+                    &previous_commitment,
+                    &registry,
+                ),
                 poll,
             )
             .await?;
@@ -177,11 +183,13 @@ pub async fn run_single_pass(
         coordination::wait_for_epoch_completion(
             s3,
             &config.s3_bucket,
-            &config.environment,
-            &config.coordination_id,
-            pass_epoch - 1,
-            &previous_commitment,
-            &registry,
+            EpochCoordinationBinding::new(
+                &config.environment,
+                &config.coordination_id,
+                pass_epoch - 1,
+                &previous_commitment,
+                &registry,
+            ),
             poll,
         )
         .await?;
@@ -189,25 +197,30 @@ pub async fn run_single_pass(
     let (target_seed, target_commitment) = epoch::ensure_epoch_seed(
         secrets,
         s3,
-        &config.s3_bucket,
-        &config.environment,
-        &config.coordination_id,
-        pass_epoch,
-        config.party_id,
-        poll,
+        &epoch::EpochSeedRequest {
+            bucket: &config.s3_bucket,
+            environment: &config.environment,
+            coordination_id: &config.coordination_id,
+            epoch: pass_epoch,
+            party: config.party_id,
+            poll_interval: poll,
+        },
     )
     .await?;
 
     let (mut next_id, max_id) = pass.begin_or_resume(pass_epoch, target_commitment).await?;
     let store_registry_commitment = registry.store_kind_commitment(config.store_kind)?;
-    let epoch_check_already_passed = coordination::epoch_check_passed(
-        s3,
-        &config.s3_bucket,
+    let coordination_binding = EpochCoordinationBinding::new(
         &config.environment,
         &config.coordination_id,
         pass_epoch,
         &target_commitment,
         &registry,
+    );
+    let epoch_check_already_passed = coordination::epoch_check_passed(
+        s3,
+        &config.s3_bucket,
+        coordination_binding,
         config.store_kind,
     )
     .await?;
@@ -339,11 +352,7 @@ pub async fn run_single_pass(
         coordination::epoch_check_passed(
             s3,
             &config.s3_bucket,
-            &config.environment,
-            &config.coordination_id,
-            pass_epoch,
-            &target_commitment,
-            &registry,
+            coordination_binding,
             config.store_kind,
         )
         .await?,

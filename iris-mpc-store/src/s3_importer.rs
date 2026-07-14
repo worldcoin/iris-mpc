@@ -849,10 +849,12 @@ mod tests {
     };
     use tokio::sync::{mpsc, Mutex};
 
+    type RequestedRanges = Arc<std::sync::Mutex<Vec<(String, (usize, usize))>>>;
+
     #[derive(Default, Clone)]
     pub struct MockStore {
         objects: HashMap<String, Vec<u8>>,
-        requested_ranges: Arc<std::sync::Mutex<Vec<(String, (usize, usize))>>>,
+        requested_ranges: RequestedRanges,
     }
 
     impl MockStore {
@@ -1107,7 +1109,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let mut rows = vec![rx.recv().await.unwrap(), rx.recv().await.unwrap()];
+        let mut rows = [rx.recv().await.unwrap(), rx.recv().await.unwrap()];
         rows.sort_unstable_by_key(S3StoredIris::serial_id);
         assert_eq!(rows[0].rerand_epoch(), 0);
         assert_eq!(rows[1].rerand_epoch(), 7);

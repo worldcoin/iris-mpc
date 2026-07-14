@@ -98,7 +98,7 @@ struct ServerJob {
 
 #[derive(Debug)]
 enum ServerCommand {
-    Job(ServerJob),
+    Job(Box<ServerJob>),
     ConsistencyCanary {
         repetitions: usize,
         context: [u8; 32],
@@ -123,7 +123,10 @@ impl JobSubmissionHandle for ServerActorHandle {
             batch,
             return_channel: tx,
         };
-        self.job_queue.send(ServerCommand::Job(job)).await.unwrap();
+        self.job_queue
+            .send(ServerCommand::Job(Box::new(job)))
+            .await
+            .unwrap();
         rx.map(|x| Ok(x?))
     }
 }
@@ -908,7 +911,7 @@ impl ServerActor {
             let ServerJob {
                 batch,
                 return_channel,
-            } = job;
+            } = *job;
             let now = Instant::now();
             if batch.full_face_mirror_attacks_detection_enabled {
                 tracing::info!("Full face mirror attack detection enabled");

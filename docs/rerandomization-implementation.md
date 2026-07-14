@@ -85,6 +85,11 @@ The sweeper uses that dedicated login. Its `RERAND_EXPECTED_STORE_REGISTRY`
 is a JSON array of exactly six `{party_id, store_kind, store_id, writer_role}`
 bindings.
 
+GPU and HNSW are separate authoritative Aurora stores, even when they belong
+to the same party. One sweeper process is bound to one database URL, schema,
+store kind, and store ID, so deployment requires one GPU and one HNSW sweeper
+per party: six processes in total.
+
 ## 3. Offset construction
 
 Each positive epoch has one verified 32-byte seed. Domain-separated XOF input
@@ -151,6 +156,25 @@ in which initialization or a pass could otherwise occur between the
 exporter's initial check and legacy marker. Safe content-addressed complete
 snapshots do not take this lock; their per-record metadata and authoritative
 inventory reconciliation make mutable legacy keys unnecessary.
+
+Legacy reshare readers and writers use the same exclusion lock. Every raw read
+stream and write transaction runs on the physical PostgreSQL session that owns
+the lock; a failover or lost session therefore fails the operation instead of
+silently reconnecting without exclusion. A reshare process cannot start after
+store initialization, and initialization waits while an already-running
+reshare session remains live. The lock is an overlap fence, not durable proof
+that an interrupted legacy reshare completed: after a failure, operators must
+discard or independently verify the target before initialization. The legacy
+reshare deployment remains disabled once continuous rerandomization is
+introduced. This guard requires a session-affine Aurora writer connection and
+the rerandomization migration; transaction-pooled proxies are not supported.
+Any intentional final legacy reshare also requires the complete three-party
+serving/write path (both sources and the target) to be quiesced. That older
+protocol neither binds its two source reads to a shared semantic-version
+snapshot nor protects target rows from its unconditional overwrite. Its source
+URL should use a database login with `SELECT` only; the Rust
+`AccessMode::ReadOnly` setting skips migrations but is not itself a PostgreSQL
+privilege boundary.
 
 ## 5. Seed creation and retention
 
@@ -342,8 +366,12 @@ Focused verification must cover:
 
 Deployment ordering is strict because only the rerandomization-aware exporter
 and loader enforce the fail-closed guards. Deploy them while rerandomization is
-disabled, apply the database migration, initialize the store identities, then
-enable rerandomization-aware serving and only after that start the sweepers.
+disabled; stop the legacy reshare workloads; apply the database migration;
+initialize the store identities; enable rerandomization-aware serving; and only
+after that start the sweepers. The central coordination bucket policy must
+already enforce create-only writes and deny deletion for the exact namespace.
+The continuous workload explicitly runs `/bin/rerand-sweeper`; the shared
+image's default command remains the legacy `/bin/rerandomize-db` entry point.
 Do not leave an old exporter or server available to restart across store
 initialization. Across that transition, rerandomization-aware legacy exporters,
 initialization, and newly started sweepers are mutually exclusive through their

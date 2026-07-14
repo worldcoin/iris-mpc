@@ -1114,7 +1114,7 @@ struct HawkJob {
 }
 
 enum HawkCommand {
-    Job(HawkJob),
+    Job(Box<HawkJob>),
     ConsistencyCanary {
         repetitions: usize,
         context: [u8; 32],
@@ -1747,7 +1747,7 @@ impl JobSubmissionHandle for HawkHandle {
         };
 
         // Wait for the job to be sent for backpressure.
-        let sent = self.job_queue.send(HawkCommand::Job(job)).await;
+        let sent = self.job_queue.send(HawkCommand::Job(Box::new(job))).await;
 
         let span = Span::current();
         async move {

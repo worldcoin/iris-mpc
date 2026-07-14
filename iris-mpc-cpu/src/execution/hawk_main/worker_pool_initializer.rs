@@ -17,7 +17,7 @@ use eyre::Result;
 use iris_mpc_common::config::Config;
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::VectorId;
-use iris_mpc_store::loader::load_iris_db;
+use iris_mpc_store::loader::{load_iris_db, LoadIrisDbOptions};
 use iris_mpc_store::rerand::RerandContext;
 use iris_mpc_store::Store;
 use itertools::izip;
@@ -162,12 +162,14 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                 load_iris_db(
                     &mut adapter,
                     &store,
-                    max_serial_id,
-                    parallelism,
-                    s3_max_serial_id,
-                    &config,
-                    shutdown_handler,
-                    rerand.as_ref(),
+                    LoadIrisDbOptions {
+                        max_serial_id_to_load: max_serial_id,
+                        store_load_parallelism: parallelism,
+                        s3_max_serial_id_to_load: s3_max_serial_id,
+                        config: &config,
+                        download_shutdown_handler: shutdown_handler,
+                        rerand: rerand.as_ref(),
+                    },
                 )
                 .await?;
                 // Drain the channels so every fire-and-forget `Insert` lands

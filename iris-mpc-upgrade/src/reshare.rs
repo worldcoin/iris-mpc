@@ -14,11 +14,19 @@ use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
 };
+use iris_mpc_store::loader::LegacyRawAccessGuard;
 use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::{izip, Itertools};
 use rand::{CryptoRng, Rng, SeedableRng};
 use sha2::{Digest, Sha256};
-use std::{collections::VecDeque, sync::Mutex};
+use std::{
+    collections::VecDeque,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
+};
+use tokio::sync::Mutex as AsyncMutex;
 use tonic::Response;
 
 pub struct IrisCodeReshareSenderHelper {
@@ -566,7 +574,11 @@ pub struct RecombinedIrisCodeBatch {
 }
 
 impl RecombinedIrisCodeBatch {
-    pub async fn insert_into_store(self, store: &Store) -> Result<()> {
+    pub async fn insert_into_store(
+        self,
+        store: &Store,
+        legacy_raw_access_guard: &mut LegacyRawAccessGuard,
+    ) -> Result<()> {
         let to_be_inserted = izip!(
             &self.left_iris_codes,
             &self.left_masks,
@@ -585,7 +597,7 @@ impl RecombinedIrisCodeBatch {
             }
         })
         .collect::<Vec<_>>();
-        let mut tx = store.tx().await?;
+        let mut tx = legacy_raw_access_guard.transaction().await?;
         store
             .insert_irises_overriding(&mut tx, &to_be_inserted)
             .await?;
@@ -597,13 +609,21 @@ impl RecombinedIrisCodeBatch {
 pub struct GrpcReshareServer {
     store: Store,
     receiver_helper: IrisCodeReshareReceiverHelper,
+    legacy_raw_access_guard: AsyncMutex<LegacyRawAccessGuard>,
+    database_failed: AtomicBool,
 }
 
 impl GrpcReshareServer {
-    pub fn new(store: Store, receiver_helper: IrisCodeReshareReceiverHelper) -> Self {
+    pub fn new(
+        store: Store,
+        receiver_helper: IrisCodeReshareReceiverHelper,
+        legacy_raw_access_guard: LegacyRawAccessGuard,
+    ) -> Self {
         Self {
             store,
             receiver_helper,
+            legacy_raw_access_guard: AsyncMutex::new(legacy_raw_access_guard),
+            database_failed: AtomicBool::new(false),
         }
     }
 }
@@ -614,6 +634,12 @@ impl iris_code_re_share_service_server::IrisCodeReShareService for GrpcReshareSe
         &self,
         request: tonic::Request<IrisCodeReShareRequest>,
     ) -> Result<Response<IrisCodeReShareResponse>, tonic::Status> {
+        if self.database_failed.load(Ordering::Acquire) {
+            return Ok(Response::new(IrisCodeReShareResponse {
+                status: IrisCodeReShareStatus::Error as i32,
+                message: "database write unavailable".to_owned(),
+            }));
+        }
         match self.receiver_helper.add_request_batch(request.into_inner()) {
             Ok(()) => (),
             Err(err) => {
@@ -638,13 +664,22 @@ impl iris_code_re_share_service_server::IrisCodeReShareService for GrpcReshareSe
         match self.receiver_helper.try_handle_batch() {
             Ok(Some(batch)) => {
                 // write the reshared iris codes to the database
-                match batch.insert_into_store(&self.store).await {
+                let mut legacy_raw_access_guard = self.legacy_raw_access_guard.lock().await;
+                match batch
+                    .insert_into_store(&self.store, &mut legacy_raw_access_guard)
+                    .await
+                {
                     Ok(()) => (),
                     Err(err) => {
+                        self.database_failed.store(true, Ordering::Release);
                         tracing::error!(
                             error = err.to_string(),
                             "Error inserting reshared iris codes into DB"
                         );
+                        return Ok(Response::new(IrisCodeReShareResponse {
+                            status: IrisCodeReShareStatus::Error as i32,
+                            message: "database write failed".to_owned(),
+                        }));
                     }
                 }
             }

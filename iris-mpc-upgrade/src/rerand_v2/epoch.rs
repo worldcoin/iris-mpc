@@ -22,6 +22,16 @@ use iris_mpc_store::Store;
 use super::coordination::{self, PARTY_COUNT};
 use crate::tripartite_dh;
 
+#[derive(Clone, Copy)]
+pub struct EpochSeedRequest<'a> {
+    pub bucket: &'a str,
+    pub environment: &'a str,
+    pub coordination_id: &'a str,
+    pub epoch: u32,
+    pub party: u8,
+    pub poll_interval: Duration,
+}
+
 fn seed_secret_id(environment: &str, coordination_id: &str, epoch: u32, party: u8) -> String {
     format!("{environment}/iris-mpc/rerand-v2/{coordination_id}/epoch-{epoch}/seed-party-{party}")
 }
@@ -100,14 +110,17 @@ pub async fn load_epoch_seed(
 
 async fn publish_and_verify_commitment(
     s3: &S3Client,
-    bucket: &str,
-    environment: &str,
-    coordination_id: &str,
-    epoch: u32,
-    party: u8,
+    request: &EpochSeedRequest<'_>,
     seed: &EpochSeed,
-    poll_interval: Duration,
 ) -> Result<[u8; 32]> {
+    let EpochSeedRequest {
+        bucket,
+        environment,
+        coordination_id,
+        epoch,
+        party,
+        poll_interval,
+    } = *request;
     let own = seed_commitment(seed);
     coordination::put_immutable(
         s3,
@@ -301,13 +314,16 @@ fn validate_authoritative_epochs(
 pub async fn ensure_epoch_seed(
     secrets: &SecretsClient,
     s3: &S3Client,
-    bucket: &str,
-    environment: &str,
-    coordination_id: &str,
-    epoch: u32,
-    party: u8,
-    poll_interval: Duration,
+    request: &EpochSeedRequest<'_>,
 ) -> Result<(EpochSeed, [u8; 32])> {
+    let EpochSeedRequest {
+        bucket,
+        environment,
+        coordination_id,
+        epoch,
+        party,
+        poll_interval,
+    } = *request;
     ensure!(party < PARTY_COUNT && epoch > 0, "invalid party or epoch");
     let seed_id = seed_secret_id(environment, coordination_id, epoch, party);
     let seed = if let Some(seed) = load_secret(secrets, &seed_id).await? {
@@ -370,17 +386,7 @@ pub async fn ensure_epoch_seed(
             )?
         }
     };
-    let commitment = publish_and_verify_commitment(
-        s3,
-        bucket,
-        environment,
-        coordination_id,
-        epoch,
-        party,
-        &seed,
-        poll_interval,
-    )
-    .await?;
+    let commitment = publish_and_verify_commitment(s3, request, &seed).await?;
     Ok((seed, commitment))
 }
 

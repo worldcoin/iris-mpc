@@ -17,6 +17,8 @@ pub const RERAND_CHECK_PROTOCOL_VERSION: u32 = 1;
 
 const VERIFICATION_INVENTORY_DOMAIN: &[u8] = b"iris-mpc/rerand-v2/verification-inventory/v1\0";
 
+type IrisCoefficients = (Vec<u16>, Vec<u16>, Vec<u16>, Vec<u16>);
+
 pub struct RerandRowUpdate {
     pub id: i64,
     pub expected_version_id: i16,
@@ -691,10 +693,7 @@ impl RerandContext {
         Ok(())
     }
 
-    fn normalized_db_coefficients(
-        &self,
-        iris: &DbStoredIris,
-    ) -> Result<(Vec<u16>, Vec<u16>, Vec<u16>, Vec<u16>)> {
+    fn normalized_db_coefficients(&self, iris: &DbStoredIris) -> Result<IrisCoefficients> {
         ensure!(iris.rerand_epoch >= 0, "negative row epoch");
         let epoch = iris.rerand_epoch as u32;
         let mut lc = bytes_to_u16(&iris.left_code)?;
@@ -766,7 +765,7 @@ pub fn build_epoch_zero_rerand_context(
 }
 
 fn bytes_to_u16(bytes: &[u8]) -> Result<Vec<u16>> {
-    ensure!(bytes.len() % 2 == 0, "odd share byte length");
+    ensure!(bytes.len().is_multiple_of(2), "odd share byte length");
     Ok(bytes
         .chunks_exact(2)
         .map(|b| u16::from_le_bytes([b[0], b[1]]))
