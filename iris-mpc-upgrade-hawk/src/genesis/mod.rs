@@ -1285,13 +1285,13 @@ async fn get_results_thread(
                     let right_iris = &right_irises[0];
 
                     let mut graph_tx = graph_store_bg.tx().await?;
-                    let iris_data =StoredIrisRef {
-                                    id: vector_id_to_persist.serial_id() as i64,
-                                    left_code: &left_iris.code.coefs,
-                                    left_mask: &left_iris.mask.coefs,
-                                    right_code: &right_iris.code.coefs,
-                                    right_mask: &right_iris.mask.coefs,
-                                };
+                    let iris_data = StoredIrisRef {
+                        id: vector_id_to_persist.serial_id() as i64,
+                        left_code: &left_iris.code.coefs,
+                        left_mask: &left_iris.mask.coefs,
+                        right_code: &right_iris.code.coefs,
+                        right_mask: &right_iris.mask.coefs,
+                    };
                     // Replay the modification's version verbatim; the handle bypasses the auto-increment trigger.
                     {
                         let mut ev = ExplicitVersion::enable(&mut graph_tx.tx).await?;

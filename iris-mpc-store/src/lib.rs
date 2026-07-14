@@ -35,6 +35,7 @@ use std::ops::DerefMut;
 ///
 /// Obtainable only via [`ExplicitVersion::enable`]. The flag is `SET LOCAL`, so it
 /// clears at commit/rollback; without it the trigger rejects any hand-set `version_id`.
+#[must_use]
 pub struct ExplicitVersion<'t, 'c> {
     tx: &'t mut Transaction<'c, Postgres>,
 }
