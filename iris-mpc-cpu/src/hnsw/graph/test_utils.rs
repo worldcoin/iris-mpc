@@ -32,7 +32,8 @@ use crate::{
     protocol::shared_iris::GaloisRingSharedIris,
 };
 use aes_prng::AesRng;
-use aws_sdk_s3::Client as S3Client;
+use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
+use aws_sdk_s3::{Client as S3Client, Config};
 use clap::ValueEnum;
 use eyre::Result;
 use iris_mpc_common::iris_db::db::IrisDB;
@@ -87,10 +88,18 @@ impl DbContext {
     }
 
     /// Convenience constructor for contexts that don't use S3 or checkpointing.
-    /// A dummy (unconfigured) S3 client is created; calls to S3 will fail, but
-    /// as long as no checkpoint operations are performed this is safe.
+    /// Is configured with dummy data to prevent a panic on S3Client::from_conf()
+    /// Attempts to use will panic
     pub async fn new_without_s3(url: &str, schema: &str, party_id: usize) -> Self {
-        let s3_client = S3Client::from_conf(aws_sdk_s3::config::Builder::new().build());
+        let creds = Credentials::new("test", "test", None, None, "test");
+        let cfg = Config::builder()
+            .behavior_version(BehaviorVersion::latest())
+            .region(Region::new("us-east-1"))
+            .credentials_provider(creds)
+            .endpoint_url("")
+            .force_path_style(true)
+            .build();
+        let s3_client = S3Client::from_conf(cfg);
         Self::new(url, schema, s3_client, String::new(), party_id).await
     }
 
