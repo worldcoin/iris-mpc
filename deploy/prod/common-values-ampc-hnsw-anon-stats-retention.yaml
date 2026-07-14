@@ -2,7 +2,7 @@
 # (common-cronjob 1.11.0 via wf-cluster-apps); per-cluster env + the
 # attachSecurityGroupPolicy that lets the pod reach the anon-stats Aurora live per-node.
 # Stage-validated 2026-07-09 (see the smpcv2 common values for details).
-image: "ghcr.io/worldcoin/retention-reaper:f8cb55547b1833ef2ccb0a84c5bd37c9e06b2408"
+image: "ghcr.io/worldcoin/retention-reaper:0e81579e29aeece93c76a1eebd7aa1561edec7e6"
 
 # SHIPS INERT, doubly: `suspend: true` AND RETENTION__ENABLED unset. Enable path:
 # un-suspend → ENABLED+DRY_RUN → inspect counts + gauges → DRY_RUN off, one party first.

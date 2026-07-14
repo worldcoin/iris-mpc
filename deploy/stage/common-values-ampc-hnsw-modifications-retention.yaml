@@ -9,7 +9,7 @@
 # coordination exists or is needed. The GPU MPCV2 DB's copy grows the same way; its
 # reaper instance FOLLOWS SHORTLY (same binary, values + cluster-apps entry only).
 #
-image: "ghcr.io/worldcoin/retention-reaper:f8cb55547b1833ef2ccb0a84c5bd37c9e06b2408"
+image: "ghcr.io/worldcoin/retention-reaper:0e81579e29aeece93c76a1eebd7aa1561edec7e6"
 
 # STAGE ENABLE, DRY-RUN: the hawk image bump in this same PR applies the created_at
 # migration to the HNSW DB at boot; the reaper then previews the exact delete predicate

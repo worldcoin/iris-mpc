@@ -3,7 +3,7 @@
 # values files. Stage-validated 2026-07-09: live deletes on all 6 stage clusters,
 # identical cross-party counts, idempotent re-run, oldest_retained drained exactly to
 # the window boundary.
-image: "ghcr.io/worldcoin/retention-reaper:f8cb55547b1833ef2ccb0a84c5bd37c9e06b2408"
+image: "ghcr.io/worldcoin/retention-reaper:0e81579e29aeece93c76a1eebd7aa1561edec7e6"
 
 # SHIPS INERT, doubly: `suspend: true` (no Jobs are created) AND RETENTION__ENABLED
 # unset (binary exits 0 without touching the DB even if a Job runs). Enable path after
