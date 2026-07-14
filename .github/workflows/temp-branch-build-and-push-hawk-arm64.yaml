@@ -4,7 +4,8 @@ on:
   push:
     branches:
       - "dev"
-
+      - "sw/test_supermatcher_seeding"
+      
     paths-ignore:
       - "deploy/**"
 
