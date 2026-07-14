@@ -1130,6 +1130,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         let sequence_number = "42";
@@ -1170,6 +1171,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         assert!(
@@ -1223,6 +1225,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         for seq in ["20", "21", "22"] {
@@ -1263,6 +1266,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         // The C2 state: rows 10,11 persisted somewhere in the fleet (this
