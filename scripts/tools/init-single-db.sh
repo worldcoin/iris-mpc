@@ -15,6 +15,12 @@ DB_SCHEMA="SMPC_1M_dev_$PARTY_ID"
 GRAPH_CHECKPOINT_S3_BUCKET="${GRAPH_CHECKPOINT_S3_BUCKET:-wf-smpcv2-dev-hnsw-checkpoint}"
 GRAPH_CHECKPOINT_S3_REGION="${GRAPH_CHECKPOINT_S3_REGION:-eu-central-1}"
 
+# old code used to get 100k irises to test in stage. used S3. need to cat the left and right codes together. matches BothEyes<GraphMem>
+# opt-in codes left, right
+# aws s3 cp s3://wf-smpcv2-stage-hnsw-performance-reports/graph_right.dat /tmp/graph_right.dat
+# aws s3 cp s3://wf-smpcv2-stage-hnsw-performance-reports/graph_left.dat /tmp/graph_left.dat
+# aws s3 cp s3://wf-smpcv2-stage-hnsw-performance-reports/gallery_left.ndjson /tmp/gallery_left_right_interleaved.ndjson
+
 echo "downloading plaintext irises and per-eye graphs from google drive"
 
 # 1M plaintext irises that match the graph.dat
@@ -71,6 +77,6 @@ shutdown_handler() {
 }
 
 trap shutdown_handler SIGTERM SIGINT
-while true; do     
-    sleep 1        
-done 
+while true; do
+    sleep 1
+done
