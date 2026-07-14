@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use super::graph_store::GraphPg;
+use crate::utils::serialization::graph::{read_graph_pair_from_file, GraphFormat};
 use crate::{
     execution::hawk_main::{BothEyes, LEFT, RIGHT},
     genesis::state_accessor::{
@@ -232,8 +233,13 @@ impl DbContext {
     }
 
     /// Loads a graph from a file and uploads it to S3 as a checkpoint.
-    pub async fn make_new_checkpoint(&self, path: &Path, dbg: bool) -> Result<()> {
-        let graph = deserialize_graph(path).await?;
+    pub async fn make_new_checkpoint(
+        &self,
+        path: &Path,
+        format: GraphFormat,
+        dbg: bool,
+    ) -> Result<()> {
+        let graph = read_graph_pair_from_file(path, format)?;
         if dbg {
             println!("loaded graph:");
             println!("{:#?}", graph);
