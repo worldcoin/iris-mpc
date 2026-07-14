@@ -33,7 +33,7 @@ use iris_mpc_common::config::CommonConfig;
 use iris_mpc_common::galois_engine::degree4::GaloisShares;
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
 use iris_mpc_common::job::{GaloisSharesBothSides, RequestIndex};
-use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_common::postgres::{run_migrations, AccessMode, PostgresClient};
 use iris_mpc_common::tracing::initialize_tracing;
 use iris_mpc_common::{
     config::{Config, Opt},
@@ -160,6 +160,7 @@ async fn server_main(config: Config) -> Result<()> {
     );
     let postgres_client =
         PostgresClient::new(&db_config.url, schema_name.as_str(), AccessMode::ReadWrite).await?;
+    run_migrations(&postgres_client.pool, db_config.migrate_ignore_missing).await?;
     let store = Store::new(&postgres_client).await?;
 
     tracing::info!("Initialising AWS services");

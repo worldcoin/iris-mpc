@@ -18,7 +18,7 @@ use eyre::{bail, eyre, Report, Result};
 use iris_mpc_common::{
     config::{CommonConfig, Config, ENV_PROD, ENV_STAGE},
     helpers::{smpc_request, sync::Modification},
-    postgres::{AccessMode, PostgresClient},
+    postgres::{run_migrations, AccessMode, PostgresClient},
     SerialId,
 };
 pub use iris_mpc_cpu::genesis::BatchSizeConfig;
@@ -1170,6 +1170,7 @@ async fn get_service_clients(
             let db_client =
                 PostgresClient::new(&db_config.url, db_schema.as_str(), AccessMode::ReadWrite)
                     .await?;
+            run_migrations(&db_client.pool, db_config.migrate_ignore_missing).await?;
 
             Ok((
                 IrisStore::new(&db_client).await?,

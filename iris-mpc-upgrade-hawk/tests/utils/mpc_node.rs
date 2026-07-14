@@ -9,7 +9,7 @@ use crate::utils::{
 use eyre::{bail, Result};
 use iris_mpc_common::{
     config::Config,
-    postgres::{AccessMode, PostgresClient},
+    postgres::{run_migrations, AccessMode, PostgresClient},
     SerialId, VectorId,
 };
 use iris_mpc_cpu::{
@@ -44,7 +44,7 @@ impl DbStores {
         let client = PostgresClient::new(url, schema_name, access_mode)
             .await
             .unwrap();
-        client.migrate().await;
+        run_migrations(&client.pool, false).await.unwrap();
         let iris = Store::new(&client).await.unwrap();
         let graph = GraphStore::new(&client).await.unwrap();
 

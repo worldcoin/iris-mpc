@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use ampc_actor_utils::network::tcp::TlsConfig;
 use iris_mpc_common::config::Config;
-use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_common::postgres::{run_migrations, AccessMode, PostgresClient};
 use iris_mpc_common::tracing::initialize_tracing;
 use iris_mpc_cpu::{
     checkpoint_protocol::{sidecar_main, SidecarConfig},
@@ -186,6 +186,7 @@ async fn main() -> Result<()> {
 
     let postgres =
         PostgresClient::new(&args.db_url, &args.db_schema, AccessMode::ReadWrite).await?;
+    run_migrations(&postgres.pool, false).await?;
     let graph_store: GraphPg<iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store> =
         GraphPg::new(&postgres).await?;
 

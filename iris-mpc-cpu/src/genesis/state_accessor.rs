@@ -296,7 +296,9 @@ mod tests {
         hnsw::graph::graph_store::GraphPg,
     };
     use eyre::Result;
-    use iris_mpc_common::postgres::{AccessMode, PostgresClient, PostgresSchemaName};
+    use iris_mpc_common::postgres::{
+        run_migrations, AccessMode, PostgresClient, PostgresSchemaName,
+    };
     use iris_mpc_store::{
         test_utils::{cleanup, temporary_name, test_db_url},
         Store as IrisStore,
@@ -319,6 +321,7 @@ mod tests {
         let pg_schema = temporary_name();
         let pg_client =
             PostgresClient::new(&test_db_url()?, &pg_schema, AccessMode::ReadWrite).await?;
+        run_migrations(&pg_client.pool, false).await?;
         // Set graph store
         let graph_store = GraphPg::new(&pg_client).await?;
         let graph_store_arc = Arc::new(graph_store);
