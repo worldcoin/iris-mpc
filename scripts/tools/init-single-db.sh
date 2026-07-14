@@ -6,10 +6,10 @@ IRISES_FILE="/tmp/gallery_left_right_interleaved.ndjson"
 GRAPH_FILE="/tmp/graph.dat"
 GRAPH_FORMAT="v3"
 
-TARGET_DB_SIZE="1048576"
+TARGET_DB_SIZE="2097152"
 PARTY_ID="$SMPC__SERVER_COORDINATION__PARTY_ID"
 DB_URL="$SMPC__CPU_DATABASE__URL"
-DB_SCHEMA="SMPC_1M_dev_$PARTY_ID"
+DB_SCHEMA="SMPC_2M_dev_$PARTY_ID"
 
 # Checkpoint bucket that iris-mpc-cpu will later read the restored graph from.
 GRAPH_CHECKPOINT_S3_BUCKET="${GRAPH_CHECKPOINT_S3_BUCKET:-wf-smpcv2-dev-hnsw-checkpoint}"
@@ -23,14 +23,11 @@ GRAPH_CHECKPOINT_S3_REGION="${GRAPH_CHECKPOINT_S3_REGION:-eu-central-1}"
 
 echo "downloading plaintext irises and per-eye graphs from google drive"
 
-# 1M plaintext irises that match the graph.dat
-curl "https://drive.usercontent.google.com/download?id=1je1stRXfVrHy2LRVcfg-SrRiz_yw33S4&export=download&confirm=t" -o ${IRISES_FILE}
-
-# an additional 1M irises
-# curl "https://drive.usercontent.google.com/download?id=1whFu0GIezDA2_YD9eMr9cY60oU0BF_Ao&export=download&confirm=t" -o /tmp/irises2M.ndjson
+# 2M plaintext irises that match the graph.dat
+curl "https://drive.usercontent.google.com/download?id=1whFu0GIezDA2_YD9eMr9cY60oU0BF_Ao&export=download&confirm=t" -o ${IRISES_FILE}
 
 # serialized BothEyes<GraphMem> in format V3
-curl "https://drive.usercontent.google.com/download?id=1vjswOMB7Yn-f7TDOqfzQr1_ZS-ubSg4E&export=download&confirm=t" -o ${GRAPH_FILE}
+curl "https://drive.usercontent.google.com/download?id=1rKhW5P6rCVO4iBpLiFajVTkR0ZXRfXh0&export=download&confirm=t" -o ${GRAPH_FILE}
 
 echo "starting iris init"
 /bin/init-single-db \
