@@ -1,5 +1,5 @@
 use crate::services::aws::clients::AwsClients;
-use crate::services::processors::batch::receive_batch_stream;
+use crate::services::processors::batch::{receive_batch_stream, spawn_db_backed_ingest_task};
 use crate::services::processors::job::{process_job_result, BatchTimings};
 use aws_sdk_s3::Client;
 use aws_sdk_sns::types::MessageAttributeValue;
@@ -75,6 +75,29 @@ pub async fn server_main(config: Config) -> Result<()> {
     let shutdown_handler = init_shutdown_handler(&config).await;
 
     process_config(&config);
+
+    if config.db_backed_ingest && config.disable_persistence {
+        bail!(
+            "db_backed_ingest=true is incompatible with disable_persistence=true: ingested request claims would never be marked persisted and would be re-formed on every restart"
+        );
+    }
+
+    if config.db_backed_ingest && !(0..=20).contains(&config.db_ingest_sqs_wait_secs) {
+        bail!(
+            "db_ingest_sqs_wait_secs must be within SQS's accepted 0..=20 range, got {}: every receive would fail and ingest would idle with warn-only logs",
+            config.db_ingest_sqs_wait_secs
+        );
+    }
+
+    if config.db_backed_ingest && !config.enable_modifications_sync {
+        bail!(
+            "db_backed_ingest=true requires enable_modifications_sync=true: the boot-time \
+             fleet-frontier skip-ahead marks rows persisted whose EFFECTS (irises/graph) only \
+             reach this party via the modifications roll-forward. With sync disabled, an \
+             asymmetric-commit recovery would reconcile bookkeeping without the data — silent \
+             cross-party data divergence instead of a loud wedge."
+        );
+    }
 
     let (iris_store, graph_store) = prepare_stores(&config).await?;
 
@@ -154,7 +177,71 @@ pub async fn server_main(config: Config) -> Result<()> {
         }
     }
 
-    sync_sqs_queues(&config, &sync_result, &aws_clients).await?;
+    if config.db_backed_ingest {
+        // Two-step boot recovery, the DB analog of the SQS queue trim:
+        //
+        // Step 1 — skip-ahead to the fleet's persisted frontier. Rows at or
+        // below max(peers' persisted sequence numbers) belong to batches that
+        // completed on at least one peer: their effects reached this party via
+        // the modifications roll-forward above, and peers will never co-form
+        // them again. Releasing them instead (the naive local decision) would
+        // make this party re-form rows the peers moved past — a permanent
+        // batch divergence. Locally, "claimed but unpersisted from a crashed
+        // symmetric batch" and "claimed but unpersisted because only MY commit
+        // failed" are indistinguishable; only the peers' frontier tells them
+        // apart.
+        //
+        // SAFETY DEPENDENCY: peers serve their SyncState from a snapshot taken
+        // at THEIR boot, so an exchanged frontier can under-report persists
+        // made after that peer booted. This is sound today only because the
+        // startup unready-gate + heartbeat teardown force full-fleet restarts
+        // (every frontier is rebuilt after its party's last commit). If
+        // coordination is ever relaxed to allow solo restarts, this exchange
+        // must move to a live DB read in the sync endpoint.
+        let fleet_frontier = sync_result.max_persisted_sequence_number();
+        if let Some(frontier) = &fleet_frontier {
+            let marked = iris_store
+                .mark_ingested_requests_persisted_up_to(frontier)
+                .await
+                .wrap_err("failed to skip-ahead ingested rows to fleet frontier")?;
+            if marked > 0 {
+                tracing::warn!(
+                    "Skip-ahead: marked {} ingested row(s) persisted up to fleet frontier {} (completed on a peer; effects arrived via modifications sync)",
+                    marked,
+                    frontier
+                );
+                metrics::counter!("db_ingest_frontier_skip_ahead").increment(marked);
+            }
+        }
+
+        // Step 2 — release remaining unpersisted claims (all above the fleet
+        // frontier = no party persisted them = the symmetric-crash case).
+        // Deterministic re-formation picks them up identically everywhere.
+        let released = iris_store
+            .reset_unpersisted_ingested_claims()
+            .await
+            .wrap_err("failed to reset unpersisted ingested claims on startup")?;
+        if released > 0 {
+            tracing::warn!(
+                "Released {} unpersisted ingested request claim(s) from a crashed/restarted batch; they will be re-formed",
+                released
+            );
+            metrics::counter!("db_ingest_claims_released").increment(released);
+        } else {
+            tracing::info!("No unpersisted ingested request claims to release on startup");
+        }
+
+        // Skip the startup queue trim: with DB-backed ingest, queues are
+        // transient buffers with party-dependent ingest offsets, so cross-party
+        // queue-position comparison is meaningless (an already-drained queue
+        // reports None and max_sns_sequence_num panics on mixed states) and the
+        // trim could delete messages a lagging party has not yet ingested.
+        // Dedup of redeliveries is handled by the ingest's PK ON CONFLICT;
+        // already-processed rows are excluded by persisted_at.
+        tracing::info!("db-backed ingest enabled; skipping startup SQS queue sync/trim");
+    } else {
+        sync_sqs_queues(&config, &sync_result, &aws_clients).await?;
+    }
 
     if shutdown_handler.is_shutting_down() {
         tracing::warn!("Shutting down has been triggered");
@@ -468,13 +555,28 @@ async fn build_sync_state(
     let modifications = store
         .last_modifications(config.max_modifications_lookback)
         .await?;
-    let next_sns_sequence_num = get_next_sns_seq_num(
-        &aws_clients.sqs_client,
-        &config.requests_queue_url,
-        config.sqs_sync_long_poll_seconds,
-    )
-    .await?;
+    // Under DB-backed ingest the queue is a transient buffer with party-local
+    // offsets: the peeked head sequence number is meaningless cross-party (its
+    // only consumer, sync_sqs_queues, is skipped) and the peek itself
+    // hard-errors on a corrupt head message — a boot crashloop for a failure
+    // the ingest-side quarantine already handles.
+    let next_sns_sequence_num = if config.db_backed_ingest {
+        None
+    } else {
+        get_next_sns_seq_num(
+            &aws_clients.sqs_client,
+            &config.requests_queue_url,
+            config.sqs_sync_long_poll_seconds,
+        )
+        .await?
+    };
     let common_config = CommonConfig::from(config.clone());
+
+    let max_persisted_sequence_number = if config.db_backed_ingest {
+        store.max_persisted_sequence_number().await?
+    } else {
+        None
+    };
 
     // Fetch graph mutations for all modifications in the lookback window so
     // they can be exchanged with the other parties via the SyncState payload.
@@ -502,6 +604,7 @@ async fn build_sync_state(
         next_sns_sequence_num,
         common_config,
         graph_mutation_bytes,
+        max_persisted_sequence_number,
     })
 }
 
@@ -794,6 +897,15 @@ async fn run_main_server_loop(
     let res: Result<()> = async {
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
+        if config.db_backed_ingest {
+            spawn_db_backed_ingest_task(
+                &mut task_monitor,
+                aws_clients.sqs_client.clone(),
+                config.clone(),
+                iris_store.clone(),
+                shutdown_handler.clone(),
+            );
+        }
 
         let (mut batch_stream, sem) = receive_batch_stream(
             party_id,

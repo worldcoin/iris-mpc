@@ -1544,6 +1544,7 @@ impl HawkResult {
 
         ServerJobResult {
             merged_results,
+            sqs_sequence_numbers: batch.sqs_sequence_numbers,
             request_ids: batch.request_ids,
             request_types: batch.request_types,
             metadata: batch.metadata,
