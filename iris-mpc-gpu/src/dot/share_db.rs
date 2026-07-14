@@ -407,7 +407,7 @@ impl ShareDB {
             .device_manager
             .devices()
             .iter()
-            .map(|_device| unsafe {
+            .map(|_device| {
                 let host_mem0 = MmapMut::map_anon(max_size * self.code_length).unwrap();
                 let host_mem1 = MmapMut::map_anon(max_size * self.code_length).unwrap();
 
