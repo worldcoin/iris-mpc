@@ -53,9 +53,7 @@ async fn streaming_upload_round_trip_multipart() -> Result<()> {
         4,
     )
     .await;
-    if let Err(e) = upload {
-        return Err(e);
-    }
+    upload?;
 
     let downloaded = client
         .store(&bucket)?
@@ -133,9 +131,7 @@ async fn streaming_download_round_trip() -> Result<()> {
         4,
     )
     .await;
-    if let Err(e) = upload {
-        return Err(e);
-    }
+    upload?;
 
     let download: Result<(Vec<u64>, [u8; 32])> = stream_download_and_deserialize_with(
         &client,
@@ -221,9 +217,7 @@ async fn v3_graph_pair_streams_to_graphmem() -> Result<()> {
         4,
     )
     .await;
-    if let Err(e) = upload {
-        return Err(e);
-    }
+    upload?;
 
     // Compute the expected BLAKE3 hash from the raw serialized bytes — the
     // same bytes the upload wrote and the download read.
@@ -333,9 +327,7 @@ async fn v4_graph_pair_streams_to_graphmem_seq_no_preserved() -> Result<()> {
         4,
     )
     .await;
-    if let Err(e) = upload {
-        return Err(e);
-    }
+    upload?;
 
     // Stream-download V4 bytes → `[GraphMem; 2]`.
     let download =

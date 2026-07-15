@@ -89,13 +89,9 @@ mod tests {
             disable_anonymized_stats: None,
         };
 
-        let result = get_iris_data_by_party_id(
-            smpc_request.s3_key.as_str(),
-            0,
-            &bucket_name.to_string(),
-            &s3_client,
-        )
-        .await;
+        let result =
+            get_iris_data_by_party_id(smpc_request.s3_key.as_str(), 0, bucket_name, &s3_client)
+                .await;
 
         assert!(result.is_ok());
         let (share, hash) = result.unwrap();

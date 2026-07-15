@@ -255,7 +255,7 @@ impl SharesS3Object {
 pub async fn get_iris_data_by_party_id(
     s3_key: &str,
     party_id: usize,
-    bucket_name: &String,
+    bucket_name: &str,
     object_store_client: &ObjectStoreClient,
 ) -> Result<(String, String), SharesDecodingError> {
     let store = object_store_client.store(bucket_name).map_err(|err| {
