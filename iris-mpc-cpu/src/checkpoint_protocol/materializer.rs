@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use aws_sdk_s3::Client as S3Client;
+use iris_mpc_common::object_store::ObjectStoreClient;
 
 use crate::checkpoint_protocol::{
     CheckpointMeta, CycleError, FreezeHeight, Graph, Materializer, MutationStore,
@@ -24,7 +24,7 @@ pub enum CheckpointDownload {
 /// Rebuilds the graph from an S3 checkpoint plus WAL replay.
 pub struct RebuildFromCheckpoint<'a, V: VectorStore> {
     pub graph_store: &'a GraphPg<V>,
-    pub s3_client: &'a S3Client,
+    pub s3_client: &'a ObjectStoreClient,
     pub bucket: String,
     pub download: CheckpointDownload,
 }
@@ -32,7 +32,7 @@ pub struct RebuildFromCheckpoint<'a, V: VectorStore> {
 impl<'a, V: VectorStore + Send + Sync> RebuildFromCheckpoint<'a, V> {
     pub fn new(
         graph_store: &'a GraphPg<V>,
-        s3_client: &'a S3Client,
+        s3_client: &'a ObjectStoreClient,
         bucket: String,
         download: CheckpointDownload,
     ) -> Self {

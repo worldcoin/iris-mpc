@@ -12,7 +12,6 @@ use ampc_server_utils::{
     init_heartbeat_task, set_node_ready, shutdown_handler::ShutdownHandler,
     start_coordination_server, wait_for_others_ready, wait_for_others_unready, TaskMonitor,
 };
-use aws_sdk_s3::Client as S3Client;
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::Client;
@@ -543,7 +542,7 @@ async fn server_main(config: Config) -> Result<()> {
     // Start thread that will be responsible for communicating back the results
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
     let sns_client_bg = aws_clients.sns_client.clone();
-    let s3_client_bg = aws_clients.s3_client.clone();
+    let s3_client_bg = aws_clients.object_store_client.clone();
     let config_bg = config.clone();
     let store_bg = store.clone();
     let shutdown_handler_bg = Arc::clone(&shutdown_handler);
@@ -1138,7 +1137,7 @@ async fn server_main(config: Config) -> Result<()> {
             party_id,
             aws_clients.sqs_client.clone(),
             aws_clients.sns_client.clone(),
-            aws_clients.s3_client.clone(),
+            aws_clients.object_store_client.clone(),
             config.clone(),
             shares_encryption_key_pair.clone(),
             shutdown_handler.clone(),

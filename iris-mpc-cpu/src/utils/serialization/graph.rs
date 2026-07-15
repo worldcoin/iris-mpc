@@ -656,8 +656,8 @@ impl From<GraphMem> for graph_v4::GraphV4 {
 /* ----------- Streaming Deserialization ---------- */
 
 /// Read a graph pair from a byte stream. Identical to [`read_graph_pair`]; the
-/// streaming benefit is in feeding `reader` incrementally (see the `s3_client`
-/// streaming download), not in the decode.
+/// streaming benefit is in feeding `reader` incrementally from object storage,
+/// not in the decode.
 pub fn read_graph_pair_streaming<R: std::io::Read + ?Sized>(
     reader: &mut R,
     format: GraphFormat,

@@ -24,27 +24,30 @@ impl AwsClient {
         };
 
         let environment = self.config().environment();
-        let s3_bucket = format!("wf-smpcv2-{}-sync-protocol", environment);
-        let s3_key = format!("{}_deleted_serial_ids.json", environment);
-        let s3_obj = S3ObjectInfo::new(&s3_bucket, &s3_key, &data);
-        self.s3_put_object(&s3_obj)
+        let object_key = format!("{}_deleted_serial_ids.json", environment);
+        let object = S3ObjectInfo::new(
+            self.config().iris_deletions_store_location(),
+            &object_key,
+            &data,
+        );
+        self.s3_put_object(&object)
             .await
             .map_err(|e| AwsClientError::IrisDeletionsUploadError(e.to_string()))
     }
 
-    // Uploads JSON encoded Iris shares to AWS S3 bucket.
+    // Uploads JSON-encoded Iris shares to the configured object store.
     pub async fn s3_upload_iris_shares(
         &self,
         signup_id: &uuid::Uuid,
         shares: &BothEyes<[GaloisRingSharedIrisForUpload; N_PARTIES]>,
     ) -> Result<S3ObjectInfo, AwsClientError> {
-        // Set AWS-S3 JSON compatible shares.
+        // Build JSON-compatible shares for the existing wire format.
         let shares = create_iris_code_shares_s3(
             &create_iris_code_shares(signup_id, shares),
             &self.public_keyset(),
         );
 
-        // Upload to AWS-S3.
+        // Upload to object storage.
         let s3_obj_info = S3ObjectInfo::new(
             self.config().s3_request_bucket_name(),
             &signup_id.to_string(),

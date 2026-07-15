@@ -1,9 +1,8 @@
-use crate::s3_importer::create_db_chunks_s3_client;
+use crate::s3_importer::create_db_chunks_object_store_client;
 use crate::{
     fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, S3Store, S3StoredIris, Store,
 };
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
-use aws_config::Region;
 use eyre::{bail, Result};
 use futures::stream::BoxStream;
 use futures::StreamExt;
@@ -122,10 +121,12 @@ async fn load_iris_db_internal(
         let s3_load_safety_overlap_seconds = config.db_load_safety_overlap_seconds;
 
         // Construct s3 client and store
-        let region_provider = Region::new(region);
-        let shared_config = aws_config::from_env().region(region_provider).load().await;
-        let s3_client = create_db_chunks_s3_client(&shared_config, true);
-        let s3_store = S3Store::new(s3_client, s3_chunks_bucket_name.clone());
+        let sdk_config = aws_config::from_env()
+            .region(aws_config::Region::new(region))
+            .load()
+            .await;
+        let object_store_client = create_db_chunks_object_store_client(&sdk_config, true);
+        let s3_store = S3Store::new(object_store_client, s3_chunks_bucket_name.clone())?;
         let s3_arc = Arc::new(s3_store);
 
         // First fetch last snapshot from S3

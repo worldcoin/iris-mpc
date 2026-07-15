@@ -1,14 +1,12 @@
 use ampc_server_utils::ShutdownHandler;
 use async_trait::async_trait;
-use aws_config::{retry::RetryConfig, timeout::TimeoutConfig};
-use aws_sdk_s3::config::StalledStreamProtectionConfig;
-use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
-use aws_sdk_s3::{primitives::ByteStream, Client};
+use bytes::Bytes;
 use eyre::{bail, eyre, Result};
-use futures::{stream, StreamExt};
+use futures::{stream, StreamExt, TryStreamExt};
+use iris_mpc_common::object_store::{path, ObjectStoreClient, ObjectStoreExt, ObjectStoreRef};
 use iris_mpc_common::{VectorId, IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
 use std::{mem, sync::Arc, time::Duration};
-use tokio::{io::AsyncReadExt, sync::mpsc::Sender};
+use tokio::sync::mpsc::Sender;
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
     + MASK_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -135,93 +133,51 @@ impl S3StoredIris {
     }
 }
 
-/// Creates an S3 client specifically for database chunks with additional
-/// configuration
-pub fn create_db_chunks_s3_client(
-    shared_config: &aws_config::SdkConfig,
+pub fn create_db_chunks_object_store_client(
+    sdk_config: &aws_config::SdkConfig,
     force_path_style: bool,
-) -> S3Client {
-    let retry_config = RetryConfig::standard().with_max_attempts(5);
-
-    // Increase S3 connect timeouts to 10s
-    let timeout_config = TimeoutConfig::builder()
-        .connect_timeout(Duration::from_secs(10))
-        .build();
-
-    let db_chunks_s3_config = S3ConfigBuilder::from(shared_config)
-        // disable stalled stream protection to avoid panics during s3 import
-        .stalled_stream_protection(StalledStreamProtectionConfig::disabled())
-        .retry_config(retry_config)
-        .timeout_config(timeout_config)
-        .force_path_style(force_path_style)
-        .build();
-
-    S3Client::from_conf(db_chunks_s3_config)
+) -> ObjectStoreClient {
+    ObjectStoreClient::new(
+        sdk_config.region().map(ToString::to_string),
+        force_path_style,
+    )
+    .with_aws_sdk_config(sdk_config)
 }
 
 #[async_trait]
 pub trait ObjectStore: Send + Sync + 'static {
-    async fn get_object(&self, key: &str, range: (usize, usize)) -> Result<ByteStream>;
+    async fn get_object(&self, key: &str, range: (usize, usize)) -> Result<Bytes>;
     async fn list_objects(&self, prefix: &str) -> Result<Vec<String>>;
 }
 
 pub struct S3Store {
-    client: Client,
-    bucket: String,
+    store: ObjectStoreRef,
 }
 
 impl S3Store {
-    pub fn new(client: Client, bucket: String) -> Self {
-        Self { client, bucket }
+    pub fn new(client: ObjectStoreClient, location: String) -> Result<Self> {
+        Ok(Self {
+            store: client.store(&location)?,
+        })
     }
 }
 
 #[async_trait]
 impl ObjectStore for S3Store {
-    async fn get_object(&self, key: &str, range: (usize, usize)) -> Result<ByteStream> {
-        let res = self
-            .client
-            .get_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .range(format!("bytes={}-{}", range.0, range.1 - 1))
-            .send()
-            .await?;
-
-        Ok(res.body)
+    async fn get_object(&self, key: &str, range: (usize, usize)) -> Result<Bytes> {
+        Ok(self
+            .store
+            .get_range(&path(key)?, (range.0 as u64)..(range.1 as u64))
+            .await?)
     }
 
     async fn list_objects(&self, prefix: &str) -> Result<Vec<String>> {
-        let mut objects = Vec::new();
-        let mut continuation_token = None;
-
-        loop {
-            let mut request = self
-                .client
-                .list_objects_v2()
-                .bucket(&self.bucket)
-                .prefix(prefix);
-
-            if let Some(token) = continuation_token {
-                request = request.continuation_token(token);
-            }
-
-            let response = request.send().await?;
-
-            objects.extend(
-                response
-                    .contents()
-                    .iter()
-                    .filter_map(|obj| obj.key().map(String::from)),
-            );
-
-            match response.next_continuation_token() {
-                Some(token) => continuation_token = Some(token.to_string()),
-                None => break,
-            }
-        }
-
-        Ok(objects)
+        Ok(self
+            .store
+            .list(Some(&path(prefix)?))
+            .map_ok(|meta| meta.location.to_string())
+            .try_collect()
+            .await?)
     }
 }
 
@@ -396,7 +352,7 @@ async fn read_range_in_chunk(
     range_size: usize,
     tx: Sender<S3StoredIris>,
 ) -> Result<()> {
-    let mut stream = store
+    let bytes = store
         .get_object(
             key,
             (
@@ -404,20 +360,11 @@ async fn read_range_in_chunk(
                 (offset_within_chunk + range_size) * SINGLE_ELEMENT_SIZE,
             ),
         )
-        .await?
-        .into_async_read();
+        .await?;
 
-    let mut slice = vec![0_u8; SINGLE_ELEMENT_SIZE];
-
-    loop {
-        match stream.read_exact(&mut slice).await {
-            Ok(_) => {
-                let iris = S3StoredIris::from_bytes(&slice)?;
-                tx.send(iris).await?;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-            Err(e) => return Err(e.into()),
-        }
+    for slice in bytes.chunks_exact(SINGLE_ELEMENT_SIZE) {
+        let iris = S3StoredIris::from_bytes(slice)?;
+        tx.send(iris).await?;
     }
 
     Ok(())
@@ -427,7 +374,6 @@ async fn read_range_in_chunk(
 mod tests {
     use super::*;
     use crate::DbStoredIris;
-    use aws_sdk_s3::primitives::SdkBody;
     use rand::Rng;
     use std::{
         cmp::min,
@@ -466,7 +412,7 @@ mod tests {
 
     #[async_trait]
     impl ObjectStore for MockStore {
-        async fn get_object(&self, key: &str, range: (usize, usize)) -> Result<ByteStream> {
+        async fn get_object(&self, key: &str, range: (usize, usize)) -> Result<Bytes> {
             let bytes = self
                 .objects
                 .get(key)
@@ -478,7 +424,7 @@ mod tests {
             let end = range.1.min(bytes.len());
             let sliced_bytes = bytes[start..end].to_vec();
 
-            Ok(ByteStream::from(SdkBody::from(sliced_bytes)))
+            Ok(Bytes::from(sliced_bytes))
         }
 
         async fn list_objects(&self, _: &str) -> Result<Vec<String>> {
@@ -505,7 +451,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ObjectStore for IntentionalFailureStore {
-        async fn get_object(&self, key: &str, range: (usize, usize)) -> Result<ByteStream> {
+        async fn get_object(&self, key: &str, range: (usize, usize)) -> Result<Bytes> {
             let range_hash = format!("{}_{},{}", key, range.0, range.1);
             let mut failures = self.remaining_failures.lock().await;
             let n_remaining = failures
@@ -531,7 +477,7 @@ mod tests {
 
     #[async_trait]
     impl ObjectStore for HangingStore {
-        async fn get_object(&self, _key: &str, _range: (usize, usize)) -> Result<ByteStream> {
+        async fn get_object(&self, _key: &str, _range: (usize, usize)) -> Result<Bytes> {
             tokio::time::sleep(Duration::from_secs(3600)).await;
             Err(eyre::eyre!(
                 "HangingStore: should have been cancelled before this"

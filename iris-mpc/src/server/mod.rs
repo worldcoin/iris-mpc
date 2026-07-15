@@ -1,8 +1,8 @@
 use crate::services::aws::clients::AwsClients;
 use crate::services::processors::batch::{receive_batch_stream, spawn_db_backed_ingest_task};
 use crate::services::processors::job::{process_job_result, BatchTimings};
-use aws_sdk_s3::Client;
 use aws_sdk_sns::types::MessageAttributeValue;
+use iris_mpc_common::object_store::ObjectStoreClient;
 use iris_mpc_cpu::checkpoint_protocol::{restart_from_checkpoint, sidecar_main, RestartOutcome};
 use iris_mpc_cpu::graph_checkpoint::sync_graph_mutations;
 use iris_mpc_cpu::hnsw::GraphMem;
@@ -250,7 +250,7 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     let mut hawk_actor = init_hawk_actor(
         &config,
-        &aws_clients.checkpoint_s3_client,
+        &aws_clients.checkpoint_object_store_client,
         &config.graph_checkpoint_bucket_name,
         &iris_store,
         &graph_store,
@@ -363,7 +363,7 @@ pub async fn server_main(config: Config) -> Result<()> {
             sidecar_main(
                 sc_config,
                 &graph_store,
-                &aws_clients.checkpoint_s3_client,
+                &aws_clients.checkpoint_object_store_client,
                 &mut network_handle,
                 sidecar_ct,
             )
@@ -684,7 +684,7 @@ fn build_hawk_args(config: &Config) -> Result<(HawkArgs, Vec<String>, Vec<String
 #[allow(clippy::too_many_arguments)]
 async fn init_hawk_actor(
     config: &Config,
-    s3_client: &Client,
+    s3_client: &ObjectStoreClient,
     checkpoint_bucket: &str,
     iris_store: &Store,
     graph_store: &GraphPg<Aby3Store<HawkOps>>,
@@ -911,7 +911,7 @@ async fn run_main_server_loop(
             party_id,
             aws_clients.sqs_client.clone(),
             aws_clients.sns_client.clone(),
-            aws_clients.s3_client.clone(),
+            aws_clients.object_store_client.clone(),
             config.clone(),
             shares_encryption_key_pair.clone(),
             shutdown_handler.clone(),
@@ -1058,7 +1058,7 @@ async fn run_main_server_loop(
                 let dur_secs = pprof_start.elapsed().as_secs();
                 let ts = Utc::now().format("%Y-%m-%dT%H-%M-%SZ");
                 let party = format!("party{}", config.party_id);
-                let s3 = aws_clients.s3_client.clone();
+                let s3 = aws_clients.object_store_client.clone();
                 let bucket = config.pprof_s3_bucket.clone();
                 let prefix = config.pprof_prefix.clone();
                 let run_id = config

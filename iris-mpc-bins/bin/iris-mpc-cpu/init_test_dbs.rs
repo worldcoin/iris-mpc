@@ -1,9 +1,8 @@
 #![recursion_limit = "256"]
 
-use aws_sdk_s3::config::Region as S3Region;
-use aws_sdk_s3::Client as S3Client;
 use clap::Parser;
 use eyre::Result;
+use iris_mpc_common::object_store::ObjectStoreClient;
 use iris_mpc_common::{iris_db::iris::IrisCode, SerialId, VectorId};
 use iris_mpc_cpu::{
     execution::hawk_main::STORE_IDS,
@@ -450,12 +449,13 @@ async fn main() -> Result<()> {
 }
 
 async fn init_dbs(args: &Args) -> Vec<DbContext> {
-    let mut builder = aws_config::from_env();
-    if let Some(aws_region) = args.aws_region.clone() {
-        builder = builder.region(S3Region::new(aws_region));
+    let mut sdk_config_loader = aws_config::from_env();
+    if let Some(region) = &args.aws_region {
+        sdk_config_loader = sdk_config_loader.region(aws_config::Region::new(region.clone()));
     }
-    let shared_config = builder.load().await;
-    let s3_client = S3Client::new(&shared_config);
+    let sdk_config = sdk_config_loader.load().await;
+    let s3_client =
+        ObjectStoreClient::new(args.aws_region.clone(), false).with_aws_sdk_config(&sdk_config);
 
     let mut dbs = Vec::new();
     for (party_id, (url, schema)) in izip!(args.db_urls().iter(), args.db_schemas().iter())

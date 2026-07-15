@@ -6,6 +6,7 @@ use serde::{
     Deserialize, Serialize,
 };
 
+use iris_mpc_common::config::resolve_iris_deletions_store_location;
 use iris_mpc_common::SerialId;
 use iris_mpc_cpu::utils::serialization::iris_ndjson::IrisSelection;
 use uuid::Uuid;
@@ -23,6 +24,11 @@ pub struct AwsOptions {
 
     /// S3: request ingress queue URL.
     s3_request_bucket_name: String,
+
+    /// Object-store location for the Iris deletion snapshot. If omitted, the
+    /// historical environment-specific S3 bucket is used.
+    #[serde(default)]
+    iris_deletions_store_location: Option<String>,
 
     /// SNS: system request ingress queue topic.
     sns_request_topic_arn: String,
@@ -48,6 +54,13 @@ impl AwsOptions {
 
     pub fn s3_request_bucket_name(&self) -> &str {
         &self.s3_request_bucket_name
+    }
+
+    pub fn iris_deletions_store_location(&self) -> String {
+        resolve_iris_deletions_store_location(
+            &self.environment,
+            self.iris_deletions_store_location.as_deref(),
+        )
     }
 
     pub fn sns_request_topic_arn(&self) -> &str {
@@ -754,6 +767,37 @@ fn simple_into_iter(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn aws_options(location: Option<&str>) -> AwsOptions {
+        let location = location
+            .map(|value| format!("iris_deletions_store_location = \"{value}\""))
+            .unwrap_or_default();
+        toml::from_str(&format!(
+            r#"
+                environment = "dev"
+                public_key_base_url = "http://localhost/public-keys"
+                s3_request_bucket_name = "request-shares"
+                {location}
+                sns_request_topic_arn = "request-topic"
+                sqs_long_poll_wait_time = 5
+                sqs_response_queue_urls = []
+                sqs_wait_time_seconds = 5
+            "#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn aws_options_deletion_store_preserves_legacy_default_and_allows_override() {
+        assert_eq!(
+            aws_options(None).iris_deletions_store_location(),
+            "wf-smpcv2-dev-sync-protocol"
+        );
+        assert_eq!(
+            aws_options(Some("az://deletions/snapshots")).iris_deletions_store_location(),
+            "az://deletions/snapshots"
+        );
+    }
 
     #[test]
     fn test_request_batch_options_simple_roundtrip() {

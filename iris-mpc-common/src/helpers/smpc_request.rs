@@ -1,6 +1,6 @@
 use super::{key_pair::SharesDecodingError, sha256::sha256_as_hex_string};
 use crate::helpers::key_pair::SharesEncryptionKeyPairs;
-use aws_sdk_s3::Client as S3Client;
+use crate::object_store::{path, ObjectStoreClient, ObjectStoreExt};
 use aws_sdk_sns::types::MessageAttributeValue;
 use aws_sdk_sqs::{
     error::SdkError,
@@ -255,32 +255,35 @@ impl SharesS3Object {
 pub async fn get_iris_data_by_party_id(
     s3_key: &str,
     party_id: usize,
-    bucket_name: &String,
-    s3_client: &S3Client,
+    bucket_name: &str,
+    object_store_client: &ObjectStoreClient,
 ) -> Result<(String, String), SharesDecodingError> {
-    let response = s3_client
-        .get_object()
-        .bucket(bucket_name)
-        .key(s3_key)
-        .send()
-        .await
-        .map_err(|err| {
-            tracing::error!("Failed to download file: {}", err);
-            SharesDecodingError::S3ResponseContent {
-                key: s3_key.to_string(),
-                message: err.to_string(),
-            }
-        })?;
+    let store = object_store_client.store(bucket_name).map_err(|err| {
+        tracing::error!("Failed to create object store: {err}");
+        SharesDecodingError::ObjectStoreResponse {
+            key: s3_key.to_string(),
+            message: err.to_string(),
+        }
+    })?;
+    let location = path(s3_key).map_err(|err| SharesDecodingError::ObjectStoreResponse {
+        key: s3_key.to_string(),
+        message: err.to_string(),
+    })?;
+    let response = store.get(&location).await.map_err(|err| {
+        tracing::error!("Failed to download file: {}", err);
+        SharesDecodingError::ObjectStoreResponse {
+            key: s3_key.to_string(),
+            message: err.to_string(),
+        }
+    })?;
 
-    let object_body = response.body.collect().await.map_err(|e| {
+    let bytes = response.bytes().await.map_err(|e| {
         tracing::error!("Failed to get object body: {}", e);
-        SharesDecodingError::S3ResponseContent {
+        SharesDecodingError::ObjectStoreResponse {
             key: s3_key.to_string(),
             message: e.to_string(),
         }
     })?;
-
-    let bytes = object_body.into_bytes();
 
     let shares_file: SharesS3Object = serde_json::from_slice(&bytes)?;
 

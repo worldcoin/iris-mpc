@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use aws_sdk_s3::Client as S3Client;
+use iris_mpc_common::object_store::ObjectStoreClient;
 use std::sync::Arc;
 use tokio::sync::{oneshot, RwLock};
 
@@ -24,7 +24,7 @@ use crate::utils::serialization::graph::GraphFormat;
 /// track per-mutation iris ids; the field is observability-only on this path).
 pub struct UploadAndRecord<'a, V: VectorStore> {
     pub graph_store: &'a GraphPg<V>,
-    pub s3_client: &'a S3Client,
+    pub s3_client: &'a ObjectStoreClient,
     pub bucket: String,
     pub party_id: usize,
     pub is_archival: bool,
@@ -34,7 +34,7 @@ pub struct UploadAndRecord<'a, V: VectorStore> {
 impl<'a, V: VectorStore + Send + Sync> UploadAndRecord<'a, V> {
     pub fn new(
         graph_store: &'a GraphPg<V>,
-        s3_client: &'a S3Client,
+        s3_client: &'a ObjectStoreClient,
         bucket: String,
         party_id: usize,
         is_archival: bool,

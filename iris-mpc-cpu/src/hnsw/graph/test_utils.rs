@@ -31,10 +31,10 @@ use crate::{
     protocol::shared_iris::GaloisRingSharedIris,
 };
 use aes_prng::AesRng;
-use aws_sdk_s3::Client as S3Client;
 use clap::ValueEnum;
 use eyre::Result;
 use iris_mpc_common::iris_db::db::IrisDB;
+use iris_mpc_common::object_store::ObjectStoreClient;
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::Itertools;
@@ -58,7 +58,7 @@ pub struct DbContext {
     /// Postgres store to persist data against
     pub store: Store,
     graph_pg: GraphPg<PlaintextStore>,
-    s3_client: S3Client,
+    s3_client: ObjectStoreClient,
     bucket: String,
     party_id: usize,
 }
@@ -67,7 +67,7 @@ impl DbContext {
     pub async fn new(
         url: &str,
         schema: &str,
-        s3_client: S3Client,
+        s3_client: ObjectStoreClient,
         bucket: String,
         party_id: usize,
     ) -> Self {
@@ -89,7 +89,7 @@ impl DbContext {
     /// A dummy (unconfigured) S3 client is created; calls to S3 will fail, but
     /// as long as no checkpoint operations are performed this is safe.
     pub async fn new_without_s3(url: &str, schema: &str, party_id: usize) -> Self {
-        let s3_client = S3Client::from_conf(aws_sdk_s3::config::Builder::new().build());
+        let s3_client = ObjectStoreClient::new(None, false);
         Self::new(url, schema, s3_client, String::new(), party_id).await
     }
 

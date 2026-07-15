@@ -5,16 +5,13 @@ use ampc_server_utils::{
     start_coordination_server_with_extra_routes, wait_for_others_ready, wait_for_others_unready,
     BatchSyncSharedState, TaskMonitor,
 };
-use aws_config::retry::RetryConfig;
+use aws_sdk_rds::config::Region;
 use aws_sdk_rds::Client as RDSClient;
-use aws_sdk_s3::{
-    config::{Builder as S3ConfigBuilder, Region},
-    Client as S3Client,
-};
 use axum::{routing::get, Router};
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result};
 
+use iris_mpc_common::object_store::ObjectStoreClient;
 use iris_mpc_common::{
     config::{CommonConfig, Config, ENV_PROD, ENV_STAGE},
     helpers::{smpc_request, sync::Modification},
@@ -262,7 +259,7 @@ async fn exec_setup(
     ExecutionContextInfo,
     Arc<ShutdownHandler>,
     TaskMonitor,
-    S3Client,
+    ObjectStoreClient,
     RDSClient,
     BothEyes<VectorIdRegistryRef>,
     BothEyes<Arc<dyn IrisWorkerPool>>,
@@ -559,7 +556,7 @@ async fn exec_delta(
     config: &Config,
     ctx: &ExecutionContextInfo,
     graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
-    s3_client: &S3Client,
+    s3_client: &ObjectStoreClient,
     imem_graph_stores: &Arc<BothEyes<GraphRef>>,
     mut hawk_handle: GenesisHawkHandle,
     tx_results: &Sender<JobResult>,
@@ -702,7 +699,7 @@ async fn exec_delta(
 /// # Arguments
 ///
 /// * `ctx` - Execution context information.
-/// * `s3_client` - AWS S3 client for checkpoint uploads.
+/// * `s3_client` - Object-store client for checkpoint uploads.
 /// * `registries` - Per-eye VectorId registries used by the batch generator.
 /// * `worker_pools` - Per-eye worker pools that own iris data and cache queries.
 /// * `imem_graph_stores` - In-memory graph stores for checkpoints.
@@ -714,7 +711,7 @@ async fn exec_delta(
 #[allow(clippy::too_many_arguments)]
 async fn exec_indexation(
     ctx: &ExecutionContextInfo,
-    s3_client: &S3Client,
+    s3_client: &ObjectStoreClient,
     registries: &BothEyes<VectorIdRegistryRef>,
     worker_pools: &BothEyes<Arc<dyn IrisWorkerPool>>,
     imem_graph_stores: &Arc<BothEyes<GraphRef>>,
@@ -1049,19 +1046,19 @@ async fn get_service_clients(
     config: &Config,
 ) -> Result<
     (
-        (S3Client, S3Client, RDSClient),
+        (ObjectStoreClient, ObjectStoreClient, RDSClient),
         (IrisStore, (IrisStore, GraphPg<Aby3Store<HawkOps>>)),
     ),
     Report,
 > {
-    /// Returns S3 clients and an RDS client.
+    /// Returns object-store clients and an RDS client.
     ///
-    /// Two S3 clients are constructed so the graph-checkpoint bucket can
-    /// live in a different AWS region than the iris-snapshot bucket.
-    async fn get_aws_clients(config: &Config) -> Result<(S3Client, S3Client, RDSClient)> {
+    /// Two object-store clients are constructed so the graph-checkpoint store
+    /// can live in a different region than the iris-snapshot store.
+    async fn get_aws_clients(
+        config: &Config,
+    ) -> Result<(ObjectStoreClient, ObjectStoreClient, RDSClient)> {
         let force_path_style = config.environment != ENV_PROD && config.environment != ENV_STAGE;
-        let retry_config = RetryConfig::standard().with_max_attempts(5);
-
         let config_region = config.aws.clone().and_then(|aws| aws.region);
         let region_name = config_region
             .clone()
@@ -1085,12 +1082,9 @@ async fn get_service_clients(
             sdk_config.endpoint_url(),
         );
 
-        // S3 client for general AWS operations (iris snapshots, deletions)
-        let s3_config = S3ConfigBuilder::from(&sdk_config)
-            .force_path_style(force_path_style)
-            .retry_config(retry_config.clone())
-            .build();
-        let aws_s3_client = S3Client::from_conf(s3_config);
+        // Object-store client for general operations (iris snapshots, deletions).
+        let aws_s3_client = ObjectStoreClient::new(Some(region_name.clone()), force_path_style)
+            .with_aws_sdk_config(&sdk_config);
 
         // RDS client using general AWS configuration
         tracing::info!(
@@ -1102,20 +1096,15 @@ async fn get_service_clients(
 
         // S3 client for graph checkpoint operations (may be in a different region)
         let checkpoint_region_name = config.graph_checkpoint_bucket_region.clone();
-        let checkpoint_region = Region::new(checkpoint_region_name.clone());
-
         tracing::info!(
             "Checkpoint S3 client: region={}, endpoint={:?}",
             checkpoint_region_name,
             sdk_config.endpoint_url(),
         );
 
-        let checkpoint_s3_config = S3ConfigBuilder::from(&sdk_config)
-            .region(checkpoint_region)
-            .force_path_style(force_path_style)
-            .retry_config(retry_config.clone())
-            .build();
-        let checkpoint_s3_client = S3Client::from_conf(checkpoint_s3_config);
+        let checkpoint_s3_client =
+            ObjectStoreClient::new(Some(checkpoint_region_name), force_path_style)
+                .with_aws_sdk_config(&sdk_config);
 
         Ok((aws_s3_client, checkpoint_s3_client, rds_client))
     }
@@ -1386,7 +1375,7 @@ async fn init_graph_from_stores(
     iris_store: &IrisStore,
     hawk_args: HawkArgs,
     hawk_networking: Box<dyn iris_mpc_cpu::network::mpc::NetworkHandle>,
-    s3_client: &S3Client,
+    s3_client: &ObjectStoreClient,
     shutdown_handler: Arc<ShutdownHandler>,
     max_indexation_id: usize,
     checkpoint: Option<GraphCheckpointState>,

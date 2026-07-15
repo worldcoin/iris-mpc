@@ -1,15 +1,14 @@
 use aws_config::SdkConfig;
-use aws_sdk_s3::{
-    config::Region as S3Region, operation::put_object::PutObjectOutput, Client as S3Client,
-    Error as S3Error,
-};
 use aws_sdk_secretsmanager::{
+    config::Region as S3Region,
     operation::{get_secret_value::GetSecretValueOutput, put_secret_value::PutSecretValueOutput},
     Client as SecretsManagerClient, Error as SecretsManagerError,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use clap::{Parser, Subcommand};
 use eyre::Result;
+use iris_mpc_common::object_store::{path, ObjectStoreClient, ObjectStoreExt};
+use object_store::PutResult;
 use rand::{thread_rng, Rng};
 use reqwest::Client;
 use sodiumoxide::crypto::box_::{curve25519xsalsa20poly1305, PublicKey, SecretKey, Seed};
@@ -188,16 +187,21 @@ async fn rotate_keys(
     rng.fill(&mut seedbuf);
     let pk_seed = Seed(seedbuf);
 
-    let mut s3_config_builder = aws_sdk_s3::config::Builder::from(sdk_config);
     let mut sm_config_builder = aws_sdk_secretsmanager::config::Builder::from(sdk_config);
+    let region = sdk_config
+        .region()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "us-east-1".to_owned());
+    let mut s3_client = ObjectStoreClient::new(Some(region), endpoint_url.is_some())
+        .with_aws_sdk_config(sdk_config);
 
     if let Some(endpoint_url) = endpoint_url.as_ref() {
-        s3_config_builder = s3_config_builder.endpoint_url(endpoint_url);
-        s3_config_builder = s3_config_builder.force_path_style(true);
+        s3_client = s3_client
+            .with_option("aws_endpoint", endpoint_url)
+            .with_option("aws_allow_http", endpoint_url.starts_with("http://"));
         sm_config_builder = sm_config_builder.endpoint_url(endpoint_url);
     }
 
-    let s3_client = S3Client::from_conf(s3_config_builder.build());
     let sm_client = SecretsManagerClient::from_conf(sm_config_builder.build());
 
     let (public_key, private_key) = generate_key_pairs(pk_seed);
@@ -298,18 +302,15 @@ async fn upload_private_key_to_asm(
 }
 
 async fn upload_public_key_to_s3(
-    client: &S3Client,
+    client: &ObjectStoreClient,
     bucket: &str,
     key: &str,
     content: &str,
-) -> Result<PutObjectOutput, S3Error> {
-    Ok(client
-        .put_object()
-        .bucket(bucket)
-        .key(key)
-        .body(content.to_string().into_bytes().into())
-        .send()
-        .await?)
+) -> object_store::Result<PutResult> {
+    client
+        .store(bucket)?
+        .put(&path(key)?, content.as_bytes().to_vec().into())
+        .await
 }
 
 fn generate_key_pairs(seed: Seed) -> (PublicKey, SecretKey) {

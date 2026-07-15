@@ -44,33 +44,17 @@ pub enum SharesDecodingError {
         url: String,
         message: String,
     },
-    #[error("Received error message from S3 for key {}: {}", .key, .message)]
-    S3ResponseContent { key: String, message: String },
+    #[error("Object store error for key {}: {}", .key, .message)]
+    ObjectStoreResponse { key: String, message: String },
     #[error(transparent)]
     SerdeError(#[from] serde_json::error::Error),
-    #[error(transparent)]
-    PresigningConfigError(#[from] aws_sdk_s3::presigning::PresigningConfigError),
-    #[error(transparent)]
-    PresignedRequestError(
-        #[from] Box<aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::get_object::GetObjectError>>,
-    ),
-    #[error("Upload share file error")]
-    UploadS3Error,
+    #[error("Object store upload error")]
+    ObjectStoreUploadError,
 }
 
 impl From<SdkError<GetSecretValueError>> for SharesDecodingError {
     fn from(value: SdkError<GetSecretValueError>) -> Self {
         Self::SecretsManagerError(Box::new(value))
-    }
-}
-
-impl From<aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::get_object::GetObjectError>>
-    for SharesDecodingError
-{
-    fn from(
-        value: aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::get_object::GetObjectError>,
-    ) -> Self {
-        Self::PresignedRequestError(Box::new(value))
     }
 }
 

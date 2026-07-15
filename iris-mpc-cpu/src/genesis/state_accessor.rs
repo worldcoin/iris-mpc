@@ -3,8 +3,8 @@ use crate::{
     execution::hawk_main::HawkOps, hawkers::aby3::aby3_store::Aby3Store,
     hnsw::graph::graph_store::GraphPg,
 };
-use aws_sdk_s3::Client as S3_Client;
 use eyre::Result;
+use iris_mpc_common::object_store::{path, ObjectStoreClient, ObjectStoreExt};
 use iris_mpc_common::{config::Config, helpers::sync::Modification, SerialId};
 use iris_mpc_store::Store;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -27,7 +27,7 @@ pub const STATE_KEY_LAST_INDEXED_MODIFICATION_ID: &str = "last_indexed_modificat
 /// # Arguments
 ///
 /// * `config` - Application configuration instance.
-/// * `s3_client` - A configured AWS S3 client instance.
+/// * `s3_client` - A configured object-store client.
 /// * `max_indexation_id` - Maximum Iris serial identifier to be indexed.
 ///
 /// # Returns
@@ -36,7 +36,7 @@ pub const STATE_KEY_LAST_INDEXED_MODIFICATION_ID: &str = "last_indexed_modificat
 ///
 pub async fn get_iris_deletions(
     config: &Config,
-    s3_client: &S3_Client,
+    s3_client: &ObjectStoreClient,
     max_indexation_id: SerialId,
 ) -> Result<Vec<SerialId>, IndexationError> {
     // Struct for deserialization.
@@ -45,35 +45,33 @@ pub async fn get_iris_deletions(
         deleted_serial_ids: Vec<SerialId>,
     }
 
-    // Set bucket and key based on environment
-    let s3_bucket = format!("wf-smpcv2-{}-sync-protocol", config.environment);
-    let s3_key = format!("{}_deleted_serial_ids.json", config.environment);
+    let store_location = config.iris_deletions_store_location();
+    let object_key = format!("{}_deleted_serial_ids.json", config.environment);
     tracing::info!(
-        "Fetching deleted serial ids from S3 bucket: {}, key: {}",
-        s3_bucket,
-        s3_key
+        "Fetching deleted serial ids from object store: {}, key: {}",
+        store_location,
+        object_key
     );
 
-    // Fetch from S3.
-    let s3_response = s3_client
-        .get_object()
-        .bucket(&s3_bucket)
-        .key(&s3_key)
-        .send()
-        .await
-        .map_err(|err| {
-            tracing::error!("Failed to download file from S3: {}", err);
-            IndexationError::AwsS3ObjectDownload
-        })?;
+    // Fetch from object storage.
+    let store = s3_client.store(&store_location).map_err(|err| {
+        tracing::error!("Failed to construct object store: {err}");
+        IndexationError::AwsS3ObjectDownload
+    })?;
+    let location = path(&object_key).map_err(|err| {
+        tracing::error!("Invalid object key: {err}");
+        IndexationError::AwsS3ObjectDownload
+    })?;
+    let response = store.get(&location).await.map_err(|err| {
+        tracing::error!("Failed to download file from object store: {}", err);
+        IndexationError::AwsS3ObjectDownload
+    })?;
 
-    // Consume S3 object stream.
-    let s3_object_body = s3_response.body.collect().await.map_err(|err| {
+    let s3_object_bytes = response.bytes().await.map_err(|err| {
         tracing::error!("Failed to get object body: {}", err);
         IndexationError::AwsS3ObjectDeserialize
     })?;
 
-    // Decode S3 object bytes.
-    let s3_object_bytes = s3_object_body.into_bytes();
     let S3Object { deleted_serial_ids } =
         serde_json::from_slice(&s3_object_bytes).map_err(|err| {
             tracing::error!("Failed to deserialize S3 object: {}", err);
@@ -280,6 +278,42 @@ async fn unset_state_element(
         })?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod object_store_tests {
+    use super::get_iris_deletions;
+    use iris_mpc_common::{
+        config::Config,
+        object_store::{path, ObjectStoreClient, ObjectStoreExt},
+    };
+
+    #[tokio::test]
+    async fn reads_deletions_from_configured_object_store_location() {
+        let store_location = "memory:///deletion-snapshots";
+        let config: Config = serde_json::from_value(serde_json::json!({
+            "environment": "test",
+            "iris_deletions_store_location": store_location
+        }))
+        .unwrap();
+        let client = ObjectStoreClient::new(None, false);
+        let store = client.store(store_location).unwrap();
+        store
+            .put(
+                &path("test_deleted_serial_ids.json").unwrap(),
+                serde_json::to_vec(&serde_json::json!({
+                    "deleted_serial_ids": [1, 3, 8]
+                }))
+                .unwrap()
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        let deletions = get_iris_deletions(&config, &client, 5).await.unwrap();
+
+        assert_eq!(deletions, vec![1, 3]);
+    }
 }
 
 #[cfg(test)]

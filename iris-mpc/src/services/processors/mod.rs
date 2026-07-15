@@ -3,7 +3,6 @@ pub mod job;
 pub mod modifications_sync;
 pub mod result_message;
 
-use aws_sdk_s3::Client as S3Client;
 use eyre::Result;
 use eyre::{Context, Report};
 use iris_mpc_common::galois_engine::degree4::{
@@ -14,6 +13,7 @@ use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::smpc_request::{
     decrypt_iris_share, get_iris_data_by_party_id, validate_iris_share, ReceiveRequestError,
 };
+use iris_mpc_common::object_store::ObjectStoreClient;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::task::{spawn_blocking, JoinHandle};
@@ -49,7 +49,7 @@ pub fn get_iris_shares_parse_task(
     party_id: usize,
     shares_encryption_key_pairs: SharesEncryptionKeyPairs,
     semaphore: Arc<Semaphore>,
-    s3_client_arc: S3Client,
+    s3_client_arc: ObjectStoreClient,
     bucket_name: String,
     s3_key: String,
 ) -> Result<JoinHandle<ParseSharesTaskResult>, ReceiveRequestError> {

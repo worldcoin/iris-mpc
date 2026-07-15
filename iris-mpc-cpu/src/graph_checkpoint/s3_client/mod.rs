@@ -3,10 +3,9 @@ mod streaming;
 mod streaming_download;
 use std::{io::Cursor, time::Instant};
 
-use aws_sdk_s3::primitives::ByteStream;
-use aws_sdk_s3::Client as S3Client;
 use bytes::Bytes;
 use eyre::{bail, eyre, Result};
+use iris_mpc_common::object_store::{path, ObjectStoreClient, ObjectStoreExt};
 
 use crate::{
     execution::hawk_main::{BothEyes, GraphRef, LEFT, RIGHT},
@@ -32,7 +31,7 @@ pub async fn upload_graph_checkpoint(
     bucket: &str,
     party_id: usize,
     graph_mem: &BothEyes<GraphRef>,
-    s3_client: &S3Client,
+    s3_client: &ObjectStoreClient,
     last_indexed_iris_id: SerialId,
     last_indexed_modification_id: i64,
     graph_mutation_id: Option<i64>,
@@ -71,7 +70,7 @@ pub async fn upload_graph_checkpoint_plaintext(
     bucket: &str,
     party_id: usize,
     graph_mem: &BothEyes<GraphMem>,
-    s3_client: &S3Client,
+    s3_client: &ObjectStoreClient,
     last_indexed_iris_id: SerialId,
     last_indexed_modification_id: i64,
     graph_mutation_id: Option<i64>,
@@ -106,7 +105,7 @@ pub async fn upload_graph_checkpoint_plaintext(
 async fn _upload_graph_checkpoint(
     bucket: &str,
     party_id: usize,
-    s3_client: &S3Client,
+    s3_client: &ObjectStoreClient,
     last_indexed_iris_id: SerialId,
     last_indexed_modification_id: i64,
     graph_mutation_id: Option<i64>,
@@ -169,7 +168,7 @@ async fn _upload_graph_checkpoint(
 }
 
 pub async fn download_graph_checkpoint(
-    s3_client: &S3Client,
+    s3_client: &ObjectStoreClient,
     bucket: &str,
     state: &GraphCheckpointState,
 ) -> Result<BothEyes<GraphMem>> {
@@ -200,7 +199,7 @@ pub async fn download_graph_checkpoint(
 // this is used for the genesis integration tests.
 // it does not convert between graph types
 pub async fn download_genesis_checkpoint_plaintext(
-    s3_client: &S3Client,
+    s3_client: &ObjectStoreClient,
     bucket: &str,
     state: &GraphCheckpointState,
 ) -> Result<BothEyes<GraphMem>> {
@@ -280,7 +279,7 @@ pub async fn save_checkpoint_state<V: VectorStore>(
 /// recorded by all parties (the startup-agreed common checkpoint).
 pub async fn cleanup_checkpoints<V: VectorStore>(
     bucket: &str,
-    s3_client: &S3Client,
+    s3_client: &ObjectStoreClient,
     current_state: &GraphCheckpointState,
     retain_from_id: Option<i64>,
     graph_store: &GraphPg<V>,
@@ -320,54 +319,42 @@ pub async fn cleanup_checkpoints<V: VectorStore>(
     Ok(())
 }
 
-/// Verifies that the S3 client has read, write, and delete access to the
-/// checkpoint bucket. Uploads a small sentinel object, reads it back, and
+/// Verifies read, write, and delete access to the checkpoint store. Uploads a
+/// small sentinel object, reads it back, and
 /// deletes it. This catches misconfigured buckets/regions/IAM before any
 /// mutations occur.
 pub async fn verify_s3_checkpoint_access(
-    s3_client: &S3Client,
+    s3_client: &ObjectStoreClient,
     bucket: &str,
     party_id: usize,
 ) -> Result<()> {
     let key = format!("genesis/{party_id}/_access_check");
     let body = b"access_check";
 
+    let store = s3_client.store(bucket)?;
+    let location = path(&key)?;
+
     // Write
-    s3_client
-        .put_object()
-        .bucket(bucket)
-        .key(&key)
-        .body(ByteStream::from_static(body))
-        .send()
+    store
+        .put(&location, Bytes::from_static(body).into())
         .await
-        .map_err(|e| eyre!("S3 checkpoint bucket write check failed: {e}"))?;
+        .map_err(|e| eyre!("Checkpoint object-store write check failed: {e}"))?;
 
     // Read
-    let resp = s3_client
-        .get_object()
-        .bucket(bucket)
-        .key(&key)
-        .send()
+    let data = store
+        .get(&location)
         .await
-        .map_err(|e| eyre!("S3 checkpoint bucket read check failed: {e}"))?;
-    let data = resp
-        .body
-        .collect()
+        .map_err(|e| eyre!("Checkpoint object-store read check failed: {e}"))?
+        .bytes()
         .await
-        .map_err(|e| eyre!("S3 checkpoint bucket read check failed to collect body: {e}"))?;
-    if data.into_bytes().as_ref() != body {
-        bail!("S3 checkpoint bucket read check returned unexpected content");
+        .map_err(|e| eyre!("Checkpoint object-store body read failed: {e}"))?;
+    if data.as_ref() != body {
+        bail!("Checkpoint object-store read check returned unexpected content");
     }
 
     // Delete
-    if let Err(e) = s3_client
-        .delete_object()
-        .bucket(bucket)
-        .key(&key)
-        .send()
-        .await
-    {
-        tracing::warn!("S3 checkpoint bucket delete check failed: {e}");
+    if let Err(e) = store.delete(&location).await {
+        tracing::warn!("Checkpoint object-store delete check failed: {e}");
     }
 
     Ok(())
@@ -379,29 +366,21 @@ pub async fn verify_s3_checkpoint_access(
 ///
 /// # Arguments
 ///
-/// * `s3_client` - Authenticated S3 client.
-/// * `bucket`    - Name of the S3 bucket to query.
+/// * `s3_client` - Configured object-store client.
+/// * `bucket`    - Object-store location to query.
 /// * `key`       - Object key to check for existence.
-pub async fn s3_key_exists(s3_client: &S3Client, bucket: &str, key: &str) -> Result<bool> {
-    match s3_client.head_object().bucket(bucket).key(key).send().await {
+pub async fn s3_key_exists(s3_client: &ObjectStoreClient, bucket: &str, key: &str) -> Result<bool> {
+    let store = s3_client.store(bucket)?;
+    let location = path(key)?;
+    match store.head(&location).await {
         Ok(_) => Ok(true),
-        Err(e) => {
-            // `head_object` returns a 404 when the key does not exist.
-            // The SDK surfaces this as a `NotFound` service error.
-            if e.as_service_error()
-                .map(|se| se.is_not_found())
-                .unwrap_or(false)
-            {
-                Ok(false)
-            } else {
-                Err(eyre!("S3 head_object failed for s3://{bucket}/{key}: {e}"))
-            }
-        }
+        Err(object_store::Error::NotFound { .. }) => Ok(false),
+        Err(e) => Err(eyre!("Object metadata failed for {bucket}/{key}: {e}")),
     }
 }
 
 async fn download_and_hash(
-    s3_client: &S3Client,
+    s3_client: &ObjectStoreClient,
     bucket: &str,
     state: &GraphCheckpointState,
 ) -> Result<Bytes> {

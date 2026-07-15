@@ -10,7 +10,7 @@ repository.workspace = true
 [dependencies]
 aws-config.workspace = true
 aws-sdk-rds.workspace = true
-aws-sdk-s3.workspace = true
+object_store.workspace = true
 axum.workspace = true
 blake3.workspace = true
 tokio.workspace = true

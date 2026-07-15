@@ -2,12 +2,13 @@ use std::{env, path::Path, time::Duration};
 
 use async_from::AsyncFrom;
 use aws_config::{retry::RetryConfig, timeout::TimeoutConfig, SdkConfig};
-use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::{config::Builder, config::Region, Client as SQSClient};
 
+use iris_mpc_common::config::resolve_iris_deletions_store_location;
 use iris_mpc_common::config::{ENV_PROD, ENV_STAGE};
+use iris_mpc_common::object_store::ObjectStoreClient;
 
 use crate::client::AwsOptions;
 
@@ -26,6 +27,9 @@ pub struct AwsClientConfig {
     /// S3: request ingress queue URL.
     s3_request_bucket_name: String,
 
+    /// Object-store location for the Iris deletion snapshot.
+    iris_deletions_store_location: String,
+
     /// SDK: associated AWS SDK configuration.
     sdk: SdkConfig,
 
@@ -42,10 +46,12 @@ pub struct AwsClientConfig {
 #[async_from::async_trait]
 impl AsyncFrom<AwsOptions> for AwsClientConfig {
     async fn async_from(opts: AwsOptions) -> Self {
-        AwsClientConfig::new(
+        let iris_deletions_store_location = opts.iris_deletions_store_location();
+        AwsClientConfig::new_with_iris_deletions_store_location(
             opts.environment().to_owned(),
             opts.public_key_base_url().to_owned(),
             opts.s3_request_bucket_name().to_owned(),
+            iris_deletions_store_location,
             opts.sns_request_topic_arn().to_owned(),
             opts.sqs_long_poll_wait_time().to_owned(),
             opts.sqs_response_queue_urls().to_owned(),
@@ -65,6 +71,10 @@ impl AwsClientConfig {
 
     pub(crate) fn s3_request_bucket_name(&self) -> &str {
         &self.s3_request_bucket_name
+    }
+
+    pub(crate) fn iris_deletions_store_location(&self) -> &str {
+        &self.iris_deletions_store_location
     }
 
     pub(super) fn sdk(&self) -> &SdkConfig {
@@ -91,10 +101,34 @@ impl AwsClientConfig {
         sqs_long_poll_wait_time: usize,
         sqs_response_queue_urls: Vec<String>,
     ) -> Self {
+        let iris_deletions_store_location =
+            resolve_iris_deletions_store_location(&environment, None);
+        Self::new_with_iris_deletions_store_location(
+            environment,
+            public_key_base_url,
+            s3_request_bucket_name,
+            iris_deletions_store_location,
+            sns_request_topic_arn,
+            sqs_long_poll_wait_time,
+            sqs_response_queue_urls,
+        )
+        .await
+    }
+
+    pub async fn new_with_iris_deletions_store_location(
+        environment: String,
+        public_key_base_url: String,
+        s3_request_bucket_name: String,
+        iris_deletions_store_location: String,
+        sns_request_topic_arn: String,
+        sqs_long_poll_wait_time: usize,
+        sqs_response_queue_urls: Vec<String>,
+    ) -> Self {
         Self {
             environment,
             public_key_base_url,
             s3_request_bucket_name,
+            iris_deletions_store_location,
             sdk: get_sdk_config().await,
             sns_request_topic_arn,
             sqs_long_poll_wait_time,
@@ -149,15 +183,15 @@ impl From<&AwsClientConfig> for SNSClient {
     }
 }
 
-impl From<&AwsClientConfig> for S3Client {
-    fn from(config: &AwsClientConfig) -> Self {
-        let force_path_style =
-            config.environment() != ENV_PROD && config.environment() != ENV_STAGE;
-        let config_builder = S3ConfigBuilder::from(config.sdk())
-            .retry_config(RetryConfig::standard().with_max_attempts(5))
-            .force_path_style(force_path_style);
-
-        S3Client::from_conf(config_builder.build())
+impl AwsClientConfig {
+    pub(crate) fn object_store_client(&self) -> ObjectStoreClient {
+        let force_path_style = self.environment() != ENV_PROD && self.environment() != ENV_STAGE;
+        let region = self
+            .sdk()
+            .region()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| AWS_DEFAULT_REGION.to_owned());
+        ObjectStoreClient::new(Some(region), force_path_style).with_aws_sdk_config(self.sdk())
     }
 }
 

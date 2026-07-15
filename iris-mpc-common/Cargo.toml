@@ -10,11 +10,12 @@ repository.workspace = true
 [features]
 default = ["helpers"]
 helpers = [
+  "dep:async-trait",
   "dep:aws-config",
+  "dep:aws-credential-types",
   "dep:aws-sdk-kms",
   "dep:aws-sdk-sns",
   "dep:aws-sdk-sqs",
-  "dep:aws-sdk-s3",
   "dep:aws-sdk-secretsmanager",
   "dep:reqwest",
 ]
@@ -22,11 +23,13 @@ explicit-sns-batching = ["dep:zstd"]
 
 [dependencies]
 aws-config = { workspace = true, optional = true }
+aws-credential-types = { workspace = true, optional = true }
 aws-sdk-kms = { workspace = true, optional = true }
 aws-sdk-sns = { workspace = true, optional = true }
 aws-sdk-sqs = { workspace = true, optional = true }
-aws-sdk-s3 = { workspace = true, optional = true }
 aws-sdk-secretsmanager = { workspace = true, optional = true }
+object_store.workspace = true
+async-trait = { workspace = true, optional = true }
 clap.workspace = true
 rand.workspace = true
 bytemuck.workspace = true
@@ -71,4 +74,3 @@ zstd = { version = "0.13", optional = true }
 
 [dev-dependencies]
 float_eq = "1"
-aws-credential-types = "1.2.1"

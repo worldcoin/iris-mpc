@@ -76,7 +76,7 @@ pub async fn base_genesis_e2e_init(configs: &HawkConfigs, s3_deletion_ids: Vec<u
     let aws_clients = get_aws_clients(config).await.unwrap();
     upload_iris_deletions(
         &s3_deletion_ids,
-        &aws_clients.s3_client,
+        &aws_clients.object_store_client,
         &config.environment,
     )
     .await
@@ -106,7 +106,7 @@ pub async fn base_genesis_e2e_init_assertions(
     // Assert localstack
     let config = &configs[0];
     let aws_clients = get_aws_clients(config).await.unwrap();
-    let deletions = get_iris_deletions(config, &aws_clients.s3_client, 100)
+    let deletions = get_iris_deletions(config, &aws_clients.object_store_client, 100)
         .await
         .unwrap();
     assert_eq!(deletions.len(), n_deletions);

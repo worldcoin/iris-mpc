@@ -189,8 +189,12 @@ async fn main() -> Result<()> {
     let graph_store: GraphPg<iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store> =
         GraphPg::new(&postgres).await?;
 
-    let aws_cfg = aws_config::from_env().load().await;
-    let s3_client = aws_sdk_s3::Client::new(&aws_cfg);
+    let aws_config = aws_config::from_env().load().await;
+    let s3_client = iris_mpc_common::object_store::ObjectStoreClient::new(
+        None,
+        std::env::var("AWS_ENDPOINT_URL").is_ok(),
+    )
+    .with_aws_sdk_config(&aws_config);
 
     // TLS is supplied via SMPC__TLS__* env vars (same path as Hawk Main), not
     // CLI flags; load it from the SMPC-prefixed config and feed it through.

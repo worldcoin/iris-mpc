@@ -113,7 +113,7 @@ impl MpcNodes {
                 .await?
                 .ok_or_else(|| eyre::eyre!("No checkpoint found for node {}", i))?;
             let s3_graphs: BothEyes<GraphMem> = download_graph_checkpoint(
-                &aws_clients.checkpoint_s3_client,
+                &aws_clients.checkpoint_object_store_client,
                 &config.graph_checkpoint_bucket_name,
                 &checkpoint_state,
             )
@@ -171,7 +171,7 @@ impl MpcNodes {
                     checkpoint.s3_key
                 );
                 if let Err(e) =
-                    delete_graph(&aws_clients.s3_client, bucket, &checkpoint.s3_key).await
+                    delete_graph(&aws_clients.object_store_client, bucket, &checkpoint.s3_key).await
                 {
                     tracing::warn!(
                         "Failed to delete S3 checkpoint {}: {:?}",
