@@ -1624,6 +1624,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         let iris = StoredIrisRef {
@@ -1674,6 +1675,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         let iris = StoredIrisRef {
@@ -1721,6 +1723,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         let iris = StoredIrisRef {
@@ -1765,6 +1768,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         let iris = StoredIrisRef {
@@ -1819,6 +1823,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         let iris = StoredIrisRef {
