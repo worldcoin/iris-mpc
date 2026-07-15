@@ -152,6 +152,12 @@ impl MpcNodes {
     /// This should be called during test teardown to prevent leftover checkpoints
     /// from interfering with subsequent test runs.
     pub async fn cleanup_s3_checkpoints(&self, configs: &HawkConfigs) -> Result<()> {
+        // Post-test inspection (e.g. scripts/run-sanity-checks-genesis-e2e.sh)
+        // needs the final checkpoint object to survive teardown.
+        if std::env::var("E2E_KEEP_S3_CHECKPOINTS").is_ok_and(|v| v == "1") {
+            tracing::info!("Teardown: keeping S3 checkpoints (E2E_KEEP_S3_CHECKPOINTS=1)");
+            return Ok(());
+        }
         for (node, config) in self.nodes.iter().zip(configs.iter()) {
             let checkpoints = node
                 .cpu_stores
