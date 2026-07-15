@@ -13,26 +13,60 @@ use tokio::{io::AsyncReadExt, sync::mpsc::Sender};
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
     + MASK_CODE_LENGTH * mem::size_of::<u16>() * 2
     + mem::size_of::<u32>()
-    + mem::size_of::<u16>(); // 75 KB
+    + mem::size_of::<u16>(); // 75 KB, identical for both snapshot formats
 
 const MAX_RANGE_SIZE: usize = 200; // Download chunks in sub-chunks of 200 elements = 15 MB
+
+/// On-disk encoding of the share buffers inside a snapshot chunk. Both
+/// formats have identical record sizes, so the format cannot be inferred from
+/// the data — it is carried by the snapshot marker file name (see
+/// [`LastSnapshotDetails`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SnapshotFormat {
+    /// Format 1 (legacy, implied by 3-part marker names): each share is
+    /// stored as two byte planes with each u16 half encoded as `byte ^ 0x80`
+    /// — the zero-point limb encoding of the old GPU kernel.
+    V1LegacyLimbs,
+    /// Format 2: each share is a plain little-endian u16 array, identical to
+    /// the database representation. Consumers derive their compute encoding
+    /// at load time.
+    V2PlainU16,
+}
 
 pub struct S3StoredIris {
     #[allow(dead_code)]
     id: i64,
-    left_code_even: Vec<u8>,
-    left_code_odd: Vec<u8>,
-    left_mask_even: Vec<u8>,
-    left_mask_odd: Vec<u8>,
-    right_code_even: Vec<u8>,
-    right_code_odd: Vec<u8>,
-    right_mask_even: Vec<u8>,
-    right_mask_odd: Vec<u8>,
     version_id: i16,
+    shares: S3IrisShares,
+}
+
+/// The share buffers of one S3 record, in whichever encoding the snapshot
+/// uses.
+pub enum S3IrisShares {
+    /// [`SnapshotFormat::V1LegacyLimbs`]: `^ 0x80` byte planes
+    /// (odd = low bytes, even = high bytes of the u16 shares).
+    LegacyLimbs {
+        left_code_odd: Vec<u8>,
+        left_code_even: Vec<u8>,
+        left_mask_odd: Vec<u8>,
+        left_mask_even: Vec<u8>,
+        right_code_odd: Vec<u8>,
+        right_code_even: Vec<u8>,
+        right_mask_odd: Vec<u8>,
+        right_mask_even: Vec<u8>,
+    },
+    /// [`SnapshotFormat::V2PlainU16`]: plain u16 shares (database
+    /// representation).
+    PlainU16 {
+        left_code: Vec<u16>,
+        left_mask: Vec<u16>,
+        right_code: Vec<u16>,
+        right_mask: Vec<u16>,
+    },
 }
 
 impl S3StoredIris {
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, eyre::Error> {
+    pub fn from_bytes(bytes: &[u8], format: SnapshotFormat) -> Result<Self, eyre::Error> {
         let mut cursor = 0;
 
         // Helper closure to extract a slice of a given size
@@ -45,6 +79,19 @@ impl S3StoredIris {
                 *cursor += size;
                 Ok(slice.to_vec())
             };
+        // Helper closure to extract `len` little-endian u16s
+        let extract_u16s =
+            |bytes: &[u8], cursor: &mut usize, len: usize| -> Result<Vec<u16>, eyre::Error> {
+                if *cursor + len * 2 > bytes.len() {
+                    bail!("Exceeded total bytes while extracting u16 slice",);
+                }
+                let out = bytes[*cursor..*cursor + len * 2]
+                    .chunks_exact(2)
+                    .map(|b| u16::from_le_bytes([b[0], b[1]]))
+                    .collect();
+                *cursor += len * 2;
+                Ok(out)
+            };
 
         // Parse `id` (i64)
         let id_bytes = extract_slice(bytes, &mut cursor, 4)?;
@@ -54,15 +101,35 @@ impl S3StoredIris {
                 .map_err(|_| eyre!("Failed to convert id bytes to i64"))?,
         ) as i64;
 
-        // parse codes and masks for each limb separately
-        let left_code_odd = extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH)?;
-        let left_code_even = extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH)?;
-        let left_mask_odd = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH)?;
-        let left_mask_even = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH)?;
-        let right_code_odd = extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH)?;
-        let right_code_even = extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH)?;
-        let right_mask_odd = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH)?;
-        let right_mask_even = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH)?;
+        let shares = match format {
+            SnapshotFormat::V1LegacyLimbs => {
+                // parse codes and masks for each limb plane separately
+                let left_code_odd = extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH)?;
+                let left_code_even = extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH)?;
+                let left_mask_odd = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH)?;
+                let left_mask_even = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH)?;
+                let right_code_odd = extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH)?;
+                let right_code_even = extract_slice(bytes, &mut cursor, IRIS_CODE_LENGTH)?;
+                let right_mask_odd = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH)?;
+                let right_mask_even = extract_slice(bytes, &mut cursor, MASK_CODE_LENGTH)?;
+                S3IrisShares::LegacyLimbs {
+                    left_code_odd,
+                    left_code_even,
+                    left_mask_odd,
+                    left_mask_even,
+                    right_code_odd,
+                    right_code_even,
+                    right_mask_odd,
+                    right_mask_even,
+                }
+            }
+            SnapshotFormat::V2PlainU16 => S3IrisShares::PlainU16 {
+                left_code: extract_u16s(bytes, &mut cursor, IRIS_CODE_LENGTH)?,
+                left_mask: extract_u16s(bytes, &mut cursor, MASK_CODE_LENGTH)?,
+                right_code: extract_u16s(bytes, &mut cursor, IRIS_CODE_LENGTH)?,
+                right_mask: extract_u16s(bytes, &mut cursor, MASK_CODE_LENGTH)?,
+            },
+        };
 
         // Parse `version_id` (i16)
         let version_id_bytes = extract_slice(bytes, &mut cursor, 2)?;
@@ -74,15 +141,8 @@ impl S3StoredIris {
 
         Ok(S3StoredIris {
             id,
-            left_code_even,
-            left_code_odd,
-            left_mask_even,
-            left_mask_odd,
-            right_code_even,
-            right_code_odd,
-            right_mask_even,
-            right_mask_odd,
             version_id,
+            shares,
         })
     }
 
@@ -98,36 +158,8 @@ impl S3StoredIris {
         VectorId::new(self.id as u32, self.version_id)
     }
 
-    pub fn left_code_odd(&self) -> &Vec<u8> {
-        &self.left_code_odd
-    }
-
-    pub fn left_code_even(&self) -> &Vec<u8> {
-        &self.left_code_even
-    }
-
-    pub fn left_mask_odd(&self) -> &Vec<u8> {
-        &self.left_mask_odd
-    }
-
-    pub fn left_mask_even(&self) -> &Vec<u8> {
-        &self.left_mask_even
-    }
-
-    pub fn right_code_odd(&self) -> &Vec<u8> {
-        &self.right_code_odd
-    }
-
-    pub fn right_code_even(&self) -> &Vec<u8> {
-        &self.right_code_even
-    }
-
-    pub fn right_mask_odd(&self) -> &Vec<u8> {
-        &self.right_mask_odd
-    }
-
-    pub fn right_mask_even(&self) -> &Vec<u8> {
-        &self.right_mask_even
+    pub fn shares(&self) -> &S3IrisShares {
+        &self.shares
     }
 
     pub fn id(&self) -> i64 {
@@ -230,24 +262,44 @@ pub struct LastSnapshotDetails {
     pub timestamp: i64,
     pub last_serial_id: i64,
     pub chunk_size: i64,
+    pub format: SnapshotFormat,
 }
 
 impl LastSnapshotDetails {
     // Parse last snapshot from s3 file name.
-    // It is in {unixTime}_{batchSize}_{lastSerialId} format.
+    // It is in {unixTime}_{batchSize}_{lastSerialId} format, with an optional
+    // fourth {formatVersion} part ({unixTime}_{batchSize}_{lastSerialId}_{format}).
+    // A 3-part name implies format 1 (legacy limb planes). Marker files with an
+    // unknown format version are skipped, so an older importer never
+    // misinterprets snapshots it cannot decode (record sizes are identical
+    // across formats, so a wrong guess would silently load garbage shares).
     pub fn new_from_str(last_snapshot_str: &str) -> Option<Self> {
         let parts: Vec<&str> = last_snapshot_str.split('_').collect();
-        match parts.len() {
-            3 => Some(Self {
-                timestamp: parts[0].parse().unwrap(),
-                chunk_size: parts[1].parse().unwrap(),
-                last_serial_id: parts[2].parse().unwrap(),
-            }),
+        let format = match parts.len() {
+            3 => SnapshotFormat::V1LegacyLimbs,
+            4 => match parts[3] {
+                "1" => SnapshotFormat::V1LegacyLimbs,
+                "2" => SnapshotFormat::V2PlainU16,
+                other => {
+                    tracing::warn!(
+                        "Skipping snapshot with unsupported format version {}: {}",
+                        other,
+                        last_snapshot_str
+                    );
+                    return None;
+                }
+            },
             _ => {
                 tracing::warn!("Invalid export timestamp file name: {}", last_snapshot_str);
-                None
+                return None;
             }
-        }
+        };
+        Some(Self {
+            timestamp: parts[0].parse().unwrap(),
+            chunk_size: parts[1].parse().unwrap(),
+            last_serial_id: parts[2].parse().unwrap(),
+            format,
+        })
     }
 }
 
@@ -320,11 +372,12 @@ pub async fn fetch_and_parse_chunks(
         let tx = tx.clone();
         let shutdown = Arc::clone(&shutdown_handler);
         let key = format!("{}/{}.bin", prefix_name, chunk_id);
+        let format = last_snapshot_details.format;
 
         async move {
             tokio::spawn(async move {
                 tokio::select! {
-                    res = fetch_single_chunk(store, key, offset_within_chunk, requested_range_size, tx, max_retries, initial_backoff_ms) => res,
+                    res = fetch_single_chunk(store, key, offset_within_chunk, requested_range_size, format, tx, max_retries, initial_backoff_ms) => res,
                     _ = shutdown.wait_for_shutdown() => Err(eyre::eyre!("Shutdown requested")),
                 }
             })
@@ -342,11 +395,13 @@ pub async fn fetch_and_parse_chunks(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn fetch_single_chunk(
     store: Arc<impl ObjectStore>,
     key: String,
     offset: usize,
     size: usize,
+    format: SnapshotFormat,
     tx: Sender<S3StoredIris>,
     max_retries: usize,
     initial_backoff_ms: u64,
@@ -356,7 +411,8 @@ async fn fetch_single_chunk(
 
     loop {
         attempt += 1;
-        match read_range_in_chunk(Arc::clone(&store), &key, offset, size, tx.clone()).await {
+        match read_range_in_chunk(Arc::clone(&store), &key, offset, size, format, tx.clone()).await
+        {
             Ok(_) => {
                 return Ok(());
             }
@@ -394,6 +450,7 @@ async fn read_range_in_chunk(
     key: &str,
     offset_within_chunk: usize,
     range_size: usize,
+    format: SnapshotFormat,
     tx: Sender<S3StoredIris>,
 ) -> Result<()> {
     let mut stream = store
@@ -412,7 +469,7 @@ async fn read_range_in_chunk(
     loop {
         match stream.read_exact(&mut slice).await {
             Ok(_) => {
-                let iris = S3StoredIris::from_bytes(&slice)?;
+                let iris = S3StoredIris::from_bytes(&slice, format)?;
                 tx.send(iris).await?;
             }
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
@@ -567,6 +624,7 @@ mod tests {
             timestamp: 0,
             last_serial_id: n as i64,
             chunk_size: chunk_size as i64,
+            format: SnapshotFormat::V1LegacyLimbs,
         }
     }
 
@@ -583,6 +641,149 @@ mod tests {
         assert_eq!(last_snapshot.timestamp, 125);
         assert_eq!(last_snapshot.last_serial_id, 958);
         assert_eq!(last_snapshot.chunk_size, 100);
+        assert_eq!(last_snapshot.format, SnapshotFormat::V1LegacyLimbs);
+    }
+
+    #[tokio::test]
+    async fn test_last_snapshot_timestamp_versioned_markers() {
+        let mut store = MockStore::new();
+        store.add_timestamp_file("out/timestamps/123_100_954");
+        store.add_timestamp_file("out/timestamps/126_100_960_2");
+        // Unknown format versions must be skipped, not misread.
+        store.add_timestamp_file("out/timestamps/127_100_961_9");
+
+        let last_snapshot = last_snapshot_timestamp(&store, "out".to_string())
+            .await
+            .unwrap();
+        assert_eq!(last_snapshot.timestamp, 126);
+        assert_eq!(last_snapshot.last_serial_id, 960);
+        assert_eq!(last_snapshot.format, SnapshotFormat::V2PlainU16);
+    }
+
+    #[test]
+    fn test_snapshot_marker_format_parsing() {
+        let v1 = LastSnapshotDetails::new_from_str("123_100_954").unwrap();
+        assert_eq!(v1.format, SnapshotFormat::V1LegacyLimbs);
+        let v1_explicit = LastSnapshotDetails::new_from_str("123_100_954_1").unwrap();
+        assert_eq!(v1_explicit.format, SnapshotFormat::V1LegacyLimbs);
+        let v2 = LastSnapshotDetails::new_from_str("123_100_954_2").unwrap();
+        assert_eq!(v2.format, SnapshotFormat::V2PlainU16);
+        assert_eq!(v2.timestamp, 123);
+        assert_eq!(v2.chunk_size, 100);
+        assert_eq!(v2.last_serial_id, 954);
+        assert!(LastSnapshotDetails::new_from_str("123_100_954_3").is_none());
+        assert!(LastSnapshotDetails::new_from_str("123_100").is_none());
+    }
+
+    /// Serialize one record in v2 (plain LE u16) layout.
+    fn v2_record_bytes(
+        id: u32,
+        version_id: u16,
+        left_code: &[u16],
+        left_mask: &[u16],
+        right_code: &[u16],
+        right_mask: &[u16],
+    ) -> Vec<u8> {
+        let mut out = Vec::with_capacity(SINGLE_ELEMENT_SIZE);
+        out.extend_from_slice(&id.to_be_bytes());
+        for share in [left_code, left_mask, right_code, right_mask] {
+            for v in share {
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        out.extend_from_slice(&version_id.to_be_bytes());
+        out
+    }
+
+    #[test]
+    fn test_from_bytes_v2_roundtrip() {
+        let mut rng = rand::thread_rng();
+        let left_code: Vec<u16> = (0..IRIS_CODE_LENGTH).map(|_| rng.gen()).collect();
+        let left_mask: Vec<u16> = (0..MASK_CODE_LENGTH).map(|_| rng.gen()).collect();
+        let right_code: Vec<u16> = (0..IRIS_CODE_LENGTH).map(|_| rng.gen()).collect();
+        let right_mask: Vec<u16> = (0..MASK_CODE_LENGTH).map(|_| rng.gen()).collect();
+
+        let bytes = v2_record_bytes(42, 7, &left_code, &left_mask, &right_code, &right_mask);
+        assert_eq!(bytes.len(), SINGLE_ELEMENT_SIZE);
+
+        let iris = S3StoredIris::from_bytes(&bytes, SnapshotFormat::V2PlainU16).unwrap();
+        assert_eq!(iris.serial_id(), 42);
+        assert_eq!(iris.version_id(), 7);
+        match iris.shares() {
+            S3IrisShares::PlainU16 {
+                left_code: lc,
+                left_mask: lm,
+                right_code: rc,
+                right_mask: rm,
+            } => {
+                assert_eq!(lc, &left_code);
+                assert_eq!(lm, &left_mask);
+                assert_eq!(rc, &right_code);
+                assert_eq!(rm, &right_mask);
+            }
+            _ => panic!("expected PlainU16 shares"),
+        }
+    }
+
+    /// The same logical shares written in both formats must decode to the same
+    /// u16 values (v1 planes hold `byte ^ 0x80` of each u16 half).
+    #[test]
+    fn test_v1_v2_encode_same_logical_shares() {
+        let mut rng = rand::thread_rng();
+        let shares: [Vec<u16>; 4] = [
+            (0..IRIS_CODE_LENGTH).map(|_| rng.gen()).collect(),
+            (0..MASK_CODE_LENGTH).map(|_| rng.gen()).collect(),
+            (0..IRIS_CODE_LENGTH).map(|_| rng.gen()).collect(),
+            (0..MASK_CODE_LENGTH).map(|_| rng.gen()).collect(),
+        ];
+
+        // v1: per share, the odd plane then the even plane, each `^ 0x80`.
+        let mut v1 = Vec::with_capacity(SINGLE_ELEMENT_SIZE);
+        v1.extend_from_slice(&5u32.to_be_bytes());
+        for share in &shares {
+            v1.extend(share.iter().map(|v| (*v as u8) ^ 0x80));
+            v1.extend(share.iter().map(|v| ((*v >> 8) as u8) ^ 0x80));
+        }
+        v1.extend_from_slice(&3u16.to_be_bytes());
+        assert_eq!(v1.len(), SINGLE_ELEMENT_SIZE);
+
+        let v2 = v2_record_bytes(5, 3, &shares[0], &shares[1], &shares[2], &shares[3]);
+
+        let iris_v1 = S3StoredIris::from_bytes(&v1, SnapshotFormat::V1LegacyLimbs).unwrap();
+        let iris_v2 = S3StoredIris::from_bytes(&v2, SnapshotFormat::V2PlainU16).unwrap();
+
+        let decode_plane = |odd: &[u8], even: &[u8]| -> Vec<u16> {
+            odd.iter()
+                .zip(even)
+                .map(|(o, e)| u16::from_le_bytes([o ^ 0x80, e ^ 0x80]))
+                .collect()
+        };
+        let (
+            S3IrisShares::LegacyLimbs {
+                left_code_odd,
+                left_code_even,
+                left_mask_odd,
+                left_mask_even,
+                right_code_odd,
+                right_code_even,
+                right_mask_odd,
+                right_mask_even,
+            },
+            S3IrisShares::PlainU16 {
+                left_code,
+                left_mask,
+                right_code,
+                right_mask,
+            },
+        ) = (iris_v1.shares(), iris_v2.shares())
+        else {
+            panic!("unexpected share variants");
+        };
+        assert_eq!(&decode_plane(left_code_odd, left_code_even), left_code);
+        assert_eq!(&decode_plane(left_mask_odd, left_mask_even), left_mask);
+        assert_eq!(&decode_plane(right_code_odd, right_code_even), right_code);
+        assert_eq!(&decode_plane(right_mask_odd, right_mask_even), right_mask);
+        assert_eq!(left_code, &shares[0]);
     }
 
     #[tokio::test]
@@ -605,6 +806,7 @@ mod tests {
             timestamp: 0,
             last_serial_id: MOCK_ENTRIES as i64,
             chunk_size: MOCK_CHUNK_SIZE as i64,
+            format: SnapshotFormat::V1LegacyLimbs,
         };
         let (tx, mut rx) = mpsc::channel::<S3StoredIris>(1024);
         let store_arc = Arc::new(store);
@@ -631,6 +833,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_fetch_and_parse_chunks_v2() {
+        const MOCK_ENTRIES: usize = 27;
+        const MOCK_CHUNK_SIZE: usize = 10;
+        let mut store = MockStore::new();
+        let n_chunks = MOCK_ENTRIES.div_ceil(MOCK_CHUNK_SIZE);
+        for i in 0..n_chunks {
+            let start_serial_id = i * MOCK_CHUNK_SIZE + 1;
+            let end_serial_id = min((i + 1) * MOCK_CHUNK_SIZE, MOCK_ENTRIES);
+            store.add_test_data(
+                &format!("out/{start_serial_id}.bin"),
+                (start_serial_id..=end_serial_id).map(dummy_entry).collect(),
+            );
+        }
+
+        let mut last_snapshot_details = snapshot(MOCK_ENTRIES, MOCK_CHUNK_SIZE);
+        last_snapshot_details.format = SnapshotFormat::V2PlainU16;
+        let (tx, mut rx) = mpsc::channel::<S3StoredIris>(1024);
+        let _res = fetch_and_parse_chunks(
+            Arc::new(store),
+            1,
+            "out".to_string(),
+            last_snapshot_details,
+            None,
+            tx,
+            1,
+            0,
+            Arc::new(ShutdownHandler::new(1)),
+        )
+        .await;
+        let mut ids: HashSet<usize> = HashSet::from_iter(1..=MOCK_ENTRIES);
+        while let Some(iris) = rx.recv().await {
+            assert!(
+                matches!(iris.shares(), S3IrisShares::PlainU16 { .. }),
+                "v2 snapshots must parse into plain u16 shares"
+            );
+            ids.remove(&iris.serial_id());
+        }
+        assert!(ids.is_empty());
+    }
+
+    #[tokio::test]
     async fn test_fetch_and_parse_chunks_respects_max_serial_id_to_load() {
         const SNAPSHOT_ENTRIES: usize = 36;
         const MAX_SERIAL_ID_TO_LOAD: usize = 25;
@@ -651,6 +894,7 @@ mod tests {
             timestamp: 0,
             last_serial_id: SNAPSHOT_ENTRIES as i64,
             chunk_size: MOCK_CHUNK_SIZE as i64,
+            format: SnapshotFormat::V1LegacyLimbs,
         };
         let (tx, mut rx) = mpsc::channel::<S3StoredIris>(1024);
         let store_arc = Arc::new(store);
@@ -707,6 +951,7 @@ mod tests {
             timestamp: 0,
             last_serial_id: MOCK_ENTRIES as i64,
             chunk_size: MOCK_CHUNK_SIZE as i64,
+            format: SnapshotFormat::V1LegacyLimbs,
         };
 
         let (tx, mut rx) = mpsc::channel::<S3StoredIris>(1024);
