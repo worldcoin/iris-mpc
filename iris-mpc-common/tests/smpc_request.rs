@@ -1,6 +1,4 @@
 mod tests {
-    use aws_credential_types::{provider::SharedCredentialsProvider, Credentials};
-    use aws_sdk_s3::Client as S3Client;
     use base64::{engine::general_purpose::STANDARD, Engine};
     use iris_mpc_common::helpers::{
         key_pair::{SharesDecodingError, SharesEncryptionKeyPairs},
@@ -10,10 +8,11 @@ mod tests {
             ReAuthRequest, UniquenessRequest,
         },
     };
+    use iris_mpc_common::object_store::{path, ObjectStoreClient, ObjectStoreExt};
+    use object_store::memory::InMemory;
     use serde_json::json;
     use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
     use std::sync::Arc;
-    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
 
     const PREVIOUS_PUBLIC_KEY: &str = "1UY8lKlS7aVj5ZnorSfLIHlG3jg+L4ToVi4K+mLKqFQ=";
     const PREVIOUS_PRIVATE_KEY: &str = "X26wWfzP5fKMP7QMz0X3eZsEeF4NhJU92jT69wZg6x8=";
@@ -59,7 +58,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_retrieve_iris_shares_from_s3_success() {
-        let mock_server = MockServer::start().await;
         let bucket_name = "bobTheBucket";
         let key = "kateTheKey";
         let response_body = json!({
@@ -71,33 +69,16 @@ mod tests {
             "iris_hashes_2": "hash_2"
         });
 
-        let data = response_body.to_string();
-
-        Mock::given(method("GET"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .insert_header("Content-Type", "application/octet-stream")
-                    .set_body_raw(data, "application/octet-stream"),
+        let store = Arc::new(InMemory::new());
+        store
+            .put(
+                &path(key).unwrap(),
+                response_body.to_string().into_bytes().into(),
             )
-            .mount(&mock_server)
-            .await;
-
-        let credentials =
-            Credentials::new("test-access-key", "test-secret-key", None, None, "test");
-        let credentials_provider = SharedCredentialsProvider::new(credentials);
-        // Configure the S3Client to point to the mock server
-        let config = aws_config::from_env()
-            .region("us-west-2")
-            .endpoint_url(mock_server.uri())
-            .credentials_provider(credentials_provider)
-            .load()
-            .await;
-        let s3_config = aws_sdk_s3::config::Builder::from(&config)
-            .endpoint_url(mock_server.uri())
-            .force_path_style(true)
-            .build();
-
-        let s3_client = Arc::new(S3Client::from_conf(s3_config));
+            .await
+            .unwrap();
+        let s3_client = ObjectStoreClient::new(None, false);
+        s3_client.insert(bucket_name, store);
 
         let smpc_request = UniquenessRequest {
             signup_id: "test_signup_id".to_string(),

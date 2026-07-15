@@ -79,6 +79,8 @@ pub struct Config {
     pub public_key_base_url: String,
 
     #[serde(default = "default_shares_bucket_name")]
+    /// Object-store location for request shares. Plain values are treated as
+    /// legacy S3 bucket names; full `object_store` URLs are also accepted.
     pub shares_bucket_name: String,
 
     #[serde(default)]
@@ -132,6 +134,8 @@ pub struct Config {
     pub enable_s3_importer: bool,
 
     #[serde(default)]
+    /// Object-store location for exported database chunks. Plain values remain
+    /// compatible with legacy S3 bucket names.
     pub db_chunks_bucket_name: String,
 
     #[serde(default = "default_db_chunks_bucket_region")]
@@ -331,6 +335,8 @@ pub struct Config {
     pub sns_retry_max_attempts: u32,
 
     #[serde(default = "default_graph_checkpoint_bucket_name")]
+    /// Object-store location for graph checkpoints. Plain values are treated
+    /// as legacy S3 bucket names; provider URLs select other backends.
     pub graph_checkpoint_bucket_name: String,
 
     #[serde(default = "default_graph_checkpoint_bucket_region")]

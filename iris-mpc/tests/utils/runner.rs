@@ -1,5 +1,5 @@
 use super::CpuConfigs;
-use aws_config;
+use iris_mpc_common::object_store::ObjectStoreClient;
 use tokio_util::sync::CancellationToken;
 
 /// Lifecycle trait implemented by each `wal_NNN` test struct.
@@ -109,7 +109,7 @@ pub struct CpuTestContext {
     pub env: TestEnvironment,
     /// Pre-built S3 client pointed at the LocalStack instance for this environment.
     /// Shared across all lifecycle phases to guarantee a consistent endpoint configuration.
-    pub s3_client: aws_sdk_s3::Client,
+    pub s3_client: ObjectStoreClient,
     /// Test number for log tagging and config selection.
     pub kind: usize,
     /// Test run index (usually 1) for multi-run scenarios.
@@ -144,13 +144,9 @@ impl CpuTestContext {
         } else {
             TestEnvironment::Local
         };
-        let aws_config = aws_config::load_from_env().await;
-        let s3_client = aws_sdk_s3::Client::from_conf(
-            aws_sdk_s3::config::Builder::from(&aws_config)
-                .endpoint_url(env.s3_endpoint())
-                .force_path_style(true)
-                .build(),
-        );
+        let s3_client = ObjectStoreClient::new(Some("us-east-1".to_owned()), true)
+            .with_option("aws_endpoint", env.s3_endpoint())
+            .with_option("aws_allow_http", true);
         Self {
             configs: Self::load_configs(&env),
             s3_client,

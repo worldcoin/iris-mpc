@@ -3,6 +3,8 @@ use crate::utils::CpuNodeConfig;
 use super::CpuConfigs;
 
 use eyre::eyre;
+use futures::TryStreamExt;
+use iris_mpc_common::object_store::{path, ObjectStoreClient, ObjectStoreExt};
 use iris_mpc_common::{
     postgres::{AccessMode, PostgresClient},
     VectorId, MASK_CODE_LENGTH,
@@ -137,11 +139,11 @@ impl DbStores {
 pub struct CpuNode {
     pub store: DbStores,
     pub config: CpuNodeConfig,
-    pub s3: aws_sdk_s3::Client,
+    pub s3: ObjectStoreClient,
 }
 
 impl CpuNode {
-    pub async fn new(config: CpuNodeConfig, s3: aws_sdk_s3::Client) -> eyre::Result<Self> {
+    pub async fn new(config: CpuNodeConfig, s3: ObjectStoreClient) -> eyre::Result<Self> {
         let stores = DbStores::new(&config).await?;
         Ok(Self {
             store: stores,
@@ -188,13 +190,9 @@ impl CpuNode {
     pub async fn delete_latest_checkpoint(&self) -> eyre::Result<()> {
         if let Some(s3_key) = self.store.delete_latest_checkpoint().await? {
             // Best-effort cleanup: ignore errors if the S3 object is already gone
-            let _ = self
-                .s3
-                .delete_object()
-                .bucket(&self.config.checkpoint_bucket)
-                .key(&s3_key)
-                .send()
-                .await;
+            if let Ok(store) = self.s3.store(&self.config.checkpoint_bucket) {
+                let _ = store.delete(&path(&s3_key)?).await;
+            }
         }
         Ok(())
     }
@@ -207,10 +205,8 @@ impl CpuNode {
         let checkpoints = self.store.graph.get_genesis_graph_checkpoints().await?;
         for row in checkpoints {
             self.s3
-                .head_object()
-                .bucket(bucket)
-                .key(&row.s3_key)
-                .send()
+                .store(bucket)?
+                .head(&path(&row.s3_key)?)
                 .await
                 .map_err(|e| eyre!("S3 object {} missing: {}", row.s3_key, e))?;
         }
@@ -222,29 +218,13 @@ impl CpuNode {
     /// Returns an empty vec when the bucket is empty.  Intended for exec_assert
     /// checks that verify the pruning pass reduced the number of stored checkpoints.
     pub async fn list_s3_keys(&self, bucket: &str) -> eyre::Result<Vec<String>> {
-        let mut keys = Vec::new();
-        let mut continuation_token: Option<String> = None;
-        loop {
-            let mut req = self.s3.list_objects_v2().bucket(bucket);
-            if let Some(ref token) = continuation_token {
-                req = req.continuation_token(token);
-            }
-            let resp = req
-                .send()
-                .await
-                .map_err(|e| eyre!("failed to list S3 objects in bucket {bucket}: {e}"))?;
-            for obj in resp.contents() {
-                if let Some(key) = obj.key() {
-                    keys.push(key.to_string());
-                }
-            }
-            if resp.is_truncated().unwrap_or(false) {
-                continuation_token = resp.next_continuation_token().map(|s| s.to_string());
-            } else {
-                break;
-            }
-        }
-        Ok(keys)
+        self.s3
+            .store(bucket)?
+            .list(None)
+            .map_ok(|meta| meta.location.to_string())
+            .try_collect()
+            .await
+            .map_err(|e| eyre!("failed to list objects in {bucket}: {e}"))
     }
 
     /// Seed a genesis (seed) checkpoint for this party.
@@ -477,7 +457,7 @@ impl CpuNode {
 pub struct CpuNodes(pub [CpuNode; 3]);
 
 impl CpuNodes {
-    pub async fn new(configs: &CpuConfigs, s3: aws_sdk_s3::Client) -> eyre::Result<Self> {
+    pub async fn new(configs: &CpuConfigs, s3: ObjectStoreClient) -> eyre::Result<Self> {
         // Construct all 3 concurrently.
         let (n0, n1, n2) = tokio::try_join!(
             CpuNode::new(configs[0].clone(), s3.clone()),
@@ -489,7 +469,7 @@ impl CpuNodes {
 
     /// Create nodes and immediately truncate checkpoint tables and clear S3 buckets —
     /// the standard starting state for every workflow test.
-    pub async fn new_clean(configs: &CpuConfigs, s3: aws_sdk_s3::Client) -> eyre::Result<Self> {
+    pub async fn new_clean(configs: &CpuConfigs, s3: ObjectStoreClient) -> eyre::Result<Self> {
         let nodes = Self::new(configs, s3).await?;
         nodes.clear_all_s3_buckets(configs).await?;
         nodes.truncate_checkpoint_tables().await?;
@@ -497,14 +477,11 @@ impl CpuNodes {
         // may or may not affect this test, but it is useful to know about.
         if let Ok(resp) = nodes.0[0]
             .s3
-            .get_object()
-            .bucket("wf-smpcv2-dev-sync-protocol")
-            .key("dev_deleted_serial_ids.json")
-            .send()
+            .store("wf-smpcv2-dev-sync-protocol")?
+            .get(&path("dev_deleted_serial_ids.json")?)
             .await
         {
-            if let Ok(body) = resp.body.collect().await {
-                let bytes = body.into_bytes();
+            if let Ok(bytes) = resp.bytes().await {
                 let text = String::from_utf8_lossy(&bytes);
                 tracing::warn!(
                     exclusions = %text,
@@ -595,13 +572,9 @@ impl CpuNodes {
             let rows = node.store.graph.get_genesis_graph_checkpoints().await?;
             for row in &rows {
                 // Ignore errors — the object may already be gone.
-                let _ = node
-                    .s3
-                    .delete_object()
-                    .bucket(&config.checkpoint_bucket)
-                    .key(&row.s3_key)
-                    .send()
-                    .await;
+                if let Ok(store) = node.s3.store(&config.checkpoint_bucket) {
+                    let _ = store.delete(&path(&row.s3_key)?).await;
+                }
             }
             node.store.truncate_checkpoint_tables().await?;
         }
@@ -709,13 +682,9 @@ impl CpuNodes {
             let keys = node.list_s3_keys(bucket).await?;
             for key in keys {
                 // Ignore errors — objects may already be gone or other transient issues.
-                let _ = node
-                    .s3
-                    .delete_object()
-                    .bucket(bucket)
-                    .key(&key)
-                    .send()
-                    .await;
+                if let Ok(store) = node.s3.store(bucket) {
+                    let _ = store.delete(&path(&key)?).await;
+                }
             }
         }
         Ok(())

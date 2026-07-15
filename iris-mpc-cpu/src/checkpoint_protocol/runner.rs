@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 
 use ampc_actor_utils::network::mpc::NetworkHandle;
 use ampc_actor_utils::network::tcp::deserialize_yaml_json_string;
-use aws_sdk_s3::Client as S3Client;
 use eyre::{eyre, Result};
+use iris_mpc_common::object_store::ObjectStoreClient;
 use serde::Deserialize;
 use serde_with::{serde_as, DurationSeconds};
 use tokio::sync::RwLock;
@@ -119,7 +119,7 @@ pub struct SidecarConfig {
 pub async fn sidecar_main<V: VectorStore + Send + Sync>(
     cfg: SidecarConfig,
     graph_store: &GraphPg<V>,
-    s3_client: &S3Client,
+    s3_client: &ObjectStoreClient,
     networking: &mut Box<dyn NetworkHandle>,
     shutdown_ct: CancellationToken,
 ) -> Result<()> {
@@ -206,7 +206,7 @@ pub async fn sidecar_main<V: VectorStore + Send + Sync>(
 async fn sidecar_cycle<V: VectorStore + Send + Sync>(
     cfg: &SidecarConfig,
     graph_store: &GraphPg<V>,
-    s3_client: &S3Client,
+    s3_client: &ObjectStoreClient,
     networking: &mut Box<dyn NetworkHandle>,
 ) -> Result<Outcome, CycleError> {
     let channel = tokio::time::timeout(cfg.make_connections_timeout, networking.control_channel())
@@ -286,7 +286,7 @@ const RESTART_RETRY_DELAY: Duration = Duration::from_secs(5);
 /// proceeds even when there are no new mutations beyond the base.
 pub async fn restart_from_checkpoint<V: VectorStore + Send + Sync>(
     graph_store: &GraphPg<V>,
-    s3_client: &S3Client,
+    s3_client: &ObjectStoreClient,
     bucket: String,
     networking: &mut Box<dyn NetworkHandle>,
     target: BothEyes<Arc<RwLock<GraphMem>>>,

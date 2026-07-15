@@ -2,6 +2,7 @@
 
 use clap::Parser;
 use eyre::Result;
+use iris_mpc_common::object_store::{path as object_path, ObjectStoreClient, ObjectStoreExt};
 use iris_mpc_common::{
     config::{ENV_PROD, ENV_STAGE},
     helpers::smpc_request::{
@@ -1094,7 +1095,7 @@ async fn main() -> Result<()> {
         None => None,
     };
 
-    // --- Load graph from S3 checkpoint, then replay any mutations recorded after it ---
+    // --- Load graph from an object-store checkpoint, then replay later mutations ---
     let bucket = config.graph_checkpoint_bucket_name.as_str();
     rpt!(rpt, "--- Loading graph from S3 checkpoint ---");
     let checkpoint_state = load_checkpoint_state(
@@ -1105,8 +1106,8 @@ async fn main() -> Result<()> {
     )
     .await?;
 
-    // Build the checkpoint S3 client (mirrors AwsClients::checkpoint_s3_client,
-    // which may target a different region from the general S3 client).
+    // Build the checkpoint object-store client, which may target a different
+    // region from the general object-store client.
     let checkpoint_s3_client = build_checkpoint_s3_client(
         &config.graph_checkpoint_bucket_region,
         config.force_path_style(),
@@ -2370,22 +2371,15 @@ fn parse_s3_uri(uri: &str) -> Result<(String, String)> {
     Ok((bucket.to_string(), prefix.to_string()))
 }
 
-fn build_s3_client(config: &aws_config::SdkConfig, force_path_style: bool) -> aws_sdk_s3::Client {
-    let retry_config = aws_config::retry::RetryConfig::standard().with_max_attempts(5);
-    let s3_config = aws_sdk_s3::config::Builder::from(config)
-        .force_path_style(force_path_style)
-        .retry_config(retry_config)
-        .build();
-    aws_sdk_s3::Client::from_conf(s3_config)
+fn build_s3_client(force_path_style: bool) -> ObjectStoreClient {
+    ObjectStoreClient::new(None, force_path_style)
 }
 
 /// Build an S3 client for the graph-checkpoint bucket, allowing the region to
 /// differ from the ambient default (genesis writes checkpoints into a bucket
 /// that may live in a different region from the iris/exclusions buckets).
-async fn build_checkpoint_s3_client(region: &str, force_path_style: bool) -> aws_sdk_s3::Client {
-    let loader = aws_config::from_env().region(aws_sdk_s3::config::Region::new(region.to_owned()));
-    let config = loader.load().await;
-    build_s3_client(&config, force_path_style)
+async fn build_checkpoint_s3_client(region: &str, force_path_style: bool) -> ObjectStoreClient {
+    ObjectStoreClient::new(Some(region.to_owned()), force_path_style)
 }
 
 async fn download_exclusions_from_s3(
@@ -2396,12 +2390,14 @@ async fn download_exclusions_from_s3(
     eyre::ensure!(!key.is_empty(), "S3 URI must include an object key");
     println!("Downloading exclusions from s3://{bucket}/{key}");
 
-    let config = aws_config::from_env().load().await;
-    let client = build_s3_client(&config, force_path_style);
-
-    let response = client.get_object().bucket(&bucket).key(&key).send().await?;
-    let body = response.body.collect().await?;
-    let exclusions: ExclusionsFile = serde_json::from_slice(&body.into_bytes())?;
+    let client = build_s3_client(force_path_style);
+    let body = client
+        .store(&bucket)?
+        .get(&object_path(&key)?)
+        .await?
+        .bytes()
+        .await?;
+    let exclusions: ExclusionsFile = serde_json::from_slice(&body)?;
 
     println!(
         "  Loaded {} excluded serial IDs",
@@ -2414,8 +2410,8 @@ async fn upload_to_s3(s3_uri: &str, files: &[PathBuf], force_path_style: bool) -
     let (bucket, prefix) = parse_s3_uri(s3_uri)?;
     println!("--- Uploading to S3: s3://{bucket}/{prefix} ---");
 
-    let config = aws_config::from_env().load().await;
-    let client = build_s3_client(&config, force_path_style);
+    let client = build_s3_client(force_path_style);
+    let store = client.store(&bucket)?;
 
     for path in files {
         let file_name = path
@@ -2429,20 +2425,8 @@ async fn upload_to_s3(s3_uri: &str, files: &[PathBuf], force_path_style: bool) -
             format!("{trimmed}/{file_name}")
         };
 
-        let content_type = if file_name.ends_with(".json") {
-            "application/json"
-        } else {
-            "text/plain"
-        };
-        let body = aws_sdk_s3::primitives::ByteStream::from_path(path).await?;
-        client
-            .put_object()
-            .bucket(&bucket)
-            .key(&key)
-            .body(body)
-            .content_type(content_type)
-            .send()
-            .await?;
+        let body = tokio::fs::read(path).await?;
+        store.put(&object_path(&key)?, body.into()).await?;
         println!("  Uploaded s3://{bucket}/{key}");
     }
 

@@ -11,10 +11,10 @@
 //! 2. Rotates ECDH keys twice for each of the three MPC parties.
 
 use aws_config::SdkConfig;
-use aws_sdk_s3::Client as S3Client;
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use eyre::Result;
+use iris_mpc_common::object_store::{path, ObjectStoreClient, ObjectStoreExt};
 use rand::{thread_rng, Rng};
 use sodiumoxide::crypto::box_::{curve25519xsalsa20poly1305, Seed};
 
@@ -145,23 +145,25 @@ pub async fn rotate_keys(
     }
 
     // Build SDK clients, optionally overriding the endpoint for LocalStack.
-    let mut s3_builder = aws_sdk_s3::config::Builder::from(sdk_config);
     let mut sm_builder = aws_sdk_secretsmanager::config::Builder::from(sdk_config);
+    let mut object_store = ObjectStoreClient::new(
+        sdk_config.region().map(ToString::to_string),
+        endpoint_url.is_some(),
+    );
 
     if let Some(ref url) = endpoint_url {
-        s3_builder = s3_builder.endpoint_url(url).force_path_style(true);
+        object_store = object_store
+            .with_option("aws_endpoint", url)
+            .with_option("aws_allow_http", url.starts_with("http://"));
         sm_builder = sm_builder.endpoint_url(url);
     }
 
-    let s3 = S3Client::from_conf(s3_builder.build());
     let sm = SecretsManagerClient::from_conf(sm_builder.build());
 
     // Upload public key to S3.
-    s3.put_object()
-        .bucket(&bucket_name)
-        .key(bucket_key_name)
-        .body(pub_key_str.into_bytes().into())
-        .send()
+    object_store
+        .store(&bucket_name)?
+        .put(&path(bucket_key_name)?, pub_key_str.into_bytes().into())
         .await
         .map_err(|e| {
             eyre::eyre!(
@@ -200,7 +202,7 @@ pub async fn rotate_keys(
 /// `DEFAULT_REGION` in `docker-compose.hawk-db.yaml`).
 async fn base_sdk_config() -> SdkConfig {
     aws_config::from_env()
-        .region(aws_sdk_s3::config::Region::new("us-east-1"))
+        .region(aws_sdk_secretsmanager::config::Region::new("us-east-1"))
         .load()
         .await
 }

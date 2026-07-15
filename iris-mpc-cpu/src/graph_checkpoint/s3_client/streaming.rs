@@ -1,12 +1,12 @@
-//! Streaming serialize + S3 multipart upload.
+//! Streaming serialize + multipart object-store upload.
 //!
-//! [`stream_serialize_and_upload_with`] serializes a value directly into an
-//! S3 multipart upload without materializing the full byte buffer in memory.
+//! [`stream_serialize_and_upload_with`] serializes a value directly into a
+//! multipart object-store upload without materializing the full byte buffer in memory.
 //! The serializer runs on a blocking thread and writes into a bounded async
 //! duplex pipe; the read side spawns up to `parallelism` concurrent
 //! `UploadPart` tasks as full chunks become available. Outside of the
 //! serializer's own working set, peak memory is roughly
-//! `(parallelism + 1) * part_size` plus the AWS SDK's request buffers.
+//! `(parallelism + 1) * part_size` plus the backend's request buffers.
 //!
 //! Compare to [`super::multipart::upload_graph`], which requires the caller
 //! to pass a fully buffered `Bytes` payload (doubling memory for large
@@ -15,25 +15,18 @@
 use std::{
     io::{BufWriter, Write},
     sync::Arc,
-    time::Duration,
 };
 
-use aws_sdk_s3::{
-    types::{CompletedMultipartUpload, CompletedPart},
-    Client as S3Client,
-};
 use bytes::Bytes;
 use eyre::{eyre, Result};
+use iris_mpc_common::object_store::{path, ObjectStoreClient, ObjectStoreExt};
+use object_store::MultipartUpload;
 use tokio::{
     io::{AsyncReadExt, DuplexStream},
     sync::Semaphore,
     task::JoinSet,
-    time::sleep,
 };
 use tokio_util::io::SyncIoBridge;
-
-const UPLOAD_PART_MAX_RETRIES: u32 = 3;
-const UPLOAD_PART_RETRY_DELAY: Duration = Duration::from_secs(2);
 
 /// Suggested part size; also the size of the duplex pipe, which bounds
 /// back-pressure on the serializer.
@@ -92,7 +85,7 @@ impl<W: Write> Write for BlakeTeeWriter<W> {
     }
 }
 
-/// Serialize directly into an S3 multipart upload without buffering the full
+/// Serialize directly into a multipart object-store upload without buffering the full
 /// payload in memory.
 ///
 /// `serialize` runs on a `spawn_blocking` thread, so it must be `Send +
@@ -102,15 +95,15 @@ impl<W: Write> Write for BlakeTeeWriter<W> {
 /// a fully buffered `Vec<u8>` to `w` defeats the streaming intent and
 /// reintroduces a full-size second copy.
 ///
-/// On any failure (serializer error, S3 error, task panic), the multipart
+/// On any failure (serializer error, object-store error, task panic), the multipart
 /// upload is aborted before the function returns. On success,
 /// `complete_multipart_upload` is called and the object is durable.
 ///
 /// Callers without a reason to override should pass
 /// [`DEFAULT_STREAMING_PART_SIZE`] and [`DEFAULT_STREAMING_PARALLELISM`].
 pub async fn stream_serialize_and_upload_with<F>(
-    s3_client: &S3Client,
-    bucket: &str,
+    client: &ObjectStoreClient,
+    store_location: &str,
     key: &str,
     serialize: F,
     part_size: usize,
@@ -120,60 +113,29 @@ where
     F: FnOnce(&mut dyn Write) -> Result<()> + Send + 'static,
 {
     tracing::info!(
-        "Streaming serialize + upload: bucket={bucket}, key={key}, \
+        "Streaming serialize + upload: store={store_location}, key={key}, \
          part_size={part_size}, parallelism={parallelism}"
     );
 
-    let init = s3_client
-        .create_multipart_upload()
-        .bucket(bucket)
-        .key(key)
-        .send()
+    let store = client.store(store_location)?;
+    let location = path(key)?;
+    let mut upload = store
+        .put_multipart(&location)
         .await
-        .map_err(|e| eyre!("create_multipart_upload failed: {e:?}"))?;
-    let upload_id = init
-        .upload_id()
-        .ok_or_else(|| eyre!("create_multipart_upload returned no upload_id"))?
-        .to_string();
+        .map_err(|e| eyre!("multipart upload creation failed: {e:?}"))?;
 
-    match drive_upload(
-        s3_client,
-        bucket,
-        key,
-        &upload_id,
-        serialize,
-        part_size,
-        parallelism,
-    )
-    .await
-    {
-        Ok(parts) => {
-            s3_client
-                .complete_multipart_upload()
-                .bucket(bucket)
-                .key(key)
-                .upload_id(&upload_id)
-                .multipart_upload(
-                    CompletedMultipartUpload::builder()
-                        .set_parts(Some(parts))
-                        .build(),
-                )
-                .send()
+    match drive_upload(&mut *upload, serialize, part_size, parallelism).await {
+        Ok(()) => {
+            upload
+                .complete()
                 .await
-                .map_err(|e| eyre!("complete_multipart_upload failed: {e:?}"))?;
+                .map_err(|e| eyre!("multipart upload completion failed: {e:?}"))?;
             tracing::info!("Streaming upload complete: key={key}");
             Ok(())
         }
         Err(e) => {
-            if let Err(abort_err) = s3_client
-                .abort_multipart_upload()
-                .bucket(bucket)
-                .key(key)
-                .upload_id(&upload_id)
-                .send()
-                .await
-            {
-                tracing::warn!("abort_multipart_upload after failure also failed: {abort_err:?}");
+            if let Err(abort_err) = upload.abort().await {
+                tracing::warn!("multipart upload abort after failure also failed: {abort_err:?}");
             }
             Err(e)
         }
@@ -181,14 +143,11 @@ where
 }
 
 async fn drive_upload<F>(
-    s3_client: &S3Client,
-    bucket: &str,
-    key: &str,
-    upload_id: &str,
+    upload: &mut dyn MultipartUpload,
     serialize: F,
     part_size: usize,
     parallelism: usize,
-) -> Result<Vec<CompletedPart>>
+) -> Result<()>
 where
     F: FnOnce(&mut dyn Write) -> Result<()> + Send + 'static,
 {
@@ -208,16 +167,7 @@ where
         Ok(())
     });
 
-    let upload_result = run_upload_loop(
-        s3_client.clone(),
-        bucket.to_string(),
-        key.to_string(),
-        upload_id.to_string(),
-        reader,
-        part_size,
-        parallelism,
-    )
-    .await;
+    let upload_result = run_upload_loop(upload, reader, part_size, parallelism).await;
 
     let serialize_result = serialize_handle
         .await
@@ -227,24 +177,20 @@ where
     // part failure it drops the reader, which surfaces as a broken-pipe error
     // in the serializer. The upload error is the root cause.
     match (upload_result, serialize_result) {
-        (Ok(parts), Ok(())) => Ok(parts),
+        (Ok(()), Ok(())) => Ok(()),
         (Err(upload_err), _) => Err(upload_err),
         (Ok(_), Err(serialize_err)) => Err(serialize_err),
     }
 }
 
 async fn run_upload_loop(
-    s3_client: S3Client,
-    bucket: String,
-    key: String,
-    upload_id: String,
+    upload: &mut dyn MultipartUpload,
     mut reader: DuplexStream,
     part_size: usize,
     parallelism: usize,
-) -> Result<Vec<CompletedPart>> {
+) -> Result<()> {
     let semaphore = Arc::new(Semaphore::new(parallelism));
-    let mut join_set: JoinSet<Result<CompletedPart>> = JoinSet::new();
-    let mut parts: Vec<CompletedPart> = Vec::new();
+    let mut join_set: JoinSet<Result<i32>> = JoinSet::new();
     let mut part_number: i32 = 1;
 
     loop {
@@ -252,7 +198,7 @@ async fn run_upload_loop(
         // spawning uploads after the upload has already gone wrong.
         while let Some(res) = join_set.try_join_next() {
             match res {
-                Ok(Ok(part)) => parts.push(part),
+                Ok(Ok(part_number)) => tracing::debug!("uploaded part {part_number}"),
                 Ok(Err(e)) => {
                     join_set.abort_all();
                     return Err(e);
@@ -290,47 +236,15 @@ async fn run_upload_loop(
             .map_err(|e| eyre!("semaphore acquire: {e}"))?;
 
         let pn = part_number;
-        let client = s3_client.clone();
-        let bucket = bucket.clone();
-        let key = key.clone();
-        let upload_id = upload_id.clone();
-        // `Bytes` so retries clone cheaply (Arc bump) instead of copying.
         let body = Bytes::from(buf);
+        let upload_part = upload.put_part(body.into());
 
         join_set.spawn(async move {
             let _permit = permit;
-            let mut attempts: u32 = 0;
-            loop {
-                match client
-                    .upload_part()
-                    .bucket(&bucket)
-                    .key(&key)
-                    .upload_id(&upload_id)
-                    .part_number(pn)
-                    .body(body.clone().into())
-                    .send()
-                    .await
-                {
-                    Ok(res) => {
-                        let etag = res
-                            .e_tag()
-                            .ok_or_else(|| eyre!("upload_part {pn} returned no e_tag"))?
-                            .to_string();
-                        tracing::debug!("uploaded part {pn} (etag={etag})");
-                        return Ok(CompletedPart::builder().e_tag(etag).part_number(pn).build());
-                    }
-                    Err(_) if attempts < UPLOAD_PART_MAX_RETRIES => {
-                        attempts += 1;
-                        tracing::warn!("Retry {attempts} for part {pn}");
-                        sleep(UPLOAD_PART_RETRY_DELAY).await;
-                    }
-                    Err(e) => {
-                        return Err(eyre!(
-                            "upload_part {pn} failed after {attempts} retries: {e:?}"
-                        ));
-                    }
-                }
-            }
+            upload_part
+                .await
+                .map_err(|e| eyre!("upload part {pn} failed: {e}"))?;
+            Ok(pn)
         });
 
         part_number += 1;
@@ -343,7 +257,7 @@ async fn run_upload_loop(
     let mut first_error: Option<eyre::Report> = None;
     while let Some(res) = join_set.join_next().await {
         match res {
-            Ok(Ok(part)) => parts.push(part),
+            Ok(Ok(part_number)) => tracing::debug!("uploaded part {part_number}"),
             Ok(Err(e)) => {
                 first_error = Some(e);
                 break;
@@ -360,8 +274,7 @@ async fn run_upload_loop(
         return Err(e);
     }
 
-    parts.sort_by_key(|p| p.part_number);
-    Ok(parts)
+    Ok(())
 }
 
 #[cfg(test)]

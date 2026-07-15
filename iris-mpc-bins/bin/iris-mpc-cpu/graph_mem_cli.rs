@@ -1,9 +1,8 @@
 #![recursion_limit = "256"]
 
-use aws_sdk_s3::config::Region as S3Region;
-use aws_sdk_s3::Client as S3Client;
 use clap::{Parser, Subcommand};
 use eyre::Result;
+use iris_mpc_common::object_store::ObjectStoreClient;
 use iris_mpc_cpu::hnsw::graph::test_utils::{DbContext, DiffMethod};
 use iris_mpc_utils::misc::write_bin;
 use std::path::PathBuf;
@@ -68,12 +67,7 @@ async fn main() -> Result<()> {
         command,
     } = Cli::parse();
 
-    let mut builder = aws_config::from_env();
-    if let Some(aws_region) = aws_region {
-        builder = builder.region(S3Region::new(aws_region));
-    }
-    let shared_config = builder.load().await;
-    let s3_client = S3Client::new(&shared_config);
+    let s3_client = ObjectStoreClient::new(aws_region, false);
 
     let db_context = DbContext::new(&db_url, &schema, s3_client, s3_bucket, party_id).await;
 

@@ -27,8 +27,8 @@ aws-config = { workspace = true }
 aws-sdk-kms = { workspace = true, optional = true }
 aws-sdk-sns = { workspace = true, optional = true }
 aws-sdk-sqs = { workspace = true, optional = true }
-aws-sdk-s3 = { workspace = true }
 aws-sdk-secretsmanager = { workspace = true, optional = true }
+object_store.workspace = true
 base64.workspace = true
 cudarc.workspace = true
 chrono.workspace = true
@@ -83,7 +83,6 @@ iris-mpc-store = { path = "../iris-mpc-store" }
 iris-mpc-upgrade-hawk = { path = "../iris-mpc-upgrade-hawk" }
 iris-mpc-utils = { path = "../iris-mpc-utils" }
 blake3.workspace = true
-aws-smithy-types = "1.2.9"
 clap_builder = "4.5.51"
 
 # ---------------------

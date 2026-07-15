@@ -2,10 +2,6 @@ use std::collections::HashSet;
 
 use async_from::AsyncFrom;
 use async_stream::stream;
-use aws_sdk_s3::{
-    primitives::{ByteStream, SdkBody},
-    Client as S3Client,
-};
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::Client as SQSClient;
@@ -13,6 +9,7 @@ use futures::stream::Stream;
 use serde_json;
 
 use iris_mpc_common::helpers::smpc_response::create_sns_message_attributes;
+use iris_mpc_common::object_store::{path, ObjectStoreClient, ObjectStoreExt};
 
 use super::{
     config::AwsClientConfig,
@@ -31,8 +28,8 @@ pub struct AwsClient {
     /// Encryption public key set ... one per MPC node.
     public_keyset: Option<PublicKeyset>,
 
-    /// Client for Amazon Simple Storage Service.
-    s3: S3Client,
+    /// Client for bucket/object storage.
+    object_store: ObjectStoreClient,
 
     /// Client for AWS Secrets Manager.
     #[allow(dead_code)]
@@ -71,7 +68,7 @@ impl AwsClient {
         Self {
             config: config.to_owned(),
             public_keyset: None,
-            s3: S3Client::from(&config),
+            object_store: config.object_store_client(),
             secrets_manager: SecretsManagerClient::from(&config),
             sqs: SQSClient::from(&config),
             sns: SNSClient::from(&config),
@@ -80,21 +77,24 @@ impl AwsClient {
 }
 
 impl AwsClient {
-    /// Enqueues data to an S3 bucket.
+    /// Writes data to the configured object store.
     pub async fn s3_put_object(&self, s3_obj_info: &S3ObjectInfo) -> Result<(), AwsClientError> {
-        tracing::debug!("AWS-S3: putting object -> {}", s3_obj_info);
-        self.s3
-            .put_object()
-            .bucket(s3_obj_info.bucket())
-            .key(s3_obj_info.key())
-            .body(ByteStream::new(SdkBody::from(s3_obj_info.body())))
-            .send()
-            .await
-            .map(|_| ())
-            .map_err(|e| {
-                tracing::error!("AWS-S3 upload error: {}", e);
-                AwsClientError::S3UploadError(s3_obj_info.key().to_string(), e.to_string())
-            })
+        tracing::debug!("Object store: putting object -> {}", s3_obj_info);
+        let result = async {
+            let store = self.object_store.store(s3_obj_info.bucket())?;
+            store
+                .put(
+                    &path(s3_obj_info.key())?,
+                    s3_obj_info.body().to_vec().into(),
+                )
+                .await?;
+            Ok::<_, object_store::Error>(())
+        }
+        .await;
+        result.map(|_| ()).map_err(|e| {
+            tracing::error!("Object-store upload error: {}", e);
+            AwsClientError::S3UploadError(s3_obj_info.key().to_string(), e.to_string())
+        })
     }
 
     /// Downloads & assigns encryption keys.
@@ -499,7 +499,10 @@ mod tests {
 
     impl AwsClient {
         fn assert_instance(&self) {
-            assert!(self.s3.config().region().is_some());
+            assert!(self
+                .object_store
+                .store(self.config.s3_request_bucket_name())
+                .is_ok());
             assert!(self.secrets_manager.config().region().is_some());
             assert!(self.sns.config().region().is_some());
             assert!(self.sqs.config().region().is_some());

@@ -14,7 +14,6 @@ helpers = [
   "dep:aws-sdk-kms",
   "dep:aws-sdk-sns",
   "dep:aws-sdk-sqs",
-  "dep:aws-sdk-s3",
   "dep:aws-sdk-secretsmanager",
   "dep:reqwest",
 ]
@@ -25,8 +24,8 @@ aws-config = { workspace = true, optional = true }
 aws-sdk-kms = { workspace = true, optional = true }
 aws-sdk-sns = { workspace = true, optional = true }
 aws-sdk-sqs = { workspace = true, optional = true }
-aws-sdk-s3 = { workspace = true, optional = true }
 aws-sdk-secretsmanager = { workspace = true, optional = true }
+object_store.workspace = true
 clap.workspace = true
 rand.workspace = true
 bytemuck.workspace = true
@@ -71,4 +70,3 @@ zstd = { version = "0.13", optional = true }
 
 [dev-dependencies]
 float_eq = "1"
-aws-credential-types = "1.2.1"

@@ -3,7 +3,6 @@ use crate::client::iris_data::{
     generate_party_shares, read_iris_data_from_file, IrisCodePartyShares,
 };
 use aws_config::retry::RetryConfig;
-use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sns::{config::Region, types::MessageAttributeValue, Client as SnsClient};
 use aws_sdk_sqs::Client as SqsClient;
 use base64::{engine::general_purpose, Engine};
@@ -21,6 +20,7 @@ use iris_mpc_common::helpers::{
     smpc_response::{create_message_type_attribute_map, UniquenessResult},
     sqs_s3_helper::upload_file_to_s3,
 };
+use iris_mpc_common::object_store::ObjectStoreClient;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use serde_json::to_string;
 use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
@@ -110,7 +110,7 @@ pub struct E2EClient {
     populate_file_data_limit: Option<usize>,
 
     // AWS clients
-    s3_client: S3Client,
+    s3_client: ObjectStoreClient,
     sns_client: Arc<SnsClient>,
     sqs_client: SqsClient,
 
@@ -136,15 +136,16 @@ impl E2EClient {
             .load()
             .await;
 
-        let mut s3_config_builder = aws_sdk_s3::config::Builder::from(&shared_config);
         let mut sns_config_builder = aws_sdk_sns::config::Builder::from(&shared_config);
 
+        let mut s3_client =
+            ObjectStoreClient::new(Some(opts.region.clone()), opts.endpoint_url.is_some());
         if let Some(endpoint_url) = opts.endpoint_url.as_ref() {
-            s3_config_builder = s3_config_builder.endpoint_url(endpoint_url);
-            s3_config_builder = s3_config_builder.force_path_style(true);
+            s3_client = s3_client
+                .with_option("aws_endpoint", endpoint_url)
+                .with_option("aws_allow_http", endpoint_url.starts_with("http://"));
             sns_config_builder = sns_config_builder.endpoint_url(endpoint_url);
         }
-        let s3_client = S3Client::from_conf(s3_config_builder.build());
         let sns_client = Arc::new(SnsClient::from_conf(sns_config_builder.build()));
         let sqs_client = SqsClient::new(&shared_config);
 

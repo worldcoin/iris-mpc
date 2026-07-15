@@ -6,7 +6,6 @@ use ampc_server_utils::{
     get_approximate_number_of_messages, get_batch_sync_states, BatchSyncResult,
     BatchSyncSharedState, BatchSyncState, TaskMonitor,
 };
-use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sns::types::MessageAttributeValue;
 use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::Client;
@@ -38,6 +37,7 @@ use iris_mpc_common::helpers::smpc_response::{
 use iris_mpc_common::helpers::sync::Modification;
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
 use iris_mpc_common::job::{BatchMetadata, BatchQuery, GaloisSharesBothSides};
+use iris_mpc_common::object_store::ObjectStoreClient;
 use iris_mpc_store::{normalize_sns_sequence_number, IngestedRequest, Store};
 use rand::Rng;
 use std::collections::HashMap;
@@ -313,7 +313,7 @@ pub fn receive_batch_stream(
     party_id: usize,
     client: Client,
     sns_client: SNSClient,
-    s3_client: S3Client,
+    s3_client: ObjectStoreClient,
     config: Config,
     shares_encryption_key_pairs: SharesEncryptionKeyPairs,
     shutdown_handler: Arc<ShutdownHandler>,
@@ -394,7 +394,7 @@ async fn receive_batch(
     party_id: usize,
     client: &Client,
     sns_client: &SNSClient,
-    s3_client: &S3Client,
+    s3_client: &ObjectStoreClient,
     config: &Config,
     shares_encryption_key_pairs: SharesEncryptionKeyPairs,
     shutdown_handler: &ShutdownHandler,
@@ -436,7 +436,7 @@ pub struct BatchProcessor<'a> {
     party_id: usize,
     client: &'a Client,
     sns_client: &'a SNSClient,
-    s3_client: &'a S3Client,
+    s3_client: &'a ObjectStoreClient,
     config: &'a Config,
     shares_encryption_key_pairs: SharesEncryptionKeyPairs,
     shutdown_handler: &'a ShutdownHandler,
@@ -462,7 +462,7 @@ impl<'a> BatchProcessor<'a> {
         party_id: usize,
         client: &'a Client,
         sns_client: &'a SNSClient,
-        s3_client: &'a S3Client,
+        s3_client: &'a ObjectStoreClient,
         config: &'a Config,
         shares_encryption_key_pairs: SharesEncryptionKeyPairs,
         shutdown_handler: &'a ShutdownHandler,

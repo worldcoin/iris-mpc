@@ -5,6 +5,7 @@ pub mod galois_engine;
 pub mod helpers;
 pub mod iris_db;
 pub mod job;
+pub mod object_store;
 pub mod postgres;
 pub mod shamir;
 #[cfg(feature = "helpers")]

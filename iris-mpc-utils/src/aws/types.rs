@@ -8,7 +8,7 @@ use crate::client::{Request, RequestPayload};
 
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 
-// Helper type encapsulating AWS-S3 object information.
+// Compatibility type encapsulating object-store location and data.
 #[derive(Debug)]
 pub struct S3ObjectInfo {
     // S3 object data.

@@ -1,5 +1,5 @@
-use aws_sdk_s3::Client as S3Client;
 use eyre::{bail, Result};
+use iris_mpc_common::object_store::ObjectStoreClient;
 use iris_mpc_common::SerialId;
 use iris_mpc_cpu::execution::hawk_main::{BothEyes, GraphRef, HawkOps};
 use iris_mpc_cpu::genesis::state_accessor::set_last_indexed_iris_id;
@@ -19,7 +19,7 @@ pub async fn upload_and_sync_genesis_checkpoint(
     checkpoint_bucket: &str,
     party_id: usize,
     imem_graph_stores: &Arc<BothEyes<GraphRef>>,
-    s3_client: &S3Client,
+    s3_client: &ObjectStoreClient,
     last_indexed_id: u32,
     max_modification_indexed_id: i64,
     is_archival: bool,

@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use aws_sdk_s3::Client;
 use eyre::{bail, eyre, Result};
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
+use iris_mpc_common::object_store::ObjectStoreClient;
 use itertools::izip;
 
 use super::{download_graph_checkpoint, GraphCheckpointState};
@@ -132,7 +132,7 @@ fn build_mutation_bytes(all_states: &[SyncState]) -> Result<HashMap<i64, &Option
 ///
 /// `wal_rows` must be ordered by `modification_id` ascending.
 pub async fn load_graph_and_roll_forward(
-    s3_client: &Client,
+    s3_client: &ObjectStoreClient,
     checkpoint_bucket: &str,
     checkpoint: Option<GraphCheckpointState>,
     wal_rows: Vec<GraphMutationRow>,

@@ -1,13 +1,13 @@
-use aws_sdk_s3::{primitives::ByteStream as S3_ByteStream, Client as S3_Client};
 use eyre::{eyre, Result};
 use iris_mpc::services::aws::clients::AwsClients;
+use iris_mpc_common::object_store::{path, ObjectStoreClient, ObjectStoreExt};
 use iris_mpc_common::{config::Config, SerialId};
 use serde::Serialize;
 
 /// Uploads to an AWS S3 bucket a set of serial identifiers marked as deleted.
 pub async fn upload_iris_deletions(
     data: &Vec<SerialId>,
-    s3: &S3_Client,
+    s3: &ObjectStoreClient,
     environment: &str,
 ) -> Result<()> {
     // Set bucket/key based on environment.
@@ -20,20 +20,15 @@ pub async fn upload_iris_deletions(
     );
 
     // Set body of payload to be persisted.
-    let body = S3_ByteStream::from(
-        serde_json::to_string(&IrisDeletionsForS3 {
-            deleted_serial_ids: data.to_owned(),
-        })
-        .unwrap()
-        .into_bytes(),
-    );
+    let body = serde_json::to_string(&IrisDeletionsForS3 {
+        deleted_serial_ids: data.to_owned(),
+    })
+    .unwrap()
+    .into_bytes();
 
     // Upload payload.
-    s3.put_object()
-        .bucket(&s3_bucket)
-        .key(&s3_key)
-        .body(body)
-        .send()
+    s3.store(&s3_bucket)?
+        .put(&path(&s3_key)?, body.into())
         .await
         .map_err(|err| {
             tracing::error!("Failed to upload file to S3: {}", err);

@@ -1,7 +1,6 @@
 use std::ops::Range;
 
 use ampc_server_utils::TaskMonitor;
-use aws_sdk_s3::{operation::put_object::PutObjectOutput, Client as S3Client, Error as S3Error};
 use aws_sdk_secretsmanager::{
     operation::put_secret_value::PutSecretValueOutput, Client as SecretsManagerClient,
     Error as SecretsManagerError,
@@ -18,6 +17,7 @@ use iris_mpc_common::galois_engine::degree4::{
     GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
 };
 use iris_mpc_common::id::PartyID;
+use iris_mpc_common::object_store::{path, ObjectStoreClient, ObjectStoreExt};
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_store::{DbStoredIris, Store, StoredIrisRef};
 use iris_mpc_upgrade::config::{
@@ -30,6 +30,7 @@ use iris_mpc_upgrade::{
     utils::{install_tracing, spawn_healthcheck_server},
 };
 use itertools::Itertools;
+use object_store::PutResult;
 use tokio::task::JoinSet;
 use tracing::Level;
 
@@ -61,18 +62,15 @@ async fn upload_private_key_to_asm(
 }
 
 async fn upload_public_key_to_s3(
-    client: &S3Client,
+    client: &ObjectStoreClient,
     bucket: &str,
     key: &str,
     content: &str,
-) -> Result<PutObjectOutput, S3Error> {
-    Ok(client
-        .put_object()
-        .bucket(bucket)
-        .key(key)
-        .body(content.to_string().into_bytes().into())
-        .send()
-        .await?)
+) -> object_store::Result<PutResult> {
+    client
+        .store(bucket)?
+        .put(&path(key)?, content.as_bytes().to_vec().into())
+        .await
 }
 
 async fn keygen_main(config: KeyGenConfig) -> Result<()> {
@@ -84,9 +82,8 @@ async fn keygen_main(config: KeyGenConfig) -> Result<()> {
         config.env, config.party_id
     );
 
-    let s3_config_builder = aws_sdk_s3::config::Builder::from(&sdk_config);
     let sm_config_builder = aws_sdk_secretsmanager::config::Builder::from(&sdk_config);
-    let s3_client = S3Client::from_conf(s3_config_builder.build());
+    let s3_client = ObjectStoreClient::new(sdk_config.region().map(ToString::to_string), false);
     let sm_client = SecretsManagerClient::from_conf(sm_config_builder.build());
 
     // Generate keys only when the secret does not exist

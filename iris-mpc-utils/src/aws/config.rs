@@ -2,12 +2,12 @@ use std::{env, path::Path, time::Duration};
 
 use async_from::AsyncFrom;
 use aws_config::{retry::RetryConfig, timeout::TimeoutConfig, SdkConfig};
-use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use aws_sdk_sns::Client as SNSClient;
 use aws_sdk_sqs::{config::Builder, config::Region, Client as SQSClient};
 
 use iris_mpc_common::config::{ENV_PROD, ENV_STAGE};
+use iris_mpc_common::object_store::ObjectStoreClient;
 
 use crate::client::AwsOptions;
 
@@ -149,15 +149,15 @@ impl From<&AwsClientConfig> for SNSClient {
     }
 }
 
-impl From<&AwsClientConfig> for S3Client {
-    fn from(config: &AwsClientConfig) -> Self {
-        let force_path_style =
-            config.environment() != ENV_PROD && config.environment() != ENV_STAGE;
-        let config_builder = S3ConfigBuilder::from(config.sdk())
-            .retry_config(RetryConfig::standard().with_max_attempts(5))
-            .force_path_style(force_path_style);
-
-        S3Client::from_conf(config_builder.build())
+impl AwsClientConfig {
+    pub(crate) fn object_store_client(&self) -> ObjectStoreClient {
+        let force_path_style = self.environment() != ENV_PROD && self.environment() != ENV_STAGE;
+        let region = self
+            .sdk()
+            .region()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| AWS_DEFAULT_REGION.to_owned());
+        ObjectStoreClient::new(Some(region), force_path_style)
     }
 }
 

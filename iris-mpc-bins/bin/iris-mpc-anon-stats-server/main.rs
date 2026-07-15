@@ -14,14 +14,13 @@ use ampc_server_utils::{
     init_heartbeat_task, shutdown_handler::ShutdownHandler, wait_for_others_ready,
     wait_for_others_unready, TaskMonitor,
 };
-use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
 use aws_sdk_sns::{config::Region, types::MessageAttributeValue, Client as SNSClient};
-use aws_smithy_types::retry::RetryConfig;
 use chrono::{DateTime, Utc};
 use clap_builder::Parser;
 use eyre::{bail, eyre, Context, Result};
 use iris_mpc_common::config::{ENV_PROD, ENV_STAGE};
 use iris_mpc_common::helpers::sqs_s3_helper::upload_file_to_s3;
+use iris_mpc_common::object_store::ObjectStoreClient;
 use iris_mpc_common::{
     helpers::{
         smpc_request::{ANONYMIZED_STATISTICS_2D_MESSAGE_TYPE, ANONYMIZED_STATISTICS_MESSAGE_TYPE},
@@ -187,7 +186,7 @@ struct AnonStatsProcessor {
     config: Arc<AnonStatsServerConfig>,
     store: AnonStatsStore,
     sns_client: SNSClient,
-    s3_client: S3Client,
+    s3_client: ObjectStoreClient,
     publish: PublishTargets,
     sync_failures: HashMap<(AnonStatsOrigin, AnonStatsOperation), usize>,
     last_report_times: HashMap<(AnonStatsOrigin, AnonStatsOperation), DateTime<Utc>>,
@@ -198,7 +197,7 @@ impl AnonStatsProcessor {
         config: Arc<AnonStatsServerConfig>,
         store: AnonStatsStore,
         sns_client: SNSClient,
-        s3_client: S3Client,
+        s3_client: ObjectStoreClient,
     ) -> Self {
         let publish = PublishTargets {
             topic_arn: config.results_topic_arn.clone(),
@@ -1089,26 +1088,16 @@ async fn build_sns_client(config: &AnonStatsServerConfig) -> Result<SNSClient> {
     Ok(SNSClient::from_conf(sns_config_builder.build()))
 }
 
-async fn build_s3_client(config: &AnonStatsServerConfig) -> Result<S3Client> {
+async fn build_s3_client(config: &AnonStatsServerConfig) -> Result<ObjectStoreClient> {
     let force_path_style = config.environment != ENV_PROD && config.environment != ENV_STAGE;
-    let retry_config = RetryConfig::standard().with_max_attempts(5);
-
-    let mut loader = aws_config::from_env();
-    if let Some(aws) = &config.aws {
-        if let Some(region) = &aws.region {
-            loader = loader.region(Region::new(region.clone()));
-        }
-    }
-
-    let shared_config = loader.load().await;
-    let mut s3_config = S3ConfigBuilder::from(&shared_config).retry_config(retry_config.clone());
+    let region = config.aws.as_ref().and_then(|aws| aws.region.clone());
+    let mut client = ObjectStoreClient::new(region, force_path_style);
     if let Some(aws) = &config.aws {
         if let Some(endpoint) = &aws.endpoint {
-            s3_config = s3_config.endpoint_url(endpoint);
-        }
-        if force_path_style {
-            s3_config = s3_config.force_path_style(force_path_style);
+            client = client
+                .with_option("aws_endpoint", endpoint)
+                .with_option("aws_allow_http", endpoint.starts_with("http://"));
         }
     }
-    Ok(S3Client::from_conf(s3_config.build()))
+    Ok(client)
 }
