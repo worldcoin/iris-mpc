@@ -49,7 +49,7 @@ use iris_mpc_cpu::{
     hnsw::{graph::graph_store::GraphPg, GraphMem},
     utils::serialization::graph::{GraphFormat, LegacyPruneContext},
 };
-use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
+use iris_mpc_store::{ExplicitVersionToken, Store as IrisStore, StoredIrisRef};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -1289,16 +1289,19 @@ async fn get_results_thread(
                     let right_iris = &right_irises[0];
 
                     let mut graph_tx = graph_store_bg.tx().await?;
-                    let iris_data =StoredIrisRef {
-                                    id: vector_id_to_persist.serial_id() as i64,
-                                    left_code: &left_iris.code.coefs,
-                                    left_mask: &left_iris.mask.coefs,
-                                    right_code: &right_iris.code.coefs,
-                                    right_mask: &right_iris.mask.coefs,
-                                };
-                    // We should ensure that the vector_id_to_persist is matching the inserted serial id
-                    hnsw_iris_store.update_iris_with_version_id(
-                            Some(&mut graph_tx.tx),
+                    // SET LOCAL, so explicit-version mode is transaction-wide; the token is only
+                    // required by the update_iris_with_version_id call below.
+                    let mut version_token = ExplicitVersionToken::enable(&mut graph_tx.tx).await?;
+                    let iris_data = StoredIrisRef {
+                        id: vector_id_to_persist.serial_id() as i64,
+                        left_code: &left_iris.code.coefs,
+                        left_mask: &left_iris.mask.coefs,
+                        right_code: &right_iris.code.coefs,
+                        right_mask: &right_iris.mask.coefs,
+                    };
+                    hnsw_iris_store
+                        .update_iris_with_version_id(
+                            &mut version_token,
                             vector_id_to_persist.version_id(),
                             &iris_data,
                         )

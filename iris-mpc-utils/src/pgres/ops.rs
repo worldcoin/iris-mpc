@@ -1,23 +1,23 @@
 use eyre::Result;
 use iris_mpc_common::{helpers::sync::Modification, VectorId};
-use iris_mpc_store::Store;
+use iris_mpc_store::{ExplicitVersionToken, Store};
 use sqlx::{Postgres, Transaction};
 use std::ops::DerefMut;
 
 /// Increments an Iris's version.
 pub async fn increment_iris_version(
-    tx: &mut Transaction<'_, Postgres>,
+    tx: &mut ExplicitVersionToken<'_, '_>,
     serial_id: i64,
 ) -> Result<()> {
-    let query = sqlx::query(
+    sqlx::query(
         r#"
             UPDATE irises SET version_id = version_id + 1
             WHERE id = $1;
             "#,
     )
-    .bind(serial_id);
-
-    query.execute(tx.deref_mut()).await?;
+    .bind(serial_id)
+    .execute(tx.tx().deref_mut())
+    .await?;
 
     Ok(())
 }

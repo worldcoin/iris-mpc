@@ -1,0 +1,57 @@
+args:
+  - "--party-index=2"
+  - "--addresses=sidecar.0.prod.hnsw.worldcoin.org:5000,sidecar.1.prod.hnsw.worldcoin.org:5001,0.0.0.0:5002"
+  - "--outbound-addrs=sidecar.0.prod.hnsw.worldcoin.org:5000,sidecar.1.prod.hnsw.worldcoin.org:5001,sidecar.2.prod.hnsw.worldcoin.org:5002"
+  - "--peer-round-timeout-secs=120"
+  - "--make-connections-timeout-secs=300"
+  - "--min-mutations-per-cycle=1"
+  - "--pruning-mode=none"
+  - "--one-shot"
+
+env:
+  SMPC__CPU_DATABASE__SCHEMA: "SMPC_rerand_genesis_restored_v2_prod_2"
+  SMPC__GRAPH_CHECKPOINT_BUCKET_NAME: "ampc-hnsw-graph-store-node-2-prod-eu-central-1"
+
+initContainer:
+  enabled: true
+  image: "amazon/aws-cli:2.17.62"
+  name: "wal-sidecar-dns-records-updater"
+  env:
+    - name: PARTY_ID
+      value: "2"
+    - name: POD_IP
+      valueFrom:
+        fieldRef:
+          fieldPath: status.podIP
+  configMap:
+    init.sh: |
+      #!/usr/bin/env bash
+
+      HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name prod.hnsw.worldcoin.org --query "HostedZones[0].Id" --output text)
+
+      BATCH_JSON=$(cat <<EOF
+      {
+        "Comment": "Upsert the A record for WAL sidecar pod",
+        "Changes": [
+          {
+            "Action": "UPSERT",
+            "ResourceRecordSet": {
+              "Name": "sidecar.$PARTY_ID.prod.hnsw.worldcoin.org",
+              "TTL": 5,
+              "Type": "A",
+              "ResourceRecords": [{
+                "Value": "$POD_IP"
+              }]
+            }
+          }
+        ]
+      }
+      EOF
+      )
+
+      aws route53 change-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --change-batch "$BATCH_JSON"
+
+attachSecurityGroupPolicy:
+  enabled: true
+  groupIds:
+    - sg-0264a02319b006769
