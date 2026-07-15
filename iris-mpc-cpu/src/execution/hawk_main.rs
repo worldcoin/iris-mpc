@@ -434,6 +434,10 @@ pub struct ClassifiedMatches {
     pub matches: SaturableMatches,
     /// Neighbors below the anon stats threshold (0.375). Superset of `matches`. Used for anon stats.
     pub anon_stats_matches: SaturableMatches,
+    /// The pre-extension `matches`, retained only when a supermatcher extended
+    /// search replaced the original results. Lets the decision step compare the
+    /// extended search's outcome against the original search alone.
+    pub pre_extension: Option<SaturableMatches>,
 }
 
 /// A high-level plan for inserting a query into the HNSW graph after a search.

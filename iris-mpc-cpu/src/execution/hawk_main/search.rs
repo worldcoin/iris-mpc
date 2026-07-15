@@ -10,7 +10,7 @@ use crate::{
         InsertPlanV, StoreId,
     },
     hawkers::aby3::aby3_store::{Aby3DistanceRef, Aby3Query, Aby3Store, DistanceOps},
-    hnsw::{graph::UpdateEntryPoint, GraphMem, HnswSearcher},
+    hnsw::{graph::UpdateEntryPoint, GraphMem, HnswSearcher, SortedNeighborhood},
 };
 use eyre::{OptionExt, Result};
 use iris_mpc_common::iris_db::iris::Threshold;
@@ -236,13 +236,14 @@ async fn classify_and_extend(
             .search_layer_0_seeded(aby3_store, graph_store, query, seeded_nbhd, ef_supermatch)
             .await?;
 
-        let supermatch_classified = classify_edges(
+        let mut supermatch_classified = classify_edges(
             &supermatch_neighbors.edges,
             aby3_store,
             ef_supermatch,
             margin,
         )
         .await?;
+        supermatch_classified.pre_extension = Some(classified.matches);
 
         if supermatch_classified.anon_stats_matches.saturated {
             tracing::warn!(
@@ -250,16 +251,6 @@ async fn classify_and_extend(
             );
             metrics::counter!("supermatcher_still_saturated_after_extended").increment(1);
         }
-
-        metrics::histogram!("extended_search_new_anon_stats_matches").record(
-            supermatch_classified.anon_stats_matches.results.len() as f64
-                - classified.anon_stats_matches.results.len() as f64,
-        );
-
-        metrics::histogram!("extended_search_new_matches").record(
-            supermatch_classified.matches.results.len() as f64
-                - classified.matches.results.len() as f64,
-        );
 
         return Ok(supermatch_classified);
     }
@@ -320,6 +311,7 @@ async fn classify_edges(
             results: anon_stats_matches,
             saturated: anon_stats_saturated,
         },
+        pre_extension: None,
     })
 }
 

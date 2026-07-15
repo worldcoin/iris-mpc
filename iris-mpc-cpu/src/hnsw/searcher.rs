@@ -33,6 +33,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     hash::{Hash, Hasher},
     iter::once,
+    time::Instant,
 };
 use tracing::{debug, instrument, trace_span, Instrument};
 
