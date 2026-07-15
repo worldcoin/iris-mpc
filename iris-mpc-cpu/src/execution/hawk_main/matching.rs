@@ -241,7 +241,7 @@ impl Step1 {
         let reauth_result = self.reauth_id().map(|(id, or_rule)| {
             let is_match =
                 [LEFT, RIGHT].map(|side| *missing_is_match[side].get(&id).unwrap_or(&false));
-            tracing::debug!("Reauth ID: {id}, or_rule: {or_rule}, is_match: {is_match:?}");
+            tracing::info!("Reauth ID: {id}, or_rule: {or_rule}, is_match: {is_match:?}");
             (id, or_rule, is_match)
         });
 
@@ -377,7 +377,7 @@ impl BatchStep3 {
     /// Applies supermatcher rejection: if any rotation's match results were
     /// saturated on either eye, the decision is forced to `NoMutation`.
     pub fn decisions(&self) -> VecRequests<Decision> {
-        tracing::debug!(
+        tracing::info!(
             "Calculating decisions for batch of {} requests",
             self.0.len()
         );
@@ -388,7 +388,7 @@ impl BatchStep3 {
         let mut decisions = Vec::<Decision>::with_capacity(self.0.len());
 
         for request in &self.0 {
-            tracing::debug!(
+            tracing::info!(
                 "Processing request type normal: {:?} mirror {:?}",
                 request.normal.request_type,
                 request.mirror.request_type,
@@ -424,10 +424,10 @@ impl BatchStep3 {
             };
 
             if because_supermatch {
-                tracing::debug!("Supermatcher rejection");
+                tracing::info!("Supermatcher rejection");
                 metrics::counter!("supermatcher_rejections").increment(1);
             }
-            tracing::debug!("Pushing decision: {decision:?}");
+            tracing::info!("Pushing decision: {decision:?}");
             decisions.push(decision);
         }
 
@@ -453,6 +453,7 @@ struct ResolvedJoin {
     saturated: BothEyes<bool>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Step2 {
     /// Search matches from the (possibly supermatcher-extended) results.
     join: ResolvedJoin,
