@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+aws-config.workspace = true
 object_store.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }
 bytemuck.workspace = true

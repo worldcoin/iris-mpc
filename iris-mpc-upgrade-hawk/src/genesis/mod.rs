@@ -1083,7 +1083,8 @@ async fn get_service_clients(
         );
 
         // Object-store client for general operations (iris snapshots, deletions).
-        let aws_s3_client = ObjectStoreClient::new(Some(region_name.clone()), force_path_style);
+        let aws_s3_client = ObjectStoreClient::new(Some(region_name.clone()), force_path_style)
+            .with_aws_sdk_config(&sdk_config);
 
         // RDS client using general AWS configuration
         tracing::info!(
@@ -1102,7 +1103,8 @@ async fn get_service_clients(
         );
 
         let checkpoint_s3_client =
-            ObjectStoreClient::new(Some(checkpoint_region_name), force_path_style);
+            ObjectStoreClient::new(Some(checkpoint_region_name), force_path_style)
+                .with_aws_sdk_config(&sdk_config);
 
         Ok((aws_s3_client, checkpoint_s3_client, rds_client))
     }

@@ -3071,7 +3071,9 @@ dependencies = [
  "ampc-anon-stats",
  "ampc-secret-sharing",
  "ampc-server-utils",
+ "async-trait",
  "aws-config",
+ "aws-credential-types",
  "aws-sdk-kms",
  "aws-sdk-secretsmanager",
  "aws-sdk-sns",
@@ -3229,6 +3231,7 @@ version = "0.1.0"
 dependencies = [
  "ampc-server-utils",
  "async-trait",
+ "aws-config",
  "bytemuck",
  "bytes",
  "dotenvy",

@@ -134,10 +134,14 @@ impl S3StoredIris {
 }
 
 pub fn create_db_chunks_object_store_client(
-    region: impl Into<String>,
+    sdk_config: &aws_config::SdkConfig,
     force_path_style: bool,
 ) -> ObjectStoreClient {
-    ObjectStoreClient::new(Some(region.into()), force_path_style)
+    ObjectStoreClient::new(
+        sdk_config.region().map(ToString::to_string),
+        force_path_style,
+    )
+    .with_aws_sdk_config(sdk_config)
 }
 
 #[async_trait]

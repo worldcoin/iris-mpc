@@ -149,7 +149,8 @@ pub async fn rotate_keys(
     let mut object_store = ObjectStoreClient::new(
         sdk_config.region().map(ToString::to_string),
         endpoint_url.is_some(),
-    );
+    )
+    .with_aws_sdk_config(sdk_config);
 
     if let Some(ref url) = endpoint_url {
         object_store = object_store

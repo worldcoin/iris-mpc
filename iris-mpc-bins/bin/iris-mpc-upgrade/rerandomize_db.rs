@@ -83,7 +83,8 @@ async fn keygen_main(config: KeyGenConfig) -> Result<()> {
     );
 
     let sm_config_builder = aws_sdk_secretsmanager::config::Builder::from(&sdk_config);
-    let s3_client = ObjectStoreClient::new(sdk_config.region().map(ToString::to_string), false);
+    let s3_client = ObjectStoreClient::new(sdk_config.region().map(ToString::to_string), false)
+        .with_aws_sdk_config(&sdk_config);
     let sm_client = SecretsManagerClient::from_conf(sm_config_builder.build());
 
     // Generate keys only when the secret does not exist

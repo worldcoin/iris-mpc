@@ -24,10 +24,13 @@ impl AwsClient {
         };
 
         let environment = self.config().environment();
-        let s3_bucket = format!("wf-smpcv2-{}-sync-protocol", environment);
-        let s3_key = format!("{}_deleted_serial_ids.json", environment);
-        let s3_obj = S3ObjectInfo::new(&s3_bucket, &s3_key, &data);
-        self.s3_put_object(&s3_obj)
+        let object_key = format!("{}_deleted_serial_ids.json", environment);
+        let object = S3ObjectInfo::new(
+            self.config().iris_deletions_store_location(),
+            &object_key,
+            &data,
+        );
+        self.s3_put_object(&object)
             .await
             .map_err(|e| AwsClientError::IrisDeletionsUploadError(e.to_string()))
     }

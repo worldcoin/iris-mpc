@@ -449,7 +449,13 @@ async fn main() -> Result<()> {
 }
 
 async fn init_dbs(args: &Args) -> Vec<DbContext> {
-    let s3_client = ObjectStoreClient::new(args.aws_region.clone(), false);
+    let mut sdk_config_loader = aws_config::from_env();
+    if let Some(region) = &args.aws_region {
+        sdk_config_loader = sdk_config_loader.region(aws_config::Region::new(region.clone()));
+    }
+    let sdk_config = sdk_config_loader.load().await;
+    let s3_client =
+        ObjectStoreClient::new(args.aws_region.clone(), false).with_aws_sdk_config(&sdk_config);
 
     let mut dbs = Vec::new();
     for (party_id, (url, schema)) in izip!(args.db_urls().iter(), args.db_schemas().iter())

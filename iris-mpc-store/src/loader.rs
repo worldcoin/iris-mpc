@@ -121,7 +121,11 @@ async fn load_iris_db_internal(
         let s3_load_safety_overlap_seconds = config.db_load_safety_overlap_seconds;
 
         // Construct s3 client and store
-        let object_store_client = create_db_chunks_object_store_client(region, true);
+        let sdk_config = aws_config::from_env()
+            .region(aws_config::Region::new(region))
+            .load()
+            .await;
+        let object_store_client = create_db_chunks_object_store_client(&sdk_config, true);
         let s3_store = S3Store::new(object_store_client, s3_chunks_bucket_name.clone())?;
         let s3_arc = Arc::new(s3_store);
 

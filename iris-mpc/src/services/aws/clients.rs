@@ -34,13 +34,15 @@ impl AwsClients {
 
         let sns_client = create_sns_client(&shared_config, config.sns_retry_max_attempts);
         let sqs_client = create_sqs_client(&shared_config, config.sqs_long_poll_wait_time);
-        let object_store_client = ObjectStoreClient::new(Some(region), force_path_style);
+        let object_store_client = ObjectStoreClient::new(Some(region), force_path_style)
+            .with_aws_sdk_config(&shared_config);
         let secrets_manager_client = SecretsManagerClient::new(&shared_config);
 
         let checkpoint_object_store_client = ObjectStoreClient::new(
             Some(config.graph_checkpoint_bucket_region.clone()),
             force_path_style,
-        );
+        )
+        .with_aws_sdk_config(&shared_config);
 
         Ok(Self {
             sqs_client,

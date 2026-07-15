@@ -204,6 +204,12 @@ pub struct Config {
     #[serde(default = "default_enable_deletion")]
     pub enable_deletion: bool,
 
+    /// Object-store location for the Iris deletion snapshot. Plain values are
+    /// treated as legacy S3 bucket names; provider URLs select other backends.
+    /// If omitted, the historical environment-specific bucket is used.
+    #[serde(default)]
+    pub iris_deletions_store_location: Option<String>,
+
     #[serde(default)]
     pub hnsw_schema_name_suffix: String,
 
@@ -619,6 +625,15 @@ impl Config {
         self.anon_stats_schema_name.clone()
     }
 
+    /// Returns the configured Iris deletion snapshot location, falling back to
+    /// the historical environment-specific S3 bucket.
+    pub fn iris_deletions_store_location(&self) -> String {
+        resolve_iris_deletions_store_location(
+            &self.environment,
+            self.iris_deletions_store_location.as_deref(),
+        )
+    }
+
     /// Returns the name of a database schema for connecting to a node's gpu dB.
     pub fn get_gpu_db_schema(&self) -> String {
         self.format_db_schema(&self.gpu_schema_name_suffix)
@@ -646,6 +661,17 @@ impl Config {
             schema_name, schema_suffix, environment, party_id
         )
     }
+}
+
+/// Resolves an optional Iris deletion snapshot location while preserving the
+/// bucket convention used before object-store URLs were supported.
+pub fn resolve_iris_deletions_store_location(
+    environment: &str,
+    configured_location: Option<&str>,
+) -> String {
+    configured_location
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| format!("wf-smpcv2-{environment}-sync-protocol"))
 }
 
 /// Encapsulates database configuration settings.
@@ -742,6 +768,7 @@ pub struct CommonConfig {
     enable_reset: bool,
     enable_recovery: bool,
     enable_deletion: bool,
+    iris_deletions_store_location: String,
     hawk_request_parallelism: usize,
     hawk_connection_parallelism: usize,
     hnsw_param_ef_constr: usize,
@@ -830,6 +857,7 @@ impl From<Config> for CommonConfig {
             enable_reset,
             enable_recovery,
             enable_deletion,
+            iris_deletions_store_location,
             hawk_request_parallelism,
             hawk_connection_parallelism,
             hnsw_param_ef_constr,
@@ -880,6 +908,11 @@ impl From<Config> for CommonConfig {
             "hnsw_disable_memory_persistence requires disable_persistence to also be true"
         );
 
+        let iris_deletions_store_location = resolve_iris_deletions_store_location(
+            &environment,
+            iris_deletions_store_location.as_deref(),
+        );
+
         Self {
             environment,
             results_topic_arn,
@@ -908,6 +941,7 @@ impl From<Config> for CommonConfig {
             enable_reset,
             enable_recovery,
             enable_deletion,
+            iris_deletions_store_location,
             hawk_request_parallelism,
             hawk_connection_parallelism,
             hnsw_param_ef_constr,
@@ -940,6 +974,28 @@ impl From<Config> for CommonConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn iris_deletions_store_location_preserves_legacy_default_and_allows_override() {
+        let legacy: Config = serde_json::from_value(serde_json::json!({
+            "environment": "dev"
+        }))
+        .unwrap();
+        assert_eq!(
+            legacy.iris_deletions_store_location(),
+            "wf-smpcv2-dev-sync-protocol"
+        );
+
+        let configured: Config = serde_json::from_value(serde_json::json!({
+            "environment": "dev",
+            "iris_deletions_store_location": "gs://deletions/snapshots"
+        }))
+        .unwrap();
+        assert_eq!(
+            configured.iris_deletions_store_location(),
+            "gs://deletions/snapshots"
+        );
+    }
 
     #[test]
     fn db_backed_ingest_is_part_of_common_config_equality() {

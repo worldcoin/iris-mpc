@@ -45,21 +45,20 @@ pub async fn get_iris_deletions(
         deleted_serial_ids: Vec<SerialId>,
     }
 
-    // Set bucket and key based on environment
-    let s3_bucket = format!("wf-smpcv2-{}-sync-protocol", config.environment);
-    let s3_key = format!("{}_deleted_serial_ids.json", config.environment);
+    let store_location = config.iris_deletions_store_location();
+    let object_key = format!("{}_deleted_serial_ids.json", config.environment);
     tracing::info!(
         "Fetching deleted serial ids from object store: {}, key: {}",
-        s3_bucket,
-        s3_key
+        store_location,
+        object_key
     );
 
     // Fetch from object storage.
-    let store = s3_client.store(&s3_bucket).map_err(|err| {
+    let store = s3_client.store(&store_location).map_err(|err| {
         tracing::error!("Failed to construct object store: {err}");
         IndexationError::AwsS3ObjectDownload
     })?;
-    let location = path(&s3_key).map_err(|err| {
+    let location = path(&object_key).map_err(|err| {
         tracing::error!("Invalid object key: {err}");
         IndexationError::AwsS3ObjectDownload
     })?;
@@ -279,6 +278,42 @@ async fn unset_state_element(
         })?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod object_store_tests {
+    use super::get_iris_deletions;
+    use iris_mpc_common::{
+        config::Config,
+        object_store::{path, ObjectStoreClient, ObjectStoreExt},
+    };
+
+    #[tokio::test]
+    async fn reads_deletions_from_configured_object_store_location() {
+        let store_location = "memory:///deletion-snapshots";
+        let config: Config = serde_json::from_value(serde_json::json!({
+            "environment": "test",
+            "iris_deletions_store_location": store_location
+        }))
+        .unwrap();
+        let client = ObjectStoreClient::new(None, false);
+        let store = client.store(store_location).unwrap();
+        store
+            .put(
+                &path("test_deleted_serial_ids.json").unwrap(),
+                serde_json::to_vec(&serde_json::json!({
+                    "deleted_serial_ids": [1, 3, 8]
+                }))
+                .unwrap()
+                .into(),
+            )
+            .await
+            .unwrap();
+
+        let deletions = get_iris_deletions(&config, &client, 5).await.unwrap();
+
+        assert_eq!(deletions, vec![1, 3]);
+    }
 }
 
 #[cfg(test)]

@@ -2371,15 +2371,23 @@ fn parse_s3_uri(uri: &str) -> Result<(String, String)> {
     Ok((bucket.to_string(), prefix.to_string()))
 }
 
-fn build_s3_client(force_path_style: bool) -> ObjectStoreClient {
-    ObjectStoreClient::new(None, force_path_style)
+fn build_s3_client(
+    sdk_config: &aws_config::SdkConfig,
+    force_path_style: bool,
+) -> ObjectStoreClient {
+    ObjectStoreClient::new(None, force_path_style).with_aws_sdk_config(sdk_config)
 }
 
 /// Build an S3 client for the graph-checkpoint bucket, allowing the region to
 /// differ from the ambient default (genesis writes checkpoints into a bucket
 /// that may live in a different region from the iris/exclusions buckets).
 async fn build_checkpoint_s3_client(region: &str, force_path_style: bool) -> ObjectStoreClient {
+    let sdk_config = aws_config::from_env()
+        .region(aws_config::Region::new(region.to_owned()))
+        .load()
+        .await;
     ObjectStoreClient::new(Some(region.to_owned()), force_path_style)
+        .with_aws_sdk_config(&sdk_config)
 }
 
 async fn download_exclusions_from_s3(
@@ -2390,7 +2398,8 @@ async fn download_exclusions_from_s3(
     eyre::ensure!(!key.is_empty(), "S3 URI must include an object key");
     println!("Downloading exclusions from s3://{bucket}/{key}");
 
-    let client = build_s3_client(force_path_style);
+    let sdk_config = aws_config::from_env().load().await;
+    let client = build_s3_client(&sdk_config, force_path_style);
     let body = client
         .store(&bucket)?
         .get(&object_path(&key)?)
@@ -2410,7 +2419,8 @@ async fn upload_to_s3(s3_uri: &str, files: &[PathBuf], force_path_style: bool) -
     let (bucket, prefix) = parse_s3_uri(s3_uri)?;
     println!("--- Uploading to S3: s3://{bucket}/{prefix} ---");
 
-    let client = build_s3_client(force_path_style);
+    let sdk_config = aws_config::from_env().load().await;
+    let client = build_s3_client(&sdk_config, force_path_style);
     let store = client.store(&bucket)?;
 
     for path in files {

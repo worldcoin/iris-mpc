@@ -144,7 +144,9 @@ impl CpuTestContext {
         } else {
             TestEnvironment::Local
         };
+        let sdk_config = aws_config::load_from_env().await;
         let s3_client = ObjectStoreClient::new(Some("us-east-1".to_owned()), true)
+            .with_aws_sdk_config(&sdk_config)
             .with_option("aws_endpoint", env.s3_endpoint())
             .with_option("aws_allow_http", true);
         Self {

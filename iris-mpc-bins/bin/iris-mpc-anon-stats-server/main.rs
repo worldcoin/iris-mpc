@@ -1091,7 +1091,13 @@ async fn build_sns_client(config: &AnonStatsServerConfig) -> Result<SNSClient> {
 async fn build_s3_client(config: &AnonStatsServerConfig) -> Result<ObjectStoreClient> {
     let force_path_style = config.environment != ENV_PROD && config.environment != ENV_STAGE;
     let region = config.aws.as_ref().and_then(|aws| aws.region.clone());
-    let mut client = ObjectStoreClient::new(region, force_path_style);
+    let mut loader = aws_config::from_env();
+    if let Some(region) = &region {
+        loader = loader.region(Region::new(region.clone()));
+    }
+    let shared_config = loader.load().await;
+    let mut client =
+        ObjectStoreClient::new(region, force_path_style).with_aws_sdk_config(&shared_config);
     if let Some(aws) = &config.aws {
         if let Some(endpoint) = &aws.endpoint {
             client = client

@@ -139,7 +139,8 @@ impl E2EClient {
         let mut sns_config_builder = aws_sdk_sns::config::Builder::from(&shared_config);
 
         let mut s3_client =
-            ObjectStoreClient::new(Some(opts.region.clone()), opts.endpoint_url.is_some());
+            ObjectStoreClient::new(Some(opts.region.clone()), opts.endpoint_url.is_some())
+                .with_aws_sdk_config(&shared_config);
         if let Some(endpoint_url) = opts.endpoint_url.as_ref() {
             s3_client = s3_client
                 .with_option("aws_endpoint", endpoint_url)

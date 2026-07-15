@@ -67,7 +67,12 @@ async fn main() -> Result<()> {
         command,
     } = Cli::parse();
 
-    let s3_client = ObjectStoreClient::new(aws_region, false);
+    let mut sdk_config_loader = aws_config::from_env();
+    if let Some(region) = &aws_region {
+        sdk_config_loader = sdk_config_loader.region(aws_config::Region::new(region.clone()));
+    }
+    let sdk_config = sdk_config_loader.load().await;
+    let s3_client = ObjectStoreClient::new(aws_region, false).with_aws_sdk_config(&sdk_config);
 
     let db_context = DbContext::new(&db_url, &schema, s3_client, s3_bucket, party_id).await;
 

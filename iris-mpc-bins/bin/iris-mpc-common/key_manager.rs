@@ -192,7 +192,8 @@ async fn rotate_keys(
         .region()
         .map(ToString::to_string)
         .unwrap_or_else(|| "us-east-1".to_owned());
-    let mut s3_client = ObjectStoreClient::new(Some(region), endpoint_url.is_some());
+    let mut s3_client = ObjectStoreClient::new(Some(region), endpoint_url.is_some())
+        .with_aws_sdk_config(sdk_config);
 
     if let Some(endpoint_url) = endpoint_url.as_ref() {
         s3_client = s3_client
