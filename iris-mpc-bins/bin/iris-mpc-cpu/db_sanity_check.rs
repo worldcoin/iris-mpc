@@ -19,7 +19,7 @@ use iris_mpc_cpu::{
     hnsw::{
         graph::{
             graph_store::{GraphMutationRow, GraphPg},
-            layered_graph::GraphMem,
+            layered_graph::{GraphMem, Neighborhood},
         },
         searcher::HnswParams,
     },
@@ -132,6 +132,23 @@ struct Args {
     /// when S3 mode is enabled (see `SMPC__GRAPH_CHECKPOINT_BUCKET_NAME` env).
     #[arg(long)]
     checkpoint_s3_key: Option<String>,
+    /// Single-source layered BFS from the search entry point; emits per-bucket
+    /// hop / reachability stats (`hops_by_bucket.csv`). Off by default; O(edges).
+    #[arg(long, default_value_t = false)]
+    bfs_hops: bool,
+    /// Count strongly-connected components per layer (Tarjan). Off by default —
+    /// this is an O(nodes + edges) pass over each layer.
+    #[arg(long, default_value_t = false)]
+    scc: bool,
+    /// Number of consecutive serial IDs per bucket for all per-bucket reports
+    /// (degree, hops, neighbor-serial matrix). Required.
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+    bucket_size: u32,
+    /// Emit an in-depth per-serial reachability dossier (`probe_report.txt` /
+    /// `.json`) for these serial IDs. Comma-separated. Enables the BFS + SCC
+    /// passes needed to populate the dossier.
+    #[arg(long, value_delimiter = ',')]
+    probe_serials: Vec<u32>,
 }
 
 /// Subset of `iris_mpc_common::config::Config` that the sanity check reads
@@ -226,6 +243,442 @@ struct DegreeHistEntry {
     node_count: usize,
 }
 
+/// Per-(eye, layer, serial-id bucket) degree summary, emitted for both in- and
+/// out-degree. `bucket` is the 0-based serial-id range index ((serial_id - 1) / bucket_size).
+#[derive(Serialize)]
+struct DegreeBucketEntry {
+    eye: String,
+    layer: usize,
+    direction: &'static str,
+    bucket: u32,
+    serial_start: u32,
+    serial_end: u32,
+    node_count: usize,
+    min: usize,
+    avg: f64,
+    median: usize,
+    max: usize,
+}
+
+/// One cell of the per-(eye, layer) bucket->bucket directed-edge count matrix.
+/// `valid_edges` counts active edges; `raw_edges` counts all edges.
+/// Only populated (nonzero) cells are emitted.
+#[derive(Serialize)]
+struct MatrixEntry {
+    eye: String,
+    layer: usize,
+    src_bucket: u32,
+    dst_bucket: u32,
+    valid_edges: u64,
+    raw_edges: u64,
+}
+
+/// min / avg / median / max of a degree list. `degrees` is sorted in place.
+fn degree_summary(degrees: &mut [usize]) -> (usize, f64, usize, usize) {
+    degrees.sort_unstable();
+    let n = degrees.len();
+    let sum: usize = degrees.iter().sum();
+    (
+        degrees[0],
+        sum as f64 / n as f64,
+        degrees[n / 2],
+        degrees[n - 1],
+    )
+}
+
+/// Per-(eye, serial-id bucket) BFS-hop summary over the layer-0 nodes whose
+/// serial ID falls in the bucket, for a single-source search from one entry point.
+///
+/// `hops_*` aggregate over the nodes in the bucket reachable from the entry point;
+/// `reachable_nodes` / `unreachable_nodes` split the bucket by reachability.
+#[derive(Serialize)]
+struct HopBucketEntry {
+    eye: String,
+    bucket: u32,
+    serial_start: u32,
+    serial_end: u32,
+    node_count: u64,
+    reachable_nodes: u64,
+    unreachable_nodes: u64,
+    hops_min: u32,
+    hops_avg: f64,
+    hops_median: u32,
+    hops_max: u32,
+}
+
+/// min / avg / median / max + total count from a value→count slice, where
+/// `counts[v]` is the number of observations equal to `v`. Median is the value
+/// at cumulative index `total / 2` (lower median). All-zero when empty.
+fn hist_stats(counts: &[u64]) -> (u32, f64, u32, u32, u64) {
+    let total: u64 = counts.iter().sum();
+    if total == 0 {
+        return (0, 0.0, 0, 0, 0);
+    }
+    let min = counts.iter().position(|&c| c > 0).unwrap() as u32;
+    let max = counts.iter().rposition(|&c| c > 0).unwrap() as u32;
+    let weighted: u128 = counts
+        .iter()
+        .enumerate()
+        .map(|(v, &c)| v as u128 * c as u128)
+        .sum();
+    let avg = weighted as f64 / total as f64;
+    let target = total / 2;
+    let mut cum = 0u64;
+    let mut median = min;
+    for (v, &c) in counts.iter().enumerate() {
+        cum += c;
+        if cum > target {
+            median = v as u32;
+            break;
+        }
+    }
+    (min, avg, median, max, total)
+}
+
+/// Per-layer adjacency indexed by `serial_id - 1` (`None` = no node at that
+/// slot), plus the content-clock seq per slot (`INIT_ABSENT` = serial not a
+/// live graph node) and the array length `n`.
+type LayerArrays<'a> = (Vec<Vec<Option<&'a Neighborhood>>>, Vec<u64>, usize);
+
+/// Sentinel in `live_versions` for a serial absent from the irises table.
+const NO_IRIS: i16 = i16::MIN;
+
+/// Sentinel in the init-seq array for a serial absent from the content clock.
+const INIT_ABSENT: u64 = u64::MAX;
+
+/// 0-based array slot of a 1-based serial; `None` for serial 0 (never a real node).
+fn slot(serial: SerialId) -> Option<usize> {
+    serial.checked_sub(1).map(|i| i as usize)
+}
+
+/// Fill a length-`n` adjacency array (indexed by `serial_id - 1`) from one
+/// layer's links. An edge is *active* — followable by search — iff its
+/// target's content-clock seq does not exceed the referencing neighborhood's
+/// seq (the `get_active_links` gate).
+fn fill_layer_arrays(
+    links: &HashMap<SerialId, Neighborhood>,
+    n: usize,
+) -> Vec<Option<&Neighborhood>> {
+    let mut adj: Vec<Option<&Neighborhood>> = vec![None; n];
+    for (serial, nbhd) in links.iter() {
+        if let Some(i) = slot(*serial).filter(|&i| i < n) {
+            adj[i] = Some(nbhd);
+        }
+    }
+    adj
+}
+
+/// Content-clock seq per slot, `INIT_ABSENT` where no live node exists.
+fn build_init_seqs(graph: &GraphMem, n: usize) -> Vec<u64> {
+    let mut seqs = vec![INIT_ABSENT; n];
+    for (serial, init) in graph.node_init.iter() {
+        if let Some(i) = slot(*serial).filter(|&i| i < n) {
+            seqs[i] = init.seq_no;
+        }
+    }
+    seqs
+}
+
+/// Per-layer adjacency plus content-clock seqs, indexed by `serial_id - 1`.
+/// Sized to layer 0's max serial (layer 0 holds all nodes). Caller must ensure
+/// layer 0 is non-empty. Returns (adj, init_seqs, n).
+fn build_layer_arrays(graph: &GraphMem) -> LayerArrays<'_> {
+    let n = graph.layers[0]
+        .links
+        .keys()
+        .max()
+        .map_or(0, |&m| m as usize);
+    let mut adj: Vec<Vec<Option<&Neighborhood>>> = Vec::with_capacity(graph.layers.len());
+    for layer in &graph.layers {
+        adj.push(fill_layer_arrays(&layer.links, n));
+    }
+    let init_seqs = build_init_seqs(graph, n);
+    (adj, init_seqs, n)
+}
+
+/// The search sources: every recorded entry point present in the graph, else the
+/// temporary entry point (LinearScan, no recorded entry points). Returns
+/// `(serial, layer)` pairs with each layer clamped to existing layers. Seeding
+/// BFS from the whole entry-point set mirrors the search, which descends from the
+/// entry point nearest the query — so reachability is "reachable from any entry
+/// point" and the hop count is the shortest layered path from the nearest one.
+fn pick_sources(
+    graph: &GraphMem,
+    adj: &[Vec<Option<&Neighborhood>>],
+    n: usize,
+) -> Vec<(SerialId, usize)> {
+    let num_layers = graph.layers.len();
+    let present = |point: SerialId, layer: usize| {
+        slot(point).is_some_and(|i| i < n && adj[layer.min(num_layers - 1)][i].is_some())
+    };
+    let eps: Vec<(SerialId, usize)> = graph
+        .entry_points
+        .iter()
+        .map(|ep| (ep.point, ep.layer.min(num_layers - 1)))
+        .filter(|(p, l)| present(*p, *l))
+        .collect();
+    if !eps.is_empty() {
+        return eps;
+    }
+    // LinearScan fallback: get_temporary_entry_point returns the min serial.
+    let Some((tp, tl)) = graph.get_temporary_entry_point() else {
+        return Vec::new();
+    };
+    let top = tl.min(num_layers - 1);
+    if present(tp, top) {
+        vec![(tp, top)]
+    } else {
+        Vec::new()
+    }
+}
+
+/// Multi-source layered BFS (top layer → 0) over active edges, via a bucket
+/// queue (Dial's algorithm). Returns `dist` indexed by `serial_id - 1`
+/// (`u32::MAX` = unreachable). Each source enters at hop 0 in its own layer and
+/// distances carry down between layers (free descent). Reachability is a topological
+/// upper bound (any path from any source) and the hop count an optimistic lower
+/// bound on the actual greedy descent, which follows a single path and may stall.
+fn layered_bfs(
+    adj: &[Vec<Option<&Neighborhood>>],
+    init_seqs: &[u64],
+    n: usize,
+    sources: &[(SerialId, usize)],
+) -> Vec<u32> {
+    let mut dist = vec![u32::MAX; n];
+    let Some(top) = sources.iter().map(|(_, l)| *l).max() else {
+        return dist;
+    };
+    // Seeds entering at each layer (real entry points all sit at the top layer, but
+    // a source recorded at a lower layer is introduced when its layer is reached).
+    let mut seeds: Vec<Vec<u32>> = vec![Vec::new(); top + 1];
+    for &(point, l) in sources {
+        if let Some(i) = slot(point).filter(|&i| i < n) {
+            if l <= top {
+                seeds[l].push(i as u32);
+            }
+        }
+    }
+    let mut reached: Vec<u32> = Vec::new();
+    let mut queue: Vec<Vec<u32>> = Vec::new();
+    for layer in (0..=top).rev() {
+        for &s in &seeds[layer] {
+            if dist[s as usize] == u32::MAX {
+                dist[s as usize] = 0;
+                reached.push(s);
+            }
+        }
+        let adj_l = &adj[layer];
+        let mut max_d = 0u32;
+        for &u in &reached {
+            let d = dist[u as usize];
+            while queue.len() <= d as usize {
+                queue.push(Vec::new());
+            }
+            queue[d as usize].push(u);
+            max_d = max_d.max(d);
+        }
+        let mut d = 0u32;
+        while d <= max_d {
+            let mut i = 0;
+            while i < queue[d as usize].len() {
+                let u = queue[d as usize][i] as usize;
+                i += 1;
+                if dist[u] != d {
+                    continue; // stale bucket-queue entry
+                }
+                let nd = d + 1;
+                let Some(nbhd) = adj_l[u] else {
+                    continue;
+                };
+                for &nb in nbhd.neighbors() {
+                    let Some(v) = slot(nb).filter(|&v| v < n) else {
+                        continue;
+                    };
+                    if adj_l[v].is_none() || init_seqs[v] > nbhd.seq_no() {
+                        continue; // active-strict: only follow edges the search can traverse
+                    }
+                    if nd < dist[v] {
+                        let first_seen = dist[v] == u32::MAX;
+                        dist[v] = nd;
+                        while queue.len() <= nd as usize {
+                            queue.push(Vec::new());
+                        }
+                        queue[nd as usize].push(v as u32);
+                        max_d = max_d.max(nd);
+                        if first_seen {
+                            reached.push(v as u32);
+                        }
+                    }
+                }
+            }
+            d += 1;
+        }
+        for b in queue.iter_mut() {
+            b.clear();
+        }
+    }
+    dist
+}
+
+/// Iterative Tarjan SCC over one layer's active edges. Returns
+/// `(comp_of, sizes)`: `comp_of[i]` = component index of the node at slot `i`
+/// (`u32::MAX` if no node there), `sizes[c]` = size of component `c`.
+fn scc_layer(adj_l: &[Option<&Neighborhood>], init_seqs: &[u64], n: usize) -> (Vec<u32>, Vec<u64>) {
+    const UNVISITED: u32 = u32::MAX;
+    let mut idx = vec![UNVISITED; n];
+    let mut low = vec![0u32; n];
+    let mut on_stack = vec![false; n];
+    let mut comp_of = vec![u32::MAX; n];
+    let mut comp_stack: Vec<u32> = Vec::new();
+    let mut dfs: Vec<(u32, u32)> = Vec::new();
+    let mut sizes: Vec<u64> = Vec::new();
+    let mut next_index = 0u32;
+    for s in 0..n {
+        if adj_l[s].is_none() || idx[s] != UNVISITED {
+            continue;
+        }
+        dfs.push((s as u32, 0));
+        while let Some(&(node, edge_pos)) = dfs.last() {
+            let u = node as usize;
+            if edge_pos == 0 {
+                idx[u] = next_index;
+                low[u] = next_index;
+                next_index += 1;
+                comp_stack.push(node);
+                on_stack[u] = true;
+            }
+            let nbhd = adj_l[u].expect("dfs only visits present slots");
+            let neighbors = nbhd.neighbors();
+            let mut p = edge_pos as usize;
+            let mut recursed = false;
+            while p < neighbors.len() {
+                let nb = neighbors[p];
+                p += 1;
+                let Some(v) = slot(nb).filter(|&v| v < n) else {
+                    continue;
+                };
+                if adj_l[v].is_none() || init_seqs[v] > nbhd.seq_no() {
+                    continue;
+                }
+                if idx[v] == UNVISITED {
+                    dfs.last_mut().unwrap().1 = p as u32;
+                    dfs.push((v as u32, 0));
+                    recursed = true;
+                    break;
+                } else if on_stack[v] {
+                    low[u] = low[u].min(idx[v]);
+                }
+            }
+            if recursed {
+                continue;
+            }
+            if low[u] == idx[u] {
+                let comp = sizes.len() as u32;
+                let mut size = 0u64;
+                loop {
+                    let w = comp_stack.pop().unwrap();
+                    on_stack[w as usize] = false;
+                    comp_of[w as usize] = comp;
+                    size += 1;
+                    if w == node {
+                        break;
+                    }
+                }
+                sizes.push(size);
+            }
+            dfs.pop();
+            if let Some(&(parent, _)) = dfs.last() {
+                low[parent as usize] = low[parent as usize].min(low[u]);
+            }
+        }
+    }
+    (comp_of, sizes)
+}
+
+/// Layered BFS hop/reachability stats, bucketed by serial ID.
+///
+/// Seeds from every live entry point (the set the search descends from), so a node
+/// counts as reachable if any entry point can reach it. Hop count is the shortest
+/// *layered* path: traverse a layer's edges, then descend (free) at any reached
+/// node. Since nodes enter a layer carrying the distance from above, each layer's
+/// relaxation is a non-uniform-source shortest path, run with a bucket queue
+/// (Dial's algorithm). Reachability is active-strict.
+fn compute_hop_buckets(
+    eye: &str,
+    graph: &GraphMem,
+    bucket_size: u32,
+    out: &mut Vec<HopBucketEntry>,
+) {
+    let Some(l0) = graph.layers.first() else {
+        return;
+    };
+    if l0.links.is_empty() {
+        return;
+    }
+    let (adj, init_seqs, n) = build_layer_arrays(graph);
+    let dist = layered_bfs(&adj, &init_seqs, n, &pick_sources(graph, &adj, n));
+
+    // Aggregate per bucket: hops over reachable nodes, plus reachable/unreachable split.
+    let num_buckets = n.div_ceil(bucket_size as usize);
+    let mut hop_counts: Vec<Vec<u64>> = vec![Vec::new(); num_buckets]; // [bucket][hop]
+    let mut node_count: Vec<u64> = vec![0; num_buckets];
+    let mut unreachable: Vec<u64> = vec![0; num_buckets];
+    for ui in 0..n {
+        if adj[0][ui].is_none() {
+            continue;
+        }
+        let bucket = ui / bucket_size as usize;
+        node_count[bucket] += 1;
+        let d = dist[ui];
+        if d == u32::MAX {
+            unreachable[bucket] += 1;
+        } else {
+            let hc = &mut hop_counts[bucket];
+            while hc.len() <= d as usize {
+                hc.push(0);
+            }
+            hc[d as usize] += 1;
+        }
+    }
+
+    for b in 0..num_buckets {
+        if node_count[b] == 0 {
+            continue;
+        }
+        let (hmin, havg, hmed, hmax, reachable) = hist_stats(&hop_counts[b]);
+        out.push(HopBucketEntry {
+            eye: eye.to_string(),
+            bucket: b as u32,
+            serial_start: b as u32 * bucket_size + 1,
+            serial_end: (b as u32 + 1) * bucket_size,
+            node_count: node_count[b],
+            reachable_nodes: reachable,
+            unreachable_nodes: unreachable[b],
+            hops_min: hmin,
+            hops_avg: havg,
+            hops_median: hmed,
+            hops_max: hmax,
+        });
+    }
+}
+
+/// Count strongly-connected components of one layer's directed graph (iterative
+/// Tarjan — forward edges only, so no reverse adjacency is needed). Edges are
+/// active-strict (a content-stale reference is not an edge), matching the BFS.
+/// Returns (number of SCCs, size of the largest SCC). All state is array-indexed
+/// by `serial_id - 1`.
+fn count_sccs(graph: &GraphMem, layer_idx: usize) -> (u64, u64) {
+    let layer = &graph.layers[layer_idx];
+    if layer.links.is_empty() {
+        return (0, 0);
+    }
+    let n = layer.links.keys().max().copied().unwrap() as usize;
+    let adj = fill_layer_arrays(&layer.links, n);
+    let init_seqs = build_init_seqs(graph, n);
+    let (_, sizes) = scc_layer(&adj, &init_seqs, n);
+    (sizes.len() as u64, sizes.iter().copied().max().unwrap_or(0))
+}
+
 struct Stats(Vec<(String, String)>);
 impl Stats {
     fn new() -> Self {
@@ -234,6 +687,337 @@ impl Stats {
     fn add(&mut self, key: impl Into<String>, value: impl Into<String>) {
         self.0.push((key.into(), value.into()));
     }
+}
+
+#[derive(Serialize, Clone)]
+struct ProbeNeighbor {
+    serial: u32,
+    /// Content-clock version of this neighbor; `None` if not a live graph node.
+    version: Option<i16>,
+    /// Whether the edge passes the `get_active_links` gate (target's
+    /// content-clock seq ≤ the referencing neighborhood's seq).
+    active: bool,
+    reachable: bool,
+    hop: Option<u32>,
+}
+
+/// In-depth per-(eye, serial) reachability dossier for a probed node.
+#[derive(Serialize)]
+struct ProbeReport {
+    eye: String,
+    serial: u32,
+    exists_in_graph: bool,
+    in_irises_table: bool,
+    /// Content-clock version of this serial's graph node.
+    graph_version: Option<i16>,
+    /// Whether `graph_version` matches the irises-table version. `false` ⇒
+    /// content changed without a re-index (search still traverses; graph
+    /// bookkeeping is out of sync with the store). `None` if either is absent.
+    version_synced: Option<bool>,
+    cpu_version: Option<i16>,
+    gpu_version: Option<i16>,
+    layers_present: Vec<usize>,
+    reachable: bool,
+    hop: Option<u32>,
+    scc_id: Option<u32>,
+    scc_size: Option<u64>,
+    same_scc_as_entry: Option<bool>,
+    self_loop: bool,
+    in_degree_raw: u32,
+    in_degree_active: u32,
+    stale_in_edges: u32,
+    out_degree: u32,
+    in_neighbors_active: Vec<ProbeNeighbor>,
+    in_neighbors_raw: Vec<ProbeNeighbor>,
+    out_neighbors: Vec<ProbeNeighbor>,
+    pending_modifications: Vec<String>,
+    gpu_byte_match: Option<bool>,
+    verdict: String,
+}
+
+/// Build a per-(eye, serial) dossier explaining whether/why each probed serial is
+/// reachable by the search. Topology (reachability, SCC, neighbor lists) reuses the
+/// shared BFS/SCC/array helpers; version/modification/GPU-byte facts come from the DB.
+async fn run_probe_reports(
+    probes: &[u32],
+    graphs: &BothEyes<GraphMem>,
+    iris_ids: &HashSet<i64>,
+    live_versions: &[i16],
+    hnsw_pool: &sqlx::PgPool,
+    gpu_pool: &sqlx::PgPool,
+) -> Result<Vec<ProbeReport>> {
+    // --- DB facts (serial-specific, eye-independent) ---
+    let probe_i64: Vec<i64> = probes.iter().map(|&s| s as i64).collect();
+    let mods: Vec<(i64, i64, String)> = sqlx::query_as(
+        "SELECT serial_id, id, request_type FROM modifications \
+         WHERE serial_id = ANY($1) ORDER BY id",
+    )
+    .bind(&probe_i64)
+    .fetch_all(gpu_pool)
+    .await
+    .unwrap_or_default();
+    let mut mods_by_serial: HashMap<u32, Vec<String>> = HashMap::new();
+    for (sid, id, rt) in mods {
+        mods_by_serial
+            .entry(sid as u32)
+            .or_default()
+            .push(format!("{rt}#{id}"));
+    }
+    let sql = "SELECT id, left_code, left_mask, right_code, right_mask \
+               FROM irises WHERE id = ANY($1)";
+    let hnsw_rows: Vec<IrisRow> = sqlx::query_as(sql)
+        .bind(&probe_i64)
+        .fetch_all(hnsw_pool)
+        .await
+        .unwrap_or_default();
+    let gpu_rows: Vec<IrisRow> = sqlx::query_as(sql)
+        .bind(&probe_i64)
+        .fetch_all(gpu_pool)
+        .await
+        .unwrap_or_default();
+    let to_map = |rows: Vec<IrisRow>| -> HashMap<i64, IrisData> {
+        rows.into_iter()
+            .map(|(id, lc, lm, rc, rm)| (id, (lc, lm, rc, rm)))
+            .collect()
+    };
+    let hnsw_map = to_map(hnsw_rows);
+    let gpu_map = to_map(gpu_rows);
+
+    let version_sql = "SELECT id, version_id FROM irises WHERE id = ANY($1)";
+    let fetch_versions = |pool: &sqlx::PgPool| {
+        let pool = pool.clone();
+        let ids = probe_i64.clone();
+        async move {
+            sqlx::query_as::<_, (i64, i16)>(version_sql)
+                .bind(&ids)
+                .fetch_all(&pool)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .collect::<HashMap<i64, i16>>()
+        }
+    };
+    let cpu_versions = fetch_versions(hnsw_pool).await;
+    let gpu_versions = fetch_versions(gpu_pool).await;
+
+    // --- Per-eye topology ---
+    let probe_set: HashSet<u32> = probes.iter().copied().collect();
+    let mut out: Vec<ProbeReport> = Vec::new();
+    for (eye, idx) in [("left", LEFT), ("right", RIGHT)] {
+        let graph = &graphs[idx];
+        if graph.layers.first().is_none_or(|l| l.links.is_empty()) {
+            continue;
+        }
+        let (adj, init_seqs, n) = build_layer_arrays(graph);
+        let sources = pick_sources(graph, &adj, n);
+        let dist = layered_bfs(&adj, &init_seqs, n, &sources);
+        let (comp_of, sizes) = scc_layer(&adj[0], &init_seqs, n);
+        let entry_comp = sources
+            .first()
+            .and_then(|(p, _)| slot(*p))
+            .map(|i| comp_of[i]);
+
+        // One edge sweep collects in-neighbors (raw + active) for the probe set.
+        let mut in_raw: HashMap<u32, Vec<ProbeNeighbor>> = HashMap::new();
+        let mut in_active: HashMap<u32, Vec<ProbeNeighbor>> = HashMap::new();
+        for (node, nbhd) in graph.layers[0].links.iter() {
+            let si = slot(*node).filter(|&i| i < n);
+            let reachable = si.is_some_and(|i| dist[i] != u32::MAX);
+            for &target in nbhd.neighbors() {
+                if !probe_set.contains(&target) {
+                    continue;
+                }
+                let active = graph
+                    .node_init
+                    .get(&target)
+                    .is_some_and(|ni| ni.seq_no <= nbhd.seq_no());
+                let pn = ProbeNeighbor {
+                    serial: *node,
+                    version: graph.node_init.get(node).map(|ni| ni.version),
+                    active,
+                    reachable,
+                    hop: reachable.then(|| dist[si.unwrap()]),
+                };
+                if active {
+                    in_active.entry(target).or_default().push(pn.clone());
+                }
+                in_raw.entry(target).or_default().push(pn);
+            }
+        }
+
+        for &serial in probes {
+            let pidx = slot(serial).filter(|&i| i < n);
+            let live_version = pidx
+                .and_then(|i| live_versions.get(i))
+                .copied()
+                .filter(|&v| v != NO_IRIS);
+            let graph_version = graph.node_init.get(&serial).map(|ni| ni.version);
+            let version_synced = match (graph_version, live_version) {
+                (Some(g), Some(l)) => Some(g == l),
+                _ => None,
+            };
+            let exists_in_graph = pidx.is_some_and(|i| adj[0][i].is_some());
+            let probe_nbhd = pidx.and_then(|i| adj[0][i]);
+            let probe_seq = probe_nbhd.map(|nbhd| nbhd.seq_no());
+            let layers_present: Vec<usize> = (0..graph.layers.len())
+                .filter(|&l| pidx.is_some_and(|i| adj[l][i].is_some()))
+                .collect();
+            let reachable = exists_in_graph && dist[pidx.unwrap()] != u32::MAX;
+            let hop = reachable.then(|| dist[pidx.unwrap()]);
+            let scc_id = exists_in_graph.then(|| comp_of[pidx.unwrap()]);
+            let scc_size = scc_id.map(|c| sizes[c as usize]);
+            let same_scc_as_entry = match (scc_id, entry_comp) {
+                (Some(a), Some(b)) => Some(a == b),
+                _ => None,
+            };
+            let out_slice: &[SerialId] = probe_nbhd.map_or(&[], |nbhd| nbhd.neighbors());
+            let self_loop = out_slice.contains(&serial);
+            let out_neighbors: Vec<ProbeNeighbor> = out_slice
+                .iter()
+                .map(|&nb| {
+                    let i = slot(nb).filter(|&i| i < n);
+                    let r = i.is_some_and(|i| dist[i] != u32::MAX);
+                    ProbeNeighbor {
+                        serial: nb,
+                        version: graph.node_init.get(&nb).map(|ni| ni.version),
+                        active: probe_seq.is_some_and(|ps| {
+                            graph.node_init.get(&nb).is_some_and(|ni| ni.seq_no <= ps)
+                        }),
+                        reachable: r,
+                        hop: r.then(|| dist[i.unwrap()]),
+                    }
+                })
+                .collect();
+            let in_neighbors_raw = in_raw.remove(&serial).unwrap_or_default();
+            let in_neighbors_active = in_active.remove(&serial).unwrap_or_default();
+            let in_degree_raw = in_neighbors_raw.len() as u32;
+            let in_degree_active = in_neighbors_active.len() as u32;
+            let active_non_self = in_neighbors_active
+                .iter()
+                .filter(|nbn| nbn.serial != serial)
+                .count();
+
+            let verdict = if !exists_in_graph {
+                "ABSENT (not a layer-0 node)".to_string()
+            } else if reachable {
+                format!("REACHABLE@hop {}", hop.unwrap())
+            } else if in_degree_raw == 0 {
+                "ORPHAN (never linked: zero in-edges)".to_string()
+            } else if active_non_self == 0 && self_loop {
+                "ORPHAN (self-loop only)".to_string()
+            } else if in_degree_active == 0 {
+                "ORPHAN (severed: all in-edges content-stale)".to_string()
+            } else {
+                "CUT-OFF (active in-neighbors all unreachable)".to_string()
+            };
+
+            let byte = hnsw_map.get(&(serial as i64));
+            let gpu = gpu_map.get(&(serial as i64));
+            out.push(ProbeReport {
+                eye: eye.to_string(),
+                serial,
+                exists_in_graph,
+                in_irises_table: iris_ids.contains(&(serial as i64)),
+                graph_version,
+                version_synced,
+                cpu_version: cpu_versions.get(&(serial as i64)).copied(),
+                gpu_version: gpu_versions.get(&(serial as i64)).copied(),
+                layers_present,
+                reachable,
+                hop,
+                scc_id,
+                scc_size,
+                same_scc_as_entry,
+                self_loop,
+                in_degree_raw,
+                in_degree_active,
+                stale_in_edges: in_degree_raw - in_degree_active,
+                out_degree: out_neighbors.len() as u32,
+                in_neighbors_active,
+                in_neighbors_raw,
+                out_neighbors,
+                pending_modifications: mods_by_serial.get(&serial).cloned().unwrap_or_default(),
+                gpu_byte_match: match (byte, gpu) {
+                    (Some(h), Some(g)) => Some(h == g),
+                    _ => None,
+                },
+                verdict,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// Render a probe neighbor list (capped) as `serial:version[(stale)]@hop` /
+/// `…/unreach`, where `(stale)` marks an edge the search cannot follow.
+fn fmt_nbrs(nbrs: &[ProbeNeighbor], cap: usize) -> String {
+    let shown: Vec<String> = nbrs
+        .iter()
+        .take(cap)
+        .map(|n| {
+            let v = n.version.map(|v| v.to_string()).unwrap_or("?".to_string());
+            let st = if n.active { "" } else { "(stale)" };
+            match n.hop {
+                Some(h) => format!("{}:{}{}@{}", n.serial, v, st, h),
+                None => format!("{}:{}{}/unreach", n.serial, v, st),
+            }
+        })
+        .collect();
+    let extra = if nbrs.len() > cap {
+        format!(" …(+{} more)", nbrs.len() - cap)
+    } else {
+        String::new()
+    };
+    format!("[{}]{}", shown.join(", "), extra)
+}
+
+/// Human-readable multi-line rendering of one probe dossier.
+fn format_probe(r: &ProbeReport) -> String {
+    let mut s = String::new();
+    let _ = writeln!(s, "[{}] serial {}", r.eye, r.serial);
+    let _ = writeln!(s, "  VERDICT: {}", r.verdict);
+    let _ = writeln!(
+        s,
+        "  exists={} in_irises={} version(cpu/gpu)={:?}/{:?} graph_version={:?} synced={:?} layers={:?}",
+        r.exists_in_graph,
+        r.in_irises_table,
+        r.cpu_version,
+        r.gpu_version,
+        r.graph_version,
+        r.version_synced,
+        r.layers_present
+    );
+    let _ = writeln!(
+        s,
+        "  reachable={} hop={:?} scc=#{:?} scc_size={:?} same_scc_as_entry={:?} self_loop={}",
+        r.reachable, r.hop, r.scc_id, r.scc_size, r.same_scc_as_entry, r.self_loop
+    );
+    let _ = writeln!(
+        s,
+        "  in_degree raw={} active={} stale={}  out_degree={}",
+        r.in_degree_raw, r.in_degree_active, r.stale_in_edges, r.out_degree
+    );
+    let _ = writeln!(
+        s,
+        "  gpu_byte_match={:?}  modifications={:?}",
+        r.gpu_byte_match, r.pending_modifications
+    );
+    let _ = writeln!(
+        s,
+        "  in_neighbors_active: {}",
+        fmt_nbrs(&r.in_neighbors_active, 25)
+    );
+    let _ = writeln!(
+        s,
+        "  in_neighbors_raw:   {}",
+        fmt_nbrs(&r.in_neighbors_raw, 25)
+    );
+    let _ = writeln!(
+        s,
+        "  out_neighbors:      {}",
+        fmt_nbrs(&r.out_neighbors, 25)
+    );
+    s
 }
 
 #[tokio::main]
@@ -272,6 +1056,9 @@ async fn main() -> Result<()> {
     let mut checks: Vec<CheckResult> = Vec::new();
     let mut stats = Stats::new();
     let mut degree_hist: Vec<DegreeHistEntry> = Vec::new();
+    let mut degree_buckets: Vec<DegreeBucketEntry> = Vec::new();
+    let mut matrix_entries: Vec<MatrixEntry> = Vec::new();
+    let mut hop_buckets: Vec<HopBucketEntry> = Vec::new();
 
     let raw_exclusions: Option<Vec<u32>> = match &args.exclusions_s3_uri {
         Some(uri) => {
@@ -381,7 +1168,7 @@ async fn main() -> Result<()> {
     let s3_graphs: Option<BothEyes<GraphMem>> = Some(graphs);
 
     rpt!(rpt, "--- Collecting iris IDs ---");
-    let iris_ids = collect_iris_ids(&hnsw_store, &mut stats).await?;
+    let (iris_ids, live_versions) = collect_iris_ids(&hnsw_store, &mut stats).await?;
 
     // Filter exclusions to IDs that actually exist in this DB snapshot.
     // Genesis filters deletions to <= max_indexation_id; the S3 file may
@@ -404,11 +1191,18 @@ async fn main() -> Result<()> {
     run_graph_checks(
         s3_graphs.as_ref(),
         &iris_ids,
+        &live_versions,
         &exclusions,
         args.m,
         layer_probability,
         &mut checks,
         &mut degree_hist,
+        &mut degree_buckets,
+        &mut matrix_entries,
+        &mut hop_buckets,
+        args.bucket_size,
+        args.bfs_hops,
+        args.scc,
         &mut stats,
         &mut rpt,
     )
@@ -440,6 +1234,39 @@ async fn main() -> Result<()> {
     )
     .await?;
 
+    // --- Probe reports (in-depth per-serial reachability dossier) ---
+    if !args.probe_serials.is_empty() {
+        if let Some(graphs) = s3_graphs.as_ref() {
+            rpt!(
+                rpt,
+                "\n--- Probe reports for serials {:?} ---",
+                args.probe_serials
+            );
+            let reports = run_probe_reports(
+                &args.probe_serials,
+                graphs,
+                &iris_ids,
+                &live_versions,
+                &hnsw_store.pool,
+                &gpu_pg.pool,
+            )
+            .await?;
+            let mut txt = String::new();
+            for r in &reports {
+                let block = format_probe(r);
+                rpt!(rpt, "{}", block.trim_end());
+                txt.push_str(&block);
+                txt.push('\n');
+            }
+            let p = args.output_dir.join("probe_report.txt");
+            fs::write(&p, &txt)?;
+            println!("Wrote {}", p.display());
+            let p = args.output_dir.join("probe_report.json");
+            fs::write(&p, serde_json::to_string_pretty(&reports)?)?;
+            println!("Wrote {}", p.display());
+        }
+    }
+
     // --- Report ---
     rpt!(rpt, "\n--- Checks ---");
     let pass_count = checks.iter().filter(|c| c.passed).count();
@@ -458,7 +1285,15 @@ async fn main() -> Result<()> {
         checks.len()
     );
 
-    let mut output_files = write_json_reports(&args.output_dir, &checks, &stats, &degree_hist)?;
+    let mut output_files = write_json_reports(
+        &args.output_dir,
+        &checks,
+        &stats,
+        &degree_hist,
+        &degree_buckets,
+        &matrix_entries,
+        &hop_buckets,
+    )?;
     let report_path = rpt.save(&args.output_dir)?;
     println!("Wrote {}", report_path.display());
     output_files.push(report_path);
@@ -477,16 +1312,27 @@ async fn main() -> Result<()> {
 // Collect iris serial IDs (needed for graph orphan / coverage checks)
 // ---------------------------------------------------------------------------
 
-async fn collect_iris_ids(store: &Store, stats: &mut Stats) -> Result<HashSet<i64>> {
-    let ids: Vec<(i64,)> = sqlx::query_as("SELECT id FROM irises")
+/// Returns the set of serial IDs present in the (cpu) irises table and a
+/// `live_versions` vector indexed by `serial_id - 1` holding each serial's
+/// version (`NO_IRIS` for gaps), for cross-checking graph content-clock
+/// versions against the store.
+async fn collect_iris_ids(store: &Store, stats: &mut Stats) -> Result<(HashSet<i64>, Vec<i16>)> {
+    let rows: Vec<(i64, i16)> = sqlx::query_as("SELECT id, version_id FROM irises")
         .fetch_all(&store.pool)
         .await?;
 
-    let max_id = ids.iter().map(|(id,)| *id).max().unwrap_or(0);
-    stats.add("Total iris count (HNSW)", ids.len().to_string());
+    let max_id = rows.iter().map(|(id, _)| *id).max().unwrap_or(0);
+    stats.add("Total iris count (HNSW)", rows.len().to_string());
     stats.add("Max serial ID (HNSW)", max_id.to_string());
 
-    Ok(ids.into_iter().map(|(id,)| id).collect())
+    let mut live_versions = vec![NO_IRIS; max_id.max(0) as usize];
+    for (id, v) in &rows {
+        if *id >= 1 {
+            live_versions[(*id - 1) as usize] = *v;
+        }
+    }
+    let ids = rows.into_iter().map(|(id, _)| id).collect();
+    Ok((ids, live_versions))
 }
 
 // ---------------------------------------------------------------------------
@@ -497,11 +1343,18 @@ async fn collect_iris_ids(store: &Store, stats: &mut Stats) -> Result<HashSet<i6
 async fn run_graph_checks(
     s3_graphs: Option<&BothEyes<GraphMem>>,
     iris_ids: &HashSet<i64>,
+    live_versions: &[i16],
     exclusions: &Option<HashSet<SerialId>>,
     m: usize,
     layer_probability: f64,
     checks: &mut Vec<CheckResult>,
     degree_hist: &mut Vec<DegreeHistEntry>,
+    degree_buckets: &mut Vec<DegreeBucketEntry>,
+    matrix_entries: &mut Vec<MatrixEntry>,
+    hop_buckets: &mut Vec<HopBucketEntry>,
+    bucket_size: u32,
+    bfs_hops: bool,
+    scc: bool,
     stats: &mut Stats,
     rpt: &mut Report,
 ) -> Result<()> {
@@ -517,15 +1370,37 @@ async fn run_graph_checks(
                 eye,
                 &graphs[idx],
                 iris_ids,
+                live_versions,
                 exclusions,
                 m,
                 layer_probability,
+                bucket_size,
                 checks,
                 degree_hist,
+                degree_buckets,
+                matrix_entries,
                 stats,
                 rpt,
             );
             l0_id_sets.push((eye, l0_ids));
+            if bfs_hops {
+                rpt!(
+                    rpt,
+                    "  Computing {eye} BFS hop buckets from entry points..."
+                );
+                compute_hop_buckets(eye, &graphs[idx], bucket_size, hop_buckets);
+            }
+            if scc {
+                for lc in 0..graphs[idx].layers.len() {
+                    let (num, largest) = count_sccs(&graphs[idx], lc);
+                    rpt!(rpt, "  {eye} layer {lc}: {num} SCC(s), largest {largest}");
+                    stats.add(format!("{eye} layer {lc} SCC count"), num.to_string());
+                    stats.add(
+                        format!("{eye} layer {lc} largest SCC size"),
+                        largest.to_string(),
+                    );
+                }
+            }
         }
     } else {
         eyre::bail!(
@@ -559,11 +1434,15 @@ fn check_single_graph(
     eye: &str,
     graph: &GraphMem,
     iris_ids: &HashSet<i64>,
+    live_versions: &[i16],
     exclusions: &Option<HashSet<SerialId>>,
     m: usize,
     layer_probability: f64,
+    bucket_size: u32,
     checks: &mut Vec<CheckResult>,
     degree_hist: &mut Vec<DegreeHistEntry>,
+    degree_buckets: &mut Vec<DegreeBucketEntry>,
+    matrix_entries: &mut Vec<MatrixEntry>,
     stats: &mut Stats,
     rpt: &mut Report,
 ) -> HashSet<SerialId> {
@@ -586,6 +1465,22 @@ fn check_single_graph(
         .collect::<Vec<_>>()
         .join(", ");
     stats.add(format!("{eye} entry points"), ep_desc);
+
+    // Content changed without a re-index: search still traverses (edges
+    // resolve by serial), but graph bookkeeping is out of sync with the store.
+    let version_desync = graph
+        .node_init
+        .iter()
+        .filter(|(serial, ni)| {
+            slot(**serial)
+                .and_then(|i| live_versions.get(i))
+                .is_some_and(|&v| v != NO_IRIS && v != ni.version)
+        })
+        .count();
+    stats.add(
+        format!("{eye} nodes version-desynced vs irises"),
+        version_desync.to_string(),
+    );
 
     for (lc, layer) in graph.layers.iter().enumerate() {
         stats.add(
@@ -615,6 +1510,87 @@ fn check_single_graph(
                 format!("{eye} layer {lc} degree min/avg/median/max"),
                 format!("{min}/{avg:.1}/{median}/{max}"),
             );
+        }
+
+        // Per-bucket out/in-degree and the bucket->bucket edge matrix
+        // (valid = active edges with both endpoints in the layer, raw = all).
+        // An active edge passes the `get_active_links` gate: the target's
+        // content-clock seq does not exceed the referencing neighborhood's seq.
+        let in_size = layer.links.keys().max().map_or(0, |&s| s as usize);
+        let mut present = vec![false; in_size];
+        for node in layer.links.keys() {
+            if let Some(i) = slot(*node).filter(|&i| i < in_size) {
+                present[i] = true;
+            }
+        }
+        let mut in_deg: Vec<u32> = vec![0; in_size];
+        let mut out_by_bucket: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+        let mut matrix: HashMap<(u32, u32), (u64, u64)> = HashMap::new();
+        for (node, nbhd) in layer.links.iter() {
+            let Some(si) = slot(*node) else {
+                continue;
+            };
+            let src = si as u32 / bucket_size;
+            out_by_bucket
+                .entry(src)
+                .or_default()
+                .push(nbhd.neighbors().len());
+            for &nb in nbhd.neighbors() {
+                let Some(v) = slot(nb) else {
+                    continue;
+                };
+                let cell = matrix
+                    .entry((src, v as u32 / bucket_size))
+                    .or_insert((0, 0));
+                cell.1 += 1;
+                if v < in_size
+                    && present[v]
+                    && graph
+                        .node_init
+                        .get(&nb)
+                        .is_some_and(|ni| ni.seq_no <= nbhd.seq_no())
+                {
+                    in_deg[v] += 1;
+                    cell.0 += 1;
+                }
+            }
+        }
+        for (&(src_bucket, dst_bucket), &(valid_edges, raw_edges)) in &matrix {
+            matrix_entries.push(MatrixEntry {
+                eye: eye.to_string(),
+                layer: lc,
+                src_bucket,
+                dst_bucket,
+                valid_edges,
+                raw_edges,
+            });
+        }
+        let mut in_by_bucket: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
+        for node in layer.links.keys() {
+            if let Some(i) = slot(*node).filter(|&i| i < in_size) {
+                in_by_bucket
+                    .entry(i as u32 / bucket_size)
+                    .or_default()
+                    .push(in_deg[i] as usize);
+            }
+        }
+        for (direction, by_bucket) in [("out", &mut out_by_bucket), ("in", &mut in_by_bucket)] {
+            for (&bucket, degrees) in by_bucket.iter_mut() {
+                let (min, avg, median, max) = degree_summary(degrees);
+                degree_buckets.push(DegreeBucketEntry {
+                    eye: eye.to_string(),
+                    layer: lc,
+                    direction,
+                    bucket,
+                    serial_start: bucket * bucket_size + 1,
+                    serial_end: (bucket + 1) * bucket_size,
+                    node_count: degrees.len(),
+                    min,
+                    avg,
+                    median,
+                    max,
+                });
+            }
         }
     }
 
@@ -1295,6 +2271,9 @@ fn write_json_reports(
     checks: &[CheckResult],
     stats: &Stats,
     hist: &[DegreeHistEntry],
+    degree_buckets: &[DegreeBucketEntry],
+    matrix_entries: &[MatrixEntry],
+    hop_buckets: &[HopBucketEntry],
 ) -> Result<Vec<PathBuf>> {
     fs::create_dir_all(dir)?;
     let mut files = Vec::new();
@@ -1327,6 +2306,41 @@ fn write_json_reports(
     }
     println!("Wrote {}", p.display());
     files.push(p);
+
+    let p = dir.join("degree_by_bucket.csv");
+    {
+        let mut wtr = csv::Writer::from_path(&p)?;
+        for entry in degree_buckets {
+            wtr.serialize(entry)?;
+        }
+        wtr.flush()?;
+    }
+    println!("Wrote {}", p.display());
+    files.push(p);
+
+    let p = dir.join("neighbor_serial_matrix.csv");
+    {
+        let mut wtr = csv::Writer::from_path(&p)?;
+        for entry in matrix_entries {
+            wtr.serialize(entry)?;
+        }
+        wtr.flush()?;
+    }
+    println!("Wrote {}", p.display());
+    files.push(p);
+
+    if !hop_buckets.is_empty() {
+        let p = dir.join("hops_by_bucket.csv");
+        {
+            let mut wtr = csv::Writer::from_path(&p)?;
+            for entry in hop_buckets {
+                wtr.serialize(entry)?;
+            }
+            wtr.flush()?;
+        }
+        println!("Wrote {}", p.display());
+        files.push(p);
+    }
 
     Ok(files)
 }

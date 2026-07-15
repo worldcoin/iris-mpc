@@ -1,18 +1,32 @@
-name: Branch - Build and push docker image
+name: Build and push image for retention-reaper
+
+# POP-3905 — generic append-only-table retention CronJob image (pushes to GHCR, which the
+# deploy values reference). An ECR mirror can be added once a repo+secret is provisioned.
 
 on:
   push:
     branches:
-      - "dev"
-      - "allow-unknown-migrations"
+      - main
+    paths:
+      - Dockerfile.retention-reaper
+      - iris-mpc-bins/bin/retention-reaper/**
+      - iris-mpc-bins/Cargo.toml
+      - iris-mpc-common/**
+      - .github/workflows/build-and-push-retention-reaper.yaml
+
+  release:
+    types:
+      - 'published'
+
+  workflow_dispatch:
 
 concurrency:
-  group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
+  group: '${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}'
   cancel-in-progress: true
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: "worldcoin/retention-reaper"
 
 jobs:
   docker:
@@ -37,20 +51,7 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Log in to the Container registry
-        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.repository_owner }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@49f33fe638c0cba4fb16037a27915a7ab7740259
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE }}
-          aws-region: eu-central-1
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076
+
       - name: Build and Push
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83
         with:
@@ -58,9 +59,9 @@ jobs:
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-            ${{ secrets.AWS_ECR_IRIS_MPC }}:${{ github.sha }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ github.event.release.tag_name && format('{0}/{1}:{2}', env.REGISTRY, env.IMAGE_NAME, github.event.release.tag_name) || '' }}
           platforms: linux/amd64
-          build-args: |
-            ARCHITECTURE=x86_64
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          file: Dockerfile.retention-reaper

@@ -82,6 +82,7 @@ impl PostgresClient {
         }
 
         sqlx::migrate!("./../migrations")
+            .set_ignore_missing(true)
             .run(&self.pool)
             .await
             .expect("Failed to run migrations");

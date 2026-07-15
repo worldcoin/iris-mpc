@@ -79,6 +79,7 @@ pub async fn process_job_result(
         identity_update_request_types,
         identity_update_indices,
         identity_update_shares,
+        sqs_sequence_numbers,
         ..
     } = job_result;
     let now = Instant::now();
@@ -420,6 +421,28 @@ pub async fn process_job_result(
                     &dummy_deletion_shares.1,
                 )
                 .await?;
+        }
+
+        if config.db_backed_ingest {
+            let marked = store
+                .mark_ingested_requests_persisted_tx(&mut graph_tx.tx, &sqs_sequence_numbers)
+                .await?;
+            if marked != sqs_sequence_numbers.len() as u64 {
+                tracing::error!(
+                    "db-backed ingest: batch {} carried {} claimed sequence number(s) but marked {} persisted; claimed rows may be re-formed",
+                    batch_timings.batch_id,
+                    sqs_sequence_numbers.len(),
+                    marked
+                );
+                metrics::counter!("db_ingest_persist_mark_mismatch").increment(1);
+            } else {
+                tracing::info!(
+                    "db-backed ingest: marked {} ingested request(s) persisted for batch {}",
+                    marked,
+                    batch_timings.batch_id
+                );
+            }
+            metrics::counter!("db_ingest_rows_persisted").increment(marked);
         }
 
         // Commit transaction

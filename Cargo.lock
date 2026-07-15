@@ -78,7 +78,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 [[package]]
 name = "ampc-actor-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=34170ed878ea13ab59170b2d1741407e5c8c53eb#34170ed878ea13ab59170b2d1741407e5c8c53eb"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=bcc6addbaab6297db7699a8c739d9056b0bdcbe#bcc6addbaab6297db7699a8c739d9056b0bdcbed"
 dependencies = [
  "aes-prng",
  "ampc-secret-sharing",
@@ -111,7 +111,7 @@ dependencies = [
 [[package]]
 name = "ampc-anon-stats"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=34170ed878ea13ab59170b2d1741407e5c8c53eb#34170ed878ea13ab59170b2d1741407e5c8c53eb"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=bcc6addbaab6297db7699a8c739d9056b0bdcbe#bcc6addbaab6297db7699a8c739d9056b0bdcbed"
 dependencies = [
  "ampc-actor-utils",
  "ampc-secret-sharing",
@@ -137,7 +137,7 @@ dependencies = [
 [[package]]
 name = "ampc-secret-sharing"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=34170ed878ea13ab59170b2d1741407e5c8c53eb#34170ed878ea13ab59170b2d1741407e5c8c53eb"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=bcc6addbaab6297db7699a8c739d9056b0bdcbe#bcc6addbaab6297db7699a8c739d9056b0bdcbed"
 dependencies = [
  "aes-prng",
  "base64",
@@ -153,7 +153,7 @@ dependencies = [
 [[package]]
 name = "ampc-server-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=34170ed878ea13ab59170b2d1741407e5c8c53eb#34170ed878ea13ab59170b2d1741407e5c8c53eb"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=bcc6addbaab6297db7699a8c739d9056b0bdcbe#bcc6addbaab6297db7699a8c739d9056b0bdcbed"
 dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sqs",
@@ -1753,9 +1753,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-epoch"
-version = "0.9.18"
+version = "0.9.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b82ac4a3c2ca9c3460964f020e1402edd5753411d7737aa39c3714ad1b5420e"
+checksum = "2d6914041f254d6e9176c01941b21115dcfb7089e55135a35411081bd106ef3f"
 dependencies = [
  "crossbeam-utils",
 ]

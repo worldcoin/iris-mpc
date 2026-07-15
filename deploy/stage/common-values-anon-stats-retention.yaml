@@ -1,0 +1,50 @@
+# POP-3905 — anon-stats retention CronJob (stage, smpcv2). Uses the common-cronjob chart
+# (chartVersion 1.11.0, worldcoin-foundation/common-cronjob) via wf-cluster-apps, mirroring
+# iris-mpc-db-exporter. Per-cluster env (RETENTION__*, map format) lives in the per-node values files.
+image: "ghcr.io/worldcoin/retention-reaper:d9a3d33342dfd9e95c7b11e8ef4e4101a3e6ed80"
+
+# STAGE LIVE: dry-run validated 2026-07-03 → 2026-07-09 (daily runs, all parties, exact
+# delete predicate logged incl. the processed=TRUE guard; 0 rows eligible only because
+# created_at was backfilled at migration time, < 14d ago). Retention is 5 days on stage
+# (per-node RETENTION_JOBS) so the mechanism produces real deletions to validate against
+# rows_deleted / oldest_retained_seconds before prod enablement.
+env:
+  RETENTION__ENABLED: "true"
+  RETENTION__DRY_RUN: "false"
+
+replicaCount: 1
+
+environment: stage
+
+# Daily, 03:30 UTC. Idempotent — a missed/failed run is caught by the next day + the
+# missing-run monitor; no retry (fail loud), same as iris-mpc-db-exporter.
+schedule: "30 3 * * *"
+backoffLimit: 0
+
+# Never run two reapers against the same DB at once.
+concurrencyPolicy: Forbid
+
+imagePullSecrets:
+  - name: github-secret
+
+resources:
+  limits:
+    cpu: "500m"
+    memory: 256Mi
+  requests:
+    cpu: "100m"
+    memory: 128Mi
+
+# Schedule onto the dedicated anon-stats-server node pool — that pool has the network
+# path to the anon-stats Aurora (smpcv2 uses a dedicated pool, not a per-pod SG like hnsw).
+# Without this the reaper lands on a generic node and times out connecting to Postgres.
+nodeSelector:
+  kubernetes.io/arch: amd64
+  workload: anon-stats-server
+
+# The dedicated pool is tainted; mirror the anon-stats-server toleration so the reaper schedules there.
+tolerations:
+  - key: dedicated
+    operator: Equal
+    value: anonStatsServer
+    effect: NoSchedule

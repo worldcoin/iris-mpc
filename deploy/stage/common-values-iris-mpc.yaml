@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:7fde3a4d9acd4e8c8f0980921f0a9f25aadb8e21"
+image: "ghcr.io/worldcoin/iris-mpc:a3c82c7a29578a3f3cea9791de6065990980b6bf"
 
 environment: stage
 replicaCount: 1
@@ -6,7 +6,7 @@ replicaCount: 1
 # Common environment variables shared across all iris-mpc nodes.
 # Defined as a map so Helm deep-merges with per-node env maps.
 env:
-  RUST_LOG: "info"
+  RUST_LOG: "debug"
   RUST_BACKTRACE: "full"
   NCCL_SOCKET_IFNAME: "ens,eth"
   NCCL_IB_CUDA_SUPPORT: "1"
@@ -21,6 +21,7 @@ env:
   SMPC__DATABASE__CREATE: "true"
   SMPC__DATABASE__LOAD_PARALLELISM: "8"
   SMPC__DISABLE_PERSISTENCE: "false"
+  SMPC__DB_BACKED_INGEST: "true" # POP-4051 DB-backed ingest (stage rollout 2026-07)
   SMPC__ANON_STATS_DATABASE__URL:
     valueFrom:
       secretKeyRef:

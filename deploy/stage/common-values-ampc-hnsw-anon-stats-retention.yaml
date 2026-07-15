@@ -1,0 +1,37 @@
+# POP-3905 — anon-stats retention CronJob (stage, ampc-hnsw). common-cronjob chart (1.11.0,
+# worldcoin-foundation/common-cronjob) via wf-cluster-apps, mirroring ampc-hnsw-db-exporter.
+# Per-cluster env (map format) + the attachSecurityGroupPolicy that lets the pod reach the
+# anon-stats Aurora live per-node.
+image: "ghcr.io/worldcoin/retention-reaper:d9a3d33342dfd9e95c7b11e8ef4e4101a3e6ed80"
+
+# STAGE LIVE: dry-run validated 2026-07-03 → 2026-07-09 (daily runs, all parties, exact
+# delete predicate logged incl. the processed=TRUE guard; 0 rows eligible only because
+# created_at was backfilled at migration time, < 14d ago). Retention is 5 days on stage
+# (per-node RETENTION_JOBS) so the mechanism produces real deletions to validate against
+# rows_deleted / oldest_retained_seconds before prod enablement.
+env:
+  RETENTION__ENABLED: "true"
+  RETENTION__DRY_RUN: "false"
+
+replicaCount: 1
+
+environment: stage
+
+schedule: "30 3 * * *"
+backoffLimit: 0
+
+concurrencyPolicy: Forbid
+
+imagePullSecrets:
+  - name: github-secret
+
+resources:
+  limits:
+    cpu: "500m"
+    memory: 256Mi
+  requests:
+    cpu: "100m"
+    memory: 128Mi
+
+nodeSelector:
+  kubernetes.io/arch: amd64
