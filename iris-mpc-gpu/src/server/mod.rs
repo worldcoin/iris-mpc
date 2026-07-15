@@ -138,6 +138,11 @@ pub struct PreprocessedBatchQuery {
 
     // SNS message ids to assert identical batch processing across parties
     pub sns_message_ids: Vec<String>,
+
+    // Sequence numbers of the ingested_requests rows claimed for this batch
+    // (db_backed_ingest only; empty otherwise). Batch-level metadata, NOT a
+    // per-request parallel array — must NOT be filtered by retain().
+    pub sqs_sequence_numbers: Vec<String>,
 }
 
 impl PreprocessedBatchQuery {
@@ -273,6 +278,7 @@ impl From<BatchQuery> for PreprocessedBatchQuery {
                 right_mirrored_iris_interpolated_requests_preprocessed.unwrap(),
             modifications: value.modifications,
             sns_message_ids: value.sns_message_ids,
+            sqs_sequence_numbers: value.sqs_sequence_numbers,
             skip_persistence: value.skip_persistence,
         }
     }
