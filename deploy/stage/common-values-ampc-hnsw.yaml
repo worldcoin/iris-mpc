@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-cpu:f8cb55547b1833ef2ccb0a84c5bd37c9e06b2408-arm64"
+image: "ghcr.io/worldcoin/iris-mpc-cpu:a3c82c7a29578a3f3cea9791de6065990980b6bf-arm64"
 
 environment: stage
 replicaCount: 1
@@ -27,6 +27,7 @@ env:
       secretKeyRef:
         key: DATABASE_AURORA_HNSW_URL
         name: application
+  SMPC__DB_BACKED_INGEST: "true" # POP-4051 DB-backed ingest (stage rollout 2026-07)
   SMPC__MAX_DB_SIZE: "2000000"
   SMPC__MAX_BATCH_SIZE: "1"
   SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS: "30"

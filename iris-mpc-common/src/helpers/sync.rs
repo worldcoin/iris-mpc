@@ -17,6 +17,18 @@ pub struct SyncState {
     /// using serde(default) for backwards compatibility.
     #[serde(default)]
     pub graph_mutation_bytes: Vec<Option<Vec<u8>>>,
+
+    /// db_backed_ingest only: this party's highest persisted (fully committed)
+    /// `ingested_requests.sequence_number`. Because formation always consumes
+    /// the lowest pending rows in FIFO ingest order, the persisted set is a
+    /// contiguous prefix of the sequence order, so this single value is a
+    /// complete progress marker — the DB analog of the SQS queue-head number.
+    /// Zero-padded fixed width: lexicographic comparison == numeric.
+    ///
+    /// serde(default) keeps rolling-deploy peers parseable (missing key =
+    /// unknown = None, which conservatively disables the skip-ahead).
+    #[serde(default)]
+    pub max_persisted_sequence_number: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -180,6 +192,19 @@ impl SyncResult {
             );
         }
         Ok(())
+    }
+
+    /// Highest persisted ingested-request sequence number across ALL parties
+    /// (db_backed_ingest only). Any row at or below this frontier belongs to a
+    /// batch that completed somewhere in the fleet — peers will never co-form
+    /// it again. Unlike max_sns_sequence_num, mixed Some/None is fine here:
+    /// None just means "that party has persisted nothing (or predates the
+    /// field)" and contributes nothing to the max.
+    pub fn max_persisted_sequence_number(&self) -> Option<String> {
+        self.all_states
+            .iter()
+            .filter_map(|s| s.max_persisted_sequence_number.clone())
+            .max()
     }
 
     pub fn max_sns_sequence_num(&self) -> Option<u128> {
@@ -373,6 +398,34 @@ mod tests {
         }
     }
 
+    #[test]
+    fn sync_state_without_frontier_field_still_parses() {
+        // Rolling-deploy skew: an old peer's serialized state has no
+        // max_persisted_sequence_number key and must parse to None.
+        let state = create_sync_state(vec![]);
+        let mut json = serde_json::to_value(&state).unwrap();
+        json.as_object_mut()
+            .unwrap()
+            .remove("max_persisted_sequence_number");
+        let parsed: SyncState = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.max_persisted_sequence_number, None);
+    }
+
+    #[test]
+    fn max_persisted_sequence_number_ignores_none_and_takes_max() {
+        let mut a = create_sync_state(vec![]);
+        let mut b = create_sync_state(vec![]);
+        let c = create_sync_state(vec![]);
+        a.max_persisted_sequence_number = Some("0000000000000000000000000000000000000005".into());
+        b.max_persisted_sequence_number = Some("0000000000000000000000000000000000000012".into());
+        // c stays None (old peer / nothing persisted) and must not poison the max.
+        let result = SyncResult::new(a.clone(), vec![a, b, c]);
+        assert_eq!(
+            result.max_persisted_sequence_number().as_deref(),
+            Some("0000000000000000000000000000000000000012")
+        );
+    }
+
     // Create a SyncState with a given vector of modifications.
     fn create_sync_state(modifications: Vec<Modification>) -> SyncState {
         let default_lookback = (100 + 64) * 2;
@@ -392,6 +445,7 @@ mod tests {
             next_sns_sequence_num: None,
             common_config: CommonConfig::from(config),
             graph_mutation_bytes: vec![],
+            max_persisted_sequence_number: None,
         }
     }
 
@@ -799,6 +853,7 @@ mod tests {
                 next_sns_sequence_num: Some(100),
                 common_config: CommonConfig::default(),
                 graph_mutation_bytes: vec![],
+                max_persisted_sequence_number: None,
             },
             SyncState {
                 db_len: 20,
@@ -806,6 +861,7 @@ mod tests {
                 next_sns_sequence_num: Some(200),
                 common_config: CommonConfig::default(),
                 graph_mutation_bytes: vec![],
+                max_persisted_sequence_number: None,
             },
             SyncState {
                 db_len: 30,
@@ -813,6 +869,7 @@ mod tests {
                 next_sns_sequence_num: Some(150),
                 common_config: CommonConfig::default(),
                 graph_mutation_bytes: vec![],
+                max_persisted_sequence_number: None,
             },
         ];
 
@@ -826,6 +883,7 @@ mod tests {
             next_sns_sequence_num: None,
             common_config: CommonConfig::default(),
             graph_mutation_bytes: vec![],
+            max_persisted_sequence_number: None,
         };
         let all_states = vec![
             state_with_none_sequence_num.clone(),
@@ -849,6 +907,7 @@ mod tests {
                 next_sns_sequence_num: None, // NodeX - advanced but empty queue
                 common_config: CommonConfig::default(),
                 graph_mutation_bytes: vec![],
+                max_persisted_sequence_number: None,
             },
             SyncState {
                 db_len: 20,
@@ -856,6 +915,7 @@ mod tests {
                 next_sns_sequence_num: Some(123), // Other nodes still have messages
                 common_config: CommonConfig::default(),
                 graph_mutation_bytes: vec![],
+                max_persisted_sequence_number: None,
             },
             SyncState {
                 db_len: 30,
@@ -863,6 +923,7 @@ mod tests {
                 next_sns_sequence_num: Some(123),
                 common_config: CommonConfig::default(),
                 graph_mutation_bytes: vec![],
+                max_persisted_sequence_number: None,
             },
         ];
 
@@ -983,6 +1044,7 @@ mod tests {
                 next_sns_sequence_num: Some(100),
                 common_config: CommonConfig::from(config1),
                 graph_mutation_bytes: vec![],
+                max_persisted_sequence_number: None,
             },
             SyncState {
                 db_len: 20,
@@ -990,6 +1052,7 @@ mod tests {
                 next_sns_sequence_num: Some(100),
                 common_config: CommonConfig::from(config2),
                 graph_mutation_bytes: vec![],
+                max_persisted_sequence_number: None,
             },
             SyncState {
                 db_len: 20,
@@ -997,6 +1060,7 @@ mod tests {
                 next_sns_sequence_num: Some(100),
                 common_config: CommonConfig::from(config3),
                 graph_mutation_bytes: vec![],
+                max_persisted_sequence_number: None,
             },
         ];
 

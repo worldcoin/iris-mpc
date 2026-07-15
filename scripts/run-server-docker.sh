@@ -35,8 +35,12 @@ fi
 # Set the stack size to 100MB to receive large messages.
 export RUST_MIN_STACK=104857600
 
+# exec so the binary replaces this shell as PID 1 and actually receives
+# SIGTERM from docker/k8s — without it, bash swallows the signal and every
+# "graceful" stop is really a SIGKILL after the grace period, making local
+# shutdown-drain behavior untestable.
 if [ "$BINARY" == "genesis" ]; then
-    /bin/iris-mpc-hawk-genesis --max-height "${GENESIS_MAX_HEIGHT:-100}" --batch-size "${GENESIS_BATCH_SIZE:-dynamic:cap=96,error_rate=128}" --perform-snapshot=false
+    exec /bin/iris-mpc-hawk-genesis --max-height "${GENESIS_MAX_HEIGHT:-100}" --batch-size "${GENESIS_BATCH_SIZE:-dynamic:cap=96,error_rate=128}" --perform-snapshot=false
 else
-    /bin/iris-mpc-hawk
+    exec /bin/iris-mpc-hawk
 fi
