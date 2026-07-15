@@ -54,6 +54,8 @@ pub enum MutationOp {
     ///
     /// Edge ops carry bare serials: node identity/version lives in
     /// `AddNode`/`RemoveNode`; edges only select neighborhood members.
+    /// `base` names the current node with that serial; `neighbors` resolve
+    /// against the record's `as_of` (see `GraphMem::insert_apply`).
     AddEdges {
         base: SerialId,
         neighbors: Vec<SerialId>,

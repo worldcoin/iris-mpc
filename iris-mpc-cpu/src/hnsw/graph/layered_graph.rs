@@ -552,13 +552,16 @@ impl GraphMem {
     }
 
     /// Resolve a record's edge references, identified at `as_of`, against the
-    /// current graph. A referenced serial is *void* if it is not [`is_active`]
-    /// at `as_of` — removed, or reauthed after identification — unless this
-    /// record's own `AddNode` creates it. Void `neighbors` are dropped from
-    /// their op; an op whose `base` is void is dropped whole (its ranking
-    /// belonged to content that no longer exists). A void `RemoveEdges` target
-    /// is skipped: the ranked edge is already invalid, and a fresh edge to the
-    /// target's new content is not this record's to evict.
+    /// current graph. A `neighbors` serial is *void* if it is not
+    /// [`is_active`] at `as_of` — removed, or reauthed after identification —
+    /// unless this record's own `AddNode` creates it; void neighbors are
+    /// dropped from their op. A void `RemoveEdges` target is skipped: the
+    /// ranked edge is already invalid, and a fresh edge to the target's new
+    /// content is not this record's to evict.
+    ///
+    /// A `base` names the current node with that serial, whatever its
+    /// content. An op whose base has no current node (and none minted here)
+    /// is dropped whole — edges must not wire to an absent endpoint.
     ///
     /// `AddEdges` additionally drops self-references (`z == base`): in a
     /// minting record they are stale echoes of a search against the node's
@@ -577,11 +580,12 @@ impl GraphMem {
             })
             .collect();
         let fresh = |z: &SerialId| minted.contains(z) || is_active(&self.node_init, *z, as_of);
+        let exists = |z: &SerialId| minted.contains(z) || self.node_init.contains_key(z);
 
         let mut dropped = 0usize;
         // The surviving refs of one op, or `None` if the op is void.
         let mut filter_refs = |base: &SerialId, neighbors: &[SerialId], keep_self: bool| {
-            if !fresh(base) {
+            if !exists(base) {
                 dropped += neighbors.len();
                 return None;
             }
@@ -1766,11 +1770,11 @@ mod tests {
         assert_eq!(replayed.get_active_links(&2, 0), vec![x1]);
     }
 
-    /// Resolution: an edge record whose *base* was reauthed after
-    /// identification is void — the ranking belonged to content that no
-    /// longer exists, so both halves are dropped.
+    /// Resolution: a `base` names the current node with that serial, so an
+    /// edge op whose base reauthed after identification applies to the
+    /// reauthed node.
     #[test]
-    fn resolution_drops_op_whose_base_reauthed_after_identification() {
+    fn resolution_applies_op_whose_base_reauthed_after_identification() {
         let mut graph = GraphMem::new();
         let mut wal: Vec<GraphMutation> = Vec::new();
         let x0 = VectorId::new(1, 0);
@@ -1802,7 +1806,67 @@ mod tests {
                 })
                 .unwrap(),
         );
-        // seq 3: the stale-based touch lands and is void.
+        // seq 3: the touch lands on the reauthed base.
+        let ops = vec![MutationOp::AddEdges {
+            base: 1,
+            neighbors: vec![3],
+            layer: 0,
+            edge_type: EdgeType::All,
+        }];
+        let minted = graph
+            .apply_new(UnstampedMutation {
+                as_of,
+                ops: ops.clone(),
+            })
+            .unwrap();
+
+        assert_eq!(minted.ops, ops);
+        assert_eq!(graph.get_active_links(&1, 0), vec![z]);
+        assert_eq!(graph.get_active_links(&3, 0), vec![x1]);
+
+        // Replay re-resolves to the identical graph.
+        wal.push(minted);
+        let mut replayed = GraphMem::new();
+        replayed.insert_apply_all(&wal).unwrap();
+        assert_eq!(graph.checksum(), replayed.checksum());
+        assert_eq!(replayed.get_active_links(&1, 0), vec![z]);
+    }
+
+    /// Resolution: an edge op whose base has no current node is dropped
+    /// whole — edges must not wire to an absent endpoint.
+    #[test]
+    fn resolution_drops_op_whose_base_is_absent() {
+        let mut graph = GraphMem::new();
+        let mut wal: Vec<GraphMutation> = Vec::new();
+        let x0 = VectorId::new(1, 0);
+        let z = VectorId::from_serial_id(3);
+        let node = |id| MutationOp::AddNode {
+            id,
+            height: 1,
+            update_ep: UpdateEntryPoint::False,
+        };
+
+        // seq 1: X and Z.
+        wal.push(
+            graph
+                .apply_new(UnstampedMutation {
+                    as_of: graph.last_update_seq_no,
+                    ops: vec![node(x0), node(z)],
+                })
+                .unwrap(),
+        );
+        // An edge touch X <-> Z was identified here.
+        let as_of = graph.last_update_seq_no;
+        // seq 2: X is removed.
+        wal.push(
+            graph
+                .apply_new(UnstampedMutation {
+                    as_of: graph.last_update_seq_no,
+                    ops: vec![MutationOp::RemoveNode { id: x0 }],
+                })
+                .unwrap(),
+        );
+        // seq 3: the touch lands with its base gone and is void.
         let ops = vec![MutationOp::AddEdges {
             base: 1,
             neighbors: vec![3],
@@ -1825,7 +1889,7 @@ mod tests {
         let mut replayed = GraphMem::new();
         replayed.insert_apply_all(&wal).unwrap();
         assert_eq!(graph.checksum(), replayed.checksum());
-        assert_eq!(replayed.get_active_links(&1, 0), Vec::<VectorId>::new());
+        assert_eq!(replayed.get_active_links(&3, 0), Vec::<VectorId>::new());
     }
 
     /// Resolution: a reauth plan's search almost always finds the node's own
