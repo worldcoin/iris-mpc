@@ -183,7 +183,7 @@ async fn server_main(config: Config) -> Result<()> {
     );
     let postgres_client =
         PostgresClient::new(&db_config.url, schema_name.as_str(), AccessMode::ReadWrite).await?;
-    run_migrations(&postgres_client.pool, db_config.migrate_ignore_missing).await?;
+    run_migrations(&postgres_client.pool, db_config.ignore_missing_migrations).await?;
     let store = Store::new(&postgres_client).await?;
 
     tracing::info!("Initialising AWS services");

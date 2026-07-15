@@ -424,7 +424,7 @@ async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store<Haw
     .await?;
     run_migrations(
         &hawk_postgres_client.pool,
-        hawk_db_config.migrate_ignore_missing,
+        hawk_db_config.ignore_missing_migrations,
     )
     .await?;
 

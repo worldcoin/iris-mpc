@@ -662,7 +662,7 @@ pub struct DbConfig {
 
     /// Flag indicating whether to ignore missing migrations.
     #[serde(default)]
-    pub migrate_ignore_missing: bool,
+    pub ignore_missing_migrations: bool,
 }
 
 fn default_load_parallelism() -> usize {
@@ -675,7 +675,7 @@ impl fmt::Debug for DbConfig {
             .field("url", &"********") // Mask the URL
             .field("migrate", &self.migrate)
             .field("create", &self.create)
-            .field("migrate_ignore_missing", &self.migrate_ignore_missing)
+            .field("ignore_missing_migrations", &self.ignore_missing_migrations)
             .finish()
     }
 }

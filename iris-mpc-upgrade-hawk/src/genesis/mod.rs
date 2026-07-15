@@ -1170,7 +1170,7 @@ async fn get_service_clients(
             let db_client =
                 PostgresClient::new(&db_config.url, db_schema.as_str(), AccessMode::ReadWrite)
                     .await?;
-            run_migrations(&db_client.pool, db_config.migrate_ignore_missing).await?;
+            run_migrations(&db_client.pool, db_config.ignore_missing_migrations).await?;
 
             Ok((
                 IrisStore::new(&db_client).await?,
