@@ -54,4 +54,4 @@ initContainer:
 attachSecurityGroupPolicy:
   enabled: true
   groupIds:
-    - sg-0af7b5f9dfdd034d5
+    - sg-0264a02319b006769
