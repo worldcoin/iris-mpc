@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - "dev"
-      - "allow-unknown-migrations"
+      - "elenagryaznova/pop-4114-introduce-feature-flag-for-ignoring-unknown-migrations-iris"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
