@@ -4,7 +4,7 @@
 # iris-mpc-db-exporter namespace — the proven CronJob precedent for reaching the iris
 # Aurora from generic nodes (its `application` secret already holds DATABASE_AURORA_URL;
 # no pod SG or dedicated pool needed, mirroring iris-mpc-db-exporter itself).
-image: "ghcr.io/worldcoin/retention-reaper:0e81579e29aeece93c76a1eebd7aa1561edec7e6"
+image: "ghcr.io/worldcoin/retention-reaper:v0.32.6@sha256:366cc7dcd9e9132bbfe2b5719332ff8d1f301ed5b487cbfc458fbc97cca92ace"
 
 # SHIPS INERT, doubly: `suspend: true` AND RETENTION__ENABLED unset. Enable path:
 # un-suspend → ENABLED+DRY_RUN → inspect counts + gauges → DRY_RUN off, one party first.

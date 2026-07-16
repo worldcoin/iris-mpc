@@ -3,7 +3,7 @@
 # modifications copy — the hawk server writes a row per signup-modification into its own
 # DB and nothing deletes it in steady state. The GPU MPCV2 DB's copy gets its own reaper
 # instance in a follow-up (same binary, values + cluster-apps entry only).
-image: "ghcr.io/worldcoin/retention-reaper:0e81579e29aeece93c76a1eebd7aa1561edec7e6"
+image: "ghcr.io/worldcoin/retention-reaper:v0.32.6@sha256:366cc7dcd9e9132bbfe2b5719332ff8d1f301ed5b487cbfc458fbc97cca92ace"
 
 # SHIPS INERT, doubly: `suspend: true` AND RETENTION__ENABLED unset. Enable path:
 # un-suspend → ENABLED+DRY_RUN → inspect counts + gauges → DRY_RUN off, one party first.
