@@ -2,37 +2,33 @@
 
 set -e
 
-IRISES_FILE="/tmp/gallery_left_right_interleaved.ndjson"
-GRAPH_FILE="/tmp/graph.dat"
+IRISES_FILE="${IRISES_FILE:-synthetic-irises-1M.ndjson}"
+GRAPH_FILE="${GRAPH_FILE:-graph-synthetic-minfhd5-1M.dat}"
 GRAPH_FORMAT="v3"
 
 TARGET_DB_SIZE="2097152"
-PARTY_ID="$SMPC__SERVER_COORDINATION__PARTY_ID"
-DB_URL="$SMPC__CPU_DATABASE__URL"
-DB_SCHEMA="SMPC_2M_dev_$PARTY_ID"
+PARTY_ID="${SMPC__SERVER_COORDINATION__PARTY_ID}"
+DB_URL="${SMPC__CPU_DATABASE__URL}"
+DB_SCHEMA="SMPC_1M_dev_${PARTY_ID}"
 
 # Checkpoint bucket that iris-mpc-cpu will later read the restored graph from.
 GRAPH_CHECKPOINT_S3_BUCKET="${GRAPH_CHECKPOINT_S3_BUCKET:-wf-smpcv2-dev-hnsw-checkpoint}"
 GRAPH_CHECKPOINT_S3_REGION="${GRAPH_CHECKPOINT_S3_REGION:-eu-central-1}"
 
-# old code used to get 100k irises to test in stage. used S3. need to cat the left and right codes together. matches BothEyes<GraphMem>
-# opt-in codes left, right
-# aws s3 cp s3://wf-smpcv2-stage-hnsw-performance-reports/graph_right.dat /tmp/graph_right.dat
-# aws s3 cp s3://wf-smpcv2-stage-hnsw-performance-reports/graph_left.dat /tmp/graph_left.dat
-# aws s3 cp s3://wf-smpcv2-stage-hnsw-performance-reports/gallery_left.ndjson /tmp/gallery_left_right_interleaved.ndjson
+echo "downloading plaintext irises and graph from s3"
 
-echo "downloading plaintext irises and per-eye graphs from google drive"
+aws s3 cp "s3://wf-smpcv2-dev-hnsw-performance-reports/${GRAPH_FILE}.gz" "/tmp/${GRAPH_FILE}.gz"
+aws s3 cp "s3://wf-smpcv2-dev-hnsw-performance-reports/${IRISES_FILE}.gz" "/tmp/${IRISES_FILE}.gz"
 
-# 2M plaintext irises that match the graph.dat
-curl "https://drive.usercontent.google.com/download?id=1whFu0GIezDA2_YD9eMr9cY60oU0BF_Ao&export=download&confirm=t" -o ${IRISES_FILE}
+echo "download complete. unzipping"
 
-# serialized BothEyes<GraphMem> in format V3
-curl "https://drive.usercontent.google.com/download?id=1rKhW5P6rCVO4iBpLiFajVTkR0ZXRfXh0&export=download&confirm=t" -o ${GRAPH_FILE}
+gzip -dc "/tmp/${GRAPH_FILE}.gz" > "/tmp/${GRAPH_FILE}"
+gzip -dc "/tmp/${IRISES_FILE}.gz" > "/tmp/${IRISES_FILE}"
 
 echo "starting iris init"
 /bin/init-single-db \
   --party-id "$PARTY_ID" \
-  --source "$IRISES_FILE" \
+  --source "/tmp/${IRISES_FILE}" \
   --db-url "$DB_URL" \
   --db-schema "$DB_SCHEMA" \
   --target-db-size "$TARGET_DB_SIZE"
@@ -58,7 +54,7 @@ echo "starting graph restore + checkpoint"
 /bin/graph-mem-cli \
   --db-url "$DB_URL" \
   --schema "$DB_SCHEMA" \
-  --file "$GRAPH_FILE" \
+  --file "/tmp/${GRAPH_FILE}" \
   --s3-bucket "$GRAPH_CHECKPOINT_S3_BUCKET" \
   --party-id "$PARTY_ID" \
   --aws-region "$GRAPH_CHECKPOINT_S3_REGION" \
