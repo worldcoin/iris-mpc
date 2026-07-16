@@ -2,7 +2,7 @@ use clap::Parser;
 use eyre::Result;
 use futures::StreamExt;
 use hkdf::Hkdf;
-use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_common::postgres::{run_migrations, AccessMode, PostgresClient};
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::kms_dh::derive_shared_secret,
@@ -59,6 +59,7 @@ async fn main() -> Result<()> {
     let schema_name = format!("{}_{}_{}", APP_NAME, config.environment, config.party_id);
     let postgres_client =
         PostgresClient::new(&config.db_url, &schema_name, AccessMode::ReadWrite).await?;
+    run_migrations(&postgres_client.pool, false).await?;
     let store = Store::new(&postgres_client).await?;
 
     let iris_stream = store.stream_irises_in_range(config.db_start..config.db_end);

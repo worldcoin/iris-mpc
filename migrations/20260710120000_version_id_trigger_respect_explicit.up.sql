@@ -13,7 +13,7 @@ BEGIN
     IF NEW.version_id IS DISTINCT FROM OLD.version_id THEN
         RAISE EXCEPTION 'version_id changed (% -> %) without the explicit-version flag',
             OLD.version_id, NEW.version_id
-            USING HINT = 'SET LOCAL app.explicit_version_id = ''on''; first, or use the ExplicitVersion store API';
+            USING HINT = 'Enable app.explicit_version_id for the transaction (via the ExplicitVersion store API) before changing version_id.';
     END IF;
 
     -- Default: auto-increment on content change.

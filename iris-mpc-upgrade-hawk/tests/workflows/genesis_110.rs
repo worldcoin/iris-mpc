@@ -21,7 +21,7 @@ use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore,
     hnsw::graph::graph_store::GraphPg,
 };
-use iris_mpc_store::ExplicitVersion;
+use iris_mpc_store::ExplicitVersionToken;
 use iris_mpc_upgrade_hawk::genesis::ExecutionArgs;
 use std::ops::DerefMut;
 use tokio::task::JoinSet;
@@ -213,7 +213,7 @@ async fn inject_divergence(node: &MpcNode, party_id: usize) -> Result<()> {
     {
         let mut tx = node.cpu_stores.iris.tx().await?;
         {
-            let mut ev = ExplicitVersion::enable(&mut tx).await?;
+            let mut ev = ExplicitVersionToken::enable(&mut tx).await?;
             sqlx::query("UPDATE irises SET version_id = version_id + 5 WHERE id = $1")
                 .bind(D1 as i64)
                 .execute(ev.tx().deref_mut())

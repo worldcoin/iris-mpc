@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc:993370451d78195a06b027df4577cda75a7aa714"
+image: "ghcr.io/worldcoin/iris-mpc:f4acd2f9e51dfa635d9b3ebfafbb34dd0b30b901"
 
 environment: stage
 replicaCount: 1
@@ -21,6 +21,7 @@ env:
   SMPC__DATABASE__CREATE: "true"
   SMPC__DATABASE__LOAD_PARALLELISM: "8"
   SMPC__DISABLE_PERSISTENCE: "false"
+  SMPC__DB_BACKED_INGEST: "true" # POP-4051 DB-backed ingest (stage rollout 2026-07)
   SMPC__ANON_STATS_DATABASE__URL:
     valueFrom:
       secretKeyRef:

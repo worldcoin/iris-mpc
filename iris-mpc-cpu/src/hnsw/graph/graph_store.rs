@@ -50,8 +50,6 @@ impl<V: VectorStore> GraphPg<V> {
             postgres_client.schema_name,
         );
 
-        postgres_client.migrate().await;
-
         Ok(Self {
             pool: postgres_client.pool.clone(),
             schema_name: postgres_client.schema_name.clone(),
@@ -530,7 +528,7 @@ impl<'b, V: VectorStore> GraphTx<'b, V> {
 
 pub mod test_utils {
     use super::*;
-    use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+    use iris_mpc_common::postgres::{run_migrations, AccessMode, PostgresClient};
     use iris_mpc_store::test_utils::{cleanup, temporary_name, test_db_url};
     use std::ops::{Deref, DerefMut};
 
@@ -548,6 +546,7 @@ pub mod test_utils {
             let schema_name = temporary_name();
             let postgres_client =
                 PostgresClient::new(&test_db_url()?, &schema_name, AccessMode::ReadWrite).await?;
+            run_migrations(&postgres_client.pool, false).await?;
             let graph = GraphPg::new(&postgres_client).await?;
             Ok(TestGraphPg {
                 postgres_client,

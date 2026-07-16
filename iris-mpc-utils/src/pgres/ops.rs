@@ -1,12 +1,12 @@
 use eyre::Result;
 use iris_mpc_common::{helpers::sync::Modification, VectorId};
-use iris_mpc_store::{ExplicitVersion, Store};
+use iris_mpc_store::{ExplicitVersionToken, Store};
 use sqlx::{Postgres, Transaction};
 use std::ops::DerefMut;
 
 /// Increments an Iris's version.
 pub async fn increment_iris_version(
-    tx: &mut ExplicitVersion<'_, '_>,
+    tx: &mut ExplicitVersionToken<'_, '_>,
     serial_id: i64,
 ) -> Result<()> {
     sqlx::query(

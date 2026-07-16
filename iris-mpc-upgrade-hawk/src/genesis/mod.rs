@@ -19,7 +19,7 @@ use iris_mpc_common::{
     config::{CommonConfig, Config, ENV_PROD, ENV_STAGE},
     helpers::{smpc_request, sync::Modification},
     iris_db::get_dummy_shares_for_deletion,
-    postgres::{AccessMode, PostgresClient},
+    postgres::{run_migrations, AccessMode, PostgresClient},
     SerialId, VectorId, VersionId,
 };
 pub use iris_mpc_cpu::genesis::BatchSizeConfig;
@@ -50,7 +50,7 @@ use iris_mpc_cpu::{
     hawkers::aby3::aby3_store::{Aby3Store, VectorIdRegistryRef},
     hnsw::{graph::graph_store::GraphPg, GraphMem},
 };
-use iris_mpc_store::{ExplicitVersion, Store as IrisStore, StoredIrisRef};
+use iris_mpc_store::{ExplicitVersionToken, Store as IrisStore, StoredIrisRef};
 use std::collections::{HashMap, HashSet};
 use std::{
     sync::Arc,
@@ -1225,7 +1225,7 @@ async fn apply_store_repairs(
         let mut insert_vids: Vec<VectorId> = Vec::new();
         let mut insert_refs: Vec<StoredIrisRef> = Vec::new();
         {
-            let mut ev = ExplicitVersion::enable(&mut tx).await?;
+            let mut ev = ExplicitVersionToken::enable(&mut tx).await?;
             for (i, vid) in vids.iter().enumerate() {
                 let left_iris = &left_data[i];
                 let right_iris = &right_data[i];
@@ -1734,6 +1734,7 @@ async fn get_service_clients(
             let db_client =
                 PostgresClient::new(&db_config.url, db_schema.as_str(), AccessMode::ReadWrite)
                     .await?;
+            run_migrations(&db_client.pool, db_config.ignore_missing_migrations).await?;
 
             Ok((
                 IrisStore::new(&db_client).await?,
@@ -1849,24 +1850,23 @@ async fn get_results_thread(
                     let right_iris = &right_irises[0];
 
                     let mut graph_tx = graph_store_bg.tx().await?;
-                    let iris_data =StoredIrisRef {
-                                    id: vector_id_to_persist.serial_id() as i64,
-                                    left_code: &left_iris.code.coefs,
-                                    left_mask: &left_iris.mask.coefs,
-                                    right_code: &right_iris.code.coefs,
-                                    right_mask: &right_iris.mask.coefs,
-                                };
-                    // Replay the modification's version verbatim; the handle bypasses the auto-increment trigger.
-                    {
-                        let mut ev = ExplicitVersion::enable(&mut graph_tx.tx).await?;
-                        hnsw_iris_store
-                            .update_iris_with_version_id(
-                                &mut ev,
-                                vector_id_to_persist.version_id(),
-                                &iris_data,
-                            )
-                            .await?;
-                    }
+                    // SET LOCAL, so explicit-version mode is transaction-wide; the token is only
+                    // required by the update_iris_with_version_id call below.
+                    let mut version_token = ExplicitVersionToken::enable(&mut graph_tx.tx).await?;
+                    let iris_data = StoredIrisRef {
+                        id: vector_id_to_persist.serial_id() as i64,
+                        left_code: &left_iris.code.coefs,
+                        left_mask: &left_iris.mask.coefs,
+                        right_code: &right_iris.code.coefs,
+                        right_mask: &right_iris.mask.coefs,
+                    };
+                    hnsw_iris_store
+                        .update_iris_with_version_id(
+                            &mut version_token,
+                            vector_id_to_persist.version_id(),
+                            &iris_data,
+                        )
+                        .await?;
 
                     let mut db_tx = graph_tx.tx;
                     set_last_indexed_modification_id(&mut db_tx, modification_id).await?;
@@ -1912,7 +1912,7 @@ async fn get_results_thread(
                         // no modification id, and a synthetic value would regress the
                         // cursor. The end-of-delta cursor write handles it once.
                         {
-                            let mut ev = ExplicitVersion::enable(&mut graph_tx.tx).await?;
+                            let mut ev = ExplicitVersionToken::enable(&mut graph_tx.tx).await?;
                             hnsw_iris_store
                                 .update_iris_with_version_id(
                                     &mut ev,

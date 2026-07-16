@@ -1678,6 +1678,7 @@ impl ServerActor {
         // Instead of sending to return_channel, we'll return this at the end
         let result = ServerJobResult {
             merged_results,
+            sqs_sequence_numbers: batch.sqs_sequence_numbers.clone(),
             request_ids: batch.request_ids,
             request_types: batch.request_types,
             metadata: batch.metadata,
@@ -2727,6 +2728,7 @@ impl ServerActor {
 
     fn non_mpc_updates_only(batch: PreprocessedBatchQuery) -> ServerJobResult {
         ServerJobResult {
+            sqs_sequence_numbers: batch.sqs_sequence_numbers,
             deleted_ids: batch.deletion_requests_indices,
             identity_update_indices: batch.identity_update_indices,
             identity_update_request_ids: batch.identity_update_request_ids,

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use ampc_actor_utils::network::mpc::NetworkHandle;
-use ampc_actor_utils::network::tcp::config::deserialize_yaml_json_string;
+use ampc_actor_utils::network::tcp::deserialize_yaml_json_string;
 use aws_sdk_s3::Client as S3Client;
 use eyre::{eyre, Result};
 use serde::Deserialize;
