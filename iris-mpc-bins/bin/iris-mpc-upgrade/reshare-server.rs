@@ -1,7 +1,7 @@
 use ampc_server_utils::TaskMonitor;
 use clap::Parser;
 use eyre::Result;
-use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_common::postgres::{run_migrations, AccessMode, PostgresClient};
 use iris_mpc_store::Store;
 use iris_mpc_upgrade::{
     config::ReShareServerConfig,
@@ -40,6 +40,7 @@ async fn main() -> Result<()> {
     let schema_name = format!("{}_{}_{}", APP_NAME, config.environment, config.party_id);
     let postgres_client =
         PostgresClient::new(&config.db_url, &schema_name, AccessMode::ReadWrite).await?;
+    run_migrations(&postgres_client.pool, false).await?;
     let store = Store::new(&postgres_client).await?;
 
     let receiver_helper = IrisCodeReshareReceiverHelper::new(
