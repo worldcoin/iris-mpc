@@ -18,7 +18,7 @@ use iris_mpc_common::galois_engine::degree4::{
     GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare,
 };
 use iris_mpc_common::id::PartyID;
-use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_common::postgres::{run_migrations, AccessMode, PostgresClient};
 use iris_mpc_store::{DbStoredIris, Store, StoredIrisRef};
 use iris_mpc_upgrade::config::{
     KeyGenConfig, ReRandomizeCheckConfig, ReRandomizeConfig, ReRandomizeDbSubCommand,
@@ -207,6 +207,7 @@ async fn rerandomize_db_main(config: ReRandomizeConfig) -> Result<()> {
         AccessMode::ReadWrite,
     )
     .await?;
+    run_migrations(&postgres_client_write.pool, false).await?;
     let read_store = Store::new(&postgres_client_read).await?;
     let write_store = Store::new(&postgres_client_write).await?;
 

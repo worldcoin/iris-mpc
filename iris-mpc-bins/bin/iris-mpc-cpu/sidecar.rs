@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use ampc_actor_utils::network::tcp::TlsConfig;
 use iris_mpc_common::config::Config;
-use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_common::postgres::{run_migrations, AccessMode, PostgresClient};
 use iris_mpc_common::tracing::initialize_tracing;
 use iris_mpc_cpu::{
     checkpoint_protocol::{sidecar_main, SidecarConfig},
@@ -48,6 +48,16 @@ pub struct SidecarArgs {
     /// Postgres schema name.
     #[clap(long, env = "SMPC__CPU_DATABASE__SCHEMA")]
     pub db_schema: String,
+
+    /// Ignore missing migration versions recorded in the database but absent from this
+    /// binary. Defaults to `false` so a rolled-back sidecar doesn't tolerate a newer
+    /// schema and abort with `VersionMissing`; set to `true` to allow missing migrations.
+    #[clap(
+        long,
+        env = "SMPC__CPU_DATABASE__IGNORE_MISSING_MIGRATIONS",
+        default_value_t = false
+    )]
+    pub ignore_missing_migrations: bool,
 
     /// S3 bucket holding graph checkpoint objects.
     #[clap(long, env = "SMPC__GRAPH_CHECKPOINT_BUCKET_NAME")]
@@ -186,6 +196,7 @@ async fn main() -> Result<()> {
 
     let postgres =
         PostgresClient::new(&args.db_url, &args.db_schema, AccessMode::ReadWrite).await?;
+    run_migrations(&postgres.pool, args.ignore_missing_migrations).await?;
     let graph_store: GraphPg<iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store> =
         GraphPg::new(&postgres).await?;
 

@@ -8,6 +8,7 @@ use futures::{
     Stream, StreamExt, TryStreamExt,
 };
 use iris_mpc_common::helpers::sync::MOD_STATUS_IN_PROGRESS;
+use iris_mpc_common::postgres::PostgresClient;
 use iris_mpc_common::{
     config::Config,
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
@@ -19,7 +20,6 @@ use iris_mpc_common::{
         sync::Modification,
     },
     iris_db::iris::IrisCode,
-    postgres::PostgresClient,
     SerialId, VectorId,
 };
 use itertools::izip;
@@ -206,11 +206,9 @@ impl Store {
             postgres_client.schema_name
         );
 
-        postgres_client.migrate().await;
-
         Ok(Store {
             pool: postgres_client.pool.clone(),
-            schema_name: postgres_client.schema_name.to_string(),
+            schema_name: postgres_client.schema_name.clone(),
         })
     }
 
@@ -1041,7 +1039,7 @@ pub mod tests {
             },
             sync::ModificationStatus,
         },
-        postgres::AccessMode,
+        postgres::{run_migrations, AccessMode},
     };
 
     // Max connections default to 100 for Postgres, but can't test at quite this level when running
@@ -1055,6 +1053,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         let got: Vec<DbStoredIris> = store.stream_irises().await.try_collect().await?;
@@ -1132,6 +1131,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         let mut tx = store.tx().await?;
@@ -1148,6 +1148,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         let sequence_number = "42";
@@ -1188,6 +1189,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         assert!(
@@ -1241,6 +1243,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         for seq in ["20", "21", "22"] {
@@ -1281,6 +1284,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         // The C2 state: rows 10,11 persisted somewhere in the fleet (this
@@ -1342,6 +1346,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         let mut codes_and_masks = vec![];
@@ -1386,6 +1391,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         let codes_and_masks = &[
@@ -1436,6 +1442,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         let expected_generated_irises_num = 10;
@@ -1455,6 +1462,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         let mut irises = vec![];
@@ -1488,6 +1496,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         // insert two irises into db
@@ -1615,6 +1624,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         let iris = StoredIrisRef {
@@ -1665,6 +1675,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         let iris = StoredIrisRef {
@@ -1712,6 +1723,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         let iris = StoredIrisRef {
@@ -1756,6 +1768,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         let iris = StoredIrisRef {
@@ -1810,6 +1823,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         let iris = StoredIrisRef {
@@ -1845,6 +1859,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         // 1. Insert a new modification
@@ -1892,6 +1907,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         // Insert a few modifications
@@ -1959,6 +1975,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         // Insert five modifications
@@ -2060,6 +2077,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         // Insert three modifications.
@@ -2108,6 +2126,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         // Insert several modifications.
@@ -2132,6 +2151,7 @@ pub mod tests {
 
         // Clean up the temporary schema.
         cleanup(&postgres_client, &schema_name).await?;
+
         Ok(())
     }
 
@@ -2150,6 +2170,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         // Insert a variety of modifications with different request types
@@ -2321,6 +2342,7 @@ pub mod tests {
         let postgres_client =
             PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
                 .await?;
+        run_migrations(&postgres_client.pool, false).await?;
         let store = Store::new(&postgres_client).await?;
 
         // Insert 3 modifications with the SAME serial_id (200)

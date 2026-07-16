@@ -4,7 +4,7 @@ use super::CpuConfigs;
 
 use eyre::eyre;
 use iris_mpc_common::{
-    postgres::{AccessMode, PostgresClient},
+    postgres::{run_migrations, AccessMode, PostgresClient},
     VectorId, MASK_CODE_LENGTH,
 };
 use iris_mpc_cpu::hawkers::plaintext_store::PlaintextStore;
@@ -31,11 +31,11 @@ pub struct DbStores {
 
 impl DbStores {
     pub async fn new(config: &CpuNodeConfig) -> eyre::Result<Self> {
-        let pg =
+        let pg_client =
             PostgresClient::new(&config.db_url, &config.db_schema, AccessMode::ReadWrite).await?;
-        pg.migrate().await;
-        let graph = GraphPg::new(&pg).await?;
-        let iris_store = IrisStore::new(&pg).await?;
+        run_migrations(&pg_client.pool, false).await?;
+        let graph = GraphPg::new(&pg_client).await?;
+        let iris_store = IrisStore::new(&pg_client).await?;
         Ok(Self { graph, iris_store })
     }
 

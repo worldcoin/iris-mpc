@@ -1,6 +1,6 @@
 use clap::Parser;
 use eyre::Result;
-use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_common::postgres::{run_migrations, AccessMode, PostgresClient};
 use iris_mpc_common::{
     galois_engine::degree4::FullGaloisRingIrisCodeShare, iris_db::iris::IrisCode,
 };
@@ -74,6 +74,10 @@ async fn main() -> Result<()> {
         AccessMode::ReadWrite,
     )
     .await?;
+
+    run_migrations(&party_1_pg_client.pool, false).await?;
+    run_migrations(&party_2_pg_client.pool, false).await?;
+    run_migrations(&party_3_pg_client.pool, false).await?;
 
     let store1 = Store::new(&party_1_pg_client).await?;
     let store2 = Store::new(&party_2_pg_client).await?;

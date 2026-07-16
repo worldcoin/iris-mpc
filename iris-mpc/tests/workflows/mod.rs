@@ -8,7 +8,7 @@ pub mod wal_109;
 pub mod wal_110;
 
 use ampc_actor_utils::network::tcp::TlsConfig;
-use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_common::postgres::{run_migrations, AccessMode, PostgresClient};
 use iris_mpc_cpu::{
     checkpoint_protocol::{sidecar_main, SidecarConfig},
     execution::hawk_main::{build_hawk_network_handle, HawkArgs},
@@ -121,6 +121,7 @@ pub fn run_sidecar(
             let postgres =
                 PostgresClient::new(&config.db_url, &config.db_schema, AccessMode::ReadWrite)
                     .await?;
+            run_migrations(&postgres.pool, false).await?;
             // Aby3Store type param is phantom for WAL/checkpoint ops; store-agnostic.
             let graph_store: GraphPg<Aby3Store> = GraphPg::new(&postgres).await?;
 

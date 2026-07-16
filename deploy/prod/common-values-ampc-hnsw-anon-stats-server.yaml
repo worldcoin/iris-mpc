@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/anon-stats-server:v0.32.1@sha256:15ed3fceb934247a633ba9d366e5791c22e7d5c90116a4b87551f78243a2e317"
+image: "ghcr.io/worldcoin/anon-stats-server:v0.32.6@sha256:bb88af42ca4a1c4af2803adb65f9ca09da6028011dad55d607b3c8affd6b0f6a"
 
 environment: prod
 replicaCount: 1
@@ -37,6 +37,8 @@ env:
   SMPC__N_BUCKETS_2D: "375"
   SMPC__N_BUCKETS_1D_REAUTH: "500"
   SMPC__N_BUCKETS_2D_REAUTH: "500"
+  SMPC__N_BUCKETS_1D_NHD: "400"
+  SMPC__N_BUCKETS_2D_NHD: "400"
   SMPC__MIN_1D_JOB_SIZE_REAUTH: "1000"
   SMPC__MIN_1D_JOB_SIZE: "65536"
   SMPC__MIN_1D_JOB_SIZE_MIRROR: "16384"
