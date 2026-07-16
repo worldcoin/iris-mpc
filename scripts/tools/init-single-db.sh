@@ -6,10 +6,11 @@ IRISES_FILE="${IRISES_FILE:-synthetic-irises-1M.ndjson}"
 GRAPH_FILE="${GRAPH_FILE:-graph-synthetic-minfhd5-1M.dat}"
 GRAPH_FORMAT="v3"
 
-TARGET_DB_SIZE="2097152"
+TARGET_DB_SIZE="${TARGET_DB_SIZE:-1048576}"
 PARTY_ID="${SMPC__SERVER_COORDINATION__PARTY_ID}"
 DB_URL="${SMPC__CPU_DATABASE__URL}"
-DB_SCHEMA="SMPC_1M_dev_${PARTY_ID}"
+# matches behavior of iris-mpc
+DB_SCHEMA="SMPC${SMPC__HNSW_SCHEMA_NAME_SUFFIX}_dev_${PARTY_ID}"
 
 # Checkpoint bucket that iris-mpc-cpu will later read the restored graph from.
 GRAPH_CHECKPOINT_S3_BUCKET="${GRAPH_CHECKPOINT_S3_BUCKET:-wf-smpcv2-dev-hnsw-checkpoint}"
