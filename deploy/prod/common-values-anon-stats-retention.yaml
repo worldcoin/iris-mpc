@@ -1,0 +1,48 @@
+# POP-3905 — anon-stats retention CronJob (prod, smpcv2). Mirrors the stage deploy
+# (common-cronjob 1.11.0 via wf-cluster-apps); per-cluster env lives in the per-node
+# values files. Stage-validated 2026-07-09: live deletes on all 6 stage clusters,
+# identical cross-party counts, idempotent re-run, oldest_retained drained exactly to
+# the window boundary.
+image: "ghcr.io/worldcoin/retention-reaper:v0.32.6@sha256:366cc7dcd9e9132bbfe2b5719332ff8d1f301ed5b487cbfc458fbc97cca92ace"
+
+# SHIPS INERT, doubly: `suspend: true` (no Jobs are created) AND RETENTION__ENABLED
+# unset (binary exits 0 without touching the DB even if a Job runs). Enable path after
+# the prod release: un-suspend → ENABLED+DRY_RUN → inspect previewed counts + health
+# gauges → flip DRY_RUN off, one party first.
+suspend: true
+
+env: {}
+
+replicaCount: 1
+
+environment: prod
+
+# Daily, 03:30 UTC — same slot as stage; offset from the modifications reaper (04:00).
+schedule: "30 3 * * *"
+backoffLimit: 0
+
+# Never run two reapers against the same DB at once.
+concurrencyPolicy: Forbid
+
+imagePullSecrets:
+  - name: github-secret
+
+resources:
+  limits:
+    cpu: "500m"
+    memory: 256Mi
+  requests:
+    cpu: "100m"
+    memory: 128Mi
+
+# Dedicated anon-stats-server node pool — the pool with the network path to the
+# anon-stats Aurora (smpcv2 uses a dedicated pool, not a per-pod SG like hnsw).
+nodeSelector:
+  kubernetes.io/arch: amd64
+  workload: anon-stats-server
+
+tolerations:
+  - key: dedicated
+    operator: Equal
+    value: anonStatsServer
+    effect: NoSchedule
