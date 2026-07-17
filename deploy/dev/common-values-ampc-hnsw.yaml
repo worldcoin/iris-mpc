@@ -33,7 +33,6 @@ env:
   SMPC__HNSW_SCHEMA_NAME_SUFFIX: "_minfhd"
   SMPC__MAX_DB_SIZE: "2000000"
   SMPC__MAX_BATCH_SIZE: "96"
-  SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS: "30"
   SMPC__PROCESSING_TIMEOUT_SECS: "1800"
   SMPC__HNSW_MIN_LAYER_SEARCH_BATCH_SIZE: "8000"
   SMPC__HAWK_REQUEST_PARALLELISM: "96"
@@ -48,6 +47,7 @@ env:
   SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST: "false"
   SMPC__AWS__REGION: "eu-central-1"
   SMPC__SERVICE_PORTS: '["4000","4001","4002"]'
+  SMPC__COORDINATOR_PORTS: '["4200","4201","4202"]'
   SMPC__SERVER_COORDINATION__IMAGE_NAME: $(IMAGE_NAME)
   SMPC__SHARES_BUCKET_NAME: "wf-smpcv2-dev-sns-requests-v2"
   SMPC__ENABLE_S3_IMPORTER: "false"
@@ -114,6 +114,15 @@ ports:
     protocol: TCP
   - containerPort: 4102
     name: tcp-4102
+    protocol: TCP
+  - containerPort: 4200
+    name: tcp-4200
+    protocol: TCP
+  - containerPort: 4201
+    name: tcp-4201
+    protocol: TCP
+  - containerPort: 4202
+    name: tcp-4202
     protocol: TCP
 
 livenessProbe:

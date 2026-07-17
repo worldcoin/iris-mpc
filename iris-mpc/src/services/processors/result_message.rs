@@ -34,6 +34,12 @@ pub async fn send_error_results_to_sns(
     base_message_attributes: &HashMap<String, MessageAttributeValue>,
     message_type: &str,
 ) -> Result<()> {
+    if config.party_id != crate::coordinator::COORDINATOR_PARTY_ID
+        || config.results_topic_arn.is_empty()
+    {
+        return Ok(());
+    }
+
     let mut message_attributes = base_message_attributes.clone();
     let trace_attributes = construct_message_attributes(&metadata.trace_id, &metadata.span_id)?;
     message_attributes.extend(trace_attributes);
@@ -57,6 +63,12 @@ pub async fn send_results_to_sns(
     base_message_attributes: &HashMap<String, MessageAttributeValue>,
     message_type: &str,
 ) -> Result<()> {
+    if config.party_id != crate::coordinator::COORDINATOR_PARTY_ID
+        || config.results_topic_arn.is_empty()
+    {
+        return Ok(());
+    }
+
     for (i, result_event) in result_events.iter().enumerate() {
         let mut message_attributes = base_message_attributes.clone();
         if metadata.len() > i {

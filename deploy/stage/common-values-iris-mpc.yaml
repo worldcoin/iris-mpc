@@ -21,7 +21,6 @@ env:
   SMPC__DATABASE__CREATE: "true"
   SMPC__DATABASE__LOAD_PARALLELISM: "8"
   SMPC__DISABLE_PERSISTENCE: "false"
-  SMPC__DB_BACKED_INGEST: "true" # POP-4051 DB-backed ingest (stage rollout 2026-07)
   SMPC__ANON_STATS_DATABASE__URL:
     valueFrom:
       secretKeyRef:
@@ -31,6 +30,10 @@ env:
   SMPC__ANON_STATS_DATABASE__CREATE: "false"
   SMPC__ANON_STATS_DATABASE__LOAD_PARALLELISM: "8"
   SMPC__AWS__REGION: "eu-north-1"
+  SMPC__COORDINATOR_PORTS: '["4200","4201","4202"]'
+  SMPC__TLS__PRIVATE_KEY: "/etc/ssl/private/key.pem"
+  SMPC__TLS__LEAF_CERT: "/etc/ssl/private/certificate.crt"
+  SMPC__TLS__ROOT_CERTS: '["/usr/local/share/ca-certificates/ca_smpcv2_party_stage_0.crt", "/usr/local/share/ca-certificates/ca_smpcv2_party_stage_1.crt", "/usr/local/share/ca-certificates/ca_smpcv2_party_stage_2.crt"]'
   SMPC__REQUESTS_QUEUE_URL:
     valueFrom:
       secretKeyRef:
@@ -150,6 +153,10 @@ keelPolling:
 preStop:
   # preStop.sleepPeriod specifies the time spent in Terminating state before SIGTERM is sent
   sleepPeriod: 10
+
+mountSSLCerts:
+  enabled: true
+  mountPath: /etc/ssl/private
 
 # terminationGracePeriodSeconds specifies the grace time between SIGTERM and SIGKILL
 terminationGracePeriodSeconds: 120

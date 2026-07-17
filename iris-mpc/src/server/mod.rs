@@ -1,5 +1,9 @@
+use crate::coordinator::{
+    coordinator_routes, spawn_coordinator_sqs_ingest, CoordinatorBatchReceiver,
+    COORDINATOR_PARTY_ID,
+};
 use crate::services::aws::clients::AwsClients;
-use crate::services::processors::batch::{receive_batch_stream, spawn_db_backed_ingest_task};
+use crate::services::processors::batch::receive_batch_stream;
 use crate::services::processors::job::{process_job_result, BatchTimings};
 use aws_sdk_s3::Client;
 use aws_sdk_sns::types::MessageAttributeValue;
@@ -15,13 +19,12 @@ use crate::services::processors::modifications_sync::{
 use ampc_anon_stats::store::postgres::AccessMode as AnonStatsAccessMode;
 use ampc_anon_stats::store::postgres::PostgresClient as AnonStatsPgClient;
 use ampc_anon_stats::AnonStatsStore;
-use ampc_server_utils::batch_sync::{CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRIES};
 use ampc_server_utils::server_coordination::wait_until_startup_visibility_is_complete;
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use ampc_server_utils::{
-    delete_messages_until_sequence_num, get_next_sns_seq_num, get_others_sync_state,
-    init_heartbeat_task, set_node_ready, start_coordination_server_with_extra_routes,
-    wait_for_others_ready, wait_for_others_unready, BatchSyncSharedState, TaskMonitor,
+    get_others_sync_state, init_heartbeat_task, set_node_ready,
+    start_coordination_server_with_extra_routes, wait_for_others_ready, wait_for_others_unready,
+    TaskMonitor,
 };
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result, WrapErr};
@@ -54,7 +57,6 @@ use pprof::ProfilerGuardBuilder;
 use sodiumoxide::hex;
 use std::collections::HashMap;
 use std::process::exit;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
@@ -63,7 +65,6 @@ use tokio::sync::RwLock;
 use tokio::time::timeout;
 
 const RNG_SEED_INIT_DB: u64 = 42;
-pub const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
 pub const MAX_CONCURRENT_REQUESTS: usize = 32;
 const PEER_ROUND_TIMEOUT: Duration = Duration::from_secs(10);
 const CHECKPOINT_WINDOW: usize = 10;
@@ -76,30 +77,14 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     process_config(&config);
 
-    if config.db_backed_ingest && config.disable_persistence {
-        bail!(
-            "db_backed_ingest=true is incompatible with disable_persistence=true: ingested request claims would never be marked persisted and would be re-formed on every restart"
-        );
-    }
-
-    if config.db_backed_ingest && !(0..=20).contains(&config.db_ingest_sqs_wait_secs) {
-        bail!(
-            "db_ingest_sqs_wait_secs must be within SQS's accepted 0..=20 range, got {}: every receive would fail and ingest would idle with warn-only logs",
-            config.db_ingest_sqs_wait_secs
-        );
-    }
-
-    if config.db_backed_ingest && !config.enable_modifications_sync {
-        bail!(
-            "db_backed_ingest=true requires enable_modifications_sync=true: the boot-time \
-             fleet-frontier skip-ahead marks rows persisted whose EFFECTS (irises/graph) only \
-             reach this party via the modifications roll-forward. With sync disabled, an \
-             asymmetric-commit recovery would reconcile bookkeeping without the data — silent \
-             cross-party data divergence instead of a loud wedge."
-        );
-    }
-
     let (iris_store, graph_store) = prepare_stores(&config).await?;
+
+    if config.party_id == COORDINATOR_PARTY_ID {
+        let reset = iris_store.reset_coordinator_requests_on_startup().await?;
+        if reset > 0 {
+            tracing::warn!("Requeued {reset} interrupted coordinator request(s)");
+        }
+    }
 
     let aws_clients = init_aws_services(&config).await?;
     let shares_encryption_key_pair = get_shares_encryption_key_pair(&config, &aws_clients).await?;
@@ -107,16 +92,9 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     maybe_seed_random_shares(&config, &iris_store).await?;
     check_store_consistency(&config, &iris_store).await?;
-    let my_state = build_sync_state(&config, &aws_clients, &iris_store, &graph_store).await?;
+    let my_state = build_sync_state(&config, &iris_store, &graph_store).await?;
 
     let mut background_tasks = TaskMonitor::new();
-
-    // Initialize shared current_batch_id
-    let current_batch_id_atomic = Arc::new(AtomicU64::new(0));
-
-    // Initialize shared batch sync state
-    let batch_sync_shared_state =
-        Arc::new(tokio::sync::Mutex::new(BatchSyncSharedState::default()));
 
     let server_coord_config = config
         .server_coordination
@@ -129,13 +107,15 @@ pub async fn server_main(config: Config) -> Result<()> {
         server_coord_config.healthcheck_ports
     );
 
+    let coordinator_api =
+        (config.party_id == COORDINATOR_PARTY_ID).then(|| coordinator_routes(iris_store.clone()));
     let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server_with_extra_routes(
         &server_coord_config,
         &mut background_tasks,
         &shutdown_handler,
         &my_state,
-        Some(batch_sync_shared_state.clone()),
         None,
+        coordinator_api,
     )
     .await;
     tracing::info!("Coordination server started");
@@ -163,7 +143,7 @@ pub async fn server_main(config: Config) -> Result<()> {
         sync_graph_mutations(&sync_result, &graph_store).await?;
     }
 
-    if config.enable_modifications_replay {
+    if config.enable_modifications_replay && config.party_id == COORDINATOR_PARTY_ID {
         // replay last `max_modification_lookback` modifications to SNS
         if let Err(e) = send_last_modifications_to_sns(
             &iris_store,
@@ -175,72 +155,6 @@ pub async fn server_main(config: Config) -> Result<()> {
         {
             tracing::error!("Failed to replay last modifications: {:?}", e);
         }
-    }
-
-    if config.db_backed_ingest {
-        // Two-step boot recovery, the DB analog of the SQS queue trim:
-        //
-        // Step 1 — skip-ahead to the fleet's persisted frontier. Rows at or
-        // below max(peers' persisted sequence numbers) belong to batches that
-        // completed on at least one peer: their effects reached this party via
-        // the modifications roll-forward above, and peers will never co-form
-        // them again. Releasing them instead (the naive local decision) would
-        // make this party re-form rows the peers moved past — a permanent
-        // batch divergence. Locally, "claimed but unpersisted from a crashed
-        // symmetric batch" and "claimed but unpersisted because only MY commit
-        // failed" are indistinguishable; only the peers' frontier tells them
-        // apart.
-        //
-        // SAFETY DEPENDENCY: peers serve their SyncState from a snapshot taken
-        // at THEIR boot, so an exchanged frontier can under-report persists
-        // made after that peer booted. This is sound today only because the
-        // startup unready-gate + heartbeat teardown force full-fleet restarts
-        // (every frontier is rebuilt after its party's last commit). If
-        // coordination is ever relaxed to allow solo restarts, this exchange
-        // must move to a live DB read in the sync endpoint.
-        let fleet_frontier = sync_result.max_persisted_sequence_number();
-        if let Some(frontier) = &fleet_frontier {
-            let marked = iris_store
-                .mark_ingested_requests_persisted_up_to(frontier)
-                .await
-                .wrap_err("failed to skip-ahead ingested rows to fleet frontier")?;
-            if marked > 0 {
-                tracing::warn!(
-                    "Skip-ahead: marked {} ingested row(s) persisted up to fleet frontier {} (completed on a peer; effects arrived via modifications sync)",
-                    marked,
-                    frontier
-                );
-                metrics::counter!("db_ingest_frontier_skip_ahead").increment(marked);
-            }
-        }
-
-        // Step 2 — release remaining unpersisted claims (all above the fleet
-        // frontier = no party persisted them = the symmetric-crash case).
-        // Deterministic re-formation picks them up identically everywhere.
-        let released = iris_store
-            .reset_unpersisted_ingested_claims()
-            .await
-            .wrap_err("failed to reset unpersisted ingested claims on startup")?;
-        if released > 0 {
-            tracing::warn!(
-                "Released {} unpersisted ingested request claim(s) from a crashed/restarted batch; they will be re-formed",
-                released
-            );
-            metrics::counter!("db_ingest_claims_released").increment(released);
-        } else {
-            tracing::info!("No unpersisted ingested request claims to release on startup");
-        }
-
-        // Skip the startup queue trim: with DB-backed ingest, queues are
-        // transient buffers with party-dependent ingest offsets, so cross-party
-        // queue-position comparison is meaningless (an already-drained queue
-        // reports None and max_sns_sequence_num panics on mixed states) and the
-        // trim could delete messages a lagging party has not yet ingested.
-        // Dedup of redeliveries is handled by the ingest's PK ON CONFLICT;
-        // already-processed rows are excluded by persisted_at.
-        tracing::info!("db-backed ingest enabled; skipping startup SQS queue sync/trim");
-    } else {
-        sync_sqs_queues(&config, &sync_result, &aws_clients).await?;
     }
 
     if shutdown_handler.is_shutting_down() {
@@ -255,6 +169,13 @@ pub async fn server_main(config: Config) -> Result<()> {
         &iris_store,
         &graph_store,
         &shutdown_handler,
+    )
+    .await?;
+
+    let coordinator_receiver = CoordinatorBatchReceiver::connect(
+        &config,
+        iris_store.clone(),
+        shutdown_handler.get_network_cancellation_token(),
     )
     .await?;
 
@@ -313,8 +234,7 @@ pub async fn server_main(config: Config) -> Result<()> {
             &shutdown_handler,
             hawk_actor,
             tx_results,
-            current_batch_id_atomic.clone(),
-            batch_sync_shared_state,
+            coordinator_receiver,
         )
         .await;
         main_finished.cancel();
@@ -547,7 +467,6 @@ async fn check_store_consistency(config: &Config, iris_store: &Store) -> Result<
 /// state for MPC operation.
 async fn build_sync_state(
     config: &Config,
-    aws_clients: &AwsClients,
     store: &Store,
     graph_store: &GraphPg<Aby3Store<HawkOps>>,
 ) -> Result<SyncState> {
@@ -555,28 +474,7 @@ async fn build_sync_state(
     let modifications = store
         .last_modifications(config.max_modifications_lookback)
         .await?;
-    // Under DB-backed ingest the queue is a transient buffer with party-local
-    // offsets: the peeked head sequence number is meaningless cross-party (its
-    // only consumer, sync_sqs_queues, is skipped) and the peek itself
-    // hard-errors on a corrupt head message — a boot crashloop for a failure
-    // the ingest-side quarantine already handles.
-    let next_sns_sequence_num = if config.db_backed_ingest {
-        None
-    } else {
-        get_next_sns_seq_num(
-            &aws_clients.sqs_client,
-            &config.requests_queue_url,
-            config.sqs_sync_long_poll_seconds,
-        )
-        .await?
-    };
     let common_config = CommonConfig::from(config.clone());
-
-    let max_persisted_sequence_number = if config.db_backed_ingest {
-        store.max_persisted_sequence_number().await?
-    } else {
-        None
-    };
 
     // Fetch graph mutations for all modifications in the lookback window so
     // they can be exchanged with the other parties via the SyncState payload.
@@ -601,10 +499,8 @@ async fn build_sync_state(
     Ok(SyncState {
         db_len,
         modifications,
-        next_sns_sequence_num,
         common_config,
         graph_mutation_bytes,
-        max_persisted_sequence_number,
     })
 }
 
@@ -614,26 +510,6 @@ async fn get_sync_result(config: &Config, my_state: &SyncState) -> Result<SyncRe
     all_states.extend(get_others_sync_state(&server_coord_config).await?);
     let sync_result = SyncResult::new(my_state.clone(), all_states);
     Ok(sync_result)
-}
-
-/// Delete stale SQS messages in requests queue with sequence number older than the most recent
-/// sequence number seen by any MPC party.
-async fn sync_sqs_queues(
-    config: &Config,
-    sync_result: &SyncResult,
-    aws_clients: &AwsClients,
-) -> Result<()> {
-    let max_sqs_sequence_num = sync_result.max_sns_sequence_num();
-    delete_messages_until_sequence_num(
-        &aws_clients.sqs_client,
-        &config.requests_queue_url,
-        sync_result.my_state.next_sns_sequence_num,
-        max_sqs_sequence_num,
-        config.sqs_sync_long_poll_seconds,
-    )
-    .await?;
-
-    Ok(())
 }
 
 /// Build `HawkArgs` from server config.
@@ -852,8 +728,8 @@ async fn start_results_thread(
     Ok(tx)
 }
 
-/// Runs main processing loop in this thread.  Batches of requests are read
-/// from the SQS input queue, and are passed to a `HawkHandle` processer task,
+/// Runs main processing loop in this thread. Batches of requests are received
+/// from the coordinator and passed to a `HawkHandle` processor task,
 /// which distributes tasks among different threads and gRPC network sessions
 /// to execute appropriate computations via MPC.  Once a batch is processed,
 /// the results are passed to the results processing thread to be finalized
@@ -868,8 +744,7 @@ async fn run_main_server_loop(
     shutdown_handler: &Arc<ShutdownHandler>,
     hawk_actor: HawkActor,
     tx_results: Sender<(BatchTimings, ServerJobResult)>,
-    current_batch_id_atomic: Arc<AtomicU64>,
-    batch_sync_shared_state: Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
+    coordinator_receiver: CoordinatorBatchReceiver,
 ) -> Result<()> {
     // --------------------------------------------------------------------------
     // ANCHOR: Start the main loop
@@ -897,19 +772,16 @@ async fn run_main_server_loop(
     let res: Result<()> = async {
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
-        if config.db_backed_ingest {
-            spawn_db_backed_ingest_task(
-                &mut task_monitor,
-                aws_clients.sqs_client.clone(),
-                config.clone(),
-                iris_store.clone(),
-                shutdown_handler.clone(),
-            );
-        }
+        spawn_coordinator_sqs_ingest(
+            &mut task_monitor,
+            aws_clients.sqs_client.clone(),
+            config.clone(),
+            iris_store.clone(),
+            shutdown_handler.clone(),
+        );
 
         let (mut batch_stream, sem) = receive_batch_stream(
             party_id,
-            aws_clients.sqs_client.clone(),
             aws_clients.sns_client.clone(),
             aws_clients.s3_client.clone(),
             config.clone(),
@@ -922,15 +794,12 @@ async fn run_main_server_loop(
             identity_deletion_error_result_attributes.clone(),
             reset_update_error_result_attributes.clone(),
             recovery_update_error_result_attributes.clone(),
-            current_batch_id_atomic.clone(),
             iris_store.clone(),
-            batch_sync_shared_state.clone(),
+            coordinator_receiver,
         );
 
-        current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
+        let mut current_batch_id = 0;
         loop {
-            // Increment batch_id for the next batch, we start at 1, since the initial state for the batch sync is set to 0, which we consider to be invalid
-
             let now = Instant::now();
 
             let mut batch = match batch_stream.recv().await {
@@ -943,68 +812,33 @@ async fn run_main_server_loop(
                 }
                 Some(Ok(Some(batch))) => batch,
             };
-            tracing::info!("SNS message IDs: {:?}", batch.sns_message_ids);
+            current_batch_id += 1;
 
-            let batch_hash = sha256_bytes(batch.sns_message_ids.join(""));
-            let batch_valid_entries = batch.valid_entries.clone();
-            *CURRENT_BATCH_SHA
-                .lock()
-                .expect("Failed to lock CURRENT_BATCH_SHA") = batch_hash;
+            if batch.requests_order.is_empty() {
+                tracing::info!("Coordinator batch contained no executable requests");
+                sem.add_permits(1);
+                continue;
+            }
+            tracing::info!("Coordinator request IDs: {:?}", batch.ordered_request_ids);
 
-            *CURRENT_BATCH_VALID_ENTRIES
-                .lock()
-                .expect("Failed to lock CURRENT_VALID_ENTRIES") = batch_valid_entries.clone();
-
+            let batch_hash = sha256_bytes(batch.ordered_request_ids.join(""));
             tracing::info!("Current batch hash: {}", hex::encode(&batch_hash[0..4]));
-
-            // Retry batch sync entries indefinitely. The external
-            // get_batch_sync_entries() has a hardcoded 20s timeout per attempt.
-            // Under heavy batch load, cross-party skew can exceed 20s when
-            // persist_modification is blocked by the modifications table lock.
-            // Retrying instead of crashing lets us keep processing.
-            let sync_start = Instant::now();
-            let mut sync_attempts = 0u32;
-            loop {
-                if shutdown_handler.is_shutting_down() {
-                    tracing::info!("Shutdown requested during batch sync retry, exiting");
-                    return Ok(());
-                }
-                sync_attempts += 1;
-                match batch.sync_batch_entries(config).await {
-                    Ok(()) => break,
-                    Err(e) => {
-                        tracing::warn!(
-                            "Batch sync entries attempt {} failed after {:.1}s: {:?}. Retrying...",
-                            sync_attempts,
-                            sync_start.elapsed().as_secs_f64(),
-                            e
-                        );
-                    }
-                }
-            }
-            let sync_elapsed = sync_start.elapsed().as_secs_f64();
-            if sync_attempts > 1 {
-                tracing::warn!(
-                    "Batch sync entries succeeded after {} attempts ({:.1}s)",
-                    sync_attempts,
-                    sync_elapsed
-                );
-            }
-            metrics::histogram!("batch_sync_entries_duration").record(sync_elapsed);
-            metrics::histogram!("batch_sync_entries_retries").record((sync_attempts - 1) as f64);
             batch.retain_valid_entries();
 
-            // Batch receive wait (poll + sync), tracked separately from compute.
+            if batch.requests_order.is_empty() {
+                tracing::info!("Batch contained no valid executable requests");
+                sem.add_permits(1);
+                continue;
+            }
+
+            // Batch receive wait, tracked separately from compute.
             let batch_wait = now.elapsed();
 
             // start trace span - with single TraceId and single ParentTraceID
             tracing::info!(
-                "Received batch in {:.1}s ({} queries, sync {:.1}s/{} attempt{})",
+                "Received batch in {:.1}s ({} queries)",
                 batch_wait.as_secs_f64(),
                 batch.request_types.len(),
-                sync_elapsed,
-                sync_attempts,
-                if sync_attempts != 1 { "s" } else { "" },
             );
 
             metrics::histogram!("receive_batch_duration").record(batch_wait.as_secs_f64());
@@ -1023,9 +857,7 @@ async fn run_main_server_loop(
 
             task_monitor.check_tasks();
 
-            // we are done with the batch sync, so we can release the semaphore permit
-            // This will allow the next batch to be received
-            current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
+            // The batch is admitted, so the next coordinator batch may be received.
             sem.add_permits(1);
 
             // Optionally start per-batch pprof guard just before compute begins
@@ -1046,7 +878,7 @@ async fn run_main_server_loop(
                 .await
                 .map_err(|e| eyre!("HawkActor processing timeout: {:?}", e))??;
             let batch_timings = BatchTimings {
-                batch_id: current_batch_id_atomic.load(Ordering::SeqCst),
+                batch_id: current_batch_id,
                 batch_hash: hex::encode(&batch_hash[0..4]),
                 receive_ms: batch_wait.as_millis(),
                 compute_ms: pprof_start.elapsed().as_millis(),

@@ -1,112 +1,65 @@
-#![allow(clippy::needless_range_loop, unused)]
+#![allow(clippy::needless_range_loop)]
 #![recursion_limit = "256"]
 
 use ampc_anon_stats::store::postgres::AccessMode as AnonStatsAccessMode;
 use ampc_anon_stats::store::postgres::PostgresClient as AnonStatsPgClient;
 use ampc_anon_stats::AnonStatsStore;
-use ampc_server_utils::batch_sync::{
-    BatchSyncSharedState, CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRIES,
-};
 use ampc_server_utils::{
-    delete_messages_until_sequence_num, get_next_sns_seq_num, get_others_sync_state,
-    init_heartbeat_task, set_node_ready, shutdown_handler::ShutdownHandler,
-    start_coordination_server, wait_for_others_ready, wait_for_others_unready, TaskMonitor,
+    get_others_sync_state, init_heartbeat_task, set_node_ready, shutdown_handler::ShutdownHandler,
+    start_coordination_server_with_extra_routes, wait_for_others_ready, wait_for_others_unready,
+    TaskMonitor,
 };
-use aws_sdk_s3::Client as S3Client;
-use aws_sdk_secretsmanager::Client as SecretsManagerClient;
-use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
-use aws_sdk_sqs::Client;
 use clap::Parser;
-use eyre::{bail, eyre, Context, Report, Result};
-use futures::{stream::BoxStream, StreamExt};
+use eyre::{bail, eyre, Result};
+use iris_mpc::coordinator::{
+    coordinator_routes, spawn_coordinator_sqs_ingest, CoordinatorBatchReceiver,
+    COORDINATOR_PARTY_ID,
+};
 use iris_mpc::services::aws::clients::AwsClients;
 use iris_mpc::services::init::initialize_chacha_seeds;
-use iris_mpc::services::processors::batch::{receive_batch_stream, spawn_db_backed_ingest_task};
-use iris_mpc::services::processors::get_iris_shares_parse_task;
+use iris_mpc::services::processors::batch::receive_batch_stream;
 use iris_mpc::services::processors::modifications_sync::{
     send_last_modifications_to_sns, sync_modifications,
 };
-use iris_mpc::services::processors::result_message::{
-    send_error_results_to_sns, send_results_to_sns,
-};
+use iris_mpc::services::processors::result_message::send_results_to_sns;
 use iris_mpc_common::config::CommonConfig;
-use iris_mpc_common::galois_engine::degree4::GaloisShares;
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
-use iris_mpc_common::job::{GaloisSharesBothSides, RequestIndex};
 use iris_mpc_common::postgres::{AccessMode, PostgresClient};
 use iris_mpc_common::tracing::initialize_tracing;
 use iris_mpc_common::{
     config::{Config, Opt},
-    galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::{
-        aws::{SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME},
         inmemory_store::InMemoryStore,
         key_pair::SharesEncryptionKeyPairs,
-        sha256::sha256_bytes,
         smpc_request::{
-            decrypt_iris_share, get_iris_data_by_party_id, validate_iris_share,
-            CircuitBreakerRequest, IdentityDeletionRequest, IdentityMatchCheckRequest,
-            IdentityUpdateRequest, ReAuthRequest, ReceiveRequestError, SQSMessage,
-            UniquenessRequest, CIRCUIT_BREAKER_MESSAGE_TYPE, IDENTITY_DELETION_MESSAGE_TYPE,
-            REAUTH_MESSAGE_TYPE, RECOVERY_CHECK_MESSAGE_TYPE, RECOVERY_UPDATE_MESSAGE_TYPE,
-            RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+            IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RECOVERY_CHECK_MESSAGE_TYPE,
+            RECOVERY_UPDATE_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
+            UNIQUENESS_MESSAGE_TYPE,
         },
         smpc_response::{
             create_message_type_attribute_map, IdentityDeletionResult, IdentityMatchCheckResult,
             IdentityUpdateAckResult, ReAuthResult, UniquenessResult,
-            ERROR_FAILED_TO_PROCESS_IRIS_SHARES, ERROR_SKIPPED_REQUEST_PREVIOUS_NODE_BATCH,
-            SMPC_MESSAGE_TYPE_ATTRIBUTE,
         },
-        sync::{Modification, ModificationKey, SyncResult, SyncState},
+        sync::{SyncResult, SyncState},
     },
     iris_db::get_dummy_shares_for_deletion,
-    job::{BatchMetadata, BatchQuery, JobSubmissionHandle, ServerJobResult},
+    job::{JobSubmissionHandle, ServerJobResult},
 };
 use iris_mpc_gpu::server::ServerActor;
 use iris_mpc_store::loader::load_iris_db;
-use iris_mpc_store::{
-    fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, ObjectStore, S3Store,
-    S3StoredIris, Store, StoredIrisRef,
-};
-use itertools::{cloned, izip, Itertools};
-use metrics_exporter_statsd::StatsdBuilder;
-use serde::{Deserialize, Serialize};
+use iris_mpc_store::{Store, StoredIrisRef};
+use itertools::{izip, Itertools};
 use std::process::exit;
 use std::{
-    collections::HashMap,
-    fmt::Debug,
-    mem, panic,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc, Mutex,
-    },
+    panic,
+    sync::Arc,
     time::{Duration, Instant},
 };
-use tokio::sync::mpsc::Receiver;
 use tokio::{
-    sync::{mpsc, oneshot, Semaphore},
-    task::{spawn_blocking, JoinHandle},
+    sync::{mpsc, oneshot},
     time::timeout,
 };
 const RNG_SEED_INIT_DB: u64 = 42;
-const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
-const MAX_CONCURRENT_REQUESTS: usize = 32;
-
-fn decode_iris_message_shares(
-    code_share: String,
-    mask_share: String,
-) -> Result<(GaloisRingIrisCodeShare, GaloisRingIrisCodeShare)> {
-    let iris_share = GaloisRingIrisCodeShare::from_base64(&code_share)
-        .context("Failed to base64 parse iris code")?;
-    let mask_share = GaloisRingIrisCodeShare::from_base64(&mask_share)
-        .context("Failed to base64 parse iris mask")?;
-
-    Ok((iris_share, mask_share))
-}
-
-fn trim_mask(mask: GaloisRingIrisCodeShare) -> GaloisRingTrimmedMaskCodeShare {
-    mask.into()
-}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -138,29 +91,6 @@ async fn main() -> Result<()> {
 }
 
 async fn server_main(config: Config) -> Result<()> {
-    if config.db_backed_ingest && config.disable_persistence {
-        bail!(
-            "db_backed_ingest=true is incompatible with disable_persistence=true: ingested request claims would never be marked persisted and would be re-formed on every restart"
-        );
-    }
-
-    if config.db_backed_ingest && !(0..=20).contains(&config.db_ingest_sqs_wait_secs) {
-        bail!(
-            "db_ingest_sqs_wait_secs must be within SQS's accepted 0..=20 range, got {}: every receive would fail and ingest would idle with warn-only logs",
-            config.db_ingest_sqs_wait_secs
-        );
-    }
-
-    if config.db_backed_ingest && !config.enable_modifications_sync {
-        bail!(
-            "db_backed_ingest=true requires enable_modifications_sync=true: the boot-time \
-             fleet-frontier skip-ahead marks rows persisted whose EFFECTS only reach this \
-             party via the modifications roll-forward. With sync disabled, an asymmetric-commit \
-             recovery would reconcile bookkeeping without the data — silent cross-party data \
-             divergence instead of a loud wedge."
-        );
-    }
-
     let shutdown_handler = Arc::new(ShutdownHandler::new(
         config.shutdown_last_results_sync_timeout_secs,
     ));
@@ -185,23 +115,15 @@ async fn server_main(config: Config) -> Result<()> {
         PostgresClient::new(&db_config.url, schema_name.as_str(), AccessMode::ReadWrite).await?;
     let store = Store::new(&postgres_client).await?;
 
+    if config.party_id == COORDINATOR_PARTY_ID {
+        let reset = store.reset_coordinator_requests_on_startup().await?;
+        if reset > 0 {
+            tracing::warn!("Requeued {reset} interrupted coordinator request(s)");
+        }
+    }
+
     tracing::info!("Initialising AWS services");
     let aws_clients = AwsClients::new(&config.clone()).await?;
-    // Under DB-backed ingest the queue head is party-local state (see the
-    // hawk main): the peek's only consumer, the startup queue trim, is skipped,
-    // and the peek itself hard-errors on a corrupt head message.
-    let next_sns_seq_number_future = async {
-        if config.db_backed_ingest {
-            Ok(None)
-        } else {
-            get_next_sns_seq_num(
-                &aws_clients.sqs_client,
-                &config.requests_queue_url,
-                config.sqs_sync_long_poll_seconds,
-            )
-            .await
-        }
-    };
 
     let shares_encryption_key_pair = match SharesEncryptionKeyPairs::from_storage(
         aws_clients.secrets_manager_client.clone(),
@@ -283,9 +205,6 @@ async fn server_main(config: Config) -> Result<()> {
 
     tracing::info!("Preparing task monitor");
     let mut background_tasks = TaskMonitor::new();
-    let current_batch_id_atomic = Arc::new(AtomicU64::new(0));
-    let batch_sync_shared_state =
-        Arc::new(tokio::sync::Mutex::new(BatchSyncSharedState::default()));
 
     // --------------------------------------------------------------------------
     // ANCHOR: Starting Healthcheck, Readiness and Sync server
@@ -295,14 +214,8 @@ async fn server_main(config: Config) -> Result<()> {
     let my_state = SyncState {
         db_len: store_len as u64,
         modifications: store.last_modifications(max_modification_lookback).await?,
-        next_sns_sequence_num: next_sns_seq_number_future.await?,
         common_config: CommonConfig::from(config.clone()),
         graph_mutation_bytes: vec![],
-        max_persisted_sequence_number: if config.db_backed_ingest {
-            store.max_persisted_sequence_number().await?
-        } else {
-            None
-        },
     };
 
     tracing::info!("Sync state: {:?}", my_state);
@@ -310,12 +223,15 @@ async fn server_main(config: Config) -> Result<()> {
     let server_coord_config = config.server_coordination.clone().unwrap_or_else(|| {
         panic!("Server coordination config must be provided for healthcheck server");
     });
-    let (is_ready_flag, verified_peers, uuid) = start_coordination_server(
+    let coordinator_api =
+        (config.party_id == COORDINATOR_PARTY_ID).then(|| coordinator_routes(store.clone()));
+    let (is_ready_flag, verified_peers, uuid) = start_coordination_server_with_extra_routes(
         &server_coord_config,
         &mut background_tasks,
         &shutdown_handler,
         &my_state,
-        Some(batch_sync_shared_state.clone()),
+        None,
+        coordinator_api,
     )
     .await;
 
@@ -335,12 +251,6 @@ async fn server_main(config: Config) -> Result<()> {
         .ok_or(eyre!("Missing database config"))?
         .load_parallelism;
 
-    let s3_load_parallelism = config.load_chunks_parallelism;
-    let s3_chunks_bucket_name = config.db_chunks_bucket_name.clone();
-    let s3_chunks_folder_name = config.db_chunks_folder_name.clone();
-    let s3_load_max_retries = config.load_chunks_max_retries;
-    let s3_load_initial_backoff_ms = config.load_chunks_initial_backoff_ms;
-
     // --------------------------------------------------------------------------
     // ANCHOR: Syncing latest node state
     // --------------------------------------------------------------------------
@@ -352,35 +262,6 @@ async fn server_main(config: Config) -> Result<()> {
 
     // check if common part of the config is the same across all nodes
     sync_result.check_common_config()?;
-
-    // Fleet persisted frontier for boot recovery (computed here because
-    // sync_modifications below consumes sync_result). See the hawk main for
-    // the full skip-ahead rationale + the boot-snapshot SAFETY DEPENDENCY.
-    let fleet_frontier = if config.db_backed_ingest {
-        sync_result.max_persisted_sequence_number()
-    } else {
-        None
-    };
-
-    if config.db_backed_ingest {
-        // Skip the startup queue trim: queues are transient buffers with
-        // party-dependent ingest offsets; cross-party queue-position comparison
-        // is meaningless and the trim could delete not-yet-ingested messages.
-        tracing::info!("db-backed ingest enabled; skipping startup SQS queue sync/trim");
-    } else {
-        // sync the queues
-        let max_sqs_sequence_num = sync_result.max_sns_sequence_num();
-        delete_messages_until_sequence_num(
-            &aws_clients.sqs_client,
-            &config.requests_queue_url,
-            my_state.next_sns_sequence_num,
-            max_sqs_sequence_num,
-            config.sqs_sync_long_poll_seconds,
-        )
-        .await?;
-    }
-
-    let dummy_shares_for_deletions = get_dummy_shares_for_deletion(party_id);
 
     // Handle modifications sync
     if config.enable_modifications_sync {
@@ -394,7 +275,7 @@ async fn server_main(config: Config) -> Result<()> {
         .await?;
     }
 
-    if config.enable_modifications_replay {
+    if config.enable_modifications_replay && config.party_id == COORDINATOR_PARTY_ID {
         // replay last `max_modification_lookback` modifications to SNS
         if let Err(e) = send_last_modifications_to_sns(
             &store,
@@ -405,42 +286,6 @@ async fn server_main(config: Config) -> Result<()> {
         .await
         {
             tracing::error!("Failed to replay last modifications: {:?}", e);
-        }
-    }
-
-    if config.db_backed_ingest {
-        // Two-step boot recovery — mirror of the hawk main (see its comments
-        // for the full C2/asymmetric-commit rationale).
-        // Step 1: skip-ahead to the fleet's persisted frontier (rows completed
-        // on a peer; effects arrived via the modifications sync above).
-        if let Some(frontier) = &fleet_frontier {
-            let marked = store
-                .mark_ingested_requests_persisted_up_to(frontier)
-                .await
-                .context("failed to skip-ahead ingested rows to fleet frontier")?;
-            if marked > 0 {
-                tracing::warn!(
-                    "Skip-ahead: marked {} ingested row(s) persisted up to fleet frontier {} (completed on a peer; effects arrived via modifications sync)",
-                    marked,
-                    frontier
-                );
-                metrics::counter!("db_ingest_frontier_skip_ahead").increment(marked);
-            }
-        }
-        // Step 2: release remaining unpersisted claims (symmetric-crash case;
-        // deterministic re-formation picks them up identically everywhere).
-        let released = store
-            .reset_unpersisted_ingested_claims()
-            .await
-            .context("failed to reset unpersisted ingested claims on startup")?;
-        if released > 0 {
-            tracing::warn!(
-                "Released {} unpersisted ingested request claim(s) from a crashed/restarted batch; they will be re-formed",
-                released
-            );
-            metrics::counter!("db_ingest_claims_released").increment(released);
-        } else {
-            tracing::info!("No unpersisted ingested request claims to release on startup");
         }
     }
 
@@ -540,20 +385,26 @@ async fn server_main(config: Config) -> Result<()> {
 
     background_tasks.check_tasks();
 
+    let coordinator_receiver = CoordinatorBatchReceiver::connect(
+        &config,
+        store.clone(),
+        shutdown_handler.get_network_cancellation_token(),
+    )
+    .await?;
+
     // Start thread that will be responsible for communicating back the results
     let (tx, mut rx) = mpsc::channel::<ServerJobResult>(32); // TODO: pick some buffer value
     let sns_client_bg = aws_clients.sns_client.clone();
-    let s3_client_bg = aws_clients.s3_client.clone();
     let config_bg = config.clone();
     let store_bg = store.clone();
     let shutdown_handler_bg = Arc::clone(&shutdown_handler);
     let _result_sender_abort = background_tasks.spawn(async move {
         while let Some(ServerJobResult {
             merged_results,
-            sqs_sequence_numbers,
             request_ids,
             request_types,
             metadata,
+            coordinator_request_ids,
             matches,
             matches_with_skip_persistence,
             skip_persistence,
@@ -572,6 +423,7 @@ async fn server_main(config: Config) -> Result<()> {
             left_iris_requests,
             right_iris_requests,
             deleted_ids,
+            deletion_coordinator_request_ids,
             matched_batch_request_ids,
             successful_reauths,
             reauth_target_indices,
@@ -579,6 +431,7 @@ async fn server_main(config: Config) -> Result<()> {
             identity_update_indices,
             identity_update_request_ids,
             identity_update_request_types,
+            identity_update_coordinator_request_ids,
             identity_update_shares,
             mut modifications,
             actor_data: _,
@@ -586,6 +439,7 @@ async fn server_main(config: Config) -> Result<()> {
         }) = rx.recv().await
         {
             let dummy_deletion_shares = get_dummy_shares_for_deletion(party_id);
+            let mut coordinator_results = Vec::new();
 
             // returned serial_ids are 0 indexed, but we want them to be 1 indexed
             let uniqueness_results = merged_results
@@ -679,6 +533,10 @@ async fn server_main(config: Config) -> Result<()> {
                     );
                     let result_string = serde_json::to_string(&result_event)
                         .expect("failed to serialize reauth result");
+                    coordinator_results.push((
+                        coordinator_request_ids[i].clone(),
+                        result_string.clone(),
+                    ));
                     modifications
                         .get_mut(&RequestId(request_ids[i].clone()))
                         .unwrap()
@@ -733,7 +591,6 @@ async fn server_main(config: Config) -> Result<()> {
                 .filter(|(_, request_type)| *request_type == REAUTH_MESSAGE_TYPE)
                 .map(|(i, _)| {
                     let reauth_id = request_ids[i].clone();
-                    let or_rule_used = reauth_or_rule_used.get(&reauth_id).unwrap();
                     let serial_id = reauth_target_indices.get(&reauth_id).unwrap() + 1;
                     let success = successful_reauths[i];
                     let result_event = ReAuthResult::new(
@@ -746,6 +603,10 @@ async fn server_main(config: Config) -> Result<()> {
                     );
                     let result_string = serde_json::to_string(&result_event)
                         .expect("failed to serialize reauth result");
+                    coordinator_results.push((
+                        coordinator_request_ids[i].clone(),
+                        result_string.clone(),
+                    ));
                     let persisted = success && !skip_persistence.get(i).copied().unwrap_or(false);
                     modifications
                         .get_mut(&RequestSerialId(serial_id))
@@ -758,11 +619,16 @@ async fn server_main(config: Config) -> Result<()> {
             // handling identity deletion results
             let identity_deletion_results = deleted_ids
                 .iter()
-                .map(|&idx| {
+                .enumerate()
+                .map(|(i, &idx)| {
                     let serial_id = idx + 1;
                     let result_event = IdentityDeletionResult::new(party_id, serial_id, true);
                     let result_string = serde_json::to_string(&result_event)
                         .expect("failed to serialize identity deletion result");
+                    coordinator_results.push((
+                        deletion_coordinator_request_ids[i].clone(),
+                        result_string.clone(),
+                    ));
                     modifications
                         .get_mut(&RequestSerialId(serial_id))
                         .unwrap()
@@ -799,6 +665,10 @@ async fn server_main(config: Config) -> Result<()> {
                     );
                     let result_string = serde_json::to_string(&result_event)
                         .expect("failed to serialize reset check result");
+                    coordinator_results.push((
+                        coordinator_request_ids[i].clone(),
+                        result_string.clone(),
+                    ));
 
                     // Mark the reset check modification as completed.
                     // Note that reset_check is only a query and does not persist anything into the database.
@@ -825,6 +695,10 @@ async fn server_main(config: Config) -> Result<()> {
                         IdentityUpdateAckResult::new(request_id.clone(), party_id, serial_id);
                     let result_string = serde_json::to_string(&result_event)
                         .expect("failed to serialize identity update result");
+                    coordinator_results.push((
+                        identity_update_coordinator_request_ids[i].clone(),
+                        result_string.clone(),
+                    ));
                     modifications
                         .get_mut(&RequestSerialId(serial_id))
                         .unwrap()
@@ -937,24 +811,10 @@ async fn server_main(config: Config) -> Result<()> {
                 }
             }
 
-            if config_bg.db_backed_ingest {
-                let marked = store_bg
-                    .mark_ingested_requests_persisted_tx(&mut tx, &sqs_sequence_numbers)
+            if party_id == iris_mpc::coordinator::COORDINATOR_PARTY_ID {
+                store_bg
+                    .complete_coordinator_requests_tx(&mut tx, &coordinator_results)
                     .await?;
-                if marked != sqs_sequence_numbers.len() as u64 {
-                    tracing::error!(
-                        "db-backed ingest: batch carried {} claimed sequence number(s) but marked {} persisted; claimed rows may be re-formed",
-                        sqs_sequence_numbers.len(),
-                        marked
-                    );
-                    metrics::counter!("db_ingest_persist_mark_mismatch").increment(1);
-                } else {
-                    tracing::info!(
-                        "db-backed ingest: marked {} ingested request(s) persisted",
-                        marked
-                    );
-                }
-                metrics::counter!("db_ingest_rows_persisted").increment(marked);
             }
 
             tx.commit().await?;
@@ -1122,21 +982,18 @@ async fn server_main(config: Config) -> Result<()> {
         // - The outer Vec is the dimension of the Galois Ring (2):
         //   - A decomposition of each iris bit into two u8 limbs.
 
-        if config.db_backed_ingest {
-            spawn_db_backed_ingest_task(
-                &mut background_tasks,
-                aws_clients.sqs_client.clone(),
-                config.clone(),
-                store.clone(),
-                shutdown_handler.clone(),
-            );
-        }
+        spawn_coordinator_sqs_ingest(
+            &mut background_tasks,
+            aws_clients.sqs_client.clone(),
+            config.clone(),
+            store.clone(),
+            shutdown_handler.clone(),
+        );
 
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
         let (mut batch_stream, sem) = receive_batch_stream(
             party_id,
-            aws_clients.sqs_client.clone(),
             aws_clients.sns_client.clone(),
             aws_clients.s3_client.clone(),
             config.clone(),
@@ -1149,12 +1006,9 @@ async fn server_main(config: Config) -> Result<()> {
             identity_deletion_error_result_attribute,
             reset_update_error_result_attribute,
             recovery_update_error_result_attribute,
-            current_batch_id_atomic.clone(),
             store.clone(),
-            batch_sync_shared_state.clone(),
+            coordinator_receiver,
         );
-        current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
-
         loop {
             let now = Instant::now();
 
@@ -1169,27 +1023,17 @@ async fn server_main(config: Config) -> Result<()> {
                 Some(Ok(Some(batch))) => batch,
             };
 
-            let batch_hash = sha256_bytes(batch.sns_message_ids.join(""));
-            let batch_valid_entries = batch.valid_entries.clone();
-            *CURRENT_BATCH_SHA
-                .lock()
-                .expect("Failed to lock CURRENT_BATCH_SHA") = batch_hash;
-            *CURRENT_BATCH_VALID_ENTRIES
-                .lock()
-                .expect("Failed to lock CURRENT_BATCH_VALID_ENTRIES") = batch_valid_entries;
+            if batch.requests_order.is_empty() {
+                tracing::info!("Coordinator batch contained no executable requests");
+                sem.add_permits(1);
+                continue;
+            }
 
-            loop {
-                if shutdown_handler.is_shutting_down() {
-                    tracing::info!("Shutdown requested during batch sync retry, exiting");
-                    return Ok(());
-                }
-
-                match batch.sync_batch_entries(&config).await {
-                    Ok(()) => break,
-                    Err(e) => {
-                        tracing::warn!("Batch sync entries failed: {:?}. Retrying...", e);
-                    }
-                }
+            batch.retain_valid_entries();
+            if batch.requests_order.is_empty() {
+                tracing::info!("Coordinator discarded every request before execution");
+                sem.add_permits(1);
+                continue;
             }
 
             // start trace span - with single TraceId and single ParentTraceID
@@ -1210,7 +1054,6 @@ async fn server_main(config: Config) -> Result<()> {
             }
 
             background_tasks.check_tasks();
-            current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
             sem.add_permits(1);
 
             let result_future = handle.submit_batch_query(batch);
@@ -1251,12 +1094,4 @@ async fn server_main(config: Config) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn is_enabled(request_type: &str, config: &Config) -> bool {
-    match request_type {
-        RECOVERY_CHECK_MESSAGE_TYPE => config.enable_recovery,
-        RESET_CHECK_MESSAGE_TYPE => config.enable_reset,
-        _ => true,
-    }
 }

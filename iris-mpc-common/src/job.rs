@@ -1,14 +1,14 @@
-use crate::config::Config;
 use crate::galois_engine::degree4::GaloisShares;
 use crate::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     helpers::sync::{Modification, ModificationKey},
     ROTATIONS,
 };
-use ampc_server_utils::batch_sync::get_own_batch_sync_entries;
-use ampc_server_utils::{get_batch_sync_entries, BatchSyncEntriesResult};
-use eyre::{eyre, Result};
-use std::{collections::HashMap, future::Future};
+use eyre::Result;
+use std::{
+    collections::{HashMap, HashSet},
+    future::Future,
+};
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct IrisQueryBatchEntries {
@@ -46,6 +46,8 @@ pub struct BatchQuery {
     // Metadata for each request - just needs to be sent back for each requestID
     // This is used for logging and tracing purposes
     pub metadata: Vec<BatchMetadata>,
+    // Coordinator submission ids, parallel to request_ids/request_types.
+    pub coordinator_request_ids: Vec<String>,
 
     // Iris queries from the request for storage
     pub left_iris_requests: IrisQueryBatchEntries,
@@ -87,23 +89,20 @@ pub struct BatchQuery {
     // Only deletion specific fields
     pub deletion_requests_indices: Vec<u32>, // 0-indexed indices of entries to be deleted
     pub deletion_requests_metadata: Vec<BatchMetadata>,
+    pub deletion_coordinator_request_ids: Vec<String>,
 
     // Keeping track of updates & deletions for sync mechanism. Mapping: ModificationKey -> Modification
     // Used for roll forward in the case of needing to re-run mutations
     pub modifications: HashMap<ModificationKey, Modification>,
 
-    // SNS message ids to assert identical batch processing across parties
-    pub sns_message_ids: Vec<String>,
-
-    // Sequence numbers of the ingested_requests rows claimed for this batch
-    // (db_backed_ingest only; empty otherwise). Batch-level metadata, NOT a
-    // per-request parallel array — used to mark rows persisted in the results tx.
-    pub sqs_sequence_numbers: Vec<String>,
+    // Coordinator request ids in execution order, across all request groups.
+    pub ordered_request_ids: Vec<String>,
 
     // Identity Update specific fields (reset_update and recovery_update)
     pub identity_update_indices: Vec<u32>,
     pub identity_update_request_ids: Vec<String>,
     pub identity_update_request_types: Vec<String>,
+    pub identity_update_coordinator_request_ids: Vec<String>,
     pub identity_update_shares: Vec<GaloisSharesBothSides>,
 
     // Boolean value for mirror attack detection enabled
@@ -115,17 +114,19 @@ impl BatchQuery {
     /// Must be followed by a call to `push_matching_request_shares` to set the shares.
     pub fn push_matching_request(
         &mut self,
-        sns_message_id: String,
+        coordinator_request_id: String,
         request_id: String,
         request_type: &str,
         metadata: BatchMetadata,
         or_rule_indices: Vec<u32>,
         skip_persistence: bool,
     ) {
-        self.sns_message_ids.push(sns_message_id);
+        self.ordered_request_ids
+            .push(coordinator_request_id.clone());
         self.requests_order
             .push(RequestIndex::UniqueReauthResetCheck(self.request_ids.len()));
 
+        self.coordinator_request_ids.push(coordinator_request_id);
         self.request_ids.push(request_id);
         self.request_types.push(request_type.to_string());
         self.metadata.push(metadata);
@@ -136,14 +137,17 @@ impl BatchQuery {
     /// Add a Deletion request to the batch.
     pub fn push_deletion_request(
         &mut self,
-        sns_message_id: String,
+        coordinator_request_id: String,
         deletion_0_index: u32,
         metadata: BatchMetadata,
     ) {
-        self.sns_message_ids.push(sns_message_id);
+        self.ordered_request_ids
+            .push(coordinator_request_id.clone());
         self.requests_order
             .push(RequestIndex::Deletion(self.deletion_requests_indices.len()));
 
+        self.deletion_coordinator_request_ids
+            .push(coordinator_request_id);
         self.deletion_requests_indices.push(deletion_0_index);
         self.deletion_requests_metadata.push(metadata);
     }
@@ -151,17 +155,20 @@ impl BatchQuery {
     /// Add an Identity Update (reset_update or recovery_update) request to the batch.
     pub fn push_identity_update_request(
         &mut self,
-        sns_message_id: String,
+        coordinator_request_id: String,
         request_id: String,
         request_type: &str,
         identity_update_0_index: u32,
         shares: GaloisSharesBothSides,
     ) {
-        self.sns_message_ids.push(sns_message_id);
+        self.ordered_request_ids
+            .push(coordinator_request_id.clone());
         self.requests_order.push(RequestIndex::IdentityUpdate(
             self.identity_update_request_ids.len(),
         ));
 
+        self.identity_update_coordinator_request_ids
+            .push(coordinator_request_id);
         self.identity_update_request_ids.push(request_id);
         self.identity_update_request_types
             .push(request_type.to_string());
@@ -221,50 +228,6 @@ impl BatchQuery {
         self.valid_entries.push(valid);
     }
 
-    pub async fn sync_batch_entries(&mut self, config: &Config) -> Result<(), eyre::Error> {
-        let own_sync_state = get_own_batch_sync_entries().await;
-        let server_coord_config = config.server_coordination.as_ref().unwrap();
-        let batch_sync_entries =
-            get_batch_sync_entries(server_coord_config, Some(own_sync_state.clone())).await?;
-
-        let batch_sync_entries_result =
-            BatchSyncEntriesResult::new(own_sync_state.clone(), batch_sync_entries);
-
-        if !batch_sync_entries_result.sha_matches() {
-            tracing::error!(
-                "Batch sync entries SHA mismatch: own batch SHAs: {}, all SHAs: {}",
-                batch_sync_entries_result.own_sha_pretty(),
-                batch_sync_entries_result.all_shas_pretty()
-            );
-            return Err(eyre!("Batch sync entries SHA mismatch"));
-        }
-        tracing::info!(
-            "Batch sync entries SHA match: {}",
-            batch_sync_entries_result.all_shas_pretty()
-        );
-
-        let valid_entries = batch_sync_entries_result.valid_entries();
-        tracing::info!(
-            "Batch sync entries valid entries: {}",
-            valid_entries.clone().into_iter().filter(|b| *b).count()
-        );
-
-        if !valid_entries.eq(&own_sync_state.clone().valid_entries) {
-            tracing::warn!(
-                "Valid entries from sync does not equal own valid entries: (own) {}, (sync) {}",
-                own_sync_state
-                    .valid_entries
-                    .clone()
-                    .into_iter()
-                    .filter(|b| *b)
-                    .count(),
-                valid_entries.clone().into_iter().filter(|b| *b).count()
-            );
-            self.valid_entries = valid_entries.clone();
-        }
-        Ok(())
-    }
-
     pub fn retain_valid_entries(&mut self) {
         use RequestIndex::*;
         let valid = self.valid_entries.clone();
@@ -314,6 +277,7 @@ impl BatchQuery {
         filter_valid!(self.request_ids);
         filter_valid!(self.request_types);
         filter_valid!(self.metadata);
+        filter_valid!(self.coordinator_request_ids);
         filter_valid!(self.or_rule_indices);
         filter_valid!(self.skip_persistence);
 
@@ -336,6 +300,92 @@ impl BatchQuery {
         filter_valid_with_rotations!(self.right_mirrored_iris_interpolated_requests.code);
         filter_valid_with_rotations!(self.right_mirrored_iris_interpolated_requests.mask);
     }
+
+    /// Applies the coordinator's union of party-local rejections before
+    /// execution. Matching requests are invalidated so their dummy shares stay
+    /// shape-compatible until normal validity filtering; other request groups
+    /// can be removed immediately.
+    pub fn reject_coordinator_requests(&mut self, rejected_request_ids: &[String]) {
+        if rejected_request_ids.is_empty() {
+            return;
+        }
+        let rejected = rejected_request_ids.iter().collect::<HashSet<_>>();
+
+        assert_eq!(self.coordinator_request_ids.len(), self.valid_entries.len());
+        for (request_id, valid) in self
+            .coordinator_request_ids
+            .iter()
+            .zip(&mut self.valid_entries)
+        {
+            if rejected.contains(request_id) {
+                *valid = false;
+            }
+        }
+
+        let deletion_keep = self
+            .deletion_coordinator_request_ids
+            .iter()
+            .map(|request_id| !rejected.contains(request_id))
+            .collect::<Vec<_>>();
+        let update_keep = self
+            .identity_update_coordinator_request_ids
+            .iter()
+            .map(|request_id| !rejected.contains(request_id))
+            .collect::<Vec<_>>();
+        let deletion_index_map = retained_index_map(&deletion_keep);
+        let update_index_map = retained_index_map(&update_keep);
+
+        self.requests_order = self
+            .requests_order
+            .iter()
+            .filter_map(|request| match request {
+                RequestIndex::UniqueReauthResetCheck(index) => {
+                    Some(RequestIndex::UniqueReauthResetCheck(*index))
+                }
+                RequestIndex::Deletion(index) => deletion_index_map
+                    .get(index)
+                    .copied()
+                    .map(RequestIndex::Deletion),
+                RequestIndex::IdentityUpdate(index) => update_index_map
+                    .get(index)
+                    .copied()
+                    .map(RequestIndex::IdentityUpdate),
+            })
+            .collect();
+
+        retain_by_mask(&mut self.deletion_requests_indices, &deletion_keep);
+        retain_by_mask(&mut self.deletion_requests_metadata, &deletion_keep);
+        retain_by_mask(&mut self.deletion_coordinator_request_ids, &deletion_keep);
+        retain_by_mask(&mut self.identity_update_indices, &update_keep);
+        retain_by_mask(&mut self.identity_update_request_ids, &update_keep);
+        retain_by_mask(&mut self.identity_update_request_types, &update_keep);
+        retain_by_mask(
+            &mut self.identity_update_coordinator_request_ids,
+            &update_keep,
+        );
+        retain_by_mask(&mut self.identity_update_shares, &update_keep);
+        self.ordered_request_ids
+            .retain(|request_id| !rejected.contains(request_id));
+    }
+}
+
+fn retained_index_map(keep: &[bool]) -> HashMap<usize, usize> {
+    keep.iter()
+        .enumerate()
+        .filter(|(_, keep)| **keep)
+        .enumerate()
+        .map(|(new_index, (old_index, _))| (old_index, new_index))
+        .collect()
+}
+
+fn retain_by_mask<T>(values: &mut Vec<T>, keep: &[bool]) {
+    assert_eq!(values.len(), keep.len());
+    let mut index = 0;
+    values.retain(|_| {
+        let retain = keep[index];
+        index += 1;
+        retain
+    });
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -364,16 +414,14 @@ pub enum RequestIndex {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ServerJobResult<A = ()> {
     pub merged_results: Vec<u32>,
-    // Sequence numbers of the ingested_requests rows claimed for this batch
-    // (db_backed_ingest only; empty otherwise). Batch-level metadata, NOT a
-    // per-request parallel array.
-    pub sqs_sequence_numbers: Vec<String>,
     // As defined in the BatchQuery - should be ordered in the same way
     pub request_ids: Vec<String>,
     // As defined in the BatchQuery
     pub request_types: Vec<String>,
     // As defined in the BatchQuery
     pub metadata: Vec<BatchMetadata>,
+    // Coordinator submission ids parallel to matching request vectors.
+    pub coordinator_request_ids: Vec<String>,
     /// Misleadingly named: stores `!UniqueInsert` (i.e. `false` only for a fresh uniqueness
     /// insertion). Reauth rows are `true` even though they overwrite the target iris.
     /// Only meaningful as "did the query match" when filtered to uniqueness rows.
@@ -416,6 +464,7 @@ pub struct ServerJobResult<A = ()> {
     pub right_iris_requests: IrisQueryBatchEntries,
     // Deleted ids, this can be ignored on the first iterations of HNSW
     pub deleted_ids: Vec<u32>,
+    pub deletion_coordinator_request_ids: Vec<String>,
     // For each query, a set of serial ids that were matched *within* the same batch
     pub matched_batch_request_ids: Vec<Vec<String>>,
     // Reauth results, this can be ignored on the first iterations of HNSW
@@ -431,6 +480,7 @@ pub struct ServerJobResult<A = ()> {
     pub identity_update_indices: Vec<u32>,
     pub identity_update_request_ids: Vec<String>,
     pub identity_update_request_types: Vec<String>,
+    pub identity_update_coordinator_request_ids: Vec<String>,
     pub identity_update_shares: Vec<GaloisSharesBothSides>,
     // Boolean array to indicate if the query is a full face mirror attack attempt.
     pub full_face_mirror_attack_detected: Vec<bool>,
@@ -544,8 +594,83 @@ mod tests {
 
         // The original SNS message IDs are kept.
         assert_eq!(
-            batch_query.sns_message_ids,
+            batch_query.ordered_request_ids,
             vec!["deletion_0", "uniq_0", "uniq_1", "uniq_2", "deletion_1"]
+        );
+    }
+
+    #[test]
+    fn coordinator_rejection_discards_every_request_group() {
+        let code = GaloisRingIrisCodeShare {
+            id: 0,
+            coefs: [0; IRIS_CODE_LENGTH],
+        };
+        let mask = GaloisRingTrimmedMaskCodeShare {
+            id: 0,
+            coefs: [0; MASK_CODE_LENGTH],
+        };
+        let matching_shares = GaloisShares {
+            code: code.clone(),
+            mask: mask.clone(),
+            code_rotated: vec![code.clone(); ROTATIONS],
+            mask_rotated: vec![mask.clone(); ROTATIONS],
+            code_interpolated: vec![code.clone(); ROTATIONS],
+            mask_interpolated: vec![mask.clone(); ROTATIONS],
+            code_mirrored: vec![code.clone(); ROTATIONS],
+            mask_mirrored: vec![mask.clone(); ROTATIONS],
+        };
+        let update_shares = GaloisSharesBothSides {
+            code_left: code.clone(),
+            mask_left: mask.clone(),
+            code_right: code,
+            mask_right: mask,
+        };
+
+        let mut batch = BatchQuery::default();
+        batch.push_matching_request(
+            "matching".to_string(),
+            "request".to_string(),
+            UNIQUENESS_MESSAGE_TYPE,
+            BatchMetadata::default(),
+            vec![],
+            false,
+        );
+        batch.push_matching_request_shares(matching_shares.clone(), matching_shares, true);
+        batch.push_deletion_request("deletion-0".to_string(), 0, BatchMetadata::default());
+        batch.push_deletion_request("deletion-1".to_string(), 1, BatchMetadata::default());
+        batch.push_identity_update_request(
+            "update-0".to_string(),
+            "request-0".to_string(),
+            "reset_update",
+            0,
+            update_shares.clone(),
+        );
+        batch.push_identity_update_request(
+            "update-1".to_string(),
+            "request-1".to_string(),
+            "reset_update",
+            1,
+            update_shares,
+        );
+
+        batch.reject_coordinator_requests(&[
+            "matching".to_string(),
+            "deletion-0".to_string(),
+            "update-1".to_string(),
+        ]);
+
+        assert_eq!(batch.valid_entries, [false]);
+        assert_eq!(batch.deletion_coordinator_request_ids, ["deletion-1"]);
+        assert_eq!(batch.identity_update_coordinator_request_ids, ["update-0"]);
+        assert_eq!(
+            batch.ordered_request_ids,
+            ["deletion-1".to_string(), "update-0".to_string()]
+        );
+
+        batch.retain_valid_entries();
+        assert_eq!(
+            batch.requests_order,
+            [RequestIndex::Deletion(0), RequestIndex::IdentityUpdate(0)]
         );
     }
 }

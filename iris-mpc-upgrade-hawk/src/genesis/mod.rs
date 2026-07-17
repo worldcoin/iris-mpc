@@ -3,7 +3,7 @@ mod graph_checkpoint;
 use ampc_server_utils::{
     get_others_sync_state, init_heartbeat_task, set_node_ready, shutdown_handler::ShutdownHandler,
     start_coordination_server_with_extra_routes, wait_for_others_ready, wait_for_others_unready,
-    BatchSyncSharedState, TaskMonitor,
+    TaskMonitor,
 };
 use aws_config::retry::RetryConfig;
 use aws_sdk_rds::Client as RDSClient;
@@ -347,9 +347,6 @@ async fn exec_setup(
 
     let (graph_checkpoints, hashes) = get_most_recent_checkpoints(&graph_store_arc).await?;
 
-    let batch_sync_shared_state =
-        Arc::new(tokio::sync::Mutex::new(BatchSyncSharedState::default()));
-
     let server_coord_config = &config
         .server_coordination
         .clone()
@@ -366,7 +363,7 @@ async fn exec_setup(
         &mut task_monitor_bg,
         &shutdown_handler,
         &my_state,
-        Some(batch_sync_shared_state),
+        None,
         Some(extra_routes),
     )
     .await;

@@ -796,21 +796,21 @@ impl ServerActor {
         }
 
         ///////////////////////////////////////////////////////////////////
-        // SYNC BATCH CONTENTS AND FILTER OUT INVALID ENTRIES
+        // VERIFY THE EXECUTION BATCH OVER NCCL AND FILTER INVALID ENTRIES
         ///////////////////////////////////////////////////////////////////
         let tmp_now = Instant::now();
-        tracing::info!("Syncing batch entries");
+        tracing::info!("Verifying GPU execution batch");
 
-        // Compute hash of the SNS message ids concatenated + currently used scan side
+        // Compute a hash of the ordered request ids and current scan side.
         let batch_hash = sha256_bytes(format!(
             "{}{}",
-            batch.sns_message_ids.join(""),
+            batch.ordered_request_ids.join(""),
             self.full_scan_side
         ));
         tracing::info!("Current batch hash: {}", hex::encode(&batch_hash[0..4]));
 
         let valid_entries =
-            self.sync_batch_entries(&batch.valid_entries, self.max_batch_size, &batch_hash)?;
+            self.verify_execution_batch(&batch.valid_entries, self.max_batch_size, &batch_hash)?;
         let valid_entry_idxs = valid_entries.iter().positions(|&x| x).collect::<Vec<_>>();
         if valid_entry_idxs.len() != batch_size {
             tracing::warn!(
@@ -1678,10 +1678,10 @@ impl ServerActor {
         // Instead of sending to return_channel, we'll return this at the end
         let result = ServerJobResult {
             merged_results,
-            sqs_sequence_numbers: batch.sqs_sequence_numbers.clone(),
             request_ids: batch.request_ids,
             request_types: batch.request_types,
             metadata: batch.metadata,
+            coordinator_request_ids: batch.coordinator_request_ids,
             matches,
             matches_with_skip_persistence,
             skip_persistence: batch.skip_persistence,
@@ -1700,6 +1700,7 @@ impl ServerActor {
             left_iris_requests: batch.left_iris_requests,
             right_iris_requests: batch.right_iris_requests,
             deleted_ids: batch.deletion_requests_indices,
+            deletion_coordinator_request_ids: batch.deletion_coordinator_request_ids,
             matched_batch_request_ids,
             successful_reauths,
             reauth_target_indices: batch.reauth_target_indices,
@@ -1707,6 +1708,7 @@ impl ServerActor {
             identity_update_indices: batch.identity_update_indices,
             identity_update_request_ids: batch.identity_update_request_ids,
             identity_update_request_types: batch.identity_update_request_types,
+            identity_update_coordinator_request_ids: batch.identity_update_coordinator_request_ids,
             identity_update_shares: batch.identity_update_shares,
             modifications: batch.modifications,
             actor_data: (),
@@ -2728,18 +2730,21 @@ impl ServerActor {
 
     fn non_mpc_updates_only(batch: PreprocessedBatchQuery) -> ServerJobResult {
         ServerJobResult {
-            sqs_sequence_numbers: batch.sqs_sequence_numbers,
             deleted_ids: batch.deletion_requests_indices,
+            deletion_coordinator_request_ids: batch.deletion_coordinator_request_ids,
             identity_update_indices: batch.identity_update_indices,
             identity_update_request_ids: batch.identity_update_request_ids,
             identity_update_request_types: batch.identity_update_request_types,
+            identity_update_coordinator_request_ids: batch.identity_update_coordinator_request_ids,
             identity_update_shares: batch.identity_update_shares,
             modifications: batch.modifications,
             ..Default::default()
         }
     }
 
-    fn sync_batch_entries(
+    /// NCCL execution-layer consistency guard. Request ordering and admission
+    /// have already been committed by the coordinator protocol.
+    fn verify_execution_batch(
         &mut self,
         valid_entries: &[bool],
         max_batch_size: usize,

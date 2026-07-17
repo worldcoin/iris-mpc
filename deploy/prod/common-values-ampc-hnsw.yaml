@@ -17,7 +17,6 @@ env:
         name: application
   SMPC__MAX_DB_SIZE: "20000000"
   SMPC__MAX_BATCH_SIZE: "8"
-  SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS: "30"
   SMPC__PROCESSING_TIMEOUT_SECS: "1240"
   SMPC__HAWK_STREAM_PARALLELISM: "32"
   SMPC__DISABLE_PERSISTENCE: "false"
@@ -29,6 +28,7 @@ env:
   SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST: "false"
   SMPC__AWS__REGION: "eu-north-1"
   SMPC__SERVICE_PORTS: '["4000","4001","4002"]'
+  SMPC__COORDINATOR_PORTS: '["4200","4201","4202"]'
   SMPC__SERVER_COORDINATION__IMAGE_NAME: $(IMAGE_NAME)
   SMPC__SERVER_COORDINATION__STARTUP_SYNC_TIMEOUT_SECS: "3600"
   SMPC__SERVER_COORDINATION__HEARTBEAT_INITIAL_RETRIES: "65"
@@ -113,6 +113,15 @@ ports:
     protocol: TCP
   - containerPort: 4102
     name: tcp-4102
+    protocol: TCP
+  - containerPort: 4200
+    name: tcp-4200
+    protocol: TCP
+  - containerPort: 4201
+    name: tcp-4201
+    protocol: TCP
+  - containerPort: 4202
+    name: tcp-4202
     protocol: TCP
 
 livenessProbe:

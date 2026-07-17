@@ -1537,10 +1537,10 @@ impl HawkResult {
 
         ServerJobResult {
             merged_results,
-            sqs_sequence_numbers: batch.sqs_sequence_numbers,
             request_ids: batch.request_ids,
             request_types: batch.request_types,
             metadata: batch.metadata,
+            coordinator_request_ids: batch.coordinator_request_ids,
             // Negated — see job.rs.
             matches: unique_insert.iter().map(|b| !b).collect_vec(),
             matches_with_skip_persistence: unique_no_match.iter().map(|b| !b).collect_vec(),
@@ -1565,6 +1565,7 @@ impl HawkResult {
             left_iris_requests: batch.left_iris_requests,
             right_iris_requests: batch.right_iris_requests,
             deleted_ids: batch.deletion_requests_indices,
+            deletion_coordinator_request_ids: batch.deletion_coordinator_request_ids,
             matched_batch_request_ids,
 
             successful_reauths,
@@ -1574,6 +1575,7 @@ impl HawkResult {
             identity_update_indices: batch.identity_update_indices,
             identity_update_request_ids: batch.identity_update_request_ids,
             identity_update_request_types: batch.identity_update_request_types,
+            identity_update_coordinator_request_ids: batch.identity_update_coordinator_request_ids,
             identity_update_shares: batch.identity_update_shares,
 
             modifications: batch.modifications,

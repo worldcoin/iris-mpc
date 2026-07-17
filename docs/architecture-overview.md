@@ -58,7 +58,8 @@ The server process that bridges AWS infrastructure with the MPC engine.
 
 | Module | Path | Role |
 |--------|------|------|
-| Batch processor | `src/services/processors/batch.rs` | Collects SQS messages into `BatchQuery` |
+| Coordinator | `src/coordinator.rs` | Party-0 FIFO ingress, API, and prepare/commit protocol |
+| Batch processor | `src/services/processors/batch.rs` | Converts coordinated envelopes into `BatchQuery` |
 | Job processor | `src/services/processors/job.rs` | Converts `ServerJobResult` to SNS responses, persists |
 | Modifications sync | `src/services/processors/modifications_sync.rs` | Rollforward/rollback of modifications |
 
@@ -74,16 +75,22 @@ Binaries and operational scripts.
 ## Data Flow (Simplified)
 
 ```
-Service Client                    Server                         MPC Engine
-─────────────                    ──────                         ──────────
-S3 upload shares  ──────►
-SNS publish request ────►  SQS receive ──► BatchQuery ────►  HawkActor.handle_job()
-                           collect batch     build batch        ├─ apply_deletions
-                                                                ├─ do_search (Normal)
-                                                                ├─ do_search (Mirror)
-                                                                ├─ handle_mutations
-                                                                └─ HawkResult
-                          SNS publish  ◄── ServerJobResult ◄── HawkResult.job_result()
-SQS receive response ◄──
-correlate with request
+Client                       Party 0 coordinator                 MPC parties
+──────                       ───────────────────                 ───────────
+POST request ──────────────► durable FIFO in Postgres
+legacy SQS (optional) ─────►
+                              Prepare over dedicated mTLS ─────► build BatchQuery
+                              ◄──────────── Prepared/digest
+                              Commit ──────────────────────────► execute GPU or HNSW job
+GET result ◄─────────────── completed/rejected/failed result
+legacy SNS (optional) ◄──── party-0 publish only
 ```
+
+The coordinator API is mounted on party 0's existing coordination HTTP server:
+
+- `POST /coordinator/requests` accepts `message_type`, `payload`, and an optional idempotency `request_id`.
+- `GET /coordinator/requests/{request_id}` returns `pending`, `preparing`, `processing`, `completed`, `rejected`, or `failed`.
+
+The request inbox and result are stored in Postgres rather than a local WAL, because server disks may be ephemeral. Inter-party coordinator traffic uses a separate connection from the execution layer while reusing the existing TCP/mTLS networking stack.
+
+During prepare, each party reports requests whose shares could not be fetched, parsed, or decrypted. Party 0 atomically persists the union as `rejected`, and the commit instructs every party to discard those requests before GPU or HNSW execution.

@@ -28,22 +28,16 @@ pub use s3_importer::{
     fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
 };
 use sqlx::{PgPool, Postgres, Row, Transaction};
-use std::ops::DerefMut;
-
-pub const SNS_SEQUENCE_NUMBER_WIDTH: usize = 40;
+use std::{collections::BTreeSet, ops::DerefMut};
 
 #[derive(sqlx::FromRow, Debug, Clone, PartialEq, Eq)]
-pub struct IngestedRequest {
-    pub sequence_number: String,
+pub struct CoordinatorRequest {
+    pub sequence_number: i64,
+    pub request_id: String,
     pub message_body: String,
-}
-
-pub fn normalize_sns_sequence_number(sequence_number: &str) -> Result<String> {
-    let parsed = sequence_number.parse::<u128>()?;
-    Ok(format!(
-        "{parsed:0width$}",
-        width = SNS_SEQUENCE_NUMBER_WIDTH
-    ))
+    pub status: String,
+    pub result_body: Option<String>,
+    pub error_message: Option<String>,
 }
 
 /// The unified type that can hold either DB or S3 variants.
@@ -197,6 +191,289 @@ impl Store {
             .fetch_one(&self.pool)
             .await?;
         Ok(count.0 as usize)
+    }
+
+    /// Inserts a request into the coordinator's durable FIFO inbox.
+    ///
+    /// Returns `true` when the request was inserted and `false` when the
+    /// request id already existed (idempotent API/SQS redelivery).
+    pub async fn insert_coordinator_request(
+        &self,
+        request_id: &str,
+        message_body: &str,
+    ) -> Result<bool> {
+        let mut tx = self.tx().await?;
+        lock_coordinator_queue(&mut tx).await?;
+        let result = sqlx::query(
+            r#"
+            INSERT INTO coordinator_requests (request_id, message_body)
+            VALUES ($1, $2)
+            ON CONFLICT (request_id) DO NOTHING
+            "#,
+        )
+        .bind(request_id)
+        .bind(message_body)
+        .execute(tx.deref_mut())
+        .await?;
+        tx.commit().await?;
+
+        Ok(result.rows_affected() == 1)
+    }
+
+    pub async fn get_coordinator_request(
+        &self,
+        request_id: &str,
+    ) -> Result<Option<CoordinatorRequest>> {
+        Ok(sqlx::query_as::<_, CoordinatorRequest>(
+            r#"
+            SELECT
+                sequence_number,
+                request_id,
+                message_body,
+                status,
+                result_body,
+                error_message
+            FROM coordinator_requests
+            WHERE request_id = $1
+            "#,
+        )
+        .bind(request_id)
+        .fetch_optional(&self.pool)
+        .await?)
+    }
+
+    /// Atomically claims the oldest pending coordinator requests.
+    pub async fn claim_coordinator_requests(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<CoordinatorRequest>> {
+        let mut tx = self.tx().await?;
+        lock_coordinator_queue(&mut tx).await?;
+        let mut rows = sqlx::query_as::<_, CoordinatorRequest>(
+            r#"
+            WITH selected AS (
+                SELECT sequence_number
+                FROM coordinator_requests
+                WHERE status = 'pending'
+                ORDER BY sequence_number
+                LIMIT $1
+                FOR UPDATE SKIP LOCKED
+            )
+            UPDATE coordinator_requests AS requests
+            SET status = 'preparing',
+                updated_at = now(),
+                error_message = NULL
+            FROM selected
+            WHERE requests.sequence_number = selected.sequence_number
+            RETURNING
+                requests.sequence_number,
+                requests.request_id,
+                requests.message_body,
+                requests.status,
+                requests.result_body,
+                requests.error_message
+            "#,
+        )
+        .bind(i64::try_from(limit)?)
+        .fetch_all(tx.deref_mut())
+        .await?;
+        tx.commit().await?;
+
+        rows.sort_by_key(|row| row.sequence_number);
+        Ok(rows)
+    }
+
+    /// Atomically records the coordinator's decision for a prepared batch.
+    /// Rejected requests become terminal while every other request advances
+    /// to processing.
+    pub async fn commit_coordinator_batch(
+        &self,
+        request_ids: &[String],
+        rejected_request_ids: &[String],
+        rejection_message: &str,
+    ) -> Result<u64> {
+        let request_id_set = request_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        if request_id_set.len() != request_ids.len() {
+            return Err(eyre!("coordinator batch contains duplicate request ids"));
+        }
+
+        let rejected_request_id_set = rejected_request_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        if rejected_request_id_set.len() != rejected_request_ids.len() {
+            return Err(eyre!(
+                "coordinator batch contains duplicate rejected request ids"
+            ));
+        }
+        if !rejected_request_id_set.is_subset(&request_id_set) {
+            return Err(eyre!(
+                "coordinator batch contains a rejected request outside the batch"
+            ));
+        }
+
+        let accepted_request_ids = request_ids
+            .iter()
+            .filter(|request_id| !rejected_request_id_set.contains(request_id.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut tx = self.tx().await?;
+
+        if !rejected_request_ids.is_empty() {
+            let result = sqlx::query(
+                r#"
+                UPDATE coordinator_requests
+                SET status = 'rejected',
+                    result_body = NULL,
+                    error_message = $2,
+                    updated_at = now()
+                WHERE request_id = ANY($1::text[])
+                  AND status = 'preparing'
+                "#,
+            )
+            .bind(rejected_request_ids)
+            .bind(rejection_message)
+            .execute(tx.deref_mut())
+            .await?;
+            let expected = u64::try_from(rejected_request_ids.len())?;
+            if result.rows_affected() != expected {
+                let updated = result.rows_affected();
+                tx.rollback().await?;
+                return Err(eyre!(
+                    "rejected {updated} coordinator requests, expected {expected}"
+                ));
+            }
+        }
+
+        if !accepted_request_ids.is_empty() {
+            let result = sqlx::query(
+                r#"
+                UPDATE coordinator_requests
+                SET status = 'processing',
+                    error_message = NULL,
+                    updated_at = now()
+                WHERE request_id = ANY($1::text[])
+                  AND status = 'preparing'
+                "#,
+            )
+            .bind(&accepted_request_ids)
+            .execute(tx.deref_mut())
+            .await?;
+            let expected = u64::try_from(accepted_request_ids.len())?;
+            if result.rows_affected() != expected {
+                let updated = result.rows_affected();
+                tx.rollback().await?;
+                return Err(eyre!(
+                    "marked {updated} coordinator requests processing, expected {expected}"
+                ));
+            }
+        }
+
+        tx.commit().await?;
+        Ok(u64::try_from(accepted_request_ids.len())?)
+    }
+
+    pub async fn complete_coordinator_requests_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        results: &[(String, String)],
+    ) -> Result<u64> {
+        if results.is_empty() {
+            return Ok(0);
+        }
+
+        let request_ids = results
+            .iter()
+            .map(|(request_id, _)| request_id.clone())
+            .collect::<Vec<_>>();
+        let result_bodies = results
+            .iter()
+            .map(|(_, result_body)| result_body.clone())
+            .collect::<Vec<_>>();
+
+        let result = sqlx::query(
+            r#"
+            UPDATE coordinator_requests AS requests
+            SET status = 'completed',
+                result_body = data.result_body,
+                error_message = NULL,
+                updated_at = now()
+            FROM (
+                SELECT
+                    unnest($1::text[]) AS request_id,
+                    unnest($2::text[]) AS result_body
+            ) AS data
+            WHERE requests.request_id = data.request_id
+              AND requests.status = 'processing'
+            "#,
+        )
+        .bind(&request_ids)
+        .bind(&result_bodies)
+        .execute(tx.deref_mut())
+        .await?;
+
+        let completed = result.rows_affected();
+        if completed != results.len() as u64 {
+            return Err(eyre!(
+                "completed {completed} coordinator rows for {} results",
+                results.len()
+            ));
+        }
+        Ok(completed)
+    }
+
+    pub async fn complete_coordinator_requests(&self, results: &[(String, String)]) -> Result<u64> {
+        let mut tx = self.tx().await?;
+        let updated = self
+            .complete_coordinator_requests_tx(&mut tx, results)
+            .await?;
+        tx.commit().await?;
+        Ok(updated)
+    }
+
+    pub async fn fail_coordinator_request(
+        &self,
+        request_id: &str,
+        error_message: &str,
+        result_body: Option<&str>,
+    ) -> Result<u64> {
+        let result = sqlx::query(
+            r#"
+            UPDATE coordinator_requests
+            SET status = 'failed',
+                result_body = $2,
+                error_message = $3,
+                updated_at = now()
+            WHERE request_id = $1
+              AND status IN ('pending', 'preparing', 'processing')
+            "#,
+        )
+        .bind(request_id)
+        .bind(result_body)
+        .bind(error_message)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    /// Requeues batches interrupted before their result transaction committed.
+    pub async fn reset_coordinator_requests_on_startup(&self) -> Result<u64> {
+        let result = sqlx::query(
+            r#"
+            UPDATE coordinator_requests
+            SET status = 'pending',
+                updated_at = now()
+            WHERE status IN ('preparing', 'processing')
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.rows_affected())
     }
 
     /// Stream irises in order.
@@ -500,193 +777,6 @@ WHERE id = $1;
             .fetch_one(&self.pool)
             .await?;
         Ok(id.0.unwrap_or(0) as usize)
-    }
-
-    /// Inserts an SQS message into `ingested_requests`, keyed by its SNS FIFO
-    /// sequence number. Idempotent via `ON CONFLICT DO NOTHING`.
-    ///
-    /// Returns `Ok(true)` if a new row was inserted, `Ok(false)` if a row with
-    /// this sequence number already existed (duplicate delivery / re-receive —
-    /// safe to delete the SQS message either way), and `Err` on DB failure
-    /// (message must NOT be deleted from SQS; it will be re-received).
-    pub async fn insert_ingested_request(
-        &self,
-        sequence_number: &str,
-        message_body: &str,
-    ) -> Result<bool> {
-        let normalized_sequence_number = normalize_sns_sequence_number(sequence_number)?;
-        let result = sqlx::query(
-            r#"
-            INSERT INTO ingested_requests (sequence_number, message_body)
-            VALUES ($1, $2)
-            ON CONFLICT (sequence_number) DO NOTHING
-            "#,
-        )
-        .bind(normalized_sequence_number)
-        .bind(message_body)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(result.rows_affected() == 1)
-    }
-
-    // Pending = unclaimed AND unpersisted. The persisted_at guard narrows a
-    // dual-consumer window (rolling-deploy pod overlap): a new pod's boot
-    // recovery can release a claim that an old pod's in-flight results tx then
-    // persist-marks — without the guard such a row would be re-formed and
-    // re-processed despite its results being committed. The claim CAS below
-    // carries the same guard so the loser of the residual race (persist
-    // landing between this SELECT and the claim) fails loud instead of
-    // claiming an already-persisted row.
-    pub async fn count_pending_ingested_requests(&self) -> Result<i64> {
-        let count: (i64,) = sqlx::query_as(
-            r#"
-            SELECT COUNT(*)
-            FROM ingested_requests
-            WHERE consumed_batch_id IS NULL
-              AND persisted_at IS NULL
-            "#,
-        )
-        .fetch_one(&self.pool)
-        .await?;
-        Ok(count.0)
-    }
-
-    pub async fn pending_ingested_requests(&self, limit: u32) -> Result<Vec<IngestedRequest>> {
-        let rows = sqlx::query_as::<_, IngestedRequest>(
-            r#"
-            SELECT sequence_number, message_body
-            FROM ingested_requests
-            WHERE consumed_batch_id IS NULL
-              AND persisted_at IS NULL
-            ORDER BY sequence_number
-            LIMIT $1
-            "#,
-        )
-        .bind(limit as i64)
-        .fetch_all(&self.pool)
-        .await?;
-        Ok(rows)
-    }
-
-    pub async fn mark_ingested_requests_consumed(
-        &self,
-        sequence_numbers: &[String],
-        batch_id: u64,
-    ) -> Result<()> {
-        if sequence_numbers.is_empty() {
-            return Ok(());
-        }
-
-        let result = sqlx::query(
-            r#"
-            UPDATE ingested_requests
-            SET consumed_batch_id = $1
-            WHERE sequence_number = ANY($2::text[])
-              AND consumed_batch_id IS NULL
-              AND persisted_at IS NULL
-            "#,
-        )
-        .bind(batch_id as i64)
-        .bind(sequence_numbers)
-        .execute(&self.pool)
-        .await?;
-
-        if result.rows_affected() != sequence_numbers.len() as u64 {
-            return Err(eyre!(
-                "marked {} ingested request rows consumed, expected {}",
-                result.rows_affected(),
-                sequence_numbers.len()
-            ));
-        }
-
-        Ok(())
-    }
-
-    /// Marks the given claimed rows as persisted, on the caller's transaction,
-    /// so the mark is atomic with the batch's result commit. Keyed by sequence
-    /// number (the PK) rather than batch id: batch ids restart per boot and the
-    /// shared batch-id atomic advances under prefetch, so they cannot reliably
-    /// correlate a claim with its persist. Returns rows affected.
-    pub async fn mark_ingested_requests_persisted_tx(
-        &self,
-        tx: &mut Transaction<'_, Postgres>,
-        sequence_numbers: &[String],
-    ) -> Result<u64> {
-        if sequence_numbers.is_empty() {
-            return Ok(0);
-        }
-
-        let result = sqlx::query(
-            r#"
-            UPDATE ingested_requests
-            SET persisted_at = now()
-            WHERE sequence_number = ANY($1::text[])
-              AND persisted_at IS NULL
-            "#,
-        )
-        .bind(sequence_numbers)
-        .execute(tx.deref_mut())
-        .await?;
-
-        Ok(result.rows_affected())
-    }
-
-    /// This party's persisted frontier: the highest sequence number with a
-    /// persist mark. The persisted set is a contiguous prefix of the sequence
-    /// order (formation consumes lowest-first in FIFO ingest order), so this
-    /// single value fully describes local progress. Exchanged via SyncState.
-    pub async fn max_persisted_sequence_number(&self) -> Result<Option<String>> {
-        let row: (Option<String>,) = sqlx::query_as(
-            r#"
-            SELECT MAX(sequence_number)
-            FROM ingested_requests
-            WHERE persisted_at IS NOT NULL
-            "#,
-        )
-        .fetch_one(&self.pool)
-        .await?;
-        Ok(row.0)
-    }
-
-    /// Startup skip-ahead (DB analog of the SQS queue trim): marks every
-    /// unpersisted row at or below the fleet's persisted frontier as persisted,
-    /// regardless of claim state. A row at or below the frontier was part of a
-    /// batch that completed on at least one peer — its effects reach this party
-    /// via the modifications roll-forward, and re-forming it locally would
-    /// diverge the batches (peers will never co-form it). Returns rows affected.
-    pub async fn mark_ingested_requests_persisted_up_to(&self, frontier: &str) -> Result<u64> {
-        let result = sqlx::query(
-            r#"
-            UPDATE ingested_requests
-            SET persisted_at = now()
-            WHERE sequence_number <= $1
-              AND persisted_at IS NULL
-            "#,
-        )
-        .bind(frontier)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(result.rows_affected())
-    }
-
-    /// Releases claims that were never persisted (crash/restart recovery). Batch ids
-    /// restart at 1 on boot, so a claim without a persist mark can never be trusted.
-    /// Returns rows affected.
-    pub async fn reset_unpersisted_ingested_claims(&self) -> Result<u64> {
-        let result = sqlx::query(
-            r#"
-            UPDATE ingested_requests
-            SET consumed_batch_id = NULL
-            WHERE consumed_batch_id IS NOT NULL
-              AND persisted_at IS NULL
-            "#,
-        )
-        .execute(&self.pool)
-        .await?;
-
-        Ok(result.rows_affected())
     }
 
     pub async fn insert_modification(
@@ -1003,6 +1093,17 @@ WHERE id = $1;
     }
 }
 
+async fn lock_coordinator_queue(tx: &mut Transaction<'_, Postgres>) -> Result<()> {
+    // Serialize enqueue and claim transactions so concurrent API/SQS writes
+    // cannot become visible to the coordinator out of FIFO order.
+    sqlx::query(
+        "SELECT pg_advisory_xact_lock(hashtextextended(current_schema() || ':coordinator', 0))",
+    )
+    .execute(tx.deref_mut())
+    .await?;
+    Ok(())
+}
+
 fn cast_u8_to_u16(s: &[u8]) -> &[u16] {
     if s.is_empty() {
         &[] // A literal empty &[u8] may be unaligned.
@@ -1109,6 +1210,124 @@ pub mod tests {
     }
 
     #[tokio::test]
+    async fn test_coordinator_request_state_machine() -> Result<()> {
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+
+        assert!(store.insert_coordinator_request("a", "body-a").await?);
+        assert!(!store.insert_coordinator_request("a", "duplicate").await?);
+        assert!(store.insert_coordinator_request("b", "body-b").await?);
+
+        let claimed = store.claim_coordinator_requests(10).await?;
+        assert_eq!(
+            claimed
+                .iter()
+                .map(|request| request.request_id.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+        let ids = claimed
+            .iter()
+            .map(|request| request.request_id.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            store
+                .commit_coordinator_batch(&ids, &[], "request rejected")
+                .await?,
+            2
+        );
+
+        let results = vec![
+            ("a".to_string(), r#"{"result":"a"}"#.to_string()),
+            ("b".to_string(), r#"{"result":"b"}"#.to_string()),
+        ];
+        assert_eq!(store.complete_coordinator_requests(&results).await?, 2);
+        assert_eq!(
+            store.get_coordinator_request("a").await?.unwrap().status,
+            "completed"
+        );
+        assert_eq!(
+            store
+                .fail_coordinator_request("a", "too late", None)
+                .await?,
+            0
+        );
+
+        assert!(store.insert_coordinator_request("c", "body-c").await?);
+        assert!(store.insert_coordinator_request("d", "body-d").await?);
+        let claimed = store.claim_coordinator_requests(10).await?;
+        let ids = claimed
+            .iter()
+            .map(|request| request.request_id.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["c", "d"]);
+        let rejected = vec!["c".to_string()];
+        assert_eq!(
+            store
+                .commit_coordinator_batch(&ids, &rejected, "request rejected")
+                .await?,
+            1
+        );
+        assert_eq!(store.reset_coordinator_requests_on_startup().await?, 1);
+        assert_eq!(
+            store.get_coordinator_request("c").await?.unwrap().status,
+            "rejected"
+        );
+        assert_eq!(
+            store.get_coordinator_request("d").await?.unwrap().status,
+            "pending"
+        );
+
+        cleanup(&postgres_client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_coordinator_batch_decision_is_atomic() -> Result<()> {
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        let store = Store::new(&postgres_client).await?;
+
+        assert!(store.insert_coordinator_request("a", "body-a").await?);
+        assert!(store.insert_coordinator_request("b", "body-b").await?);
+        let ids = store
+            .claim_coordinator_requests(10)
+            .await?
+            .into_iter()
+            .map(|request| request.request_id)
+            .collect::<Vec<_>>();
+
+        // Simulate one row leaving `preparing` before the batch decision. The
+        // rejected update for `a` must roll back when advancing `b` fails.
+        assert_eq!(
+            store
+                .fail_coordinator_request("b", "external failure", None)
+                .await?,
+            1
+        );
+        assert!(store
+            .commit_coordinator_batch(&ids, &["a".to_string()], "request rejected")
+            .await
+            .is_err());
+        assert_eq!(
+            store.get_coordinator_request("a").await?.unwrap().status,
+            "preparing"
+        );
+        assert_eq!(
+            store.get_coordinator_request("b").await?.unwrap().status,
+            "failed"
+        );
+
+        cleanup(&postgres_client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_empty_insert() -> Result<()> {
         let schema_name = temporary_name();
         let postgres_client =
@@ -1119,198 +1338,6 @@ pub mod tests {
         let mut tx = store.tx().await?;
         store.insert_irises(&mut tx, &[]).await?;
         tx.commit().await?;
-
-        cleanup(&postgres_client, &schema_name).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_ingested_requests_idempotency() -> Result<()> {
-        let schema_name = temporary_name();
-        let postgres_client =
-            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
-                .await?;
-        let store = Store::new(&postgres_client).await?;
-
-        let sequence_number = "42";
-        let normalized_sequence_number = normalize_sns_sequence_number(sequence_number)?;
-
-        assert!(
-            store
-                .insert_ingested_request(sequence_number, "message body")
-                .await?
-        );
-        assert!(
-            !store
-                .insert_ingested_request(sequence_number, "message body")
-                .await?
-        );
-
-        assert_eq!(store.count_pending_ingested_requests().await?, 1);
-
-        let pending = store.pending_ingested_requests(10).await?;
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].sequence_number, normalized_sequence_number);
-        assert_eq!(pending[0].message_body, "message body");
-
-        let sequence_numbers = vec![pending[0].sequence_number.clone()];
-        store
-            .mark_ingested_requests_consumed(&sequence_numbers, 7)
-            .await?;
-
-        assert_eq!(store.count_pending_ingested_requests().await?, 0);
-
-        cleanup(&postgres_client, &schema_name).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_ingested_requests_two_phase_claim_recovery() -> Result<()> {
-        let schema_name = temporary_name();
-        let postgres_client =
-            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
-                .await?;
-        let store = Store::new(&postgres_client).await?;
-
-        assert!(
-            store
-                .insert_ingested_request("42", "first message body")
-                .await?
-        );
-        assert!(
-            store
-                .insert_ingested_request("43", "second message body")
-                .await?
-        );
-
-        let pending = store.pending_ingested_requests(10).await?;
-        assert_eq!(pending.len(), 2);
-        let sequence_numbers = pending
-            .iter()
-            .map(|request| request.sequence_number.clone())
-            .collect::<Vec<_>>();
-
-        store
-            .mark_ingested_requests_consumed(&sequence_numbers, 7)
-            .await?;
-        assert_eq!(store.count_pending_ingested_requests().await?, 0);
-
-        assert_eq!(store.reset_unpersisted_ingested_claims().await?, 2);
-        assert_eq!(store.count_pending_ingested_requests().await?, 2);
-
-        store
-            .mark_ingested_requests_consumed(&sequence_numbers, 1)
-            .await?;
-        assert_eq!(store.count_pending_ingested_requests().await?, 0);
-
-        let mut tx = store.tx().await?;
-        let marked = store
-            .mark_ingested_requests_persisted_tx(&mut tx, &sequence_numbers)
-            .await?;
-        assert_eq!(marked, 2);
-        tx.commit().await?;
-
-        assert_eq!(store.reset_unpersisted_ingested_claims().await?, 0);
-        assert_eq!(store.count_pending_ingested_requests().await?, 0);
-
-        cleanup(&postgres_client, &schema_name).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_ingested_requests_double_claim_fails_loud() -> Result<()> {
-        let schema_name = temporary_name();
-        let postgres_client =
-            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
-                .await?;
-        let store = Store::new(&postgres_client).await?;
-
-        for seq in ["20", "21", "22"] {
-            assert!(store.insert_ingested_request(seq, "body").await?);
-        }
-        let all = store.pending_ingested_requests(10).await?;
-        let seqs: Vec<String> = all.iter().map(|r| r.sequence_number.clone()).collect();
-
-        // First claimer takes rows 20,21.
-        store
-            .mark_ingested_requests_consumed(&seqs[0..2], 1)
-            .await?;
-
-        // Second claimer (dual-consumer race: e.g. rolling-deploy pod overlap)
-        // tries an overlapping set {21,22}: the claim is compare-and-swap
-        // (WHERE consumed_batch_id IS NULL), so it must fail loud, not
-        // silently steal row 21 from the in-flight batch.
-        let overlap = vec![seqs[1].clone(), seqs[2].clone()];
-        assert!(store
-            .mark_ingested_requests_consumed(&overlap, 2)
-            .await
-            .is_err());
-
-        // Pinned side effect of the failed partial UPDATE: the non-overlapping
-        // row 22 WAS claimed by the losing call and now sits claimed with no
-        // batch to persist it — boot recovery is what releases it.
-        assert_eq!(store.count_pending_ingested_requests().await?, 0);
-        assert_eq!(store.reset_unpersisted_ingested_claims().await?, 3);
-        assert_eq!(store.count_pending_ingested_requests().await?, 3);
-
-        cleanup(&postgres_client, &schema_name).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_ingested_requests_frontier_skip_ahead() -> Result<()> {
-        let schema_name = temporary_name();
-        let postgres_client =
-            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
-                .await?;
-        let store = Store::new(&postgres_client).await?;
-
-        // The C2 state: rows 10,11 persisted somewhere in the fleet (this
-        // party's commit was the one that failed: claimed, unpersisted), row 12
-        // claimed above the fleet frontier (nobody persisted), row 13 pending.
-        for seq in ["10", "11", "12", "13"] {
-            assert!(store.insert_ingested_request(seq, "body").await?);
-        }
-        let all = store.pending_ingested_requests(10).await?;
-        let seqs: Vec<String> = all.iter().map(|r| r.sequence_number.clone()).collect();
-        store
-            .mark_ingested_requests_consumed(&seqs[0..3], 1)
-            .await?;
-
-        assert_eq!(store.max_persisted_sequence_number().await?, None);
-
-        // Fleet frontier says a peer persisted through row 11.
-        let frontier = normalize_sns_sequence_number("11")?;
-        assert_eq!(
-            store
-                .mark_ingested_requests_persisted_up_to(&frontier)
-                .await?,
-            2
-        );
-        // Skip-ahead is idempotent.
-        assert_eq!(
-            store
-                .mark_ingested_requests_persisted_up_to(&frontier)
-                .await?,
-            0
-        );
-        assert_eq!(
-            store.max_persisted_sequence_number().await?.as_deref(),
-            Some(frontier.as_str())
-        );
-
-        // Release: only row 12 (claimed above the frontier) goes back to
-        // pending; rows 10,11 stay persisted forever.
-        assert_eq!(store.reset_unpersisted_ingested_claims().await?, 1);
-        let pending = store.pending_ingested_requests(10).await?;
-        let pending_seqs: Vec<&str> = pending.iter().map(|r| r.sequence_number.as_str()).collect();
-        assert_eq!(
-            pending_seqs,
-            vec![
-                normalize_sns_sequence_number("12")?.as_str(),
-                normalize_sns_sequence_number("13")?.as_str()
-            ]
-        );
 
         cleanup(&postgres_client, &schema_name).await?;
         Ok(())

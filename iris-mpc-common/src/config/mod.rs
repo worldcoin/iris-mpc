@@ -93,13 +93,6 @@ pub struct Config {
     #[serde(default = "default_max_batch_size")]
     pub max_batch_size: usize,
 
-    // used for testing to recreate batch sequence
-    #[serde(
-        default = "default_predefined_batch_sizes",
-        deserialize_with = "deserialize_usize_vec"
-    )]
-    pub predefined_batch_sizes: Vec<usize>,
-
     #[serde(default)]
     pub fake_db_size: usize,
 
@@ -124,6 +117,17 @@ pub struct Config {
     // should be set to the same as service_ports if not explicitly set.
     #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
     pub service_outbound_ports: Vec<String>,
+
+    /// Dedicated ports for coordinator-to-party control traffic.
+    #[serde(
+        default = "default_coordinator_ports",
+        deserialize_with = "deserialize_yaml_json_string"
+    )]
+    pub coordinator_ports: Vec<String>,
+
+    /// Dial ports for coordinator traffic. Defaults to `coordinator_ports`.
+    #[serde(default, deserialize_with = "deserialize_yaml_json_string")]
+    pub coordinator_outbound_ports: Vec<String>,
 
     #[serde(default = "default_shutdown_last_results_sync_timeout_secs")]
     pub shutdown_last_results_sync_timeout_secs: u64,
@@ -294,35 +298,14 @@ pub struct Config {
     #[serde(default = "default_pprof_per_batch_enabled")]
     pub enable_pprof_per_batch: bool,
 
-    #[serde(default = "default_sqs_sync_long_poll_seconds")]
-    pub sqs_sync_long_poll_seconds: i32,
-
     #[serde(default = "default_full_scan_side")]
     pub full_scan_side: Eye,
 
     #[serde(default = "default_full_scan_side_switching_enabled")]
     pub full_scan_side_switching_enabled: bool,
 
-    #[serde(default = "default_batch_polling_timeout_secs")]
-    pub batch_polling_timeout_secs: i32,
-
     #[serde(default = "default_sqs_long_poll_wait_time")]
     pub sqs_long_poll_wait_time: usize,
-
-    #[serde(default = "default_batch_sync_polling_timeout_secs")]
-    pub batch_sync_polling_timeout_secs: u64,
-
-    #[serde(default = "default_db_backed_ingest")]
-    pub db_backed_ingest: bool,
-
-    #[serde(default = "default_db_ingest_sqs_wait_secs")]
-    pub db_ingest_sqs_wait_secs: i32,
-
-    #[serde(default = "default_db_ingest_backoff_initial_ms")]
-    pub db_ingest_backoff_initial_ms: u64,
-
-    #[serde(default = "default_db_ingest_backoff_max_ms")]
-    pub db_ingest_backoff_max_ms: u64,
 
     #[serde(default = "default_separate_tokio_cores_per_node")]
     pub separate_tokio_cores_per_node: Option<usize>,
@@ -354,15 +337,7 @@ fn default_processing_timeout_secs() -> u64 {
 }
 
 fn default_max_batch_size() -> usize {
-    if cfg!(feature = "explicit-sns-batching") {
-        1
-    } else {
-        64
-    }
-}
-
-fn default_predefined_batch_sizes() -> Vec<usize> {
-    Vec::new()
+    64
 }
 
 fn default_shutdown_last_results_sync_timeout_secs() -> u64 {
@@ -459,6 +434,10 @@ fn default_service_ports() -> Vec<String> {
     vec!["4000".to_string(); 3]
 }
 
+fn default_coordinator_ports() -> Vec<String> {
+    vec!["4200".to_string(), "4201".to_string(), "4202".to_string()]
+}
+
 fn default_disable_persistence() -> bool {
     // temporarily defaulting to true while iris-mpc-hawk changes over to using
     // a graph checkpoint + write ahead log
@@ -473,36 +452,8 @@ fn default_max_modifications_lookback() -> usize {
     (default_max_deletions_per_batch() + default_max_batch_size()) * 2
 }
 
-fn default_sqs_sync_long_poll_seconds() -> i32 {
-    10
-}
-
-fn default_batch_polling_timeout_secs() -> i32 {
-    1
-}
-
 fn default_sqs_long_poll_wait_time() -> usize {
     10
-}
-
-fn default_batch_sync_polling_timeout_secs() -> u64 {
-    10
-}
-
-fn default_db_backed_ingest() -> bool {
-    false
-}
-
-fn default_db_ingest_sqs_wait_secs() -> i32 {
-    10
-}
-
-fn default_db_ingest_backoff_initial_ms() -> u64 {
-    200
-}
-
-fn default_db_ingest_backoff_max_ms() -> u64 {
-    5_000
 }
 
 fn default_full_scan_side_switching_enabled() -> bool {
@@ -568,6 +519,10 @@ impl Config {
         // copy service_ports to service_outbound_ports
         if config.service_outbound_ports.is_empty() {
             config.service_outbound_ports = config.service_ports.clone();
+        }
+
+        if config.coordinator_outbound_ports.is_empty() {
+            config.coordinator_outbound_ports = config.coordinator_ports.clone();
         }
 
         if let Some(service_coordination) = &mut config.server_coordination {
@@ -675,14 +630,6 @@ impl fmt::Debug for DbConfig {
     }
 }
 
-fn deserialize_usize_vec<'de, D>(deserializer: D) -> Result<Vec<usize>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value: String = Deserialize::deserialize(deserializer)?;
-    serde_json::from_str(&value).map_err(serde::de::Error::custom)
-}
-
 /// Env-provided values arrive as strings, so a JSON-encoded array (`"[320,32,1]"`)
 /// must be parsed explicitly; a native sequence (file configs) is taken as-is.
 fn deserialize_opt_usize_vec<'de, D>(deserializer: D) -> Result<Option<Vec<usize>>, D::Error>
@@ -709,7 +656,6 @@ where
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CommonConfig {
     environment: String,
-    results_topic_arn: String,
     processing_timeout_secs: u64,
     public_key_base_url: String,
     shares_bucket_name: String,
@@ -717,8 +663,6 @@ pub struct CommonConfig {
     init_db_size: usize,
     max_db_size: usize,
     max_batch_size: usize,
-    #[serde(default)]
-    predefined_batch_sizes: Vec<usize>,
     fake_db_size: usize,
     return_partial_results: bool,
     disable_persistence: bool,
@@ -752,16 +696,11 @@ pub struct CommonConfig {
     max_modifications_lookback: usize,
     enable_modifications_sync: bool,
     enable_modifications_replay: bool,
-    sqs_sync_long_poll_seconds: i32,
     schema_name: String,
     hnsw_schema_name_suffix: String,
     gpu_schema_name_suffix: String,
     full_scan_side: Eye,
     full_scan_side_switching_enabled: bool,
-    batch_polling_timeout_secs: i32,
-    sqs_long_poll_wait_time: usize,
-    batch_sync_polling_timeout_secs: u64,
-    db_backed_ingest: bool,
 }
 
 impl CommonConfig {
@@ -778,8 +717,8 @@ impl From<Config> for CommonConfig {
             environment,
             party_id: _,           // party id is different for each server
             requests_queue_url: _, // requests queue url is different for each server
-            results_topic_arn,
-            kms_key_arns: _, // kms key arns are different for each server
+            results_topic_arn: _,  // only the coordinator publishes results
+            kms_key_arns: _,       // kms key arns are different for each server
             tls: _,
             service: _,
             server_coordination: _,
@@ -795,14 +734,15 @@ impl From<Config> for CommonConfig {
             init_db_size,
             max_db_size,
             max_batch_size,
-            predefined_batch_sizes,
             fake_db_size,
             return_partial_results,
             disable_persistence,
             hnsw_disable_memory_persistence,
             enable_debug_timing: _,
-            service_ports: _,          // Could be different for each server
-            service_outbound_ports: _, // Could be different for each server
+            service_ports: _,              // Could be different for each server
+            service_outbound_ports: _,     // Could be different for each server
+            coordinator_ports: _,          // Could be different for each server
+            coordinator_outbound_ports: _, // Could be different for each server
             shutdown_last_results_sync_timeout_secs,
             enable_s3_importer: _, // it does not matter if this is synced or not between servers
             db_chunks_bucket_name: _, // different for each server
@@ -840,19 +780,12 @@ impl From<Config> for CommonConfig {
             max_modifications_lookback,
             enable_modifications_sync,
             enable_modifications_replay,
-            sqs_sync_long_poll_seconds,
             schema_name,
             hnsw_schema_name_suffix,
             gpu_schema_name_suffix,
             full_scan_side,
             full_scan_side_switching_enabled,
-            batch_polling_timeout_secs,
-            sqs_long_poll_wait_time,
-            batch_sync_polling_timeout_secs,
-            db_backed_ingest,
-            db_ingest_sqs_wait_secs: _,
-            db_ingest_backoff_initial_ms: _,
-            db_ingest_backoff_max_ms: _,
+            sqs_long_poll_wait_time: _, // only the coordinator polls SQS
             // pprof collector (not part of common hash)
             pprof_s3_bucket: _,
             pprof_prefix: _,
@@ -876,14 +809,12 @@ impl From<Config> for CommonConfig {
 
         Self {
             environment,
-            results_topic_arn,
             processing_timeout_secs,
             public_key_base_url,
             shares_bucket_name,
             clear_db_before_init,
             init_db_size,
             max_db_size,
-            predefined_batch_sizes,
             max_batch_size,
             fake_db_size,
             return_partial_results,
@@ -917,37 +848,11 @@ impl From<Config> for CommonConfig {
             max_modifications_lookback,
             enable_modifications_sync,
             enable_modifications_replay,
-            sqs_sync_long_poll_seconds,
             schema_name,
             hnsw_schema_name_suffix,
             gpu_schema_name_suffix,
             full_scan_side,
             full_scan_side_switching_enabled,
-            batch_polling_timeout_secs,
-            sqs_long_poll_wait_time,
-            batch_sync_polling_timeout_secs,
-            db_backed_ingest,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn db_backed_ingest_is_part_of_common_config_equality() {
-        // The equality check across parties is the gate that prevents mixed
-        // ingestion modes (one party counting SQS, others counting DB rows).
-        // If this field ever leaves CommonConfig, that gate silently vanishes.
-        let base = CommonConfig::default();
-        let flag_on = CommonConfig {
-            db_backed_ingest: true,
-            ..Default::default()
-        };
-        assert_ne!(base, flag_on);
-        // The ingest tuning knobs (db_ingest_sqs_wait_secs, backoff params)
-        // deliberately live only on Config, not CommonConfig: they may skew
-        // across parties during rolling deploys without splitting the fleet.
     }
 }

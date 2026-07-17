@@ -12,7 +12,10 @@ tbd
 
 **File:** `iris-mpc/src/services/processors/batch.rs`
 
-The server collects SQS messages into a `BatchQuery`:
+Party 0 accepts requests through the coordinator API or the compatibility SQS
+queue, assigns their FIFO order, and sends the ordered batch to the other
+parties over the dedicated mTLS coordinator connection.
+Each party then converts the same envelopes into a `BatchQuery`:
 
 | Message Type | Handler | Key Logic |
 |-------------|---------|-----------|
@@ -22,7 +25,9 @@ The server collects SQS messages into a `BatchQuery`:
 | `reset_check` | `process_reset_check_request` | Query-only, no persistence |
 | `reset_update` | `process_reset_update_request` | Iris replacement at target serial_id |
 
-**Deletion dedup** (lines 436-447): If the same serial_id already has a modification in the CURRENT batch, the second request is silently skipped (`return Ok(())`). The SQS message is already deleted (line 427), so no response is ever generated for the skipped request.
+If two modifications in one batch target the same serial ID, the later request
+is rejected before execution. Party 0 records the rejected coordinator row and
+publishes the compatibility error result; all parties discard the same request.
 
 This dedup only applies WITHIN a single server batch. Across batches, the `modifications` map is fresh.
 
@@ -30,7 +35,7 @@ This dedup only applies WITHIN a single server batch. Across batches, the `modif
 
 **File:** `iris-mpc/src/services/processors/job.rs`
 
-After MPC computation, `ServerJobResult` is converted to per-request SNS responses:
+After MPC computation, `ServerJobResult` is converted to per-request results:
 
 ```
 identity_deletion_results = deleted_ids.iter().map(|idx| {
@@ -39,7 +44,8 @@ identity_deletion_results = deleted_ids.iter().map(|idx| {
 })
 ```
 
-Results sent to SNS per type (lines 389-440):
+Party 0 saves each result in `coordinator_requests` for API polling and, when a
+results topic is configured, publishes the same compatibility SNS events:
 1. Uniqueness results
 2. Reauth results
 3. Identity deletion results
@@ -87,6 +93,6 @@ MPC apply_deletions:
 ServerJobResult.deleted_ids = [0-based indices]
   ↓ job.rs: serial_id = idx + 1
 IdentityDeletionResult { serial_id }   →  back to 1-based
-  ↓ SNS → SQS
-Client is_correlation: parent.SerialId == result.serial_id
+  ↓ coordinator API polling or compatibility SNS → SQS
+Client correlation: parent.SerialId == result.serial_id
 ```

@@ -15,6 +15,8 @@ pub struct BatchQuery {
 
     // Uniqueness + Reauth + ResetCheck fields
     pub request_ids: Vec<String>,              // Operation IDs (signup_id, reauth_id, reset_id)
+    pub coordinator_request_ids: Vec<String>,  // Ledger IDs for matching requests
+    pub ordered_request_ids: Vec<String>,      // Ledger IDs across every request type
     pub request_types: Vec<String>,            // Message type strings
     pub metadata: Vec<BatchMetadata>,
     pub skip_persistence: Vec<bool>,
@@ -65,17 +67,17 @@ pub enum RequestIndex {
 ```rust
 // Adds uniqueness/reauth/reset_check request
 pub fn push_matching_request(
-    sns_message_id, request_id, request_type, metadata, or_rule_serial_ids, skip_persistence
+    coordinator_request_id, request_id, request_type, metadata, or_rule_serial_ids, skip_persistence
 )
 
 // Adds deletion request
 pub fn push_deletion_request(
-    sns_message_id, deletion_0_index: u32, metadata   // deletion_0_index is 0-based
+    coordinator_request_id, deletion_0_index: u32, metadata   // deletion_0_index is 0-based
 )
 
 // Adds reset update request
-pub fn push_reset_update_request(
-    sns_message_id, reset_update_0_index: u32, request_id, metadata, shares
+pub fn push_identity_update_request(
+    coordinator_request_id, request_id, request_type, identity_update_0_index: u32, shares
 )
 ```
 

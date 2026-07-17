@@ -55,6 +55,7 @@ pub async fn process_job_result(
         request_ids,
         request_types,
         metadata,
+        coordinator_request_ids,
         // `matches` / `matches_with_skip_persistence` are misleadingly named — see job.rs.
         // Only meaningful filtered to uniqueness rows, which is what this consumer does.
         matches,
@@ -68,6 +69,7 @@ pub async fn process_job_result(
         left_iris_requests,
         right_iris_requests,
         deleted_ids,
+        deletion_coordinator_request_ids,
         matched_batch_request_ids,
         successful_reauths,
         reauth_target_indices,
@@ -77,13 +79,14 @@ pub async fn process_job_result(
         full_face_mirror_attack_detected,
         identity_update_request_ids,
         identity_update_request_types,
+        identity_update_coordinator_request_ids,
         identity_update_indices,
         identity_update_shares,
-        sqs_sequence_numbers,
         ..
     } = job_result;
     let now = Instant::now();
     let dummy_deletion_shares = get_dummy_shares_for_deletion(party_id);
+    let mut coordinator_results = Vec::new();
 
     // returned serial_ids are 0 indexed, but we want them to be 1 indexed
     let uniqueness_results = merged_results
@@ -144,6 +147,7 @@ pub async fn process_job_result(
             );
             let result_string = serde_json::to_string(&result_event)
                 .wrap_err("failed to serialize uniqueness result")?;
+            coordinator_results.push((coordinator_request_ids[i].clone(), result_string.clone()));
 
             let modification_key = RequestId(result_event.signup_id);
             modifications
@@ -201,6 +205,7 @@ pub async fn process_job_result(
             );
             let result_string = serde_json::to_string(&result_event)
                 .wrap_err("failed to serialize reauth result")?;
+            coordinator_results.push((coordinator_request_ids[i].clone(), result_string.clone()));
 
             let modification_key = RequestSerialId(serial_id);
             let persisted = success && !skip_persistence.get(i).copied().unwrap_or(false);
@@ -216,11 +221,16 @@ pub async fn process_job_result(
     // handling identity deletion results
     let identity_deletion_results = deleted_ids
         .iter()
-        .map(|&idx| {
+        .enumerate()
+        .map(|(i, &idx)| {
             let serial_id = idx + 1;
             let result_event = IdentityDeletionResult::new(party_id, serial_id, true);
             let result_string = serde_json::to_string(&result_event)
                 .wrap_err("failed to serialize identity deletion result")?;
+            coordinator_results.push((
+                deletion_coordinator_request_ids[i].clone(),
+                result_string.clone(),
+            ));
 
             let modification_key = RequestSerialId(serial_id);
             modifications
@@ -265,6 +275,7 @@ pub async fn process_job_result(
             );
             let result_string = serde_json::to_string(&result_event)
                 .wrap_err("failed to serialize identity match check result")?;
+            coordinator_results.push((coordinator_request_ids[i].clone(), result_string.clone()));
 
             // Mark the reset check modification as completed.
             // Note that reset_check is only a query and does not persist anything into the database.
@@ -293,6 +304,10 @@ pub async fn process_job_result(
                 IdentityUpdateAckResult::new(request_id.clone(), party_id, serial_id);
             let result_string = serde_json::to_string(&result_event)
                 .wrap_err("failed to serialize identity update result")?;
+            coordinator_results.push((
+                identity_update_coordinator_request_ids[i].clone(),
+                result_string.clone(),
+            ));
             modifications
                 .get_mut(&RequestSerialId(serial_id))
                 .unwrap()
@@ -423,26 +438,10 @@ pub async fn process_job_result(
                 .await?;
         }
 
-        if config.db_backed_ingest {
-            let marked = store
-                .mark_ingested_requests_persisted_tx(&mut graph_tx.tx, &sqs_sequence_numbers)
+        if party_id == crate::coordinator::COORDINATOR_PARTY_ID {
+            store
+                .complete_coordinator_requests_tx(&mut graph_tx.tx, &coordinator_results)
                 .await?;
-            if marked != sqs_sequence_numbers.len() as u64 {
-                tracing::error!(
-                    "db-backed ingest: batch {} carried {} claimed sequence number(s) but marked {} persisted; claimed rows may be re-formed",
-                    batch_timings.batch_id,
-                    sqs_sequence_numbers.len(),
-                    marked
-                );
-                metrics::counter!("db_ingest_persist_mark_mismatch").increment(1);
-            } else {
-                tracing::info!(
-                    "db-backed ingest: marked {} ingested request(s) persisted for batch {}",
-                    marked,
-                    batch_timings.batch_id
-                );
-            }
-            metrics::counter!("db_ingest_rows_persisted").increment(marked);
         }
 
         // Commit transaction
@@ -451,6 +450,10 @@ pub async fn process_job_result(
         metrics::histogram!("persist_commit_duration").record(step_start.elapsed().as_secs_f64());
         metrics::histogram!("persist_total_duration")
             .record(persist_total_start.elapsed().as_secs_f64());
+    } else if party_id == crate::coordinator::COORDINATOR_PARTY_ID {
+        store
+            .complete_coordinator_requests(&coordinator_results)
+            .await?;
     }
     let persist_ms = persist_total_start.elapsed().as_millis();
 

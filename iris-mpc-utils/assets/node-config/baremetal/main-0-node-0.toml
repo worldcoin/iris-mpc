@@ -51,12 +51,9 @@ hawk_prf_key = 0
 max_deletions_per_batch = 100
 enable_modifications_sync = false
 enable_modifications_replay = false
-sqs_sync_long_poll_seconds = 10
 full_scan_side = "Left"
 full_scan_side_switching_enabled = true
-batch_polling_timeout_secs = 1
 sqs_long_poll_wait_time = 10
-batch_sync_polling_timeout_secs = 10
 
 [service]
 service_name = "smpcv2-server-dev"

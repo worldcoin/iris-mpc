@@ -34,6 +34,10 @@ env:
   SMPC__ANON_STATS_DATABASE__CREATE: "true"
   SMPC__ANON_STATS_DATABASE__LOAD_PARALLELISM: "8"
   SMPC__AWS__REGION: "eu-north-1"
+  SMPC__COORDINATOR_PORTS: '["4200","4201","4202"]'
+  SMPC__TLS__PRIVATE_KEY: "/etc/ssl/private/key.pem"
+  SMPC__TLS__LEAF_CERT: "/etc/ssl/private/certificate.crt"
+  SMPC__TLS__ROOT_CERTS: '["/usr/local/share/ca-certificates/ca_smpcv2_party_prod_0.crt", "/usr/local/share/ca-certificates/ca_smpcv2_party_prod_1.crt", "/usr/local/share/ca-certificates/ca_smpcv2_party_prod_2.crt"]'
   SMPC__REQUESTS_QUEUE_URL:
     valueFrom:
       secretKeyRef:
@@ -157,6 +161,10 @@ tmpDir:
 preStop:
   # preStop.sleepPeriod specifies the time spent in Terminating state before SIGTERM is sent
   sleepPeriod: 10
+
+mountSSLCerts:
+  enabled: true
+  mountPath: /etc/ssl/private
 
 # terminationGracePeriodSeconds specifies the grace time between SIGTERM and SIGKILL
 terminationGracePeriodSeconds: 240 # TODO: make it 3x SMPC__PROCESSING_TIMEOUT_SECS

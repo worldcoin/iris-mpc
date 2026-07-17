@@ -25,6 +25,13 @@ RUN rustup component add cargo
 RUN cargo install cargo-build-deps \
     && cargo install cargo-edit --version 0.13.6 --locked
 
+RUN curl -o /tmp/ca_smpcv2_party_stage_0.crt https://wf-smpcv2-ca-stage-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_stage_1.stage.smpcv2.worldcoin.dev.pem && \
+    curl -o /tmp/ca_smpcv2_party_stage_1.crt https://wf-smpcv2-ca-stage-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_stage_2.stage.smpcv2.worldcoin.dev.pem && \
+    curl -o /tmp/ca_smpcv2_party_stage_2.crt https://wf-smpcv2-ca-stage-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_stage_3.stage.smpcv2.worldcoin.dev.pem && \
+    curl -o /tmp/ca_smpcv2_party_prod_0.crt https://wf-smpcv2-ca-prod-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_prod_1.smpcv2.worldcoin.org.pem && \
+    curl -o /tmp/ca_smpcv2_party_prod_1.crt https://wf-smpcv2-ca-prod-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_prod_2.smpcv2.worldcoin.org.pem && \
+    curl -o /tmp/ca_smpcv2_party_prod_2.crt https://wf-smpcv2-ca-prod-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_prod_3.smpcv2.worldcoin.org.pem
+
 FROM --platform=linux/amd64 build-image as build-app
 WORKDIR /src/gpu-iris-mpc
 COPY . .
@@ -40,6 +47,7 @@ COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/
 COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/key-manager /bin/key-manager
 COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/reshare-server /bin/reshare-server
 COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/reshare-client /bin/reshare-client
+COPY --from=build-image /tmp/ca_smpcv2_party_*.crt /usr/local/share/ca-certificates/
 
 USER 65534
 ENTRYPOINT ["/bin/iris-mpc-gpu"]

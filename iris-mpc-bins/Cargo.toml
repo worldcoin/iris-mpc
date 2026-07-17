@@ -15,7 +15,6 @@ helpers = [
   "dep:reqwest",
 ]
 phase_trace = ["iris-mpc-cpu/phase_trace"]
-explicit-sns-batching = ["iris-mpc/explicit-sns-batching", "iris-mpc-common/explicit-sns-batching", "iris-mpc-utils/explicit-sns-batching"]
 networking_metrics = ["iris-mpc-cpu/networking_metrics"]
 
 [dependencies]

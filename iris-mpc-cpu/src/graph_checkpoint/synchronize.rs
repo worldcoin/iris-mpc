@@ -355,10 +355,8 @@ mod sync_graph_mutations_tests {
         SyncState {
             db_len: 0,
             modifications,
-            next_sns_sequence_num: None,
             common_config: CommonConfig::default(),
             graph_mutation_bytes,
-            max_persisted_sequence_number: None,
         }
     }
 
@@ -461,10 +459,8 @@ mod sync_graph_mutations_tests {
                 id: 1,
                 ..Default::default()
             }],
-            next_sns_sequence_num: None,
             common_config: CommonConfig::default(),
             graph_mutation_bytes: vec![], // one modification, zero byte entries
-            max_persisted_sequence_number: None,
         };
         let err = build_mutation_bytes(&[state]).unwrap_err();
         assert!(

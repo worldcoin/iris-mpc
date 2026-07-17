@@ -93,6 +93,7 @@ pub struct PreprocessedBatchQuery {
     pub request_ids: Vec<String>,
     pub request_types: Vec<String>,
     pub metadata: Vec<BatchMetadata>,
+    pub coordinator_request_ids: Vec<String>,
 
     pub left_iris_requests: IrisQueryBatchEntries,
     pub right_iris_requests: IrisQueryBatchEntries,
@@ -115,6 +116,7 @@ pub struct PreprocessedBatchQuery {
 
     // Only deletion specific fields
     pub deletion_requests_indices: Vec<u32>, // 0-indexed indices of entries to be deleted
+    pub deletion_coordinator_request_ids: Vec<String>,
 
     // this one is not needed for the GPU actor
     // pub deletion_requests_metadata: Vec<BatchMetadata>,
@@ -123,6 +125,7 @@ pub struct PreprocessedBatchQuery {
     pub identity_update_indices: Vec<u32>,
     pub identity_update_request_ids: Vec<String>,
     pub identity_update_request_types: Vec<String>,
+    pub identity_update_coordinator_request_ids: Vec<String>,
     pub identity_update_shares: Vec<GaloisSharesBothSides>,
 
     // additional fields which are GPU specific
@@ -136,13 +139,8 @@ pub struct PreprocessedBatchQuery {
     // Keeping track of updates & deletions for sync mechanism. Mapping: Serial id -> Modification
     pub modifications: HashMap<ModificationKey, Modification>,
 
-    // SNS message ids to assert identical batch processing across parties
-    pub sns_message_ids: Vec<String>,
-
-    // Sequence numbers of the ingested_requests rows claimed for this batch
-    // (db_backed_ingest only; empty otherwise). Batch-level metadata, NOT a
-    // per-request parallel array — must NOT be filtered by retain().
-    pub sqs_sequence_numbers: Vec<String>,
+    // Coordinator request ids used by the execution-layer consistency guard.
+    pub ordered_request_ids: Vec<String>,
 }
 
 impl PreprocessedBatchQuery {
@@ -243,6 +241,7 @@ impl From<BatchQuery> for PreprocessedBatchQuery {
             request_ids: value.request_ids,
             request_types: value.request_types,
             metadata: value.metadata,
+            coordinator_request_ids: value.coordinator_request_ids,
             left_iris_requests: value.left_iris_requests,
             right_iris_requests: value.right_iris_requests,
             left_iris_rotated_requests: value.left_iris_rotated_requests,
@@ -261,8 +260,10 @@ impl From<BatchQuery> for PreprocessedBatchQuery {
             identity_update_indices: value.identity_update_indices,
             identity_update_request_ids: value.identity_update_request_ids,
             identity_update_request_types: value.identity_update_request_types,
+            identity_update_coordinator_request_ids: value.identity_update_coordinator_request_ids,
             identity_update_shares: value.identity_update_shares,
             deletion_requests_indices: value.deletion_requests_indices,
+            deletion_coordinator_request_ids: value.deletion_coordinator_request_ids,
             // deletion_requests_metadata: value.deletion_requests_metadata,
             left_iris_interpolated_requests_preprocessed:
                 left_iris_interpolated_requests_preprocessed.unwrap(),
@@ -277,8 +278,7 @@ impl From<BatchQuery> for PreprocessedBatchQuery {
             right_mirrored_iris_interpolated_requests_preprocessed:
                 right_mirrored_iris_interpolated_requests_preprocessed.unwrap(),
             modifications: value.modifications,
-            sns_message_ids: value.sns_message_ids,
-            sqs_sequence_numbers: value.sqs_sequence_numbers,
+            ordered_request_ids: value.ordered_request_ids,
             skip_persistence: value.skip_persistence,
         }
     }
@@ -290,6 +290,7 @@ impl PreprocessedBatchQuery {
         filter_by_indices!(self.request_ids, indices_set);
         filter_by_indices!(self.request_types, indices_set);
         filter_by_indices!(self.metadata, indices_set);
+        filter_by_indices!(self.coordinator_request_ids, indices_set);
         filter_by_indices!(self.left_iris_requests.code, indices_set);
         filter_by_indices!(self.left_iris_requests.mask, indices_set);
         filter_by_indices!(self.right_iris_requests.code, indices_set);
