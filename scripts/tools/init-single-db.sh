@@ -3,6 +3,7 @@
 set -e
 
 IRISES_FILE="${IRISES_FILE:-synthetic-irises-1M.ndjson}"
+# warning: this is the graph for one eye, not BothEyes
 GRAPH_FILE="${GRAPH_FILE:-graph-synthetic-minfhd5-1M.dat}"
 GRAPH_FORMAT="${GRAPH_FORMAT:-v3}"
 
@@ -25,6 +26,11 @@ echo "download complete. unzipping"
 
 gzip -dc "/tmp/${GRAPH_FILE}.gz" > "/tmp/${GRAPH_FILE}"
 gzip -dc "/tmp/${IRISES_FILE}.gz" > "/tmp/${IRISES_FILE}"
+
+# note: the synthetic-minfhd5-1M.dat graph is only for one eye. for testing against randomly generated iris codes, it is sufficient
+# to use this graph for both eyes. If, in the future, one uploads a default graph that is for both eyes, this section can be deleted.
+cat "/tmp/${GRAPH_FILE}" "/tmp/${GRAPH_FILE}" > /tmp/combined.dat
+mv /tmp/combined.dat "/tmp/${GRAPH_FILE}"
 
 echo "starting iris init"
 /bin/init-single-db \
