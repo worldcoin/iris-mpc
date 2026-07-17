@@ -9,15 +9,18 @@ use crate::utils::{
     s3_deletions::get_aws_clients,
     HawkConfigs, TestRun, TestRunContextInfo,
 };
-use eyre::{eyre, Result};
+use eyre::{ensure, eyre, Result};
 use iris_mpc_common::{
+    config::Config,
     helpers::{smpc_request::REAUTH_MESSAGE_TYPE, sync::Modification},
     iris_db::get_dummy_shares_for_deletion,
     VectorId,
 };
 use iris_mpc_cpu::{
-    genesis::DeltaMode,
-    graph_checkpoint::{download_graph_checkpoint, get_latest_checkpoint_state},
+    graph_checkpoint::{
+        download_graph_checkpoint, get_latest_checkpoint_state, save_checkpoint_state,
+        upload_graph_checkpoint_plaintext,
+    },
     hawkers::plaintext_store::PlaintextStore,
     hnsw::graph::graph_store::GraphPg,
 };
@@ -36,12 +39,18 @@ const A1: u32 = 5; // version bump + mod row  (agreement: join ∩ mod)
 const A2: u32 = 15; // version bump + mod row  (agreement: join ∩ mod)
 const B1: u32 = 25; // version bump, no mod row (join-only)
 const C1: u32 = 35; // mod row, no version bump (mod-only, invariant violation)
-const D1: u32 = 45; // HNSW row version drift   (store_repair)
+const D1: u32 = 45; // HNSW row version drift   (row mismatch → surgery)
 const C2: u32 = 55; // rejected reauth (persisted=false) — must appear nowhere
+const H1: u32 = 60; // HNSW row deleted, source live (row missing → insert + surgery)
 const E1: u32 = 65; // ghost baked into the base graph (multi-version surgery)
 const F1: u32 = 70; // deleted: source content = dummy shares (remove-only)
 const G1: u32 = 75; // deleted then reinserted with a live iris (replay)
 const G1_DONOR: u32 = 2; // untouched serial whose shares G1's reinsert copies
+
+// Asymmetric damage on a single party; the cross-party surgery union must
+// bring every party to the same replay list or the MPC jobs desync.
+const K1: u32 = 50; // HNSW row deleted on party 0 only
+const L1: u32 = 30; // HNSW row version drift on party 1 only
 
 // Max persisted+completed source modification id after divergence: id 1 (E1,
 // phase A) and ids 2,3,4 (A1, A2, C1) are persisted; C2 (id 5) is not.
@@ -67,29 +76,32 @@ impl Test {
 
 impl TestRun for Test {
     async fn exec(&mut self) -> Result<()> {
-        // Phase A — build the base graph (modifications mode), then bake a
-        // ghost: bump E1 via a reauth mod and rerun; the replay inserts the new
-        // version and leaves the old node. The result is the version-join base.
+        // Phase A — build the base graph, then bake a multi-version fixture:
+        // bump E1 in the source (reauth mod + row version) and republish the
+        // latest checkpoint with an extra E1 layer-0 key. The baked checkpoint
+        // is the version-join base.
         let mut args = DEFAULT_GENESIS_ARGS;
         args.max_indexation_id = BASE_HEIGHT;
-        run_genesis!(self, args.clone());
-
-        for node in self.get_nodes().await {
-            node.apply_modifications(
-                &[],
-                &[ModificationInput::new(1, E1 as i64, Reauth, true, true)],
-            )
-            .await?;
-        }
         run_genesis!(self, args);
 
-        let base_hash = {
-            let nodes: Vec<_> = self.get_nodes().await.collect();
-            let state = get_latest_checkpoint_state(&nodes[0].cpu_stores.graph)
-                .await?
-                .ok_or_else(|| eyre!("no base checkpoint recorded after phase A"))?;
-            state.blake3_hash
-        };
+        let mut join_set = JoinSet::new();
+        for (node, config) in self.get_nodes().await.zip(self.configs.iter().cloned()) {
+            join_set.spawn(async move { bake_e1_ghost(&node, &config).await });
+        }
+        let hashes: Vec<String> = join_set
+            .join_all()
+            .await
+            .into_iter()
+            .collect::<Result<_>>()?;
+        ensure!(
+            hashes.iter().all(|h| h == &hashes[0]),
+            "baked checkpoint hashes must agree across parties"
+        );
+        let base_hash = hashes[0].clone();
+
+        // Fixture self-check: the baked base checkpoint holds exactly two
+        // layer-0 keys for E1 (the ghost exists).
+        assert_e1_ghost_in_base(&self.configs, &base_hash).await?;
 
         // Phase B — inject divergence on every party.
         let mut join_set = JoinSet::new();
@@ -101,12 +113,20 @@ impl TestRun for Test {
         // Phase C — version-join pinned to the base, indexing up to MAX_HEIGHT.
         run_version_join(&self.configs, MAX_HEIGHT, Some(base_hash.clone())).await?;
         assert_reconciled(&self.configs, EXPECTED_MOD_CURSOR).await?;
-        assert_graph_state(&self.configs, &[A1, A2, B1, E1, G1], &[F1]).await?;
+        assert_graph_state(&self.configs, &[A1, A2, B1, D1, E1, G1, H1, K1, L1], &[F1]).await?;
+        assert_post_delta_checkpoint(&self.configs, &base_hash).await?;
+        let phase_c_hashes = latest_checkpoint_hashes(&self.configs).await?;
 
         // Phase D — rerun with the latest common checkpoint (no pin). The join
-        // plan is empty; the run converges to the same state (idempotency).
+        // plan is empty; the run converges to the same state (idempotency) and
+        // is quiescent: no new checkpoint is recorded.
         run_version_join(&self.configs, MAX_HEIGHT, None).await?;
         assert_reconciled(&self.configs, EXPECTED_MOD_CURSOR).await?;
+        let phase_d_hashes = latest_checkpoint_hashes(&self.configs).await?;
+        assert_eq!(
+            phase_c_hashes, phase_d_hashes,
+            "phase D must not record a new checkpoint (graph unchanged)"
+        );
 
         Ok(())
     }
@@ -129,6 +149,104 @@ impl TestRun for Test {
             .cleanup_s3_checkpoints(&self.configs)
             .await
     }
+}
+
+/// Bake the E1 multi-version fixture on one party and return the baked
+/// checkpoint's blake3 hash (equal across parties: graph structure is public
+/// and its serialization canonical).
+///
+/// Steps: reauth mod row + source version bump; HNSW row version aligned to
+/// the source (so E1 is a pure multi-version case); latest checkpoint
+/// downloaded, an extra layer-0 key `(E1, 1)` inserted in both eyes, and the
+/// result re-uploaded and recorded as a new checkpoint row.
+async fn bake_e1_ghost(node: &MpcNode, config: &Config) -> Result<String> {
+    node.apply_modifications(
+        &[],
+        &[ModificationInput::new(1, E1 as i64, Reauth, true, true)],
+    )
+    .await?;
+
+    // Align the HNSW row version with the source (mimics a persisted replay).
+    {
+        let mut tx = node.cpu_stores.iris.tx().await?;
+        {
+            let mut ev = ExplicitVersionToken::enable(&mut tx).await?;
+            sqlx::query("UPDATE irises SET version_id = version_id + 1 WHERE id = $1")
+                .bind(E1 as i64)
+                .execute(ev.tx().deref_mut())
+                .await?;
+        }
+        tx.commit().await?;
+    }
+
+    let aws = get_aws_clients(config).await?;
+    let state = get_latest_checkpoint_state(&node.cpu_stores.graph)
+        .await?
+        .ok_or_else(|| eyre!("no checkpoint recorded after phase A"))?;
+    let mut graphs = download_graph_checkpoint(
+        &aws.checkpoint_s3_client,
+        &config.graph_checkpoint_bucket_name,
+        &state,
+    )
+    .await?;
+
+    let old_key = VectorId::new(E1, 0);
+    let ghost_key = VectorId::new(E1, 1);
+    for graph in graphs.iter_mut() {
+        let links = graph.layers[0]
+            .get_links(&old_key)
+            .ok_or_else(|| eyre!("E1 missing from base graph layer 0"))?
+            .to_vec();
+        graph.layers[0].insert_node(&ghost_key, links);
+    }
+
+    let baked = upload_graph_checkpoint_plaintext(
+        &config.graph_checkpoint_bucket_name,
+        config.party_id,
+        &graphs,
+        &aws.checkpoint_s3_client,
+        state.last_indexed_iris_id,
+        state.last_indexed_modification_id,
+        None,
+        true,
+    )
+    .await?;
+    save_checkpoint_state(node.cpu_stores.graph.tx().await?, &baked).await?;
+    Ok(baked.blake3_hash)
+}
+
+/// Assert the baked base checkpoint holds exactly two layer-0 keys for E1
+/// (versions 0 and 1) in both eyes, on every party.
+async fn assert_e1_ghost_in_base(configs: &HawkConfigs, base_hash: &str) -> Result<()> {
+    for config in configs.iter() {
+        let node = MpcNode::new(config.clone()).await;
+        let aws = get_aws_clients(config).await?;
+        let state = get_latest_checkpoint_state(&node.cpu_stores.graph)
+            .await?
+            .ok_or_else(|| eyre!("no baked checkpoint"))?;
+        assert_eq!(state.blake3_hash, base_hash, "baked row must be the latest");
+        let graphs = download_graph_checkpoint(
+            &aws.checkpoint_s3_client,
+            &config.graph_checkpoint_bucket_name,
+            &state,
+        )
+        .await?;
+        for (eye, graph) in graphs.iter().enumerate() {
+            let mut keys: Vec<VectorId> = graph.layers[0]
+                .links
+                .keys()
+                .filter(|v| v.serial_id() == E1)
+                .copied()
+                .collect();
+            keys.sort_unstable_by_key(|k| k.version_id());
+            assert_eq!(
+                keys,
+                vec![VectorId::new(E1, 0), VectorId::new(E1, 1)],
+                "E1 must have exactly two layer-0 keys in the base checkpoint (eye {eye})"
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Apply all Phase B divergence to one party's databases.
@@ -208,7 +326,7 @@ async fn inject_divergence(node: &MpcNode, party_id: usize) -> Result<()> {
     .execute(&node.gpu_stores.iris.pool)
     .await?;
 
-    // D1: drift the HNSW iris row version (local-only damage → store_repair).
+    // D1: drift the HNSW iris row version (local-only damage → surgery).
     // Hand-set version: needs the explicit-version flag past the trigger.
     {
         let mut tx = node.cpu_stores.iris.tx().await?;
@@ -216,6 +334,32 @@ async fn inject_divergence(node: &MpcNode, party_id: usize) -> Result<()> {
             let mut ev = ExplicitVersionToken::enable(&mut tx).await?;
             sqlx::query("UPDATE irises SET version_id = version_id + 5 WHERE id = $1")
                 .bind(D1 as i64)
+                .execute(ev.tx().deref_mut())
+                .await?;
+        }
+        tx.commit().await?;
+    }
+
+    // H1: delete the HNSW iris row while the source stays live (missing row →
+    // surgery; the row is INSERTed at the post-checkpoint flush).
+    sqlx::query("DELETE FROM irises WHERE id = $1")
+        .bind(H1 as i64)
+        .execute(&node.cpu_stores.iris.pool)
+        .await?;
+
+    // K1 / L1: same damage classes on a single party only.
+    if party_id == 0 {
+        sqlx::query("DELETE FROM irises WHERE id = $1")
+            .bind(K1 as i64)
+            .execute(&node.cpu_stores.iris.pool)
+            .await?;
+    }
+    if party_id == 1 {
+        let mut tx = node.cpu_stores.iris.tx().await?;
+        {
+            let mut ev = ExplicitVersionToken::enable(&mut tx).await?;
+            sqlx::query("UPDATE irises SET version_id = version_id + 3 WHERE id = $1")
+                .bind(L1 as i64)
                 .execute(ev.tx().deref_mut())
                 .await?;
         }
@@ -236,8 +380,10 @@ async fn inject_divergence(node: &MpcNode, party_id: usize) -> Result<()> {
     .execute(node.cpu_stores.graph.pool())
     .await?;
 
-    // Clobber the HNSW modification cursor with a garbage value; version-join
-    // must source its cursor from the checkpoint, not from here.
+    // Clobber the HNSW modification cursor with a DIFFERENT garbage value per
+    // party; the cursor is party-local state, so this must neither wedge the
+    // sync handshake nor leak into the join (which sources its cursor from the
+    // checkpoint).
     {
         let graph_tx = node.cpu_stores.graph.tx().await?;
         let mut tx = graph_tx.tx;
@@ -245,7 +391,7 @@ async fn inject_divergence(node: &MpcNode, party_id: usize) -> Result<()> {
             &mut tx,
             "genesis",
             "last_indexed_modification_id",
-            &9_999_999_i64,
+            &(9_999_999_i64 + party_id as i64),
         )
         .await?;
         tx.commit().await?;
@@ -269,7 +415,6 @@ async fn run_version_join(
             let mut ga = DEFAULT_GENESIS_ARGS;
             ga.max_indexation_id = max_indexation_id;
             let mut ea = ExecutionArgs::from_plaintext_args(ga, false);
-            ea.delta_mode = DeltaMode::VersionJoin;
             ea.base_checkpoint_hash = base;
             let r = iris_mpc_upgrade_hawk::genesis::exec(ea, config)
                 .instrument(span)
@@ -284,23 +429,103 @@ async fn run_version_join(
     Ok(())
 }
 
-/// Assert that every party's HNSW iris store matches the source on
-/// `(id, version)`, the stale tail is gone, the WAL and HNSW modifications are
-/// empty, and the cursors are correct.
+/// Assert every party recorded a post-delta checkpoint: the two newest rows
+/// are the final indexation checkpoint at `MAX_HEIGHT` and, below it, an
+/// archival delta checkpoint at `BASE_HEIGHT` whose hash differs from the
+/// base (the graph changed). Row writes are deferred until after this
+/// checkpoint, so its existence is a precondition of the reconciled rows.
+async fn assert_post_delta_checkpoint(configs: &HawkConfigs, base_hash: &str) -> Result<()> {
+    for config in configs.iter() {
+        let node = MpcNode::new(config.clone()).await;
+        let rows = node
+            .cpu_stores
+            .graph
+            .get_genesis_graph_checkpoints()
+            .await?;
+        assert!(rows.len() >= 2, "expected final + delta checkpoints");
+        assert_eq!(
+            rows[0].last_indexed_iris_id, MAX_HEIGHT as i64,
+            "newest checkpoint must be the final indexation checkpoint"
+        );
+        assert_eq!(
+            rows[1].last_indexed_iris_id, BASE_HEIGHT as i64,
+            "second-newest checkpoint must be the post-delta checkpoint"
+        );
+        assert!(
+            rows[1].is_archival,
+            "post-delta checkpoint must be archival"
+        );
+        assert_ne!(
+            rows[1].blake3_hash, base_hash,
+            "post-delta checkpoint must differ from the base (graph changed)"
+        );
+    }
+    Ok(())
+}
+
+/// The latest checkpoint blake3 hash per party.
+async fn latest_checkpoint_hashes(configs: &HawkConfigs) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    for config in configs.iter() {
+        let node = MpcNode::new(config.clone()).await;
+        let state = get_latest_checkpoint_state(&node.cpu_stores.graph)
+            .await?
+            .ok_or_else(|| eyre!("no checkpoint recorded"))?;
+        out.push(state.blake3_hash);
+    }
+    Ok(out)
+}
+
+/// Per-row content digests: `(id, version_id, md5s of the four share columns)`.
+async fn iris_row_digests(pool: &sqlx::PgPool) -> Result<Vec<(i64, i16, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT id, version_id, \
+         md5(left_code) || md5(left_mask) || md5(right_code) || md5(right_mask) \
+         FROM irises ORDER BY id ASC",
+    )
+    .fetch_all(pool)
+    .await?)
+}
+
+/// Assert that every party's HNSW iris store matches the source byte-wise on
+/// `(id, version, content)`, the stale tail is gone, the WAL and HNSW
+/// modifications are empty, and the cursors are correct. Also checks the
+/// fixture content: F1 holds the party's dummy shares, G1 the donor's shares.
 async fn assert_reconciled(configs: &HawkConfigs, expected_mod_cursor: i64) -> Result<()> {
     for config in configs.iter() {
         let node = MpcNode::new(config.clone()).await;
 
-        let src = db_ops::get_iris_vector_ids(&node.gpu_stores.iris).await?;
-        let dst = db_ops::get_iris_vector_ids(&node.cpu_stores.iris).await?;
+        let src = iris_row_digests(&node.gpu_stores.iris.pool).await?;
+        let dst = iris_row_digests(&node.cpu_stores.iris.pool).await?;
         assert_eq!(
             src, dst,
-            "HNSW irises must match source on (id, version) for all serials"
+            "HNSW irises must match source on (id, version, content) for all serials"
         );
         assert_eq!(
             src.len(),
             MAX_HEIGHT as usize,
             "expected exactly {MAX_HEIGHT} irises (tail rows trimmed)"
+        );
+
+        // F1 holds the party's deletion dummy shares.
+        let (dummy_code, dummy_mask) = get_dummy_shares_for_deletion(config.party_id);
+        let f1 = node.cpu_stores.iris.get_iris_data_by_id(F1 as i64).await?;
+        assert_eq!(f1.left_code(), &dummy_code.coefs[..], "F1 left code");
+        assert_eq!(f1.left_mask(), &dummy_mask.coefs[..], "F1 left mask");
+        assert_eq!(f1.right_code(), &dummy_code.coefs[..], "F1 right code");
+        assert_eq!(f1.right_mask(), &dummy_mask.coefs[..], "F1 right mask");
+
+        // G1 holds the donor's shares (content digest only; versions differ).
+        let digest_of = |rows: &[(i64, i16, String)], serial: u32| {
+            rows.iter()
+                .find(|(id, _, _)| *id == serial as i64)
+                .map(|(_, _, digest)| digest.clone())
+                .ok_or_else(|| eyre!("serial {serial} missing"))
+        };
+        assert_eq!(
+            digest_of(&dst, G1)?,
+            digest_of(&dst, G1_DONOR)?,
+            "G1 must hold the donor's content"
         );
 
         let hnsw_mods = node.cpu_stores.iris.last_modifications(1000).await?;

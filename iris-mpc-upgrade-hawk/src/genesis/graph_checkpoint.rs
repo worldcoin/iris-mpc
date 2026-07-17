@@ -59,43 +59,14 @@ pub async fn upload_and_sync_genesis_checkpoint(
     Ok(())
 }
 
-pub async fn maybe_rollback_iris_db(
-    graph_checkpoint: &GraphCheckpointState,
-    graph_store: &GraphPg<Aby3Store<HawkOps>>,
-    iris_store: &IrisStore,
-    last_indexed_id: SerialId,
-    last_indexed_modification_id: i64,
-) -> Result<()> {
-    if last_indexed_modification_id != graph_checkpoint.last_indexed_modification_id {
-        bail!("mismatch between db and s3 checkpoint for last_indexed_modification_id: db={}, checkpoint={}",
-            last_indexed_modification_id, graph_checkpoint.last_indexed_modification_id);
-    }
-
-    if last_indexed_id < graph_checkpoint.last_indexed_iris_id {
-        bail!("s3 checkpoint is ahead of iris db: db_last_indexed_iris_id={}, checkpoint_last_indexed_iris_id={}",
-            last_indexed_id,
-            graph_checkpoint.last_indexed_iris_id);
-    }
-
-    if last_indexed_id > graph_checkpoint.last_indexed_iris_id {
-        tracing::info!("S3 checkpoint is behind the iris db. rolling back the iris db");
-        let graph_tx = graph_store.tx().await?;
-        let mut tx = graph_tx.tx;
-        set_last_indexed_iris_id(&mut tx, graph_checkpoint.last_indexed_iris_id).await?;
-        iris_store
-            .delete_irises_after_id_tx(&mut tx, graph_checkpoint.last_indexed_iris_id as usize)
-            .await?;
-        tx.commit().await?;
-    }
-    Ok(())
-}
-
-/// Reset all HNSW-schema state to `graph_checkpoint` for version-join mode:
+/// Reset all HNSW-schema state to `graph_checkpoint`:
 /// trim the iris tail beyond the checkpoint, restore the indexed cursors, and
 /// clear the WAL and modifications table. When a base checkpoint was pinned,
-/// also drop checkpoint rows that post-date it so an abandoned lineage cannot
-/// win the next run's latest-common selection. Single transaction: a crash
-/// before commit leaves the prior state; a crash after leaves a re-runnable one.
+/// `pinned_row_id` carries its `genesis_graph_checkpoint` row id and every row
+/// created after it is dropped (by id, so same-height abandoned rows go too);
+/// an abandoned lineage must not win the next run's latest-common selection.
+/// Single transaction: a crash before commit leaves the prior state; a crash
+/// after leaves a re-runnable one.
 ///
 /// Takes the **HNSW** iris store (not the source store): all mutated tables live
 /// in the HNSW schema.
@@ -108,7 +79,7 @@ pub async fn reset_to_checkpoint(
     graph_store: &GraphPg<Aby3Store<HawkOps>>,
     hnsw_iris_store: &IrisStore,
     last_indexed_id: SerialId,
-    pinned: bool,
+    pinned_row_id: Option<i64>,
 ) -> Result<()> {
     if last_indexed_id < graph_checkpoint.last_indexed_iris_id {
         bail!(
@@ -131,8 +102,8 @@ pub async fn reset_to_checkpoint(
     hnsw_iris_store
         .clear_modifications_table(&mut graph_tx.tx)
         .await?;
-    if pinned {
-        graph_tx.delete_checkpoints_after(s_cp).await?;
+    if let Some(row_id) = pinned_row_id {
+        graph_tx.delete_checkpoints_after_id(row_id).await?;
     }
     graph_tx.tx.commit().await?;
 

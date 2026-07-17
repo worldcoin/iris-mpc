@@ -3,10 +3,7 @@
 use clap::Parser;
 use eyre::{bail, Result};
 use iris_mpc_common::{config::Config, helpers::numactl, tracing::initialize_tracing, SerialId};
-use iris_mpc_cpu::{
-    genesis::{BatchSizeConfig, DeltaMode},
-    graph_checkpoint::PruningMode,
-};
+use iris_mpc_cpu::{genesis::BatchSizeConfig, graph_checkpoint::PruningMode};
 use iris_mpc_upgrade_hawk::genesis::{exec, ExecutionArgs};
 
 #[derive(Parser)]
@@ -43,14 +40,6 @@ struct Args {
     ///   - all-older            — prune all older checkpoints
     #[clap(long("pruning-mode"))]
     pruning_mode: Option<String>,
-
-    /// Delta reconciliation mode.
-    ///
-    /// Accepted values:
-    ///   - modifications   — replay the source modifications log (default)
-    ///   - version-join    — reconcile by version comparison against a base checkpoint
-    #[clap(long("delta-mode"))]
-    delta_mode: Option<String>,
 
     /// Base checkpoint blake3 hash to pin (hex). Optional; when omitted the
     /// latest common checkpoint is used.
@@ -216,16 +205,6 @@ fn parse_args() -> Result<ExecutionArgs> {
         PruningMode::OlderNonArchival
     };
 
-    // Arg: delta mode (optional, defaults to Modifications).
-    let delta_mode = if let Some(mode_str) = args.delta_mode.as_ref() {
-        mode_str.parse::<DeltaMode>().map_err(|e| {
-            eprintln!("Error: --delta-mode argument invalid: {}", e);
-            e
-        })?
-    } else {
-        DeltaMode::default()
-    };
-
     // Arg: base checkpoint hash (optional).
     let base_checkpoint_hash = args.base_checkpoint_hash.clone();
 
@@ -235,7 +214,6 @@ fn parse_args() -> Result<ExecutionArgs> {
         perform_snapshot,
         checkpoint_frequency,
         pruning_mode,
-        delta_mode,
         base_checkpoint_hash,
     })
 }

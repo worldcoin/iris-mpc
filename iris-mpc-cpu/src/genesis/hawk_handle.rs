@@ -12,7 +12,7 @@ use crate::{
     },
 };
 use eyre::{bail, eyre, OptionExt, Result};
-use iris_mpc_common::{helpers::smpc_request, VectorId};
+use iris_mpc_common::VectorId;
 use itertools::{izip, Itertools};
 use std::{
     future::Future,
@@ -104,7 +104,6 @@ impl Handle {
 }
 
 /// Search + insert `vector_id` for one eye from the worker pool's iris.
-/// Shared by the modification-replay and version-replay job arms.
 async fn replay_serial_for_side(
     session: &HawkSession,
     searcher: &HnswSearcher,
@@ -305,70 +304,6 @@ impl Handle {
                     ),
                 ))
             }
-            JobRequest::Modification { modification } => {
-                let serial_id = modification.serial_id.ok_or(eyre!(
-                    "Genesis received modification with empty serial_id field"
-                ))? as u32;
-
-                let jobs_per_side =
-                    izip!(STORE_IDS, sessions.iter()).map(|(side, sessions_side)| {
-                        let sessions = sessions_side.clone();
-                        let registry = actor.registry(side);
-                        let modification = modification.clone();
-                        let searcher = actor.searcher();
-
-                        async move {
-                            let vector_id_ = registry.get_vector_id(serial_id).await;
-
-                            let session =
-                                sessions.first().ok_or_eyre("Sessions for side are empty")?;
-
-                            match modification.request_type.as_str() {
-                                smpc_request::RESET_UPDATE_MESSAGE_TYPE
-                                | smpc_request::RECOVERY_UPDATE_MESSAGE_TYPE
-                                | smpc_request::REAUTH_MESSAGE_TYPE => {
-                                    let vector_id = vector_id_.ok_or_eyre(
-                                        "Expected vector serial id of update is missing from store",
-                                    )?;
-                                    // TODO remove any prior versions of this vector id from graph
-                                    replay_serial_for_side(session, &searcher, side, vector_id).await
-                                }
-                                smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
-                                    let msg = format!(
-                                        "HawkActor does not support deletion of identities: modification: {:?}",
-                                        modification
-                                    );
-                                    tracing::error!("{}", msg);
-                                    Err(eyre!(msg))
-                                }
-                                _ => {
-                                    let msg = format!(
-                                        "Invalid modification type received: {:?}",
-                                        modification,
-                                    );
-                                    tracing::error!("{}", msg);
-                                    Err(eyre!(msg))
-                                }
-                            }
-                        }
-                    });
-
-                let results_ = parallelize(jobs_per_side.into_iter()).await?;
-                let results: [_; 2] = results_.try_into().unwrap();
-
-                let [left_vector, right_vector] = results;
-
-                assert_eq!(left_vector.version_id(), right_vector.version_id());
-                assert_eq!(left_vector.serial_id(), right_vector.serial_id());
-
-                metrics::histogram!("genesis_modification_duration")
-                    .record(now.elapsed().as_secs_f64());
-
-                Ok((
-                    done_rx,
-                    JobResult::new_modification_result(modification.id, left_vector, done_tx),
-                ))
-            }
             JobRequest::VersionReplay {
                 serial_id,
                 removals,
@@ -420,7 +355,7 @@ impl Handle {
 
                 Ok((
                     done_rx,
-                    JobResult::new_version_replay_result(left_vector, done_tx),
+                    JobResult::new_version_replay_result(serial_id, left_vector, done_tx),
                 ))
             }
             JobRequest::SyncState {

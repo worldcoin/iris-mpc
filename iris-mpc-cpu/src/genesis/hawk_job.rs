@@ -6,7 +6,7 @@ use crate::{
     protocol::shared_iris::ArcIris,
 };
 use eyre::Result;
-use iris_mpc_common::{helpers::sync::Modification, SerialId, VectorId};
+use iris_mpc_common::{SerialId, VectorId};
 use std::{
     fmt,
     sync::{atomic::AtomicU8, Arc},
@@ -53,15 +53,11 @@ pub enum JobRequest {
         /// Irises to cache in worker pools before search, per eye [LEFT, RIGHT].
         irises_to_cache: BothEyes<Vec<(QueryId, ArcIris)>>,
     },
-    Modification {
-        /// Modification entry for processing.
-        modification: Modification,
-    },
-    /// Graph surgery for one serial (version-join delta mode): remove every
+    /// Graph surgery for one serial (version-join delta): remove every
     /// existing graph key, then optionally search + re-insert the current
     /// source version.
     VersionReplay {
-        serial_id: u32,
+        serial_id: SerialId,
         /// Existing graph keys per eye, removed before the insertion search.
         removals: BothEyes<Vec<VectorId>>,
         /// False for deletion tombstones: remove only.
@@ -88,12 +84,8 @@ impl JobRequest {
         }
     }
 
-    pub fn new_modification(modification: Modification) -> Self {
-        Self::Modification { modification }
-    }
-
     pub fn new_version_replay(
-        serial_id: u32,
+        serial_id: SerialId,
         removals: BothEyes<Vec<VectorId>>,
         reinsert: bool,
     ) -> Self {
@@ -124,16 +116,11 @@ pub enum JobResult {
         last_serial_id: SerialId,
         done_tx: sync::oneshot::Sender<()>,
     },
-    Modification {
-        /// Modification id of associated modifications table entry.
-        modification_id: i64,
-
-        /// Vector id for persistence.
-        vector_id_to_persist: VectorId,
-
-        done_tx: sync::oneshot::Sender<()>,
-    },
     VersionReplay {
+        /// Serial the surgery targeted (present for remove-only completions
+        /// too, so every completion is attributable in logs).
+        serial_id: SerialId,
+
         /// Vector id for persistence; `None` for remove-only surgery.
         vector_id_to_persist: Option<VectorId>,
 
@@ -172,23 +159,13 @@ impl JobResult {
         }
     }
 
-    pub(crate) fn new_modification_result(
-        modification_id: i64,
-        vector_id_to_persist: VectorId,
-        done_tx: sync::oneshot::Sender<()>,
-    ) -> Self {
-        Self::Modification {
-            modification_id,
-            vector_id_to_persist,
-            done_tx,
-        }
-    }
-
     pub(crate) fn new_version_replay_result(
+        serial_id: SerialId,
         vector_id_to_persist: Option<VectorId>,
         done_tx: sync::oneshot::Sender<()>,
     ) -> Self {
         Self::VersionReplay {
+            serial_id,
             vector_id_to_persist,
             done_tx,
         }
@@ -225,26 +202,22 @@ impl fmt::Display for JobResult {
                     last_serial_id
                 )
             }
-            JobResult::Modification {
-                modification_id, ..
-            } => {
-                write!(
-                    f,
-                    "JobResult::Modification: modification-id={}",
-                    modification_id
-                )
-            }
             JobResult::VersionReplay {
+                serial_id,
                 vector_id_to_persist,
                 ..
             } => match vector_id_to_persist {
                 Some(vid) => write!(
                     f,
                     "JobResult::VersionReplay: serial-id={}, version-id={}",
-                    vid.serial_id(),
+                    serial_id,
                     vid.version_id()
                 ),
-                None => write!(f, "JobResult::VersionReplay: remove-only"),
+                None => write!(
+                    f,
+                    "JobResult::VersionReplay: serial-id={}, remove-only",
+                    serial_id
+                ),
             },
             JobResult::SyncState { mismatched } => {
                 write!(f, "JobResult::SyncState: mismatched={}", mismatched)

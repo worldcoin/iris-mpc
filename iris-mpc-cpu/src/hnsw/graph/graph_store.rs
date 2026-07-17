@@ -242,6 +242,36 @@ impl<V: VectorStore> GraphPg<V> {
         Ok(row)
     }
 
+    /// Returns the newest genesis graph checkpoint with the given blake3 hash,
+    /// from anywhere in checkpoint history.
+    pub async fn get_genesis_graph_checkpoint_by_hash(
+        &self,
+        blake3_hash: &str,
+    ) -> Result<Option<GraphCheckpointRow>> {
+        let row = sqlx::query_as::<_, GraphCheckpointRow>(
+            r#"
+            SELECT
+                id,
+                s3_key,
+                last_indexed_iris_id,
+                last_indexed_modification_id,
+                graph_mutation_id,
+                blake3_hash,
+                is_archival,
+                graph_version
+            FROM genesis_graph_checkpoint
+            WHERE blake3_hash = $1
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(blake3_hash)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row)
+    }
+
     /// Returns genesis graph checkpoints in descending order
     pub async fn get_genesis_graph_checkpoints(&self) -> Result<Vec<GraphCheckpointRow>> {
         let rows = sqlx::query_as::<_, GraphCheckpointRow>(
@@ -514,12 +544,13 @@ impl<'b, V: VectorStore> GraphTx<'b, V> {
         Ok(())
     }
 
-    /// Delete `genesis_graph_checkpoint` rows whose `last_indexed_iris_id` is
-    /// strictly greater than the pinned checkpoint's. Abandoned-lineage entries
-    /// left by prior runs must not win the next run's latest-common selection.
-    pub async fn delete_checkpoints_after(&mut self, last_indexed_iris_id: u32) -> Result<()> {
-        sqlx::query("DELETE FROM genesis_graph_checkpoint WHERE last_indexed_iris_id > $1")
-            .bind(i64::from(last_indexed_iris_id))
+    /// Delete `genesis_graph_checkpoint` rows created after the pinned row
+    /// (row id order == creation order). Abandoned-lineage entries left by
+    /// prior runs — including same-height ones — must not win the next run's
+    /// latest-common selection.
+    pub async fn delete_checkpoints_after_id(&mut self, checkpoint_row_id: i64) -> Result<()> {
+        sqlx::query("DELETE FROM genesis_graph_checkpoint WHERE id > $1")
+            .bind(checkpoint_row_id)
             .execute(self.tx.deref_mut())
             .await?;
         Ok(())

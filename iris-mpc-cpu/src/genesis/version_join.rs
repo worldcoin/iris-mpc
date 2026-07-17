@@ -1,18 +1,28 @@
-//! Pure set computation for the version-join delta mode.
+//! Pure set computation for the genesis version-join delta.
 //!
 //! Graph work is uniform surgery — remove every key for the serial, then
 //! search + reinsert at the current source version — applied to any serial
-//! with a suspect lineage: version behind or ahead of the source, several
-//! keys (ghosts), or absent from the graph.
+//! that disagrees with the source on any axis: graph version behind or ahead,
+//! several keys (ghosts), absent from the graph, or an HNSW iris row that is
+//! missing or at the wrong version (a row-level disagreement means the graph
+//! entry may have been built against wrong content, so graph-key equality
+//! alone is not trustworthy).
+//!
+//! Plans are computed per eye and unioned by the driver: source and HNSW row
+//! versions are per-serial (eye-invariant), so only per-eye graph state can
+//! differ, and asymmetric per-eye damage is repairable by uniform surgery
+//! (reinsertion is a harmless refresh for a clean eye).
 //!
 //! Deletion is invisible to version comparison (it bumps the source version
-//! and writes dummy shares); [`VersionJoinPlan::split`] separates tombstones
-//! (remove only) from live serials (remove + reinsert).
+//! and writes dummy shares); [`split_surgery`] separates tombstones (remove
+//! only) from live serials (remove + reinsert).
 
 use iris_mpc_common::{SerialId, VersionId};
 use std::collections::{HashMap, HashSet};
 
-/// Why serials entered the surgery set; one exclusive class per serial.
+/// Per-class counts over one eye's surgery set; logging/metrics only. The
+/// graph classes are mutually exclusive per serial; the store classes are
+/// independent of them.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SurgeryReasons {
     /// `max graph version < source version`.
@@ -23,46 +33,66 @@ pub struct SurgeryReasons {
     pub multi_version: usize,
     /// Present in source but absent from the graph.
     pub graph_missing: usize,
+    /// HNSW iris row absent.
+    pub row_missing: usize,
+    /// HNSW iris row version differs from source.
+    pub row_mismatch: usize,
 }
 
-impl SurgeryReasons {
-    pub fn total(&self) -> usize {
-        self.version_behind + self.version_ahead + self.multi_version + self.graph_missing
-    }
-}
-
-/// The version-comparison output of [`compute_version_join`]. All serial
-/// vectors are sorted ascending, so processing order is identical across
-/// parties.
+/// The version-comparison output of [`compute_version_join`] for one eye. All
+/// serial vectors are sorted ascending, so processing order is identical
+/// across parties.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct VersionJoinPlan {
     /// Serials needing graph surgery: remove every existing key, then reinsert
-    /// at the current source version iff live (see [`Self::split`]).
+    /// at the current source version iff live (see [`split_surgery`]).
     pub graph_surgery: Vec<SerialId>,
-    /// Per-class breakdown of `graph_surgery`.
+    /// Per-class breakdown of `graph_surgery`, for logging only.
     pub surgery_reasons: SurgeryReasons,
-    /// Non-surgery serials whose HNSW iris row disagrees with the source.
-    pub store_repair: Vec<SerialId>,
-    /// Serials (surgery or not) with no HNSW row at all; INSERTed during the
-    /// store-repair phase so a later replay UPDATE finds a row. Subset of
-    /// `store_repair`.
+    /// Serials with no HNSW row at all; INSERTed at the row-write flush.
+    /// Subset of `graph_surgery`. Eye-invariant.
     pub missing_hnsw_rows: Vec<SerialId>,
-    /// `serial ≤ max_serial` absent from the source pool. Logged, not acted on.
+    /// `serial ≤ max_serial` absent from the source pool. Logged, not acted
+    /// on. Eye-invariant.
     pub source_missing: Vec<SerialId>,
 }
 
-/// Final action sets after the deletion split.
+/// Final action sets after the deletion split. All row writes are deferred to
+/// a single flush once the rebuilt graph is durable (see [`Self::row_writes`]):
+/// a row that turns source-consistent earlier would erase its own surgery
+/// trigger while the distrusted graph could still be lost.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SurgeryPlan {
     /// Live serials: remove all existing keys, then MPC search + insert at the
-    /// current source version, and persist the HNSW row.
+    /// current source version; the HNSW row is rewritten at flush.
     pub graph_replay: Vec<SerialId>,
     /// Deletion tombstones with graph presence: remove all keys, no reinsert.
     pub graph_remove: Vec<SerialId>,
-    /// Serials whose HNSW iris row is overwritten from the pool.
-    pub store_repair: Vec<SerialId>,
-    /// Subset of `store_repair` to INSERT instead of UPDATE.
-    pub missing_hnsw_rows: Vec<SerialId>,
+    /// Serials without an HNSW row: INSERTed (source content) at flush.
+    pub insert_missing_rows: Vec<SerialId>,
+    /// Tombstones with a stale HNSW row: overwritten from source content at
+    /// flush (no replay covers their row).
+    pub tombstone_row_overwrite: Vec<SerialId>,
+}
+
+impl SurgeryPlan {
+    /// Row writes for the flush: `(inserts, updates)`, both sorted. Inserts
+    /// are the absent rows; updates are every replayed serial plus the
+    /// tombstone overwrites, minus the freshly inserted rows.
+    pub fn row_writes(&self) -> (Vec<SerialId>, Vec<SerialId>) {
+        let inserts = self.insert_missing_rows.clone();
+        let insert_set: HashSet<SerialId> = inserts.iter().copied().collect();
+        let mut updates: Vec<SerialId> = self
+            .graph_replay
+            .iter()
+            .chain(self.tombstone_row_overwrite.iter())
+            .filter(|s| !insert_set.contains(s))
+            .copied()
+            .collect();
+        updates.sort_unstable();
+        updates.dedup();
+        (inserts, updates)
+    }
 }
 
 /// Fold `(serial, version)` pairs into all versions per serial. Per-serial
@@ -77,11 +107,11 @@ pub fn versions_per_serial(
     out
 }
 
-/// Compute the version-join plan over `1..=max_serial`. Pure: no I/O.
+/// Compute one eye's version-join plan over `1..=max_serial`. Pure: no I/O.
 ///
 /// `graph_versions` must carry every graph key per serial (see
 /// [`versions_per_serial`]). Deletions are not distinguished here;
-/// [`VersionJoinPlan::split`] resolves the tombstones.
+/// [`split_surgery`] resolves the tombstones.
 pub fn compute_version_join(
     graph_versions: &HashMap<SerialId, Vec<VersionId>>,
     source_versions: &HashMap<SerialId, VersionId>,
@@ -96,8 +126,8 @@ pub fn compute_version_join(
             continue;
         };
 
-        // Graph axis: any suspect lineage goes to surgery.
-        let surgery = match graph_versions.get(&serial) {
+        // Graph axis.
+        let mut surgery = match graph_versions.get(&serial) {
             None => {
                 plan.surgery_reasons.graph_missing += 1;
                 true
@@ -121,66 +151,71 @@ pub fn compute_version_join(
                 }
             }
         };
-        if surgery {
-            plan.graph_surgery.push(serial);
-        }
 
-        // Store axis: a missing row is inserted even under surgery (replay
-        // persistence is an UPDATE); a stale row under surgery is left to the
-        // replay, except for tombstones (`split` routes those to store repair).
+        // Store axis: any row disagreement is surgery too. A missing row is
+        // additionally INSERTed at flush; a stale live row is rewritten by
+        // the replay's flush entry, and a stale tombstone row by the
+        // overwrite `split_surgery` routes it to.
         match hnsw_versions.get(&serial) {
             None => {
-                plan.store_repair.push(serial);
+                plan.surgery_reasons.row_missing += 1;
                 plan.missing_hnsw_rows.push(serial);
+                surgery = true;
             }
-            Some(&v_hnsw) if v_hnsw != v_src && !surgery => {
-                plan.store_repair.push(serial);
+            Some(&v_hnsw) if v_hnsw != v_src => {
+                plan.surgery_reasons.row_mismatch += 1;
+                surgery = true;
             }
             Some(_) => {}
+        }
+
+        if surgery {
+            plan.graph_surgery.push(serial);
         }
     }
 
     plan
 }
 
-impl VersionJoinPlan {
-    /// Split surgery into replay vs remove-only using `deleted` (serials whose
-    /// source content is the deletion tombstone). Tombstones without graph
-    /// presence are dropped; tombstones with a stale HNSW row are added to
-    /// `store_repair` (no replay rewrites their row).
-    pub fn split(
-        &self,
-        deleted: &HashSet<SerialId>,
-        graph_versions: &HashMap<SerialId, Vec<VersionId>>,
-        source_versions: &HashMap<SerialId, VersionId>,
-        hnsw_versions: &HashMap<SerialId, VersionId>,
-    ) -> SurgeryPlan {
-        let mut out = SurgeryPlan {
-            store_repair: self.store_repair.clone(),
-            missing_hnsw_rows: self.missing_hnsw_rows.clone(),
-            ..Default::default()
-        };
+/// Split the (cross-eye union) surgery set into per-action lists.
+///
+/// `deleted` holds the tombstones (serials whose source content is the
+/// deletion dummy); `graph_presence` holds serials with at least one graph key
+/// in either eye. Tombstones without graph presence get no graph job;
+/// tombstones with a stale HNSW row go to `tombstone_row_overwrite`, those
+/// without a row are already covered by `insert_missing_rows` (inserted with
+/// source content, i.e. the tombstone).
+pub fn split_surgery(
+    surgery: &[SerialId],
+    missing_hnsw_rows: &[SerialId],
+    deleted: &HashSet<SerialId>,
+    graph_presence: &HashSet<SerialId>,
+    source_versions: &HashMap<SerialId, VersionId>,
+    hnsw_versions: &HashMap<SerialId, VersionId>,
+) -> SurgeryPlan {
+    let mut out = SurgeryPlan {
+        insert_missing_rows: missing_hnsw_rows.to_vec(),
+        ..Default::default()
+    };
 
-        for &serial in &self.graph_surgery {
-            if !deleted.contains(&serial) {
-                out.graph_replay.push(serial);
-                continue;
-            }
-            if graph_versions.contains_key(&serial) {
-                out.graph_remove.push(serial);
-            }
-            let stale_row = match (hnsw_versions.get(&serial), source_versions.get(&serial)) {
-                (Some(v_hnsw), Some(v_src)) => v_hnsw != v_src,
-                _ => false,
-            };
-            if stale_row {
-                out.store_repair.push(serial);
-            }
+    for &serial in surgery {
+        if !deleted.contains(&serial) {
+            out.graph_replay.push(serial);
+            continue;
         }
-        out.store_repair.sort_unstable();
-
-        out
+        if graph_presence.contains(&serial) {
+            out.graph_remove.push(serial);
+        }
+        let stale_row = match (hnsw_versions.get(&serial), source_versions.get(&serial)) {
+            (Some(v_hnsw), Some(v_src)) => v_hnsw != v_src,
+            _ => false,
+        };
+        if stale_row {
+            out.tombstone_row_overwrite.push(serial);
+        }
     }
+
+    out
 }
 
 #[cfg(test)]
@@ -199,6 +234,24 @@ mod tests {
         serials.iter().copied().collect()
     }
 
+    fn split(
+        plan: &VersionJoinPlan,
+        deleted: &HashSet<SerialId>,
+        graph_versions: &HashMap<SerialId, Vec<VersionId>>,
+        source_versions: &HashMap<SerialId, VersionId>,
+        hnsw_versions: &HashMap<SerialId, VersionId>,
+    ) -> SurgeryPlan {
+        let presence: HashSet<SerialId> = graph_versions.keys().copied().collect();
+        split_surgery(
+            &plan.graph_surgery,
+            &plan.missing_hnsw_rows,
+            deleted,
+            &presence,
+            source_versions,
+            hnsw_versions,
+        )
+    }
+
     #[test]
     fn versions_per_serial_collects_all_keys() {
         let m = versions_per_serial([(1u32, 3i16), (1, 1), (2, 5)]);
@@ -207,13 +260,14 @@ mod tests {
     }
 
     #[test]
-    fn version_behind_is_surgery_without_store_repair() {
-        // Graph behind source; stale HNSW row is left to the replay path.
+    fn version_behind_is_surgery() {
         let g = graph(&[(1, &[3])]);
         let plan = compute_version_join(&g, &map(&[(1, 4)]), &map(&[(1, 3)]), 1);
         assert_eq!(plan.graph_surgery, vec![1]);
         assert_eq!(plan.surgery_reasons.version_behind, 1);
-        assert!(plan.store_repair.is_empty());
+        // Stale row counted, but the replay rewrites it (no direct action).
+        assert_eq!(plan.surgery_reasons.row_mismatch, 1);
+        assert!(plan.missing_hnsw_rows.is_empty());
     }
 
     #[test]
@@ -226,7 +280,7 @@ mod tests {
         assert_eq!(plan.graph_surgery, vec![1, 2]);
         assert_eq!(plan.surgery_reasons.version_ahead, 1);
         assert_eq!(plan.surgery_reasons.multi_version, 1);
-        assert!(plan.store_repair.is_empty());
+        assert!(plan.missing_hnsw_rows.is_empty());
     }
 
     #[test]
@@ -237,26 +291,33 @@ mod tests {
     }
 
     #[test]
-    fn hnsw_mismatch_both_directions_is_store_repair() {
-        // Clean graph; HNSW row behind (1) and ahead (2) of source.
+    fn hnsw_row_mismatch_with_clean_graph_is_surgery() {
+        // Clean graph; HNSW row behind (1) and ahead (2) of source. A
+        // row-level disagreement disqualifies the graph entry too.
         let g = graph(&[(1, &[5]), (2, &[5])]);
         let source = map(&[(1, 5), (2, 5)]);
         let hnsw = map(&[(1, 4), (2, 6)]);
         let plan = compute_version_join(&g, &source, &hnsw, 2);
-        assert!(plan.graph_surgery.is_empty());
-        assert_eq!(plan.store_repair, vec![1, 2]);
+        assert_eq!(plan.graph_surgery, vec![1, 2]);
+        assert_eq!(plan.surgery_reasons.row_mismatch, 2);
         assert!(plan.missing_hnsw_rows.is_empty());
+
+        // Live rows: no direct row action — the replay rewrites them.
+        let surgery = split(&plan, &set(&[]), &g, &source, &hnsw);
+        assert_eq!(surgery.graph_replay, vec![1, 2]);
+        assert!(surgery.tombstone_row_overwrite.is_empty());
+        assert!(surgery.insert_missing_rows.is_empty());
     }
 
     #[test]
-    fn missing_hnsw_row_is_inserted_even_under_surgery() {
-        // 1: surgery + missing row; 2: clean graph + missing row.
+    fn missing_hnsw_row_is_surgery_and_inserted() {
+        // 1: graph behind + missing row; 2: clean graph + missing row.
         let g = graph(&[(1, &[1]), (2, &[2])]);
         let source = map(&[(1, 2), (2, 2)]);
         let plan = compute_version_join(&g, &source, &map(&[]), 2);
-        assert_eq!(plan.graph_surgery, vec![1]);
-        assert_eq!(plan.store_repair, vec![1, 2]);
+        assert_eq!(plan.graph_surgery, vec![1, 2]);
         assert_eq!(plan.missing_hnsw_rows, vec![1, 2]);
+        assert_eq!(plan.surgery_reasons.row_missing, 2);
     }
 
     #[test]
@@ -265,7 +326,6 @@ mod tests {
         let plan = compute_version_join(&g, &map(&[(2, 1)]), &map(&[(2, 1)]), 2);
         assert_eq!(plan.source_missing, vec![1]);
         assert!(plan.graph_surgery.is_empty());
-        assert!(plan.store_repair.is_empty());
     }
 
     #[test]
@@ -279,20 +339,36 @@ mod tests {
     #[test]
     fn split_routes_live_and_tombstone_surgery() {
         // 1: live, behind → replay. 2: tombstone with ghosts → remove-only,
-        // stale row → store repair. 3: tombstone never indexed → dropped.
+        // stale row → overwrite. 3: tombstone never indexed → no graph job,
+        // missing row inserted (with tombstone content).
         let g = graph(&[(1, &[1]), (2, &[1, 2])]);
         let source = map(&[(1, 2), (2, 3), (3, 2)]);
         let hnsw = map(&[(1, 1), (2, 1)]);
         let plan = compute_version_join(&g, &source, &hnsw, 3);
         assert_eq!(plan.graph_surgery, vec![1, 2, 3]);
-        // 3 has no HNSW row → inserted (with tombstone content) via store repair.
         assert_eq!(plan.missing_hnsw_rows, vec![3]);
 
-        let surgery = plan.split(&set(&[2, 3]), &g, &source, &hnsw);
+        let surgery = split(&plan, &set(&[2, 3]), &g, &source, &hnsw);
         assert_eq!(surgery.graph_replay, vec![1]);
         assert_eq!(surgery.graph_remove, vec![2]);
-        assert_eq!(surgery.store_repair, vec![2, 3]);
-        assert_eq!(surgery.missing_hnsw_rows, vec![3]);
+        assert_eq!(surgery.tombstone_row_overwrite, vec![2]);
+        assert_eq!(surgery.insert_missing_rows, vec![3]);
+    }
+
+    #[test]
+    fn row_writes_updates_exclude_fresh_inserts() {
+        // 1: replayed, row present → update. 2: replayed, row absent →
+        // insert only. 3: tombstone overwrite → update. 4: tombstone,
+        // row absent → insert only.
+        let plan = SurgeryPlan {
+            graph_replay: vec![1, 2],
+            graph_remove: vec![3, 4],
+            insert_missing_rows: vec![2, 4],
+            tombstone_row_overwrite: vec![3],
+        };
+        let (inserts, updates) = plan.row_writes();
+        assert_eq!(inserts, vec![2, 4]);
+        assert_eq!(updates, vec![1, 3]);
     }
 
     #[test]
@@ -301,9 +377,25 @@ mod tests {
         let source = map(&[(1, 2)]);
         let hnsw = map(&[(1, 2)]);
         let plan = compute_version_join(&g, &source, &hnsw, 1);
-        let surgery = plan.split(&set(&[]), &g, &source, &hnsw);
+        let surgery = split(&plan, &set(&[]), &g, &source, &hnsw);
         assert_eq!(surgery.graph_replay, vec![1]);
         assert!(surgery.graph_remove.is_empty());
-        assert!(surgery.store_repair.is_empty());
+        assert!(surgery.tombstone_row_overwrite.is_empty());
+    }
+
+    #[test]
+    fn per_eye_plans_differ_only_on_graph_axis() {
+        // Ghost in one eye only: that eye classifies multi_version, the other
+        // is clean. The driver unions the sets; both eyes get uniform surgery.
+        let g_left = graph(&[(1, &[1, 2])]);
+        let g_right = graph(&[(1, &[2])]);
+        let source = map(&[(1, 2)]);
+        let hnsw = map(&[(1, 2)]);
+        let left = compute_version_join(&g_left, &source, &hnsw, 1);
+        let right = compute_version_join(&g_right, &source, &hnsw, 1);
+        assert_eq!(left.graph_surgery, vec![1]);
+        assert!(right.graph_surgery.is_empty());
+        assert_eq!(left.missing_hnsw_rows, right.missing_hnsw_rows);
+        assert_eq!(left.source_missing, right.source_missing);
     }
 }
