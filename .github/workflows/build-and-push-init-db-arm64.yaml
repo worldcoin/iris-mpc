@@ -8,6 +8,9 @@ name: Init-DB Build and push Arm64 docker image
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - "sw/updated_dev_cluster_testing"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
