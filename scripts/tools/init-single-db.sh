@@ -59,8 +59,8 @@ echo "starting graph restore + checkpoint"
   --s3-bucket "$GRAPH_CHECKPOINT_S3_BUCKET" \
   --party-id "$PARTY_ID" \
   --aws-region "$GRAPH_CHECKPOINT_S3_REGION" \
-  --graph-format "$GRAPH_FORMAT" \
-  load-checkpoint 
+  load-checkpoint --graph-format "${GRAPH_FORMAT}"
+
 echo "graph restore + checkpoint done"
 echo "init complete"
 
