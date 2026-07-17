@@ -1,4 +1,7 @@
 env:
+  - name: GRAPH_CHECKPOINT_S3_BUCKET
+    value: "wf-smpcv2-dev-hnsw-performance-reports"
+    
   - name: GENESIS_MAX_HEIGHT
     value: "1750064"
 
