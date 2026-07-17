@@ -39,9 +39,9 @@ echo "iris init done"
 # Record last_indexed_iris_id BEFORE the checkpoint: load-checkpoint embeds
 # this value into the checkpoint row it creates.
 # ---------------------------------------------------------------------------
-psql "$DB_URL" -c "
-INSERT INTO persistent_state (domain, \"key\", \"value\")
-VALUES ('genesis', 'last_indexed_iris_id', '$TARGET_DB_SIZE')
+psql "${DB_URL}" -v ON_ERROR_STOP=1 -c "
+INSERT INTO \"${DB_SCHEMA}\".persistent_state (domain, \"key\", \"value\")
+VALUES ('genesis', 'last_indexed_iris_id', '${TARGET_DB_SIZE}')
 ON CONFLICT (domain, \"key\")
 DO UPDATE SET \"value\" = EXCLUDED.\"value\";
 "
