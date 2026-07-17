@@ -18,8 +18,8 @@ GRAPH_CHECKPOINT_S3_REGION="${GRAPH_CHECKPOINT_S3_REGION:-eu-central-1}"
 
 echo "downloading plaintext irises and graph from s3"
 
-aws s3 cp "s3://wf-smpcv2-dev-hnsw-performance-reports/${GRAPH_FILE}.gz" "/tmp/${GRAPH_FILE}.gz"
-aws s3 cp "s3://wf-smpcv2-dev-hnsw-performance-reports/${IRISES_FILE}.gz" "/tmp/${IRISES_FILE}.gz"
+aws s3 cp "s3://wf-smpcv2-dev-hnsw-performance-reports/${GRAPH_FILE}.gz" "/tmp/${GRAPH_FILE}.gz" --only-show-errors
+aws s3 cp "s3://wf-smpcv2-dev-hnsw-performance-reports/${IRISES_FILE}.gz" "/tmp/${IRISES_FILE}.gz" --only-show-errors
 
 echo "download complete. unzipping"
 
@@ -59,7 +59,8 @@ echo "starting graph restore + checkpoint"
   --s3-bucket "$GRAPH_CHECKPOINT_S3_BUCKET" \
   --party-id "$PARTY_ID" \
   --aws-region "$GRAPH_CHECKPOINT_S3_REGION" \
-  load-checkpoint --graph-format "$GRAPH_FORMAT"
+  --graph-format "$GRAPH_FORMAT" \
+  load-checkpoint 
 echo "graph restore + checkpoint done"
 echo "init complete"
 
