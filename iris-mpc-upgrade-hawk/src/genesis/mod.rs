@@ -43,7 +43,8 @@ use iris_mpc_cpu::{
             Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
         },
         version_join::{
-            compute_version_join, split_surgery, versions_per_serial, SurgeryPlan, VersionJoinPlan,
+            compute_version_join, partition_repair, versions_per_serial, RepairPlan,
+            VersionJoinPlan,
         },
         BatchGenerator, BatchIterator, Handle as GenesisHawkHandle, IndexationError, JobRequest,
         JobResult,
@@ -78,8 +79,8 @@ const DEFAULT_REGION: &str = "eu-north-1";
 
 // Delta consensus exchange over the coordination server: each node publishes
 // its value into a slot served on a GET route and polls the peers' slots.
-const DELTA_SURGERY_ROUTE: &str = "/delta-surgery";
-const DELTA_SURGERY_ENDPOINT: &str = "delta-surgery";
+const DELTA_REPAIR_ROUTE: &str = "/delta-repair";
+const DELTA_REPAIR_ENDPOINT: &str = "delta-repair";
 const DELTA_TOMBSTONES_ROUTE: &str = "/delta-tombstones";
 const DELTA_TOMBSTONES_ENDPOINT: &str = "delta-tombstones";
 const DELTA_EXCHANGE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -89,14 +90,14 @@ type DeltaExchangeSlot = Arc<tokio::sync::RwLock<Option<Vec<u8>>>>;
 
 /// Server-side slots backing the delta consensus routes.
 pub struct DeltaExchangeSlots {
-    surgery: DeltaExchangeSlot,
+    repair: DeltaExchangeSlot,
     tombstones: DeltaExchangeSlot,
 }
 
 impl DeltaExchangeSlots {
     fn new() -> Self {
         Self {
-            surgery: Arc::new(tokio::sync::RwLock::new(None)),
+            repair: Arc::new(tokio::sync::RwLock::new(None)),
             tombstones: Arc::new(tokio::sync::RwLock::new(None)),
         }
     }
@@ -496,8 +497,8 @@ async fn exec_setup(
             get(move || async move { serde_json::to_string(&hashes).unwrap() }),
         )
         .route(
-            DELTA_SURGERY_ROUTE,
-            delta_slot_route(delta_exchange.surgery.clone()),
+            DELTA_REPAIR_ROUTE,
+            delta_slot_route(delta_exchange.repair.clone()),
         )
         .route(
             DELTA_TOMBSTONES_ROUTE,
@@ -720,12 +721,12 @@ async fn exec_setup(
 ///
 /// The base checkpoint has already been loaded into the in-memory graph and the
 /// HNSW schema reset to it (see `reset_to_checkpoint`). Computes per-eye plans,
-/// unions them across eyes and parties, runs graph surgery via the Hawk handle,
-/// and only then writes iris rows.
+/// unions them across eyes and parties, runs the graph repair via the Hawk
+/// handle, and only then writes iris rows.
 ///
 /// Ordering invariant: no HNSW row becomes source-consistent before the
-/// rebuilt graph is durable (the post-delta checkpoint). Row disagreements are
-/// surgery triggers; writing a row first and crashing before the checkpoint
+/// repaired graph is durable (the post-delta checkpoint). Row disagreements are
+/// repair triggers; writing a row first and crashing before the checkpoint
 /// would erase the trigger while the distrusted graph survives. A crash
 /// anywhere before the flush leaves rows untouched, so a rerun re-derives the
 /// same plan. With no graph change the flush runs immediately (no graph
@@ -756,7 +757,7 @@ async fn exec_delta(
         .as_ref()
         .ok_or(eyre!("Missing server coordination config"))?;
 
-    let res: Result<(bool, SurgeryPlan)> = async {
+    let res: Result<(bool, RepairPlan)> = async {
         // 1. Build the version state per eye and compute per-eye plans.
         //    hnsw_versions is a single DB scan (one iris row covers both eyes);
         //    source versions are eye-invariant (one source row covers both
@@ -778,21 +779,21 @@ async fn exec_delta(
             )
         });
 
-        // Local surgery set = union across eyes. Only per-eye graph state can
+        // Local repair set = union across eyes. Only per-eye graph state can
         // differ (the store axis is eye-invariant); asymmetric per-eye damage
         // is repairable — removals stay per-eye, reinsertion is uniform (a
         // harmless refresh for the clean eye).
         log_per_eye_asymmetries(&plans, &graph_versions, &source_versions);
-        let mut local_surgery: Vec<SerialId> = plans[LEFT]
-            .graph_surgery
+        let mut local_repair: Vec<SerialId> = plans[LEFT]
+            .graph_repair
             .iter()
-            .chain(plans[RIGHT].graph_surgery.iter())
+            .chain(plans[RIGHT].graph_repair.iter())
             .copied()
             .collect();
-        local_surgery.sort_unstable();
-        local_surgery.dedup();
+        local_repair.sort_unstable();
+        local_repair.dedup();
 
-        // 2. Cross-party surgery membership. Every replay is an interactive
+        // 2. Cross-party repair membership. Every replay is an interactive
         //    MPC job that all parties must submit identically, but the row
         //    axis is party-local — so exchange the local sets and take the
         //    union. A replay on a party whose local state was clean is a
@@ -800,19 +801,19 @@ async fn exec_delta(
         delta_exchange_barrier(&mut hawk_handle, shutdown_handler).await?;
         let peer_sets: Vec<Vec<SerialId>> = exchange_delta_state(
             server_coord_config,
-            &delta_exchange.surgery,
-            DELTA_SURGERY_ENDPOINT,
-            &local_surgery,
+            &delta_exchange.repair,
+            DELTA_REPAIR_ENDPOINT,
+            &local_repair,
         )
         .await?;
-        let surgery_serials = union_surgery_with_peers(&local_surgery, &peer_sets);
+        let repair_serials = union_repair_with_peers(&local_repair, &peer_sets);
 
-        // 3. Tombstones among surgery serials, by content check against the
+        // 3. Tombstones among repair serials, by content check against the
         //    party's dummy shares. The classification gates the reinsert flag,
         //    so parties must agree; a mismatch means source-level content
-        //    inconsistency, which surgery must not paper over.
+        //    inconsistency, which the repair must not paper over.
         let deleted =
-            gather_tombstones(config.party_id, &surgery_serials, registries, worker_pools).await?;
+            gather_tombstones(config.party_id, &repair_serials, registries, worker_pools).await?;
         let deleted_hash = {
             let mut h = SetHash::default();
             for s in &deleted {
@@ -836,16 +837,16 @@ async fn exec_delta(
             );
         }
 
-        let graph_presence: HashSet<SerialId> = graph_versions[LEFT]
+        let serials_in_graph: HashSet<SerialId> = graph_versions[LEFT]
             .keys()
             .chain(graph_versions[RIGHT].keys())
             .copied()
             .collect();
-        let surgery = split_surgery(
-            &surgery_serials,
+        let repair = partition_repair(
+            &repair_serials,
             &plans[LEFT].missing_hnsw_rows,
             &deleted,
-            &graph_presence,
+            &serials_in_graph,
             &source_versions,
             &hnsw_versions,
         );
@@ -853,22 +854,22 @@ async fn exec_delta(
         // 4. Comparison log (join vs modifications, deletion cross-checks) + metrics.
         log_version_join_comparison(
             &plans,
-            &surgery_serials,
-            &surgery,
+            &repair_serials,
+            &repair,
             &deleted,
             &excluded,
             &ctx.modifications,
             ctx.max_modification_persist_id,
         );
 
-        // 5. Graph surgery: replays and removals in serial order, one job per
+        // 5. Graph repair: replays and removals in serial order, one job per
         //    serial, syncing periodically. Removing an entry point is fine
         //    (the searcher falls back to a temporary EP). No row writes here.
-        let mut items: Vec<(SerialId, bool)> = surgery
+        let mut items: Vec<(SerialId, bool)> = repair
             .graph_replay
             .iter()
             .map(|s| (*s, true))
-            .chain(surgery.graph_remove.iter().map(|s| (*s, false)))
+            .chain(repair.graph_remove.iter().map(|s| (*s, false)))
             .collect();
         items.sort_unstable_by_key(|(serial, _)| *serial);
 
@@ -929,12 +930,12 @@ async fn exec_delta(
             }
         }
 
-        Ok((!items.is_empty(), surgery))
+        Ok((!items.is_empty(), repair))
     }
     .await;
 
     match res {
-        Ok((graph_changed, surgery)) => {
+        Ok((graph_changed, repair)) => {
             tracing::info!("Waiting for version replays to be processed...");
             let _ = shutdown_handler.wait_for_pending_batches_completion().await;
             tracing::info!("All version replays have been processed");
@@ -971,8 +972,8 @@ async fn exec_delta(
             }
 
             // Row writes last: the graph repair is durable, so erasing the
-            // row-level surgery triggers is now safe.
-            flush_row_writes(&surgery, registries, worker_pools, hnsw_iris_store).await?;
+            // row-level repair triggers is now safe.
+            flush_row_writes(&repair, registries, worker_pools, hnsw_iris_store).await?;
 
             Ok(hawk_handle)
         }
@@ -1042,7 +1043,7 @@ async fn gather_tombstones(
         let mut vids: Vec<VectorId> = Vec::with_capacity(chunk.len());
         for (serial, maybe) in chunk.iter().zip(maybe_vids) {
             let vid =
-                maybe.ok_or_else(|| eyre!("surgery serial {serial} missing from registry"))?;
+                maybe.ok_or_else(|| eyre!("repair serial {serial} missing from registry"))?;
             vids.push(vid);
         }
 
@@ -1110,9 +1111,9 @@ fn log_per_eye_asymmetries(
     };
 
     for (side, name) in [(LEFT, "left"), (RIGHT, "right")] {
-        let other: HashSet<SerialId> = plans[1 - side].graph_surgery.iter().copied().collect();
+        let other: HashSet<SerialId> = plans[1 - side].graph_repair.iter().copied().collect();
         let only: Vec<(SerialId, &'static str)> = plans[side]
-            .graph_surgery
+            .graph_repair
             .iter()
             .filter(|s| !other.contains(s))
             .map(|&s| (s, graph_class(side, s)))
@@ -1133,8 +1134,8 @@ fn log_per_eye_asymmetries(
 /// (tombstones, row repairs), which graph checksums do not cover.
 fn log_version_join_comparison(
     plans: &[VersionJoinPlan; 2],
-    surgery_serials: &[SerialId],
-    surgery: &SurgeryPlan,
+    repair_serials: &[SerialId],
+    repair: &RepairPlan,
     deleted: &HashSet<SerialId>,
     excluded: &HashSet<SerialId>,
     modifications: &[Modification],
@@ -1142,7 +1143,7 @@ fn log_version_join_comparison(
 ) {
     const SAMPLE: usize = 50;
 
-    let join_set: HashSet<SerialId> = surgery_serials.iter().copied().collect();
+    let join_set: HashSet<SerialId> = repair_serials.iter().copied().collect();
     let mod_set: HashSet<SerialId> = modifications
         .iter()
         .filter_map(|m| m.serial_id.map(|s| s as SerialId))
@@ -1158,7 +1159,7 @@ fn log_version_join_comparison(
 
     // Listed ∧ live = reinserted after deletion (replayed); tombstone ∉ list =
     // deletion the list missed.
-    let listed_live: Vec<SerialId> = surgery
+    let listed_live: Vec<SerialId> = repair
         .graph_replay
         .iter()
         .filter(|s| excluded.contains(s))
@@ -1181,19 +1182,19 @@ fn log_version_join_comparison(
     let sample = |v: &[SerialId]| v[..v.len().min(SAMPLE)].to_vec();
 
     tracing::info!(
-        "version-join comparison: surgery={} reasons_left={:?} reasons_right={:?} replay={} \
+        "version-join comparison: repair={} reasons_left={:?} reasons_right={:?} replay={} \
          remove={} row_inserts={} tombstone_overwrites={} mod_set={} intersection={} mod_only={} \
          join_only={} source_missing={} listed_live={} mod_cursor_stamp={} | replay_hash={} \
          remove_hash={} mod_hash={} row_insert_hash={} tombstone_overwrite_hash={} | \
          mod_only_sample={:?} join_only_sample={:?} row_insert_sample={:?} \
          tombstone_overwrite_sample={:?}",
-        surgery_serials.len(),
-        plans[LEFT].surgery_reasons,
-        plans[RIGHT].surgery_reasons,
-        surgery.graph_replay.len(),
-        surgery.graph_remove.len(),
-        surgery.insert_missing_rows.len(),
-        surgery.tombstone_row_overwrite.len(),
+        repair_serials.len(),
+        plans[LEFT].repair_reasons,
+        plans[RIGHT].repair_reasons,
+        repair.graph_replay.len(),
+        repair.graph_remove.len(),
+        repair.insert_missing_rows.len(),
+        repair.stale_tombstone_rows.len(),
         mod_set.len(),
         intersection,
         mod_only.len(),
@@ -1201,15 +1202,15 @@ fn log_version_join_comparison(
         plans[LEFT].source_missing.len(),
         listed_live.len(),
         max_modification_persist_id,
-        hash_of(&surgery.graph_replay),
-        hash_of(&surgery.graph_remove),
+        hash_of(&repair.graph_replay),
+        hash_of(&repair.graph_remove),
         hash_of(&mod_all),
-        hash_of(&surgery.insert_missing_rows),
-        hash_of(&surgery.tombstone_row_overwrite),
+        hash_of(&repair.insert_missing_rows),
+        hash_of(&repair.stale_tombstone_rows),
         sample(&mod_only),
         sample(&join_only),
-        sample(&surgery.insert_missing_rows),
-        sample(&surgery.tombstone_row_overwrite),
+        sample(&repair.insert_missing_rows),
+        sample(&repair.stale_tombstone_rows),
     );
 
     if !plans[LEFT].source_missing.is_empty() {
@@ -1228,22 +1229,22 @@ fn log_version_join_comparison(
     }
 
     metrics::gauge!("genesis_version_join_graph_replay_count")
-        .set(surgery.graph_replay.len() as f64);
+        .set(repair.graph_replay.len() as f64);
     metrics::gauge!("genesis_version_join_graph_remove_count")
-        .set(surgery.graph_remove.len() as f64);
+        .set(repair.graph_remove.len() as f64);
     metrics::gauge!("genesis_version_join_row_insert_count")
-        .set(surgery.insert_missing_rows.len() as f64);
+        .set(repair.insert_missing_rows.len() as f64);
     metrics::gauge!("genesis_version_join_tombstone_overwrite_count")
-        .set(surgery.tombstone_row_overwrite.len() as f64);
+        .set(repair.stale_tombstone_rows.len() as f64);
     metrics::gauge!("genesis_version_join_mod_only_count").set(mod_only.len() as f64);
     metrics::gauge!("genesis_version_join_join_only_count").set(join_only.len() as f64);
     metrics::gauge!("genesis_version_join_anomaly_count")
         .set(plans[LEFT].source_missing.len() as f64);
 }
 
-/// Union the local surgery set with the peers', logging per-peer differences
+/// Union the local repair set with the peers', logging per-peer differences
 /// (a non-empty difference = party-local row damage). Output sorted.
-fn union_surgery_with_peers(local: &[SerialId], peer_sets: &[Vec<SerialId>]) -> Vec<SerialId> {
+fn union_repair_with_peers(local: &[SerialId], peer_sets: &[Vec<SerialId>]) -> Vec<SerialId> {
     const SAMPLE: usize = 50;
     let local_set: HashSet<SerialId> = local.iter().copied().collect();
     let mut union: Vec<SerialId> = local.to_vec();
@@ -1261,7 +1262,7 @@ fn union_surgery_with_peers(local: &[SerialId], peer_sets: &[Vec<SerialId>]) -> 
             .collect();
         if !peer_only.is_empty() || !local_only.is_empty() {
             tracing::warn!(
-                "version-join: surgery set differs from peer {}: peer_only={} local_only={} \
+                "version-join: repair set differs from peer {}: peer_only={} local_only={} \
                  peer_only_sample={:?} local_only_sample={:?}",
                 i,
                 peer_only.len(),
@@ -1303,12 +1304,12 @@ async fn fetch_pool_rows(
 /// graph is durable — see the ordering invariant on [`exec_delta`]. Chunked to
 /// bound transaction size.
 async fn flush_row_writes(
-    surgery: &SurgeryPlan,
+    repair: &RepairPlan,
     registries: &BothEyes<VectorIdRegistryRef>,
     worker_pools: &BothEyes<Arc<dyn IrisWorkerPool>>,
     hnsw_iris_store: &IrisStore,
 ) -> Result<()> {
-    let (inserts, updates) = surgery.row_writes();
+    let (inserts, updates) = repair.row_writes();
     if inserts.is_empty() && updates.is_empty() {
         return Ok(());
     }
