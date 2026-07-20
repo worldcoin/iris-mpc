@@ -1,0 +1,40 @@
+# POP-3931 — `modifications` retention CronJob (prod, smpcv2 clusters — the GPU MPCV2
+# DB's copy). Companion to the hnsw-side reaper (common-values-ampc-hnsw-modifications-
+# retention.yaml): same binary, same guard, different database. Runs in the
+# iris-mpc-db-exporter namespace — the proven CronJob precedent for reaching the iris
+# Aurora from generic nodes (its `application` secret already holds DATABASE_AURORA_URL;
+# no pod SG or dedicated pool needed, mirroring iris-mpc-db-exporter itself).
+image: "ghcr.io/worldcoin/retention-reaper:v0.32.6@sha256:366cc7dcd9e9132bbfe2b5719332ff8d1f301ed5b487cbfc458fbc97cca92ace"
+
+# SHIPS INERT, doubly: `suspend: true` AND RETENTION__ENABLED unset. Enable path:
+# un-suspend → ENABLED+DRY_RUN → inspect counts + gauges → DRY_RUN off, one party first.
+# NOTE: rows_deleted stays 0 for the first 30 days after the prod created_at migration
+# lands (backfill stamps everything at migration time — the GPU image bump in this
+# release applies the migration at boot).
+suspend: true
+
+env: {}
+
+replicaCount: 1
+
+environment: prod
+
+# Daily, 04:30 UTC — ladder: anon-stats 03:30, hnsw modifications 04:00, this 04:30.
+schedule: "30 4 * * *"
+backoffLimit: 0
+
+concurrencyPolicy: Forbid
+
+imagePullSecrets:
+  - name: github-secret
+
+resources:
+  limits:
+    cpu: "500m"
+    memory: 256Mi
+  requests:
+    cpu: "100m"
+    memory: 128Mi
+
+nodeSelector:
+  kubernetes.io/arch: amd64
