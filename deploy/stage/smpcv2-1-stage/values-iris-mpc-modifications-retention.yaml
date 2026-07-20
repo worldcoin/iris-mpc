@@ -1,0 +1,31 @@
+# POP-3931 / POP-4134 — modifications retention (retention-reaper), smpcv2 party 1 (stage).
+# Per-node. Reaps the GPU MPCV2 DB's modifications copy in the live GPU stage schema. The
+# hnsw-side twin reaps that system's own copy; the two databases are disjoint.
+#
+# Guard anatomy (ANDed onto the binary's own created_at < now() - 30 days conjunct):
+#   - status/persisted: only terminal, fully-persisted rows (never in-flight)
+#   - id < MIN(id of newest 10000 rows): always retain the newest 10k regardless — keeps
+#     the cross-party startup-sync window intact AND guarantees the MAX(id)+1 assignment
+#     trigger can never see an emptied table (id reuse).
+env:
+  RUST_LOG: "info"
+  RETENTION__DB_SCHEMA: "SMPC_stage_1"
+  RETENTION__PARTY: "1"
+  RETENTION__SERVICE__SERVICE_NAME: "retention-reaper-modifications-smpcv2-1"
+  RETENTION__SERVICE__METRICS__PORT: "8125"
+  RETENTION__SERVICE__METRICS__QUEUE_SIZE: "5000"
+  RETENTION__SERVICE__METRICS__BUFFER_SIZE: "256"
+  RETENTION__SERVICE__METRICS__PREFIX: "retention-reaper-modifications-smpcv2-1"
+  RETENTION__DB_URL:
+    valueFrom:
+      secretKeyRef:
+        name: application
+        key: DATABASE_AURORA_URL
+  RETENTION__SERVICE__METRICS__HOST:
+    valueFrom:
+      fieldRef:
+        fieldPath: status.hostIP
+  RETENTION_JOBS: >-
+    [{"table":"modifications","ts_column":"created_at","retention":"30 days",
+    "batch_size":2000,"batch_pause_ms":250,
+    "guard":"status = 'COMPLETED' AND persisted AND id < (SELECT COALESCE(MIN(id), 0) FROM (SELECT id FROM modifications ORDER BY id DESC LIMIT 10000) newest)"}]

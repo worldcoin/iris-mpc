@@ -1,0 +1,43 @@
+# POP-3931 / POP-4134 — `modifications` retention CronJob (stage, smpcv2 clusters — the
+# GPU MPCV2 DB's copy). Stage counterpart of the prod GPU reaper (added in #2267); the
+# missing rung — the HNSW-system reaper was validated on stage but this one jumped
+# straight into the prod release. This lands it on stage in DRY-RUN so its schema
+# (SMPC_stage_N), namespace (iris-mpc-db-exporter), and DB reachability are exercised
+# before prod enablement.
+#
+# Runs in the iris-mpc-db-exporter namespace — the existing CronJob precedent for reaching
+# the GPU iris Aurora from generic nodes (its `application` secret holds
+# DATABASE_AURORA_URL; no pod SG or dedicated pool needed, mirroring iris-mpc-db-exporter).
+image: "ghcr.io/worldcoin/retention-reaper:v0.32.6@sha256:366cc7dcd9e9132bbfe2b5719332ff8d1f301ed5b487cbfc458fbc97cca92ace"
+
+# STAGE ENABLE, DRY-RUN: previews the exact delete predicate (read-only COUNT) daily.
+# Expected 0 for the first 30 days (created_at backfilled at migration boot) + the
+# newest-10k floor on the low-volume table. Flip DRY_RUN to "false" after clean previews
+# (mirrors the HNSW-side reaper's stage path).
+env:
+  RETENTION__ENABLED: "true"
+  RETENTION__DRY_RUN: "true"
+
+replicaCount: 1
+
+environment: stage
+
+# Daily, 04:30 UTC — ladder: anon-stats 03:30, hnsw modifications 04:00, this 04:30.
+schedule: "30 4 * * *"
+backoffLimit: 0
+
+concurrencyPolicy: Forbid
+
+imagePullSecrets:
+  - name: github-secret
+
+resources:
+  limits:
+    cpu: "500m"
+    memory: 256Mi
+  requests:
+    cpu: "100m"
+    memory: 128Mi
+
+nodeSelector:
+  kubernetes.io/arch: amd64
