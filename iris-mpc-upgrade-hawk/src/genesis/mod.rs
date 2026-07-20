@@ -119,6 +119,10 @@ fn delta_slot_route(slot: DeltaExchangeSlot) -> axum::routing::MethodRouter {
 /// One exchange round: publish `value` on this node's slot, poll the peers'
 /// `endpoint` until both answer, and return their values (peer order as
 /// returned by the coordination layer).
+///
+/// Callers must rendezvous first ([`delta_exchange_barrier`]): the deadline
+/// starts at publish, and the work preceding an exchange runs at party-local
+/// speed.
 async fn exchange_delta_state<T: serde::Serialize + serde::de::DeserializeOwned>(
     server_coord_config: &ServerCoordinationConfig,
     slot: &DeltaExchangeSlot,
@@ -140,6 +144,20 @@ async fn exchange_delta_state<T: serde::Serialize + serde::de::DeserializeOwned>
         }
         tokio::time::sleep(DELTA_EXCHANGE_POLL).await;
     }
+}
+
+/// Rendezvous ahead of a timed delta exchange, carrying the shutdown flag; a
+/// shutdown on any party aborts the delta (a partial delta must not proceed).
+async fn delta_exchange_barrier(
+    hawk_handle: &mut GenesisHawkHandle,
+    shutdown_handler: &ShutdownHandler,
+) -> Result<()> {
+    let shutdown = shutdown_handler.is_shutting_down();
+    let mismatched = hawk_handle.sync_state(shutdown, None).await?;
+    if shutdown || mismatched {
+        bail!("shutdown signalled during version-join delta");
+    }
+    Ok(())
 }
 
 /// Process input arguments typically passed from command line.
@@ -779,6 +797,7 @@ async fn exec_delta(
         //    axis is party-local — so exchange the local sets and take the
         //    union. A replay on a party whose local state was clean is a
         //    harmless refresh.
+        delta_exchange_barrier(&mut hawk_handle, shutdown_handler).await?;
         let peer_sets: Vec<Vec<SerialId>> = exchange_delta_state(
             server_coord_config,
             &delta_exchange.surgery,
@@ -801,6 +820,7 @@ async fn exec_delta(
             }
             h.checksum()
         };
+        delta_exchange_barrier(&mut hawk_handle, shutdown_handler).await?;
         let peer_hashes: Vec<u64> = exchange_delta_state(
             server_coord_config,
             &delta_exchange.tombstones,
@@ -884,17 +904,20 @@ async fn exec_delta(
                         })??;
 
                 let (done_rx, result) = result;
-                tx_results.send(result).await?;
+                // Increment before send: the results thread decrements on
+                // completion, and send-first would let the counter wrap.
                 shutdown_handler.increment_batches_pending_completion();
+                tx_results.send(result).await?;
 
                 let is_sync_batch = idx % (PERSIST_DELAY - 1) == 0 || idx == end;
                 if is_sync_batch {
                     let wait_start = Instant::now();
-                    let mismatched = hawk_handle.sync_state(false, Some(done_rx)).await?;
-                    if mismatched {
-                        // A peer is shutting down; a partial delta must not
+                    let shutdown = shutdown_handler.is_shutting_down();
+                    let mismatched = hawk_handle.sync_state(shutdown, Some(done_rx)).await?;
+                    if shutdown || mismatched {
+                        // Shutdown on any party: a partial delta must not
                         // proceed to the checkpoint or the row flush.
-                        bail!("peer shutdown signalled during version-join delta");
+                        bail!("shutdown signalled during version-join delta");
                     }
                     metrics::histogram!("genesis_persist_wait_duration")
                         .record(wait_start.elapsed().as_secs_f64());
