@@ -37,7 +37,7 @@ use aws_sdk_s3::{Client as S3Client, Config};
 use clap::ValueEnum;
 use eyre::Result;
 use iris_mpc_common::iris_db::db::IrisDB;
-use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_common::postgres::{run_migrations, AccessMode, PostgresClient};
 use iris_mpc_store::{Store, StoredIrisRef};
 use itertools::Itertools;
 use rand::SeedableRng;
@@ -76,6 +76,7 @@ impl DbContext {
         let client = PostgresClient::new(url, schema, AccessMode::ReadWrite)
             .await
             .unwrap();
+        run_migrations(&client.pool, false).await.unwrap();
         let store = Store::new(&client).await.unwrap();
         let graph_pg = GraphPg::new(&client).await.unwrap();
         Self {

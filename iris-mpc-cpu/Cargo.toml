@@ -106,5 +106,9 @@ harness = false
 name = "encoded_neighborhood"
 harness = false
 
+[[bench]]
+name = "ptx_store"
+harness = false
+
 [[example]]
 name = "hnsw-ex"

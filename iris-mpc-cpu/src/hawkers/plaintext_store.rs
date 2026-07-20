@@ -16,6 +16,7 @@ use iris_mpc_common::{
     VectorId,
 };
 use rand::{CryptoRng, RngCore, SeedableRng};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 use tracing::debug;
@@ -301,19 +302,21 @@ impl<D: DistanceOps> VectorStore for SharedPlaintextStore<D> {
     ) -> Result<Vec<Self::DistanceRef>> {
         debug!(event_type = EvaluateDistance.id());
         let store = self.storage.read().await;
-        let vector_codes = vectors
-            .iter()
+        let mode = self.distance_mode;
+        // Parallelize the vector lookups and distance evaluations with rayon.
+        // Let rayon adaptively split, with a min run length so small/cheap
+        // batches don't over-split into scheduling overhead.
+        vectors
+            .par_iter()
+            .with_min_len((vectors.len() / (rayon::current_num_threads() * 4)).max(1))
             .map(|v| {
                 let serial_id = v.serial_id();
-                store.get_vector(v).ok_or_else(|| {
+                let code = store.get_vector(v).ok_or_else(|| {
                     eyre::eyre!("Vector ID not found in store for serial {}", serial_id)
-                })
+                })?;
+                Ok(D::plaintext_distance(code, query, mode))
             })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(vector_codes
-            .into_iter()
-            .map(|v| D::plaintext_distance(v, query, self.distance_mode))
-            .collect())
+            .collect()
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {

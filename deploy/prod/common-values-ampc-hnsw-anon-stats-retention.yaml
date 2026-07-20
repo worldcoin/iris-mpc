@@ -1,0 +1,34 @@
+# POP-3905 — anon-stats retention CronJob (prod, ampc-hnsw). Mirrors the stage deploy
+# (common-cronjob 1.11.0 via wf-cluster-apps); per-cluster env + the
+# attachSecurityGroupPolicy that lets the pod reach the anon-stats Aurora live per-node.
+# Stage-validated 2026-07-09 (see the smpcv2 common values for details).
+image: "ghcr.io/worldcoin/retention-reaper:v0.32.6@sha256:366cc7dcd9e9132bbfe2b5719332ff8d1f301ed5b487cbfc458fbc97cca92ace"
+
+# SHIPS INERT, doubly: `suspend: true` AND RETENTION__ENABLED unset. Enable path:
+# un-suspend → ENABLED+DRY_RUN → inspect counts + gauges → DRY_RUN off, one party first.
+suspend: true
+
+env: {}
+
+replicaCount: 1
+
+environment: prod
+
+schedule: "30 3 * * *"
+backoffLimit: 0
+
+concurrencyPolicy: Forbid
+
+imagePullSecrets:
+  - name: github-secret
+
+resources:
+  limits:
+    cpu: "500m"
+    memory: 256Mi
+  requests:
+    cpu: "100m"
+    memory: 128Mi
+
+nodeSelector:
+  kubernetes.io/arch: amd64

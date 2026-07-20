@@ -1283,14 +1283,21 @@ impl HawkRequest {
     }
 
     fn luc_ids<I: Clone>(&self, registry: &SharedIrises<I>) -> VecRequests<Vec<VectorId>> {
-        let luc_lookback_ids = registry.last_vector_ids(self.batch.luc_lookback_records);
+        // Inclusive lookback window: a configured value of N spans the N+1
+        // most-recent serials, and 0 disables lookback entirely.
+        let luc_lookback_ids = if self.batch.luc_lookback_records > 0 {
+            registry.last_vector_ids(self.batch.luc_lookback_records + 1)
+        } else {
+            Vec::new()
+        };
 
         izip!(&self.batch.or_rule_indices, &self.batch.request_types)
             .map(|(or_rule_idx, request_type)| {
                 let mut or_rule_ids = registry.from_0_indices(or_rule_idx);
 
-                let lookback =
-                    request_type != REAUTH_MESSAGE_TYPE && request_type != RESET_CHECK_MESSAGE_TYPE;
+                let lookback = request_type != REAUTH_MESSAGE_TYPE
+                    && request_type != RESET_CHECK_MESSAGE_TYPE
+                    && request_type != RECOVERY_CHECK_MESSAGE_TYPE;
                 if lookback {
                     or_rule_ids.extend_from_slice(&luc_lookback_ids);
                 };
