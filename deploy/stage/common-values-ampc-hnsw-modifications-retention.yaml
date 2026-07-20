@@ -11,16 +11,15 @@
 #
 image: "ghcr.io/worldcoin/retention-reaper:v0.32.6@sha256:366cc7dcd9e9132bbfe2b5719332ff8d1f301ed5b487cbfc458fbc97cca92ace"
 
-# STAGE ENABLE, DRY-RUN: the hawk image bump in this same PR applies the created_at
-# migration to the HNSW DB at boot; the reaper then previews the exact delete predicate
-# (read-only COUNT) daily. Expected counts: 0 for the first 30 days (backfill stamps all
-# rows at migration time) — the dry run proves the query is valid against the migrated
-# schema (created_at present, guard incl. the newest-10k subselect executes). Flip
-# DRY_RUN to "false" after the first clean previews; nothing becomes deletable before
-# the 30d clock matures anyway.
+# STAGE LIVE: dry-run cleared after clean daily previews (2026-07-09 → 2026-07-20 all
+# "would delete 0"). The reaper now performs the real guarded DELETE. This is a no-op
+# today by design — created_at was backfilled at the migration boot (~2026-07-09), so the
+# 30d age floor makes nothing deletable before ~2026-08-08, and the newest-10k floor holds
+# on the low-volume stage table. Flipping now makes it real ahead of the clock (no second
+# PR needed at maturity) and keeps stage exercising the true delete path.
 env:
   RETENTION__ENABLED: "true"
-  RETENTION__DRY_RUN: "true"
+  RETENTION__DRY_RUN: "false"
 
 replicaCount: 1
 
