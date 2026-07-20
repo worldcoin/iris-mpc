@@ -231,15 +231,16 @@ async fn classify_and_extend(
 
         let seeded_nbhd = SortedNeighborhood::from_ascending_vec(edges.to_vec());
         let start = Instant::now();
-        let supermatch_neighbors = hnsw_supermatch
-            .search_layer_0_seeded(aby3_store, graph_store, query, seeded_nbhd, ef_supermatch)
-            .await?;
-        let sm_l0_search = start.elapsed();
-
         let full_search = hnsw_supermatch
             .search(aby3_store, graph_store, query, ef_supermatch)
             .await?;
-        let sm_full_search = start.elapsed() - sm_l0_search;
+        let sm_full_search = start.elapsed();
+
+        let supermatch_neighbors = hnsw_supermatch
+            .search_layer_0_seeded(aby3_store, graph_store, query, seeded_nbhd, ef_supermatch)
+            .await?;
+
+        let sm_l0_search = start.elapsed() - sm_full_search;
 
         metrics::histogram!("sm_full_search_ms").record(sm_full_search.as_millis() as f64);
         metrics::histogram!("sm_l0_search_ms").record(sm_l0_search.as_millis() as f64);
