@@ -759,16 +759,16 @@ async fn exec_delta(
 
     let res: Result<(bool, RepairPlan)> = async {
         // 1. Build the version state per eye and compute per-eye plans.
-        //    hnsw_versions is a single DB scan (one iris row covers both eyes);
-        //    source versions are eye-invariant (one source row covers both
+        //    versions_from_iris_store is a single DB scan (one iris row covers both eyes);
+        //    versions_from_source are eye-invariant (one source row covers both
         //    eyes), so the LEFT registry is authoritative.
-        let hnsw_versions = gather_hnsw_versions(hnsw_iris_store, max_serial).await?;
-        let source_versions = gather_source_versions(&registries[LEFT], max_serial).await;
+        let hnsw_versions = get_versions_from_iris_store(hnsw_iris_store, max_serial).await?;
+        let source_versions = get_versions_from_source(&registries[LEFT], max_serial).await;
 
         let mut graph_versions: [HashMap<SerialId, Vec<VersionId>>; 2] =
             [HashMap::new(), HashMap::new()];
         for side in [LEFT, RIGHT] {
-            graph_versions[side] = gather_graph_versions(&imem_graph_stores[side]).await;
+            graph_versions[side] = get_versions_from_hnsw_graph(&imem_graph_stores[side]).await;
         }
         let plans: [VersionJoinPlan; 2] = [LEFT, RIGHT].map(|side| {
             compute_version_join(
@@ -993,7 +993,7 @@ async fn exec_delta(
 }
 
 /// Scan the HNSW iris store's `(serial → version)` index over `1..=max_serial`.
-async fn gather_hnsw_versions(
+async fn get_versions_from_iris_store(
     hnsw_iris_store: &IrisStore,
     max_serial: SerialId,
 ) -> Result<HashMap<SerialId, i16>> {
@@ -1010,7 +1010,7 @@ async fn gather_hnsw_versions(
 
 /// Build the graph's per-serial key list from layer-0 node keys (layer 0 holds
 /// every node, so this enumerates all graph keys).
-async fn gather_graph_versions(graph_ref: &GraphRef) -> HashMap<SerialId, Vec<VersionId>> {
+async fn get_versions_from_hnsw_graph(graph_ref: &GraphRef) -> HashMap<SerialId, Vec<VersionId>> {
     let graph = graph_ref.read().await;
     if graph.layers.is_empty() {
         return HashMap::new();
@@ -1042,8 +1042,7 @@ async fn gather_tombstones(
         let maybe_vids = registries[LEFT].get_vector_ids(chunk).await;
         let mut vids: Vec<VectorId> = Vec::with_capacity(chunk.len());
         for (serial, maybe) in chunk.iter().zip(maybe_vids) {
-            let vid =
-                maybe.ok_or_else(|| eyre!("repair serial {serial} missing from registry"))?;
+            let vid = maybe.ok_or_else(|| eyre!("repair serial {serial} missing from registry"))?;
             vids.push(vid);
         }
 
@@ -1066,7 +1065,7 @@ async fn gather_tombstones(
 }
 
 /// Build the source `(serial → version)` map from the registry (no DB scan).
-async fn gather_source_versions(
+async fn get_versions_from_source(
     registry: &VectorIdRegistryRef,
     max_serial: SerialId,
 ) -> HashMap<SerialId, i16> {
