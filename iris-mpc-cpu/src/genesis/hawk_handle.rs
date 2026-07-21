@@ -2,13 +2,17 @@ use super::hawk_job::{Job, JobRequest, JobResult, SYNC_DONE, SYNC_ERROR, SYNC_RU
 use crate::{
     execution::hawk_main::{
         insert::insert, iris_worker::QueryId, scheduler::parallelize,
-        search::search_single_query_no_match_count, BothEyes, HawkActor, HawkSession, LEFT, RIGHT,
-        STORE_IDS,
+        search::search_single_query_no_match_count, BothEyes, HawkActor, HawkSession, StoreId,
+        LEFT, RIGHT, STORE_IDS,
     },
     hawkers::aby3::aby3_store::Aby3Query,
+    hnsw::{
+        graph::{mutation::UnstampedMutation, MutationOp},
+        HnswSearcher,
+    },
 };
 use eyre::{bail, eyre, OptionExt, Result};
-use iris_mpc_common::helpers::smpc_request;
+use iris_mpc_common::VectorId;
 use itertools::{izip, Itertools};
 use std::{
     future::Future,
@@ -97,6 +101,50 @@ impl Handle {
 
         Ok(Self { job_queue: tx })
     }
+}
+
+/// Search + insert `vector_id` for one eye from the worker pool's iris.
+async fn replay_serial_for_side(
+    session: &HawkSession,
+    searcher: &HnswSearcher,
+    side: StoreId,
+    vector_id: VectorId,
+) -> Result<VectorId> {
+    let identifier = (vector_id, side);
+
+    // Fetch the iris from the worker pool and cache it before search.
+    let query_id = QueryId::new();
+    let irises = {
+        let store = session.aby3_store.read().await;
+        store.workers.fetch_irises(vec![vector_id]).await?
+    };
+    {
+        let store = session.aby3_store.read().await;
+        store
+            .workers
+            .cache_queries(vec![(query_id, irises.into_iter().next().unwrap())])
+            .await?;
+    }
+    let query = Aby3Query::new(query_id);
+    let insert_plan =
+        search_single_query_no_match_count(session.clone(), query, searcher, &identifier).await?;
+    let plans = vec![Some(insert_plan)];
+    let ids = vec![Some(vector_id)];
+
+    let mut store = session.aby3_store.write().await;
+    let mut graph = session.graph_store.write().await;
+
+    let replace_ids = vec![None; plans.len()];
+    let (_connect_plan, _inserted_id) =
+        insert(&mut *store, &mut graph, searcher, plans, &ids, &replace_ids).await?;
+
+    // Evict the cached query now that search + insert are done.
+    // Use the workers reference from the already-held write guard: the query
+    // cache uses its own internal lock, independent of the aby3_store RwLock.
+    // Acquiring a second `read()` here would deadlock against the `write()` guard.
+    store.workers.evict_queries(vec![query_id]).await?;
+
+    Ok(vector_id)
 }
 
 /// Methods.
@@ -256,119 +304,60 @@ impl Handle {
                     ),
                 ))
             }
-            JobRequest::Modification { modification } => {
-                let serial_id = modification.serial_id.ok_or(eyre!(
-                    "Genesis received modification with empty serial_id field"
-                ))? as u32;
-
-                let jobs_per_side =
-                    izip!(STORE_IDS, sessions.iter()).map(|(side, sessions_side)| {
+            JobRequest::VersionReplay {
+                serial_id,
+                removals,
+                reinsert,
+            } => {
+                let jobs_per_side = izip!(STORE_IDS, sessions.iter(), removals).map(
+                    |(side, sessions_side, remove_keys)| {
                         let sessions = sessions_side.clone();
                         let registry = actor.registry(side);
-                        let modification = modification.clone();
                         let searcher = actor.searcher();
 
                         async move {
-                            let vector_id_ = registry.get_vector_id(serial_id).await;
-
                             let session =
                                 sessions.first().ok_or_eyre("Sessions for side are empty")?;
 
-                            match modification.request_type.as_str() {
-                                smpc_request::RESET_UPDATE_MESSAGE_TYPE
-                                | smpc_request::RECOVERY_UPDATE_MESSAGE_TYPE
-                                | smpc_request::REAUTH_MESSAGE_TYPE => {
-                                    let vector_id = vector_id_.ok_or_eyre(
-                                        "Expected vector serial id of update is missing from store",
-                                    )?;
-                                    let identifier = (vector_id, side);
-
-                                    // TODO remove any prior versions of this vector id from graph
-
-                                    // Fetch the iris from the worker pool and cache it before search.
-                                    let query_id = QueryId::new();
-                                    let irises = {
-                                        let store = session.aby3_store.read().await;
-                                        store.workers.fetch_irises(vec![vector_id]).await?
-                                    };
-                                    {
-                                        let store = session.aby3_store.read().await;
-                                        store
-                                            .workers
-                                            .cache_queries(vec![(query_id, irises.into_iter().next().unwrap())])
-                                            .await?;
-                                    }
-                                    let query = Aby3Query::new(query_id);
-                                    let insert_plan = search_single_query_no_match_count(
-                                        session.clone(),
-                                        query,
-                                        &searcher,
-                                        &identifier,
-                                    )
-                                    .await?;
-                                    let plans = vec![Some(insert_plan)];
-                                    let ids = vec![Some(vector_id)];
-
-                                    let mut store = session.aby3_store.write().await;
-                                    let mut graph = session.graph_store.write().await;
-
-                                    let replace_ids = vec![None; plans.len()];
-                                    let (connect_plan, _inserted_id) = insert(
-                                        &mut *store,
-                                        &mut graph,
-                                        &searcher,
-                                        plans,
-                                        &ids,
-                                        &replace_ids,
-                                    )
-                                    .await?;
-
-                                    // Evict the cached query now that search + insert are done.
-                                    // Use the workers reference from the already-held write guard:
-                                    // the query cache uses its own internal lock, independent of
-                                    // the aby3_store RwLock. Acquiring a second `read()` here would
-                                    // deadlock against the outer `write()` guard.
-                                    store.workers.evict_queries(vec![query_id]).await?;
-
-                                    Ok((connect_plan, vector_id))
-                                }
-                                smpc_request::IDENTITY_DELETION_MESSAGE_TYPE => {
-                                    let msg = format!(
-                                        "HawkActor does not support deletion of identities: modification: {:?}",
-                                        modification
-                                    );
-                                    tracing::error!("{}", msg);
-                                    Err(eyre!(msg))
-                                }
-                                _ => {
-                                    let msg = format!(
-                                        "Invalid modification type received: {:?}",
-                                        modification,
-                                    );
-                                    tracing::error!("{}", msg);
-                                    Err(eyre!(msg))
+                            // Prior keys leave the graph before the search so
+                            // it cannot route through or link to them.
+                            if !remove_keys.is_empty() {
+                                let mut graph = session.graph_store.write().await;
+                                for id in &remove_keys {
+                                    let as_of = graph.last_update_seq_no;
+                                    graph.apply_new(UnstampedMutation {
+                                        as_of,
+                                        ops: vec![MutationOp::RemoveNode { id: *id }],
+                                    })?;
                                 }
                             }
+
+                            if !reinsert {
+                                return Ok(None);
+                            }
+                            let vector_id = registry.get_vector_id(serial_id).await.ok_or_eyre(
+                                "Expected vector serial id of replay is missing from store",
+                            )?;
+                            replay_serial_for_side(session, &searcher, side, vector_id)
+                                .await
+                                .map(Some)
                         }
-                    });
+                    },
+                );
 
                 let results_ = parallelize(jobs_per_side.into_iter()).await?;
                 let results: [_; 2] = results_.try_into().unwrap();
 
-                // Convert the results into SingleHawkMutation format
-                let [left_plans_and_vector, right_plans_and_vector] = results;
-                let left_vector = left_plans_and_vector.1;
-                let right_vector = right_plans_and_vector.1;
+                let [left_vector, right_vector] = results;
 
-                assert_eq!(left_vector.version_id(), right_vector.version_id());
-                assert_eq!(left_vector.serial_id(), right_vector.serial_id());
+                assert_eq!(left_vector, right_vector);
 
-                metrics::histogram!("genesis_modification_duration")
+                metrics::histogram!("genesis_version_replay_duration")
                     .record(now.elapsed().as_secs_f64());
 
                 Ok((
                     done_rx,
-                    JobResult::new_modification_result(modification.id, left_vector, done_tx),
+                    JobResult::new_version_replay_result(serial_id, left_vector, done_tx),
                 ))
             }
             JobRequest::SyncState {

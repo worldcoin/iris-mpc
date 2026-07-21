@@ -16,6 +16,7 @@ use iris_mpc_common::{
     VectorId,
 };
 use rand::{CryptoRng, RngCore, SeedableRng};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 use tracing::debug;
@@ -303,27 +304,31 @@ impl<D: DistanceOps> VectorStore for SharedPlaintextStore<D> {
     ) -> Result<Vec<Self::DistanceRef>> {
         debug!(event_type = EvaluateDistance.id());
         let store = self.storage.read().await;
-        // See `PlaintextStore::eval_distance` for the lag-window fallback.
-        let vector_codes = vectors
-            .iter()
+        let mode = self.distance_mode;
+        // Parallelize the vector lookups and distance evaluations with rayon.
+        // Let rayon adaptively split, with a min run length so small/cheap
+        // batches don't over-split into scheduling overhead.
+        vectors
+            .par_iter()
+            .with_min_len((vectors.len() / (rayon::current_num_threads() * 4)).max(1))
             .map(|v| {
                 let serial_id = v.serial_id();
-                match store.get_vector(v) {
-                    Some(code) => Ok(code),
+                // See `PlaintextStore::eval_distance` for the lag-window fallback.
+                let code = match store.get_vector(v) {
+                    Some(code) => code,
                     None if store.get_current_version(serial_id).is_some() => {
-                        Ok(store.get_vector_or_empty(v))
+                        store.get_vector_or_empty(v)
                     }
-                    None => Err(eyre::eyre!(
-                        "Vector ID not found in store for serial {}",
-                        serial_id
-                    )),
-                }
+                    None => {
+                        return Err(eyre::eyre!(
+                            "Vector ID not found in store for serial {}",
+                            serial_id
+                        ))
+                    }
+                };
+                Ok(D::plaintext_distance(code, query, mode))
             })
-            .collect::<Result<Vec<_>>>()?;
-        Ok(vector_codes
-            .into_iter()
-            .map(|v| D::plaintext_distance(v, query, self.distance_mode))
-            .collect())
+            .collect()
     }
 
     async fn is_match(&mut self, distance: &Self::DistanceRef) -> Result<bool> {

@@ -7,7 +7,6 @@ const MAX_CONNECTIONS: u32 = 100;
 pub struct PostgresClient {
     pub pool: PgPool,
     pub schema_name: String,
-    pub access_mode: AccessMode,
 }
 
 // Helper type: name of a PostgreSQL schema.
@@ -68,23 +67,29 @@ impl PostgresClient {
 
         Ok(PostgresClient {
             pool,
-            access_mode,
             schema_name: schema_name.to_string(),
         })
     }
+}
 
-    pub async fn migrate(&self) {
-        tracing::info!("Running migrations...");
+/// Runs pending database migrations against the schema associated with `client`.
+///
+/// When `ignore_missing_migrations` is true,
+/// migrations applied to the database but missing from the local migrations
+/// directory are ignored instead of causing the migration to fail.
+///
+/// This is intentionally decoupled from connection/store construction so that
+/// migrations run explicitly, once, at application startup.
+pub async fn run_migrations(pool: &PgPool, ignore_missing_migrations: bool) -> Result<()> {
+    tracing::info!(
+        "Running migrations (ignore_missing_migrations={})...",
+        ignore_missing_migrations
+    );
 
-        if self.access_mode == AccessMode::ReadOnly {
-            tracing::info!("Not migrating client in read-only mode");
-            return;
-        }
+    sqlx::migrate!("./../migrations")
+        .set_ignore_missing(ignore_missing_migrations)
+        .run(pool)
+        .await?;
 
-        sqlx::migrate!("./../migrations")
-            .set_ignore_missing(true)
-            .run(&self.pool)
-            .await
-            .expect("Failed to run migrations");
-    }
+    Ok(())
 }

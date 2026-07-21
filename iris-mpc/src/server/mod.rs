@@ -37,7 +37,7 @@ use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
 use iris_mpc_common::helpers::sqs_s3_helper::upload_file_to_s3;
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::job::JobSubmissionHandle;
-use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+use iris_mpc_common::postgres::{run_migrations, AccessMode, PostgresClient};
 use iris_mpc_cpu::checkpoint_protocol::runner::SidecarConfigWrapper;
 use iris_mpc_cpu::execution::hawk_main::worker_pool_initializer::{
     DbLoadParams, LocalWorkerPoolInitializer, WorkerPoolInitializer,
@@ -420,6 +420,11 @@ async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store<Haw
         &hawk_db_config.url,
         &hawk_schema_name,
         AccessMode::ReadWrite,
+    )
+    .await?;
+    run_migrations(
+        &hawk_postgres_client.pool,
+        hawk_db_config.ignore_missing_migrations,
     )
     .await?;
 

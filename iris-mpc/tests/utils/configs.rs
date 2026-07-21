@@ -53,6 +53,7 @@ pub fn make_hawk_config(
         url: cpu_cfg.db_url.clone(),
         migrate: true,
         create: true,
+        ignore_missing_migrations: false,
         load_parallelism: 8,
     };
     let healthcheck_ports: Vec<String> = all_configs

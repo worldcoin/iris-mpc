@@ -93,7 +93,7 @@ Postconditions:
 - CPU iris database contains vector ids matching those in the plaintext genesis CPU database
 - CPU `persisted_state` table shows the max indexed modification is 2 and max indexed iris is 100
 - CPU graph database matches the output of plaintext genesis
-- CPU graph database at layer zero has 102 nodes
+- CPU graph database at layer zero has 100 nodes (modified serials are replayed in place: prior keys removed, current version reinserted)
 
 ## 105
 
@@ -125,7 +125,7 @@ Post-conditions
 - CPU iris database contains vector ids matching those in the plaintext genesis CPU database
 - CPU `persisted_state` table shows the max indexed modification is 8 and max indexed iris is 100
 - CPU graph database matches the output of plaintext genesis
-- CPU graph database at layer zero has 103 nodes
+- CPU graph database at layer zero has 100 nodes (modified serials are replayed in place: prior keys removed, current version reinserted)
 
 
 ## 106
@@ -143,7 +143,7 @@ Post-conditions
 - CPU iris database contains vector ids matching those in the plaintext genesis CPU database
 - CPU `persisted_state` table shows the max indexed modification is 8 and max indexed iris is 100
 - CPU graph database matches the output of plaintext genesis
-- CPU graph database at layer zero has 98 nodes
+- CPU graph database at layer zero has 98 nodes (deleted serials ≤ 50 are reinserted by the second run's delta — their source content is live, and deletion is content-based; only 77 and 100 stay excluded)
 
 ## 107
 
