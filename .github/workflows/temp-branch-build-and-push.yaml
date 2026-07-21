@@ -10,6 +10,11 @@ concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  packages: write
+  pull-requests: write
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
@@ -51,16 +56,35 @@ jobs:
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@062b18b96a7aff071d4dc91bc00c4c1a7945b076
+      - name: Extract metadata (tags, labels)
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=long
+            type=raw,value=${{ github.sha }}
+            type=raw,value=main-${{ github.sha }},enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=latest
+            type=raw,value=${{ github.event.release.tag_name }},enable=${{ github.event_name == 'release' }}
       - name: Build and Push
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83
         with:
           context: .
           push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-            ${{ secrets.AWS_ECR_IRIS_MPC }}:${{ github.sha }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           platforms: linux/amd64
           build-args: |
             ARCHITECTURE=x86_64
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Comment image tags on PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          body=$(printf '### Docker image published\n\nPushed the following tags:\n\n```\n%s\n```\n' "$TAGS")
+          gh pr comment "$GITHUB_REF_NAME" --edit-last --create-if-none --body "$body" \
+            || echo "No PR associated with branch $GITHUB_REF_NAME; skipping comment."
