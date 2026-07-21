@@ -5,13 +5,16 @@
 # instance in a follow-up (same binary, values + cluster-apps entry only).
 image: "ghcr.io/worldcoin/retention-reaper:v0.32.6@sha256:366cc7dcd9e9132bbfe2b5719332ff8d1f301ed5b487cbfc458fbc97cca92ace"
 
-# SHIPS INERT, doubly: `suspend: true` AND RETENTION__ENABLED unset. Enable path:
-# un-suspend → ENABLED+DRY_RUN → inspect counts + gauges → DRY_RUN off, one party first.
-# NOTE: rows_deleted stays 0 for the first 30 days after the prod created_at migration
-# lands (backfill stamps everything at migration time).
-suspend: true
+# ENABLED IN DRY-RUN (POP-4134 prod enablement): un-suspended + ENABLED + DRY_RUN=true —
+# runs daily and PREVIEWS the guarded DELETE (read-only COUNT, no rows removed). Expect
+# would-delete 0 until ~30d after the prod created_at migration (backfill) + the
+# newest-10k floor. Flip DRY_RUN to "false" per the POP-4134 ladder once previews + the
+# POP-4136 monitors look right.
+suspend: false
 
-env: {}
+env:
+  RETENTION__ENABLED: "true"
+  RETENTION__DRY_RUN: "true"
 
 replicaCount: 1
 
