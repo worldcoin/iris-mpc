@@ -50,7 +50,7 @@ Results sent to SNS per type (lines 389-440):
 
 ### Deletion Processing
 
-**File:** `iris-mpc-cpu/src/execution/hawk_main/reset.rs` — `apply_deletions()` (line 62)
+**File:** `iris-mpc-cpu/src/execution/hawk_main/identity_update.rs` — `apply_deletions()` (line 62)
 
 ```rust
 let dummy = GaloisRingSharedIris::dummy_for_party(hawk_actor.party_id);
