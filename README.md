@@ -48,9 +48,9 @@ After release creation the build image is starting with tag with release number.
 
 ## Setup
 
-- GPU-based node implementation in `iris-mpc/src/bin/server.rs`
-- CPU-based node PoC in `iris-mpc/src/bin/server_hawk.rs`
-- Example client in `src/bin/client.rs`
+- GPU-based node implementation (the `iris-mpc-gpu` binary) in `iris-mpc-bins/bin/iris-mpc/server.rs`
+- CPU (HNSW) implementation (the `iris-mpc-hawk` binary) in `iris-mpc-bins/bin/iris-mpc/server/iris_mpc_hawk.rs`
+- Example client in `iris-mpc-bins/bin/iris-mpc/client/client.rs`
 
 ## Security Model
 
