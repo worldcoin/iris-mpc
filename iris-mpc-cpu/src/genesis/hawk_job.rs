@@ -53,7 +53,7 @@ pub enum JobRequest {
         /// Irises to cache in worker pools before search, per eye [LEFT, RIGHT].
         irises_to_cache: BothEyes<Vec<(QueryId, ArcIris)>>,
     },
-    /// Graph surgery for one serial (version-join delta): remove every
+    /// Graph repair for one serial (version-join delta): remove every
     /// existing graph key, then optionally search + re-insert the current
     /// source version.
     VersionReplay {
