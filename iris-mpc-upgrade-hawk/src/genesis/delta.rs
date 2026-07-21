@@ -42,7 +42,8 @@ use std::{
 };
 use tokio::{sync::mpsc::Sender, time::timeout};
 
-use super::{upload_and_sync_genesis_checkpoint, ExecutionContextInfo, PERSIST_DELAY};
+use super::graph_checkpoint::upload_and_sync_genesis_checkpoint;
+use super::{ExecutionContextInfo, PERSIST_DELAY};
 
 // Delta consensus exchange over the coordination server: each node publishes
 // its value into a slot served on a GET route and polls the peers' slots.
@@ -190,9 +191,14 @@ pub(super) async fn exec_delta(
             shutdown_handler,
         )
         .await?;
-        let graph_changed =
-            apply_graph_repair(config, &plan, &mut hawk_handle, tx_results, shutdown_handler)
-                .await?;
+        let graph_changed = apply_graph_repair(
+            config,
+            &plan,
+            &mut hawk_handle,
+            tx_results,
+            shutdown_handler,
+        )
+        .await?;
         Ok((graph_changed, plan.repair))
     }
     .await;
