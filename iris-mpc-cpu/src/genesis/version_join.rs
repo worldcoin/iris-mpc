@@ -14,7 +14,7 @@
 //! (reinsertion is a harmless refresh for a clean eye).
 //!
 //! Deletion is invisible to version comparison (it bumps the source version
-//! and writes dummy shares); [`partition_repair`] separates tombstones (remove
+//! and writes dummy shares); [`make_repair_plan`] separates tombstones (remove
 //! only) from live serials (remove + reinsert).
 
 use iris_mpc_common::{SerialId, VersionId};
@@ -45,7 +45,7 @@ pub struct RepairReasons {
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct VersionJoinPlan {
     /// Serials needing a graph repair: remove every existing key, then reinsert
-    /// at the current source version iff live (see [`partition_repair`]).
+    /// at the current source version iff live (see [`make_repair_plan`]).
     pub graph_repair: Vec<SerialId>,
     /// Per-class breakdown of `graph_repair`, for logging only.
     pub repair_reasons: RepairReasons,
@@ -111,7 +111,7 @@ pub fn versions_per_serial(
 ///
 /// `graph_versions` must carry every graph key per serial (see
 /// [`versions_per_serial`]). Deletions are not distinguished here;
-/// [`partition_repair`] resolves the tombstones.
+/// [`make_repair_plan`] resolves the tombstones.
 pub fn compute_version_join(
     graph_versions: &HashMap<SerialId, Vec<VersionId>>,
     source_versions: &HashMap<SerialId, VersionId>,
@@ -155,7 +155,7 @@ pub fn compute_version_join(
         // Store axis: any row disagreement is a repair too. A missing row is
         // additionally INSERTed at flush; a stale live row is rewritten by
         // the replay's flush entry, and a stale tombstone row by the
-        // overwrite `partition_repair` routes it to.
+        // overwrite `make_repair_plan` routes it to.
         match hnsw_versions.get(&serial) {
             None => {
                 plan.repair_reasons.row_missing += 1;
