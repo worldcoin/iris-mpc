@@ -7,8 +7,8 @@
 //! - insertion into the store,
 //! - preprocessing of queries (vectors) to the HNSW protocol.
 //!
-//! Each store implements the `Store` trait which defines the common interface for all the stores.
-//! The `Store` trait is defined in `hnsw::vector_store.rs`.
+//! Each store implements the `VectorStore` (and `VectorStoreMut`) trait which defines the common interface for all the stores.
+//! The `VectorStore` trait is defined in `hnsw::vector_store.rs`.
 
 use crate::{execution::hawk_main, hawkers::aby3::aby3_store::DistanceMode};
 
