@@ -62,10 +62,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=sha,format=long
             type=raw,value=${{ github.sha }}
             type=raw,value=main-${{ github.sha }},enable=${{ github.ref == 'refs/heads/main' }}
-            type=raw,value=latest
             type=raw,value=${{ github.event.release.tag_name }},enable=${{ github.event_name == 'release' }}
       - name: Build and Push
         uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83
