@@ -330,6 +330,32 @@ fn is_request_payload_valid(sns_message: &SQSMessage) -> bool {
         return false;
     };
 
+    // A compressed batch envelope (explicit-sns-batching) carries message_type
+    // == BATCH_MESSAGE_TYPE with a CompressedBatchPayload. It has no
+    // parse_request_payload arm, so validate it end-to-end here: wrapper JSON ->
+    // base64/zstd decompress -> Vec<RequestPayload>. Success means every inner
+    // request parsed. A failure is content-determined (identical bytes on all
+    // parties), so record is_valid = false rather than retrying it forever.
+    #[cfg(feature = "explicit-sns-batching")]
+    if request_type == BATCH_MESSAGE_TYPE {
+        let payload = match serde_json::from_str::<CompressedBatchPayload>(&sns_message.message) {
+            Ok(payload) => payload,
+            Err(e) => {
+                tracing::error!("db-backed ingest: invalid compressed batch payload: {e}");
+                metrics::counter!("invalid_request_payload", "request_type" => "compressed_batch_payload")
+                    .increment(1);
+                return false;
+            }
+        };
+        if let Err(e) = CompactBatchRequest::decompress(&payload.data) {
+            tracing::error!("db-backed ingest: invalid compressed batch: {e}");
+            metrics::counter!("invalid_request_payload", "request_type" => "compressed_batch")
+                .increment(1);
+            return false;
+        }
+        return true;
+    }
+
     match parse_request_payload(request_type, sns_message.message.as_str()) {
         Ok(_) => true,
         Err(e) => {
@@ -1873,6 +1899,50 @@ mod tests {
         });
         let msg: SQSMessage = serde_json::from_value(body).expect("valid SQSMessage json");
         assert!(!is_request_payload_valid(&msg));
+    }
+
+    #[cfg(feature = "explicit-sns-batching")]
+    #[test]
+    fn is_request_payload_valid_accepts_batch_envelope() {
+        use iris_mpc_common::helpers::smpc_request::{
+            CompactBatchRequest, CompressedBatchPayload, IdentityDeletionRequest,
+            IdentityMatchCheckRequest, RequestPayload, BATCH_MESSAGE_TYPE,
+        };
+
+        // Build a proper compressed batch the same way the client's
+        // publish_requests does: RequestPayload items -> CompactBatchRequest ->
+        // base64/zstd compress -> CompressedBatchPayload -> JSON SNS message body.
+        let items = vec![
+            RequestPayload::IdentityDeletion(IdentityDeletionRequest { serial_id: 42 }),
+            RequestPayload::RecoveryCheck(IdentityMatchCheckRequest {
+                request_id: "test-request-id".to_string(),
+                s3_key: "test-request-id/test-object/request.json".to_string(),
+            }),
+        ];
+        let compressed_data = CompactBatchRequest { items }
+            .compress()
+            .expect("compress batch");
+        let message = serde_json::to_string(&CompressedBatchPayload {
+            data: compressed_data,
+        })
+        .expect("serialize CompressedBatchPayload");
+
+        let body = serde_json::json!({
+          "Type" : "Notification",
+          "MessageId" : "00000000-0000-0000-0000-000000000000",
+          "SequenceNumber" : "10000000000000000000",
+          "TopicArn" : "arn:aws:sns:us-east-1:000000000000:test-topic.fifo",
+          "Message" : message,
+          "Timestamp" : "2024-01-01T00:00:00.000Z",
+          "UnsubscribeURL" : "https://sns.us-east-1.amazonaws.com/?Action=Unsubscribe",
+          "MessageAttributes" : {
+            "TraceID" : {"Type":"String","Value":"00000000000000000000000000000000"},
+            "message_type" : {"Type":"String","Value": BATCH_MESSAGE_TYPE},
+            "SpanID" : {"Type":"String","Value":"0000000000000000000"}
+          }
+        });
+        let msg: SQSMessage = serde_json::from_value(body).expect("valid SQSMessage json");
+        assert!(is_request_payload_valid(&msg));
     }
 
     #[test]
