@@ -79,7 +79,7 @@ impl Neighborhood {
 /// ([`GraphMem::vector_id_of`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodeInit {
-    /// Seq_no of the node's last `AddNode`. Gates edge liveness via [`is_active`].
+    /// Seq_no of the node's last `AddNode`. Gates edge liveness via `is_active`.
     pub seq_no: u64,
     /// Iris version carried by that `AddNode`'s `VectorId`.
     pub version: VersionId,
@@ -141,7 +141,7 @@ pub struct GraphMem {
     /// Content clock: per live node, the seq_no of its last (re-)insertion and
     /// the iris version it carried. Moved only by the node's own
     /// `AddNode`/`RemoveNode`, never by edge ops. Gates edge liveness
-    /// ([`is_active`]) and resolves serials to `VectorId`s
+    /// (`is_active`) and resolves serials to `VectorId`s
     /// ([`GraphMem::vector_id_of`]).
     pub node_init: HashMap<SerialId, NodeInit>,
 
@@ -339,7 +339,7 @@ impl GraphMem {
     ///
     /// The one apply path: minting ([`Self::apply_new`]) and replay both land
     /// here. Edge references are resolved against the record's `as_of`
-    /// ([`Self::resolve_ops`]) and staleness cleanup re-derives from graph
+    /// (`Self::resolve_ops`) and staleness cleanup re-derives from graph
     /// state, so replay reaches the same state the mint produced.
     ///
     /// # Errors
@@ -704,7 +704,7 @@ impl GraphMem {
     }
 
     /// Neighbors of `base` at layer `lc` valid for traversal, resolved to
-    /// current `VectorId`s: `z` is kept iff [`is_active`] against this
+    /// current `VectorId`s: `z` is kept iff `is_active` against this
     /// neighborhood's certified `seq_no`, so reauthed/removed edges are
     /// skipped even in neighborhoods no write has physically cleaned yet.
     /// Empty if `base`/`lc` absent.
@@ -1012,7 +1012,7 @@ impl Layer {
     }
 
     /// Remove `id`'s own neighborhood. Backlinks (`other -> id`) are
-    /// intentionally left in place: [`is_active`] masks them at read time, and
+    /// intentionally left in place: `is_active` masks them at read time, and
     /// the next touch of each holder drops them physically. Keeps node removal
     /// free of implicit edits to other nodes' neighborhoods.
     pub fn remove_node(&mut self, id: SerialId) {
@@ -1028,7 +1028,7 @@ impl Layer {
     /// Trusted bulk-load / construction only. Writes `from`'s full neighbor
     /// list at a caller-supplied raw `seq_no` — no [`Tick`] guard, no
     /// staleness filter — canonicalizing it (sort+dedup). Never call on the
-    /// live mutation path; use [`Layer::create_node`] and [`Layer::edit_links`]
+    /// live mutation path; use `Layer::create_node` and `Layer::edit_links`
     /// there.
     pub fn set_links_trusted(&mut self, from: SerialId, mut links: Vec<SerialId>, seq_no: u64) {
         use std::collections::hash_map::Entry;
