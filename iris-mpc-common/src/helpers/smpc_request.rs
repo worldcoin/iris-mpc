@@ -113,16 +113,6 @@ pub const RECOVERY_CHECK_MESSAGE_TYPE: &str = "recovery_check";
 pub const RESET_UPDATE_MESSAGE_TYPE: &str = "reset_update";
 pub const RECOVERY_UPDATE_MESSAGE_TYPE: &str = "recovery_update";
 
-pub enum RequestMessage {
-    Uniqueness(UniquenessRequest),
-    IdentityDeletion(IdentityDeletionRequest),
-    Reauthorization(ReAuthRequest),
-    ResetCheck(IdentityMatchCheckRequest),
-    ResetUpdate(IdentityUpdateRequest),
-    RecoveryCheck(IdentityMatchCheckRequest),
-    RecoveryUpdate(IdentityUpdateRequest),
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct UniquenessRequest {
     pub signup_id: String,
