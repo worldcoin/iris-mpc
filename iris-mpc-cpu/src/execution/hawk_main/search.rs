@@ -237,16 +237,6 @@ async fn classify_and_extend(
 
         metrics::histogram!("sm_full_search_ms").record(sm_full_search.as_millis() as f64);
 
-        let edges_full: HashSet<VectorId> =
-            HashSet::from_iter(full_search.edges.iter().map(|(id, _dist)| *id));
-        let edges_l0: HashSet<VectorId> =
-            HashSet::from_iter(supermatch_neighbors.edges.iter().map(|(id, _dist)| *id));
-        assert_eq!(edges_full.len(), edges_l0.len());
-
-        let union: HashSet<&VectorId> =
-            HashSet::from_iter(edges_l0.iter().chain(edges_full.iter()));
-        metrics::histogram!("sm_union").record(union.len() as f64);
-
         let supermatch_classified = classify_edges(
             &supermatch_neighbors.edges,
             aby3_store,
