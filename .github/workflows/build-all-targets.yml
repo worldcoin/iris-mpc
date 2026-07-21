@@ -13,7 +13,7 @@ concurrency:
 jobs:
   build-tests:
     runs-on:
-      group: arc-public-large-amd64-runner
+      group: arc-public-4xlarge-amd64-runner
     permissions:
       contents: read
     steps:
