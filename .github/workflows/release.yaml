@@ -23,7 +23,7 @@ jobs:
     timeout-minutes: 20
     name: Update Release Draft
     runs-on:
-      group: arc-public-large-amd64-runner
+      group: arc-public-xlarge-amd64-runner
 
     permissions:
       contents: write

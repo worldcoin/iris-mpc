@@ -8,7 +8,7 @@ on:
 jobs:
   cargo-deny:
     runs-on:
-      group: arc-public-large-amd64-runner
+      group: arc-public-xlarge-amd64-runner
     permissions:
       contents: read
     steps:

@@ -6,7 +6,7 @@ on:
 jobs:
   check-approvals:
     runs-on:
-      group: arc-public-large-amd64-runner
+      group: arc-public-xlarge-amd64-runner
     permissions:
       pull-requests: read
     steps:

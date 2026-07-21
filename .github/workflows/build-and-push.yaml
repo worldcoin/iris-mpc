@@ -76,7 +76,7 @@ jobs:
     # TODO: remove comment after PoC phase
     # if: github.event_name == 'release'
     runs-on:
-      group: arc-public-large-amd64-runner
+      group: arc-public-xlarge-amd64-runner
 
     steps:
       - name: Install Foundry
