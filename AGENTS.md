@@ -12,7 +12,7 @@
 - `just dev-pg-up` / `just dev-pg-down` control the Postgres instance used by HNSW.
 
 ## MPC Implementations: GPU vs HNSW
-- GPU path (`iris-mpc/bin/server.rs`, `iris-mpc-gpu/src/server/actor.rs`) preloads shares into CUDA `ShareDB` slices, scans distances via cuBLAS GEMM, coordinates multi-GPU batches with NCCL, and shapes device inputs through `PreprocessedBatchQuery`.
+- GPU path (`iris-mpc-bins/bin/iris-mpc/server.rs`, `iris-mpc-gpu/src/server/actor.rs`) preloads shares into CUDA `ShareDB` slices, scans distances via cuBLAS GEMM, coordinates multi-GPU batches with NCCL, and shapes device inputs through `PreprocessedBatchQuery`.
 - HNSW path (`iris-mpc/src/server/mod.rs`, `iris-mpc-cpu/src/execution/hawk_main.rs`) steers ABY3 sessions with `HawkActor` and drives `HnswSearcher` lookups backed by the Postgres `GraphPg` store.
 - Matching differs: GPU thresholds every candidate chunk with `DistanceComparator`; HNSW narrows neighbors (`search_to_insert`, `match_count`) then rechecks via ABY3 distance MPC in `is_match_batch.rs`.
 - State updates differ: GPU reloads device slices from `load_iris_db` and streams OR-policy masks, while HNSW derives insertion layers from a shared PRF and persists edges through `ConnectPlanV`.

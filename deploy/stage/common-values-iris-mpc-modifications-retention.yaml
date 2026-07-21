@@ -10,13 +10,14 @@
 # DATABASE_AURORA_URL; no pod SG or dedicated pool needed, mirroring iris-mpc-db-exporter).
 image: "ghcr.io/worldcoin/retention-reaper:v0.32.6@sha256:366cc7dcd9e9132bbfe2b5719332ff8d1f301ed5b487cbfc458fbc97cca92ace"
 
-# STAGE ENABLE, DRY-RUN: previews the exact delete predicate (read-only COUNT) daily.
-# Expected 0 for the first 30 days (created_at backfilled at migration boot) + the
-# newest-10k floor on the low-volume table. Flip DRY_RUN to "false" after clean previews
-# (mirrors the HNSW-side reaper's stage path).
+# STAGE LIVE: dry-run cleared — the reaper now performs the real guarded DELETE against
+# the GPU MPCV2 DB. No-op today by design (created_at backfilled at migration boot + the
+# newest-10k floor on the low-volume table → deletes 0 until ~2026-08-08); flipping now
+# exercises the real path on stage, both systems, ahead of the clock. Preview validated
+# live 2026-07-20 (connected SMPC_stage_0, would delete 0). Mirrors the HNSW-side reaper.
 env:
   RETENTION__ENABLED: "true"
-  RETENTION__DRY_RUN: "true"
+  RETENTION__DRY_RUN: "false"
 
 replicaCount: 1
 
