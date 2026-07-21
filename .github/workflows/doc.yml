@@ -12,7 +12,8 @@ concurrency:
 
 jobs:
   doc:
-    runs-on: ubuntu-22.04
+    runs-on:
+      group: arc-public-large-amd64-runner
     permissions:
       contents: read
     steps:

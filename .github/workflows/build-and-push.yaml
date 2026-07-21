@@ -20,7 +20,7 @@ jobs:
   docker:
     timeout-minutes: 40
     runs-on:
-      labels: ubuntu-22.04-16core
+      group: arc-public-4xlarge-amd64-runner
     permissions:
       packages: write
       contents: read
@@ -75,7 +75,8 @@ jobs:
     needs: docker
     # TODO: remove comment after PoC phase
     # if: github.event_name == 'release'
-    runs-on: ubuntu-22.04
+    runs-on:
+      group: arc-public-large-amd64-runner
 
     steps:
       - name: Install Foundry

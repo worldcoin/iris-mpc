@@ -23,7 +23,7 @@ jobs:
     timeout-minutes: 20
     name: Update Release Draft
     runs-on:
-      labels: ubuntu-latest
+      group: arc-public-large-amd64-runner
 
     permissions:
       contents: write

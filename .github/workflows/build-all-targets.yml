@@ -12,7 +12,8 @@ concurrency:
 
 jobs:
   build-tests:
-    runs-on: ubuntu-22.04
+    runs-on:
+      group: arc-public-large-amd64-runner
     permissions:
       contents: read
     steps:
@@ -73,7 +74,7 @@ jobs:
   build-bins:
     timeout-minutes: 40
     runs-on:
-      labels: ubuntu-22.04-16core
+      group: arc-public-4xlarge-amd64-runner
     steps:
       - name: Checkout code
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
