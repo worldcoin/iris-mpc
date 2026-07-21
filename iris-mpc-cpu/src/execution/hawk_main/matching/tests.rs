@@ -310,35 +310,34 @@ fn run_test_matching(tc: &TestCase) -> BatchStep3 {
     }
 
     let saturated = tc.saturated;
-    let search_result = |match_ids: Vec<VectorId>,
-                         non_match_ids: Vec<VectorId>,
-                         side_saturated: bool| {
-        let links_unstructured = vec![chain!(match_ids.clone(), non_match_ids).collect_vec()];
+    let search_result =
+        |match_ids: Vec<VectorId>, non_match_ids: Vec<VectorId>, side_saturated: bool| {
+            let links_unstructured = vec![chain!(match_ids.clone(), non_match_ids).collect_vec()];
 
-        let matches: Vec<_> = match_ids.iter().cloned().map(|v| (v, distance())).collect();
-        let insert_plan = HawkInsertPlan {
-            classified: ClassifiedMatches {
-                anon_stats_matches: SaturableMatches {
-                    results: matches.clone(),
-                    saturated: side_saturated,
+            let matches: Vec<_> = match_ids.iter().cloned().map(|v| (v, distance())).collect();
+            let insert_plan = HawkInsertPlan {
+                classified: ClassifiedMatches {
+                    anon_stats_matches: SaturableMatches {
+                        results: matches.clone(),
+                        saturated: side_saturated,
+                    },
+                    matches: SaturableMatches {
+                        results: matches,
+                        saturated: side_saturated,
+                    },
                 },
-                matches: SaturableMatches {
-                    results: matches,
-                    saturated: side_saturated,
+                plan: InsertPlanV {
+                    query: Aby3Query::new(QueryId::new()),
+                    links: links_unstructured,
+                    update_ep: UpdateEntryPoint::False,
+                    as_of: 0,
                 },
-            },
-            plan: InsertPlanV {
-                query: Aby3Query::new(QueryId::new()),
-                links: links_unstructured,
-                update_ep: UpdateEntryPoint::False,
-                as_of: 0,
-            },
+            };
+            VecRotations::from(vec![
+                insert_plan;
+                HAWK_BASE_ROTATIONS_MASK.count_ones() as usize
+            ])
         };
-        VecRotations::from(vec![
-            insert_plan;
-            HAWK_BASE_ROTATIONS_MASK.count_ones() as usize
-        ])
-    };
 
     let search_results = [
         vec![search_result(match_left, non_match_left, saturated[LEFT])],

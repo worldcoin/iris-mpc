@@ -90,10 +90,7 @@ impl VectorStore for TestStore {
     type QueryRef = usize; // Vector ID, pending insertion.
     type DistanceRef = u32; // Eager distance representation as fraction.
 
-    async fn vectors_as_queries(
-        &mut self,
-        vectors: Vec<VectorId>,
-    ) -> Result<Vec<Self::QueryRef>> {
+    async fn vectors_as_queries(&mut self, vectors: Vec<VectorId>) -> Result<Vec<Self::QueryRef>> {
         Ok(vectors
             .into_iter()
             .map(|v| v.serial_id() as usize)
@@ -165,8 +162,7 @@ async fn test_from_another() -> Result<()> {
     let mut searcher = HnswSearcher::new_with_test_parameters();
     // Bump layer density so enough nodes roll onto the entry-point layer
     // (max_graph_layer + 1) for the entry-point migration checks below.
-    searcher.layer_distribution =
-        crate::hnsw::searcher::LayerDistribution::new_geometric_from_M(2);
+    searcher.layer_distribution = crate::hnsw::searcher::LayerDistribution::new_geometric_from_M(2);
     let mut rng = AesRng::seed_from_u64(0_u64);
 
     let mut point_ids_map: HashMap<SerialId, SerialId> = HashMap::new();
@@ -1071,8 +1067,7 @@ async fn graph_v5_evolving_roundtrip() {
 
     let mut pair_buf = Vec::new();
     write_graph_pair_current(&mut pair_buf, [g.clone(), g.clone()]).unwrap();
-    let pair =
-        read_graph_pair(&mut std::io::Cursor::new(&pair_buf), GraphFormat::Current).unwrap();
+    let pair = read_graph_pair(&mut std::io::Cursor::new(&pair_buf), GraphFormat::Current).unwrap();
     for restored in &pair {
         assert_eq!(*restored, g, "pair round-trip changed the aged graph");
     }
