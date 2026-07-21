@@ -280,7 +280,7 @@ async fn ingest_sqs_message(
 
     let body = sqs_message.body().expect("checked above").to_string();
     let sns_message: SQSMessage = serde_json::from_str(&body).expect("checked above");
-    let is_valid = is_request_payload_valid(&sns_message, &body);
+    let is_valid = is_request_payload_valid(&sns_message);
 
     // DB errors are transient: propagate WITHOUT deleting so the message is
     // redelivered (PK dedup makes the redelivery-after-successful-insert
@@ -318,17 +318,14 @@ async fn ingest_sqs_message(
 /// missing/non-string `message_type` attribute or an unparseable payload. Both
 /// are deterministic across parties, so the caller records the row as
 /// `is_valid = false` instead of propagating a transient error that would retry
-/// the message forever at the FIFO group head. `body` is the full SNS envelope,
-/// used only for diagnostics.
-fn is_request_payload_valid(sns_message: &SQSMessage, body: &str) -> bool {
+/// the message forever at the FIFO group head.
+fn is_request_payload_valid(sns_message: &SQSMessage) -> bool {
     let Some(request_type) = sns_message
         .message_attributes
         .get(SMPC_MESSAGE_TYPE_ATTRIBUTE)
         .and_then(|attr| attr.string_value())
     else {
-        tracing::error!(
-            "db-backed ingest: missing or non-string message type attribute; body: {body}"
-        );
+        tracing::error!("db-backed ingest: missing or non-string message type attribute");
         metrics::counter!("invalid_request_payload", "request_type" => "missing").increment(1);
         return false;
     };
@@ -337,7 +334,8 @@ fn is_request_payload_valid(sns_message: &SQSMessage, body: &str) -> bool {
         Ok(_) => true,
         Err(e) => {
             tracing::error!(
-                "db-backed ingest: invalid request payload {request_type} body: {body}: {:?}",
+                "db-backed ingest: invalid request payload {request_type} message: {}: {:?}",
+                sns_message.message,
                 e
             );
             metrics::counter!("invalid_request_payload", "request_type" => request_type.to_string())
@@ -1827,8 +1825,8 @@ pub async fn get_own_batch_sync_state(
 #[cfg(test)]
 mod tests {
     use super::{
-        is_content_poison, messages_to_poll_for_available, DbIngestBackoff, ReceiveRequestError,
-        SQSMessage, KNOWN_MESSAGE_TYPES,
+        is_content_poison, is_request_payload_valid, messages_to_poll_for_available,
+        DbIngestBackoff, ReceiveRequestError, SQSMessage, KNOWN_MESSAGE_TYPES,
     };
     use iris_mpc_common::helpers::smpc_request::{
         IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RECOVERY_CHECK_MESSAGE_TYPE,
@@ -1836,6 +1834,46 @@ mod tests {
         UNIQUENESS_MESSAGE_TYPE,
     };
     use iris_mpc_store::{normalize_sns_sequence_number, SNS_SEQUENCE_NUMBER_WIDTH};
+
+    #[test]
+    fn is_request_payload_valid_accepts_well_formed_request() {
+        let body = serde_json::json!({
+          "Type" : "Notification",
+          "MessageId" : "00000000-0000-0000-0000-000000000000",
+          "SequenceNumber" : "10000000000000000000",
+          "TopicArn" : "arn:aws:sns:us-east-1:000000000000:test-topic.fifo",
+          "Message" : "{\"request_id\":\"test-request-id\",\"batch_size\":1,\"s3_key\":\"test-request-id/test-object/request.json\"}",
+          "Timestamp" : "2024-01-01T00:00:00.000Z",
+          "UnsubscribeURL" : "https://sns.us-east-1.amazonaws.com/?Action=Unsubscribe&SubscriptionArn=arn:aws:sns:us-east-1:000000000000:test-topic.fifo:00000000-0000-0000-0000-000000000000",
+          "MessageAttributes" : {
+            "TraceID" : {"Type":"String","Value":"00000000000000000000000000000000"},
+            "message_type" : {"Type":"String","Value":"recovery_check"},
+            "SpanID" : {"Type":"String","Value":"0000000000000000000"}
+          }
+        });
+        let msg: SQSMessage = serde_json::from_value(body).expect("valid SQSMessage json");
+        assert!(is_request_payload_valid(&msg));
+    }
+
+    #[test]
+    fn is_request_payload_with_missing_s3_key_is_invalid() {
+        let body = serde_json::json!({
+          "Type" : "Notification",
+          "MessageId" : "00000000-0000-0000-0000-000000000000",
+          "SequenceNumber" : "10000000000000000000",
+          "TopicArn" : "arn:aws:sns:us-east-1:000000000000:test-topic.fifo",
+          "Message" : "{\"request_id\":\"test-request-id\",\"batch_size\":1}",
+          "Timestamp" : "2024-01-01T00:00:00.000Z",
+          "UnsubscribeURL" : "https://sns.us-east-1.amazonaws.com/?Action=Unsubscribe&SubscriptionArn=arn:aws:sns:us-east-1:000000000000:test-topic.fifo:00000000-0000-0000-0000-000000000000",
+          "MessageAttributes" : {
+            "TraceID" : {"Type":"String","Value":"00000000000000000000000000000000"},
+            "message_type" : {"Type":"String","Value":"recovery_check"},
+            "SpanID" : {"Type":"String","Value":"0000000000000000000"}
+          }
+        });
+        let msg: SQSMessage = serde_json::from_value(body).expect("valid SQSMessage json");
+        assert!(!is_request_payload_valid(&msg));
+    }
 
     #[test]
     fn messages_to_poll_for_available_caps_by_available_messages() {
