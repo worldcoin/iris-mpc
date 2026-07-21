@@ -48,6 +48,8 @@ use tokio::sync::mpsc::Receiver;
 use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinHandle;
 
+use iris_mpc_common::helpers::smpc_request::RequestMessage;
+
 /// Request types the batch processor knows how to handle; anything else in a
 /// DB-ingested row is quarantined as content poison.
 const KNOWN_MESSAGE_TYPES: &[&str] = &[
@@ -277,6 +279,8 @@ async fn ingest_sqs_message(
 
     let body = sqs_message.body().expect("checked above").to_string();
     let sns_message: SQSMessage = serde_json::from_str(&body).expect("checked above");
+
+    // Validate body has s3_key field in json
 
     // DB errors are transient: propagate WITHOUT deleting so the message is
     // redelivered (PK dedup makes the redelivery-after-successful-insert
@@ -905,61 +909,124 @@ impl<'a> BatchProcessor<'a> {
         Ok(())
     }
 
+    fn parse_request_message(
+        &self,
+        request_type: &str,
+        message: &str,
+    ) -> Result<RequestMessage, ReceiveRequestError> {
+        match request_type {
+            IDENTITY_DELETION_MESSAGE_TYPE => {
+                let identity_deletion_request: IdentityDeletionRequest =
+                    serde_json::from_str(message).map_err(|e| {
+                        ReceiveRequestError::json_parse_error("Identity deletion request", e)
+                    })?;
+                Ok(RequestMessage::IdentityDeletion(identity_deletion_request))
+            }
+            UNIQUENESS_MESSAGE_TYPE => {
+                let uniqueness_request: UniquenessRequest = serde_json::from_str(message)
+                    .map_err(|e| ReceiveRequestError::json_parse_error("Uniqueness request", e))?;
+                Ok(RequestMessage::Uniqueness(uniqueness_request))
+            }
+            REAUTH_MESSAGE_TYPE => {
+                let reauth_request: ReAuthRequest = serde_json::from_str(message).map_err(|e| {
+                    ReceiveRequestError::json_parse_error("Reauthorization request", e)
+                })?;
+                Ok(RequestMessage::Reauthorization(reauth_request))
+            }
+            RECOVERY_CHECK_MESSAGE_TYPE => {
+                let recovery_check_request: IdentityMatchCheckRequest =
+                    serde_json::from_str(message).map_err(|e| {
+                        ReceiveRequestError::json_parse_error("Recovery check request", e)
+                    })?;
+                Ok(RequestMessage::RecoveryCheck(recovery_check_request))
+            }
+            RESET_CHECK_MESSAGE_TYPE => {
+                let reset_check_request: IdentityMatchCheckRequest = serde_json::from_str(message)
+                    .map_err(|e| ReceiveRequestError::json_parse_error("Reset check request", e))?;
+                Ok(RequestMessage::ResetCheck(reset_check_request))
+            }
+            RECOVERY_UPDATE_MESSAGE_TYPE => {
+                let recovery_update_request: IdentityUpdateRequest = serde_json::from_str(message)
+                    .map_err(|e| {
+                        ReceiveRequestError::json_parse_error("Recovery update request", e)
+                    })?;
+                Ok(RequestMessage::RecoveryUpdate(recovery_update_request))
+            }
+            RESET_UPDATE_MESSAGE_TYPE => {
+                let reset_update_request: IdentityUpdateRequest = serde_json::from_str(message)
+                    .map_err(|e| {
+                        ReceiveRequestError::json_parse_error("Reset update request", e)
+                    })?;
+                Ok(RequestMessage::ResetUpdate(reset_update_request))
+            }
+            _ => Err(ReceiveRequestError::InvalidMessageType),
+        }
+    }
+
     async fn process_message_(
         &mut self,
         message: &SQSMessage,
         request_type: &str,
         batch_metadata: BatchMetadata,
     ) -> Result<(), ReceiveRequestError> {
-        match request_type {
-            IDENTITY_DELETION_MESSAGE_TYPE => {
-                self.process_identity_deletion(message, batch_metadata)
+        let request_message = self.parse_request_message(request_type, &message.message)?;
+        let sns_message_id = message.message_id.clone();
+        match request_message {
+            RequestMessage::IdentityDeletion(identity_deletion_request) => {
+                self.process_identity_deletion(
+                    sns_message_id,
+                    identity_deletion_request,
+                    batch_metadata,
+                )
+                .await
+            }
+            RequestMessage::Uniqueness(uniqueness_request) => {
+                self.process_uniqueness_request(sns_message_id, uniqueness_request, batch_metadata)
                     .await
             }
-            UNIQUENESS_MESSAGE_TYPE => {
-                self.process_uniqueness_request(message, batch_metadata)
+            RequestMessage::Reauthorization(reauth_request) => {
+                self.process_reauth_request(sns_message_id, reauth_request, batch_metadata)
                     .await
             }
-            REAUTH_MESSAGE_TYPE => self.process_reauth_request(message, batch_metadata).await,
-            RECOVERY_CHECK_MESSAGE_TYPE => {
+            RequestMessage::RecoveryCheck(recovery_check_request) => {
                 self.process_identity_match_check_request(
-                    message,
+                    sns_message_id,
+                    recovery_check_request,
                     batch_metadata,
                     RECOVERY_CHECK_MESSAGE_TYPE,
                     self.config.enable_recovery,
                 )
                 .await
             }
-            RESET_CHECK_MESSAGE_TYPE => {
+            RequestMessage::ResetCheck(reset_check_request) => {
                 self.process_identity_match_check_request(
-                    message,
+                    sns_message_id,
+                    reset_check_request,
                     batch_metadata,
                     RESET_CHECK_MESSAGE_TYPE,
                     self.config.enable_reset,
                 )
                 .await
             }
-            RECOVERY_UPDATE_MESSAGE_TYPE => {
+            RequestMessage::RecoveryUpdate(recovery_update_request) => {
                 self.process_identity_update_request(
-                    message,
+                    sns_message_id,
+                    recovery_update_request,
                     batch_metadata,
                     RECOVERY_UPDATE_MESSAGE_TYPE,
                     self.config.enable_recovery,
                 )
                 .await
             }
-            RESET_UPDATE_MESSAGE_TYPE => {
+            RequestMessage::ResetUpdate(reset_update_request) => {
                 self.process_identity_update_request(
-                    message,
+                    sns_message_id,
+                    reset_update_request,
                     batch_metadata,
                     RESET_UPDATE_MESSAGE_TYPE,
                     self.config.enable_reset,
                 )
                 .await
-            }
-            _ => {
-                tracing::error!("Error: {}", ReceiveRequestError::InvalidMessageType);
-                Ok(())
             }
         }
     }
@@ -1022,16 +1089,11 @@ impl<'a> BatchProcessor<'a> {
 
     async fn process_identity_deletion(
         &mut self,
-        message: &SQSMessage,
+        sns_message_id: String,
+        identity_deletion_request: IdentityDeletionRequest,
         batch_metadata: BatchMetadata,
     ) -> Result<(), ReceiveRequestError> {
         metrics::counter!("request.received", "type" => "identity_deletion").increment(1);
-        let sns_message_id = message.message_id.clone();
-        let identity_deletion_request: IdentityDeletionRequest =
-            serde_json::from_str(&message.message).map_err(|e| {
-                ReceiveRequestError::json_parse_error("Identity deletion request", e)
-            })?;
-
         if self.config.enable_deletion {
             // Skip the request if serial ID already exists in current batch modifications
             if self
@@ -1106,14 +1168,11 @@ impl<'a> BatchProcessor<'a> {
 
     async fn process_uniqueness_request(
         &mut self,
-        message: &SQSMessage,
+        sns_message_id: String,
+        uniqueness_request: UniquenessRequest,
         batch_metadata: BatchMetadata,
     ) -> Result<(), ReceiveRequestError> {
         metrics::counter!("request.received", "type" => "uniqueness_verification").increment(1);
-        let sns_message_id = message.message_id.clone();
-        let uniqueness_request: UniquenessRequest = serde_json::from_str(&message.message)
-            .map_err(|e| ReceiveRequestError::json_parse_error("Uniqueness request", e))?;
-
         // Persist in progress modification
         let modification = persist_modification(
             self.config.disable_persistence,
@@ -1160,14 +1219,11 @@ impl<'a> BatchProcessor<'a> {
 
     async fn process_reauth_request(
         &mut self,
-        message: &SQSMessage,
+        sns_message_id: String,
+        reauth_request: ReAuthRequest,
         batch_metadata: BatchMetadata,
     ) -> Result<(), ReceiveRequestError> {
         metrics::counter!("request.received", "type" => "reauth").increment(1);
-        let sns_message_id = message.message_id.clone();
-        let reauth_request: ReAuthRequest = serde_json::from_str(&message.message)
-            .map_err(|e| ReceiveRequestError::json_parse_error("Reauth request", e))?;
-
         tracing::debug!("Received reauth request: {:?}", reauth_request);
 
         if !self.config.enable_reauth {
@@ -1292,17 +1348,13 @@ impl<'a> BatchProcessor<'a> {
 
     async fn process_identity_match_check_request(
         &mut self,
-        message: &SQSMessage,
+        sns_message_id: String,
+        identity_match_check_request: IdentityMatchCheckRequest,
         batch_metadata: BatchMetadata,
         request_type: &str,
         is_request_type_enabled: bool,
     ) -> Result<(), ReceiveRequestError> {
         metrics::counter!("request.received", "type" => request_type.to_string()).increment(1);
-        let sns_message_id = message.message_id.clone();
-        let identity_match_check_request: IdentityMatchCheckRequest =
-            serde_json::from_str(&message.message)
-                .map_err(|e| ReceiveRequestError::json_parse_error("Identity check request", e))?;
-
         tracing::debug!(
             "Received {} request: {:?}",
             request_type,
@@ -1366,16 +1418,13 @@ impl<'a> BatchProcessor<'a> {
 
     async fn process_identity_update_request(
         &mut self,
-        message: &SQSMessage,
+        sns_message_id: String,
+        identity_update_request: IdentityUpdateRequest,
         batch_metadata: BatchMetadata,
         request_type: &str,
         is_request_type_enabled: bool,
     ) -> Result<(), ReceiveRequestError> {
         metrics::counter!("request.received", "type" => request_type.to_string()).increment(1);
-        let sns_message_id = message.message_id.clone();
-        let identity_update_request: IdentityUpdateRequest = serde_json::from_str(&message.message)
-            .map_err(|e| ReceiveRequestError::json_parse_error("Identity update request", e))?;
-
         tracing::debug!(
             "Received {} request: {:?}",
             request_type,
