@@ -5,6 +5,7 @@ use iris_mpc_cpu::execution::hawk_main::{BothEyes, GraphRef, HawkOps};
 use iris_mpc_cpu::genesis::state_accessor::{
     set_last_indexed_iris_id, set_last_indexed_modification_id,
 };
+use iris_mpc_cpu::genesis::{Handle as GenesisHawkHandle, JobResult};
 use iris_mpc_cpu::graph_checkpoint::{upload_graph_checkpoint, GraphCheckpointState};
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
@@ -12,8 +13,6 @@ use iris_mpc_store::Store as IrisStore;
 use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot;
-
-use super::{GenesisHawkHandle, JobResult};
 
 /// Uploads a genesis checkpoint, sends the result, and synchronizes peers.
 #[allow(clippy::too_many_arguments)]
