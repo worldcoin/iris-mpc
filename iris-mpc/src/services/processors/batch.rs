@@ -279,29 +279,8 @@ async fn ingest_sqs_message(
     }
 
     let body = sqs_message.body().expect("checked above").to_string();
-    // Validate request payload
     let sns_message: SQSMessage = serde_json::from_str(&body).expect("checked above");
-    let request_type = sns_message
-        .message_attributes
-        .get(SMPC_MESSAGE_TYPE_ATTRIBUTE)
-        .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?
-        .string_value()
-        .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?
-        .to_string();
-    let request_payload =
-        parse_request_payload(request_type.as_str(), sns_message.message.as_str());
-    let is_valid = match request_payload {
-        Ok(_) => true,
-        Err(e) => {
-            tracing::error!(
-                "db-backed ingest: invalid request payload {request_type} body: {body}: {:?}",
-                e
-            );
-            metrics::counter!("invalid_request_payload", "request_type" => request_type)
-                .increment(1);
-            false
-        }
-    };
+    let is_valid = is_request_payload_valid(&sns_message, &body);
 
     // DB errors are transient: propagate WITHOUT deleting so the message is
     // redelivered (PK dedup makes the redelivery-after-successful-insert
@@ -331,6 +310,41 @@ async fn ingest_sqs_message(
         );
     }
     Ok(())
+}
+
+/// Validates a parseable SNS envelope's request payload for DB-backed ingest.
+///
+/// Returns `false` (rather than an error) for content-determined poison — a
+/// missing/non-string `message_type` attribute or an unparseable payload. Both
+/// are deterministic across parties, so the caller records the row as
+/// `is_valid = false` instead of propagating a transient error that would retry
+/// the message forever at the FIFO group head. `body` is the full SNS envelope,
+/// used only for diagnostics.
+fn is_request_payload_valid(sns_message: &SQSMessage, body: &str) -> bool {
+    let Some(request_type) = sns_message
+        .message_attributes
+        .get(SMPC_MESSAGE_TYPE_ATTRIBUTE)
+        .and_then(|attr| attr.string_value())
+    else {
+        tracing::error!(
+            "db-backed ingest: missing or non-string message type attribute; body: {body}"
+        );
+        metrics::counter!("invalid_request_payload", "request_type" => "missing").increment(1);
+        return false;
+    };
+
+    match parse_request_payload(request_type, sns_message.message.as_str()) {
+        Ok(_) => true,
+        Err(e) => {
+            tracing::error!(
+                "db-backed ingest: invalid request payload {request_type} body: {body}: {:?}",
+                e
+            );
+            metrics::counter!("invalid_request_payload", "request_type" => request_type.to_string())
+                .increment(1);
+            false
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
