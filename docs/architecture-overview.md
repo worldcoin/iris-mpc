@@ -23,8 +23,8 @@ The core MPC computation engine. Runs the ABY3 protocol over HNSW graphs.
 | ABY3 store | `src/hawkers/aby3/aby3_store.rs` | Secret-shared distance computation |
 | SharedIrises | `src/hawkers/shared_irises.rs` | In-memory versioned iris store |
 | HNSW graph | `src/hnsw/` | Graph structure, searcher, layer distribution |
-| Network | `src/network/tcp.rs` | TCP connections between MPC parties |
-| Session | `src/execution/session.rs` | NetworkSession + PRF = cryptographic context |
+| Network | `ampc-actor-utils` crate — `network` (re-exported via `iris-mpc-cpu/src/lib.rs`) | TCP connections between MPC parties |
+| Session | `ampc-actor-utils` crate — `execution::session` (re-exported via `iris-mpc-cpu/src/execution/mod.rs`) | NetworkSession + PRF = cryptographic context |
 
 ### iris-mpc-common
 Shared types with no business logic.
@@ -67,7 +67,8 @@ Binaries and operational scripts.
 
 | Item | Path | Role |
 |------|------|------|
-| Server binary | `bin/iris-mpc/server.rs` | Main MPC server entry point |
+| GPU server binary (`iris-mpc-gpu`) | `bin/iris-mpc/server.rs` | GPU MPC server entry point |
+| Hawk server binary (`iris-mpc-hawk`) | `bin/iris-mpc/server/iris_mpc_hawk.rs` | CPU (HNSW) MPC server entry point |
 | Service client | `bin/service-client/` | CLI binary wrapping iris-mpc-utils |
 | Run script | `scripts/run-service-client.sh` | Shell wrapper with file resolution and AWS profile setup |
 
