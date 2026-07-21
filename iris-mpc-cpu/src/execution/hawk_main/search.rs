@@ -237,13 +237,8 @@ async fn classify_and_extend(
 
         metrics::histogram!("sm_full_search_ms").record(sm_full_search.as_millis() as f64);
 
-        let supermatch_classified = classify_edges(
-            &supermatch_neighbors.edges,
-            aby3_store,
-            ef_supermatch,
-            margin,
-        )
-        .await?;
+        let supermatch_classified =
+            classify_edges(&full_search.edges, aby3_store, ef_supermatch, margin).await?;
 
         if supermatch_classified.anon_stats_matches.saturated {
             tracing::warn!(
