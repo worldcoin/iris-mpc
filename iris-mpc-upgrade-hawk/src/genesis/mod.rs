@@ -43,7 +43,7 @@ use iris_mpc_cpu::{
             Config as GenesisConfig, SyncResult as GenesisSyncResult, SyncState as GenesisSyncState,
         },
         version_join::{
-            compute_version_join, partition_repair, versions_per_serial, RepairPlan,
+            compute_version_join, make_repair_plan, versions_per_serial, RepairPlan,
             VersionJoinPlan,
         },
         BatchGenerator, BatchIterator, Handle as GenesisHawkHandle, IndexationError, JobRequest,
@@ -842,7 +842,7 @@ async fn exec_delta(
             .chain(graph_versions[RIGHT].keys())
             .copied()
             .collect();
-        let repair = partition_repair(
+        let repair = make_repair_plan(
             &repair_serials,
             &plans[LEFT].missing_hnsw_rows,
             &deleted,

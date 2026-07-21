@@ -185,7 +185,7 @@ pub fn compute_version_join(
 /// tombstones with a stale HNSW row go to `stale_tombstone_rows`, those
 /// without a row are already covered by `insert_missing_rows` (inserted with
 /// source content, i.e. the tombstone).
-pub fn partition_repair(
+pub fn make_repair_plan(
     repair: &[SerialId],
     missing_hnsw_rows: &[SerialId],
     deleted: &HashSet<SerialId>,
@@ -242,7 +242,7 @@ mod tests {
         hnsw_versions: &HashMap<SerialId, VersionId>,
     ) -> RepairPlan {
         let serials_in_graph: HashSet<SerialId> = graph_versions.keys().copied().collect();
-        partition_repair(
+        make_repair_plan(
             &plan.graph_repair,
             &plan.missing_hnsw_rows,
             deleted,
