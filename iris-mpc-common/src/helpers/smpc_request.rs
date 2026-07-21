@@ -395,6 +395,41 @@ impl RequestPayload {
     }
 }
 
+pub fn parse_request_payload(
+    message_type: &str,
+    payload: &str,
+) -> Result<RequestPayload, serde_json::Error> {
+    match message_type {
+        UNIQUENESS_MESSAGE_TYPE => Ok(RequestPayload::Uniqueness(serde_json::from_str::<
+            UniquenessRequest,
+        >(payload)?)),
+        IDENTITY_DELETION_MESSAGE_TYPE => {
+            Ok(RequestPayload::IdentityDeletion(serde_json::from_str::<
+                IdentityDeletionRequest,
+            >(payload)?))
+        }
+        REAUTH_MESSAGE_TYPE => Ok(RequestPayload::Reauthorization(serde_json::from_str::<
+            ReAuthRequest,
+        >(payload)?)),
+        RESET_CHECK_MESSAGE_TYPE => Ok(RequestPayload::ResetCheck(serde_json::from_str::<
+            IdentityMatchCheckRequest,
+        >(payload)?)),
+        RECOVERY_CHECK_MESSAGE_TYPE => Ok(RequestPayload::RecoveryCheck(serde_json::from_str::<
+            IdentityMatchCheckRequest,
+        >(payload)?)),
+        RESET_UPDATE_MESSAGE_TYPE => Ok(RequestPayload::ResetUpdate(serde_json::from_str::<
+            IdentityUpdateRequest,
+        >(payload)?)),
+        RECOVERY_UPDATE_MESSAGE_TYPE => Ok(RequestPayload::RecoveryUpdate(serde_json::from_str::<
+            IdentityUpdateRequest,
+        >(payload)?)),
+        _ => Err(serde::de::Error::invalid_value(
+            serde::de::Unexpected::Str(message_type),
+            &"Invalid message type",
+        )),
+    }
+}
+
 #[cfg(feature = "explicit-sns-batching")]
 pub use explicit_sns_batching::*;
 

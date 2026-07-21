@@ -19,6 +19,7 @@ use iris_mpc_common::helpers::aws::{
     SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
 };
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
+use iris_mpc_common::helpers::smpc_request::RequestPayload;
 #[cfg(feature = "explicit-sns-batching")]
 use iris_mpc_common::helpers::smpc_request::{
     CompactBatchRequest, CompressedBatchPayload, BATCH_MESSAGE_TYPE,
@@ -48,7 +49,7 @@ use tokio::sync::mpsc::Receiver;
 use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinHandle;
 
-use iris_mpc_common::helpers::smpc_request::RequestMessage;
+use iris_mpc_common::helpers::smpc_request::parse_request_payload;
 
 /// Request types the batch processor knows how to handle; anything else in a
 /// DB-ingested row is quarantined as content poison.
@@ -278,15 +279,35 @@ async fn ingest_sqs_message(
     }
 
     let body = sqs_message.body().expect("checked above").to_string();
+    // Validate request payload
     let sns_message: SQSMessage = serde_json::from_str(&body).expect("checked above");
-
-    // Validate body has s3_key field in json
+    let request_type = sns_message
+        .message_attributes
+        .get(SMPC_MESSAGE_TYPE_ATTRIBUTE)
+        .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?
+        .string_value()
+        .ok_or(ReceiveRequestError::NoMessageTypeAttribute)?
+        .to_string();
+    let request_payload =
+        parse_request_payload(request_type.as_str(), sns_message.message.as_str());
+    let is_valid = match request_payload {
+        Ok(_) => true,
+        Err(e) => {
+            tracing::error!(
+                "db-backed ingest: invalid request payload {request_type} body: {body}: {:?}",
+                e
+            );
+            metrics::counter!("invalid_request_payload", "request_type" => request_type)
+                .increment(1);
+            false
+        }
+    };
 
     // DB errors are transient: propagate WITHOUT deleting so the message is
     // redelivered (PK dedup makes the redelivery-after-successful-insert
     // case harmless).
     let inserted = iris_store
-        .insert_ingested_request(&sns_message.sequence_number, &body)
+        .insert_ingested_request(&sns_message.sequence_number, &body, is_valid)
         .await?;
 
     client
@@ -909,70 +930,17 @@ impl<'a> BatchProcessor<'a> {
         Ok(())
     }
 
-    fn parse_request_message(
-        &self,
-        request_type: &str,
-        message: &str,
-    ) -> Result<RequestMessage, ReceiveRequestError> {
-        match request_type {
-            IDENTITY_DELETION_MESSAGE_TYPE => {
-                let identity_deletion_request: IdentityDeletionRequest =
-                    serde_json::from_str(message).map_err(|e| {
-                        ReceiveRequestError::json_parse_error("Identity deletion request", e)
-                    })?;
-                Ok(RequestMessage::IdentityDeletion(identity_deletion_request))
-            }
-            UNIQUENESS_MESSAGE_TYPE => {
-                let uniqueness_request: UniquenessRequest = serde_json::from_str(message)
-                    .map_err(|e| ReceiveRequestError::json_parse_error("Uniqueness request", e))?;
-                Ok(RequestMessage::Uniqueness(uniqueness_request))
-            }
-            REAUTH_MESSAGE_TYPE => {
-                let reauth_request: ReAuthRequest = serde_json::from_str(message).map_err(|e| {
-                    ReceiveRequestError::json_parse_error("Reauthorization request", e)
-                })?;
-                Ok(RequestMessage::Reauthorization(reauth_request))
-            }
-            RECOVERY_CHECK_MESSAGE_TYPE => {
-                let recovery_check_request: IdentityMatchCheckRequest =
-                    serde_json::from_str(message).map_err(|e| {
-                        ReceiveRequestError::json_parse_error("Recovery check request", e)
-                    })?;
-                Ok(RequestMessage::RecoveryCheck(recovery_check_request))
-            }
-            RESET_CHECK_MESSAGE_TYPE => {
-                let reset_check_request: IdentityMatchCheckRequest = serde_json::from_str(message)
-                    .map_err(|e| ReceiveRequestError::json_parse_error("Reset check request", e))?;
-                Ok(RequestMessage::ResetCheck(reset_check_request))
-            }
-            RECOVERY_UPDATE_MESSAGE_TYPE => {
-                let recovery_update_request: IdentityUpdateRequest = serde_json::from_str(message)
-                    .map_err(|e| {
-                        ReceiveRequestError::json_parse_error("Recovery update request", e)
-                    })?;
-                Ok(RequestMessage::RecoveryUpdate(recovery_update_request))
-            }
-            RESET_UPDATE_MESSAGE_TYPE => {
-                let reset_update_request: IdentityUpdateRequest = serde_json::from_str(message)
-                    .map_err(|e| {
-                        ReceiveRequestError::json_parse_error("Reset update request", e)
-                    })?;
-                Ok(RequestMessage::ResetUpdate(reset_update_request))
-            }
-            _ => Err(ReceiveRequestError::InvalidMessageType),
-        }
-    }
-
     async fn process_message_(
         &mut self,
         message: &SQSMessage,
         request_type: &str,
         batch_metadata: BatchMetadata,
     ) -> Result<(), ReceiveRequestError> {
-        let request_message = self.parse_request_message(request_type, &message.message)?;
+        let request_payload = parse_request_payload(request_type, message.message.as_str())
+            .map_err(|err| ReceiveRequestError::json_parse_error(request_type, err))?;
         let sns_message_id = message.message_id.clone();
-        match request_message {
-            RequestMessage::IdentityDeletion(identity_deletion_request) => {
+        match request_payload {
+            RequestPayload::IdentityDeletion(identity_deletion_request) => {
                 self.process_identity_deletion(
                     sns_message_id,
                     identity_deletion_request,
@@ -980,15 +948,15 @@ impl<'a> BatchProcessor<'a> {
                 )
                 .await
             }
-            RequestMessage::Uniqueness(uniqueness_request) => {
+            RequestPayload::Uniqueness(uniqueness_request) => {
                 self.process_uniqueness_request(sns_message_id, uniqueness_request, batch_metadata)
                     .await
             }
-            RequestMessage::Reauthorization(reauth_request) => {
+            RequestPayload::Reauthorization(reauth_request) => {
                 self.process_reauth_request(sns_message_id, reauth_request, batch_metadata)
                     .await
             }
-            RequestMessage::RecoveryCheck(recovery_check_request) => {
+            RequestPayload::RecoveryCheck(recovery_check_request) => {
                 self.process_identity_match_check_request(
                     sns_message_id,
                     recovery_check_request,
@@ -998,7 +966,7 @@ impl<'a> BatchProcessor<'a> {
                 )
                 .await
             }
-            RequestMessage::ResetCheck(reset_check_request) => {
+            RequestPayload::ResetCheck(reset_check_request) => {
                 self.process_identity_match_check_request(
                     sns_message_id,
                     reset_check_request,
@@ -1008,7 +976,7 @@ impl<'a> BatchProcessor<'a> {
                 )
                 .await
             }
-            RequestMessage::RecoveryUpdate(recovery_update_request) => {
+            RequestPayload::RecoveryUpdate(recovery_update_request) => {
                 self.process_identity_update_request(
                     sns_message_id,
                     recovery_update_request,
@@ -1018,7 +986,7 @@ impl<'a> BatchProcessor<'a> {
                 )
                 .await
             }
-            RequestMessage::ResetUpdate(reset_update_request) => {
+            RequestPayload::ResetUpdate(reset_update_request) => {
                 self.process_identity_update_request(
                     sns_message_id,
                     reset_update_request,

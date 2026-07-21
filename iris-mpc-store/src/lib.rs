@@ -529,17 +529,19 @@ WHERE id = $1;
         &self,
         sequence_number: &str,
         message_body: &str,
+        is_valid: bool,
     ) -> Result<bool> {
         let normalized_sequence_number = normalize_sns_sequence_number(sequence_number)?;
         let result = sqlx::query(
             r#"
-            INSERT INTO ingested_requests (sequence_number, message_body)
-            VALUES ($1, $2)
+            INSERT INTO ingested_requests (sequence_number, message_body, is_valid)
+            VALUES ($1, $2, $3)
             ON CONFLICT (sequence_number) DO NOTHING
             "#,
         )
         .bind(normalized_sequence_number)
         .bind(message_body)
+        .bind(is_valid)
         .execute(&self.pool)
         .await?;
 
@@ -561,6 +563,7 @@ WHERE id = $1;
             FROM ingested_requests
             WHERE consumed_batch_id IS NULL
               AND persisted_at IS NULL
+              AND is_valid IS NOT FALSE
             "#,
         )
         .fetch_one(&self.pool)
@@ -575,6 +578,7 @@ WHERE id = $1;
             FROM ingested_requests
             WHERE consumed_batch_id IS NULL
               AND persisted_at IS NULL
+              AND is_valid IS NOT FALSE
             ORDER BY sequence_number
             LIMIT $1
             "#,
@@ -1156,12 +1160,12 @@ pub mod tests {
 
         assert!(
             store
-                .insert_ingested_request(sequence_number, "message body")
+                .insert_ingested_request(sequence_number, "message body", true)
                 .await?
         );
         assert!(
             !store
-                .insert_ingested_request(sequence_number, "message body")
+                .insert_ingested_request(sequence_number, "message body", true)
                 .await?
         );
 
@@ -1194,12 +1198,12 @@ pub mod tests {
 
         assert!(
             store
-                .insert_ingested_request("42", "first message body")
+                .insert_ingested_request("42", "first message body", true)
                 .await?
         );
         assert!(
             store
-                .insert_ingested_request("43", "second message body")
+                .insert_ingested_request("43", "second message body", true)
                 .await?
         );
 
@@ -1247,7 +1251,7 @@ pub mod tests {
         let store = Store::new(&postgres_client).await?;
 
         for seq in ["20", "21", "22"] {
-            assert!(store.insert_ingested_request(seq, "body").await?);
+            assert!(store.insert_ingested_request(seq, "body", true).await?);
         }
         let all = store.pending_ingested_requests(10).await?;
         let seqs: Vec<String> = all.iter().map(|r| r.sequence_number.clone()).collect();
@@ -1291,7 +1295,7 @@ pub mod tests {
         // party's commit was the one that failed: claimed, unpersisted), row 12
         // claimed above the fleet frontier (nobody persisted), row 13 pending.
         for seq in ["10", "11", "12", "13"] {
-            assert!(store.insert_ingested_request(seq, "body").await?);
+            assert!(store.insert_ingested_request(seq, "body", true).await?);
         }
         let all = store.pending_ingested_requests(10).await?;
         let seqs: Vec<String> = all.iter().map(|r| r.sequence_number.clone()).collect();
