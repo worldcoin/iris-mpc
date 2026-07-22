@@ -2,7 +2,7 @@ pub mod loader;
 mod s3_importer;
 
 use bytemuck::cast_slice;
-use eyre::{eyre, Result};
+use eyre::{ensure, eyre, Result};
 use futures::{
     stream::{self},
     Stream, StreamExt, TryStreamExt,
@@ -467,13 +467,17 @@ WHERE id = $1;
 
     /// Update an iris's shares, writing `version_id` verbatim (the [`ExplicitVersionToken`]
     /// handle bypasses the auto-increment trigger).
+    ///
+    /// # Errors
+    /// Bails unless exactly one row was updated — a missing row would otherwise
+    /// be a silent success.
     pub async fn update_iris_with_version_id(
         &self,
         tx: &mut ExplicitVersionToken<'_, '_>,
         version_id: i16,
         codes_and_masks: &StoredIrisRef<'_>,
     ) -> Result<()> {
-        sqlx::query(
+        let result = sqlx::query(
             r#"
 UPDATE irises SET (version_id, left_code, left_mask, right_code, right_mask) = ($2, $3, $4, $5, $6)
 WHERE id = $1;
@@ -487,6 +491,12 @@ WHERE id = $1;
         .bind(cast_slice::<u16, u8>(codes_and_masks.right_mask))
         .execute(tx.tx().deref_mut())
         .await?;
+        ensure!(
+            result.rows_affected() == 1,
+            "update_iris_with_version_id: expected to update 1 row for id={}, updated {}",
+            codes_and_masks.id,
+            result.rows_affected()
+        );
 
         Ok(())
     }
@@ -839,6 +849,29 @@ WHERE id = $1;
 
         let modifications = rows.into_iter().map(Into::into).collect();
         Ok((modifications, max_id))
+    }
+
+    /// Global `MAX(id)` over persisted+completed modifications of the types
+    /// genesis replays; `0` when there are none. Cursor-independent.
+    pub async fn get_max_persisted_modification_id(&self) -> Result<i64> {
+        let message_types = &[
+            RESET_UPDATE_MESSAGE_TYPE,
+            RECOVERY_UPDATE_MESSAGE_TYPE,
+            REAUTH_MESSAGE_TYPE,
+            IDENTITY_DELETION_MESSAGE_TYPE,
+        ];
+        let max_id: Option<i64> = sqlx::query_scalar(
+            r#"
+            SELECT MAX(id) FROM modifications
+            WHERE persisted = true
+                AND request_type = ANY($1)
+                AND status = 'COMPLETED'
+            "#,
+        )
+        .bind(message_types)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(max_id.unwrap_or(0))
     }
 
     /// Update the status, persisted flag, and result_message_body of the

@@ -64,7 +64,7 @@ handle_job(hawk_actor, sessions, request)
 ├── 1. numa_realloc(request)           — Move iris data to local NUMA node
 │
 ├── 2. apply_deletions(hawk_actor, &request)  — Replace deleted irises with dummies
-│      (reset.rs:62-79, runs BEFORE searches)
+│      (identity_update.rs:62-79, runs BEFORE searches)
 │
 ├── 3. do_search(Normal) ─┐            — HNSW search + intra-batch matching
 │   do_search(Mirror)  ───┤            — Both orientations run concurrently via try_join!
@@ -133,7 +133,7 @@ struct SingleHawkMutation {
 
 | File | Role |
 |------|------|
-| `reset.rs` | `apply_deletions()`, `search_to_reset()` |
+| `identity_update.rs` | `apply_deletions()`, `search_to_reset()` |
 | `search.rs` | HNSW search orchestration, `SearchParams`, `SearchQueries` |
 | `insert.rs` | HNSW insertion, `InsertPlanV` |
 | `matching.rs` | Multi-step matching pipeline: `BatchStep1` → `BatchStep2` → `BatchStep3`, `Decision` enum |
@@ -148,7 +148,7 @@ struct SingleHawkMutation {
 
 ## Deletion Flow Detail
 
-1. `apply_deletions` (reset.rs:62-79): Acquires write locks on both iris stores, calls `from_0_indices` to map 0-based indices to current VectorIds, then `store.update(del_id, dummy)` for each.
+1. `apply_deletions` (identity_update.rs:62-79): Acquires write locks on both iris stores, calls `from_0_indices` to map 0-based indices to current VectorIds, then `store.update(del_id, dummy)` for each.
 2. No HNSW graph mutation — the dummy iris has max distance and will never match.
 3. `ServerJobResult.deleted_ids` just echoes `batch.deletion_requests_indices`.
 4. Duplicate deletions within same batch: second `update` is idempotent (same version, same dummy).

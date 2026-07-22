@@ -40,6 +40,11 @@ struct Args {
     ///   - all-older            — prune all older checkpoints
     #[clap(long("pruning-mode"))]
     pruning_mode: Option<String>,
+
+    /// Base checkpoint blake3 hash to pin (hex). Optional; when omitted the
+    /// latest common checkpoint is used.
+    #[clap(long("base-checkpoint-hash"))]
+    base_checkpoint_hash: Option<String>,
 }
 
 /// Process main entry point: performs initial indexation of HNSW graph and optionally
@@ -200,11 +205,15 @@ fn parse_args() -> Result<ExecutionArgs> {
         PruningMode::OlderNonArchival
     };
 
+    // Arg: base checkpoint hash (optional).
+    let base_checkpoint_hash = args.base_checkpoint_hash.clone();
+
     Ok(ExecutionArgs {
         batch_size_config,
         max_indexation_id,
         perform_snapshot,
         checkpoint_frequency,
         pruning_mode,
+        base_checkpoint_hash,
     })
 }

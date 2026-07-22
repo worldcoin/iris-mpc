@@ -25,7 +25,6 @@ pub enum ModificationType {
 
 /// used as inputs to iris-mpc-store > insert_modification()
 /// note that s3_url, result_message_body, and graph_mutation (from the Modification struct) can all be None
-/// look for JobRequest::Modification in iris-mpc-cpu/src/genesis/hawk_handle.rs to see how these are handled
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModificationInput {
     pub mod_id: i64,
