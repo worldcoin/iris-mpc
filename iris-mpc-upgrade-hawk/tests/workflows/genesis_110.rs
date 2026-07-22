@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{BTreeSet, HashMap},
+    sync::Arc,
+};
 
 use crate::join_runners;
 use crate::run_genesis;
@@ -545,6 +548,16 @@ async fn assert_graph_state(configs: &HawkConfigs, current: &[u32], removed: &[u
 
         for (eye, graph) in graphs.iter().enumerate() {
             assert!(!graph.layers.is_empty(), "graph is empty (eye {eye})");
+            // The content clock and the bottom layer must hold exactly the
+            // same serials: surgery, removals and replays all maintain the
+            // clock through the same apply path as the edges.
+            let clock_keys: BTreeSet<u32> = graph.node_init.keys().copied().collect();
+            let layer0_keys: BTreeSet<u32> =
+                graph.layers[0].get_links_map().keys().copied().collect();
+            assert_eq!(
+                clock_keys, layer0_keys,
+                "content clock and bottom layer disagree (eye {eye})"
+            );
             for &serial in current {
                 let version = *version_by_serial
                     .get(&serial)

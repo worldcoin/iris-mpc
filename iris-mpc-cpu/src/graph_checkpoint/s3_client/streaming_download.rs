@@ -55,6 +55,7 @@ use crate::{
     hnsw::graph::layered_graph::GraphMem,
     utils::serialization::graph::{
         read_graph_pair_pruned, read_graph_pair_streaming, GraphFormat, LegacyPruneContext,
+        PruneReport,
     },
 };
 
@@ -162,7 +163,7 @@ pub async fn stream_download_and_deserialize_graph_pair(
     format: GraphFormat,
     prune: Option<LegacyPruneContext>,
 ) -> Result<([GraphMem; 2], [u8; 32])> {
-    stream_download_and_deserialize_graph_pair_with(
+    let (graphs, _reports, hash) = stream_download_and_deserialize_graph_pair_with(
         s3_client,
         bucket,
         key,
@@ -172,11 +173,13 @@ pub async fn stream_download_and_deserialize_graph_pair(
         DEFAULT_DOWNLOAD_RANGE_SIZE,
         DEFAULT_DOWNLOAD_PARALLELISM,
     )
-    .await
+    .await?;
+    Ok((graphs, hash))
 }
 
 /// Like [`stream_download_and_deserialize_graph_pair`] but with explicit
-/// `pipe_capacity`, `range_size`, and `parallelism` knobs.
+/// `pipe_capacity`, `range_size`, and `parallelism` knobs, and returning the
+/// [`PruneReport`] pair a legacy pruning decode emits (`None` otherwise).
 #[allow(clippy::too_many_arguments)]
 pub async fn stream_download_and_deserialize_graph_pair_with(
     s3_client: &S3Client,
@@ -187,7 +190,7 @@ pub async fn stream_download_and_deserialize_graph_pair_with(
     pipe_capacity: usize,
     range_size: usize,
     parallelism: usize,
-) -> Result<([GraphMem; 2], [u8; 32])> {
+) -> Result<([GraphMem; 2], Option<[PruneReport; 2]>, [u8; 32])> {
     tracing::info!(
         "Streaming download + deserialize graph pair: bucket={bucket}, key={key}, \
          format={format}, pipe_capacity={pipe_capacity}, range_size={range_size}, \
@@ -212,7 +215,7 @@ pub async fn stream_download_and_deserialize_graph_pair_with(
         parallelism,
     ));
     let reader = StreamReader::new(stream);
-    deserialize_and_hash_from_fn(reader, pipe_capacity, move |r| {
+    let ((graphs, reports), hash) = deserialize_and_hash_from_fn(reader, pipe_capacity, move |r| {
         // bincode reads the graph field-by-field; without buffering, each tiny
         // read blocks across the duplex via SyncIoBridge — ~10x slower at prod
         // scale.
@@ -220,10 +223,11 @@ pub async fn stream_download_and_deserialize_graph_pair_with(
         if let Some(prune) = &prune {
             read_graph_pair_pruned(&mut buf, format, prune)
         } else {
-            read_graph_pair_streaming(&mut buf, format)
+            Ok((read_graph_pair_streaming(&mut buf, format)?, None))
         }
     })
-    .await
+    .await?;
+    Ok((graphs, reports, hash))
 }
 
 /// `HeadObject` for `content_length`, retried per [`RANGE_MAX_RETRIES`].

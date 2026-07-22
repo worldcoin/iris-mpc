@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     fmt::Display,
     fs::File,
     io::{BufReader, BufWriter, Cursor},
@@ -372,12 +372,42 @@ pub struct LegacyPruneContext {
     pub deleted: HashSet<u32>,
 }
 
+/// Damage census emitted while pruning a legacy (V3/V4) base.
+///
+/// The observations here are unrecoverable after the prune: the output graph
+/// holds one version-free entry per serial, so key multiplicity and per-edge
+/// versions exist only during this pass.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct PruneReport {
+    /// Serials whose node keys carry more than one distinct version — the
+    /// graph held a live entry and at least one straggler for the serial.
+    pub multi_version_serials: BTreeSet<u32>,
+    /// Serials with an edge to themselves, under any version combination.
+    pub self_loop_serials: BTreeSet<u32>,
+    /// Node keys dropped because the serial is in the deletion list.
+    pub nodes_dropped_deleted: u64,
+    /// Node keys dropped on version mismatch or absence from `version_map`.
+    pub nodes_dropped_stale: u64,
+    /// Edges dropped because the target serial is in the deletion list.
+    pub edges_dropped_deleted: u64,
+    /// Edges dropped on target version mismatch or absence from `version_map`.
+    pub edges_dropped_stale: u64,
+    /// Self-edges dropped from surviving nodes.
+    pub edges_dropped_self_loop: u64,
+    /// Surviving bottom-layer nodes left with no outgoing edges. Sorted.
+    pub zero_out_degree: Vec<u32>,
+    /// Surviving bottom-layer nodes that no surviving bottom-layer edge points
+    /// to (entry points legitimately appear here). Sorted.
+    pub zero_in_degree: Vec<u32>,
+}
+
 /// Read a `GraphMem` pair, physically dropping edges the runtime would
-/// version-skip: an edge to Z survives iff Z is not deleted and the edge's
-/// stored version equals Z's current version (`version_map`). Surviving nodes
-/// seed the staleness clock to 0. Genesis uses this to materialize a legacy
-/// V3/V4 base; V5/Current edges are version-free (skipped lazily by
-/// `get_active_links`) and fall through to the plain reader.
+/// version-skip: an edge to Z survives iff Z is not deleted, the edge's
+/// stored version equals Z's current version (`version_map`), and the edge is
+/// not a self-loop. Surviving nodes seed the staleness clock to 0. Genesis
+/// uses this to materialize a legacy V3/V4 base; V5/Current edges are
+/// version-free (skipped lazily by `get_active_links`) and fall through to
+/// the plain reader, with no report.
 ///
 /// INVARIANT: `version_map` must be identical across parties or the resulting
 /// checksum diverges — relies on `version_id` being public and replicated.
@@ -385,19 +415,28 @@ pub fn read_graph_pair_pruned<R: std::io::Read + ?Sized>(
     reader: &mut R,
     format: GraphFormat,
     prune: &LegacyPruneContext,
-) -> Result<[GraphMem; 2]> {
+) -> Result<([GraphMem; 2], Option<[PruneReport; 2]>)> {
     match format {
-        GraphFormat::V4 => Ok(read_pair::<_, GraphV4>(reader)?.map(|g| prune_graph_v4(g, prune))),
-        GraphFormat::V3 => Ok(read_pair::<_, GraphV3>(reader)?.map(|g| prune_graph_v3(g, prune))),
-        _ => read_graph_pair(reader, format),
+        GraphFormat::V4 => {
+            let [(g0, r0), (g1, r1)] =
+                read_pair::<_, GraphV4>(reader)?.map(|g| prune_graph_v4(g, prune));
+            Ok(([g0, g1], Some([r0, r1])))
+        }
+        GraphFormat::V3 => {
+            let [(g0, r0), (g1, r1)] =
+                read_pair::<_, GraphV3>(reader)?.map(|g| prune_graph_v3(g, prune));
+            Ok(([g0, g1], Some([r0, r1])))
+        }
+        _ => Ok((read_graph_pair(reader, format)?, None)),
     }
 }
 
-/// Build pruned `Layer`s and a `node_init` clock (seq 0, version from
-/// `version_map`) from a legacy graph. `$layers`/`$entry_points` are moved out
-/// (distinct fields → partial move). At most one version per serial matches
-/// `version_map`, so multi-version stragglers collapse deterministically onto
-/// the live entry. `set_links_trusted` recomputes each layer's `set_hash`.
+/// Build pruned `Layer`s, a `node_init` clock (seq 0, version from
+/// `version_map`), and a [`PruneReport`] from a legacy graph.
+/// `$layers`/`$entry_points` are moved out (distinct fields → partial move).
+/// At most one version per serial matches `version_map`, so multi-version
+/// stragglers collapse deterministically onto the live entry.
+/// `set_links_trusted` recomputes each layer's `set_hash`.
 macro_rules! legacy_prune_to_mem {
     ($layers:expr, $entry_points:expr, $last_update_seq_no:expr, $prune:expr) => {{
         let src_layers = $layers;
@@ -405,23 +444,79 @@ macro_rules! legacy_prune_to_mem {
         let live_at = |id: u32, version: i16| {
             !prune.deleted.contains(&id) && prune.version_map.get(&id) == Some(&version)
         };
+        let mut report = PruneReport::default();
+        // Serial → first key version seen; a second distinct version flags the
+        // serial. Same (serial, version) on several layers is normal hierarchy.
+        let mut first_key_version: HashMap<u32, i16> = HashMap::new();
+        // Bottom-layer census: kept keys and the set of kept edge targets.
+        let mut bottom_keys: Vec<u32> = Vec::new();
+        let mut bottom_in_edge = Vec::<bool>::new();
+        let mark_in_edge = |v: &mut Vec<bool>, id: u32| {
+            let i = id as usize;
+            if i >= v.len() {
+                v.resize(i + 1, false);
+            }
+            v[i] = true;
+        };
         let mut layers = Vec::with_capacity(src_layers.len());
-        for layer in src_layers {
+        for (layer_idx, layer) in src_layers.into_iter().enumerate() {
             let mut out = Layer::with_capacity(layer.links.len());
             for (key, edges) in layer.links {
+                match first_key_version.get(&key.id) {
+                    None => {
+                        first_key_version.insert(key.id, key.version);
+                    }
+                    Some(&v) if v != key.version => {
+                        report.multi_version_serials.insert(key.id);
+                    }
+                    Some(_) => {}
+                }
+                // Self-loop fingerprints are recorded before any liveness
+                // filtering: the serial is damaged even if this key or edge
+                // is dropped.
+                if edges.0.iter().any(|e| e.id == key.id) {
+                    report.self_loop_serials.insert(key.id);
+                }
                 if !live_at(key.id, key.version) {
+                    if prune.deleted.contains(&key.id) {
+                        report.nodes_dropped_deleted += 1;
+                    } else {
+                        report.nodes_dropped_stale += 1;
+                    }
                     continue;
                 }
-                let kept: Vec<u32> = edges
-                    .0
-                    .into_iter()
-                    .filter(|e| live_at(e.id, e.version))
-                    .map(|e| e.id)
-                    .collect();
+                let mut kept: Vec<u32> = Vec::with_capacity(edges.0.len());
+                for e in edges.0 {
+                    if e.id == key.id {
+                        report.edges_dropped_self_loop += 1;
+                    } else if prune.deleted.contains(&e.id) {
+                        report.edges_dropped_deleted += 1;
+                    } else if !live_at(e.id, e.version) {
+                        report.edges_dropped_stale += 1;
+                    } else {
+                        if layer_idx == 0 {
+                            mark_in_edge(&mut bottom_in_edge, e.id);
+                        }
+                        kept.push(e.id);
+                    }
+                }
+                if layer_idx == 0 {
+                    bottom_keys.push(key.id);
+                    if kept.is_empty() {
+                        report.zero_out_degree.push(key.id);
+                    }
+                }
                 out.set_links_trusted(key.id, kept, 0);
             }
             layers.push(out);
         }
+        report.zero_in_degree = bottom_keys
+            .iter()
+            .copied()
+            .filter(|&id| !bottom_in_edge.get(id as usize).copied().unwrap_or(false))
+            .collect();
+        report.zero_in_degree.sort_unstable();
+        report.zero_out_degree.sort_unstable();
         // A kept node's key version equals its registry-current version (that's
         // what `live_at` checked), so it seeds the graph's version truth.
         let node_init = layers
@@ -435,16 +530,17 @@ macro_rules! legacy_prune_to_mem {
                 (v, NodeInit { seq_no: 0, version })
             })
             .collect();
-        GraphMem::from_parts(
+        let mem = GraphMem::from_parts(
             $entry_points.into_iter().map(|e| e.into()).collect(),
             layers,
             $last_update_seq_no,
             node_init,
-        )
+        );
+        (mem, report)
     }};
 }
 
-fn prune_graph_v4(value: GraphV4, prune: &LegacyPruneContext) -> GraphMem {
+fn prune_graph_v4(value: GraphV4, prune: &LegacyPruneContext) -> (GraphMem, PruneReport) {
     legacy_prune_to_mem!(
         value.layers,
         value.entry_points,
@@ -453,7 +549,7 @@ fn prune_graph_v4(value: GraphV4, prune: &LegacyPruneContext) -> GraphMem {
     )
 }
 
-fn prune_graph_v3(value: GraphV3, prune: &LegacyPruneContext) -> GraphMem {
+fn prune_graph_v3(value: GraphV3, prune: &LegacyPruneContext) -> (GraphMem, PruneReport) {
     // V3 has no `last_update_seq_no` and names its entry points `entry_point`.
     legacy_prune_to_mem!(value.layers, value.entry_point, 0, prune)
 }
@@ -1148,9 +1244,12 @@ mod tests {
             version_map: HashMap::from([(1u32, 0i16), (2, 0), (3, 2)]),
             deleted: HashSet::new(),
         };
-        let mem = prune_graph_v4(g, &prune);
+        let (mem, report) = prune_graph_v4(g, &prune);
         let m = mem.layers[0].get_links_map();
         assert!(m[&1u32].neighbors().is_empty(), "stale + dangling dropped");
+        assert_eq!(report.edges_dropped_stale, 2, "3@1 and absent 9@0");
+        assert!(report.multi_version_serials.is_empty());
+        assert!(report.self_loop_serials.is_empty());
         assert_eq!(m[&2u32].neighbors(), [3u32], "fresh edge kept");
         assert!(m[&3u32].neighbors().is_empty());
         assert_eq!(mem.last_update_seq_no, 7);
@@ -1191,10 +1290,16 @@ mod tests {
             version_map: HashMap::from([(1u32, 0i16), (2, 0), (3, 2)]),
             deleted: HashSet::new(),
         };
-        let mem = prune_graph_v4(g, &prune);
+        let (mem, report) = prune_graph_v4(g, &prune);
         let m = mem.layers[0].get_links_map();
         // Serial 3 present once, with the live (@2) entry's out-edges (-> 1).
         assert_eq!(m[&3u32].neighbors(), [1u32], "live entry's edges kept");
+        assert_eq!(
+            report.multi_version_serials,
+            BTreeSet::from([3u32]),
+            "the straggler pair flags serial 3"
+        );
+        assert_eq!(report.nodes_dropped_stale, 1, "the 3@1 straggler key");
         assert!(
             m[&1u32].neighbors().is_empty(),
             "inbound edge to 3@1 dropped"
@@ -1233,14 +1338,111 @@ mod tests {
             version_map: HashMap::from([(1u32, 0i16), (2, 0), (3, 5)]),
             deleted: HashSet::from([3u32]),
         };
-        let mem = prune_graph_v4(g, &prune);
+        let (mem, report) = prune_graph_v4(g, &prune);
         let m = mem.layers[0].get_links_map();
         assert!(!m.contains_key(&3u32), "deleted serial absent as a node");
+        assert_eq!(report.nodes_dropped_deleted, 1);
+        assert_eq!(report.edges_dropped_deleted, 1, "1→3 dropped by list");
         assert_eq!(m[&1u32].neighbors(), [2u32], "edge to deleted 3 dropped");
         assert!(m[&2u32].neighbors().is_empty());
         assert!(
             !mem.node_init.contains_key(&3u32),
             "deleted serial absent from clock"
+        );
+    }
+
+    /// A version-matching self-edge is dropped by the prune and the serial is
+    /// fingerprinted, even though `live_at` alone would keep the edge.
+    #[test]
+    fn prune_drops_self_loop_edge_and_fingerprints_serial() {
+        use crate::utils::serialization::types::graph_v4;
+        let vid = |id: u32, version: i16| graph_v4::VectorId { id, version };
+        // Serial 2 carries a self-edge at its own live version (the replayed-
+        // with-identical-id signature) plus a real edge to 1.
+        let mut links = HashMap::new();
+        links.insert(vid(1, 0), graph_v4::EdgeIds(vec![vid(2, 0)]));
+        links.insert(vid(2, 0), graph_v4::EdgeIds(vec![vid(2, 0), vid(1, 0)]));
+        let g = graph_v4::GraphV4 {
+            entry_points: vec![],
+            layers: vec![graph_v4::Layer { links, set_hash: 0 }],
+            last_update_seq_no: 0,
+        };
+
+        let prune = LegacyPruneContext {
+            version_map: HashMap::from([(1u32, 0i16), (2, 0)]),
+            deleted: HashSet::new(),
+        };
+        let (mem, report) = prune_graph_v4(g, &prune);
+        let m = mem.layers[0].get_links_map();
+        assert_eq!(m[&2u32].neighbors(), [1u32], "self-edge dropped");
+        assert_eq!(report.self_loop_serials, BTreeSet::from([2u32]));
+        assert_eq!(report.edges_dropped_self_loop, 1);
+    }
+
+    /// The bottom-layer census flags survivors with no outgoing edges and
+    /// survivors nothing points to, after pruning.
+    #[test]
+    fn prune_reports_zero_degree_survivors() {
+        use crate::utils::serialization::types::graph_v4;
+        let vid = |id: u32, version: i16| graph_v4::VectorId { id, version };
+        // 1 → 2 survives; 2's only out-edge targets the stale 3@0 and is
+        // dropped, leaving 2 with out-degree 0; 3's key is stale (dropped);
+        // 1 has no surviving in-edge.
+        let mut links = HashMap::new();
+        links.insert(vid(1, 0), graph_v4::EdgeIds(vec![vid(2, 0)]));
+        links.insert(vid(2, 0), graph_v4::EdgeIds(vec![vid(3, 0)]));
+        links.insert(vid(3, 0), graph_v4::EdgeIds(vec![]));
+        let g = graph_v4::GraphV4 {
+            entry_points: vec![],
+            layers: vec![graph_v4::Layer { links, set_hash: 0 }],
+            last_update_seq_no: 0,
+        };
+
+        let prune = LegacyPruneContext {
+            version_map: HashMap::from([(1u32, 0i16), (2, 0), (3, 1)]),
+            deleted: HashSet::new(),
+        };
+        let (_mem, report) = prune_graph_v4(g, &prune);
+        assert_eq!(report.zero_out_degree, vec![2u32]);
+        assert_eq!(report.zero_in_degree, vec![1u32]);
+        assert_eq!(report.nodes_dropped_stale, 1, "3@0's key");
+        assert_eq!(report.edges_dropped_stale, 1, "2→3@0");
+    }
+
+    /// The V3 arm shares the prune body with V4: clean edges survive, stale
+    /// ones drop, clocks seed at 0, and the report is emitted the same way.
+    #[test]
+    fn prune_v3_parity_with_v4() {
+        use crate::utils::serialization::types::graph_v3;
+        let vid = |id: u32, version: i16| graph_v3::VectorId { id, version };
+        let mut links = HashMap::new();
+        links.insert(vid(1, 0), graph_v3::EdgeIds(vec![vid(2, 0), vid(3, 0)]));
+        links.insert(vid(2, 0), graph_v3::EdgeIds(vec![vid(1, 0)]));
+        let g = graph_v3::GraphV3 {
+            entry_point: vec![],
+            layers: vec![graph_v3::Layer { links, set_hash: 0 }],
+        };
+
+        let prune = LegacyPruneContext {
+            version_map: HashMap::from([(1u32, 0i16), (2, 0), (3, 9)]),
+            deleted: HashSet::new(),
+        };
+        let (mem, report) = prune_graph_v3(g, &prune);
+        let m = mem.layers[0].get_links_map();
+        assert_eq!(
+            m[&1u32].neighbors(),
+            [2u32],
+            "clean edge kept, stale dropped"
+        );
+        assert_eq!(m[&2u32].neighbors(), [1u32]);
+        assert_eq!(report.edges_dropped_stale, 1);
+        assert_eq!(mem.last_update_seq_no, 0, "V3 has no seq no");
+        assert_eq!(
+            mem.node_init.get(&1u32),
+            Some(&NodeInit {
+                seq_no: 0,
+                version: 0
+            })
         );
     }
 

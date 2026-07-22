@@ -32,6 +32,7 @@ use iris_mpc_cpu::{
     hawkers::aby3::aby3_store::{Aby3Store, VectorIdRegistryRef},
     hnsw::graph::graph_store::GraphPg,
     protocol::shared_iris::ArcIris,
+    utils::serialization::graph::PruneReport,
 };
 use iris_mpc_store::{ExplicitVersionToken, Store as IrisStore, StoredIrisRef};
 use itertools::izip;
@@ -167,6 +168,7 @@ pub(super) async fn exec_delta(
     hnsw_iris_store: &IrisStore,
     imem_graph_stores: &Arc<BothEyes<GraphRef>>,
     delta_exchange: &DeltaExchangeSlots,
+    prune_reports: Option<&[PruneReport; 2]>,
     mut hawk_handle: GenesisHawkHandle,
     tx_results: &Sender<JobResult>,
     task_monitor_bg: &mut TaskMonitor,
@@ -186,6 +188,7 @@ pub(super) async fn exec_delta(
             hnsw_iris_store,
             imem_graph_stores,
             delta_exchange,
+            prune_reports,
             &mut hawk_handle,
             server_coord_config,
             shutdown_handler,
@@ -274,6 +277,7 @@ async fn compute_delta_plan(
     hnsw_iris_store: &IrisStore,
     imem_graph_stores: &Arc<BothEyes<GraphRef>>,
     delta_exchange: &DeltaExchangeSlots,
+    prune_reports: Option<&[PruneReport; 2]>,
     hawk_handle: &mut GenesisHawkHandle,
     server_coord_config: &ServerCoordinationConfig,
     shutdown_handler: &Arc<ShutdownHandler>,
@@ -281,7 +285,8 @@ async fn compute_delta_plan(
     // S_cp: the checkpoint's last indexed iris id (ctx.last_indexed_id was set
     // to it during reset). Serials are compared over 1..=S_cp.
     let max_serial = ctx.last_indexed_id;
-    // Logged cross-check only; tombstones are detected from source content.
+    // Authority for tombstone classification (unioned with the content check
+    // in step 3) and input to the comparison log.
     let excluded: HashSet<SerialId> = ctx.excluded_serial_ids.iter().copied().collect();
 
     // 1. Build the version state per eye and compute per-eye plans.
@@ -316,6 +321,37 @@ async fn compute_delta_plan(
         .chain(plans[RIGHT].graph_repair.iter())
         .copied()
         .collect();
+
+    // Force-include the prune-detected damage classes: a multi-version serial
+    // can collapse onto an entry whose version agrees with source, and a
+    // self-loop serial is version- and row-clean — neither is reachable by the
+    // join axes, and their version bookkeeping is known-unreliable, so only a
+    // rebuild from source content is sound. Checkpoint-derived, hence
+    // hash-agreed across parties.
+    if let Some(reports) = prune_reports {
+        let forced: Vec<SerialId> = reports
+            .iter()
+            .flat_map(|r| {
+                r.multi_version_serials
+                    .iter()
+                    .chain(r.self_loop_serials.iter())
+            })
+            .copied()
+            .filter(|&s| s > 0 && s <= max_serial)
+            .collect();
+        tracing::info!(
+            "Force-including {} prune-report serials into the repair set \
+             (multi_version l/r: {}/{}, self_loop l/r: {}/{})",
+            forced.len(),
+            reports[LEFT].multi_version_serials.len(),
+            reports[RIGHT].multi_version_serials.len(),
+            reports[LEFT].self_loop_serials.len(),
+            reports[RIGHT].self_loop_serials.len(),
+        );
+        metrics::gauge!("genesis_version_join_force_included_count").set(forced.len() as f64);
+        local_repair.extend(forced);
+    }
+
     local_repair.sort_unstable();
     local_repair.dedup();
 
@@ -334,12 +370,51 @@ async fn compute_delta_plan(
     .await?;
     let repair_serials = union_repair_with_peers(&local_repair, &peer_sets);
 
-    // 3. Tombstones among repair serials, by content check against the
-    //    party's dummy shares. The classification gates the reinsert flag,
-    //    so parties must agree; a mismatch means source-level content
+    // 3. Tombstones among repair serials: the deletion list is the authority
+    //    (it is sync-verified identical across parties), unioned with the
+    //    content check against the party's dummy shares as a second net —
+    //    content alone cannot be trusted to cover deletions whose dummy
+    //    predates the current constant, and a serial matching the dummy while
+    //    absent from the list exposes a list gap. The classification gates the
+    //    reinsert flag, so parties must agree; a mismatch means source-level
     //    inconsistency, which the repair must not paper over.
-    let deleted =
+    let content_tombstones =
         gather_tombstones(config.party_id, &repair_serials, registries, worker_pools).await?;
+    let listed_tombstones: HashSet<SerialId> = repair_serials
+        .iter()
+        .copied()
+        .filter(|s| excluded.contains(s))
+        .collect();
+    let mut list_only: Vec<SerialId> = listed_tombstones
+        .difference(&content_tombstones)
+        .copied()
+        .collect();
+    list_only.sort_unstable();
+    if !list_only.is_empty() {
+        tracing::warn!(
+            "{} repair serials are in the deletion list but their content is \
+             not the current dummy (deletion mechanism drift?): {:?}",
+            list_only.len(),
+            &list_only[..list_only.len().min(100)],
+        );
+    }
+    let mut content_only: Vec<SerialId> = content_tombstones
+        .difference(&listed_tombstones)
+        .copied()
+        .collect();
+    content_only.sort_unstable();
+    if !content_only.is_empty() {
+        tracing::warn!(
+            "{} repair serials carry dummy content but are absent from the \
+             deletion list (list gap?): {:?}",
+            content_only.len(),
+            &content_only[..content_only.len().min(100)],
+        );
+    }
+    let deleted: HashSet<SerialId> = listed_tombstones
+        .union(&content_tombstones)
+        .copied()
+        .collect();
     let deleted_hash = {
         let mut h = SetHash::default();
         for s in &deleted {

@@ -48,7 +48,7 @@ use iris_mpc_cpu::{
     graph_checkpoint::*,
     hawkers::aby3::aby3_store::{Aby3Store, VectorIdRegistryRef},
     hnsw::{graph::graph_store::GraphPg, GraphMem},
-    utils::serialization::graph::{GraphFormat, LegacyPruneContext},
+    utils::serialization::graph::{GraphFormat, LegacyPruneContext, PruneReport},
 };
 use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
 use std::collections::{HashMap, HashSet};
@@ -81,6 +81,9 @@ pub(super) struct SetupOutput {
     pub(super) graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
     pub(super) hnsw_iris_store: IrisStore,
     pub(super) delta_exchange: DeltaExchangeSlots,
+    /// Per-eye damage census from pruning a legacy (V3/V4) base at load;
+    /// `None` on a native V5 base or fresh start.
+    pub(super) prune_reports: Option<[PruneReport; 2]>,
 }
 
 /// Execute process setup tasks.
@@ -317,7 +320,7 @@ pub(super) async fn exec_setup(args: &ExecutionArgs, config: &Config) -> Result<
     tracing::info!("Store consistency checks OK");
 
     // Iris and graph load in parallel, then assemble the actor.
-    let hawk_actor = init_graph_from_stores(
+    let (hawk_actor, prune_reports) = init_graph_from_stores(
         config,
         &config.graph_checkpoint_bucket_name,
         &iris_store,
@@ -332,6 +335,9 @@ pub(super) async fn exec_setup(args: &ExecutionArgs, config: &Config) -> Result<
     .await?;
     task_monitor_bg.check_tasks();
     tracing::info!("HNSW graph initialised from store");
+    if let Some(reports) = prune_reports.as_ref() {
+        log_prune_reports(reports);
+    }
 
     // do this after obtaining the graph from s3. that way if for some reason it isn't there,
     // the old checkpoints could still be found;
@@ -419,6 +425,7 @@ pub(super) async fn exec_setup(args: &ExecutionArgs, config: &Config) -> Result<
         graph_store: graph_store_arc,
         hnsw_iris_store,
         delta_exchange,
+        prune_reports,
     })
 }
 
@@ -799,7 +806,7 @@ async fn init_graph_from_stores(
     max_indexation_id: usize,
     checkpoint: Option<GraphCheckpointState>,
     deleted_serial_ids: HashSet<SerialId>,
-) -> Result<HawkActor> {
+) -> Result<(HawkActor, Option<[PruneReport; 2]>)> {
     tracing::info!("⚓️ ANCHOR: Load the database");
 
     let iris_db_parallelism = config
@@ -850,7 +857,7 @@ async fn init_graph_from_stores(
             // Legacy V3/V4 bases are pruned at read (see `read_graph_pair_pruned`);
             // only they need the current-version table, so skip the scan for V5.
             let prune = match GraphFormat::try_from(state.graph_version)? {
-                GraphFormat::V3 | GraphFormat::V4 => {
+                format @ (GraphFormat::V3 | GraphFormat::V4) => {
                     let version_map: HashMap<u32, i16> = prune_iris_store
                         .stream_iris_ids(max_index)
                         .map_ok(|(id, version)| {
@@ -858,6 +865,31 @@ async fn init_graph_from_stores(
                         })
                         .try_collect()
                         .await?;
+                    // The prune classifies any serial absent from `version_map`
+                    // as stale and silently drops it, so the map must cover
+                    // every serial the base can reference. `max_index` is
+                    // derived from a row COUNT — serial holes would leave a
+                    // tail (or gaps) uncovered and prune-erase whole ranges.
+                    let base_height = state.last_indexed_iris_id;
+                    let missing: Vec<u32> = (1..=base_height)
+                        .filter(|s| !version_map.contains_key(s))
+                        .collect();
+                    if !missing.is_empty() {
+                        bail!(
+                            "version_map does not cover the {format} base (height \
+                             {base_height}): {} serials missing, first: {:?}",
+                            missing.len(),
+                            &missing[..missing.len().min(20)],
+                        );
+                    }
+                    // Downstream, the version-join sees pruned serials only as
+                    // absent from the graph — the specific drop cause is
+                    // consumed here and reported via the prune report.
+                    tracing::info!(
+                        "Legacy {format} base: prune-at-read precedes the \
+                         version-join; join reasons for pruned serials degrade \
+                         to graph-missing"
+                    );
                     Some(LegacyPruneContext {
                         version_map,
                         deleted: deleted_serial_ids,
@@ -865,21 +897,64 @@ async fn init_graph_from_stores(
                 }
                 _ => None,
             };
-            download_graph_checkpoint(s3_client, checkpoint_bucket, &state, prune).await
+            download_graph_checkpoint_pruned(s3_client, checkpoint_bucket, &state, prune).await
         } else {
             tracing::info!("No S3 checkpoint found, defaulting to empty graph");
-            Ok([GraphMem::new(), GraphMem::new()])
+            Ok(([GraphMem::new(), GraphMem::new()], None))
         }
     };
 
-    let (initialized, graph) = tokio::try_join!(initializer.initialize(), graph_load_future)?;
+    let (initialized, (graph, prune_reports)) =
+        tokio::try_join!(initializer.initialize(), graph_load_future)?;
 
-    Ok(HawkActor::new(
-        hawk_args,
-        hawk_networking,
-        initialized,
-        graph,
+    Ok((
+        HawkActor::new(hawk_args, hawk_networking, initialized, graph),
+        prune_reports,
     ))
+}
+
+/// Log the per-eye damage census from a legacy-base prune: class counts, then
+/// serial lists in bounded chunks (CloudWatch truncates oversized lines).
+fn log_prune_reports(reports: &[PruneReport; 2]) {
+    const CHUNK: usize = 1000;
+    let log_serials = |eye: &str, class: &str, serials: Vec<u32>| {
+        for (i, chunk) in serials.chunks(CHUNK).enumerate() {
+            tracing::info!(
+                "Prune report [{eye}] {class} serials ({}/{}): {chunk:?}",
+                i * CHUNK + chunk.len(),
+                serials.len(),
+            );
+        }
+    };
+    for (report, eye) in reports.iter().zip(["left", "right"]) {
+        tracing::info!(
+            "Prune report [{eye}]: multi_version={} self_loop={} \
+             nodes_dropped(deleted={} stale={}) \
+             edges_dropped(deleted={} stale={} self_loop={}) \
+             zero_out_degree={} zero_in_degree={}",
+            report.multi_version_serials.len(),
+            report.self_loop_serials.len(),
+            report.nodes_dropped_deleted,
+            report.nodes_dropped_stale,
+            report.edges_dropped_deleted,
+            report.edges_dropped_stale,
+            report.edges_dropped_self_loop,
+            report.zero_out_degree.len(),
+            report.zero_in_degree.len(),
+        );
+        log_serials(
+            eye,
+            "multi_version",
+            report.multi_version_serials.iter().copied().collect(),
+        );
+        log_serials(
+            eye,
+            "self_loop",
+            report.self_loop_serials.iter().copied().collect(),
+        );
+        log_serials(eye, "zero_out_degree", report.zero_out_degree.clone());
+        log_serials(eye, "zero_in_degree", report.zero_in_degree.clone());
+    }
 }
 
 /// Initializes shutdown handler, which waits for shutdown signals or function

@@ -190,9 +190,9 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
     // version in either eye, or a destination row missing or at the wrong
     // version — triggers uniform surgery: remove the serial's node, then
     // search + reinsert at the current source version, and copy the row.
-    // Deletion tombstones (dummy-share source content) are not modeled;
-    // deletion is content-based, so an s3-excluded serial with live source
-    // content is reinserted (exclusions gate indexation only).
+    // The deletion list is the authority: a listed serial is removed if
+    // present and never reinserted; its destination row still tracks the
+    // source. Dummy-share tombstone content is not modeled.
     for serial_id in 1..=last_indexed_iris_id {
         let Some((src_version, left_iris, right_iris)) =
             state.src_db.irises.get(&serial_id).cloned()
@@ -203,6 +203,22 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
 
         let graph_ids: [Option<VectorId>; 2] =
             [0, 1].map(|eye| state.dst_db.graphs[eye].vector_id_of(serial_id));
+
+        if state.s3_deletions.contains(&serial_id) {
+            for (graph, graph_id) in izip!(&mut state.dst_db.graphs, graph_ids) {
+                if let Some(id) = graph_id {
+                    let as_of = graph.last_update_seq_no;
+                    graph.apply_new(UnstampedMutation {
+                        as_of,
+                        ops: vec![MutationOp::RemoveNode { id }],
+                    })?;
+                }
+            }
+            let irises = state.src_db.irises.get(&serial_id).unwrap().clone();
+            state.dst_db.irises.insert(serial_id, irises);
+            continue;
+        }
+
         let row_version = state.dst_db.irises.get(&serial_id).map(|(v, _, _)| *v);
         let clean =
             row_version == Some(src_version) && graph_ids.iter().all(|id| *id == Some(vector_id));
@@ -502,10 +518,10 @@ mod tests {
         let state_2 = run_plaintext_genesis(state_1).await?;
 
         assert_eq!(state_2.dst_db.irises.len(), 100);
-        // The second run's delta reinserts the excluded-but-live serials
-        // ≤ 50 (25, 40, 50); only 60 and 90 stay excluded from indexation.
-        assert_eq!(state_2.dst_db.graphs[0].layers[0].links.len(), 98);
-        assert_eq!(state_2.dst_db.graphs[1].layers[0].links.len(), 98);
+        // The deletion list is the authority: the second run's delta must not
+        // reinsert the listed serials ≤ 50 (25, 40, 50).
+        assert_eq!(state_2.dst_db.graphs[0].layers[0].links.len(), 95);
+        assert_eq!(state_2.dst_db.graphs[1].layers[0].links.len(), 95);
 
         Ok(())
     }

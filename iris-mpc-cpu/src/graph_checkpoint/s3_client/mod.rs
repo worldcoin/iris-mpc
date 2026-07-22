@@ -17,7 +17,7 @@ use crate::{
         },
         VectorStore,
     },
-    utils::serialization::graph::{GraphFormat, LegacyPruneContext},
+    utils::serialization::graph::{GraphFormat, LegacyPruneContext, PruneReport},
 };
 
 use crate::graph_checkpoint::data::*;
@@ -174,6 +174,19 @@ pub async fn download_graph_checkpoint(
     state: &GraphCheckpointState,
     prune: Option<LegacyPruneContext>,
 ) -> Result<BothEyes<GraphMem>> {
+    let (graphs, _reports) =
+        download_graph_checkpoint_pruned(s3_client, bucket, state, prune).await?;
+    Ok(graphs)
+}
+
+/// Like [`download_graph_checkpoint`], also returning the per-eye
+/// [`PruneReport`] when a legacy (V3/V4) base was pruned at read.
+pub async fn download_graph_checkpoint_pruned(
+    s3_client: &S3Client,
+    bucket: &str,
+    state: &GraphCheckpointState,
+    prune: Option<LegacyPruneContext>,
+) -> Result<(BothEyes<GraphMem>, Option<[PruneReport; 2]>)> {
     let format = GraphFormat::try_from(state.graph_version)?;
     if format == GraphFormat::Raw {
         bail!("Unexpected graph checkpoint format: Raw");
@@ -195,9 +208,17 @@ pub async fn download_graph_checkpoint(
         );
     }
     let start = Instant::now();
-    let (graphs, hash_bytes) =
-        stream_download_and_deserialize_graph_pair(s3_client, bucket, &state.s3_key, format, prune)
-            .await?;
+    let (graphs, reports, hash_bytes) = stream_download_and_deserialize_graph_pair_with(
+        s3_client,
+        bucket,
+        &state.s3_key,
+        format,
+        prune,
+        DEFAULT_DOWNLOAD_PIPE_CAPACITY,
+        DEFAULT_DOWNLOAD_RANGE_SIZE,
+        DEFAULT_DOWNLOAD_PARALLELISM,
+    )
+    .await?;
     metrics::histogram!("genesis_checkpoint_download_duration")
         .record(start.elapsed().as_secs_f64());
 
@@ -211,7 +232,7 @@ pub async fn download_graph_checkpoint(
         ));
     }
     tracing::info!("BLAKE3 hash verified successfully: {}", computed_hash);
-    Ok(graphs)
+    Ok((graphs, reports))
 }
 
 // this is used for the genesis integration tests.

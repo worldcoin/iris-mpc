@@ -143,7 +143,7 @@ Post-conditions
 - CPU iris database contains vector ids matching those in the plaintext genesis CPU database
 - CPU `persisted_state` table shows the max indexed modification is 8 and max indexed iris is 100
 - CPU graph database matches the output of plaintext genesis
-- CPU graph database at layer zero has 98 nodes (deleted serials ≤ 50 are reinserted by the second run's delta — their source content is live, and deletion is content-based; only 77 and 100 stay excluded)
+- CPU graph database at layer zero has 95 nodes (the deletion list is the authority: the second run's delta does not reinsert listed serials, so all five stay excluded)
 
 ## 107
 
@@ -207,3 +207,25 @@ Post-conditions:
 - After Run 2: 4 genesis graph checkpoints exist (no pruning with `None` mode keeps previous checkpoints)
 - After Run 3: 3 genesis graph checkpoints exist (pruning mode `OlderNonArchival` removes older non-archival checkpoints)
 - After Run 4: 2 genesis graph checkpoint exists (pruning mode `AllOlder` removes all but the latest prior checkpoint)
+
+## 111
+
+Pre-conditions:
+- Databases are initialized
+- S3 deletions: `[]` (a deletion is uploaded mid-test)
+
+Test:
+- Phase A: index genesis up to serial id 80 (clean V5 base)
+- Phase B: rewrite the base as a damaged V4 checkpoint on every party:
+  - a multi-version ghost key for one serial, with the live key's neighborhood emptied
+  - a self-loop as another serial's only edge
+  - a third serial kept in the graph while its deletion is uploaded to S3 and its source content becomes the dummy shares
+  - one party additionally loses the HNSW iris row of a fourth serial (cross-party union)
+- Phase C: run genesis pinned to the V4 base up to serial id 100
+
+Post-conditions:
+- The prune report classifies exactly the baked classes (fixture self-check via `download_graph_checkpoint_pruned`)
+- Ghost and self-loop serials are force-surged: present at the source-current version with rebuilt, self-free neighborhoods
+- The tombstoned serial leaves no trace in graph or content clock; its HNSW row holds the dummy shares
+- HNSW iris rows match the source byte-wise; WAL and modifications empty
+- Post-delta (archival, height 80) and final (height 100) checkpoints are graph format V5; final hashes agree across parties
