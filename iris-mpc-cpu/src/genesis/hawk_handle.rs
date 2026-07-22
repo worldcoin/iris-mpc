@@ -324,7 +324,9 @@ impl Handle {
                             if !remove_keys.is_empty() {
                                 let mut graph = session.graph_store.write().await;
                                 for id in &remove_keys {
+                                    let as_of = graph.last_update_seq_no;
                                     graph.apply_new(UnstampedMutation {
+                                        as_of,
                                         ops: vec![MutationOp::RemoveNode { id: *id }],
                                     })?;
                                 }

@@ -1,4 +1,5 @@
 use std::{
+    collections::{HashMap, HashSet},
     fmt::Display,
     fs::File,
     io::{BufReader, BufWriter, Cursor},
@@ -11,13 +12,14 @@ use iris_mpc_common::VectorId;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    hnsw::graph::layered_graph::{self, GraphMem, Layer},
+    hnsw::graph::layered_graph::{self, GraphMem, Layer, NodeInit},
     utils::serialization::types::{
         graph_v0::{self, read_graph_v0, GraphV0},
         graph_v1::{self, read_graph_v1, GraphV1},
         graph_v2::{self, read_graph_v2, GraphV2},
         graph_v3::{self, read_graph_v3, GraphV3},
         graph_v4::{self, read_graph_v4, GraphV4},
+        graph_v5::{self, read_graph_v5, GraphV5},
     },
 };
 
@@ -27,6 +29,18 @@ use crate::{
 pub enum GraphFormat {
     /// Designated current stable format for `GraphMem` serialization.
     Current,
+
+    /// Stable graph serialization format Version 5.
+    ///
+    /// - Binary format
+    /// - Multiple entry-points
+    /// - VectorId = SerialId
+    /// - Contains layer checksums
+    /// - Edges store VectorIds only
+    /// - Sequence number for timestamping graph mutations
+    /// - Neighborhoods contain the last updated sequence number <-- DIFF with V4
+    /// - Contains a HashMap of (VectorId, sequence number) to invalidate old edges <-- DIFF with V4
+    V5,
 
     /// Stable graph serialization format Version 4.
     ///
@@ -85,7 +99,8 @@ impl GraphFormat {
     /// Convert GraphFormat to its corresponding i32 value for storage.
     pub fn version(&self) -> i32 {
         match self {
-            GraphFormat::Current | GraphFormat::V4 => 4,
+            GraphFormat::Current | GraphFormat::V5 => 5,
+            GraphFormat::V4 => 4,
             GraphFormat::V3 => 3,
             GraphFormat::V2 => 2,
             GraphFormat::V1 => 1,
@@ -99,7 +114,8 @@ impl GraphFormat {
 }
 
 /// Array of all concrete graph formats
-pub const ALL_CONCRETE_GRAPH_FORMATS: [GraphFormat; 6] = [
+pub const ALL_CONCRETE_GRAPH_FORMATS: [GraphFormat; 7] = [
+    GraphFormat::V5,
     GraphFormat::V4,
     GraphFormat::V3,
     GraphFormat::V2,
@@ -112,6 +128,7 @@ impl Display for GraphFormat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             GraphFormat::Current => "Current",
+            GraphFormat::V5 => "V5",
             GraphFormat::V4 => "V4",
             GraphFormat::V3 => "V3",
             GraphFormat::V2 => "V2",
@@ -133,6 +150,7 @@ impl TryFrom<i32> for GraphFormat {
             2 => Ok(GraphFormat::V2),
             3 => Ok(GraphFormat::V3),
             4 => Ok(GraphFormat::V4),
+            5 => Ok(GraphFormat::V5),
             -1 => Ok(GraphFormat::Raw),
             _ => Err(eyre::eyre!("unsupported graph format version: {}", value)),
         }
@@ -140,16 +158,16 @@ impl TryFrom<i32> for GraphFormat {
 }
 
 /// Designated method for reading a `GraphMem`. Currently goes through the
-/// `GraphV4` serialization type.
+/// `GraphV5` serialization type.
 pub fn read_graph_current<R: std::io::Read>(reader: &mut R) -> eyre::Result<GraphMem> {
-    let data = bincode::deserialize_from::<_, GraphV4>(reader)?.into();
+    let data = bincode::deserialize_from::<_, GraphV5>(reader)?.into();
     Ok(data)
 }
 
 /// Designated method for writing a `GraphMem`. Currently goes through the
-/// `GraphV4` serialization type.
+/// `GraphV5` serialization type.
 pub fn write_graph_current<W: std::io::Write>(writer: &mut W, data: GraphMem) -> Result<()> {
-    bincode::serialize_into::<_, GraphV4>(writer, &(data.into()))?;
+    bincode::serialize_into::<_, GraphV5>(writer, &(data.into()))?;
     Ok(())
 }
 
@@ -177,6 +195,10 @@ pub fn write_graph_raw<W: std::io::Write>(writer: &mut W, data: GraphMem) -> Res
 pub fn read_graph<R: std::io::Read>(reader: &mut R, format: GraphFormat) -> Result<GraphMem> {
     match format {
         GraphFormat::Current => read_graph_current(reader),
+        GraphFormat::V5 => {
+            let graph = read_graph_v5(reader)?;
+            Ok(graph.into())
+        }
         GraphFormat::V4 => {
             let graph = read_graph_v4(reader)?;
             Ok(graph.into())
@@ -243,7 +265,7 @@ pub fn check_valid_graph_formats(data: &[u8]) -> Vec<GraphFormat> {
 }
 
 /// Write a `GraphMem` to file using the `GraphFormat::Current` serialization
-/// format, currently `GraphV4`.
+/// format, currently `GraphV5`.
 pub fn write_graph_to_file<P: AsRef<Path>>(path: P, data: GraphMem) -> Result<()> {
     let file = File::create(path)?;
     let mut writer = BufWriter::new(file);
@@ -262,9 +284,11 @@ fn read_pair<R: std::io::Read + ?Sized, G: for<'a> Deserialize<'a>>(
 
 /// Convert a decoded wire-format pair into `GraphMem`s.
 ///
-/// Serial on purpose: parallelizing the two eyes frees the source on a
-/// different allocator arena than the decode used, which strands it under
-/// glibc and pushes peak RSS toward ~2×E. Serial keeps it at ~1×E.
+/// Deliberately serial: each `into()` drains its source entry-by-entry, so
+/// peak transient memory stays at ~1×E (E = edge payload). Converting the
+/// eyes in parallel would free each source on a different allocator arena
+/// than it was decoded on, stranding it under glibc's per-thread arenas and
+/// pushing peak RSS toward ~2×E.
 fn convert_pair<G>(pair: [G; 2]) -> [GraphMem; 2]
 where
     G: Into<GraphMem>,
@@ -274,19 +298,19 @@ where
 }
 
 /// Designated method for reading a pair of `GraphMem` structs. Currently goes
-/// through the `GraphV4` serialization type.
+/// through the `GraphV5` serialization type.
 pub fn read_graph_pair_current<R: std::io::Read + ?Sized>(reader: &mut R) -> Result<[GraphMem; 2]> {
-    Ok(convert_pair(read_pair::<_, GraphV4>(reader)?))
+    Ok(convert_pair(read_pair::<_, GraphV5>(reader)?))
 }
 
 /// Designated method for writing a pair of `GraphMem` structs. Currently goes
-/// through the `GraphV4` serialization type.
+/// through the `GraphV5` serialization type.
 pub fn write_graph_pair_current<W: std::io::Write>(
     writer: &mut W,
     data: [GraphMem; 2],
 ) -> Result<()> {
     let data = data.map(|graph| graph.into());
-    bincode::serialize_into::<_, [GraphV4; 2]>(writer, &data)?;
+    bincode::serialize_into::<_, [GraphV5; 2]>(writer, &data)?;
     Ok(())
 }
 
@@ -317,6 +341,7 @@ pub fn read_graph_pair<R: std::io::Read + ?Sized>(
 ) -> Result<[GraphMem; 2]> {
     match format {
         GraphFormat::Current => read_graph_pair_current(reader),
+        GraphFormat::V5 => Ok(convert_pair(read_pair::<_, GraphV5>(reader)?)),
         GraphFormat::V4 => Ok(convert_pair(read_pair::<_, GraphV4>(reader)?)),
         GraphFormat::V3 => Ok(convert_pair(read_pair::<_, GraphV3>(reader)?)),
         GraphFormat::V2 => {
@@ -333,6 +358,104 @@ pub fn read_graph_pair<R: std::io::Read + ?Sized>(
         }
         GraphFormat::Raw => read_graph_pair_raw(reader),
     }
+}
+
+/// Inputs for read-time pruning of a legacy (V3/V4) base checkpoint.
+pub struct LegacyPruneContext {
+    /// Serial → current-version table from the iris store (`stream_iris_ids`).
+    /// An edge to Z survives only if its stored target version equals Z's
+    /// version here.
+    pub version_map: HashMap<u32, i16>,
+    /// Deleted serials (S3 deletion list). Dropped regardless of version: a
+    /// deletion keeps the iris row, and we don't assume its version bump reaches
+    /// `version_map`, so version-match alone may keep edges to a deleted serial.
+    pub deleted: HashSet<u32>,
+}
+
+/// Read a `GraphMem` pair, physically dropping edges the runtime would
+/// version-skip: an edge to Z survives iff Z is not deleted and the edge's
+/// stored version equals Z's current version (`version_map`). Surviving nodes
+/// seed the staleness clock to 0. Genesis uses this to materialize a legacy
+/// V3/V4 base; V5/Current edges are version-free (skipped lazily by
+/// `get_active_links`) and fall through to the plain reader.
+///
+/// INVARIANT: `version_map` must be identical across parties or the resulting
+/// checksum diverges — relies on `version_id` being public and replicated.
+pub fn read_graph_pair_pruned<R: std::io::Read + ?Sized>(
+    reader: &mut R,
+    format: GraphFormat,
+    prune: &LegacyPruneContext,
+) -> Result<[GraphMem; 2]> {
+    match format {
+        GraphFormat::V4 => Ok(read_pair::<_, GraphV4>(reader)?.map(|g| prune_graph_v4(g, prune))),
+        GraphFormat::V3 => Ok(read_pair::<_, GraphV3>(reader)?.map(|g| prune_graph_v3(g, prune))),
+        _ => read_graph_pair(reader, format),
+    }
+}
+
+/// Build pruned `Layer`s and a `node_init` clock (seq 0, version from
+/// `version_map`) from a legacy graph. `$layers`/`$entry_points` are moved out
+/// (distinct fields → partial move). At most one version per serial matches
+/// `version_map`, so multi-version stragglers collapse deterministically onto
+/// the live entry. `set_links_trusted` recomputes each layer's `set_hash`.
+macro_rules! legacy_prune_to_mem {
+    ($layers:expr, $entry_points:expr, $last_update_seq_no:expr, $prune:expr) => {{
+        let src_layers = $layers;
+        let prune = $prune;
+        let live_at = |id: u32, version: i16| {
+            !prune.deleted.contains(&id) && prune.version_map.get(&id) == Some(&version)
+        };
+        let mut layers = Vec::with_capacity(src_layers.len());
+        for layer in src_layers {
+            let mut out = Layer::with_capacity(layer.links.len());
+            for (key, edges) in layer.links {
+                if !live_at(key.id, key.version) {
+                    continue;
+                }
+                let kept: Vec<u32> = edges
+                    .0
+                    .into_iter()
+                    .filter(|e| live_at(e.id, e.version))
+                    .map(|e| e.id)
+                    .collect();
+                out.set_links_trusted(key.id, kept, 0);
+            }
+            layers.push(out);
+        }
+        // A kept node's key version equals its registry-current version (that's
+        // what `live_at` checked), so it seeds the graph's version truth.
+        let node_init = layers
+            .iter()
+            .flat_map(|l| l.links.keys())
+            .map(|&v| {
+                let version = *prune
+                    .version_map
+                    .get(&v)
+                    .expect("pruned node must be in version_map");
+                (v, NodeInit { seq_no: 0, version })
+            })
+            .collect();
+        GraphMem::from_parts(
+            $entry_points.into_iter().map(|e| e.into()).collect(),
+            layers,
+            $last_update_seq_no,
+            node_init,
+        )
+    }};
+}
+
+fn prune_graph_v4(value: GraphV4, prune: &LegacyPruneContext) -> GraphMem {
+    legacy_prune_to_mem!(
+        value.layers,
+        value.entry_points,
+        value.last_update_seq_no,
+        prune
+    )
+}
+
+fn prune_graph_v3(value: GraphV3, prune: &LegacyPruneContext) -> GraphMem {
+    // V3 has no `last_update_seq_no` and names its entry points `entry_point`.
+    legacy_prune_to_mem!(value.layers, value.entry_point, 0, prune)
 }
 
 /// Read a pair of `GraphMem` structs from file with a specified graph
@@ -382,7 +505,7 @@ pub fn check_valid_graph_pair_formats(data: &[u8]) -> Vec<GraphFormat> {
 }
 
 /// Write a pair of `GraphMem` structs to file using the `GraphFormat::Current`
-/// graph serialization format, currently `GraphV4`.
+/// graph serialization format, currently `GraphV5`.
 pub fn write_graph_pair_to_file<P: AsRef<Path>>(path: P, data: [GraphMem; 2]) -> Result<()> {
     let file = File::create(path)?;
     let mut writer = BufWriter::new(file);
@@ -393,15 +516,14 @@ pub fn write_graph_pair_to_file<P: AsRef<Path>>(path: P, data: [GraphMem; 2]) ->
 
 impl From<graph_v0::PointId> for VectorId {
     fn from(value: graph_v0::PointId) -> Self {
-        // The V0 format only stores a u32 ID. We assume version 0.
-        VectorId::new(value.0, 0)
+        VectorId::from_serial_id(value.0)
     }
 }
 
 impl From<graph_v0::EntryPoint> for layered_graph::EntryPoint {
     fn from(value: graph_v0::EntryPoint) -> Self {
         layered_graph::EntryPoint {
-            point: value.point.into(),
+            point: value.point.0,
             layer: value.layer,
         }
     }
@@ -411,10 +533,7 @@ impl From<graph_v0::Layer> for Layer {
     fn from(value: graph_v0::Layer) -> Self {
         let mut layer = Layer::new();
         for (point_id, edges) in value.links.into_iter() {
-            layer.set_links(
-                point_id.into(),
-                edges.0.into_iter().map(|x| x.0.into()).collect(),
-            );
+            layer.set_links_trusted(point_id.0, edges.0.into_iter().map(|x| x.0 .0).collect(), 0);
         }
         layer
     }
@@ -422,15 +541,22 @@ impl From<graph_v0::Layer> for Layer {
 
 impl From<graph_v0::GraphV0> for GraphMem {
     fn from(value: GraphV0) -> Self {
-        GraphMem {
-            entry_points: value
+        let layers: Vec<Layer> = value.layers.into_iter().map(|layer| layer.into()).collect();
+        let node_init = layers
+            .iter()
+            .flat_map(|l| l.links.keys())
+            .map(|&v| (v, NodeInit::default()))
+            .collect();
+        GraphMem::from_parts(
+            value
                 .entry_point
                 .map(|ep| ep.into())
                 .into_iter()
                 .collect::<Vec<_>>(),
-            layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
-            last_update_seq_no: 0,
-        }
+            layers,
+            0,
+            node_init,
+        )
     }
 }
 
@@ -438,14 +564,14 @@ impl From<graph_v0::GraphV0> for GraphMem {
 
 impl From<graph_v1::VectorId> for VectorId {
     fn from(value: graph_v1::VectorId) -> Self {
-        VectorId::new(value.0, 0)
+        VectorId::from_serial_id(value.0)
     }
 }
 
 impl From<graph_v1::EntryPoint> for layered_graph::EntryPoint {
     fn from(value: graph_v1::EntryPoint) -> Self {
         layered_graph::EntryPoint {
-            point: value.point.into(),
+            point: value.point.0,
             layer: value.layer,
         }
     }
@@ -455,10 +581,7 @@ impl From<graph_v1::Layer> for Layer {
     fn from(value: graph_v1::Layer) -> Self {
         let mut layer = Layer::new();
         for (v, nb) in value.links.into_iter() {
-            layer.set_links(
-                VectorId::new(v.0, 1),
-                nb.0.into_iter().map(|x| VectorId::new(x.0, 1)).collect(),
-            );
+            layer.set_links_trusted(v.0, nb.0.into_iter().map(|x| x.0).collect(), 0);
         }
         layer
     }
@@ -466,15 +589,22 @@ impl From<graph_v1::Layer> for Layer {
 
 impl From<graph_v1::GraphV1> for GraphMem {
     fn from(value: GraphV1) -> Self {
-        GraphMem {
-            entry_points: value
+        let layers: Vec<Layer> = value.layers.into_iter().map(|layer| layer.into()).collect();
+        let node_init = layers
+            .iter()
+            .flat_map(|l| l.links.keys())
+            .map(|&v| (v, NodeInit::default()))
+            .collect();
+        GraphMem::from_parts(
+            value
                 .entry_point
                 .map(|e| e.into())
                 .into_iter()
                 .collect::<Vec<_>>(),
-            layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
-            last_update_seq_no: 0,
-        }
+            layers,
+            0,
+            node_init,
+        )
     }
 }
 
@@ -482,14 +612,14 @@ impl From<graph_v1::GraphV1> for GraphMem {
 
 impl From<graph_v2::VectorId> for VectorId {
     fn from(value: graph_v2::VectorId) -> Self {
-        VectorId::new(value.id, value.version)
+        VectorId::from_serial_id(value.id)
     }
 }
 
 impl From<graph_v2::EntryPoint> for layered_graph::EntryPoint {
     fn from(value: graph_v2::EntryPoint) -> Self {
         layered_graph::EntryPoint {
-            point: value.point.into(),
+            point: value.point.id,
             layer: value.layer,
         }
     }
@@ -500,9 +630,9 @@ impl From<graph_v2::Layer> for Layer {
         let mut layer = Layer::new();
 
         // value.set_hash is ignored;
-        // instead the set_hash is recomputed implicitly in the set_links calls
+        // instead the set_hash is recomputed implicitly in the set_links_trusted calls
         for (v, nb) in value.links.into_iter() {
-            layer.set_links(v.into(), nb.0.into_iter().map(|x| x.into()).collect());
+            layer.set_links_trusted(v.id, nb.0.into_iter().map(|x| x.id).collect(), 0);
         }
         layer
     }
@@ -510,16 +640,23 @@ impl From<graph_v2::Layer> for Layer {
 
 impl From<graph_v2::GraphV2> for GraphMem {
     fn from(value: graph_v2::GraphV2) -> Self {
-        GraphMem {
-            // GraphMem uses a Vec<EntryPoint>, V2 uses Option<EntryPoint>.
-            entry_points: value
+        let layers: Vec<Layer> = value.layers.into_iter().map(|layer| layer.into()).collect();
+        let node_init = layers
+            .iter()
+            .flat_map(|l| l.links.keys())
+            .map(|&v| (v, NodeInit::default()))
+            .collect();
+        // GraphMem uses a Vec<EntryPoint>, V2 uses Option<EntryPoint>.
+        GraphMem::from_parts(
+            value
                 .entry_point
                 .map(|e| e.into())
                 .into_iter()
                 .collect::<Vec<_>>(),
-            layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
-            last_update_seq_no: 0,
-        }
+            layers,
+            0,
+            node_init,
+        )
     }
 }
 
@@ -527,14 +664,14 @@ impl From<graph_v2::GraphV2> for GraphMem {
 
 impl From<graph_v3::VectorId> for VectorId {
     fn from(value: graph_v3::VectorId) -> Self {
-        VectorId::new(value.id, value.version)
+        VectorId::from_serial_id(value.id)
     }
 }
 
 impl From<graph_v3::EntryPoint> for layered_graph::EntryPoint {
     fn from(value: graph_v3::EntryPoint) -> Self {
         layered_graph::EntryPoint {
-            point: value.point.into(),
+            point: value.point.id,
             layer: value.layer,
         }
     }
@@ -542,26 +679,32 @@ impl From<graph_v3::EntryPoint> for layered_graph::EntryPoint {
 
 impl From<graph_v3::Layer> for Layer {
     fn from(value: graph_v3::Layer) -> Self {
-        // Recompute set_hash rather than trusting the stored value: older
-        // checkpoints carry a set_hash from a prior fold algorithm. Build the
-        // map, then fold the checksum in parallel (see `Layer::from_links`).
-        let links = value
-            .links
-            .into_iter()
-            .map(|(v, nb)| (v.into(), nb.0.into_iter().map(|x| x.into()).collect()))
-            .collect();
-        Layer::from_links(links)
+        // Recompute set_hash via set_links_trusted rather than trusting the stored
+        // value: older checkpoints carry a set_hash from a prior fold algorithm.
+        // Pre-size the map so the bulk insert doesn't rehash.
+        let mut layer = Layer::with_capacity(value.links.len());
+        for (v, nb) in value.links.into_iter() {
+            layer.set_links_trusted(v.id, nb.0.into_iter().map(|x| x.id).collect(), 0);
+        }
+        layer
     }
 }
 
 impl From<graph_v3::GraphV3> for GraphMem {
     fn from(value: graph_v3::GraphV3) -> Self {
-        GraphMem {
-            // V3 uses a Vec<EntryPoint>, which matches GraphMem
-            entry_points: value.entry_point.into_iter().map(|e| e.into()).collect(),
-            layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
-            last_update_seq_no: 0,
-        }
+        let layers: Vec<Layer> = value.layers.into_iter().map(|layer| layer.into()).collect();
+        let node_init = layers
+            .iter()
+            .flat_map(|l| l.links.keys())
+            .map(|&v| (v, NodeInit::default()))
+            .collect();
+        // V3 uses a Vec<EntryPoint>, which matches GraphMem
+        GraphMem::from_parts(
+            value.entry_point.into_iter().map(|e| e.into()).collect(),
+            layers,
+            0,
+            node_init,
+        )
     }
 }
 
@@ -569,14 +712,15 @@ impl From<graph_v3::GraphV3> for GraphMem {
 
 impl From<graph_v4::VectorId> for VectorId {
     fn from(value: graph_v4::VectorId) -> Self {
-        VectorId::new(value.id, value.version)
+        // V4 stored (id, version); drop the version field.
+        VectorId::from_serial_id(value.id)
     }
 }
 
 impl From<graph_v4::EntryPoint> for layered_graph::EntryPoint {
     fn from(value: graph_v4::EntryPoint) -> Self {
         layered_graph::EntryPoint {
-            point: value.point.into(),
+            point: value.point.id,
             layer: value.layer,
         }
     }
@@ -584,23 +728,29 @@ impl From<graph_v4::EntryPoint> for layered_graph::EntryPoint {
 
 impl From<graph_v4::Layer> for Layer {
     fn from(value: graph_v4::Layer) -> Self {
-        // See `From<graph_v3::Layer>`: recompute set_hash via parallel fold.
-        let links = value
-            .links
-            .into_iter()
-            .map(|(v, nb)| (v.into(), nb.0.into_iter().map(|x| x.into()).collect()))
-            .collect();
-        Layer::from_links(links)
+        // See `From<graph_v3::Layer>`: recompute set_hash, pre-sized map.
+        let mut layer = Layer::with_capacity(value.links.len());
+        for (v, nb) in value.links.into_iter() {
+            layer.set_links_trusted(v.id, nb.0.into_iter().map(|x| x.id).collect(), 0);
+        }
+        layer
     }
 }
 
 impl From<graph_v4::GraphV4> for GraphMem {
     fn from(value: graph_v4::GraphV4) -> Self {
-        GraphMem {
-            entry_points: value.entry_points.into_iter().map(|e| e.into()).collect(),
-            layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
-            last_update_seq_no: value.last_update_seq_no,
-        }
+        let layers: Vec<Layer> = value.layers.into_iter().map(|layer| layer.into()).collect();
+        let node_init = layers
+            .iter()
+            .flat_map(|l| l.links.keys())
+            .map(|&v| (v, NodeInit::default()))
+            .collect();
+        GraphMem::from_parts(
+            value.entry_points.into_iter().map(|e| e.into()).collect(),
+            layers,
+            value.last_update_seq_no,
+            node_init,
+        )
     }
 }
 
@@ -608,9 +758,10 @@ impl From<graph_v4::GraphV4> for GraphMem {
 
 impl From<VectorId> for graph_v4::VectorId {
     fn from(value: VectorId) -> Self {
+        // V4 required a version field; default to 0 when writing back.
         graph_v4::VectorId {
             id: value.serial_id(),
-            version: value.version_id(),
+            version: 0,
         }
     }
 }
@@ -618,7 +769,10 @@ impl From<VectorId> for graph_v4::VectorId {
 impl From<layered_graph::EntryPoint> for graph_v4::EntryPoint {
     fn from(value: layered_graph::EntryPoint) -> Self {
         graph_v4::EntryPoint {
-            point: value.point.into(),
+            point: graph_v4::VectorId {
+                id: value.point,
+                version: 0,
+            },
             layer: value.layer,
         }
     }
@@ -633,8 +787,13 @@ impl From<Layer> for graph_v4::Layer {
                 .into_iter()
                 .map(|(v, nb)| {
                     (
-                        v.into(),
-                        graph_v4::EdgeIds(nb.into_iter().map(|x| x.into()).collect()),
+                        graph_v4::VectorId { id: v, version: 0 },
+                        graph_v4::EdgeIds(
+                            nb.neighbors()
+                                .iter()
+                                .map(|&x| graph_v4::VectorId { id: x, version: 0 })
+                                .collect(),
+                        ),
                     )
                 })
                 .collect(),
@@ -653,11 +812,117 @@ impl From<GraphMem> for graph_v4::GraphV4 {
     }
 }
 
-/* ----------- Streaming Deserialization ---------- */
+/* --------------- Conversion GraphV5 -> GraphMem ------------------- */
 
-/// Read a graph pair from a byte stream. Identical to [`read_graph_pair`]; the
-/// streaming benefit is in feeding `reader` incrementally (see the `s3_client`
-/// streaming download), not in the decode.
+impl From<graph_v5::EntryPoint> for layered_graph::EntryPoint {
+    fn from(value: graph_v5::EntryPoint) -> Self {
+        layered_graph::EntryPoint {
+            point: value.point,
+            layer: value.layer,
+        }
+    }
+}
+
+impl From<graph_v5::Layer> for Layer {
+    fn from(value: graph_v5::Layer) -> Self {
+        let mut layer = Layer::new();
+        for (v, nb) in value.links.into_iter() {
+            layer.set_links_trusted(v, nb.neighbors, nb.updated_seq_no);
+        }
+        layer
+    }
+}
+
+impl From<graph_v5::NodeInit> for NodeInit {
+    fn from(value: graph_v5::NodeInit) -> Self {
+        NodeInit {
+            seq_no: value.seq_no,
+            version: value.version,
+        }
+    }
+}
+
+impl From<graph_v5::GraphV5> for GraphMem {
+    fn from(value: GraphV5) -> Self {
+        GraphMem::from_parts(
+            value.entry_points.into_iter().map(|e| e.into()).collect(),
+            value.layers.into_iter().map(|layer| layer.into()).collect(),
+            value.last_update_seq_no,
+            value
+                .node_init
+                .into_iter()
+                .map(|(k, v)| (k, v.into()))
+                .collect(),
+        )
+    }
+}
+
+/* --------------- Conversion GraphMem -> GraphV5 ------------------- */
+
+impl From<layered_graph::EntryPoint> for graph_v5::EntryPoint {
+    fn from(value: layered_graph::EntryPoint) -> Self {
+        graph_v5::EntryPoint {
+            point: value.point,
+            layer: value.layer,
+        }
+    }
+}
+
+impl From<Layer> for graph_v5::Layer {
+    fn from(value: Layer) -> Self {
+        let set_hash = value.checksum();
+        graph_v5::Layer {
+            links: value
+                .links
+                .into_iter()
+                .map(|(v, nb)| {
+                    (
+                        v,
+                        graph_v5::Neighborhood {
+                            neighbors: nb.neighbors().to_vec(),
+                            updated_seq_no: nb.seq_no(),
+                        },
+                    )
+                })
+                .collect(),
+            set_hash,
+        }
+    }
+}
+
+impl From<NodeInit> for graph_v5::NodeInit {
+    fn from(value: NodeInit) -> Self {
+        graph_v5::NodeInit {
+            seq_no: value.seq_no,
+            version: value.version,
+        }
+    }
+}
+
+impl From<GraphMem> for graph_v5::GraphV5 {
+    fn from(value: GraphMem) -> Self {
+        graph_v5::GraphV5 {
+            entry_points: value.entry_points.into_iter().map(|ep| ep.into()).collect(),
+            layers: value.layers.into_iter().map(|layer| layer.into()).collect(),
+            node_init: value
+                .node_init
+                .into_iter()
+                .map(|(k, v)| (k, v.into()))
+                .collect(),
+            last_update_seq_no: value.last_update_seq_no,
+        }
+    }
+}
+
+/* ----------- Streaming Deserialization (single-copy path) ---------- */
+
+/// Read a pair of [`GraphMem`] structs from a byte stream.
+///
+/// `bincode::deserialize_from` pulls bytes incrementally from `reader`, and the
+/// `From<GraphVN>` conversions move neighbor `Vec`s into the destination graph,
+/// so peak transient memory is roughly the wire payload — no second full-graph
+/// copy. The streaming win comes from byte-streaming the input `reader`, not
+/// from the decode.
 pub fn read_graph_pair_streaming<R: std::io::Read + ?Sized>(
     reader: &mut R,
     format: GraphFormat,
@@ -673,59 +938,78 @@ mod tests {
     /// is overwhelmingly unlikely to coincide with sorted order — i.e. the test
     /// actually exercises the link sorting.
     fn sample_graph() -> GraphMem {
-        let v = VectorId::from_serial_id;
         let mut layer = Layer::new();
         for &n in &[7u32, 3, 9, 1, 5, 8, 2, 6, 4] {
-            layer.set_links(v(n), vec![v(n + 1), v(n + 2)]);
+            layer.set_links_trusted(n, vec![n + 1, n + 2], 0);
         }
-        let mut g = GraphMem::new();
-        g.entry_points = vec![layered_graph::EntryPoint {
-            point: v(1),
-            layer: 0,
-        }];
-        g.layers = vec![layer];
-        g
+        // Seed the content clock at 0 for every node, matching the From<GraphVN>
+        // converters; the checksum folds node_init.
+        let node_init = layer
+            .get_links_map()
+            .keys()
+            .map(|&k| (k, NodeInit::default()))
+            .collect();
+        let entry_points = vec![layered_graph::EntryPoint { point: 1, layer: 0 }];
+        GraphMem::from_parts(entry_points, vec![layer], 0, node_init)
     }
 
-    /// Like `sample_graph` but with enough nodes that rayon splits
-    /// `Layer::from_links`'s parallel fold into multiple jobs. The determinism
-    /// test needs this: the multi-partial `reduce` (where an order-dependent
-    /// `set_hash` regression would diverge across parties) only runs when the
-    /// fold actually splits — `sample_graph`'s 9 nodes fold as a single job.
-    fn large_sample_graph() -> GraphMem {
-        let v = VectorId::from_serial_id;
-        let n = 4096u32;
+    /// Round-trip a `GraphMem` through the current (V5) serialization format and
+    /// verify the deserialized graph compares equal to the original.
+    #[test]
+    fn current_v5_round_trip() {
+        let g = sample_graph();
+        let mut buf = Vec::new();
+        write_graph_current(&mut buf, g.clone()).unwrap();
+        let g2 = read_graph_current(&mut buf.as_slice()).unwrap();
+        assert_eq!(
+            g, g2,
+            "GraphV5/Current round-trip produced a different graph"
+        );
+    }
+
+    /// Checkpoints are written by serializing `[GraphMem; 2]` directly but
+    /// read back as `GraphV5`; the two wire layouts must be byte-identical.
+    /// The fixture's clocks are non-zero and distinct over out-of-order keys
+    /// so field-order drift and BTreeMap-sort vs HashMap-iteration ordering
+    /// are both observable (uniform-zero clocks would alias the orderings and
+    /// pass regardless).
+    #[test]
+    fn graphmem_direct_write_matches_current_and_reads_back() {
         let mut layer = Layer::new();
-        for i in 1..=n {
-            layer.set_links(
-                v(i),
-                vec![v(i % n + 1), v((i + 1) % n + 1), v((i + 2) % n + 1)],
+        for (i, &n) in [7u32, 3, 9, 1, 5, 8, 2, 6, 4].iter().enumerate() {
+            layer.set_links_trusted(n, vec![n + 1, n + 2], i as u64 + 1);
+        }
+        let node_init = layer
+            .get_links_map()
+            .keys()
+            .map(|&k| {
+                (
+                    k,
+                    NodeInit {
+                        seq_no: k as u64 * 10 + 1,
+                        version: k as i16 + 1,
+                    },
+                )
+            })
+            .collect();
+        let entry_points = vec![layered_graph::EntryPoint { point: 1, layer: 0 }];
+        let g = GraphMem::from_parts(entry_points, vec![layer], 42, node_init);
+
+        let direct = bincode::serialize(&[g.clone(), g.clone()]).unwrap();
+        let mut via_current = Vec::new();
+        write_graph_pair_current(&mut via_current, [g.clone(), g.clone()]).unwrap();
+        assert_eq!(
+            direct, via_current,
+            "GraphMem-direct bytes differ from write_graph_pair_current (GraphV5) bytes"
+        );
+
+        let pair = read_graph_pair(&mut Cursor::new(&direct), GraphFormat::Current).unwrap();
+        for restored in pair {
+            assert_eq!(
+                restored, g,
+                "genesis-written bytes did not read back via V5 reader"
             );
         }
-        let mut g = GraphMem::new();
-        g.entry_points = vec![layered_graph::EntryPoint {
-            point: v(1),
-            layer: 0,
-        }];
-        g.layers = vec![layer];
-        g
-    }
-
-    /// The `Current` (GraphV4) file format must serialize byte-identically to the
-    /// raw `GraphMem` wire format used by `upload_graph_checkpoint` and the
-    /// materializer. If they drift, checkpoints minted via `graph-utils` won't
-    /// match those minted by the sidecar and cross-party BLAKE3 consensus breaks.
-    #[test]
-    fn current_serialization_matches_raw_graphmem() {
-        let g = sample_graph();
-        let mut cur = Vec::new();
-        write_graph_current(&mut cur, g.clone()).unwrap();
-        let mut raw = Vec::new();
-        write_graph_raw(&mut raw, g).unwrap();
-        assert_eq!(
-            cur, raw,
-            "GraphV4/Current serialization diverged from raw GraphMem bytes"
-        );
     }
 
     /// Per-layer checksum and links survive a write→read round trip: the
@@ -736,7 +1020,7 @@ mod tests {
         let mut buf = Vec::new();
         write_graph_pair_current(&mut buf, [g.clone(), g.clone()]).unwrap();
 
-        for fmt in [GraphFormat::Current, GraphFormat::V4] {
+        for fmt in [GraphFormat::Current, GraphFormat::V5] {
             let pair = read_graph_pair(&mut Cursor::new(&buf), fmt).unwrap();
             for restored in pair {
                 assert_eq!(restored.layers.len(), g.layers.len());
@@ -772,8 +1056,8 @@ mod tests {
                         .iter()
                         .map(|ep| graph_v3::EntryPoint {
                             point: graph_v3::VectorId {
-                                id: ep.point.serial_id(),
-                                version: ep.point.version_id(),
+                                id: ep.point,
+                                version: 0,
                             },
                             layer: ep.layer,
                         })
@@ -787,16 +1071,11 @@ mod tests {
                                 .iter()
                                 .map(|(v, nb)| {
                                     (
-                                        graph_v3::VectorId {
-                                            id: v.serial_id(),
-                                            version: v.version_id(),
-                                        },
+                                        graph_v3::VectorId { id: *v, version: 0 },
                                         graph_v3::EdgeIds(
-                                            nb.iter()
-                                                .map(|x| graph_v3::VectorId {
-                                                    id: x.serial_id(),
-                                                    version: x.version_id(),
-                                                })
+                                            nb.neighbors()
+                                                .iter()
+                                                .map(|x| graph_v3::VectorId { id: *x, version: 0 })
                                                 .collect(),
                                         ),
                                     )
@@ -814,44 +1093,159 @@ mod tests {
         buf
     }
 
-    /// For V3 and V4, `read_graph_pair_streaming` round-trips a pair back to the
-    /// original (and matches `read_graph_pair`), including per-layer `checksum()`.
+    /// `read_graph_pair_streaming` yields a graph pair equal to
+    /// `read_graph_pair` and to the original, including per-layer `checksum()`,
+    /// for every stable layer-hashed format.
     #[test]
     fn streaming_matches_derived_and_original() {
-        // Force a 4-thread pool so `from_links` splits regardless of host core
-        // count — otherwise `large_sample_graph` might still fold as one job and
-        // the multi-chunk `reduce` path would go untested.
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(4)
-            .build()
-            .unwrap();
+        let g = sample_graph();
 
-        for g in [sample_graph(), large_sample_graph()] {
-            for fmt in [GraphFormat::V3, GraphFormat::V4] {
-                let buf = write_pair_in_format(&g, fmt);
+        for fmt in [GraphFormat::V3, GraphFormat::V4, GraphFormat::V5] {
+            let buf = if fmt == GraphFormat::V5 {
+                let mut b = Vec::new();
+                write_graph_pair_current(&mut b, [g.clone(), g.clone()]).unwrap();
+                b
+            } else {
+                write_pair_in_format(&g, fmt)
+            };
 
-                let derived = pool
-                    .install(|| read_graph_pair(&mut Cursor::new(&buf), fmt))
-                    .unwrap();
-                let streamed = pool
-                    .install(|| read_graph_pair_streaming(&mut Cursor::new(&buf), fmt))
-                    .unwrap();
+            let derived = read_graph_pair(&mut Cursor::new(&buf), fmt).unwrap();
+            let streamed = read_graph_pair_streaming(&mut Cursor::new(&buf), fmt).unwrap();
 
-                for (s, d) in streamed.iter().zip(derived.iter()) {
-                    assert_eq!(s.checksum(), d.checksum(), "streamed != derived ({fmt:?})");
-                    assert_eq!(s.checksum(), g.checksum(), "streamed != original ({fmt:?})");
-                    assert_eq!(s.layers.len(), g.layers.len());
-                    for (orig, got) in g.layers.iter().zip(s.layers.iter()) {
-                        assert_eq!(orig.get_links_map(), got.get_links_map());
-                    }
+            for (s, d) in streamed.iter().zip(derived.iter()) {
+                assert_eq!(s.checksum(), d.checksum(), "streamed != derived ({fmt:?})");
+                assert_eq!(s.checksum(), g.checksum(), "streamed != original ({fmt:?})");
+                assert_eq!(s.layers.len(), g.layers.len());
+                for (orig, got) in g.layers.iter().zip(s.layers.iter()) {
+                    assert_eq!(orig.get_links_map(), got.get_links_map());
                 }
             }
         }
     }
 
-    /// `From<graph_v3::Layer>` recomputes `set_hash` from links and ignores the
-    /// stored value (prod checkpoints carry an older-algorithm `set_hash`). Feed
-    /// a deliberately wrong stored value and assert it's ignored.
+    /// Prune-at-read drops edges whose stored target version differs from the
+    /// target's registry-current version, plus edges to absent targets. Every
+    /// surviving node's clock seeds at seq 0 with its registry-current version.
+    #[test]
+    fn prune_drops_version_drifted_and_dangling_edges() {
+        use crate::utils::serialization::types::graph_v4;
+        let vid = |id: u32, version: i16| graph_v4::VectorId { id, version };
+        // Registry says node 3 ("Z") current version is 2. Node 1 ("A") links to
+        // the stale Z@1 and to an absent target 9@0 (not in the registry); node 2
+        // ("B") links to the fresh Z@2.
+        let mut links = HashMap::new();
+        links.insert(vid(1, 0), graph_v4::EdgeIds(vec![vid(3, 1), vid(9, 0)]));
+        links.insert(vid(2, 0), graph_v4::EdgeIds(vec![vid(3, 2)]));
+        links.insert(vid(3, 2), graph_v4::EdgeIds(vec![]));
+        let layer = graph_v4::Layer { links, set_hash: 0 };
+        let g = graph_v4::GraphV4 {
+            entry_points: vec![],
+            layers: vec![layer],
+            last_update_seq_no: 7,
+        };
+
+        let prune = LegacyPruneContext {
+            version_map: HashMap::from([(1u32, 0i16), (2, 0), (3, 2)]),
+            deleted: HashSet::new(),
+        };
+        let mem = prune_graph_v4(g, &prune);
+        let m = mem.layers[0].get_links_map();
+        assert!(m[&1u32].neighbors().is_empty(), "stale + dangling dropped");
+        assert_eq!(m[&2u32].neighbors(), [3u32], "fresh edge kept");
+        assert!(m[&3u32].neighbors().is_empty());
+        assert_eq!(mem.last_update_seq_no, 7);
+        for (k, version) in [(1u32, 0i16), (2, 0), (3, 2)] {
+            assert_eq!(
+                mem.node_init.get(&k),
+                Some(&NodeInit { seq_no: 0, version }),
+                "clock seeds at seq 0 with the registry-current version"
+            );
+        }
+    }
+
+    /// A legacy graph carrying two version entries for one serial (a `RemoveNode`
+    /// straggler) collapses deterministically onto the registry-current entry:
+    /// the stale entry's out-edges are dropped, inbound edges to the old version
+    /// are dropped, and the serial appears once with the live entry's edges.
+    /// Only one version can match the registry value, so there is no
+    /// HashMap-iteration-order dependence.
+    #[test]
+    fn prune_collapses_multi_version_serial_to_live_entry() {
+        use crate::utils::serialization::types::graph_v4;
+        let vid = |id: u32, version: i16| graph_v4::VectorId { id, version };
+        // Serial 3 has both a stale entry (@1, out-edge to 2) and the live entry
+        // (@2, out-edge to 1); registry-current is 2. Serial 1 links to the stale
+        // 3@1; serial 2 to 3@2.
+        let mut links = HashMap::new();
+        links.insert(vid(1, 0), graph_v4::EdgeIds(vec![vid(3, 1)]));
+        links.insert(vid(2, 0), graph_v4::EdgeIds(vec![vid(3, 2)]));
+        links.insert(vid(3, 1), graph_v4::EdgeIds(vec![vid(2, 0)]));
+        links.insert(vid(3, 2), graph_v4::EdgeIds(vec![vid(1, 0)]));
+        let g = graph_v4::GraphV4 {
+            entry_points: vec![],
+            layers: vec![graph_v4::Layer { links, set_hash: 0 }],
+            last_update_seq_no: 0,
+        };
+
+        let prune = LegacyPruneContext {
+            version_map: HashMap::from([(1u32, 0i16), (2, 0), (3, 2)]),
+            deleted: HashSet::new(),
+        };
+        let mem = prune_graph_v4(g, &prune);
+        let m = mem.layers[0].get_links_map();
+        // Serial 3 present once, with the live (@2) entry's out-edges (-> 1).
+        assert_eq!(m[&3u32].neighbors(), [1u32], "live entry's edges kept");
+        assert!(
+            m[&1u32].neighbors().is_empty(),
+            "inbound edge to 3@1 dropped"
+        );
+        assert_eq!(m[&2u32].neighbors(), [3u32], "inbound edge to 3@2 kept");
+        assert_eq!(
+            mem.node_init.get(&3u32),
+            Some(&NodeInit {
+                seq_no: 0,
+                version: 2
+            })
+        );
+    }
+
+    /// A deleted serial is dropped outright — node and inbound edges — even
+    /// when the registry version still matches: the deletion list is the
+    /// authority, not a version bump.
+    #[test]
+    fn prune_drops_deleted_serial_and_its_inbound_edges() {
+        use crate::utils::serialization::types::graph_v4;
+        let vid = |id: u32, version: i16| graph_v4::VectorId { id, version };
+        // Serial 3 is deleted but present as key @5, and the registry still
+        // reports 3@5 as current, so serial 1's edge 3@5 *matches* by version —
+        // only the deletion list distinguishes it. Serial 2 is live.
+        let mut links = HashMap::new();
+        links.insert(vid(1, 0), graph_v4::EdgeIds(vec![vid(3, 5), vid(2, 0)]));
+        links.insert(vid(2, 0), graph_v4::EdgeIds(vec![]));
+        links.insert(vid(3, 5), graph_v4::EdgeIds(vec![vid(2, 0)]));
+        let g = graph_v4::GraphV4 {
+            entry_points: vec![],
+            layers: vec![graph_v4::Layer { links, set_hash: 0 }],
+            last_update_seq_no: 0,
+        };
+
+        let prune = LegacyPruneContext {
+            version_map: HashMap::from([(1u32, 0i16), (2, 0), (3, 5)]),
+            deleted: HashSet::from([3u32]),
+        };
+        let mem = prune_graph_v4(g, &prune);
+        let m = mem.layers[0].get_links_map();
+        assert!(!m.contains_key(&3u32), "deleted serial absent as a node");
+        assert_eq!(m[&1u32].neighbors(), [2u32], "edge to deleted 3 dropped");
+        assert!(m[&2u32].neighbors().is_empty());
+        assert!(
+            !mem.node_init.contains_key(&3u32),
+            "deleted serial absent from clock"
+        );
+    }
+
+    /// `From<graph_v3::Layer>` recomputes `set_hash` from links and ignores
+    /// the stored value (older checkpoints carry an older-algorithm hash).
     #[test]
     fn from_graph_v3_layer_recomputes_ignoring_stored_set_hash() {
         use crate::utils::serialization::types::graph_v3;
@@ -863,7 +1257,7 @@ mod tests {
         let mut reference = Layer::new();
         for (n, nbs) in &entries {
             let wnbs: Vec<graph_v3::VectorId> = nbs.iter().map(|&x| wire(x)).collect();
-            reference.set_links(wire(*n).into(), wnbs.iter().map(|x| (*x).into()).collect());
+            reference.set_links_trusted(wire(*n).id, wnbs.iter().map(|x| x.id).collect(), 0);
             links.insert(wire(*n), graph_v3::EdgeIds(wnbs));
         }
         let recomputed = reference.checksum();

@@ -128,11 +128,11 @@ impl<D: DistanceOps> PlaintextStore<D> {
                 .clone();
             let query_id = VectorId::from_serial_id(serial_id);
             let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
-            let (neighbors, update_ep) = searcher
+            let (neighbors, update_ep, as_of) = searcher
                 .search_to_insert(self, &graph, &query, insertion_layer)
                 .await?;
             searcher
-                .insert_from_search_results(self, &mut graph, query_id, neighbors, update_ep)
+                .insert_from_search_results(self, &mut graph, query_id, neighbors, update_ep, as_of)
                 .await?;
         }
 
@@ -157,12 +157,27 @@ impl<D: DistanceOps> VectorStore for PlaintextStore<D> {
         vector: &VectorId,
     ) -> Result<Self::DistanceRef> {
         debug!(event_type = EvaluateDistance.id());
-        let vector_code = self.storage.get_vector(vector).ok_or_else(|| {
-            eyre::eyre!(
-                "Vector ID not found in store for serial {}",
-                vector.serial_id()
-            )
-        })?;
+        // A present serial at a newer version is the sanctioned lag window (the
+        // store runs ahead of the graph clock until the graph mutation lands):
+        // evaluate against the empty iris, which matches nothing — mirroring
+        // the shared-store `get_vector_or_empty` fetch. An absent serial is a
+        // genuine error.
+        let vector_code = match self.storage.get_vector(vector) {
+            Some(code) => code,
+            None if self
+                .storage
+                .get_current_version(vector.serial_id())
+                .is_some() =>
+            {
+                self.storage.get_vector_or_empty(vector)
+            }
+            None => {
+                return Err(eyre::eyre!(
+                    "Vector ID not found in store for serial {}",
+                    vector.serial_id()
+                ))
+            }
+        };
         let distance = D::plaintext_distance(vector_code, query, self.distance_mode);
         Ok(distance)
     }
@@ -191,19 +206,6 @@ impl<D: DistanceOps> VectorStore for PlaintextStore<D> {
         }
         metrics::counter!("less_than").increment(distances.len() as u64);
         Ok(results)
-    }
-
-    async fn only_valid_vectors(&mut self, mut vectors: Vec<VectorId>) -> Vec<VectorId> {
-        vectors.retain(|v| self.storage.contains(v));
-        vectors
-    }
-
-    async fn only_valid_entry_points(
-        &mut self,
-        mut entry_points: Vec<(VectorId, usize)>,
-    ) -> Vec<(VectorId, usize)> {
-        entry_points.retain(|(v, _)| self.storage.contains(v));
-        entry_points
     }
 }
 
@@ -311,9 +313,19 @@ impl<D: DistanceOps> VectorStore for SharedPlaintextStore<D> {
             .with_min_len((vectors.len() / (rayon::current_num_threads() * 4)).max(1))
             .map(|v| {
                 let serial_id = v.serial_id();
-                let code = store.get_vector(v).ok_or_else(|| {
-                    eyre::eyre!("Vector ID not found in store for serial {}", serial_id)
-                })?;
+                // See `PlaintextStore::eval_distance` for the lag-window fallback.
+                let code = match store.get_vector(v) {
+                    Some(code) => code,
+                    None if store.get_current_version(serial_id).is_some() => {
+                        store.get_vector_or_empty(v)
+                    }
+                    None => {
+                        return Err(eyre::eyre!(
+                            "Vector ID not found in store for serial {}",
+                            serial_id
+                        ))
+                    }
+                };
                 Ok(D::plaintext_distance(code, query, mode))
             })
             .collect()
@@ -343,21 +355,6 @@ impl<D: DistanceOps> VectorStore for SharedPlaintextStore<D> {
         }
         metrics::counter!("less_than").increment(distances.len() as u64);
         Ok(results)
-    }
-
-    async fn only_valid_vectors(&mut self, mut vectors: Vec<VectorId>) -> Vec<VectorId> {
-        let storage = self.storage.read().await;
-        vectors.retain(|v| storage.contains(v));
-        vectors
-    }
-
-    async fn only_valid_entry_points(
-        &mut self,
-        mut entry_points: Vec<(VectorId, usize)>,
-    ) -> Vec<(VectorId, usize)> {
-        let storage = self.storage.read().await;
-        entry_points.retain(|(v, _)| storage.contains(v));
-        entry_points
     }
 }
 

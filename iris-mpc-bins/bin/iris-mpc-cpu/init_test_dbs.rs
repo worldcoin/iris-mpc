@@ -397,7 +397,7 @@ async fn main() -> Result<()> {
                 vector_store.insert_with_id(inserted_id, query.clone());
 
                 let insertion_layer = searcher.gen_layer_prf(&prf_seed, &(inserted_id, side))?;
-                let (neighbors, update_ep) = searcher
+                let (neighbors, update_ep, as_of) = searcher
                     .search_to_insert(&mut vector_store, &graph, &query, insertion_layer)
                     .await?;
                 searcher
@@ -407,6 +407,7 @@ async fn main() -> Result<()> {
                         inserted_id,
                         neighbors,
                         update_ep,
+                        as_of,
                     )
                     .await?;
 
@@ -476,13 +477,9 @@ async fn init_dbs(args: &Args) -> Vec<DbContext> {
     dbs
 }
 
-fn get_max_serial_id(graph: &GraphMem) -> Option<u32> {
+fn get_max_serial_id(graph: &GraphMem) -> Option<SerialId> {
     if let Some(layer) = graph.layers.first() {
-        layer
-            .get_links_map()
-            .keys()
-            .map(|vec_id| vec_id.serial_id())
-            .max()
+        layer.get_links_map().keys().copied().max()
     } else {
         None
     }

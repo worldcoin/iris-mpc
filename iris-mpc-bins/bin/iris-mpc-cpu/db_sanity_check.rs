@@ -8,7 +8,7 @@ use iris_mpc_common::{
         REAUTH_MESSAGE_TYPE, RECOVERY_UPDATE_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
     },
     postgres::{AccessMode, PostgresClient},
-    VectorId,
+    SerialId,
 };
 use iris_mpc_cpu::{
     execution::hawk_main::{BothEyes, LEFT, RIGHT},
@@ -19,7 +19,7 @@ use iris_mpc_cpu::{
     hnsw::{
         graph::{
             graph_store::{GraphMutationRow, GraphPg},
-            layered_graph::GraphMem,
+            layered_graph::{GraphMem, Neighborhood},
         },
         searcher::HnswParams,
     },
@@ -243,9 +243,6 @@ struct DegreeHistEntry {
     node_count: usize,
 }
 
-/// Sentinel for an absent array slot: serial 0 is never a real node (1-indexed).
-const ABSENT: VectorId = VectorId::from_serial_id(0);
-
 /// Per-(eye, layer, serial-id bucket) degree summary, emitted for both in- and
 /// out-degree. `bucket` is the 0-based serial-id range index ((serial_id - 1) / bucket_size).
 #[derive(Serialize)]
@@ -264,7 +261,7 @@ struct DegreeBucketEntry {
 }
 
 /// One cell of the per-(eye, layer) bucket->bucket directed-edge count matrix.
-/// `valid_edges` counts version-matched edges; `raw_edges` counts all edges.
+/// `valid_edges` counts active edges; `raw_edges` counts all edges.
 /// Only populated (nonzero) cells are emitted.
 #[derive(Serialize)]
 struct MatrixEntry {
@@ -338,105 +335,114 @@ fn hist_stats(counts: &[u64]) -> (u32, f64, u32, u32, u64) {
     (min, avg, median, max, total)
 }
 
-/// Per-layer adjacency (slices into the graph) and live-key arrays, both indexed
-/// by `VectorId::index()`, plus the array length `n`.
-type LayerArrays<'a> = (Vec<Vec<&'a [VectorId]>>, Vec<Vec<VectorId>>, usize);
+/// Per-layer adjacency indexed by `serial_id - 1` (`None` = no node at that
+/// slot), plus the content-clock seq per slot (`INIT_ABSENT` = serial not a
+/// live graph node) and the array length `n`.
+type LayerArrays<'a> = (Vec<Vec<Option<&'a Neighborhood>>>, Vec<u64>, usize);
 
 /// Sentinel in `live_versions` for a serial absent from the irises table.
 const NO_IRIS: i16 = i16::MIN;
 
-/// Fill length-`n` adjacency + live-key arrays (indexed by `VectorId::index()`)
-/// from one layer's links. Liveness comes from the irises table, not the graph:
-/// the live node at a slot is the graph node whose `version_id` equals
-/// `live_versions[index]` (the cpu iris store version the search loads against).
-/// A serial whose live version is not present in the graph has no live node here,
-/// so its live iris is unreachable — surfacing un-indexed updates.
-fn fill_layer_arrays<'a>(
-    links: &'a HashMap<VectorId, Vec<VectorId>>,
-    n: usize,
-    live_versions: &[i16],
-) -> (Vec<&'a [VectorId]>, Vec<VectorId>) {
-    let empty: &[VectorId] = &[];
-    let mut adj: Vec<&[VectorId]> = vec![empty; n];
-    let mut key: Vec<VectorId> = vec![ABSENT; n];
-    for (vid, nbs) in links.iter() {
-        let i = vid.index() as usize;
-        if i < n && live_versions.get(i).copied().unwrap_or(NO_IRIS) == vid.version_id() {
-            adj[i] = nbs.as_slice();
-            key[i] = *vid;
-        }
-    }
-    (adj, key)
+/// Sentinel in the init-seq array for a serial absent from the content clock.
+const INIT_ABSENT: u64 = u64::MAX;
+
+/// 0-based array slot of a 1-based serial; `None` for serial 0 (never a real node).
+fn slot(serial: SerialId) -> Option<usize> {
+    serial.checked_sub(1).map(|i| i as usize)
 }
 
-/// Per-layer adjacency (slices into the graph) and live-key arrays, indexed by
-/// `VectorId::index()`. Sized to layer 0's max index + 1 (layer 0 holds all nodes).
-/// Caller must ensure layer 0 is non-empty. Returns (adj, key, n).
-fn build_layer_arrays<'a>(graph: &'a GraphMem, live_versions: &[i16]) -> LayerArrays<'a> {
-    let num_layers = graph.layers.len();
+/// Fill a length-`n` adjacency array (indexed by `serial_id - 1`) from one
+/// layer's links. An edge is *active* — followable by search — iff its
+/// target's content-clock seq does not exceed the referencing neighborhood's
+/// seq (the `get_active_links` gate).
+fn fill_layer_arrays(
+    links: &HashMap<SerialId, Neighborhood>,
+    n: usize,
+) -> Vec<Option<&Neighborhood>> {
+    let mut adj: Vec<Option<&Neighborhood>> = vec![None; n];
+    for (serial, nbhd) in links.iter() {
+        if let Some(i) = slot(*serial).filter(|&i| i < n) {
+            adj[i] = Some(nbhd);
+        }
+    }
+    adj
+}
+
+/// Content-clock seq per slot, `INIT_ABSENT` where no live node exists.
+fn build_init_seqs(graph: &GraphMem, n: usize) -> Vec<u64> {
+    let mut seqs = vec![INIT_ABSENT; n];
+    for (serial, init) in graph.node_init.iter() {
+        if let Some(i) = slot(*serial).filter(|&i| i < n) {
+            seqs[i] = init.seq_no;
+        }
+    }
+    seqs
+}
+
+/// Per-layer adjacency plus content-clock seqs, indexed by `serial_id - 1`.
+/// Sized to layer 0's max serial (layer 0 holds all nodes). Caller must ensure
+/// layer 0 is non-empty. Returns (adj, init_seqs, n).
+fn build_layer_arrays(graph: &GraphMem) -> LayerArrays<'_> {
     let n = graph.layers[0]
         .links
         .keys()
-        .map(|v| v.index() as usize)
         .max()
-        .map_or(0, |m| m + 1);
-    let mut adj: Vec<Vec<&[VectorId]>> = Vec::with_capacity(num_layers);
-    let mut key: Vec<Vec<VectorId>> = Vec::with_capacity(num_layers);
+        .map_or(0, |&m| m as usize);
+    let mut adj: Vec<Vec<Option<&Neighborhood>>> = Vec::with_capacity(graph.layers.len());
     for layer in &graph.layers {
-        let (a, k) = fill_layer_arrays(&layer.links, n, live_versions);
-        adj.push(a);
-        key.push(k);
+        adj.push(fill_layer_arrays(&layer.links, n));
     }
-    (adj, key, n)
+    let init_seqs = build_init_seqs(graph, n);
+    (adj, init_seqs, n)
 }
 
-/// The search sources: every live recorded entry point, else the live node at the
-/// temporary entry point's slot (LinearScan, no recorded entry points). Returns
-/// `(live_point, layer)` pairs with each layer clamped to existing layers. Seeding
+/// The search sources: every recorded entry point present in the graph, else the
+/// temporary entry point (LinearScan, no recorded entry points). Returns
+/// `(serial, layer)` pairs with each layer clamped to existing layers. Seeding
 /// BFS from the whole entry-point set mirrors the search, which descends from the
 /// entry point nearest the query — so reachability is "reachable from any entry
 /// point" and the hop count is the shortest layered path from the nearest one.
-fn pick_sources(graph: &GraphMem, key: &[Vec<VectorId>], n: usize) -> Vec<(VectorId, usize)> {
+fn pick_sources(
+    graph: &GraphMem,
+    adj: &[Vec<Option<&Neighborhood>>],
+    n: usize,
+) -> Vec<(SerialId, usize)> {
     let num_layers = graph.layers.len();
-    let live = |point: &VectorId, layer: usize| {
-        let i = point.index() as usize;
-        i < n && key[layer.min(num_layers - 1)][i] == *point
+    let present = |point: SerialId, layer: usize| {
+        slot(point).is_some_and(|i| i < n && adj[layer.min(num_layers - 1)][i].is_some())
     };
-    let eps: Vec<(VectorId, usize)> = graph
+    let eps: Vec<(SerialId, usize)> = graph
         .entry_points
         .iter()
         .map(|ep| (ep.point, ep.layer.min(num_layers - 1)))
-        .filter(|(p, l)| live(p, *l))
+        .filter(|(p, l)| present(*p, *l))
         .collect();
     if !eps.is_empty() {
         return eps;
     }
-    // LinearScan fallback. get_temporary_entry_point returns links.keys().min(),
-    // i.e. the lowest version of the min serial, which may be stale; resolve to the
-    // live node at that slot (`key` already holds the irises-version-matched node).
+    // LinearScan fallback: get_temporary_entry_point returns the min serial.
     let Some((tp, tl)) = graph.get_temporary_entry_point() else {
         return Vec::new();
     };
     let top = tl.min(num_layers - 1);
-    let i = tp.index() as usize;
-    if i < n && key[top][i] != ABSENT {
-        vec![(key[top][i], top)]
+    if present(tp, top) {
+        vec![(tp, top)]
     } else {
         Vec::new()
     }
 }
 
-/// Multi-source layered BFS (top layer → 0) over version-strict edges, via a bucket
-/// queue (Dial's algorithm). Returns `dist` indexed by `VectorId::index()`
+/// Multi-source layered BFS (top layer → 0) over active edges, via a bucket
+/// queue (Dial's algorithm). Returns `dist` indexed by `serial_id - 1`
 /// (`u32::MAX` = unreachable). Each source enters at hop 0 in its own layer and
 /// distances carry down between layers (free descent). Reachability is a topological
 /// upper bound (any path from any source) and the hop count an optimistic lower
 /// bound on the actual greedy descent, which follows a single path and may stall.
 fn layered_bfs(
-    adj: &[Vec<&[VectorId]>],
-    key: &[Vec<VectorId>],
+    adj: &[Vec<Option<&Neighborhood>>],
+    init_seqs: &[u64],
     n: usize,
-    sources: &[(VectorId, usize)],
+    sources: &[(SerialId, usize)],
 ) -> Vec<u32> {
     let mut dist = vec![u32::MAX; n];
     let Some(top) = sources.iter().map(|(_, l)| *l).max() else {
@@ -446,9 +452,10 @@ fn layered_bfs(
     // a source recorded at a lower layer is introduced when its layer is reached).
     let mut seeds: Vec<Vec<u32>> = vec![Vec::new(); top + 1];
     for &(point, l) in sources {
-        let i = point.index() as usize;
-        if i < n && l <= top {
-            seeds[l].push(i as u32);
+        if let Some(i) = slot(point).filter(|&i| i < n) {
+            if l <= top {
+                seeds[l].push(i as u32);
+            }
         }
     }
     let mut reached: Vec<u32> = Vec::new();
@@ -461,7 +468,6 @@ fn layered_bfs(
             }
         }
         let adj_l = &adj[layer];
-        let key_l = &key[layer];
         let mut max_d = 0u32;
         for &u in &reached {
             let d = dist[u as usize];
@@ -481,10 +487,15 @@ fn layered_bfs(
                     continue; // stale bucket-queue entry
                 }
                 let nd = d + 1;
-                for nb in adj_l[u] {
-                    let v = nb.index() as usize;
-                    if v >= n || key_l[v] != *nb {
-                        continue; // version-strict: only follow edges into the live node
+                let Some(nbhd) = adj_l[u] else {
+                    continue;
+                };
+                for &nb in nbhd.neighbors() {
+                    let Some(v) = slot(nb).filter(|&v| v < n) else {
+                        continue;
+                    };
+                    if adj_l[v].is_none() || init_seqs[v] > nbhd.seq_no() {
+                        continue; // active-strict: only follow edges the search can traverse
                     }
                     if nd < dist[v] {
                         let first_seen = dist[v] == u32::MAX;
@@ -509,10 +520,10 @@ fn layered_bfs(
     dist
 }
 
-/// Iterative Tarjan SCC over one layer's version-strict edges. Returns
-/// `(comp_of, sizes)`: `comp_of[i]` = component index of the live node at index `i`
-/// (`u32::MAX` if no live node there), `sizes[c]` = size of component `c`.
-fn scc_layer(adj_l: &[&[VectorId]], key_l: &[VectorId], n: usize) -> (Vec<u32>, Vec<u64>) {
+/// Iterative Tarjan SCC over one layer's active edges. Returns
+/// `(comp_of, sizes)`: `comp_of[i]` = component index of the node at slot `i`
+/// (`u32::MAX` if no node there), `sizes[c]` = size of component `c`.
+fn scc_layer(adj_l: &[Option<&Neighborhood>], init_seqs: &[u64], n: usize) -> (Vec<u32>, Vec<u64>) {
     const UNVISITED: u32 = u32::MAX;
     let mut idx = vec![UNVISITED; n];
     let mut low = vec![0u32; n];
@@ -523,7 +534,7 @@ fn scc_layer(adj_l: &[&[VectorId]], key_l: &[VectorId], n: usize) -> (Vec<u32>, 
     let mut sizes: Vec<u64> = Vec::new();
     let mut next_index = 0u32;
     for s in 0..n {
-        if key_l[s] == ABSENT || idx[s] != UNVISITED {
+        if adj_l[s].is_none() || idx[s] != UNVISITED {
             continue;
         }
         dfs.push((s as u32, 0));
@@ -536,14 +547,17 @@ fn scc_layer(adj_l: &[&[VectorId]], key_l: &[VectorId], n: usize) -> (Vec<u32>, 
                 comp_stack.push(node);
                 on_stack[u] = true;
             }
-            let neighbors = adj_l[u];
+            let nbhd = adj_l[u].expect("dfs only visits present slots");
+            let neighbors = nbhd.neighbors();
             let mut p = edge_pos as usize;
             let mut recursed = false;
             while p < neighbors.len() {
-                let nb = &neighbors[p];
+                let nb = neighbors[p];
                 p += 1;
-                let v = nb.index() as usize;
-                if v >= n || key_l[v] != *nb {
+                let Some(v) = slot(nb).filter(|&v| v < n) else {
+                    continue;
+                };
+                if adj_l[v].is_none() || init_seqs[v] > nbhd.seq_no() {
                     continue;
                 }
                 if idx[v] == UNVISITED {
@@ -588,11 +602,10 @@ fn scc_layer(adj_l: &[&[VectorId]], key_l: &[VectorId], n: usize) -> (Vec<u32>, 
 /// *layered* path: traverse a layer's edges, then descend (free) at any reached
 /// node. Since nodes enter a layer carrying the distance from above, each layer's
 /// relaxation is a non-uniform-source shortest path, run with a bucket queue
-/// (Dial's algorithm). Reachability is version-strict.
+/// (Dial's algorithm). Reachability is active-strict.
 fn compute_hop_buckets(
     eye: &str,
     graph: &GraphMem,
-    live_versions: &[i16],
     bucket_size: u32,
     out: &mut Vec<HopBucketEntry>,
 ) {
@@ -602,8 +615,8 @@ fn compute_hop_buckets(
     if l0.links.is_empty() {
         return;
     }
-    let (adj, key, n) = build_layer_arrays(graph, live_versions);
-    let dist = layered_bfs(&adj, &key, n, &pick_sources(graph, &key, n));
+    let (adj, init_seqs, n) = build_layer_arrays(graph);
+    let dist = layered_bfs(&adj, &init_seqs, n, &pick_sources(graph, &adj, n));
 
     // Aggregate per bucket: hops over reachable nodes, plus reachable/unreachable split.
     let num_buckets = n.div_ceil(bucket_size as usize);
@@ -611,7 +624,7 @@ fn compute_hop_buckets(
     let mut node_count: Vec<u64> = vec![0; num_buckets];
     let mut unreachable: Vec<u64> = vec![0; num_buckets];
     for ui in 0..n {
-        if key[0][ui] == ABSENT {
+        if adj[0][ui].is_none() {
             continue;
         }
         let bucket = ui / bucket_size as usize;
@@ -651,23 +664,18 @@ fn compute_hop_buckets(
 
 /// Count strongly-connected components of one layer's directed graph (iterative
 /// Tarjan — forward edges only, so no reverse adjacency is needed). Edges are
-/// version-strict (a stale-version reference is not an edge), matching the BFS.
+/// active-strict (a content-stale reference is not an edge), matching the BFS.
 /// Returns (number of SCCs, size of the largest SCC). All state is array-indexed
-/// by `VectorId::index()`.
-fn count_sccs(graph: &GraphMem, layer_idx: usize, live_versions: &[i16]) -> (u64, u64) {
+/// by `serial_id - 1`.
+fn count_sccs(graph: &GraphMem, layer_idx: usize) -> (u64, u64) {
     let layer = &graph.layers[layer_idx];
     if layer.links.is_empty() {
         return (0, 0);
     }
-    let n = layer
-        .links
-        .keys()
-        .map(|v| v.index() as usize)
-        .max()
-        .unwrap()
-        + 1;
-    let (adj, key) = fill_layer_arrays(&layer.links, n, live_versions);
-    let (_, sizes) = scc_layer(&adj, &key, n);
+    let n = layer.links.keys().max().copied().unwrap() as usize;
+    let adj = fill_layer_arrays(&layer.links, n);
+    let init_seqs = build_init_seqs(graph, n);
+    let (_, sizes) = scc_layer(&adj, &init_seqs, n);
     (sizes.len() as u64, sizes.iter().copied().max().unwrap_or(0))
 }
 
@@ -684,9 +692,11 @@ impl Stats {
 #[derive(Serialize, Clone)]
 struct ProbeNeighbor {
     serial: u32,
-    version: i16,
-    /// For an in-edge, the probe version this edge points at; `None` for out-edges.
-    target_version: Option<i16>,
+    /// Content-clock version of this neighbor; `None` if not a live graph node.
+    version: Option<i16>,
+    /// Whether the edge passes the `get_active_links` gate (target's
+    /// content-clock seq ≤ the referencing neighborhood's seq).
+    active: bool,
     reachable: bool,
     hop: Option<u32>,
 }
@@ -698,11 +708,12 @@ struct ProbeReport {
     serial: u32,
     exists_in_graph: bool,
     in_irises_table: bool,
-    /// All versions of this serial present in graph layer 0, version-descending.
-    graph_versions_present: Vec<i16>,
-    /// Whether the live (cpu irises) version is among the graph versions — i.e. the
-    /// search can actually load this node. False ⇒ the live iris was never indexed.
-    live_in_graph: bool,
+    /// Content-clock version of this serial's graph node.
+    graph_version: Option<i16>,
+    /// Whether `graph_version` matches the irises-table version. `false` ⇒
+    /// content changed without a re-index (search still traverses; graph
+    /// bookkeeping is out of sync with the store). `None` if either is absent.
+    version_synced: Option<bool>,
     cpu_version: Option<i16>,
     gpu_version: Option<i16>,
     layers_present: Vec<usize>,
@@ -713,14 +724,11 @@ struct ProbeReport {
     same_scc_as_entry: Option<bool>,
     self_loop: bool,
     in_degree_raw: u32,
-    in_degree_valid: u32,
+    in_degree_active: u32,
     stale_in_edges: u32,
     out_degree: u32,
-    in_neighbors_valid: Vec<ProbeNeighbor>,
+    in_neighbors_active: Vec<ProbeNeighbor>,
     in_neighbors_raw: Vec<ProbeNeighbor>,
-    /// Distribution over which probe version raw in-edges point at: `(version, count)`,
-    /// version-descending. Surfaces in-links anchored to a stale version.
-    in_target_version_dist: Vec<(i16, u32)>,
     out_neighbors: Vec<ProbeNeighbor>,
     pending_modifications: Vec<String>,
     gpu_byte_match: Option<bool>,
@@ -800,132 +808,107 @@ async fn run_probe_reports(
         if graph.layers.first().is_none_or(|l| l.links.is_empty()) {
             continue;
         }
-        let (adj, key, n) = build_layer_arrays(graph, live_versions);
-        let sources = pick_sources(graph, &key, n);
-        let dist = layered_bfs(&adj, &key, n, &sources);
-        let (comp_of, sizes) = scc_layer(&adj[0], &key[0], n);
-        let entry_comp = sources.first().map(|(p, _)| comp_of[p.index() as usize]);
+        let (adj, init_seqs, n) = build_layer_arrays(graph);
+        let sources = pick_sources(graph, &adj, n);
+        let dist = layered_bfs(&adj, &init_seqs, n, &sources);
+        let (comp_of, sizes) = scc_layer(&adj[0], &init_seqs, n);
+        let entry_comp = sources
+            .first()
+            .and_then(|(p, _)| slot(*p))
+            .map(|i| comp_of[i]);
 
-        // One edge sweep collects in-neighbors (raw + valid) for the probe set, plus
-        // every graph version present for each probe serial (any version, not just live).
+        // One edge sweep collects in-neighbors (raw + active) for the probe set.
         let mut in_raw: HashMap<u32, Vec<ProbeNeighbor>> = HashMap::new();
-        let mut in_valid: HashMap<u32, Vec<ProbeNeighbor>> = HashMap::new();
-        let mut graph_versions: HashMap<u32, Vec<i16>> = HashMap::new();
-        for (node, neighbors) in graph.layers[0].links.iter() {
-            if probe_set.contains(&node.serial_id()) {
-                graph_versions
-                    .entry(node.serial_id())
-                    .or_default()
-                    .push(node.version_id());
-            }
-            let si = node.index() as usize;
-            // A stale source node is never navigated; `dist[si]` tracks the LIVE node
-            // at that slot, so only report reachability/hop for live sources.
-            let source_live = si < n && key[0][si] == *node;
-            let reachable = source_live && dist[si] != u32::MAX;
-            for nb in neighbors {
-                let target = nb.serial_id();
+        let mut in_active: HashMap<u32, Vec<ProbeNeighbor>> = HashMap::new();
+        for (node, nbhd) in graph.layers[0].links.iter() {
+            let si = slot(*node).filter(|&i| i < n);
+            let reachable = si.is_some_and(|i| dist[i] != u32::MAX);
+            for &target in nbhd.neighbors() {
                 if !probe_set.contains(&target) {
                     continue;
                 }
-                let ti = nb.index() as usize;
-                let valid = source_live && ti < n && key[0][ti] == *nb;
+                let active = graph
+                    .node_init
+                    .get(&target)
+                    .is_some_and(|ni| ni.seq_no <= nbhd.seq_no());
                 let pn = ProbeNeighbor {
-                    serial: node.serial_id(),
-                    version: node.version_id(),
-                    target_version: Some(nb.version_id()),
+                    serial: *node,
+                    version: graph.node_init.get(node).map(|ni| ni.version),
+                    active,
                     reachable,
-                    hop: reachable.then(|| dist[si]),
+                    hop: reachable.then(|| dist[si.unwrap()]),
                 };
-                if valid {
-                    in_valid.entry(target).or_default().push(pn.clone());
+                if active {
+                    in_active.entry(target).or_default().push(pn.clone());
                 }
                 in_raw.entry(target).or_default().push(pn);
             }
         }
 
         for &serial in probes {
-            let pidx = if serial >= 1 {
-                (serial - 1) as usize
-            } else {
-                usize::MAX
+            let pidx = slot(serial).filter(|&i| i < n);
+            let live_version = pidx
+                .and_then(|i| live_versions.get(i))
+                .copied()
+                .filter(|&v| v != NO_IRIS);
+            let graph_version = graph.node_init.get(&serial).map(|ni| ni.version);
+            let version_synced = match (graph_version, live_version) {
+                (Some(g), Some(l)) => Some(g == l),
+                _ => None,
             };
-            // Liveness comes from the irises table: the live node is the one the
-            // search loads (version == irises version). `live_in_graph` is whether
-            // that node is in the graph at all; `exists_in_graph` is whether *any*
-            // version of the serial is.
-            let live_version = live_versions.get(pidx).copied().filter(|&v| v != NO_IRIS);
-            let mut graph_versions_present = graph_versions.remove(&serial).unwrap_or_default();
-            graph_versions_present.sort_unstable_by(|a, b| b.cmp(a));
-            graph_versions_present.dedup();
-            let exists_in_graph = !graph_versions_present.is_empty();
-            let live_in_graph = pidx < n && key[0][pidx] != ABSENT;
-            let live_vid = live_in_graph.then(|| key[0][pidx]);
+            let exists_in_graph = pidx.is_some_and(|i| adj[0][i].is_some());
+            let probe_nbhd = pidx.and_then(|i| adj[0][i]);
+            let probe_seq = probe_nbhd.map(|nbhd| nbhd.seq_no());
             let layers_present: Vec<usize> = (0..graph.layers.len())
-                .filter(|&l| {
-                    pidx < n && key[l][pidx].serial_id() == serial && key[l][pidx] != ABSENT
-                })
+                .filter(|&l| pidx.is_some_and(|i| adj[l][i].is_some()))
                 .collect();
-            let reachable = live_in_graph && dist[pidx] != u32::MAX;
-            let hop = reachable.then(|| dist[pidx]);
-            let scc_id = live_in_graph.then(|| comp_of[pidx]);
+            let reachable = exists_in_graph && dist[pidx.unwrap()] != u32::MAX;
+            let hop = reachable.then(|| dist[pidx.unwrap()]);
+            let scc_id = exists_in_graph.then(|| comp_of[pidx.unwrap()]);
             let scc_size = scc_id.map(|c| sizes[c as usize]);
             let same_scc_as_entry = match (scc_id, entry_comp) {
                 (Some(a), Some(b)) => Some(a == b),
                 _ => None,
             };
-            let out_slice: &[VectorId] = if live_in_graph { adj[0][pidx] } else { &[] };
-            let self_loop = live_vid.is_some_and(|lv| out_slice.contains(&lv));
+            let out_slice: &[SerialId] = probe_nbhd.map_or(&[], |nbhd| nbhd.neighbors());
+            let self_loop = out_slice.contains(&serial);
             let out_neighbors: Vec<ProbeNeighbor> = out_slice
                 .iter()
-                .map(|nb| {
-                    let i = nb.index() as usize;
-                    let r = i < n && dist[i] != u32::MAX;
+                .map(|&nb| {
+                    let i = slot(nb).filter(|&i| i < n);
+                    let r = i.is_some_and(|i| dist[i] != u32::MAX);
                     ProbeNeighbor {
-                        serial: nb.serial_id(),
-                        version: nb.version_id(),
-                        target_version: None,
+                        serial: nb,
+                        version: graph.node_init.get(&nb).map(|ni| ni.version),
+                        active: probe_seq.is_some_and(|ps| {
+                            graph.node_init.get(&nb).is_some_and(|ni| ni.seq_no <= ps)
+                        }),
                         reachable: r,
-                        hop: r.then(|| dist[i]),
+                        hop: r.then(|| dist[i.unwrap()]),
                     }
                 })
                 .collect();
             let in_neighbors_raw = in_raw.remove(&serial).unwrap_or_default();
-            let in_neighbors_valid = in_valid.remove(&serial).unwrap_or_default();
-            let in_target_version_dist = {
-                let mut counts: HashMap<i16, u32> = HashMap::new();
-                for nbn in &in_neighbors_raw {
-                    if let Some(tv) = nbn.target_version {
-                        *counts.entry(tv).or_default() += 1;
-                    }
-                }
-                let mut dist: Vec<(i16, u32)> = counts.into_iter().collect();
-                dist.sort_unstable_by_key(|&(v, _)| std::cmp::Reverse(v));
-                dist
-            };
+            let in_neighbors_active = in_active.remove(&serial).unwrap_or_default();
             let in_degree_raw = in_neighbors_raw.len() as u32;
-            let in_degree_valid = in_neighbors_valid.len() as u32;
-            let valid_non_self = in_neighbors_valid
+            let in_degree_active = in_neighbors_active.len() as u32;
+            let active_non_self = in_neighbors_active
                 .iter()
                 .filter(|nbn| nbn.serial != serial)
                 .count();
 
             let verdict = if !exists_in_graph {
                 "ABSENT (not a layer-0 node)".to_string()
-            } else if !live_in_graph {
-                format!(
-                    "STALE (live version {live_version:?} not indexed; graph has {graph_versions_present:?})"
-                )
             } else if reachable {
                 format!("REACHABLE@hop {}", hop.unwrap())
             } else if in_degree_raw == 0 {
                 "ORPHAN (never linked: zero in-edges)".to_string()
-            } else if valid_non_self == 0 && self_loop {
+            } else if active_non_self == 0 && self_loop {
                 "ORPHAN (self-loop only)".to_string()
-            } else if in_degree_valid == 0 {
-                "ORPHAN (severed: in-links reference stale versions)".to_string()
+            } else if in_degree_active == 0 {
+                "ORPHAN (severed: all in-edges content-stale)".to_string()
             } else {
-                "CUT-OFF (valid in-neighbors all unreachable)".to_string()
+                "CUT-OFF (active in-neighbors all unreachable)".to_string()
             };
 
             let byte = hnsw_map.get(&(serial as i64));
@@ -935,8 +918,8 @@ async fn run_probe_reports(
                 serial,
                 exists_in_graph,
                 in_irises_table: iris_ids.contains(&(serial as i64)),
-                graph_versions_present,
-                live_in_graph,
+                graph_version,
+                version_synced,
                 cpu_version: cpu_versions.get(&(serial as i64)).copied(),
                 gpu_version: gpu_versions.get(&(serial as i64)).copied(),
                 layers_present,
@@ -947,12 +930,11 @@ async fn run_probe_reports(
                 same_scc_as_entry,
                 self_loop,
                 in_degree_raw,
-                in_degree_valid,
-                stale_in_edges: in_degree_raw - in_degree_valid,
+                in_degree_active,
+                stale_in_edges: in_degree_raw - in_degree_active,
                 out_degree: out_neighbors.len() as u32,
-                in_neighbors_valid,
+                in_neighbors_active,
                 in_neighbors_raw,
-                in_target_version_dist,
                 out_neighbors,
                 pending_modifications: mods_by_serial.get(&serial).cloned().unwrap_or_default(),
                 gpu_byte_match: match (byte, gpu) {
@@ -966,20 +948,18 @@ async fn run_probe_reports(
     Ok(out)
 }
 
-/// Render a probe neighbor list (capped) as `serial:version[→target]@hop` /
-/// `…/unreach`, where `→target` is the probe version an in-edge points at.
+/// Render a probe neighbor list (capped) as `serial:version[(stale)]@hop` /
+/// `…/unreach`, where `(stale)` marks an edge the search cannot follow.
 fn fmt_nbrs(nbrs: &[ProbeNeighbor], cap: usize) -> String {
     let shown: Vec<String> = nbrs
         .iter()
         .take(cap)
         .map(|n| {
-            let tv = n
-                .target_version
-                .map(|v| format!("→{v}"))
-                .unwrap_or_default();
+            let v = n.version.map(|v| v.to_string()).unwrap_or("?".to_string());
+            let st = if n.active { "" } else { "(stale)" };
             match n.hop {
-                Some(h) => format!("{}:{}{}@{}", n.serial, n.version, tv, h),
-                None => format!("{}:{}{}/unreach", n.serial, n.version, tv),
+                Some(h) => format!("{}:{}{}@{}", n.serial, v, st, h),
+                None => format!("{}:{}{}/unreach", n.serial, v, st),
             }
         })
         .collect();
@@ -998,13 +978,13 @@ fn format_probe(r: &ProbeReport) -> String {
     let _ = writeln!(s, "  VERDICT: {}", r.verdict);
     let _ = writeln!(
         s,
-        "  exists={} live_in_graph={} in_irises={} version(cpu/gpu)={:?}/{:?} graph_versions={:?} layers={:?}",
+        "  exists={} in_irises={} version(cpu/gpu)={:?}/{:?} graph_version={:?} synced={:?} layers={:?}",
         r.exists_in_graph,
-        r.live_in_graph,
         r.in_irises_table,
         r.cpu_version,
         r.gpu_version,
-        r.graph_versions_present,
+        r.graph_version,
+        r.version_synced,
         r.layers_present
     );
     let _ = writeln!(
@@ -1014,8 +994,8 @@ fn format_probe(r: &ProbeReport) -> String {
     );
     let _ = writeln!(
         s,
-        "  in_degree raw={} valid={} stale={}  out_degree={}",
-        r.in_degree_raw, r.in_degree_valid, r.stale_in_edges, r.out_degree
+        "  in_degree raw={} active={} stale={}  out_degree={}",
+        r.in_degree_raw, r.in_degree_active, r.stale_in_edges, r.out_degree
     );
     let _ = writeln!(
         s,
@@ -1024,20 +1004,14 @@ fn format_probe(r: &ProbeReport) -> String {
     );
     let _ = writeln!(
         s,
-        "  in_neighbors_valid: {}",
-        fmt_nbrs(&r.in_neighbors_valid, 25)
+        "  in_neighbors_active: {}",
+        fmt_nbrs(&r.in_neighbors_active, 25)
     );
     let _ = writeln!(
         s,
         "  in_neighbors_raw:   {}",
         fmt_nbrs(&r.in_neighbors_raw, 25)
     );
-    let dist: Vec<String> = r
-        .in_target_version_dist
-        .iter()
-        .map(|(v, c)| format!("v{v}:{c}"))
-        .collect();
-    let _ = writeln!(s, "  in_edge_target_versions: [{}]", dist.join(", "));
     let _ = writeln!(
         s,
         "  out_neighbors:      {}",
@@ -1120,7 +1094,7 @@ async fn main() -> Result<()> {
         checkpoint_state.s3_key
     );
     let mut graphs: BothEyes<GraphMem> =
-        download_graph_checkpoint(&checkpoint_s3_client, bucket, &checkpoint_state).await?;
+        download_graph_checkpoint(&checkpoint_s3_client, bucket, &checkpoint_state, None).await?;
     rpt!(rpt, "  Checkpoint loaded and BLAKE3 verified.");
 
     // Replay any GraphMutations recorded in hawk_graph_mutations after the checkpoint.
@@ -1200,9 +1174,9 @@ async fn main() -> Result<()> {
     // Genesis filters deletions to <= max_indexation_id; the S3 file may
     // contain IDs beyond this snapshot's range.
     let iris_max = iris_ids.iter().copied().max().unwrap_or(0) as u32;
-    let exclusions: Option<HashSet<u32>> = raw_exclusions.map(|raw| {
+    let exclusions: Option<HashSet<SerialId>> = raw_exclusions.map(|raw| {
         let before = raw.len();
-        let filtered: HashSet<u32> = raw.into_iter().filter(|&id| id <= iris_max).collect();
+        let filtered: HashSet<SerialId> = raw.into_iter().filter(|&id| id <= iris_max).collect();
         rpt!(
             rpt,
             "  Exclusions: {} total in file, {} after filtering to id <= {iris_max}",
@@ -1339,9 +1313,9 @@ async fn main() -> Result<()> {
 // ---------------------------------------------------------------------------
 
 /// Returns the set of serial IDs present in the (cpu) irises table and a
-/// `live_versions` vector indexed by `VectorId::index()` holding each serial's
-/// version (`NO_IRIS` for gaps). The version vector defines liveness for the graph
-/// passes — the search loads vectors version-strict against this same table.
+/// `live_versions` vector indexed by `serial_id - 1` holding each serial's
+/// version (`NO_IRIS` for gaps), for cross-checking graph content-clock
+/// versions against the store.
 async fn collect_iris_ids(store: &Store, stats: &mut Stats) -> Result<(HashSet<i64>, Vec<i16>)> {
     let rows: Vec<(i64, i16)> = sqlx::query_as("SELECT id, version_id FROM irises")
         .fetch_all(&store.pool)
@@ -1370,7 +1344,7 @@ async fn run_graph_checks(
     s3_graphs: Option<&BothEyes<GraphMem>>,
     iris_ids: &HashSet<i64>,
     live_versions: &[i16],
-    exclusions: &Option<HashSet<u32>>,
+    exclusions: &Option<HashSet<SerialId>>,
     m: usize,
     layer_probability: f64,
     checks: &mut Vec<CheckResult>,
@@ -1384,7 +1358,7 @@ async fn run_graph_checks(
     stats: &mut Stats,
     rpt: &mut Report,
 ) -> Result<()> {
-    let mut l0_id_sets: Vec<(&str, HashSet<u32>)> = Vec::new();
+    let mut l0_id_sets: Vec<(&str, HashSet<SerialId>)> = Vec::new();
 
     if let Some(graphs) = s3_graphs {
         for (eye, idx) in [("left", LEFT), ("right", RIGHT)] {
@@ -1414,11 +1388,11 @@ async fn run_graph_checks(
                     rpt,
                     "  Computing {eye} BFS hop buckets from entry points..."
                 );
-                compute_hop_buckets(eye, &graphs[idx], live_versions, bucket_size, hop_buckets);
+                compute_hop_buckets(eye, &graphs[idx], bucket_size, hop_buckets);
             }
             if scc {
                 for lc in 0..graphs[idx].layers.len() {
-                    let (num, largest) = count_sccs(&graphs[idx], lc, live_versions);
+                    let (num, largest) = count_sccs(&graphs[idx], lc);
                     rpt!(rpt, "  {eye} layer {lc}: {num} SCC(s), largest {largest}");
                     stats.add(format!("{eye} layer {lc} SCC count"), num.to_string());
                     stats.add(
@@ -1461,7 +1435,7 @@ fn check_single_graph(
     graph: &GraphMem,
     iris_ids: &HashSet<i64>,
     live_versions: &[i16],
-    exclusions: &Option<HashSet<u32>>,
+    exclusions: &Option<HashSet<SerialId>>,
     m: usize,
     layer_probability: f64,
     bucket_size: u32,
@@ -1471,7 +1445,7 @@ fn check_single_graph(
     matrix_entries: &mut Vec<MatrixEntry>,
     stats: &mut Stats,
     rpt: &mut Report,
-) -> HashSet<u32> {
+) -> HashSet<SerialId> {
     // ef values are irrelevant
     let params = HnswParams::new(1, 1, m);
 
@@ -1492,6 +1466,22 @@ fn check_single_graph(
         .join(", ");
     stats.add(format!("{eye} entry points"), ep_desc);
 
+    // Content changed without a re-index: search still traverses (edges
+    // resolve by serial), but graph bookkeeping is out of sync with the store.
+    let version_desync = graph
+        .node_init
+        .iter()
+        .filter(|(serial, ni)| {
+            slot(**serial)
+                .and_then(|i| live_versions.get(i))
+                .is_some_and(|&v| v != NO_IRIS && v != ni.version)
+        })
+        .count();
+    stats.add(
+        format!("{eye} nodes version-desynced vs irises"),
+        version_desync.to_string(),
+    );
+
     for (lc, layer) in graph.layers.iter().enumerate() {
         stats.add(
             format!("{eye} layer {lc} node count"),
@@ -1499,7 +1489,7 @@ fn check_single_graph(
         );
         let mut deg_counts: BTreeMap<usize, usize> = BTreeMap::new();
         for neighbors in layer.links.values() {
-            *deg_counts.entry(neighbors.len()).or_insert(0) += 1;
+            *deg_counts.entry(neighbors.neighbors().len()).or_insert(0) += 1;
         }
         for (&degree, &count) in &deg_counts {
             degree_hist.push(DegreeHistEntry {
@@ -1510,7 +1500,8 @@ fn check_single_graph(
             });
         }
         if !layer.links.is_empty() {
-            let mut degrees: Vec<usize> = layer.links.values().map(|n| n.len()).collect();
+            let mut degrees: Vec<usize> =
+                layer.links.values().map(|n| n.neighbors().len()).collect();
             degrees.sort();
             let (min, max) = (degrees[0], degrees[degrees.len() - 1]);
             let avg = degrees.iter().sum::<usize>() as f64 / degrees.len() as f64;
@@ -1521,41 +1512,45 @@ fn check_single_graph(
             );
         }
 
-        // Per-bucket out/in-degree. `live[index]` holds the live node per serial
-        // (the graph node whose version matches the irises table) plus its valid
-        // in-degree count; a valid edge requires both endpoints live, so stale
-        // source nodes are skipped.
-        let in_size = layer
-            .links
-            .keys()
-            .map(|v| v.index() as usize)
-            .max()
-            .map_or(0, |m| m + 1);
-        let mut live: Vec<(VectorId, u32)> = vec![(ABSENT, 0); in_size];
+        // Per-bucket out/in-degree and the bucket->bucket edge matrix
+        // (valid = active edges with both endpoints in the layer, raw = all).
+        // An active edge passes the `get_active_links` gate: the target's
+        // content-clock seq does not exceed the referencing neighborhood's seq.
+        let in_size = layer.links.keys().max().map_or(0, |&s| s as usize);
+        let mut present = vec![false; in_size];
         for node in layer.links.keys() {
-            let i = node.index() as usize;
-            if live_versions.get(i).copied().unwrap_or(NO_IRIS) == node.version_id() {
-                live[i].0 = *node;
+            if let Some(i) = slot(*node).filter(|&i| i < in_size) {
+                present[i] = true;
             }
         }
-        // Single edge sweep over live source nodes: out-degree, valid in-degree,
-        // and the bucket->bucket edge matrix (valid = live→live, raw = live→any).
+        let mut in_deg: Vec<u32> = vec![0; in_size];
         let mut out_by_bucket: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
         let mut matrix: HashMap<(u32, u32), (u64, u64)> = HashMap::new();
-        for (node, neighbors) in layer.links.iter() {
-            if live[node.index() as usize].0 != *node {
-                continue; // stale source node: not part of the live graph
-            }
-            let src = node.index() / bucket_size;
-            out_by_bucket.entry(src).or_default().push(neighbors.len());
-            for nb in neighbors {
+        for (node, nbhd) in layer.links.iter() {
+            let Some(si) = slot(*node) else {
+                continue;
+            };
+            let src = si as u32 / bucket_size;
+            out_by_bucket
+                .entry(src)
+                .or_default()
+                .push(nbhd.neighbors().len());
+            for &nb in nbhd.neighbors() {
+                let Some(v) = slot(nb) else {
+                    continue;
+                };
                 let cell = matrix
-                    .entry((src, nb.index() / bucket_size))
+                    .entry((src, v as u32 / bucket_size))
                     .or_insert((0, 0));
                 cell.1 += 1;
-                let v = nb.index() as usize;
-                if v < live.len() && live[v].0 == *nb {
-                    live[v].1 += 1;
+                if v < in_size
+                    && present[v]
+                    && graph
+                        .node_init
+                        .get(&nb)
+                        .is_some_and(|ni| ni.seq_no <= nbhd.seq_no())
+                {
+                    in_deg[v] += 1;
                     cell.0 += 1;
                 }
             }
@@ -1571,12 +1566,12 @@ fn check_single_graph(
             });
         }
         let mut in_by_bucket: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
-        for (key, deg) in &live {
-            if *key != ABSENT {
+        for node in layer.links.keys() {
+            if let Some(i) = slot(*node).filter(|&i| i < in_size) {
                 in_by_bucket
-                    .entry(key.index() / bucket_size)
+                    .entry(i as u32 / bucket_size)
                     .or_default()
-                    .push(*deg as usize);
+                    .push(in_deg[i] as usize);
             }
         }
         for (direction, by_bucket) in [("out", &mut out_by_bucket), ("in", &mut in_by_bucket)] {
@@ -1604,7 +1599,7 @@ fn check_single_graph(
         .layers
         .iter()
         .flat_map(|l| l.links.keys())
-        .filter(|n| !iris_ids.contains(&(n.serial_id() as i64)))
+        .filter(|n| !iris_ids.contains(&(**n as i64)))
         .count();
     checks.push(CheckResult::new(
         "1a",
@@ -1618,12 +1613,12 @@ fn check_single_graph(
     ));
 
     // -- 1b: Node coverage --
-    let layer0_ids: HashSet<u32> = graph
+    let layer0_ids: HashSet<SerialId> = graph
         .layers
         .first()
-        .map(|l| l.links.keys().map(|v| v.serial_id()).collect())
+        .map(|l| l.links.keys().copied().collect())
         .unwrap_or_default();
-    let uncovered: HashSet<u32> = iris_ids
+    let uncovered: HashSet<SerialId> = iris_ids
         .iter()
         .map(|&id| id as u32)
         .filter(|id| !layer0_ids.contains(id))
@@ -1703,11 +1698,11 @@ fn check_single_graph(
         .layers
         .iter()
         .map(|layer| {
-            let nodes: HashSet<&VectorId> = layer.links.keys().collect();
+            let nodes: HashSet<&SerialId> = layer.links.keys().collect();
             layer
                 .links
                 .values()
-                .flat_map(|nbs| nbs.iter())
+                .flat_map(|nbs| nbs.neighbors().iter())
                 .filter(|nb| !nodes.contains(nb))
                 .count() as u64
         })
@@ -1728,7 +1723,7 @@ fn check_single_graph(
         .layers
         .iter()
         .flat_map(|l| l.links.iter())
-        .filter(|(node, nbs)| nbs.contains(node))
+        .filter(|(node, nbs)| nbs.neighbors().contains(node))
         .count() as u64;
     checks.push(CheckResult::new(
         "1e",
@@ -1747,8 +1742,8 @@ fn check_single_graph(
         .iter()
         .flat_map(|l| l.links.values())
         .map(|nbs| {
-            let unique: HashSet<&VectorId> = nbs.iter().collect();
-            (nbs.len() - unique.len()) as u64
+            let unique: HashSet<&SerialId> = nbs.neighbors().iter().collect();
+            (nbs.neighbors().len() - unique.len()) as u64
         })
         .sum();
     checks.push(CheckResult::new(
@@ -1767,13 +1762,13 @@ fn check_single_graph(
     for (lc, layer) in graph.layers.iter().enumerate() {
         let m_limit = params.get_M_limit(lc);
         for (node, nbs) in layer.links.iter() {
-            if nbs.len() > m_limit {
+            if nbs.neighbors().len() > m_limit {
                 degree_viol += 1;
                 if degree_viol <= 5 {
                     rpt!(
                         rpt,
                         "  [1g] {eye} L{lc} node {node} degree {} > M_limit {m_limit}",
-                        nbs.len()
+                        nbs.neighbors().len()
                     );
                 }
             }
@@ -2014,13 +2009,7 @@ fn graph_mem_max_serial_id(graph: &GraphMem) -> i64 {
     graph
         .layers
         .first()
-        .and_then(|layer| {
-            layer
-                .get_links_map()
-                .keys()
-                .map(|vec_id| vec_id.serial_id())
-                .max()
-        })
+        .and_then(|layer| layer.get_links_map().keys().copied().max())
         .map(|id| id as i64)
         .unwrap_or(0)
 }

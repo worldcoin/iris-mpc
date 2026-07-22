@@ -1,5 +1,5 @@
 use super::Differ;
-use iris_mpc_common::VectorId;
+use iris_mpc_common::SerialId;
 use std::{collections::HashSet, fmt::Display, ops::Add};
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -59,8 +59,8 @@ impl Display for JaccardState {
 pub struct DetailedJaccardDiffer {
     n: usize,
     graph_state: JaccardState,
-    current_layer_details: Vec<(VectorId, JaccardState)>,
-    per_layer_results: Vec<(JaccardState, Vec<(VectorId, JaccardState)>)>,
+    current_layer_details: Vec<(SerialId, JaccardState)>,
+    per_layer_results: Vec<(JaccardState, Vec<(SerialId, JaccardState)>)>,
 }
 
 impl DetailedJaccardDiffer {
@@ -78,7 +78,7 @@ pub struct DetailedJaccardReport(
     #[allow(clippy::type_complexity)]
     pub  (
         JaccardState,
-        Vec<(JaccardState, Vec<(VectorId, JaccardState)>)>,
+        Vec<(JaccardState, Vec<(SerialId, JaccardState)>)>,
     ),
 );
 
@@ -108,9 +108,9 @@ impl Differ for DetailedJaccardDiffer {
     fn diff_neighborhood(
         &mut self,
         _layer_index: usize,
-        node: &VectorId,
-        lhs: &[VectorId],
-        rhs: &[VectorId],
+        node: &SerialId,
+        lhs: &[SerialId],
+        rhs: &[SerialId],
     ) {
         let lhs_set: HashSet<_> = lhs.iter().collect();
         let rhs_set: HashSet<_> = rhs.iter().collect();
