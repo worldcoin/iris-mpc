@@ -5,6 +5,7 @@ use aws_sdk_s3::Client as S3Client;
 use clap::{Parser, Subcommand};
 use eyre::Result;
 use iris_mpc_cpu::hnsw::graph::test_utils::{DbContext, DiffMethod};
+use iris_mpc_cpu::utils::serialization::graph::GraphFormat;
 use iris_mpc_utils::misc::write_bin;
 use std::path::PathBuf;
 
@@ -44,7 +45,12 @@ enum Command {
     /// (testing only) creates random data and stores it as a checkpoint
     RandomCheckpoint,
     /// Load a graph from a file to memory, then upload it to s3 and add it to the checkpoint table.
-    LoadCheckpoint,
+    LoadCheckpoint {
+        /// Serialization format of the input graph-pair file. Defaults to
+        /// GraphFormat::Current
+        #[arg(long, value_enum, default_value_t = GraphFormat::Current)]
+        graph_format: GraphFormat,
+    },
     /// (testing only) run BackupGraph and compare it against a file.
     VerifyBackup,
     /// Load a graph from a file and compare it to the graph stored in the database.
@@ -82,8 +88,10 @@ async fn main() -> Result<()> {
             let graph = db_context.get_both_eyes().await?;
             write_bin(&graph, &file)?;
         }
-        Command::LoadCheckpoint => {
-            db_context.make_new_checkpoint(&file, dbg).await?;
+        Command::LoadCheckpoint { graph_format } => {
+            db_context
+                .make_new_checkpoint(&file, graph_format, dbg)
+                .await?;
         }
         Command::VerifyBackup => {
             db_context.verify_backup(&file, dbg).await?;
