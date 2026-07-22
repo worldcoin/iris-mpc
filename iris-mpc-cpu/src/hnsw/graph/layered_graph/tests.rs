@@ -214,9 +214,9 @@ async fn test_from_another() -> Result<()> {
             // Neighbor lists are stored serial-sorted, and the id remap does
             // not preserve that order, so compare the remapped sets.
             let expected: std::collections::HashSet<SerialId> =
-                nbhd.neighbors.iter().map(|n| point_ids_map[n]).collect();
+                nbhd.neighbors().iter().map(|n| point_ids_map[n]).collect();
             let got: std::collections::HashSet<SerialId> =
-                new_nbhd.neighbors.iter().copied().collect();
+                new_nbhd.neighbors().iter().copied().collect();
             assert_eq!(expected, got, "neighbors of {point_id} -> {new_point_id}");
         }
     }
@@ -271,15 +271,15 @@ fn add_edges_outgoing_writes_only_to_id_list() {
         })
         .unwrap();
     assert_eq!(
-        graph.layers[0].get_links(&1).unwrap().neighbors,
+        graph.layers[0].get_links(&1).unwrap().neighbors(),
         vec![2u32, 3u32]
     );
     assert_eq!(
-        graph.layers[0].get_links(&2).unwrap().neighbors,
+        graph.layers[0].get_links(&2).unwrap().neighbors(),
         vec![] as Vec<SerialId>
     );
     assert_eq!(
-        graph.layers[0].get_links(&3).unwrap().neighbors,
+        graph.layers[0].get_links(&3).unwrap().neighbors(),
         vec![] as Vec<SerialId>
     );
 }
@@ -326,11 +326,17 @@ fn add_edges_incoming_writes_only_to_target_lists() {
         })
         .unwrap();
     assert_eq!(
-        graph.layers[0].get_links(&1).unwrap().neighbors,
+        graph.layers[0].get_links(&1).unwrap().neighbors(),
         vec![] as Vec<SerialId>
     );
-    assert_eq!(graph.layers[0].get_links(&2).unwrap().neighbors, vec![1u32]);
-    assert_eq!(graph.layers[0].get_links(&3).unwrap().neighbors, vec![1u32]);
+    assert_eq!(
+        graph.layers[0].get_links(&2).unwrap().neighbors(),
+        vec![1u32]
+    );
+    assert_eq!(
+        graph.layers[0].get_links(&3).unwrap().neighbors(),
+        vec![1u32]
+    );
 }
 
 /// Filter-on-bump: an asymmetric stale edge `a -> b` (no `b -> a`
@@ -369,7 +375,7 @@ fn stale_edge_dropped_on_neighborhood_touch_after_reauth() {
         })
         .unwrap();
     assert_eq!(
-        graph.layers[0].get_links(&1).unwrap().neighbors().to_vec(),
+        graph.layers[0].get_links(&1).unwrap().neighbors(),
         vec![2u32]
     );
 
@@ -384,7 +390,7 @@ fn stale_edge_dropped_on_neighborhood_touch_after_reauth() {
     // a's neighborhood (last touched at seq 2) hasn't been revisited, so the
     // stale edge is still present — detection happens on next touch.
     assert_eq!(
-        graph.layers[0].get_links(&1).unwrap().neighbors().to_vec(),
+        graph.layers[0].get_links(&1).unwrap().neighbors(),
         vec![2u32]
     );
 
@@ -410,7 +416,7 @@ fn stale_edge_dropped_on_neighborhood_touch_after_reauth() {
         })
         .unwrap();
     assert_eq!(
-        graph.layers[0].get_links(&1).unwrap().neighbors().to_vec(),
+        graph.layers[0].get_links(&1).unwrap().neighbors(),
         vec![3u32]
     );
 
@@ -815,7 +821,7 @@ fn get_active_links_skips_content_stale_neighbor() {
 
     // Physical edge survives (a untouched), but read-path skips it.
     assert_eq!(
-        graph.layers[0].get_links(&1).unwrap().neighbors().to_vec(),
+        graph.layers[0].get_links(&1).unwrap().neighbors(),
         vec![2u32]
     );
     assert_eq!(graph.get_active_links(&1, 0), Vec::<VectorId>::new());
@@ -867,7 +873,7 @@ fn get_active_links_drops_edge_to_removed_node() {
 
     // Physical edge a -> b survives, but read-path skips the dead node.
     assert_eq!(
-        graph.layers[0].get_links(&1).unwrap().neighbors().to_vec(),
+        graph.layers[0].get_links(&1).unwrap().neighbors(),
         vec![2u32]
     );
     assert_eq!(graph.get_active_links(&1, 0), Vec::<VectorId>::new());
@@ -1521,11 +1527,17 @@ fn add_edges_bidirectional_writes_both_sides() {
         })
         .unwrap();
     assert_eq!(
-        graph.layers[0].get_links(&1).unwrap().neighbors,
+        graph.layers[0].get_links(&1).unwrap().neighbors(),
         vec![2u32, 3u32]
     );
-    assert_eq!(graph.layers[0].get_links(&2).unwrap().neighbors, vec![1u32]);
-    assert_eq!(graph.layers[0].get_links(&3).unwrap().neighbors, vec![1u32]);
+    assert_eq!(
+        graph.layers[0].get_links(&2).unwrap().neighbors(),
+        vec![1u32]
+    );
+    assert_eq!(
+        graph.layers[0].get_links(&3).unwrap().neighbors(),
+        vec![1u32]
+    );
 }
 
 #[test]
@@ -1587,9 +1599,15 @@ fn remove_edges_outgoing_only_modifies_id_list() {
             }],
         })
         .unwrap();
-    assert_eq!(graph.layers[0].get_links(&1).unwrap().neighbors, vec![3u32]);
+    assert_eq!(
+        graph.layers[0].get_links(&1).unwrap().neighbors(),
+        vec![3u32]
+    );
     // Bidirectional cleanup is not implied — b's list still contains a.
-    assert_eq!(graph.layers[0].get_links(&2).unwrap().neighbors, vec![1u32]);
+    assert_eq!(
+        graph.layers[0].get_links(&2).unwrap().neighbors(),
+        vec![1u32]
+    );
 }
 
 #[test]
@@ -1627,7 +1645,10 @@ fn two_phase_apply_edges_before_node_in_vec_still_works() {
         .unwrap();
     // Pass-1 created the nodes, then pass-2 applied the edge — so a should
     // now have b in its outgoing list.
-    assert_eq!(graph.layers[0].get_links(&1).unwrap().neighbors, vec![2u32]);
+    assert_eq!(
+        graph.layers[0].get_links(&1).unwrap().neighbors(),
+        vec![2u32]
+    );
 }
 
 #[test]
