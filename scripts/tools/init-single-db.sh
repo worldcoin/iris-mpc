@@ -1,43 +1,83 @@
-#!/bin/sh
+#!/bin/bash
 
-# opt-in codes left, right
-aws s3 cp s3://wf-smpcv2-stage-hnsw-performance-reports/graph_right.dat /tmp/graph_right.dat
-aws s3 cp s3://wf-smpcv2-stage-hnsw-performance-reports/graph_left.dat /tmp/graph_left.dat
+set -e
 
-aws s3 cp s3://wf-smpcv2-stage-hnsw-performance-reports/gallery_left.ndjson /tmp/gallery_left_right_interleaved.ndjson
+IRISES_FILE="${IRISES_FILE:-synthetic-irises-1M.ndjson}"
+# warning: this is the graph for one eye, not BothEyes
+GRAPH_FILE="${GRAPH_FILE:-graph-synthetic-minfhd5-1M.dat}"
+GRAPH_FORMAT="${GRAPH_FORMAT:-v3}"
 
+TARGET_DB_SIZE="${TARGET_DB_SIZE:-1048576}"
+PARTY_ID="${SMPC__SERVER_COORDINATION__PARTY_ID}"
+DB_URL="${SMPC__CPU_DATABASE__URL}"
+# matches behavior of iris-mpc
+DB_SCHEMA="SMPC${SMPC__HNSW_SCHEMA_NAME_SUFFIX}_dev_${PARTY_ID}"
 
-echo "starting left init"
+# Checkpoint bucket that iris-mpc-cpu will later read the restored graph from.
+GRAPH_CHECKPOINT_S3_BUCKET="${GRAPH_CHECKPOINT_S3_BUCKET:-wf-smpcv2-dev-hnsw-checkpoint}"
+GRAPH_CHECKPOINT_S3_REGION="${GRAPH_CHECKPOINT_S3_REGION:-eu-central-1}"
+
+echo "downloading plaintext irises and graph from s3"
+
+aws s3 cp "s3://wf-smpcv2-dev-hnsw-performance-reports/${GRAPH_FILE}.gz" "/tmp/${GRAPH_FILE}.gz" --only-show-errors
+aws s3 cp "s3://wf-smpcv2-dev-hnsw-performance-reports/${IRISES_FILE}.gz" "/tmp/${IRISES_FILE}.gz" --only-show-errors
+
+echo "download complete. unzipping"
+
+gzip -dc "/tmp/${GRAPH_FILE}.gz" > "/tmp/${GRAPH_FILE}"
+gzip -dc "/tmp/${IRISES_FILE}.gz" > "/tmp/${IRISES_FILE}"
+
+# note: the synthetic-minfhd5-1M.dat graph is only for one eye. for testing against randomly generated iris codes, it is sufficient
+# to use this graph for both eyes. If, in the future, one uploads a default graph that is for both eyes, this section can be deleted.
+cat "/tmp/${GRAPH_FILE}" "/tmp/${GRAPH_FILE}" > /tmp/combined.dat
+mv /tmp/combined.dat "/tmp/${GRAPH_FILE}"
+
+echo "starting iris init"
 /bin/init-single-db \
-  --party-id $SMPC__SERVER_COORDINATION__PARTY_ID \
-  --source "/tmp/gallery_left_right_interleaved.ndjson" \
-  --db-url "$SMPC__CPU_DATABASE__URL" \
-  --db-schema "SMPC_correctness_test_stage_$SMPC__SERVER_COORDINATION__PARTY_ID" \
-  --target-db-size 287895
+  --party-id "$PARTY_ID" \
+  --source "/tmp/${IRISES_FILE}" \
+  --db-url "$DB_URL" \
+  --db-schema "$DB_SCHEMA" \
+  --target-db-size "$TARGET_DB_SIZE"
+echo "iris init done"
 
-echo "starting restore graph left"
-/bin/graph-mem-cli --db-url $SMPC__CPU_DATABASE__URL --schema SMPC_correctness_test_stage_$SMPC__SERVER_COORDINATION__PARTY_ID --file /tmp/graph_left.dat restore-side --side "left"
-echo "restore graph left done"
-
-echo "starting restore graph right"
-/bin/graph-mem-cli --db-url $SMPC__CPU_DATABASE__URL --schema SMPC_correctness_test_stage_$SMPC__SERVER_COORDINATION__PARTY_ID --file /tmp/graph_right.dat restore-side --side "right"
-echo "restore graph right done"
-
-psql "$SMPC__CPU_DATABASE__URL" -c "
-INSERT INTO persistent_state (domain, \"key\", \"value\")
-VALUES ('genesis', 'last_indexed_iris_id', '287895')
+# ---------------------------------------------------------------------------
+# Record last_indexed_iris_id BEFORE the checkpoint: load-checkpoint embeds
+# this value into the checkpoint row it creates.
+# ---------------------------------------------------------------------------
+psql "${DB_URL}" -v ON_ERROR_STOP=1 -c "
+INSERT INTO \"${DB_SCHEMA}\".persistent_state (domain, \"key\", \"value\")
+VALUES ('genesis', 'last_indexed_iris_id', '${TARGET_DB_SIZE}')
 ON CONFLICT (domain, \"key\")
 DO UPDATE SET \"value\" = EXCLUDED.\"value\";
 "
 echo "persistent_state updated"
 
+# ---------------------------------------------------------------------------
+# Restore the graph (both eyes from one file) and upload exactly one
+# checkpoint. On a fresh DB this leaves a single, most-recent checkpoint.
+# ---------------------------------------------------------------------------
+echo "starting graph restore + checkpoint"
+/bin/graph-mem-cli \
+  --db-url "$DB_URL" \
+  --schema "$DB_SCHEMA" \
+  --file "/tmp/${GRAPH_FILE}" \
+  --s3-bucket "$GRAPH_CHECKPOINT_S3_BUCKET" \
+  --party-id "$PARTY_ID" \
+  --aws-region "$GRAPH_CHECKPOINT_S3_REGION" \
+  load-checkpoint --graph-format "${GRAPH_FORMAT}"
+
+echo "graph restore + checkpoint done"
+echo "init complete"
+
+
+# the deployment tends to be auto-restart. no need to do that here. wait for the next deployment.
 shutdown_handler() {
     echo "Shutdown requested"
     exit 0
 }
 
 trap shutdown_handler SIGTERM SIGINT
-
 while true; do
     sleep 1
 done
