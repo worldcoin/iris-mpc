@@ -422,10 +422,10 @@ async fn apply_graph_repair(
         let end = items.len().saturating_sub(1);
         let mut now = Instant::now();
         for (idx, (serial, reinsert)) in items.iter().enumerate() {
-            // Version lists follow hash iteration order; mutation order
-            // must match across parties.
+            // The content clock holds at most one entry per serial, so each
+            // side removes at most one node.
             let removals = [LEFT, RIGHT].map(|side| {
-                let mut keys: Vec<VectorId> = graph_versions[side]
+                let keys: Vec<VectorId> = graph_versions[side]
                     .get(serial)
                     .map(|versions| {
                         versions
@@ -434,7 +434,7 @@ async fn apply_graph_repair(
                             .collect()
                     })
                     .unwrap_or_default();
-                keys.sort_unstable_by_key(|k| k.version_id());
+                debug_assert!(keys.len() <= 1, "one content-clock entry per serial");
                 keys
             });
             let request = JobRequest::new_version_replay(*serial, removals, *reinsert);
@@ -491,19 +491,12 @@ async fn get_versions_from_iris_store(
         .collect())
 }
 
-/// Build the graph's per-serial key list from layer-0 node keys (layer 0 holds
-/// every node, so this enumerates all graph keys).
+/// Build the graph's per-serial version list from the content clock, which
+/// holds every live node. Each serial has exactly one entry; the `Vec` shape
+/// is shared with the join, whose predicate is "exactly {source version}".
 async fn get_versions_from_hnsw_graph(graph_ref: &GraphRef) -> HashMap<SerialId, Vec<VersionId>> {
     let graph = graph_ref.read().await;
-    if graph.layers.is_empty() {
-        return HashMap::new();
-    }
-    versions_per_serial(
-        graph.layers[0]
-            .links
-            .keys()
-            .map(|v| (v.serial_id(), v.version_id())),
-    )
+    versions_per_serial(graph.node_init.iter().map(|(&s, ni)| (s, ni.version)))
 }
 
 /// Serials whose source content equals the party's deletion dummy on both

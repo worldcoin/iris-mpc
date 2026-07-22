@@ -11,16 +11,12 @@ use crate::utils::{
 };
 use eyre::{ensure, eyre, Result};
 use iris_mpc_common::{
-    config::Config,
     helpers::{smpc_request::REAUTH_MESSAGE_TYPE, sync::Modification},
     iris_db::get_dummy_shares_for_deletion,
     VectorId,
 };
 use iris_mpc_cpu::{
-    graph_checkpoint::{
-        download_graph_checkpoint, get_latest_checkpoint_state, save_checkpoint_state,
-        upload_graph_checkpoint_plaintext,
-    },
+    graph_checkpoint::{download_graph_checkpoint, get_latest_checkpoint_state},
     hawkers::plaintext_store::PlaintextStore,
     hnsw::graph::graph_store::GraphPg,
 };
@@ -42,7 +38,7 @@ const C1: u32 = 35; // mod row, no version bump (mod-only, invariant violation)
 const D1: u32 = 45; // HNSW row version drift   (row mismatch → surgery)
 const C2: u32 = 55; // rejected reauth (persisted=false) — must appear nowhere
 const H1: u32 = 60; // HNSW row deleted, source live (row missing → insert + surgery)
-const E1: u32 = 65; // ghost baked into the base graph (multi-version surgery)
+const E1: u32 = 65; // base graph clock stale, row aligned (graph-axis-only surgery)
 const F1: u32 = 70; // deleted: source content = dummy shares (remove-only)
 const G1: u32 = 75; // deleted then reinserted with a live iris (replay)
 const G1_DONOR: u32 = 2; // untouched serial whose shares G1's reinsert copies
@@ -76,17 +72,17 @@ impl Test {
 
 impl TestRun for Test {
     async fn exec(&mut self) -> Result<()> {
-        // Phase A — build the base graph, then bake a multi-version fixture:
-        // bump E1 in the source (reauth mod + row version) and republish the
-        // latest checkpoint with an extra E1 layer-0 key. The baked checkpoint
-        // is the version-join base.
+        // Phase A — build the base graph, then bake the E1 fixture: bump E1 in
+        // the source (reauth mod + row version) and align the HNSW row, so the
+        // base checkpoint's content clock is stale while the rows agree. The
+        // phase-A checkpoint is the version-join base.
         let mut args = DEFAULT_GENESIS_ARGS;
         args.max_indexation_id = BASE_HEIGHT;
         run_genesis!(self, args);
 
         let mut join_set = JoinSet::new();
-        for (node, config) in self.get_nodes().await.zip(self.configs.iter().cloned()) {
-            join_set.spawn(async move { bake_e1_ghost(&node, &config).await });
+        for node in self.get_nodes().await {
+            join_set.spawn(async move { bake_e1_stale_clock(&node).await });
         }
         let hashes: Vec<String> = join_set
             .join_all()
@@ -99,9 +95,9 @@ impl TestRun for Test {
         );
         let base_hash = hashes[0].clone();
 
-        // Fixture self-check: the baked base checkpoint holds exactly two
-        // layer-0 keys for E1 (the ghost exists).
-        assert_e1_ghost_in_base(&self.configs, &base_hash).await?;
+        // Fixture self-check: the base checkpoint's content clock still holds
+        // E1 at version 0 (graph-axis divergence exists).
+        assert_e1_stale_in_base(&self.configs, &base_hash).await?;
 
         // Phase B — inject divergence on every party.
         let mut join_set = JoinSet::new();
@@ -151,15 +147,14 @@ impl TestRun for Test {
     }
 }
 
-/// Bake the E1 multi-version fixture on one party and return the baked
+/// Bake the E1 stale-clock fixture on one party and return the base
 /// checkpoint's blake3 hash (equal across parties: graph structure is public
 /// and its serialization canonical).
 ///
 /// Steps: reauth mod row + source version bump; HNSW row version aligned to
-/// the source (so E1 is a pure multi-version case); latest checkpoint
-/// downloaded, an extra layer-0 key `(E1, 1)` inserted in both eyes, and the
-/// result re-uploaded and recorded as a new checkpoint row.
-async fn bake_e1_ghost(node: &MpcNode, config: &Config) -> Result<String> {
+/// the source. Rows agree at version 1 while the base graph's content clock
+/// still holds version 0 — a pure graph-axis divergence.
+async fn bake_e1_stale_clock(node: &MpcNode) -> Result<String> {
     node.apply_modifications(
         &[],
         &[ModificationInput::new(1, E1 as i64, Reauth, true, true)],
@@ -179,70 +174,34 @@ async fn bake_e1_ghost(node: &MpcNode, config: &Config) -> Result<String> {
         tx.commit().await?;
     }
 
-    let aws = get_aws_clients(config).await?;
     let state = get_latest_checkpoint_state(&node.cpu_stores.graph)
         .await?
         .ok_or_else(|| eyre!("no checkpoint recorded after phase A"))?;
-    let mut graphs = download_graph_checkpoint(
-        &aws.checkpoint_s3_client,
-        &config.graph_checkpoint_bucket_name,
-        &state,
-    )
-    .await?;
-
-    let old_key = VectorId::new(E1, 0);
-    let ghost_key = VectorId::new(E1, 1);
-    for graph in graphs.iter_mut() {
-        let links = graph.layers[0]
-            .get_links(&old_key)
-            .ok_or_else(|| eyre!("E1 missing from base graph layer 0"))?
-            .to_vec();
-        graph.layers[0].insert_node(&ghost_key, links);
-    }
-
-    let baked = upload_graph_checkpoint_plaintext(
-        &config.graph_checkpoint_bucket_name,
-        config.party_id,
-        &graphs,
-        &aws.checkpoint_s3_client,
-        state.last_indexed_iris_id,
-        state.last_indexed_modification_id,
-        None,
-        true,
-    )
-    .await?;
-    save_checkpoint_state(node.cpu_stores.graph.tx().await?, &baked).await?;
-    Ok(baked.blake3_hash)
+    Ok(state.blake3_hash)
 }
 
-/// Assert the baked base checkpoint holds exactly two layer-0 keys for E1
-/// (versions 0 and 1) in both eyes, on every party.
-async fn assert_e1_ghost_in_base(configs: &HawkConfigs, base_hash: &str) -> Result<()> {
+/// Assert the base checkpoint's content clock holds E1 at version 0 in both
+/// eyes, on every party (the source row is already at 1).
+async fn assert_e1_stale_in_base(configs: &HawkConfigs, base_hash: &str) -> Result<()> {
     for config in configs.iter() {
         let node = MpcNode::new(config.clone()).await;
         let aws = get_aws_clients(config).await?;
         let state = get_latest_checkpoint_state(&node.cpu_stores.graph)
             .await?
-            .ok_or_else(|| eyre!("no baked checkpoint"))?;
-        assert_eq!(state.blake3_hash, base_hash, "baked row must be the latest");
+            .ok_or_else(|| eyre!("no base checkpoint"))?;
+        assert_eq!(state.blake3_hash, base_hash, "base row must be the latest");
         let graphs = download_graph_checkpoint(
             &aws.checkpoint_s3_client,
             &config.graph_checkpoint_bucket_name,
             &state,
+            None,
         )
         .await?;
         for (eye, graph) in graphs.iter().enumerate() {
-            let mut keys: Vec<VectorId> = graph.layers[0]
-                .links
-                .keys()
-                .filter(|v| v.serial_id() == E1)
-                .copied()
-                .collect();
-            keys.sort_unstable_by_key(|k| k.version_id());
             assert_eq!(
-                keys,
-                vec![VectorId::new(E1, 0), VectorId::new(E1, 1)],
-                "E1 must have exactly two layer-0 keys in the base checkpoint (eye {eye})"
+                graph.vector_id_of(E1),
+                Some(VectorId::new(E1, 0)),
+                "E1 must sit at version 0 in the base content clock (eye {eye})"
             );
         }
     }
@@ -560,9 +519,9 @@ async fn assert_reconciled(configs: &HawkConfigs, expected_mod_cursor: i64) -> R
     Ok(())
 }
 
-/// Assert every party's latest checkpoint graph holds, in layer 0, exactly one
-/// key per serial in `current` — the current source version (stale nodes
-/// replayed, ghosts removed) — and no key at all for serials in `removed`.
+/// Assert every party's latest checkpoint graph holds each serial in
+/// `current` at exactly the current source version in its content clock
+/// (stale nodes replayed), and no trace at all of serials in `removed`.
 async fn assert_graph_state(configs: &HawkConfigs, current: &[u32], removed: &[u32]) -> Result<()> {
     for config in configs.iter() {
         let node = MpcNode::new(config.clone()).await;
@@ -580,35 +539,36 @@ async fn assert_graph_state(configs: &HawkConfigs, current: &[u32], removed: &[u
             &aws.checkpoint_s3_client,
             &config.graph_checkpoint_bucket_name,
             &state,
+            None,
         )
         .await?;
 
         for (eye, graph) in graphs.iter().enumerate() {
             assert!(!graph.layers.is_empty(), "graph is empty (eye {eye})");
-            let mut keys_per_serial: HashMap<u32, Vec<VectorId>> = HashMap::new();
-            for vid in graph.layers[0].links.keys() {
-                keys_per_serial
-                    .entry(vid.serial_id())
-                    .or_default()
-                    .push(*vid);
-            }
-
             for &serial in current {
                 let version = *version_by_serial
                     .get(&serial)
                     .ok_or_else(|| eyre!("serial {serial} absent from source"))?;
                 let vid = VectorId::new(serial, version);
                 assert_eq!(
-                    keys_per_serial.get(&serial),
-                    Some(&vec![vid]),
-                    "graph layer 0 must hold exactly {vid:?} (eye {eye})"
+                    graph.vector_id_of(serial),
+                    Some(vid),
+                    "content clock must hold exactly {vid:?} (eye {eye})"
+                );
+                assert!(
+                    graph.layers[0].get_links(&serial).is_some(),
+                    "graph layer 0 must hold serial {serial} (eye {eye})"
                 );
             }
             for &serial in removed {
                 assert_eq!(
-                    keys_per_serial.get(&serial),
+                    graph.vector_id_of(serial),
                     None,
-                    "graph layer 0 must hold no key for serial {serial} (eye {eye})"
+                    "content clock must hold no entry for serial {serial} (eye {eye})"
+                );
+                assert!(
+                    graph.layers[0].get_links(&serial).is_none(),
+                    "graph layer 0 must hold no node for serial {serial} (eye {eye})"
                 );
             }
         }

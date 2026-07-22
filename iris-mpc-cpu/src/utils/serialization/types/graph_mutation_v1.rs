@@ -1,8 +1,14 @@
 use serde::{Deserialize, Serialize};
 
+/// V1 wire format for one WAL graph mutation.
+///
+/// Edge ops carry bare serial ids — node identity/version rides only
+/// `AddNode`/`RemoveNode` — and records carry `as_of`; references resolve on
+/// every apply. V0 (edge ops carrying `VectorId`) is not readable.
 #[derive(Clone, Serialize, Deserialize)]
-pub struct GraphMutationV0 {
+pub struct GraphMutationV1 {
     pub seq_no: u64,
+    pub as_of: u64,
     pub ops: Vec<MutationOp>,
 }
 
@@ -46,14 +52,14 @@ pub enum MutationOp {
         id: VectorId,
     },
     AddEdges {
-        base: VectorId,
-        neighbors: Vec<VectorId>,
+        base: u32,
+        neighbors: Vec<u32>,
         layer: usize,
         edge_type: EdgeType,
     },
     RemoveEdges {
-        base: VectorId,
-        neighbors: Vec<VectorId>,
+        base: u32,
+        neighbors: Vec<u32>,
         layer: usize,
         edge_type: EdgeType,
     },

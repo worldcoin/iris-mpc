@@ -578,21 +578,6 @@ where
         Ok(query_ids.into_iter().map(Aby3Query::new).collect_vec())
     }
 
-    async fn only_valid_vectors(&mut self, mut vectors: Vec<VectorId>) -> Vec<VectorId> {
-        let registry = self.registry.read().await;
-        vectors.retain(|v| registry.contains(v));
-        vectors
-    }
-
-    async fn only_valid_entry_points(
-        &mut self,
-        mut entry_points: Vec<(VectorId, usize)>,
-    ) -> Vec<(VectorId, usize)> {
-        let registry = self.registry.read().await;
-        entry_points.retain(|(v, _)| registry.contains(v));
-        entry_points
-    }
-
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn eval_distance(
         &mut self,

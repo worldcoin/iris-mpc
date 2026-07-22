@@ -23,6 +23,10 @@ export SMPC__ENVIRONMENT=dev
 export SMPC__GRAPH_CHECKPOINT_BUCKET_NAME=wf-smpcv2-dev-hnsw-checkpoint
 export SMPC__GRAPH_CHECKPOINT_BUCKET_REGION=us-east-1
 
+# Keep each test's final checkpoint object past teardown so the sanity check
+# can load it.
+export E2E_KEEP_S3_CHECKPOINTS=1
+
 log()  { echo "$(date +%Y-%m-%dT%H:%M:%S) [INFO] $*"; }
 fail() { echo "$(date +%Y-%m-%dT%H:%M:%S) [FAIL] $*" >&2; exit 1; }
 
@@ -60,6 +64,9 @@ for test_id in "${TESTS[@]}"; do
             --hnsw-schema "SMPC_hnsw_dev_${party_id}" \
             --gpu-schema "SMPC_dev_${party_id}" \
             --seed "$SEED" \
+            --bucket-size 100 \
+            --bfs-hops \
+            --scc \
             --exclusions-s3-uri "$EXCLUSIONS_S3_URI" \
             --output-dir "$output_dir" \
             > "$log_file" 2>&1

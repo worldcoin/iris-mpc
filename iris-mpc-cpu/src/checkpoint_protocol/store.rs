@@ -88,6 +88,7 @@ mod tests {
     fn both_eyes_payload(left_id: u32, right_id: u32) -> BothEyes<Vec<GraphMutation>> {
         let mk = |id: u32| GraphMutation {
             seq_no: 1,
+            as_of: 0,
             ops: vec![MutationOp::RemoveNode { id: vid(id) }],
         };
         [vec![mk(left_id)], vec![mk(right_id)]]

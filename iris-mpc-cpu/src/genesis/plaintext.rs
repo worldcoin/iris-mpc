@@ -186,9 +186,9 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
     // ⚓ Start: Delta protocol (version join)
 
     // Reconcile serials 1..=last_indexed_iris_id against the source: any
-    // disagreement — a graph key set other than exactly {source version} in
-    // either eye, or a destination row missing or at the wrong version —
-    // triggers uniform surgery: remove every graph key for the serial, then
+    // disagreement — a graph content clock other than exactly the source
+    // version in either eye, or a destination row missing or at the wrong
+    // version — triggers uniform surgery: remove the serial's node, then
     // search + reinsert at the current source version, and copy the row.
     // Deletion tombstones (dummy-share source content) are not modeled;
     // deletion is content-based, so an s3-excluded serial with live source
@@ -201,41 +201,29 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
         };
         let vector_id = VectorId::new(serial_id, src_version);
 
-        let keys_per_eye: [Vec<VectorId>; 2] = [0, 1].map(|eye| {
-            let mut keys: Vec<VectorId> = state.dst_db.graphs[eye]
-                .layers
-                .first()
-                .map(|layer| {
-                    layer
-                        .links
-                        .keys()
-                        .filter(|v| v.serial_id() == serial_id)
-                        .copied()
-                        .collect()
-                })
-                .unwrap_or_default();
-            keys.sort_unstable_by_key(|k| k.version_id());
-            keys
-        });
+        let graph_ids: [Option<VectorId>; 2] =
+            [0, 1].map(|eye| state.dst_db.graphs[eye].vector_id_of(serial_id));
         let row_version = state.dst_db.irises.get(&serial_id).map(|(v, _, _)| *v);
-        let clean = row_version == Some(src_version)
-            && keys_per_eye.iter().all(|keys| *keys == [vector_id]);
+        let clean =
+            row_version == Some(src_version) && graph_ids.iter().all(|id| *id == Some(vector_id));
         if clean {
             continue;
         }
 
-        for (side, store, graph, iris, keys) in izip!(
+        for (side, store, graph, iris, graph_id) in izip!(
             STORE_IDS,
             [&mut left_store, &mut right_store],
             &mut state.dst_db.graphs,
             vec![left_iris, right_iris],
-            keys_per_eye,
+            graph_ids,
         ) {
-            // Prior keys leave the graph before the search so it cannot route
-            // through or link to them.
-            for key in keys {
+            // The prior node leaves the graph before the search so it cannot
+            // route through or link to it.
+            if let Some(id) = graph_id {
+                let as_of = graph.last_update_seq_no;
                 graph.apply_new(UnstampedMutation {
-                    ops: vec![MutationOp::RemoveNode { id: key }],
+                    as_of,
+                    ops: vec![MutationOp::RemoveNode { id }],
                 })?;
             }
 
@@ -243,7 +231,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
             let identifier = (vector_id, side);
             let insertion_layer = searcher.gen_layer_prf(&prf_key, &identifier)?;
 
-            let (links, update_ep) = searcher
+            let (links, update_ep, as_of) = searcher
                 .search_to_insert(store, graph, &query, insertion_layer)
                 .await?;
 
@@ -259,6 +247,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                 query,
                 links: links_unstructured,
                 update_ep,
+                as_of,
             };
 
             insert::insert(
@@ -343,7 +332,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                 let identifier = (vector_id, side);
                 let insertion_layer = searcher.gen_layer_prf(&prf_key, &identifier)?;
 
-                let (links, update_ep) = searcher
+                let (links, update_ep, as_of) = searcher
                     .search_to_insert(store, graph, &query, insertion_layer)
                     .await?;
 
@@ -359,6 +348,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                     query,
                     links: links_unstructured,
                     update_ep,
+                    as_of,
                 };
 
                 results.push(Some(insert_plan));
