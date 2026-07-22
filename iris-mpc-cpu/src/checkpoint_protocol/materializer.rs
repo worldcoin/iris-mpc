@@ -52,12 +52,16 @@ impl<V: VectorStore + Send + Sync> Materializer for RebuildFromCheckpoint<'_, V>
         base: CheckpointMeta,
         freeze: FreezeHeight,
     ) -> Result<Graph, CycleError> {
+        // The materializer rebuilds without iris-store access, so it cannot prune
+        // a legacy base; it requires a native V5 checkpoint. Migrating V3/V4 to
+        // V5 is genesis's job (it prunes against the registry).
         let format = GraphFormat::try_from(base.graph_version)
             .ok()
-            .filter(|f| matches!(f, GraphFormat::V3 | GraphFormat::V4))
+            .filter(|f| matches!(f, GraphFormat::V5))
             .ok_or_else(|| {
                 CycleError::Fatal(format!(
-                    "unsupported checkpoint graph_version={} for {}/{}",
+                    "materializer requires a V5 checkpoint (legacy bases are migrated by \
+                     genesis); got graph_version={} for {}/{}",
                     base.graph_version, self.bucket, base.s3_key,
                 ))
             })?;
@@ -74,6 +78,7 @@ impl<V: VectorStore + Send + Sync> Materializer for RebuildFromCheckpoint<'_, V>
                 &self.bucket,
                 &base.s3_key,
                 format,
+                None,
             )
             .await
             .map_err(|e| {
@@ -174,6 +179,7 @@ mod tests {
     fn add_node(n: u32) -> GraphMutation {
         GraphMutation {
             seq_no: n as u64,
+            as_of: (n as u64) - 1,
             ops: vec![MutationOp::AddNode {
                 id: vid(n),
                 height: 1,
@@ -210,13 +216,13 @@ mod tests {
             graph[LEFT]
                 .get_layers()
                 .iter()
-                .any(|l| l.get_links(&vid(n)).is_some())
+                .any(|l| l.get_links(&n).is_some())
         };
         let right_has = |n| {
             graph[RIGHT]
                 .get_layers()
                 .iter()
-                .any(|l| l.get_links(&vid(n)).is_some())
+                .any(|l| l.get_links(&n).is_some())
         };
 
         assert!(left_has(10));
@@ -250,7 +256,7 @@ mod tests {
             graph[LEFT]
                 .get_layers()
                 .iter()
-                .any(|l| l.get_links(&vid(n)).is_some())
+                .any(|l| l.get_links(&n).is_some())
         };
         assert!(left_has(1), "row before the error should have applied");
         assert!(!left_has(3), "row after the error should not have applied");

@@ -242,11 +242,11 @@ impl PlaintextDeepIDStore {
                 .map(|version| VectorId::new(serial_id, version))
                 .unwrap_or_else(|| VectorId::from_serial_id(serial_id));
             let insertion_layer = searcher.gen_layer_rng(&mut rng)?;
-            let (neighbors, update_ep) = searcher
+            let (neighbors, update_ep, as_of) = searcher
                 .search_to_insert(self, &graph, &query, insertion_layer)
                 .await?;
             searcher
-                .insert_from_search_results(self, &mut graph, query_id, neighbors, update_ep)
+                .insert_from_search_results(self, &mut graph, query_id, neighbors, update_ep, as_of)
                 .await?;
         }
 
@@ -305,19 +305,6 @@ impl VectorStore for PlaintextDeepIDStore {
         }
         metrics::counter!("less_than").increment(distances.len() as u64);
         Ok(results)
-    }
-
-    async fn only_valid_vectors(&mut self, mut vectors: Vec<VectorId>) -> Vec<VectorId> {
-        vectors.retain(|v| self.storage.contains(v));
-        vectors
-    }
-
-    async fn only_valid_entry_points(
-        &mut self,
-        mut entry_points: Vec<(VectorId, usize)>,
-    ) -> Vec<(VectorId, usize)> {
-        entry_points.retain(|(v, _)| self.storage.contains(v));
-        entry_points
     }
 }
 
@@ -436,21 +423,6 @@ impl VectorStore for SharedPlaintextDeepIDStore {
         }
         metrics::counter!("less_than").increment(distances.len() as u64);
         Ok(results)
-    }
-
-    async fn only_valid_vectors(&mut self, mut vectors: Vec<VectorId>) -> Vec<VectorId> {
-        let store = self.storage.read().await;
-        vectors.retain(|v| store.contains(v));
-        vectors
-    }
-
-    async fn only_valid_entry_points(
-        &mut self,
-        mut entry_points: Vec<(VectorId, usize)>,
-    ) -> Vec<(VectorId, usize)> {
-        let store = self.storage.read().await;
-        entry_points.retain(|(v, _)| store.contains(v));
-        entry_points
     }
 }
 

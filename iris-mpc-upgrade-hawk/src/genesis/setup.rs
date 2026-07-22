@@ -20,6 +20,7 @@ use aws_sdk_s3::{
 };
 use axum::{routing::get, Router};
 use eyre::{bail, eyre, Report, Result};
+use futures::TryStreamExt;
 use iris_mpc_common::{
     config::{CommonConfig, Config, ENV_PROD, ENV_STAGE},
     postgres::{run_migrations, AccessMode, PostgresClient},
@@ -47,8 +48,10 @@ use iris_mpc_cpu::{
     graph_checkpoint::*,
     hawkers::aby3::aby3_store::{Aby3Store, VectorIdRegistryRef},
     hnsw::{graph::graph_store::GraphPg, GraphMem},
+    utils::serialization::graph::{GraphFormat, LegacyPruneContext},
 };
 use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc::{self, Sender};
@@ -324,6 +327,7 @@ pub(super) async fn exec_setup(args: &ExecutionArgs, config: &Config) -> Result<
         Arc::clone(&shutdown_handler),
         args.max_indexation_id as usize,
         graph_checkpoint.clone(),
+        excluded_serial_ids.iter().copied().collect(),
     )
     .await?;
     task_monitor_bg.check_tasks();
@@ -794,6 +798,7 @@ async fn init_graph_from_stores(
     shutdown_handler: Arc<ShutdownHandler>,
     max_indexation_id: usize,
     checkpoint: Option<GraphCheckpointState>,
+    deleted_serial_ids: HashSet<SerialId>,
 ) -> Result<HawkActor> {
     tracing::info!("⚓️ ANCHOR: Load the database");
 
@@ -835,13 +840,32 @@ async fn init_graph_from_stores(
             },
         ));
 
-    let graph_load_future = async {
+    let prune_iris_store = iris_store.clone();
+    let graph_load_future = async move {
         if let Some(state) = checkpoint {
             tracing::info!(
                 "Loading graph from S3 checkpoint, hash: {}",
                 state.blake3_hash
             );
-            download_graph_checkpoint(s3_client, checkpoint_bucket, &state).await
+            // Legacy V3/V4 bases are pruned at read (see `read_graph_pair_pruned`);
+            // only they need the current-version table, so skip the scan for V5.
+            let prune = match GraphFormat::try_from(state.graph_version)? {
+                GraphFormat::V3 | GraphFormat::V4 => {
+                    let version_map: HashMap<u32, i16> = prune_iris_store
+                        .stream_iris_ids(max_index)
+                        .map_ok(|(id, version)| {
+                            (u32::try_from(id).expect("serial id fits u32"), version)
+                        })
+                        .try_collect()
+                        .await?;
+                    Some(LegacyPruneContext {
+                        version_map,
+                        deleted: deleted_serial_ids,
+                    })
+                }
+                _ => None,
+            };
+            download_graph_checkpoint(s3_client, checkpoint_bucket, &state, prune).await
         } else {
             tracing::info!("No S3 checkpoint found, defaulting to empty graph");
             Ok([GraphMem::new(), GraphMem::new()])

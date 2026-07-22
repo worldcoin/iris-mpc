@@ -87,25 +87,37 @@ pub async fn init_graph(actor: &mut HawkActor) -> Result<()> {
 
     for side in [LEFT, RIGHT] {
         let mut graph = actor.graph_store[side].write().await;
+        let mut seq = 0u64;
+        // Phase 1: insert all nodes. The ring links each node to the *next*
+        // one, so all endpoints must exist before edges are wired or the
+        // staleness filter would drop them.
         for i in 0..db_size {
-            let update_ep = UpdateEntryPoint::False;
-            let mutations = vec![
-                MutationOp::AddNode {
-                    id: id(i),
-                    height: 1,
-                    update_ep,
-                },
-                MutationOp::AddEdges {
-                    base: id(i),
-                    layer: 0,
-                    neighbors: edges(i),
-                    edge_type: EdgeType::All,
-                },
-            ];
+            seq += 1;
             graph
                 .insert_apply(&GraphMutation {
-                    seq_no: (i as u64) + 1,
-                    ops: mutations,
+                    seq_no: seq,
+                    as_of: (seq) - 1,
+                    ops: vec![MutationOp::AddNode {
+                        id: id(i),
+                        height: 1,
+                        update_ep: UpdateEntryPoint::False,
+                    }],
+                })
+                .unwrap();
+        }
+        // Phase 2: wire the ring now that every endpoint exists.
+        for i in 0..db_size {
+            seq += 1;
+            graph
+                .insert_apply(&GraphMutation {
+                    seq_no: seq,
+                    as_of: (seq) - 1,
+                    ops: vec![MutationOp::AddEdges {
+                        base: id(i).serial_id(),
+                        layer: 0,
+                        neighbors: edges(i).iter().map(|v| v.serial_id()).collect(),
+                        edge_type: EdgeType::All,
+                    }],
                 })
                 .unwrap();
         }
