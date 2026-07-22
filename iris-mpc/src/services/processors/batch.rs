@@ -49,7 +49,7 @@ use tokio::sync::mpsc::Receiver;
 use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinHandle;
 
-use iris_mpc_common::helpers::smpc_request::parse_request_payload;
+use iris_mpc_common::helpers::smpc_request::{parse_request_payload, RequestPayloadError};
 
 /// Request types the batch processor knows how to handle; anything else in a
 /// DB-ingested row is quarantined as content poison.
@@ -974,8 +974,19 @@ impl<'a> BatchProcessor<'a> {
         request_type: &str,
         batch_metadata: BatchMetadata,
     ) -> Result<(), ReceiveRequestError> {
-        let request_payload = parse_request_payload(request_type, message.message.as_str())
-            .map_err(|err| ReceiveRequestError::json_parse_error(request_type, err))?;
+        let request_payload = match parse_request_payload(request_type, message.message.as_str()) {
+            Ok(payload) => payload,
+            // Unknown message type: content-determined, identical on all parties.
+            // Legacy semantics: log and skip rather than fail the batch.
+            Err(RequestPayloadError::InvalidMessageType(message_type)) => {
+                tracing::error!("Skipping request with invalid message type: {message_type}");
+                return Ok(());
+            }
+            // Malformed payload for a known type: surface as a parse error.
+            Err(RequestPayloadError::Json(e)) => {
+                return Err(ReceiveRequestError::json_parse_error(request_type, e));
+            }
+        };
         let sns_message_id = message.message_id.clone();
         match request_payload {
             RequestPayload::IdentityDeletion(identity_deletion_request) => {

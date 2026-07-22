@@ -385,10 +385,21 @@ impl RequestPayload {
     }
 }
 
+/// Error returned by [`parse_request_payload`]. Distinguishes an unrecognized
+/// `message_type` (caller may choose to skip the request) from a payload that
+/// failed to deserialize, so callers like `process_message_` can react to each.
+#[derive(Error, Debug)]
+pub enum RequestPayloadError {
+    #[error("invalid message type: {0}")]
+    InvalidMessageType(String),
+    #[error("failed to parse request payload: {0}")]
+    Json(#[from] serde_json::Error),
+}
+
 pub fn parse_request_payload(
     message_type: &str,
     payload: &str,
-) -> Result<RequestPayload, serde_json::Error> {
+) -> Result<RequestPayload, RequestPayloadError> {
     match message_type {
         UNIQUENESS_MESSAGE_TYPE => Ok(RequestPayload::Uniqueness(serde_json::from_str::<
             UniquenessRequest,
@@ -413,9 +424,8 @@ pub fn parse_request_payload(
         RECOVERY_UPDATE_MESSAGE_TYPE => Ok(RequestPayload::RecoveryUpdate(serde_json::from_str::<
             IdentityUpdateRequest,
         >(payload)?)),
-        _ => Err(serde::de::Error::invalid_value(
-            serde::de::Unexpected::Str(message_type),
-            &"Invalid message type",
+        _ => Err(RequestPayloadError::InvalidMessageType(
+            message_type.to_string(),
         )),
     }
 }
