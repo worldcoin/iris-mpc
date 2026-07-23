@@ -316,7 +316,7 @@ pub struct BatchStep3(VecRequests<Step3>);
 /// depends on `Supermatch` being yielded last by `select`, so it is only set
 /// when no ordinary match short-circuited the search first.
 fn uniqueness_is_match(
-    ids: impl Iterator<Item = MatchId>,
+    ids: impl IntoIterator<Item = MatchId>,
     prior_decisions: &[Decision],
 ) -> (bool, bool) {
     let mut because_supermatch = false;
