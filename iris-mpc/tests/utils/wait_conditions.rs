@@ -1,6 +1,10 @@
+use std::collections::HashSet;
 use std::time::Duration;
 
-use ampc_server_utils::{wait_for_others_ready, ServerCoordinationConfig};
+use ampc_server_utils::{
+    try_get_endpoint_other_nodes, wait_for_others_ready, ReadyProbeResponse,
+    ServerCoordinationConfig,
+};
 use eyre::bail;
 use futures::future::try_join_all;
 use tokio::task::JoinSet;
@@ -40,7 +44,13 @@ pub async fn wait_for_all_ready(
             http_query_timeout_ms: 10000,
             startup_sync_timeout_secs: 300,
         };
-        async move { wait_for_others_ready(&coord).await }
+        async move {
+            // `wait_for_others_ready` fails fast on any peer UUID it hasn't already
+            // verified, so first probe every peer's `/health` endpoint to collect the
+            // UUIDs established this generation, then hand that set in.
+            let verified_peers = gather_verified_peers(&coord).await?;
+            wait_for_others_ready(&coord, verified_peers).await
+        }
     });
 
     let ready_all = try_join_all(ready_futures);
@@ -57,6 +67,28 @@ pub async fn wait_for_all_ready(
             )
         }
     }
+}
+
+/// Probe every other party's `/health` endpoint and collect the UUIDs they
+/// report, forming the `verified_peers` set that `wait_for_others_ready`
+/// validates against.
+///
+/// In production these UUIDs are captured during the startup unready handshake
+/// (`wait_for_others_unready`); the CPU tests skip that handshake, so we gather
+/// them here instead. `try_get_endpoint_other_nodes` retries until the peers
+/// respond, so this doubles as a wait for the peers' coordination servers to
+/// come up.
+async fn gather_verified_peers(coord: &ServerCoordinationConfig) -> eyre::Result<HashSet<String>> {
+    let health_resps = try_get_endpoint_other_nodes(coord, "health").await?;
+
+    let mut verified_peers = HashSet::new();
+    for (_status, body) in health_resps {
+        let probe: ReadyProbeResponse = serde_json::from_slice(&body)
+            .map_err(|e| eyre::eyre!("failed to deserialize ReadyProbeResponse: {e}"))?;
+        verified_peers.insert(probe.uuid);
+    }
+
+    Ok(verified_peers)
 }
 
 /// Wait for the first hawk_main task to exit with an error.
