@@ -142,7 +142,7 @@ pub async fn load_graph_and_roll_forward(
             "Loading graph from common S3 checkpoint, hash: {}",
             state.blake3_hash
         );
-        download_graph_checkpoint(s3_client, checkpoint_bucket, &state).await?
+        download_graph_checkpoint(s3_client, checkpoint_bucket, &state, None).await?
     } else {
         tracing::info!("No S3 checkpoint found, defaulting to empty graph");
         [GraphMem::new(), GraphMem::new()]
@@ -224,6 +224,7 @@ mod tests {
         let seq_no = SEQ_COUNTER.fetch_add(1, Ordering::SeqCst);
         GraphMutation {
             seq_no,
+            as_of: seq_no - 1,
             ops: vec![MutationOp::AddNode {
                 id,
                 height: 1,
@@ -257,8 +258,10 @@ mod tests {
             "left eye should have one layer"
         );
         assert_eq!(
-            both_eyes[0].layers[0].get_links(&vid(1)),
-            Some([].as_slice()),
+            both_eyes[0].layers[0]
+                .get_links(&1)
+                .map(|n| n.neighbors().to_vec()),
+            Some(vec![]),
             "node 1 should exist in left eye layer 0"
         );
         assert!(
@@ -274,16 +277,20 @@ mod tests {
         apply_graph_mutations(&mut both_eyes, vec![row]).unwrap();
 
         assert_eq!(
-            both_eyes[0].layers[0].get_links(&vid(1)),
-            Some([].as_slice())
+            both_eyes[0].layers[0]
+                .get_links(&1)
+                .map(|n| n.neighbors().to_vec()),
+            Some(vec![])
         );
         assert_eq!(
-            both_eyes[1].layers[0].get_links(&vid(10)),
-            Some([].as_slice())
+            both_eyes[1].layers[0]
+                .get_links(&10)
+                .map(|n| n.neighbors().to_vec()),
+            Some(vec![])
         );
         // Cross-check: node from one eye must not appear in the other.
-        assert!(both_eyes[0].layers[0].get_links(&vid(10)).is_none());
-        assert!(both_eyes[1].layers[0].get_links(&vid(1)).is_none());
+        assert!(both_eyes[0].layers[0].get_links(&10).is_none());
+        assert!(both_eyes[1].layers[0].get_links(&1).is_none());
     }
 
     #[test]
@@ -298,15 +305,19 @@ mod tests {
 
         for node in [1u32, 2, 3] {
             assert_eq!(
-                both_eyes[0].layers[0].get_links(&vid(node)),
-                Some([].as_slice()),
+                both_eyes[0].layers[0]
+                    .get_links(&node)
+                    .map(|n| n.neighbors().to_vec()),
+                Some(vec![]),
                 "node {node} missing from left eye"
             );
         }
         for node in [10u32, 20, 30] {
             assert_eq!(
-                both_eyes[1].layers[0].get_links(&vid(node)),
-                Some([].as_slice()),
+                both_eyes[1].layers[0]
+                    .get_links(&node)
+                    .map(|n| n.neighbors().to_vec()),
+                Some(vec![]),
                 "node {node} missing from right eye"
             );
         }

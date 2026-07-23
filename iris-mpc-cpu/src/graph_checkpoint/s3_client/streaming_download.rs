@@ -53,7 +53,9 @@ use tokio_util::io::{StreamReader, SyncIoBridge};
 
 use crate::{
     hnsw::graph::layered_graph::GraphMem,
-    utils::serialization::graph::{read_graph_pair_streaming, GraphFormat},
+    utils::serialization::graph::{
+        read_graph_pair_pruned, read_graph_pair_streaming, GraphFormat, LegacyPruneContext,
+    },
 };
 
 const RANGE_MAX_RETRIES: u32 = 3;
@@ -146,19 +148,26 @@ where
 
 /// Stream the object at `s3://{bucket}/{key}` through BLAKE3 and deserialize
 /// into a `[GraphMem; 2]`. Bytes are fed to the decoder incrementally as ranges
-/// arrive; the decode itself ([`read_graph_pair_streaming`]) is the standard
-/// derived path.
+/// arrive; the decode is the standard derived path
+/// ([`read_graph_pair_streaming`], or [`read_graph_pair_pruned`] when pruning).
+///
+/// When `prune` is `Some`, edges that are stale at load time are dropped during
+/// deserialization and the given deleted serials are removed (see
+/// [`read_graph_pair_pruned`]); genesis passes `Some` when materializing a
+/// legacy base checkpoint. `None` reads verbatim.
 pub async fn stream_download_and_deserialize_graph_pair(
     s3_client: &S3Client,
     bucket: &str,
     key: &str,
     format: GraphFormat,
+    prune: Option<LegacyPruneContext>,
 ) -> Result<([GraphMem; 2], [u8; 32])> {
     stream_download_and_deserialize_graph_pair_with(
         s3_client,
         bucket,
         key,
         format,
+        prune,
         DEFAULT_DOWNLOAD_PIPE_CAPACITY,
         DEFAULT_DOWNLOAD_RANGE_SIZE,
         DEFAULT_DOWNLOAD_PARALLELISM,
@@ -168,11 +177,13 @@ pub async fn stream_download_and_deserialize_graph_pair(
 
 /// Like [`stream_download_and_deserialize_graph_pair`] but with explicit
 /// `pipe_capacity`, `range_size`, and `parallelism` knobs.
+#[allow(clippy::too_many_arguments)]
 pub async fn stream_download_and_deserialize_graph_pair_with(
     s3_client: &S3Client,
     bucket: &str,
     key: &str,
     format: GraphFormat,
+    prune: Option<LegacyPruneContext>,
     pipe_capacity: usize,
     range_size: usize,
     parallelism: usize,
@@ -202,11 +213,15 @@ pub async fn stream_download_and_deserialize_graph_pair_with(
     ));
     let reader = StreamReader::new(stream);
     deserialize_and_hash_from_fn(reader, pipe_capacity, move |r| {
-        // bincode reads the graph field-by-field (count, then per-entry
-        // VectorId + edge Vec); without buffering each tiny read blocks
-        // across the duplex via SyncIoBridge — ~10x slower at prod scale.
+        // bincode reads the graph field-by-field; without buffering, each tiny
+        // read blocks across the duplex via SyncIoBridge — ~10x slower at prod
+        // scale.
         let mut buf = std::io::BufReader::with_capacity(GRAPH_DECODE_BUFFER, r);
-        read_graph_pair_streaming(&mut buf, format)
+        if let Some(prune) = &prune {
+            read_graph_pair_pruned(&mut buf, format, prune)
+        } else {
+            read_graph_pair_streaming(&mut buf, format)
+        }
     })
     .await
 }

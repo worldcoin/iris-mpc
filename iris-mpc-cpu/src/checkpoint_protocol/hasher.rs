@@ -6,7 +6,7 @@
 //!   `SortedLinks` wrapper in `layered_graph.rs`, which sorts entries by
 //!   key before emitting — so HashMap iteration order is not a hash risk.
 //! - **Per-key neighbor `Vec<V>`** is emitted in insertion order; the
-//!   planner is responsible for sorting neighbors before `set_links`, and
+//!   planner is responsible for sorting neighbors before `set_links_trusted`, and
 //!   `Layer::add_neighbor` maintains sortedness. Bypassing the planner
 //!   breaks hash consensus.
 
@@ -34,7 +34,7 @@ impl GraphHasher for Blake3GraphHasher {
 mod tests {
     use super::*;
     use crate::hnsw::graph::layered_graph::{EntryPoint, GraphMem, Layer};
-    use iris_mpc_common::VectorId;
+    use iris_mpc_common::{SerialId, VectorId};
 
     fn vid(i: u32) -> VectorId {
         VectorId::from_0_index(i)
@@ -42,23 +42,40 @@ mod tests {
 
     type LayerInput = Vec<(usize, Vec<(VectorId, Vec<VectorId>)>)>;
 
+    #[allow(clippy::type_complexity)]
+    fn convert_layer_input(layers_in: LayerInput) -> Vec<(usize, Vec<(SerialId, Vec<SerialId>)>)> {
+        layers_in
+            .into_iter()
+            .map(|(lc, pairs)| {
+                let converted_pairs = pairs
+                    .into_iter()
+                    .map(|(k, v)| {
+                        (
+                            k.serial_id(),
+                            v.into_iter().map(|vid| vid.serial_id()).collect(),
+                        )
+                    })
+                    .collect();
+                (lc, converted_pairs)
+            })
+            .collect()
+    }
+
     /// Bypasses the planner so tests can pin serializer-level determinism
     /// independently of the planner's sortedness invariant.
     fn graph_from(eyes: [LayerInput; 2]) -> Graph {
         let build = |layers_in: LayerInput| -> GraphMem {
             let mut g = GraphMem::new();
+            let converted = convert_layer_input(layers_in.clone());
             let max_lc = layers_in.iter().map(|(lc, _)| *lc).max().unwrap_or(0);
             let mut layers: Vec<Layer> = (0..=max_lc).map(|_| Layer::new()).collect();
-            for (lc, pairs) in layers_in {
+            for (lc, pairs) in converted {
                 for (k, v) in pairs {
-                    layers[lc].set_links(k, v);
+                    layers[lc].set_links_trusted(k, v, 0);
                 }
             }
             g.layers = layers;
-            g.entry_points = vec![EntryPoint {
-                point: vid(0),
-                layer: 0,
-            }];
+            g.entry_points = vec![EntryPoint { point: 0, layer: 0 }];
             g
         };
         [build(eyes[0].clone()), build(eyes[1].clone())]
@@ -151,14 +168,14 @@ mod tests {
     fn left_right_swap_changes_hash() {
         let left = {
             let mut l = Layer::new();
-            l.set_links(vid(1), vec![vid(2)]);
+            l.set_links_trusted(1, vec![2], 0);
             let mut g = GraphMem::new();
             g.layers = vec![l];
             g
         };
         let right = {
             let mut l = Layer::new();
-            l.set_links(vid(5), vec![vid(6)]);
+            l.set_links_trusted(5, vec![6], 0);
             let mut g = GraphMem::new();
             g.layers = vec![l];
             g

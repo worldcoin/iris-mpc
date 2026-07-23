@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use super::graph_store::GraphPg;
+use crate::utils::serialization::graph::{read_graph_pair_from_file, GraphFormat};
 use crate::{
     execution::hawk_main::{BothEyes, LEFT, RIGHT},
     genesis::state_accessor::{
@@ -31,7 +32,8 @@ use crate::{
     protocol::shared_iris::GaloisRingSharedIris,
 };
 use aes_prng::AesRng;
-use aws_sdk_s3::Client as S3Client;
+use aws_sdk_s3::config::{BehaviorVersion, Credentials, Region};
+use aws_sdk_s3::{Client as S3Client, Config};
 use clap::ValueEnum;
 use eyre::Result;
 use iris_mpc_common::iris_db::db::IrisDB;
@@ -87,10 +89,18 @@ impl DbContext {
     }
 
     /// Convenience constructor for contexts that don't use S3 or checkpointing.
-    /// A dummy (unconfigured) S3 client is created; calls to S3 will fail, but
-    /// as long as no checkpoint operations are performed this is safe.
+    /// Is configured with dummy data to prevent a panic on S3Client::from_conf()
+    /// Attempts to use will panic
     pub async fn new_without_s3(url: &str, schema: &str, party_id: usize) -> Self {
-        let s3_client = S3Client::from_conf(aws_sdk_s3::config::Builder::new().build());
+        let creds = Credentials::new("test", "test", None, None, "test");
+        let cfg = Config::builder()
+            .behavior_version(BehaviorVersion::latest())
+            .region(Region::new("us-east-1"))
+            .credentials_provider(creds)
+            .endpoint_url("")
+            .force_path_style(true)
+            .build();
+        let s3_client = S3Client::from_conf(cfg);
         Self::new(url, schema, s3_client, String::new(), party_id).await
     }
 
@@ -233,8 +243,13 @@ impl DbContext {
     }
 
     /// Loads a graph from a file and uploads it to S3 as a checkpoint.
-    pub async fn make_new_checkpoint(&self, path: &Path, dbg: bool) -> Result<()> {
-        let graph = deserialize_graph(path).await?;
+    pub async fn make_new_checkpoint(
+        &self,
+        path: &Path,
+        format: GraphFormat,
+        dbg: bool,
+    ) -> Result<()> {
+        let graph = read_graph_pair_from_file(path, format)?;
         if dbg {
             println!("loaded graph:");
             println!("{:#?}", graph);
@@ -381,6 +396,7 @@ impl DbContext {
         left_graph
             .insert_apply(&GraphMutation {
                 seq_no: 1,
+                as_of: 0,
                 ops: vec![ep_mutation],
             })
             .unwrap();
@@ -401,15 +417,16 @@ impl DbContext {
                     update_ep: UpdateEntryPoint::False,
                 },
                 MutationOp::AddEdges {
-                    base: vectors[i],
+                    base: vectors[i].serial_id(),
                     layer: 0,
-                    neighbors,
+                    neighbors: neighbors.iter().map(|v| v.serial_id()).collect(),
                     edge_type: EdgeType::Base,
                 },
             ];
             left_graph
                 .insert_apply(&GraphMutation {
                     seq_no: (i as u64) + 1,
+                    as_of: ((i as u64) + 1) - 1,
                     ops: mutations,
                 })
                 .unwrap();

@@ -14,7 +14,7 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use eyre::{bail, OptionExt, Result};
+use eyre::{OptionExt, Result};
 use iris_mpc_common::{
     helpers::smpc_request::{
         IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RECOVERY_UPDATE_MESSAGE_TYPE,
@@ -34,7 +34,11 @@ use crate::{
     genesis::{BatchSize, BatchSizeConfig},
     graph_checkpoint::PruningMode,
     hawkers::plaintext_store::PlaintextStore,
-    hnsw::{vector_store::VectorStoreMut, GraphMem, HnswSearcher, LINEAR_SCAN_MAX_GRAPH_LAYER},
+    hnsw::{
+        graph::{mutation::UnstampedMutation, MutationOp},
+        vector_store::VectorStoreMut,
+        GraphMem, HnswSearcher, LINEAR_SCAN_MAX_GRAPH_LAYER,
+    },
 };
 
 /// Represents irises db table, mapping serial ids to version, and left and right iris codes.
@@ -135,11 +139,6 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
         .persistent_state
         .last_indexed_iris_id
         .unwrap_or(0);
-    let last_indexed_modification_id = state
-        .dst_db
-        .persistent_state
-        .last_indexed_modification_id
-        .unwrap_or(0);
 
     // Id currently being inspected
     let mut id = last_indexed_iris_id;
@@ -184,109 +183,103 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
         .map(|key_u64| (key_u64 as u128).to_le_bytes())
         .unwrap_or_else(|| thread_rng().gen());
 
-    // ⚓ Start: Delta protocol
+    // ⚓ Start: Delta protocol (version join)
 
-    // Filter modifications for those which apply to current genesis index
-    let mut applicable_modifications: Vec<_> = state
-        .src_db
-        .modifications
-        .iter()
-        .filter(
-            |(mod_id, (serial_id, request_type, completed, persisted))| {
-                **mod_id > last_indexed_modification_id
-                    && *serial_id <= last_indexed_iris_id
-                    && *completed
-                    && *persisted
-                    && (request_type == IDENTITY_DELETION_MESSAGE_TYPE
-                        || request_type == REAUTH_MESSAGE_TYPE
-                        || request_type == RESET_UPDATE_MESSAGE_TYPE
-                        || request_type == RECOVERY_UPDATE_MESSAGE_TYPE)
-            },
-        )
-        .map(|(mod_id, (serial_id, request_type, _status, _persisted))| {
-            (*mod_id, *serial_id, request_type.clone())
-        })
-        .collect();
-    applicable_modifications.sort_by_key(|(mod_id, _, _)| *mod_id);
+    // Reconcile serials 1..=last_indexed_iris_id against the source: any
+    // disagreement — a graph content clock other than exactly the source
+    // version in either eye, or a destination row missing or at the wrong
+    // version — triggers uniform surgery: remove the serial's node, then
+    // search + reinsert at the current source version, and copy the row.
+    // Deletion tombstones (dummy-share source content) are not modeled;
+    // deletion is content-based, so an s3-excluded serial with live source
+    // content is reinserted (exclusions gate indexation only).
+    for serial_id in 1..=last_indexed_iris_id {
+        let Some((src_version, left_iris, right_iris)) =
+            state.src_db.irises.get(&serial_id).cloned()
+        else {
+            continue;
+        };
+        let vector_id = VectorId::new(serial_id, src_version);
 
-    // Process applicable modifications entries
-    for (mod_id, serial_id, request_type) in applicable_modifications {
-        match request_type.as_str() {
-            RESET_UPDATE_MESSAGE_TYPE | RECOVERY_UPDATE_MESSAGE_TYPE | REAUTH_MESSAGE_TYPE => {
-                let (vector_id, left_iris, right_iris) = state
-                    .src_db
-                    .irises
-                    .get(&serial_id)
-                    .map(|(version, left_iris, right_iris)| {
-                        (
-                            VectorId::new(serial_id, *version),
-                            left_iris.clone(),
-                            right_iris.clone(),
-                        )
-                    })
-                    .ok_or_eyre(format!(
-                        "Modified iris serial id {serial_id} not found in src_db"
-                    ))?;
-
-                for (side, store, graph, iris) in izip!(
-                    STORE_IDS,
-                    [&mut left_store, &mut right_store],
-                    &mut state.dst_db.graphs,
-                    vec![left_iris, right_iris]
-                ) {
-                    let query = Arc::new(iris);
-
-                    let identifier = (vector_id, side);
-                    let insertion_layer = searcher.gen_layer_prf(&prf_key, &identifier)?;
-
-                    let (links, update_ep) = searcher
-                        .search_to_insert(store, graph, &query, insertion_layer)
-                        .await?;
-
-                    // Trim and extract unstructured vector lists
-                    let mut links_unstructured = Vec::new();
-                    for (lc, mut l) in links.into_iter().enumerate() {
-                        let m = searcher.params.get_M(lc);
-                        l.trim(store, m).await?;
-                        links_unstructured.push(l.edge_ids())
-                    }
-
-                    let insert_plan = InsertPlanV {
-                        query,
-                        links: links_unstructured,
-                        update_ep,
-                    };
-
-                    insert::insert(
-                        store,
-                        graph,
-                        &searcher,
-                        vec![Some(insert_plan)],
-                        &vec![Some(vector_id)],
-                        &vec![None],
-                    )
-                    .await?;
-                }
-
-                // Insert modified iris into destination db
-                let irises = state.src_db.irises.get(&serial_id).unwrap().clone();
-                state.dst_db.irises.insert(serial_id, irises);
-            }
-            _ => {
-                bail!("Genesis does not support modifications of type {request_type}")
-            }
+        let graph_ids: [Option<VectorId>; 2] =
+            [0, 1].map(|eye| state.dst_db.graphs[eye].vector_id_of(serial_id));
+        let row_version = state.dst_db.irises.get(&serial_id).map(|(v, _, _)| *v);
+        let clean =
+            row_version == Some(src_version) && graph_ids.iter().all(|id| *id == Some(vector_id));
+        if clean {
+            continue;
         }
 
-        // Update last_indexed_modification_id in destination db
-        state.dst_db.persistent_state.last_indexed_modification_id = Some(mod_id);
+        for (side, store, graph, iris, graph_id) in izip!(
+            STORE_IDS,
+            [&mut left_store, &mut right_store],
+            &mut state.dst_db.graphs,
+            vec![left_iris, right_iris],
+            graph_ids,
+        ) {
+            // The prior node leaves the graph before the search so it cannot
+            // route through or link to it.
+            if let Some(id) = graph_id {
+                let as_of = graph.last_update_seq_no;
+                graph.apply_new(UnstampedMutation {
+                    as_of,
+                    ops: vec![MutationOp::RemoveNode { id }],
+                })?;
+            }
+
+            let query = Arc::new(iris);
+            let identifier = (vector_id, side);
+            let insertion_layer = searcher.gen_layer_prf(&prf_key, &identifier)?;
+
+            let (links, update_ep, as_of) = searcher
+                .search_to_insert(store, graph, &query, insertion_layer)
+                .await?;
+
+            // Trim and extract unstructured vector lists
+            let mut links_unstructured = Vec::new();
+            for (lc, mut l) in links.into_iter().enumerate() {
+                let m = searcher.params.get_M(lc);
+                l.trim(store, m).await?;
+                links_unstructured.push(l.edge_ids())
+            }
+
+            let insert_plan = InsertPlanV {
+                query,
+                links: links_unstructured,
+                update_ep,
+                as_of,
+            };
+
+            insert::insert(
+                store,
+                graph,
+                &searcher,
+                vec![Some(insert_plan)],
+                &vec![Some(vector_id)],
+                &vec![None],
+            )
+            .await?;
+        }
+
+        // Copy the reconciled iris into the destination db
+        let irises = state.src_db.irises.get(&serial_id).unwrap().clone();
+        state.dst_db.irises.insert(serial_id, irises);
     }
 
-    // Update last_indexed_modification_id in destination db to largest persisted id
+    // Update last_indexed_modification_id in destination db to the largest
+    // persisted+completed modification id of the types genesis tracks
     let max_persisted_modification_id = state
         .src_db
         .modifications
         .iter()
-        .filter(|(_, (_, _, complete, persisted))| *complete && *persisted)
+        .filter(|(_, (_, request_type, complete, persisted))| {
+            *complete
+                && *persisted
+                && (request_type == IDENTITY_DELETION_MESSAGE_TYPE
+                    || request_type == REAUTH_MESSAGE_TYPE
+                    || request_type == RESET_UPDATE_MESSAGE_TYPE
+                    || request_type == RECOVERY_UPDATE_MESSAGE_TYPE)
+        })
         .map(|(id, _)| *id)
         .max()
         .unwrap_or(0);
@@ -339,7 +332,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                 let identifier = (vector_id, side);
                 let insertion_layer = searcher.gen_layer_prf(&prf_key, &identifier)?;
 
-                let (links, update_ep) = searcher
+                let (links, update_ep, as_of) = searcher
                     .search_to_insert(store, graph, &query, insertion_layer)
                     .await?;
 
@@ -355,6 +348,7 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                     query,
                     links: links_unstructured,
                     update_ep,
+                    as_of,
                 };
 
                 results.push(Some(insert_plan));
@@ -508,8 +502,10 @@ mod tests {
         let state_2 = run_plaintext_genesis(state_1).await?;
 
         assert_eq!(state_2.dst_db.irises.len(), 100);
-        assert_eq!(state_2.dst_db.graphs[0].layers[0].links.len(), 95);
-        assert_eq!(state_2.dst_db.graphs[1].layers[0].links.len(), 95);
+        // The second run's delta reinserts the excluded-but-live serials
+        // ≤ 50 (25, 40, 50); only 60 and 90 stay excluded from indexation.
+        assert_eq!(state_2.dst_db.graphs[0].layers[0].links.len(), 98);
+        assert_eq!(state_2.dst_db.graphs[1].layers[0].links.len(), 98);
 
         Ok(())
     }

@@ -5,11 +5,12 @@
 //! possible exceptions for lower-level data types related to serialization
 //! formats of external libraries.
 
-pub mod graph_mutation_v0;
+pub mod graph_mutation_v1;
 pub mod graph_v0;
 pub mod graph_v1;
 pub mod graph_v2;
 pub mod graph_v3;
 pub mod graph_v4;
+pub mod graph_v5;
 pub mod int4_base64;
 pub mod iris_base64;

@@ -17,7 +17,7 @@ use crate::{
         },
         VectorStore,
     },
-    utils::serialization::graph::GraphFormat,
+    utils::serialization::graph::{GraphFormat, LegacyPruneContext},
 };
 
 use crate::graph_checkpoint::data::*;
@@ -172,14 +172,31 @@ pub async fn download_graph_checkpoint(
     s3_client: &S3Client,
     bucket: &str,
     state: &GraphCheckpointState,
+    prune: Option<LegacyPruneContext>,
 ) -> Result<BothEyes<GraphMem>> {
     let format = GraphFormat::try_from(state.graph_version)?;
     if format == GraphFormat::Raw {
         bail!("Unexpected graph checkpoint format: Raw");
     }
+    // V2 bakes versions into edges (like V3/V4) but has no v5 prune path, so a
+    // serial-only conversion would silently keep version-stale edges. Reject it
+    // outright — there is no supported V2 base migration.
+    if format == GraphFormat::V2 {
+        bail!("refusing V2 checkpoint: version-baked edges with no v5 migration path");
+    }
+    // Only genesis may consume a legacy V3/V4 base: it supplies a prune context
+    // and rewrites the result as V5. Every other consumer (hawk restart,
+    // diagnostics) must load a native V5 checkpoint, since v5 serial-only edges
+    // can't reproduce the version-skip an unpruned legacy base would need.
+    if prune.is_none() && matches!(format, GraphFormat::V3 | GraphFormat::V4) {
+        bail!(
+            "refusing to load unmigrated legacy {format:?} checkpoint; only genesis \
+             may consume V3/V4 (it prunes and rewrites as V5)"
+        );
+    }
     let start = Instant::now();
     let (graphs, hash_bytes) =
-        stream_download_and_deserialize_graph_pair(s3_client, bucket, &state.s3_key, format)
+        stream_download_and_deserialize_graph_pair(s3_client, bucket, &state.s3_key, format, prune)
             .await?;
     metrics::histogram!("genesis_checkpoint_download_duration")
         .record(start.elapsed().as_secs_f64());

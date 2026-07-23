@@ -220,6 +220,7 @@ mod tests {
             let mut g = eye.write().await;
             g.insert_apply(&GraphMutation {
                 seq_no: 1,
+                as_of: 0,
                 ops: vec![MutationOp::AddNode {
                     id: vid(99),
                     height: 1,
@@ -236,6 +237,7 @@ mod tests {
             for g in [&mut left, &mut right] {
                 g.insert_apply(&GraphMutation {
                     seq_no: 1,
+                    as_of: 0,
                     ops: vec![MutationOp::AddNode {
                         id: vid(1),
                         height: 1,
@@ -255,14 +257,8 @@ mod tests {
         // After finalize, the target has node 1 and no longer has node 99.
         for eye in &target {
             let g = eye.read().await;
-            let has_1 = g
-                .get_layers()
-                .iter()
-                .any(|l| l.get_links(&vid(1)).is_some());
-            let has_99 = g
-                .get_layers()
-                .iter()
-                .any(|l| l.get_links(&vid(99)).is_some());
+            let has_1 = g.get_layers().iter().any(|l| l.get_links(&1).is_some());
+            let has_99 = g.get_layers().iter().any(|l| l.get_links(&99).is_some());
             assert!(has_1, "snapshot's vid(1) should be installed");
             assert!(!has_99, "target's prior vid(99) should be gone");
         }
@@ -283,6 +279,7 @@ mod tests {
         let mut right = GraphMem::new();
         left.insert_apply(&GraphMutation {
             seq_no: 1,
+            as_of: 0,
             ops: vec![MutationOp::AddNode {
                 id: vid(7),
                 height: 2,
@@ -293,6 +290,7 @@ mod tests {
         right
             .insert_apply(&GraphMutation {
                 seq_no: 1,
+                as_of: 0,
                 ops: vec![MutationOp::AddNode {
                     id: vid(11),
                     height: 1,
