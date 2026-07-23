@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - "dev"
-      - "sw/test-ampc-common"
+      - "sw/test_ampc_common"
       
     paths-ignore:
       - "deploy/**"
