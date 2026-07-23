@@ -70,15 +70,16 @@ impl BatchStep1 {
     }
 }
 
-/// The inner/anti join of one request's search matches, plus per-eye saturation.
+/// One request's search matches, split by how many eyes matched, plus per-eye
+/// saturation.
 ///
-/// `inner_join` holds vectors that matched on both eyes directly in the search
-/// results. `anti_join[side]` holds vectors that matched only on `side`; the
-/// other eye is resolved later via `resolve` using the MPC `missing_is_match`.
+/// `matched_both` holds vectors that matched on both eyes directly in the search
+/// results. `matched_one_side[side]` holds vectors that matched only on `side`;
+/// the other eye is resolved later via `resolve` using the MPC `missing_is_match`.
 #[derive(Clone, Debug)]
 struct SearchJoin {
-    inner_join: VecEdges<(VectorId, BothEyes<bool>)>,
-    anti_join: BothEyes<VecEdges<VectorId>>,
+    matched_both: VecEdges<(VectorId, BothEyes<bool>)>,
+    matched_one_side: BothEyes<VecEdges<VectorId>>,
     /// True per eye if any rotation's match results were saturated (supermatcher).
     saturated: BothEyes<bool>,
 }
@@ -95,7 +96,7 @@ struct Step1 {
 }
 
 impl SearchJoin {
-    /// Build the inner/anti join by merging match results across all rotations
+    /// Build by merging match results across all rotations
     /// of both eyes. When `use_pre` is set, the pre-extension matches are used
     /// for any rotation that was extended by the supermatcher (falling back to
     /// the normal matches for rotations that were not extended).
@@ -133,37 +134,37 @@ impl SearchJoin {
             .sorted()
             .collect();
 
-        let mut inner_join = Vec::new();
-        let mut anti_join: BothEyes<VecEdges<VectorId>> = [Vec::new(), Vec::new()];
+        let mut matched_both = Vec::new();
+        let mut matched_one_side: BothEyes<VecEdges<VectorId>> = [Vec::new(), Vec::new()];
         for (vector_id, is_match_lr) in full_join_partial_matches_ordered {
             match is_match_lr {
-                [true, true] => inner_join.push((vector_id, [true, true])),
-                [true, false] => anti_join[LEFT].push(vector_id),
-                [false, true] => anti_join[RIGHT].push(vector_id),
+                [true, true] => matched_both.push((vector_id, [true, true])),
+                [true, false] => matched_one_side[LEFT].push(vector_id),
+                [false, true] => matched_one_side[RIGHT].push(vector_id),
                 [false, false] => {}
             }
         }
 
         SearchJoin {
-            inner_join,
-            anti_join,
+            matched_both,
+            matched_one_side,
             saturated,
         }
     }
 
-    /// Resolve anti-join entries into a full join using the MPC-computed
+    /// Resolve the one-sided matches into a full join using the MPC-computed
     /// `missing_is_match` results for the opposite eye.
     fn resolve(
         &self,
         missing_is_match: BothEyes<&MapEdges<bool>>,
     ) -> VecEdges<(VectorId, BothEyes<bool>)> {
-        let mut full_join = self.inner_join.clone();
-        for id in &self.anti_join[LEFT] {
+        let mut full_join = self.matched_both.clone();
+        for id in &self.matched_one_side[LEFT] {
             if let Some(right) = missing_is_match[RIGHT].get(id) {
                 full_join.push((*id, [true, *right]));
             }
         }
-        for id in &self.anti_join[RIGHT] {
+        for id in &self.matched_one_side[RIGHT] {
             if let Some(left) = missing_is_match[LEFT].get(id) {
                 full_join.push((*id, [*left, true]));
             }
@@ -206,21 +207,26 @@ impl Step1 {
 
     fn missing_vector_ids(&self, side: usize) -> VecEdges<VectorId> {
         let other_side = 1 - side;
-        let anti_join = &self.join.anti_join[other_side];
-        // Include the pre-extension anti-join so the pre-extension outcome can be
-        // resolved from the same MPC results (its ids are a subset of `join`'s,
-        // but include them explicitly to be safe).
-        let pre_anti_join = self
+        let matched_one_side = &self.join.matched_one_side[other_side];
+        // Include the pre-extension one-sided matches so the pre-extension outcome
+        // can be resolved from the same MPC results (its ids are a subset of
+        // `join`'s, but include them explicitly to be safe).
+        let pre_matched_one_side = self
             .pre_join
             .iter()
-            .flat_map(|j| j.anti_join[other_side].iter());
+            .flat_map(|j| j.matched_one_side[other_side].iter());
         // Always add reauth target so is_match is computed even if the search didn't hit it.
         let reauth_id = self.reauth_id().map(|(id, _)| id);
 
-        chain!(anti_join, pre_anti_join, &self.luc_ids, &reauth_id)
-            .cloned()
-            .unique()
-            .collect_vec()
+        chain!(
+            matched_one_side,
+            pre_matched_one_side,
+            &self.luc_ids,
+            &reauth_id
+        )
+        .cloned()
+        .unique()
+        .collect_vec()
     }
 
     fn step2(
