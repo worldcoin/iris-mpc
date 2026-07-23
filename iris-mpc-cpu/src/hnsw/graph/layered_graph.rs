@@ -74,7 +74,7 @@ impl Neighborhood {
     pub fn neighbors(&self) -> Vec<SerialId> {
         self.neighbors
             .decode()
-            .expect("stored neighborhood blob must decode")
+            .unwrap_or_else(|e| panic!("stored neighborhood blob must decode: {e}"))
     }
 
     /// Number of neighbors, read from the encoding header without decoding.
@@ -1027,12 +1027,12 @@ impl Layer {
         let mut neighbors = nbhd
             .neighbors
             .decode()
-            .expect("stored neighborhood blob must decode");
+            .unwrap_or_else(|e| panic!("stored neighborhood blob must decode: {e}"));
         f(nbhd.seq_no, &mut neighbors);
         neighbors.sort_unstable();
         neighbors.dedup();
         nbhd.neighbors = EncodedNeighborhood::encode(&neighbors)
-            .expect("canonicalized neighbor list must encode");
+            .unwrap_or_else(|e| panic!("canonicalized neighbor list must encode: {e}"));
         nbhd.seq_no = tick.value();
         self.set_hash.add_hash(Self::neighborhood_contribution(
             node,
@@ -1070,8 +1070,8 @@ impl Layer {
         // Canonical form for `neighborhood_contribution`.
         links.sort_unstable();
         links.dedup();
-        let encoded =
-            EncodedNeighborhood::encode(&links).expect("canonicalized neighbor list must encode");
+        let encoded = EncodedNeighborhood::encode(&links)
+            .unwrap_or_else(|e| panic!("canonicalized neighbor list must encode: {e}"));
         self.set_links_encoded_trusted(from, encoded, seq_no);
     }
 

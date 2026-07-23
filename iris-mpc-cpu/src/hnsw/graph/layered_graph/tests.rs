@@ -763,7 +763,7 @@ fn resolution_drops_reauth_self_reference() {
 
     // No self-edge, physically or actively; the real neighbor survives
     // in both directions.
-    assert_eq!(graph.get_raw_links(&1, 0), &[2u32]);
+    assert_eq!(graph.get_raw_links(&1, 0), vec![2u32]);
     assert_eq!(graph.get_active_links(&1, 0), vec![a]);
     assert_eq!(graph.get_active_links(&2, 0), vec![s1]);
 
@@ -771,7 +771,7 @@ fn resolution_drops_reauth_self_reference() {
     let mut replayed = GraphMem::new();
     replayed.insert_apply_all(&wal).unwrap();
     assert_eq!(graph.checksum(), replayed.checksum());
-    assert_eq!(replayed.get_raw_links(&1, 0), &[2u32]);
+    assert_eq!(replayed.get_raw_links(&1, 0), vec![2u32]);
 }
 
 /// Read-path skip: `get_active_links` omits a content-stale neighbor even
@@ -1115,7 +1115,11 @@ async fn remove_edges_op_fused_retain_drops_explicit_and_sweeps_stale() {
         ops: vec![MutationOp::RemoveNode { id: v(3) }, node(v(3))],
     })
     .unwrap();
-    assert_eq!(g.get_raw_links(&1, 0), &[2u32, 3u32], "stale 3 still raw");
+    assert_eq!(
+        g.get_raw_links(&1, 0),
+        vec![2u32, 3u32],
+        "stale 3 still raw"
+    );
     assert_eq!(g.get_active_links(&1, 0), vec![v(2)], "3 masked as stale");
 
     // RemoveEdges Base(1 -/-> 2): retain drops explicit 2 AND stale 3; the
@@ -1134,7 +1138,7 @@ async fn remove_edges_op_fused_retain_drops_explicit_and_sweeps_stale() {
         .unwrap();
     assert_eq!(
         g.get_raw_links(&1, 0),
-        &[] as &[u32],
+        vec![] as Vec<u32>,
         "explicit 2 removed AND content-stale 3 swept in one retain"
     );
     assert_eq!(minted.ops, vec![teardown], "ops returned unchanged");
@@ -1164,7 +1168,11 @@ async fn remove_edges_op_fused_retain_drops_explicit_and_sweeps_stale() {
         ops: vec![MutationOp::RemoveNode { id: v(6) }, node(v(6))],
     })
     .unwrap();
-    assert_eq!(g.get_raw_links(&5, 0), &[4u32, 6u32], "stale 6 still raw");
+    assert_eq!(
+        g.get_raw_links(&5, 0),
+        vec![4u32, 6u32],
+        "stale 6 still raw"
+    );
 
     // RemoveEdges All(4 -/- 5): forward half empties 4; back-half retain on
     // target 5 drops explicit 4 AND stale 6.
@@ -1182,12 +1190,12 @@ async fn remove_edges_op_fused_retain_drops_explicit_and_sweeps_stale() {
         .unwrap();
     assert_eq!(
         g.get_raw_links(&4, 0),
-        &[] as &[u32],
+        vec![] as Vec<u32>,
         "forward half drops 5"
     );
     assert_eq!(
         g.get_raw_links(&5, 0),
-        &[] as &[u32],
+        vec![] as Vec<u32>,
         "back-half retain drops explicit 4 AND content-stale 6"
     );
     assert_eq!(minted.ops, vec![teardown], "ops returned unchanged");
@@ -1387,10 +1395,10 @@ async fn edge_ops_do_not_perturb_content_clock() {
         }],
     })
     .unwrap();
-    assert_eq!(g.get_raw_links(&1, 0), &[2u32, 3u32]);
+    assert_eq!(g.get_raw_links(&1, 0), vec![2u32, 3u32]);
     assert_eq!(
         g.get_raw_links(&2, 0),
-        &[1u32],
+        vec![1u32],
         "back-edge keyed on serial 2"
     );
     assert_eq!(
@@ -1409,7 +1417,7 @@ async fn edge_ops_do_not_perturb_content_clock() {
         }],
     })
     .unwrap();
-    assert_eq!(g.get_raw_links(&1, 0), &[3u32]);
+    assert_eq!(g.get_raw_links(&1, 0), vec![3u32]);
     assert_eq!(
         g.node_init, clock_before,
         "RemoveEdges must not perturb the content clock"
@@ -1469,12 +1477,12 @@ async fn remove_node_of_entry_point_falls_back_to_min_serial() {
     assert!(g.layers[1].get_links(&1).is_none(), "gone at layer 1");
     // Backlinks 2->1 / 3->1 linger physically but are masked at read: 1 is
     // gone from the content clock, so is_active hides the dangling edge.
-    assert_eq!(g.get_raw_links(&2, 0), &[1u32], "2->1 lingers in raw");
+    assert_eq!(g.get_raw_links(&2, 0), vec![1u32], "2->1 lingers in raw");
     assert!(
         g.get_active_links(&2, 0).is_empty(),
         "2->1 masked by is_active"
     );
-    assert_eq!(g.get_raw_links(&3, 0), &[1u32], "3->1 lingers in raw");
+    assert_eq!(g.get_raw_links(&3, 0), vec![1u32], "3->1 lingers in raw");
     assert!(
         g.get_active_links(&3, 0).is_empty(),
         "3->1 masked by is_active"
