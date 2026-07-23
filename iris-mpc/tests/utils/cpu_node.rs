@@ -257,10 +257,6 @@ impl CpuNode {
         self.make_checkpoint_with_options(true).await
     }
 
-    pub async fn make_checkpoint_v3(&self) -> eyre::Result<GraphCheckpointRow> {
-        self.make_checkpoint_inner(false, GraphFormat::V3).await
-    }
-
     /// Run all set assertions in `assertions` against this node.
     ///
     /// Always verifies that all checkpoint S3 objects exist in the bucket.
@@ -624,19 +620,6 @@ impl CpuNodes {
             self.0[0].make_checkpoint(),
             self.0[1].make_checkpoint(),
             self.0[2].make_checkpoint(),
-        )?;
-        Ok([r0, r1, r2])
-    }
-
-    /// Seed a V3-format genesis checkpoint for all 3 parties concurrently.
-    ///
-    /// Each checkpoint is non-archival and serialized without the `seq_no`
-    /// field (see [`CpuNode::make_checkpoint_v3`]).
-    pub async fn make_checkpoints_v3(&self) -> eyre::Result<[GraphCheckpointRow; 3]> {
-        let (r0, r1, r2) = tokio::try_join!(
-            self.0[0].make_checkpoint_v3(),
-            self.0[1].make_checkpoint_v3(),
-            self.0[2].make_checkpoint_v3(),
         )?;
         Ok([r0, r1, r2])
     }

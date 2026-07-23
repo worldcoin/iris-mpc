@@ -10,7 +10,7 @@ function _main()
 
     pushd "$(_get_path_to_monorepo)/iris-mpc" || exit
 
-    cargo test --release -p iris-mpc --test e2e_hawk_init -- --include-ignored --skip test_wal_100
+    cargo test --release -p iris-mpc --test e2e_hawk_init -- --include-ignored
     popd || exit
 }
 
