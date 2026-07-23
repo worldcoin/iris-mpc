@@ -283,16 +283,18 @@ pub async fn server_main(config: Config) -> Result<()> {
     )
     .await?;
 
+    let verified_peers = verified_peers.lock().await.clone();
     init_heartbeat_task(
         &server_coord_config,
         &mut background_tasks,
         &shutdown_handler,
+        verified_peers.clone(),
     )
     .await?;
     background_tasks.check_tasks();
 
     set_node_ready(is_ready_flag);
-    wait_for_others_ready(&server_coord_config).await?;
+    wait_for_others_ready(&server_coord_config, verified_peers).await?;
 
     background_tasks.check_tasks();
 
