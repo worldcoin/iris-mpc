@@ -40,8 +40,6 @@
 //! `stream_serialize_and_upload` this is automatic; callers
 //! wiring up other sources must respect the contract.
 
-use std::time::Duration;
-
 use aws_sdk_s3::Client as S3Client;
 use bytes::Bytes;
 use eyre::{eyre, Result};
@@ -59,8 +57,10 @@ use crate::{
     },
 };
 
-const RANGE_MAX_RETRIES: u32 = 3;
-const RANGE_RETRY_DELAY: Duration = Duration::from_secs(2);
+const RANGE_MAX_RETRIES: u32 = 10;
+
+/// Log a download-progress line every this many ranges issued.
+const DOWNLOAD_PROGRESS_EVERY: usize = 64;
 
 /// Default duplex pipe capacity. Bounds back-pressure on the range
 /// reader: when the deserializer falls behind, the pipe fills, the tee
@@ -247,7 +247,7 @@ async fn head_object_size_with_retry(s3_client: &S3Client, bucket: &str, key: &s
             Err(e) if attempts < RANGE_MAX_RETRIES => {
                 attempts += 1;
                 tracing::warn!("Retry {attempts} for head_object s3://{bucket}/{key}: {e:?}");
-                sleep(RANGE_RETRY_DELAY).await;
+                sleep(super::retry_backoff(attempts)).await;
             }
             Err(e) => {
                 return Err(eyre!(
@@ -283,13 +283,21 @@ fn range_stream(
         ranges.push((offset, end_inclusive));
         offset = end_inclusive + 1;
     }
+    let total_ranges = ranges.len();
 
-    stream::iter(ranges)
-        .map(move |(start, end_inclusive)| {
+    stream::iter(ranges.into_iter().enumerate())
+        .map(move |(idx, (start, end_inclusive))| {
             let s3_client = s3_client.clone();
             let bucket = bucket.clone();
             let key = key.clone();
             async move {
+                if idx % DOWNLOAD_PROGRESS_EVERY == 0 {
+                    tracing::info!(
+                        "download progress s3://{bucket}/{key}: range {idx}/{total_ranges} \
+                         (~{} bytes)",
+                        start,
+                    );
+                }
                 let range = format!("bytes={start}-{end_inclusive}");
                 fetch_range(&s3_client, &bucket, &key, &range)
                     .await
@@ -330,7 +338,7 @@ async fn fetch_range(s3_client: &S3Client, bucket: &str, key: &str, range: &str)
             Err(e) if attempts < RANGE_MAX_RETRIES => {
                 attempts += 1;
                 tracing::warn!("Retry {attempts} for range {range}: {e}");
-                sleep(RANGE_RETRY_DELAY).await;
+                sleep(super::retry_backoff(attempts)).await;
             }
             Err(e) => {
                 return Err(eyre!("range {range} failed after {attempts} retries: {e}"));

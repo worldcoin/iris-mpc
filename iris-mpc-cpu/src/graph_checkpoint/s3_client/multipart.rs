@@ -9,12 +9,17 @@ use aws_sdk_s3::{
 };
 use bytes::{Bytes, BytesMut};
 use eyre::{eyre, Result};
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 use tokio::{sync::Semaphore, task::JoinSet, time::sleep};
 
 pub const DEFAULT_CHECKPOINT_CHUNK_SIZE: usize = 100 * 1024 * 1024; // 100 MB chunks
 pub const DEFAULT_CHECKPOINT_PARALLELISM: usize = 32;
 const MULTIPART_THRESHOLD: usize = 5 * 1024 * 1024; // 5MB - S3 multipart minimum part size
+/// Total attempts per S3 transfer op (upload part, download range, simple PUT)
+/// before it aborts.
+const TRANSFER_MAX_RETRIES: u32 = 10;
+/// Log an upload-progress line every this many parts issued.
+const UPLOAD_PROGRESS_EVERY: usize = 32;
 
 /// Uploads checkpoint data to S3.
 /// Uses simple PUT for files under 5MB, multipart upload for larger files.
@@ -77,8 +82,15 @@ pub async fn upload_graph(
     }
 
     // Spawn Workers for Chunks
+    let total_parts = chunks.len();
     for (i, (start, end)) in chunks.into_iter().enumerate() {
         let part_number = (i + 1) as i32;
+        if i % UPLOAD_PROGRESS_EVERY == 0 {
+            tracing::info!(
+                "upload progress s3://{bucket}/{key}: part {}/{total_parts} (~{start} bytes)",
+                i + 1,
+            );
+        }
         let client = s3_client.clone();
         let bucket = bucket.to_string();
         let key = key.to_string();
@@ -91,8 +103,7 @@ pub async fn upload_graph(
         let body = data.slice(start..end);
 
         join_set.spawn(async move {
-            let mut attempts = 0;
-            let max_retries = 3;
+            let mut attempts: u32 = 0;
 
             loop {
                 match client
@@ -119,10 +130,10 @@ pub async fn upload_graph(
                             .part_number(part_number)
                             .build());
                     }
-                    Err(_e) if attempts < max_retries => {
+                    Err(_e) if attempts < TRANSFER_MAX_RETRIES => {
                         attempts += 1;
                         tracing::warn!("Retry {} for part {}", attempts, part_number);
-                        sleep(Duration::from_secs(2)).await;
+                        sleep(super::retry_backoff(attempts)).await;
                     }
                     Err(e) => {
                         drop(permit);
@@ -233,7 +244,7 @@ pub async fn download_graph(s3_client: &S3Client, bucket: &str, key: &str) -> Re
             .map_err(|e| eyre!("failed to acquire semaphore: {e}"))?;
 
         join_set.spawn(async move {
-            let mut attempts = 0;
+            let mut attempts: u32 = 0;
             let range = format!("bytes={}-{}", start, end);
 
             loop {
@@ -256,10 +267,10 @@ pub async fn download_graph(s3_client: &S3Client, bucket: &str, key: &str) -> Re
                         drop(permit);
                         return Ok((start, data.into_bytes()));
                     }
-                    Err(_e) if attempts < 3 => {
+                    Err(_e) if attempts < TRANSFER_MAX_RETRIES => {
                         attempts += 1;
                         tracing::warn!("Retry {} for range {}", attempts, range);
-                        sleep(Duration::from_secs(2)).await;
+                        sleep(super::retry_backoff(attempts)).await;
                     }
                     Err(e) => {
                         drop(permit);
@@ -326,8 +337,7 @@ async fn upload_graph_simple(
         data.len()
     );
 
-    let mut attempts = 0;
-    let max_retries = 3;
+    let mut attempts: u32 = 0;
 
     loop {
         match s3_client
@@ -342,10 +352,10 @@ async fn upload_graph_simple(
                 tracing::info!("Simple PUT upload completed: e_tag={:?}", res.e_tag());
                 return Ok(());
             }
-            Err(_e) if attempts < max_retries => {
+            Err(_e) if attempts < TRANSFER_MAX_RETRIES => {
                 attempts += 1;
                 tracing::warn!("Retry {} for simple PUT upload", attempts);
-                sleep(Duration::from_secs(2)).await;
+                sleep(super::retry_backoff(attempts)).await;
             }
             Err(e) => {
                 return Err(eyre!("Simple PUT upload failed: {:?}", e));
