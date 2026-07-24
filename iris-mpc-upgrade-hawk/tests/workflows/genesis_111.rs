@@ -453,6 +453,17 @@ async fn assert_graph_state(configs: &HawkConfigs, healed: &[u32], removed: &[u3
                     Some(vid),
                     "content clock must hold exactly {vid:?} (eye {eye})"
                 );
+                // The prune seeds kept keys at seq 0; only surgery mints a
+                // nonzero seq. This pins the force-include arm: GH1/SL1 are
+                // join-invisible, so seq 0 here means they were never surged.
+                let init = graph
+                    .node_init
+                    .get(&serial)
+                    .ok_or_else(|| eyre!("content clock must hold serial {serial} (eye {eye})"))?;
+                assert!(
+                    init.seq_no > 0,
+                    "serial {serial} carries the prune-seeded clock — not surged (eye {eye})"
+                );
                 let links = graph.layers[0]
                     .get_links(&serial)
                     .ok_or_else(|| eyre!("layer 0 must hold serial {serial} (eye {eye})"))?;
