@@ -173,7 +173,7 @@ mod tests {
 
     /// Test helper: the neighbor list of `node`, owned, or `None` if absent.
     fn links(layer: &Layer, node: u32) -> Option<Vec<u32>> {
-        layer.get_links(&node).map(|n| n.neighbors().to_vec())
+        layer.get_links(&node).map(|n| n.neighbors())
     }
 
     /// Test helper: add `node` as an incoming edge into each target's list —
