@@ -14,6 +14,8 @@ use std::sync::Arc;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::oneshot;
 
+use super::retry::{with_retry, CHECKPOINT_UPLOAD_ATTEMPTS};
+
 /// Uploads a genesis checkpoint, sends the result, and synchronizes peers.
 #[allow(clippy::too_many_arguments)]
 pub async fn upload_and_sync_genesis_checkpoint(
@@ -27,29 +29,32 @@ pub async fn upload_and_sync_genesis_checkpoint(
     tx_results: &Sender<JobResult>,
     hawk_handle: &mut GenesisHawkHandle,
 ) -> Result<()> {
-    let checkpoint_state = match upload_graph_checkpoint(
-        checkpoint_bucket,
-        party_id,
-        imem_graph_stores,
-        s3_client,
-        last_indexed_id,
-        max_modification_indexed_id,
-        // genesis doesn't need graph_mutation_id, it can just replay irises from the GPU database.
-        None,
-        is_archival,
+    // Each attempt mints a fresh S3 key, so the upload is idempotent to retry.
+    let checkpoint_state = with_retry(
+        "checkpoint upload",
+        CHECKPOINT_UPLOAD_ATTEMPTS,
+        || async move {
+            upload_graph_checkpoint(
+                checkpoint_bucket,
+                party_id,
+                imem_graph_stores,
+                s3_client,
+                last_indexed_id,
+                max_modification_indexed_id,
+                // genesis doesn't need graph_mutation_id, it can just replay irises from the GPU database.
+                None,
+                is_archival,
+            )
+            .await
+        },
     )
     .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!(
-                "failed to upload genesis checkpoint for last_indexed_id: {}: {}",
-                last_indexed_id,
-                e
-            );
-            bail!(e);
-        }
-    };
+    .map_err(|e| {
+        tracing::error!(
+            "failed to upload genesis checkpoint for last_indexed_id {last_indexed_id}: {e}"
+        );
+        e
+    })?;
 
     let (tx, done_rx) = oneshot::channel();
     let result = JobResult::new_s3_checkpoint(checkpoint_state, tx);

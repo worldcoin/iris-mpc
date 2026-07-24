@@ -335,6 +335,12 @@ pub struct Config {
 
     #[serde(default = "default_graph_checkpoint_bucket_region")]
     pub graph_checkpoint_bucket_region: String,
+
+    /// Bound on the per-exchange peer sync during genesis (`sync_state` /
+    /// `sync_peers`). Genesis-only; hawk-main calls the underlying sync
+    /// unwrapped. Set high (hours-scale) for the prod genesis run.
+    #[serde(default = "default_genesis_sync_timeout_secs")]
+    pub genesis_sync_timeout_secs: u64,
 }
 
 fn default_full_scan_side() -> Eye {
@@ -545,6 +551,10 @@ fn default_sns_retry_max_attempts() -> u32 {
 
 fn default_graph_checkpoint_bucket_name() -> String {
     "wf-smpcv2-prod-hnsw-checkpoint".to_string()
+}
+
+fn default_genesis_sync_timeout_secs() -> u64 {
+    300
 }
 
 fn default_graph_checkpoint_bucket_region() -> String {
@@ -872,6 +882,7 @@ impl From<Config> for CommonConfig {
             sns_retry_max_attempts: _,
             graph_checkpoint_bucket_name: _,
             graph_checkpoint_bucket_region: _,
+            genesis_sync_timeout_secs: _, // genesis-only operational knob, not part of the common hash
         } = value;
 
         assert!(

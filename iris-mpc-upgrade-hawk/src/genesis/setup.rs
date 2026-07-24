@@ -12,12 +12,8 @@ use ampc_server_utils::{
     start_coordination_server_with_extra_routes, wait_for_others_ready, wait_for_others_unready,
     BatchSyncSharedState, TaskMonitor,
 };
-use aws_config::retry::RetryConfig;
 use aws_sdk_rds::Client as RDSClient;
-use aws_sdk_s3::{
-    config::{Builder as S3ConfigBuilder, Region},
-    Client as S3Client,
-};
+use aws_sdk_s3::{config::Region, Client as S3Client};
 use axum::{routing::get, Router};
 use eyre::{bail, eyre, Report, Result};
 use futures::TryStreamExt;
@@ -53,13 +49,14 @@ use iris_mpc_cpu::{
 use iris_mpc_store::{Store as IrisStore, StoredIrisRef};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{self, Sender};
 
 use super::delta::{
     delta_slot_route, DeltaExchangeSlots, DELTA_REPAIR_ROUTE, DELTA_TOMBSTONES_ROUTE,
 };
 use super::graph_checkpoint::reset_to_checkpoint;
+use super::retry::{with_retry, DB_RETRY_ATTEMPTS};
 use super::{ExecutionArgs, ExecutionContextInfo, PERSIST_DELAY};
 
 const DEFAULT_REGION: &str = "eu-north-1";
@@ -389,7 +386,11 @@ pub(super) async fn exec_setup(args: &ExecutionArgs, config: &Config) -> Result<
     ]);
 
     // Set Hawk handle.
-    let hawk_handle = GenesisHawkHandle::new(hawk_actor).await?;
+    let hawk_handle = GenesisHawkHandle::new(
+        hawk_actor,
+        Duration::from_secs(config.genesis_sync_timeout_secs),
+    )
+    .await?;
     tracing::info!("Hawk handle initialised");
 
     // Set thread for persisting indexing results to DB.
@@ -502,7 +503,6 @@ async fn get_service_clients(
     /// live in a different AWS region than the iris-snapshot bucket.
     async fn get_aws_clients(config: &Config) -> Result<(S3Client, S3Client, RDSClient)> {
         let force_path_style = config.environment != ENV_PROD && config.environment != ENV_STAGE;
-        let retry_config = RetryConfig::standard().with_max_attempts(5);
 
         let config_region = config.aws.clone().and_then(|aws| aws.region);
         let region_name = config_region
@@ -528,11 +528,7 @@ async fn get_service_clients(
         );
 
         // S3 client for general AWS operations (iris snapshots, deletions)
-        let s3_config = S3ConfigBuilder::from(&sdk_config)
-            .force_path_style(force_path_style)
-            .retry_config(retry_config.clone())
-            .build();
-        let aws_s3_client = S3Client::from_conf(s3_config);
+        let aws_s3_client = create_s3_client(&sdk_config, force_path_style, None);
 
         // RDS client using general AWS configuration
         tracing::info!(
@@ -552,12 +548,8 @@ async fn get_service_clients(
             sdk_config.endpoint_url(),
         );
 
-        let checkpoint_s3_config = S3ConfigBuilder::from(&sdk_config)
-            .region(checkpoint_region)
-            .force_path_style(force_path_style)
-            .retry_config(retry_config.clone())
-            .build();
-        let checkpoint_s3_client = S3Client::from_conf(checkpoint_s3_config);
+        let checkpoint_s3_client =
+            create_s3_client(&sdk_config, force_path_style, Some(checkpoint_region));
 
         Ok((aws_s3_client, checkpoint_s3_client, rds_client))
     }
@@ -686,20 +678,27 @@ async fn get_results_thread(
                             })
                             .collect();
 
-                    let mut graph_tx = graph_store.tx().await?;
-
-                    // Persist batch of Iris's to the HNSW graph store.
-                    hnsw_iris_store
-                        .insert_copy_irises(
-                            &mut graph_tx.tx,
-                            &vector_ids_to_persist,
-                            &codes_and_masks,
-                        )
-                        .await?;
-
-                    let mut db_tx = graph_tx.tx;
-                    set_last_indexed_iris_id(&mut db_tx, last_serial_id).await?;
-                    db_tx.commit().await?;
+                    // A single Aurora transient here otherwise propagates out of
+                    // the results task and (via task_monitor) aborts the run.
+                    // The transaction is rolled back on failure, so each retry
+                    // restarts from a clean state.
+                    with_retry("persist batch", DB_RETRY_ATTEMPTS, || {
+                        let graph_store = &graph_store;
+                        let hnsw_iris_store = &hnsw_iris_store;
+                        let vids = &vector_ids_to_persist;
+                        let refs = &codes_and_masks;
+                        async move {
+                            let mut graph_tx = graph_store.tx().await?;
+                            hnsw_iris_store
+                                .insert_copy_irises(&mut graph_tx.tx, vids, refs)
+                                .await?;
+                            let mut db_tx = graph_tx.tx;
+                            set_last_indexed_iris_id(&mut db_tx, last_serial_id).await?;
+                            db_tx.commit().await?;
+                            Ok(())
+                        }
+                    })
+                    .await?;
                     tracing::info!(
                         "Job Results :: Persisted last indexed id: batch-id={batch_id}"
                     );
@@ -858,28 +857,34 @@ async fn init_graph_from_stores(
             // only they need the current-version table, so skip the scan for V5.
             let prune = match GraphFormat::try_from(state.graph_version)? {
                 format @ (GraphFormat::V3 | GraphFormat::V4) => {
-                    let version_map: HashMap<u32, i16> = prune_iris_store
-                        .stream_iris_ids(max_index)
-                        .map_ok(|(id, version)| {
-                            (u32::try_from(id).expect("serial id fits u32"), version)
+                    let version_map: HashMap<u32, i16> =
+                        with_retry("version_map scan", DB_RETRY_ATTEMPTS, || {
+                            let store = &prune_iris_store;
+                            async move {
+                                store
+                                    .stream_iris_ids(max_index)
+                                    .map_ok(|(id, version)| {
+                                        (u32::try_from(id).expect("serial id fits u32"), version)
+                                    })
+                                    .try_collect()
+                                    .await
+                                    .map_err(eyre::Report::from)
+                            }
                         })
-                        .try_collect()
                         .await?;
                     // The prune classifies any serial absent from `version_map`
-                    // as stale and silently drops it, so the map must cover
-                    // every serial the base can reference. `max_index` is
-                    // derived from a row COUNT — serial holes would leave a
-                    // tail (or gaps) uncovered and prune-erase whole ranges.
+                    // as stale and silently drops it. The scan bound `max_index`
+                    // (= min(max_indexation_id, count)) must reach the base
+                    // height; otherwise the uncovered tail past it is prune-
+                    // erased — live serials the join can never repair, since both
+                    // pools are bounded identically. Within-bound holes prune
+                    // silently, which is acceptable: a graph node without source
+                    // content is unusable regardless.
                     let base_height = state.last_indexed_iris_id;
-                    let missing: Vec<u32> = (1..=base_height)
-                        .filter(|s| !version_map.contains_key(s))
-                        .collect();
-                    if !missing.is_empty() {
+                    if max_index < base_height as usize {
                         bail!(
-                            "version_map does not cover the {format} base (height \
-                             {base_height}): {} serials missing, first: {:?}",
-                            missing.len(),
-                            &missing[..missing.len().min(20)],
+                            "version_map scan bound ({max_index}) does not reach the {format} \
+                             base height ({base_height}); the uncovered tail would be prune-erased"
                         );
                     }
                     // Downstream, the version-join sees pruned serials only as

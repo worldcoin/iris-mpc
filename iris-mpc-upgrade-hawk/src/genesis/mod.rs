@@ -1,6 +1,7 @@
 mod delta;
 mod graph_checkpoint;
 mod indexation;
+mod retry;
 mod setup;
 mod snapshot;
 
