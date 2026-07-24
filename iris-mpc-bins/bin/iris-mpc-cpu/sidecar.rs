@@ -118,8 +118,8 @@ pub struct SidecarArgs {
     ///   - tiered               — keep all versions newer than Y, keep every
     ///                            Nth version between Y and X, and delete all
     ///                            versions older than X. X/Y/N are read from the
-    ///                            PRUNING_TIERED_DELETE_OLDER_THAN,
-    ///                            PRUNING_TIERED_THIN_OLDER_THAN, and
+    ///                            PRUNING_TIERED_DELETE_OLDER_THAN_DAYS,
+    ///                            PRUNING_TIERED_THIN_OLDER_THAN_DAYS, and
     ///                            PRUNING_TIERED_KEEP_EVERY_NTH (defaults to 4)
     ///                            env vars.
     #[clap(long("pruning-mode"))]
