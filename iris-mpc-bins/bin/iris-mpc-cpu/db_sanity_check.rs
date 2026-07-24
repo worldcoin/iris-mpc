@@ -525,44 +525,63 @@ fn layered_bfs(
 /// (`u32::MAX` if no node there), `sizes[c]` = size of component `c`.
 fn scc_layer(adj_l: &[Option<&Neighborhood>], init_seqs: &[u64], n: usize) -> (Vec<u32>, Vec<u64>) {
     const UNVISITED: u32 = u32::MAX;
+    // `neighbors()` decodes the neighborhood on every call, and a DFS frame is
+    // resumed once per child — decode once at push time and keep the list in
+    // the frame (peak extra memory = decoded edges along one DFS path).
+    struct Frame {
+        node: u32,
+        edge_pos: u32,
+        neighbors: Vec<SerialId>,
+        seq_no: u64,
+    }
+    fn frame_for(adj_l: &[Option<&Neighborhood>], s: u32) -> Frame {
+        let nbhd = adj_l[s as usize].expect("dfs only visits present slots");
+        Frame {
+            node: s,
+            edge_pos: 0,
+            neighbors: nbhd.neighbors(),
+            seq_no: nbhd.seq_no(),
+        }
+    }
     let mut idx = vec![UNVISITED; n];
     let mut low = vec![0u32; n];
     let mut on_stack = vec![false; n];
     let mut comp_of = vec![u32::MAX; n];
     let mut comp_stack: Vec<u32> = Vec::new();
-    let mut dfs: Vec<(u32, u32)> = Vec::new();
+    let mut dfs: Vec<Frame> = Vec::new();
     let mut sizes: Vec<u64> = Vec::new();
     let mut next_index = 0u32;
     for s in 0..n {
         if adj_l[s].is_none() || idx[s] != UNVISITED {
             continue;
         }
-        dfs.push((s as u32, 0));
-        while let Some(&(node, edge_pos)) = dfs.last() {
+        dfs.push(frame_for(adj_l, s as u32));
+        while let Some(top) = dfs.len().checked_sub(1) {
+            let node = dfs[top].node;
             let u = node as usize;
-            if edge_pos == 0 {
+            if dfs[top].edge_pos == 0 {
                 idx[u] = next_index;
                 low[u] = next_index;
                 next_index += 1;
                 comp_stack.push(node);
                 on_stack[u] = true;
             }
-            let nbhd = adj_l[u].expect("dfs only visits present slots");
-            let neighbors = nbhd.neighbors();
-            let mut p = edge_pos as usize;
+            let mut p = dfs[top].edge_pos as usize;
             let mut recursed = false;
-            while p < neighbors.len() {
-                let nb = neighbors[p];
+            while p < dfs[top].neighbors.len() {
+                let frame = &dfs[top];
+                let nb = frame.neighbors[p];
+                let seq_no = frame.seq_no;
                 p += 1;
                 let Some(v) = slot(nb).filter(|&v| v < n) else {
                     continue;
                 };
-                if adj_l[v].is_none() || init_seqs[v] > nbhd.seq_no() {
+                if adj_l[v].is_none() || init_seqs[v] > seq_no {
                     continue;
                 }
                 if idx[v] == UNVISITED {
-                    dfs.last_mut().unwrap().1 = p as u32;
-                    dfs.push((v as u32, 0));
+                    dfs[top].edge_pos = p as u32;
+                    dfs.push(frame_for(adj_l, v as u32));
                     recursed = true;
                     break;
                 } else if on_stack[v] {
@@ -587,8 +606,9 @@ fn scc_layer(adj_l: &[Option<&Neighborhood>], init_seqs: &[u64], n: usize) -> (V
                 sizes.push(size);
             }
             dfs.pop();
-            if let Some(&(parent, _)) = dfs.last() {
-                low[parent as usize] = low[parent as usize].min(low[u]);
+            if let Some(parent) = dfs.last() {
+                let pu = parent.node as usize;
+                low[pu] = low[pu].min(low[u]);
             }
         }
     }
