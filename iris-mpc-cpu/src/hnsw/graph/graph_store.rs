@@ -19,6 +19,11 @@ pub struct GraphCheckpointRow {
     pub blake3_hash: String,
     pub graph_version: i32,
     pub is_archival: bool,
+    /// Creation time of the row.
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Soft-delete tombstone: `true` once the checkpoint's S3 object has been
+    /// pruned. Read paths filter these out; the row is retained for audit.
+    pub is_deleted: bool,
 }
 
 /// A row from the hawk_graph_mutations table.
@@ -203,8 +208,11 @@ impl<V: VectorStore> GraphPg<V> {
                 graph_mutation_id,
                 blake3_hash,
                 is_archival,
-                graph_version
+                graph_version,
+                created_at,
+                is_deleted
             FROM genesis_graph_checkpoint
+            WHERE NOT is_deleted
             ORDER BY id DESC
             LIMIT 1
             "#,
@@ -230,9 +238,11 @@ impl<V: VectorStore> GraphPg<V> {
                 graph_mutation_id,
                 blake3_hash,
                 is_archival,
-                graph_version
+                graph_version,
+                created_at,
+                is_deleted
             FROM genesis_graph_checkpoint
-            WHERE s3_key = $1
+            WHERE s3_key = $1 AND NOT is_deleted
             "#,
         )
         .bind(s3_key)
@@ -258,9 +268,11 @@ impl<V: VectorStore> GraphPg<V> {
                 graph_mutation_id,
                 blake3_hash,
                 is_archival,
-                graph_version
+                graph_version,
+                created_at,
+                is_deleted
             FROM genesis_graph_checkpoint
-            WHERE blake3_hash = $1
+            WHERE blake3_hash = $1 AND NOT is_deleted
             ORDER BY id DESC
             LIMIT 1
             "#,
@@ -284,8 +296,11 @@ impl<V: VectorStore> GraphPg<V> {
                 graph_mutation_id,
                 blake3_hash,
                 is_archival,
-                graph_version
+                graph_version,
+                created_at,
+                is_deleted
             FROM genesis_graph_checkpoint
+            WHERE NOT is_deleted
             ORDER BY id DESC
             "#,
         )
@@ -295,16 +310,58 @@ impl<V: VectorStore> GraphPg<V> {
         Ok(rows)
     }
 
+    /// Returns *all* genesis graph checkpoints in ascending id order,
+    /// including soft-deleted tombstones.
+    ///
+    /// Unlike [`Self::get_genesis_graph_checkpoints`], this does not filter out
+    /// `is_deleted` rows. It exists so version-age-based pruning
+    /// ([`crate::graph_checkpoint::PruningMode::Tiered`]) can rank a checkpoint
+    /// by its position in the full history: a survivor's age must not shift when
+    /// earlier rows are tombstoned, otherwise re-running the cleanup would
+    /// progressively re-classify and delete checkpoints that a prior run kept.
+    pub async fn get_genesis_graph_checkpoints_including_deleted(
+        &self,
+    ) -> Result<Vec<GraphCheckpointRow>> {
+        let rows = sqlx::query_as::<_, GraphCheckpointRow>(
+            r#"
+            SELECT
+                id,
+                s3_key,
+                last_indexed_iris_id,
+                last_indexed_modification_id,
+                graph_mutation_id,
+                blake3_hash,
+                is_archival,
+                graph_version,
+                created_at,
+                is_deleted
+            FROM genesis_graph_checkpoint
+            ORDER BY id ASC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| eyre!("Failed to fetch genesis checkpoints: {e}"))?;
+        Ok(rows)
+    }
+
+    /// Soft-deletes a genesis checkpoint: marks the row `is_deleted = TRUE`
+    /// instead of removing it. The row is retained as an audit tombstone but is
+    /// excluded from every read path (latest/by-key/by-hash/list). Callers are
+    /// expected to delete the associated S3 object separately, since the data is
+    /// no longer recoverable once pruned.
     pub async fn delete_genesis_checkpoint(&self, id: i64) -> Result<()> {
         let _ = sqlx::query(
             r#"
-            DELETE FROM genesis_graph_checkpoint WHERE id = $1
+            UPDATE genesis_graph_checkpoint
+            SET is_deleted = TRUE
+            WHERE id = $1
             "#,
         )
         .bind(id)
         .execute(&self.pool)
         .await
-        .map_err(|e| eyre!("Failed to delete genesis checkpoint: {e}"))?;
+        .map_err(|e| eyre!("Failed to soft-delete genesis checkpoint: {e}"))?;
 
         Ok(())
     }

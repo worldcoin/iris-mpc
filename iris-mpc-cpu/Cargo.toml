@@ -52,6 +52,7 @@ tokio-stream = "0.1"
 tokio-util = { workspace = true, features = ["io-util"] }
 metrics.workspace = true
 tracing.workspace = true
+chrono = "0.4.42"
 tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", rev = "5683eba", features = [
     "uuid",
     "chrono",

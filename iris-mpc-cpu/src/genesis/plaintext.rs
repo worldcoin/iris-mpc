@@ -32,7 +32,7 @@ use crate::{
         BothEyes, STORE_IDS,
     },
     genesis::{BatchSize, BatchSizeConfig},
-    graph_checkpoint::PruningMode,
+    graph_checkpoint::{PruningMode, TieredPruningConfig},
     hawkers::plaintext_store::PlaintextStore,
     hnsw::{
         graph::{mutation::UnstampedMutation, MutationOp},
@@ -117,6 +117,9 @@ pub struct GenesisArgs {
 
     // Controls which older checkpoints are pruned after loading a common checkpoint.
     pub pruning_mode: PruningMode,
+
+    // Numeric bounds for `PruningMode::Tiered`; ignored by other modes.
+    pub tiered_pruning: TieredPruningConfig,
 }
 
 impl Default for GenesisArgs {
@@ -126,6 +129,7 @@ impl Default for GenesisArgs {
             batch_size_config: BatchSizeConfig::Static { size: 1 },
             checkpoint_frequency: 100_000,
             pruning_mode: PruningMode::OlderNonArchival,
+            tiered_pruning: TieredPruningConfig::DEFAULT,
         }
     }
 }
