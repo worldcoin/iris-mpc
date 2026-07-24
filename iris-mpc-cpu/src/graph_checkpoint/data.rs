@@ -18,9 +18,9 @@ pub const DEFAULT_TIERED_DELETE_OLDER_THAN_DAYS: usize = 60;
 pub const DEFAULT_TIERED_THIN_OLDER_THAN_DAYS: usize = 30;
 
 /// Env var holding the `delete_older_than` (`X`) bound for [`PruningMode::Tiered`].
-pub const ENV_TIERED_DELETE_OLDER_THAN: &str = "PRUNING_TIERED_DELETE_OLDER_THAN";
+pub const ENV_TIERED_DELETE_OLDER_THAN_DAYS: &str = "PRUNING_TIERED_DELETE_OLDER_THAN";
 /// Env var holding the `thin_older_than` (`Y`) bound for [`PruningMode::Tiered`].
-pub const ENV_TIERED_THIN_OLDER_THAN: &str = "PRUNING_TIERED_THIN_OLDER_THAN";
+pub const ENV_TIERED_THIN_OLDER_THAN_DAYS: &str = "PRUNING_TIERED_THIN_OLDER_THAN";
 /// Env var holding the `keep_every_nth` factor for [`PruningMode::Tiered`]
 /// (optional; defaults to [`DEFAULT_TIERED_KEEP_EVERY_NTH`]).
 pub const ENV_TIERED_KEEP_EVERY_NTH: &str = "PRUNING_TIERED_KEEP_EVERY_NTH";
@@ -99,8 +99,8 @@ impl Default for TieredPruningConfig {
 
 impl TieredPruningConfig {
     /// Builds a [`TieredPruningConfig`] from environment variables:
-    /// - [`ENV_TIERED_DELETE_OLDER_THAN`] (`X`, required),
-    /// - [`ENV_TIERED_THIN_OLDER_THAN`] (`Y`, required),
+    /// - [`ENV_TIERED_DELETE_OLDER_THAN_DAYS`] (`X`, required),
+    /// - [`ENV_TIERED_THIN_OLDER_THAN_DAYS`] (`Y`, required),
     /// - [`ENV_TIERED_KEEP_EVERY_NTH`] (`N`, optional, defaults to
     ///   [`DEFAULT_TIERED_KEEP_EVERY_NTH`]).
     ///
@@ -113,8 +113,8 @@ impl TieredPruningConfig {
                 .map_err(|e| eyre!("invalid {name} value '{raw}': {e}"))
         };
 
-        let delete_older_than_days = required_usize(ENV_TIERED_DELETE_OLDER_THAN)?;
-        let thin_older_than_days = required_usize(ENV_TIERED_THIN_OLDER_THAN)?;
+        let delete_older_than_days = required_usize(ENV_TIERED_DELETE_OLDER_THAN_DAYS)?;
+        let thin_older_than_days = required_usize(ENV_TIERED_THIN_OLDER_THAN_DAYS)?;
         let keep_every_nth = match std::env::var(ENV_TIERED_KEEP_EVERY_NTH) {
             Ok(raw) => raw
                 .parse::<usize>()
