@@ -65,6 +65,7 @@ func exportCommand() *cobra.Command {
 	var parallelism int
 	var outputFolder string
 	var endIndex int
+	var formatVersion int
 
 	allowedOutputs := []string{"hdd", "s3"}
 
@@ -119,11 +120,12 @@ func exportCommand() *cobra.Command {
 			// Avoid blocking producers by defining a chan buffer in case consumers are slower
 			chanBufferLen := cfg.MaxItemsPerUploadPart * 2
 
-			commands.ExportCommand(ctx, exportMode, outputFolder, *store, converter.NewBinaryConverter(CodeSize, MaskSize, IdSize, VersionIdSize), writer, reader, batchSize, parallelism, endIndex, chanBufferLen)
+			commands.ExportCommand(ctx, exportMode, outputFolder, *store, converter.NewBinaryConverter(CodeSize, MaskSize, IdSize, VersionIdSize, formatVersion), writer, reader, batchSize, parallelism, endIndex, chanBufferLen)
 		},
 	}
 
 	exportCmd.Flags().StringVar(&exportMode, "export-mode", "INCREMENTAL_EXPORT", "Complete or incremental export")
+	exportCmd.Flags().IntVar(&formatVersion, "format-version", converter.FormatLegacyLimbs, "Snapshot record format: 1 = legacy limb planes, 2 = plain little-endian u16 shares")
 	exportCmd.Flags().StringVar(&exportFormat, "export-format", "csv", "Choose which format to convert the data to (csv/binary)")
 	exportCmd.Flags().StringVar(&exportOutput, "export-output", "hdd", "Choose which persistence to use (HDD/S3)")
 	exportCmd.Flags().StringVar(&outputFolder, "output-folder", "output", "Specify the output folder chunks will be written to")

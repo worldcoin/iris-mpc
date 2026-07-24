@@ -25,7 +25,8 @@ use iris_mpc_common::{
 use itertools::izip;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{
-    fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
+    fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3IrisShares, S3Store,
+    S3StoredIris, SnapshotFormat,
 };
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use std::ops::DerefMut;

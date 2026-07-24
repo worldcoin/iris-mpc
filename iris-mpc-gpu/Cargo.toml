@@ -23,6 +23,7 @@ num-traits.workspace = true
 rand.workspace = true
 static_assertions.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }
+u16-gemm = { git = "https://github.com/philsippl/u16-gemm", branch = "main" }
 iris-mpc-cpu = { path = "../iris-mpc-cpu" }
 metrics.workspace = true
 memmap2.workspace = true
