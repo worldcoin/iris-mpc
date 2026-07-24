@@ -24,12 +24,6 @@ use std::{
 };
 use tokio::sync::{self, mpsc, oneshot};
 
-/// Maximum time to wait for all parties to complete the sync_peers exchange.
-/// This bounds the retry loop inside `HawkSession::sync_peers` so that
-/// persistent failures (crashed peer, broken connection) surface as errors
-/// rather than hanging indefinitely.
-const SYNC_PEERS_TIMEOUT: Duration = Duration::from_secs(5 * 60);
-
 /// Handle to manage concurrent interactions with a Hawk actor.
 #[derive(Clone, Debug)]
 pub struct Handle {
@@ -39,7 +33,10 @@ pub struct Handle {
 
 /// Constructors.
 impl Handle {
-    pub async fn new(mut actor: HawkActor) -> Result<Self> {
+    /// `sync_timeout` bounds each peer sync exchange (`sync_state` /
+    /// `sync_peers`) so a crashed peer or broken connection surfaces as an
+    /// error rather than hanging indefinitely.
+    pub async fn new(mut actor: HawkActor, sync_timeout: Duration) -> Result<Self> {
         /// Performs post job processing health checks:
         /// - resets Hawk sessions upon job failure
         /// - ensures system state is in sync.
@@ -73,7 +70,8 @@ impl Handle {
                 return_channel,
             }) = rx.recv().await
             {
-                let job_result = Self::handle_job(&mut actor, &sessions, request).await;
+                let job_result =
+                    Self::handle_job(&mut actor, &sessions, request, sync_timeout).await;
                 // SyncPeers and SyncState do not modify the inner state. As long as they didn't fail
                 // it is safe to skip the health check
                 let health = if matches!(
@@ -165,6 +163,7 @@ impl Handle {
         actor: &mut HawkActor,
         sessions: &BothEyes<Vec<HawkSession>>,
         request: JobRequest,
+        sync_timeout: Duration,
     ) -> Result<(sync::oneshot::Receiver<()>, JobResult)> {
         let now = Instant::now();
         let (done_tx, done_rx) = sync::oneshot::channel();
@@ -350,7 +349,12 @@ impl Handle {
 
                 let [left_vector, right_vector] = results;
 
-                assert_eq!(left_vector, right_vector);
+                if left_vector != right_vector {
+                    bail!(
+                        "version replay for serial {serial_id} produced diverging vector ids \
+                         across eyes: left={left_vector:?}, right={right_vector:?}"
+                    );
+                }
 
                 metrics::histogram!("genesis_version_replay_duration")
                     .record(now.elapsed().as_secs_f64());
@@ -366,18 +370,18 @@ impl Handle {
             } => {
                 let _ = done_tx;
                 let mismatched = tokio::time::timeout(
-                    SYNC_PEERS_TIMEOUT,
+                    sync_timeout,
                     HawkSession::sync_state(shutdown, sync_status, sessions),
                 )
                 .await
-                .map_err(|_| eyre!("sync_state timed out after {SYNC_PEERS_TIMEOUT:?}"))??;
+                .map_err(|_| eyre!("sync_state timed out after {sync_timeout:?}"))??;
                 Ok((done_rx, JobResult::SyncState { mismatched }))
             }
             JobRequest::SyncPeers => {
                 let _ = done_tx;
-                tokio::time::timeout(SYNC_PEERS_TIMEOUT, actor.sync_peers())
+                tokio::time::timeout(sync_timeout, actor.sync_peers())
                     .await
-                    .map_err(|_| eyre!("sync_peers timeout after {SYNC_PEERS_TIMEOUT:?}"))??;
+                    .map_err(|_| eyre!("sync_peers timeout after {sync_timeout:?}"))??;
                 Ok((done_rx, JobResult::SyncPeers))
             }
         }

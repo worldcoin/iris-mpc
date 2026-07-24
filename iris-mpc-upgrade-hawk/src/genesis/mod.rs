@@ -1,6 +1,7 @@
 mod delta;
 mod graph_checkpoint;
 mod indexation;
+mod retry;
 mod setup;
 mod snapshot;
 
@@ -139,6 +140,7 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         graph_store,
         hnsw_iris_store,
         delta_exchange,
+        prune_reports,
     } = exec_setup(&args, &config).await?;
 
     tracing::info!("Setup complete.");
@@ -162,6 +164,7 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
             &hnsw_iris_store,
             &imem_graph_stores,
             &delta_exchange,
+            prune_reports.as_ref(),
             hawk_handle,
             &tx_results,
             &mut task_monitor_bg,

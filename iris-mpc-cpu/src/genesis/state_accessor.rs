@@ -22,6 +22,9 @@ pub const STATE_KEY_LAST_INDEXED_IRIS_ID: &str = "last_indexed_iris_id";
 /// Key for persistent state store entry for last indexed modification id
 pub const STATE_KEY_LAST_INDEXED_MODIFICATION_ID: &str = "last_indexed_modification_id";
 
+/// Key for the force-included serial set captured during a legacy-base delta
+pub const STATE_KEY_DELTA_FORCED_SERIALS: &str = "delta_forced_serials";
+
 /// Fetches serial identifiers marked as deleted.
 ///
 /// # Arguments
@@ -150,6 +153,31 @@ pub async fn get_last_indexed_modification_id(
     graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
 ) -> Result<i64> {
     get_state_element(graph_store, STATE_KEY_LAST_INDEXED_MODIFICATION_ID).await
+}
+
+/// Persists the force-included serial set derived from a legacy-base prune
+/// report. A crash after the base is rewritten as V5 loses the report (it only
+/// exists for a legacy base), so a rerun reloads this to replay the same
+/// force-included content refreshes. Written at plan time, cleared after flush.
+pub async fn set_delta_forced_serials(
+    tx: &mut Transaction<'_, Postgres>,
+    serials: &[SerialId],
+) -> Result<(), IndexationError> {
+    set_state_element(tx, STATE_KEY_DELTA_FORCED_SERIALS, &serials.to_vec()).await
+}
+
+/// Loads the persisted force-included serial set, or an empty vec if none.
+pub async fn get_delta_forced_serials(
+    graph_store: Arc<GraphPg<Aby3Store<HawkOps>>>,
+) -> Result<Vec<SerialId>> {
+    get_state_element(graph_store, STATE_KEY_DELTA_FORCED_SERIALS).await
+}
+
+/// Clears the persisted force-included serial set once its refreshes are durable.
+pub async fn unset_delta_forced_serials(
+    tx: &mut Transaction<'_, Postgres>,
+) -> Result<(), IndexationError> {
+    unset_state_element(tx, STATE_KEY_DELTA_FORCED_SERIALS).await
 }
 
 /// Gets a state element value from remote store.

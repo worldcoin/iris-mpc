@@ -45,17 +45,31 @@ pub(super) async fn exec_snapshot(
     let host_and_db = &url[at_pos + 1..];
     let slash_pos = host_and_db.find('/').unwrap_or(host_and_db.len());
     let cluster_endpoint = &host_and_db[..slash_pos];
-    let resp = aws_rds_client
-        .describe_db_clusters()
-        .send()
-        .await
-        .map_err(|_| IndexationError::AwsRdsGetClusterURLs)?;
-    let cluster_id = resp
-        .db_clusters()
-        .iter()
-        .find(|cluster| cluster.endpoint() == Some(cluster_endpoint))
-        .and_then(|cluster| cluster.db_cluster_identifier())
-        .ok_or(IndexationError::AwsRdsClusterIdNotFound)?;
+    // Page through every cluster: a single `describe_db_clusters` returns at
+    // most 100, so the target can be beyond the first page.
+    let mut marker: Option<String> = None;
+    let cluster_id = loop {
+        let mut req = aws_rds_client.describe_db_clusters();
+        if let Some(m) = &marker {
+            req = req.marker(m);
+        }
+        let resp = req
+            .send()
+            .await
+            .map_err(|_| IndexationError::AwsRdsGetClusterURLs)?;
+        if let Some(id) = resp
+            .db_clusters()
+            .iter()
+            .find(|cluster| cluster.endpoint() == Some(cluster_endpoint))
+            .and_then(|cluster| cluster.db_cluster_identifier())
+        {
+            break id.to_string();
+        }
+        match resp.marker() {
+            Some(next) => marker = Some(next.to_string()),
+            None => return Err(IndexationError::AwsRdsClusterIdNotFound),
+        }
+    };
 
     // Create cluster snapshot.
     tracing::info!(
@@ -65,7 +79,7 @@ pub(super) async fn exec_snapshot(
     );
     aws_rds_client
         .create_db_cluster_snapshot()
-        .db_cluster_identifier(cluster_id)
+        .db_cluster_identifier(cluster_id.clone())
         .db_cluster_snapshot_identifier(snapshot_id.clone())
         .send()
         .await

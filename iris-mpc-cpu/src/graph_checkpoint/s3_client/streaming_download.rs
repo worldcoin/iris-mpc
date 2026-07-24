@@ -40,8 +40,6 @@
 //! `stream_serialize_and_upload` this is automatic; callers
 //! wiring up other sources must respect the contract.
 
-use std::time::Duration;
-
 use aws_sdk_s3::Client as S3Client;
 use bytes::Bytes;
 use eyre::{eyre, Result};
@@ -55,11 +53,14 @@ use crate::{
     hnsw::graph::layered_graph::GraphMem,
     utils::serialization::graph::{
         read_graph_pair_pruned, read_graph_pair_streaming, GraphFormat, LegacyPruneContext,
+        PruneReport,
     },
 };
 
 const RANGE_MAX_RETRIES: u32 = 3;
-const RANGE_RETRY_DELAY: Duration = Duration::from_secs(2);
+
+/// Log a download-progress line every this many ranges issued.
+const DOWNLOAD_PROGRESS_EVERY: usize = 64;
 
 /// Default duplex pipe capacity. Bounds back-pressure on the range
 /// reader: when the deserializer falls behind, the pipe fills, the tee
@@ -162,7 +163,7 @@ pub async fn stream_download_and_deserialize_graph_pair(
     format: GraphFormat,
     prune: Option<LegacyPruneContext>,
 ) -> Result<([GraphMem; 2], [u8; 32])> {
-    stream_download_and_deserialize_graph_pair_with(
+    let (graphs, _reports, hash) = stream_download_and_deserialize_graph_pair_with(
         s3_client,
         bucket,
         key,
@@ -172,11 +173,13 @@ pub async fn stream_download_and_deserialize_graph_pair(
         DEFAULT_DOWNLOAD_RANGE_SIZE,
         DEFAULT_DOWNLOAD_PARALLELISM,
     )
-    .await
+    .await?;
+    Ok((graphs, hash))
 }
 
 /// Like [`stream_download_and_deserialize_graph_pair`] but with explicit
-/// `pipe_capacity`, `range_size`, and `parallelism` knobs.
+/// `pipe_capacity`, `range_size`, and `parallelism` knobs, and returning the
+/// [`PruneReport`] pair a legacy pruning decode emits (`None` otherwise).
 #[allow(clippy::too_many_arguments)]
 pub async fn stream_download_and_deserialize_graph_pair_with(
     s3_client: &S3Client,
@@ -187,7 +190,7 @@ pub async fn stream_download_and_deserialize_graph_pair_with(
     pipe_capacity: usize,
     range_size: usize,
     parallelism: usize,
-) -> Result<([GraphMem; 2], [u8; 32])> {
+) -> Result<([GraphMem; 2], Option<[PruneReport; 2]>, [u8; 32])> {
     tracing::info!(
         "Streaming download + deserialize graph pair: bucket={bucket}, key={key}, \
          format={format}, pipe_capacity={pipe_capacity}, range_size={range_size}, \
@@ -212,7 +215,7 @@ pub async fn stream_download_and_deserialize_graph_pair_with(
         parallelism,
     ));
     let reader = StreamReader::new(stream);
-    deserialize_and_hash_from_fn(reader, pipe_capacity, move |r| {
+    let ((graphs, reports), hash) = deserialize_and_hash_from_fn(reader, pipe_capacity, move |r| {
         // bincode reads the graph field-by-field; without buffering, each tiny
         // read blocks across the duplex via SyncIoBridge — ~10x slower at prod
         // scale.
@@ -220,10 +223,11 @@ pub async fn stream_download_and_deserialize_graph_pair_with(
         if let Some(prune) = &prune {
             read_graph_pair_pruned(&mut buf, format, prune)
         } else {
-            read_graph_pair_streaming(&mut buf, format)
+            Ok((read_graph_pair_streaming(&mut buf, format)?, None))
         }
     })
-    .await
+    .await?;
+    Ok((graphs, reports, hash))
 }
 
 /// `HeadObject` for `content_length`, retried per [`RANGE_MAX_RETRIES`].
@@ -243,7 +247,7 @@ async fn head_object_size_with_retry(s3_client: &S3Client, bucket: &str, key: &s
             Err(e) if attempts < RANGE_MAX_RETRIES => {
                 attempts += 1;
                 tracing::warn!("Retry {attempts} for head_object s3://{bucket}/{key}: {e:?}");
-                sleep(RANGE_RETRY_DELAY).await;
+                sleep(super::retry_backoff(attempts)).await;
             }
             Err(e) => {
                 return Err(eyre!(
@@ -279,13 +283,21 @@ fn range_stream(
         ranges.push((offset, end_inclusive));
         offset = end_inclusive + 1;
     }
+    let total_ranges = ranges.len();
 
-    stream::iter(ranges)
-        .map(move |(start, end_inclusive)| {
+    stream::iter(ranges.into_iter().enumerate())
+        .map(move |(idx, (start, end_inclusive))| {
             let s3_client = s3_client.clone();
             let bucket = bucket.clone();
             let key = key.clone();
             async move {
+                if idx % DOWNLOAD_PROGRESS_EVERY == 0 {
+                    tracing::info!(
+                        "download progress s3://{bucket}/{key}: range {idx}/{total_ranges} \
+                         (~{} bytes)",
+                        start,
+                    );
+                }
                 let range = format!("bytes={start}-{end_inclusive}");
                 fetch_range(&s3_client, &bucket, &key, &range)
                     .await
@@ -326,7 +338,7 @@ async fn fetch_range(s3_client: &S3Client, bucket: &str, key: &str, range: &str)
             Err(e) if attempts < RANGE_MAX_RETRIES => {
                 attempts += 1;
                 tracing::warn!("Retry {attempts} for range {range}: {e}");
-                sleep(RANGE_RETRY_DELAY).await;
+                sleep(super::retry_backoff(attempts)).await;
             }
             Err(e) => {
                 return Err(eyre!("range {range} failed after {attempts} retries: {e}"));
