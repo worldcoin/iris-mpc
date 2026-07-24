@@ -214,9 +214,9 @@ async fn test_from_another() -> Result<()> {
             // Neighbor lists are stored serial-sorted, and the id remap does
             // not preserve that order, so compare the remapped sets.
             let expected: std::collections::HashSet<SerialId> =
-                nbhd.neighbors.iter().map(|n| point_ids_map[n]).collect();
+                nbhd.neighbors().iter().map(|n| point_ids_map[n]).collect();
             let got: std::collections::HashSet<SerialId> =
-                new_nbhd.neighbors.iter().copied().collect();
+                new_nbhd.neighbors().iter().copied().collect();
             assert_eq!(expected, got, "neighbors of {point_id} -> {new_point_id}");
         }
     }
@@ -271,15 +271,15 @@ fn add_edges_outgoing_writes_only_to_id_list() {
         })
         .unwrap();
     assert_eq!(
-        graph.layers[0].get_links(&1).unwrap().neighbors,
+        graph.layers[0].get_links(&1).unwrap().neighbors(),
         vec![2u32, 3u32]
     );
     assert_eq!(
-        graph.layers[0].get_links(&2).unwrap().neighbors,
+        graph.layers[0].get_links(&2).unwrap().neighbors(),
         vec![] as Vec<SerialId>
     );
     assert_eq!(
-        graph.layers[0].get_links(&3).unwrap().neighbors,
+        graph.layers[0].get_links(&3).unwrap().neighbors(),
         vec![] as Vec<SerialId>
     );
 }
@@ -326,11 +326,17 @@ fn add_edges_incoming_writes_only_to_target_lists() {
         })
         .unwrap();
     assert_eq!(
-        graph.layers[0].get_links(&1).unwrap().neighbors,
+        graph.layers[0].get_links(&1).unwrap().neighbors(),
         vec![] as Vec<SerialId>
     );
-    assert_eq!(graph.layers[0].get_links(&2).unwrap().neighbors, vec![1u32]);
-    assert_eq!(graph.layers[0].get_links(&3).unwrap().neighbors, vec![1u32]);
+    assert_eq!(
+        graph.layers[0].get_links(&2).unwrap().neighbors(),
+        vec![1u32]
+    );
+    assert_eq!(
+        graph.layers[0].get_links(&3).unwrap().neighbors(),
+        vec![1u32]
+    );
 }
 
 /// Filter-on-bump: an asymmetric stale edge `a -> b` (no `b -> a`
@@ -369,7 +375,7 @@ fn stale_edge_dropped_on_neighborhood_touch_after_reauth() {
         })
         .unwrap();
     assert_eq!(
-        graph.layers[0].get_links(&1).unwrap().neighbors().to_vec(),
+        graph.layers[0].get_links(&1).unwrap().neighbors(),
         vec![2u32]
     );
 
@@ -384,7 +390,7 @@ fn stale_edge_dropped_on_neighborhood_touch_after_reauth() {
     // a's neighborhood (last touched at seq 2) hasn't been revisited, so the
     // stale edge is still present — detection happens on next touch.
     assert_eq!(
-        graph.layers[0].get_links(&1).unwrap().neighbors().to_vec(),
+        graph.layers[0].get_links(&1).unwrap().neighbors(),
         vec![2u32]
     );
 
@@ -410,7 +416,7 @@ fn stale_edge_dropped_on_neighborhood_touch_after_reauth() {
         })
         .unwrap();
     assert_eq!(
-        graph.layers[0].get_links(&1).unwrap().neighbors().to_vec(),
+        graph.layers[0].get_links(&1).unwrap().neighbors(),
         vec![3u32]
     );
 
@@ -757,7 +763,7 @@ fn resolution_drops_reauth_self_reference() {
 
     // No self-edge, physically or actively; the real neighbor survives
     // in both directions.
-    assert_eq!(graph.get_raw_links(&1, 0), &[2u32]);
+    assert_eq!(graph.get_raw_links(&1, 0), vec![2u32]);
     assert_eq!(graph.get_active_links(&1, 0), vec![a]);
     assert_eq!(graph.get_active_links(&2, 0), vec![s1]);
 
@@ -765,7 +771,7 @@ fn resolution_drops_reauth_self_reference() {
     let mut replayed = GraphMem::new();
     replayed.insert_apply_all(&wal).unwrap();
     assert_eq!(graph.checksum(), replayed.checksum());
-    assert_eq!(replayed.get_raw_links(&1, 0), &[2u32]);
+    assert_eq!(replayed.get_raw_links(&1, 0), vec![2u32]);
 }
 
 /// Read-path skip: `get_active_links` omits a content-stale neighbor even
@@ -815,7 +821,7 @@ fn get_active_links_skips_content_stale_neighbor() {
 
     // Physical edge survives (a untouched), but read-path skips it.
     assert_eq!(
-        graph.layers[0].get_links(&1).unwrap().neighbors().to_vec(),
+        graph.layers[0].get_links(&1).unwrap().neighbors(),
         vec![2u32]
     );
     assert_eq!(graph.get_active_links(&1, 0), Vec::<VectorId>::new());
@@ -867,7 +873,7 @@ fn get_active_links_drops_edge_to_removed_node() {
 
     // Physical edge a -> b survives, but read-path skips the dead node.
     assert_eq!(
-        graph.layers[0].get_links(&1).unwrap().neighbors().to_vec(),
+        graph.layers[0].get_links(&1).unwrap().neighbors(),
         vec![2u32]
     );
     assert_eq!(graph.get_active_links(&1, 0), Vec::<VectorId>::new());
@@ -1109,7 +1115,11 @@ async fn remove_edges_op_fused_retain_drops_explicit_and_sweeps_stale() {
         ops: vec![MutationOp::RemoveNode { id: v(3) }, node(v(3))],
     })
     .unwrap();
-    assert_eq!(g.get_raw_links(&1, 0), &[2u32, 3u32], "stale 3 still raw");
+    assert_eq!(
+        g.get_raw_links(&1, 0),
+        vec![2u32, 3u32],
+        "stale 3 still raw"
+    );
     assert_eq!(g.get_active_links(&1, 0), vec![v(2)], "3 masked as stale");
 
     // RemoveEdges Base(1 -/-> 2): retain drops explicit 2 AND stale 3; the
@@ -1128,7 +1138,7 @@ async fn remove_edges_op_fused_retain_drops_explicit_and_sweeps_stale() {
         .unwrap();
     assert_eq!(
         g.get_raw_links(&1, 0),
-        &[] as &[u32],
+        vec![] as Vec<u32>,
         "explicit 2 removed AND content-stale 3 swept in one retain"
     );
     assert_eq!(minted.ops, vec![teardown], "ops returned unchanged");
@@ -1158,7 +1168,11 @@ async fn remove_edges_op_fused_retain_drops_explicit_and_sweeps_stale() {
         ops: vec![MutationOp::RemoveNode { id: v(6) }, node(v(6))],
     })
     .unwrap();
-    assert_eq!(g.get_raw_links(&5, 0), &[4u32, 6u32], "stale 6 still raw");
+    assert_eq!(
+        g.get_raw_links(&5, 0),
+        vec![4u32, 6u32],
+        "stale 6 still raw"
+    );
 
     // RemoveEdges All(4 -/- 5): forward half empties 4; back-half retain on
     // target 5 drops explicit 4 AND stale 6.
@@ -1176,12 +1190,12 @@ async fn remove_edges_op_fused_retain_drops_explicit_and_sweeps_stale() {
         .unwrap();
     assert_eq!(
         g.get_raw_links(&4, 0),
-        &[] as &[u32],
+        vec![] as Vec<u32>,
         "forward half drops 5"
     );
     assert_eq!(
         g.get_raw_links(&5, 0),
-        &[] as &[u32],
+        vec![] as Vec<u32>,
         "back-half retain drops explicit 4 AND content-stale 6"
     );
     assert_eq!(minted.ops, vec![teardown], "ops returned unchanged");
@@ -1381,10 +1395,10 @@ async fn edge_ops_do_not_perturb_content_clock() {
         }],
     })
     .unwrap();
-    assert_eq!(g.get_raw_links(&1, 0), &[2u32, 3u32]);
+    assert_eq!(g.get_raw_links(&1, 0), vec![2u32, 3u32]);
     assert_eq!(
         g.get_raw_links(&2, 0),
-        &[1u32],
+        vec![1u32],
         "back-edge keyed on serial 2"
     );
     assert_eq!(
@@ -1403,7 +1417,7 @@ async fn edge_ops_do_not_perturb_content_clock() {
         }],
     })
     .unwrap();
-    assert_eq!(g.get_raw_links(&1, 0), &[3u32]);
+    assert_eq!(g.get_raw_links(&1, 0), vec![3u32]);
     assert_eq!(
         g.node_init, clock_before,
         "RemoveEdges must not perturb the content clock"
@@ -1463,12 +1477,12 @@ async fn remove_node_of_entry_point_falls_back_to_min_serial() {
     assert!(g.layers[1].get_links(&1).is_none(), "gone at layer 1");
     // Backlinks 2->1 / 3->1 linger physically but are masked at read: 1 is
     // gone from the content clock, so is_active hides the dangling edge.
-    assert_eq!(g.get_raw_links(&2, 0), &[1u32], "2->1 lingers in raw");
+    assert_eq!(g.get_raw_links(&2, 0), vec![1u32], "2->1 lingers in raw");
     assert!(
         g.get_active_links(&2, 0).is_empty(),
         "2->1 masked by is_active"
     );
-    assert_eq!(g.get_raw_links(&3, 0), &[1u32], "3->1 lingers in raw");
+    assert_eq!(g.get_raw_links(&3, 0), vec![1u32], "3->1 lingers in raw");
     assert!(
         g.get_active_links(&3, 0).is_empty(),
         "3->1 masked by is_active"
@@ -1521,11 +1535,17 @@ fn add_edges_bidirectional_writes_both_sides() {
         })
         .unwrap();
     assert_eq!(
-        graph.layers[0].get_links(&1).unwrap().neighbors,
+        graph.layers[0].get_links(&1).unwrap().neighbors(),
         vec![2u32, 3u32]
     );
-    assert_eq!(graph.layers[0].get_links(&2).unwrap().neighbors, vec![1u32]);
-    assert_eq!(graph.layers[0].get_links(&3).unwrap().neighbors, vec![1u32]);
+    assert_eq!(
+        graph.layers[0].get_links(&2).unwrap().neighbors(),
+        vec![1u32]
+    );
+    assert_eq!(
+        graph.layers[0].get_links(&3).unwrap().neighbors(),
+        vec![1u32]
+    );
 }
 
 #[test]
@@ -1587,9 +1607,15 @@ fn remove_edges_outgoing_only_modifies_id_list() {
             }],
         })
         .unwrap();
-    assert_eq!(graph.layers[0].get_links(&1).unwrap().neighbors, vec![3u32]);
+    assert_eq!(
+        graph.layers[0].get_links(&1).unwrap().neighbors(),
+        vec![3u32]
+    );
     // Bidirectional cleanup is not implied — b's list still contains a.
-    assert_eq!(graph.layers[0].get_links(&2).unwrap().neighbors, vec![1u32]);
+    assert_eq!(
+        graph.layers[0].get_links(&2).unwrap().neighbors(),
+        vec![1u32]
+    );
 }
 
 #[test]
@@ -1627,7 +1653,10 @@ fn two_phase_apply_edges_before_node_in_vec_still_works() {
         .unwrap();
     // Pass-1 created the nodes, then pass-2 applied the edge — so a should
     // now have b in its outgoing list.
-    assert_eq!(graph.layers[0].get_links(&1).unwrap().neighbors, vec![2u32]);
+    assert_eq!(
+        graph.layers[0].get_links(&1).unwrap().neighbors(),
+        vec![2u32]
+    );
 }
 
 #[test]

@@ -10,6 +10,7 @@ use crate::{
     },
     hnsw::{
         graph::{
+            encoded_neighborhood::EncodedNeighborhood,
             mutation::{EdgeType, UnstampedMutation},
             GraphMutation, MutationOp, UpdateEntryPoint,
         },
@@ -49,21 +50,46 @@ impl Tick {
     }
 }
 
-/// One node's neighbor list in one layer, plus the seq_no of the mutation that
-/// last modified it.
+/// One node's neighbor list in one layer, stored Rice-coded
+/// ([`EncodedNeighborhood`]), plus the seq_no of the mutation that last
+/// modified it.
 ///
 /// Fields are private: the "every edge valid as of `seq_no`" invariant is
-/// maintained solely by [`Layer`]'s mutators.
+/// maintained solely by [`Layer`]'s mutators, which also keep the encoding
+/// canonical (sorted, deduplicated input).
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Neighborhood {
-    neighbors: Vec<SerialId>,
+    neighbors: EncodedNeighborhood,
     seq_no: u64,
 }
 
 impl Neighborhood {
-    /// The neighbor list. Read-only; mutate via [`Layer`].
-    pub fn neighbors(&self) -> &[SerialId] {
+    /// Decode the neighbor list, sorted ascending. Read-only; mutate via
+    /// [`Layer`].
+    ///
+    /// # Panics
+    /// If the stored blob does not decode — impossible for blobs produced by
+    /// [`Layer`]'s mutators; trusted-ingest paths must only accept blobs
+    /// minted by [`EncodedNeighborhood::encode`].
+    pub fn neighbors(&self) -> Vec<SerialId> {
+        self.neighbors
+            .decode()
+            .unwrap_or_else(|e| panic!("stored neighborhood blob must decode: {e}"))
+    }
+
+    /// Number of neighbors, read from the encoding header without decoding.
+    pub fn degree(&self) -> usize {
+        self.neighbors.len()
+    }
+
+    /// The stored Rice-coded form.
+    pub fn encoded(&self) -> &EncodedNeighborhood {
         &self.neighbors
+    }
+
+    /// Consume into the stored Rice-coded form.
+    pub fn into_encoded(self) -> EncodedNeighborhood {
+        self.neighbors
     }
 
     /// Seq_no of the mutation that last modified this neighborhood; every edge
@@ -174,7 +200,7 @@ impl Display for Layer {
         let mut links = self
             .links
             .iter()
-            .map(|(k, v)| (*k, v.neighbors.clone()))
+            .map(|(k, v)| (*k, v.neighbors()))
             .collect_vec();
         links.sort_by_key(|(k, _)| *k);
         for (id, l) in links.iter() {
@@ -687,12 +713,12 @@ impl GraphMem {
     /// staleness filtering. For maintenance paths that reason about physical
     /// edges; traversal must use [`Self::get_active_links`]. Empty if
     /// `base`/`lc` absent.
-    pub fn get_raw_links(&self, base: &SerialId, lc: usize) -> &[SerialId] {
+    pub fn get_raw_links(&self, base: &SerialId, lc: usize) -> Vec<SerialId> {
         self.layers
             .get(lc)
             .and_then(|layer| layer.get_links(base))
-            .map(|n| n.neighbors.as_slice())
-            .unwrap_or(&[])
+            .map(|n| n.neighbors())
+            .unwrap_or_default()
     }
 
     /// Current `VectorId` of an in-graph node, from the content clock. `None`
@@ -713,9 +739,9 @@ impl GraphMem {
             return Vec::new();
         };
         let old_seq = nbhd.seq_no;
-        nbhd.neighbors
-            .iter()
-            .filter_map(|&z| {
+        nbhd.neighbors()
+            .into_iter()
+            .filter_map(|z| {
                 self.node_init
                     .get(&z)
                     .filter(|ni| ni.active_at(old_seq))
@@ -963,15 +989,16 @@ impl Layer {
     }
 
     /// Set-hash contribution of one neighborhood, keyed on `(node, seq_no)`
-    /// over the neighbor list. The list MUST be sorted+deduped: the hash is
-    /// order-sensitive, and cross-party consensus needs one canonical order.
-    /// `edit_links` and `set_links_trusted` maintain that invariant.
-    fn neighborhood_contribution(node: SerialId, seq_no: u64, neighbors: &[SerialId]) -> u64 {
-        debug_assert!(
-            neighbors.is_sorted(),
-            "neighborhood must be sorted before hashing (consensus invariant)"
-        );
-        SetHash::hash((node, seq_no, neighbors))
+    /// over the Rice-coded bytes. The encoding is canonical — deterministic
+    /// over a sorted+deduped list — so hashing the blob discriminates exactly
+    /// like hashing the decoded list, and cross-party consensus needs that one
+    /// canonical form. `edit_links` and `set_links_trusted` maintain it.
+    fn neighborhood_contribution(
+        node: SerialId,
+        seq_no: u64,
+        neighbors: &EncodedNeighborhood,
+    ) -> u64 {
+        SetHash::hash((node, seq_no, neighbors.as_bytes()))
     }
 
     pub fn insert_node(&mut self, id: SerialId, neighbors: Vec<SerialId>, seq_no: u64) {
@@ -981,6 +1008,9 @@ impl Layer {
     /// Edit `node`'s existing neighbor list and re-stamp it at `tick`. No-op
     /// if `node` is absent. Representation primitive only — graph code routes
     /// through `GraphMem::edit_neighborhood`, which owns the staleness filter.
+    ///
+    /// The stored blob is decoded for the edit and re-encoded canonically
+    /// (sorted, deduplicated) afterwards.
     pub(in crate::hnsw::graph) fn edit_links<F>(&mut self, node: SerialId, tick: Tick, f: F)
     where
         F: FnOnce(u64, &mut Vec<SerialId>),
@@ -994,9 +1024,15 @@ impl Layer {
             nbhd.seq_no,
             &nbhd.neighbors,
         ));
-        f(nbhd.seq_no, &mut nbhd.neighbors);
-        nbhd.neighbors.sort_unstable();
-        nbhd.neighbors.dedup();
+        let mut neighbors = nbhd
+            .neighbors
+            .decode()
+            .unwrap_or_else(|e| panic!("stored neighborhood blob must decode: {e}"));
+        f(nbhd.seq_no, &mut neighbors);
+        neighbors.sort_unstable();
+        neighbors.dedup();
+        nbhd.neighbors = EncodedNeighborhood::encode(&neighbors)
+            .unwrap_or_else(|e| panic!("canonicalized neighbor list must encode: {e}"));
         nbhd.seq_no = tick.value();
         self.set_hash.add_hash(Self::neighborhood_contribution(
             node,
@@ -1027,14 +1063,30 @@ impl Layer {
 
     /// Trusted bulk-load / construction only. Writes `from`'s full neighbor
     /// list at a caller-supplied raw `seq_no` — no [`Tick`] guard, no
-    /// staleness filter — canonicalizing it (sort+dedup). Never call on the
-    /// live mutation path; use `Layer::create_node` and `Layer::edit_links`
-    /// there.
+    /// staleness filter — canonicalizing it (sort+dedup) before encoding.
+    /// Never call on the live mutation path; use `Layer::create_node` and
+    /// `Layer::edit_links` there.
     pub fn set_links_trusted(&mut self, from: SerialId, mut links: Vec<SerialId>, seq_no: u64) {
-        use std::collections::hash_map::Entry;
-        // Canonical order for `neighborhood_contribution`.
+        // Canonical form for `neighborhood_contribution`.
         links.sort_unstable();
         links.dedup();
+        let encoded = EncodedNeighborhood::encode(&links)
+            .unwrap_or_else(|e| panic!("canonicalized neighbor list must encode: {e}"));
+        self.set_links_encoded_trusted(from, encoded, seq_no);
+    }
+
+    /// [`Layer::set_links_trusted`] variant taking an already-encoded
+    /// neighborhood, ingested without a decode pass. The blob must be
+    /// canonical — minted by [`EncodedNeighborhood::encode`] from a sorted,
+    /// deduplicated list — or later reads panic and the set-hash diverges
+    /// from the list contents.
+    pub fn set_links_encoded_trusted(
+        &mut self,
+        from: SerialId,
+        links: EncodedNeighborhood,
+        seq_no: u64,
+    ) {
+        use std::collections::hash_map::Entry;
         match self.links.entry(from) {
             Entry::Occupied(mut e) => {
                 let key = *e.key();
@@ -1171,7 +1223,7 @@ where
             for (from, nbhd) in v.links.into_iter() {
                 layer.set_links_trusted(
                     vector_map(from),
-                    nbhd.neighbors.into_iter().map(vector_map).collect(),
+                    nbhd.neighbors().into_iter().map(vector_map).collect(),
                     nbhd.seq_no,
                 );
             }
@@ -1237,7 +1289,7 @@ mod int4_layer_tests {
             // order is not preserved — only membership of the correct k matters.
             let mut expected: Vec<SerialId> = dists.into_iter().take(k).map(|(j, _)| j).collect();
             expected.sort_unstable();
-            assert_eq!(&nbhd.neighbors, &expected, "key {key}");
+            assert_eq!(&nbhd.neighbors(), &expected, "key {key}");
         }
     }
 }
