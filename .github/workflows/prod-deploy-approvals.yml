@@ -5,7 +5,8 @@ on:
 
 jobs:
   check-approvals:
-    runs-on: ubuntu-latest
+    runs-on:
+      group: arc-public-xlarge-amd64-runner
     permissions:
       pull-requests: read
     steps:

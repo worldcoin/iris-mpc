@@ -45,6 +45,7 @@
 //!
 //! See `module_doc_example_bytes` for the test that pins these bytes.
 
+use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
 use thiserror::Error;
 
 /// Maximum supported neighborhood size. Limited by the 16-bit `k` field in the header.
@@ -56,6 +57,56 @@ const HEADER_LEN: usize = 3;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EncodedNeighborhood {
     bytes: Box<[u8]>,
+}
+
+impl Default for EncodedNeighborhood {
+    /// The encoding of the empty neighborhood.
+    fn default() -> Self {
+        Self {
+            bytes: Box::new([0u8; HEADER_LEN]),
+        }
+    }
+}
+
+/// Serialized as a raw byte string (`serialize_bytes`): under bincode this is
+/// a u64 length followed by the blob verbatim, byte-identical to a derived
+/// `Vec<u8>` field. Wire adapters mirroring this type must keep that layout.
+impl Serialize for EncodedNeighborhood {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(&self.bytes)
+    }
+}
+
+impl<'de> Deserialize<'de> for EncodedNeighborhood {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct BytesVisitor;
+        impl<'de> de::Visitor<'de> for BytesVisitor {
+            type Value = Box<[u8]>;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("encoded neighborhood bytes")
+            }
+
+            fn visit_bytes<E: de::Error>(self, v: &[u8]) -> Result<Self::Value, E> {
+                Ok(v.into())
+            }
+
+            fn visit_byte_buf<E: de::Error>(self, v: Vec<u8>) -> Result<Self::Value, E> {
+                Ok(v.into_boxed_slice())
+            }
+
+            fn visit_seq<A: de::SeqAccess<'de>>(self, mut seq: A) -> Result<Self::Value, A::Error> {
+                let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+                while let Some(b) = seq.next_element::<u8>()? {
+                    out.push(b);
+                }
+                Ok(out.into_boxed_slice())
+            }
+        }
+        Ok(Self {
+            bytes: deserializer.deserialize_byte_buf(BytesVisitor)?,
+        })
+    }
 }
 
 /// Errors returned by [`EncodedNeighborhood::encode`].
@@ -140,6 +191,24 @@ impl EncodedNeighborhood {
     /// Return the underlying encoded bytes.
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
+    }
+
+    /// Consume into the underlying encoded bytes.
+    pub fn into_bytes(self) -> Box<[u8]> {
+        self.bytes
+    }
+
+    /// Number of encoded ids, read from the `k` header field without decoding
+    /// the body. `0` for a blob too short to carry a header.
+    pub fn len(&self) -> usize {
+        match self.bytes.first_chunk::<2>() {
+            Some(k) => u16::from_le_bytes(*k) as usize,
+            None => 0,
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     /// Decode back to a sorted-ascending `Vec<u32>` of neighbor IDs.
@@ -390,6 +459,35 @@ mod tests {
         let actual: Vec<u8> = encoded.as_bytes().to_vec();
         eprintln!("BYTES = {actual:02x?}");
         assert_eq!(actual, vec![0x03, 0x00, 0x01, 0x89, 0x80]);
+    }
+
+    #[test]
+    fn serde_bincode_matches_plain_byte_vec() {
+        // The manual serde impls must stay byte-identical to a derived
+        // `Vec<u8>` field under bincode; wire adapters rely on this.
+        let encoded = EncodedNeighborhood::encode(&[0u32, 5, 9]).unwrap();
+        let as_vec: Vec<u8> = encoded.as_bytes().to_vec();
+        let serialized = bincode::serialize(&encoded).unwrap();
+        assert_eq!(serialized, bincode::serialize(&as_vec).unwrap());
+        let back: EncodedNeighborhood = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(back, encoded);
+    }
+
+    #[test]
+    fn default_is_empty_encoding() {
+        let d = EncodedNeighborhood::default();
+        assert_eq!(d, EncodedNeighborhood::encode(&[]).unwrap());
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn len_reads_header_without_decode() {
+        for ids in [vec![], vec![7u32], (0..450u32).collect::<Vec<_>>()] {
+            let e = EncodedNeighborhood::encode(&ids).unwrap();
+            assert_eq!(e.len(), ids.len());
+        }
+        assert_eq!(EncodedNeighborhood::from_bytes(Box::new([])).len(), 0);
+        assert_eq!(EncodedNeighborhood::from_bytes(Box::new([5u8])).len(), 0);
     }
 
     #[test]

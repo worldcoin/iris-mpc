@@ -17,7 +17,7 @@ jobs:
   docker:
     timeout-minutes: 40
     runs-on:
-      labels: arm64-ubuntu-22.04-16core
+      group: arc-public-4xlarge-arm64-runner
     permissions:
       packages: write
       contents: read

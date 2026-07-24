@@ -12,7 +12,10 @@ use iris_mpc_common::VectorId;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    hnsw::graph::layered_graph::{self, GraphMem, Layer, NodeInit},
+    hnsw::graph::{
+        encoded_neighborhood::EncodedNeighborhood,
+        layered_graph::{self, GraphMem, Layer, NodeInit},
+    },
     utils::serialization::types::{
         graph_v0::{self, read_graph_v0, GraphV0},
         graph_v1::{self, read_graph_v1, GraphV1},
@@ -40,6 +43,7 @@ pub enum GraphFormat {
     /// - Sequence number for timestamping graph mutations
     /// - Neighborhoods contain the last updated sequence number <-- DIFF with V4
     /// - Contains a HashMap of (VectorId, sequence number) to invalidate old edges <-- DIFF with V4
+    /// - Neighbor lists are Rice-coded blobs (`EncodedNeighborhood`) <-- DIFF with V4
     V5,
 
     /// Stable graph serialization format Version 4.
@@ -921,9 +925,13 @@ impl From<graph_v5::EntryPoint> for layered_graph::EntryPoint {
 
 impl From<graph_v5::Layer> for Layer {
     fn from(value: graph_v5::Layer) -> Self {
-        let mut layer = Layer::new();
+        let mut layer = Layer::with_capacity(value.links.len());
         for (v, nb) in value.links.into_iter() {
-            layer.set_links_trusted(v, nb.neighbors, nb.updated_seq_no);
+            layer.set_links_encoded_trusted(
+                v,
+                EncodedNeighborhood::from_bytes(nb.neighbors.0.into_boxed_slice()),
+                nb.updated_seq_no,
+            );
         }
         layer
     }
@@ -972,11 +980,14 @@ impl From<Layer> for graph_v5::Layer {
                 .links
                 .into_iter()
                 .map(|(v, nb)| {
+                    let updated_seq_no = nb.seq_no();
                     (
                         v,
                         graph_v5::Neighborhood {
-                            neighbors: nb.neighbors().to_vec(),
-                            updated_seq_no: nb.seq_no(),
+                            neighbors: graph_v5::EncodedNeighborhoodBytes(
+                                nb.into_encoded().into_bytes().into_vec(),
+                            ),
+                            updated_seq_no,
                         },
                     )
                 })
