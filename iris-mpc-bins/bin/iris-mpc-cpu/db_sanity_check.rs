@@ -490,7 +490,7 @@ fn layered_bfs(
                 let Some(nbhd) = adj_l[u] else {
                     continue;
                 };
-                for &nb in nbhd.neighbors() {
+                for nb in nbhd.neighbors() {
                     let Some(v) = slot(nb).filter(|&v| v < n) else {
                         continue;
                     };
@@ -823,7 +823,7 @@ async fn run_probe_reports(
         for (node, nbhd) in graph.layers[0].links.iter() {
             let si = slot(*node).filter(|&i| i < n);
             let reachable = si.is_some_and(|i| dist[i] != u32::MAX);
-            for &target in nbhd.neighbors() {
+            for target in nbhd.neighbors() {
                 if !probe_set.contains(&target) {
                     continue;
                 }
@@ -870,9 +870,9 @@ async fn run_probe_reports(
                 (Some(a), Some(b)) => Some(a == b),
                 _ => None,
             };
-            let out_slice: &[SerialId] = probe_nbhd.map_or(&[], |nbhd| nbhd.neighbors());
-            let self_loop = out_slice.contains(&serial);
-            let out_neighbors: Vec<ProbeNeighbor> = out_slice
+            let out_ids: Vec<SerialId> = probe_nbhd.map_or_else(Vec::new, |nbhd| nbhd.neighbors());
+            let self_loop = out_ids.contains(&serial);
+            let out_neighbors: Vec<ProbeNeighbor> = out_ids
                 .iter()
                 .map(|&nb| {
                     let i = slot(nb).filter(|&i| i < n);
@@ -1489,7 +1489,7 @@ fn check_single_graph(
         );
         let mut deg_counts: BTreeMap<usize, usize> = BTreeMap::new();
         for neighbors in layer.links.values() {
-            *deg_counts.entry(neighbors.neighbors().len()).or_insert(0) += 1;
+            *deg_counts.entry(neighbors.degree()).or_insert(0) += 1;
         }
         for (&degree, &count) in &deg_counts {
             degree_hist.push(DegreeHistEntry {
@@ -1500,8 +1500,7 @@ fn check_single_graph(
             });
         }
         if !layer.links.is_empty() {
-            let mut degrees: Vec<usize> =
-                layer.links.values().map(|n| n.neighbors().len()).collect();
+            let mut degrees: Vec<usize> = layer.links.values().map(|n| n.degree()).collect();
             degrees.sort();
             let (min, max) = (degrees[0], degrees[degrees.len() - 1]);
             let avg = degrees.iter().sum::<usize>() as f64 / degrees.len() as f64;
@@ -1531,11 +1530,8 @@ fn check_single_graph(
                 continue;
             };
             let src = si as u32 / bucket_size;
-            out_by_bucket
-                .entry(src)
-                .or_default()
-                .push(nbhd.neighbors().len());
-            for &nb in nbhd.neighbors() {
+            out_by_bucket.entry(src).or_default().push(nbhd.degree());
+            for nb in nbhd.neighbors() {
                 let Some(v) = slot(nb) else {
                     continue;
                 };
@@ -1702,7 +1698,7 @@ fn check_single_graph(
             layer
                 .links
                 .values()
-                .flat_map(|nbs| nbs.neighbors().iter())
+                .flat_map(|nbs| nbs.neighbors())
                 .filter(|nb| !nodes.contains(nb))
                 .count() as u64
         })
@@ -1742,8 +1738,9 @@ fn check_single_graph(
         .iter()
         .flat_map(|l| l.links.values())
         .map(|nbs| {
-            let unique: HashSet<&SerialId> = nbs.neighbors().iter().collect();
-            (nbs.neighbors().len() - unique.len()) as u64
+            let ids = nbs.neighbors();
+            let unique: HashSet<&SerialId> = ids.iter().collect();
+            (ids.len() - unique.len()) as u64
         })
         .sum();
     checks.push(CheckResult::new(
@@ -1762,13 +1759,13 @@ fn check_single_graph(
     for (lc, layer) in graph.layers.iter().enumerate() {
         let m_limit = params.get_M_limit(lc);
         for (node, nbs) in layer.links.iter() {
-            if nbs.neighbors().len() > m_limit {
+            if nbs.degree() > m_limit {
                 degree_viol += 1;
                 if degree_viol <= 5 {
                     rpt!(
                         rpt,
                         "  [1g] {eye} L{lc} node {node} degree {} > M_limit {m_limit}",
-                        nbs.neighbors().len()
+                        nbs.degree()
                     );
                 }
             }

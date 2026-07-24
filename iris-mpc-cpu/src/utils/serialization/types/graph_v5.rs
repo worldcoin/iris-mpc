@@ -60,8 +60,56 @@ pub struct Layer {
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Neighborhood {
-    pub neighbors: Vec<SerialId>,
+    pub neighbors: EncodedNeighborhoodBytes,
     pub updated_seq_no: u64,
+}
+
+/// Rice-coded neighborhood blob (`EncodedNeighborhood` wire form), carried
+/// verbatim.
+///
+/// `Serialize` emits a raw byte string (`serialize_bytes`), byte-identical
+/// under bincode to both a derived `Vec<u8>` field and `EncodedNeighborhood`'s
+/// own serde — the layout `GraphMem`'s serializer produces.
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+pub struct EncodedNeighborhoodBytes(pub Vec<u8>);
+
+impl Serialize for EncodedNeighborhoodBytes {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(&self.0)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for EncodedNeighborhoodBytes {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct BytesVisitor;
+        impl<'de> serde::de::Visitor<'de> for BytesVisitor {
+            type Value = Vec<u8>;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("encoded neighborhood bytes")
+            }
+
+            fn visit_bytes<E: serde::de::Error>(self, v: &[u8]) -> Result<Self::Value, E> {
+                Ok(v.to_vec())
+            }
+
+            fn visit_byte_buf<E: serde::de::Error>(self, v: Vec<u8>) -> Result<Self::Value, E> {
+                Ok(v)
+            }
+
+            fn visit_seq<A: serde::de::SeqAccess<'de>>(
+                self,
+                mut seq: A,
+            ) -> Result<Self::Value, A::Error> {
+                let mut out = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+                while let Some(b) = seq.next_element::<u8>()? {
+                    out.push(b);
+                }
+                Ok(out)
+            }
+        }
+        Ok(Self(deserializer.deserialize_byte_buf(BytesVisitor)?))
+    }
 }
 
 struct SortedLinks<'a> {

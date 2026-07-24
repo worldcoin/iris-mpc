@@ -82,7 +82,7 @@ async fn run_sanity_check_iris<D: DistanceOps>(
             .get_M_max(lc)
             .min(layer.links.len().saturating_sub(1));
         for (_, value) in layer.links.iter() {
-            assert_eq!(value.neighbors().len(), expected_nb_size);
+            assert_eq!(value.degree(), expected_nb_size);
         }
     }
 
@@ -136,7 +136,7 @@ async fn run_sanity_check_iris<D: DistanceOps>(
 
         if !dists.is_empty() {
             dists.sort_by(|a, b| D::plaintext_ordering(&a.1, &b.1));
-            dists.truncate(neighbors.neighbors().len());
+            dists.truncate(neighbors.degree());
             let kth_dist = dists.last().unwrap().1;
 
             let count_greater = neighbors
@@ -170,7 +170,7 @@ async fn run_sanity_check_deep_id(
             .get_M_max(lc)
             .min(layer.links.len().saturating_sub(1));
         for (_, value) in layer.links.iter() {
-            assert_eq!(value.neighbors().len(), expected_nb_size);
+            assert_eq!(value.degree(), expected_nb_size);
         }
     }
 
@@ -221,7 +221,7 @@ async fn run_sanity_check_deep_id(
 
         // Larger dot = closer. Sort descending by dot, ascending by id on ties.
         dists.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.serial_id().cmp(&b.0.serial_id())));
-        dists.truncate(neighbors.neighbors().len());
+        dists.truncate(neighbors.degree());
         let kth_dot = dists.last().unwrap().1;
 
         let count_closer_outside = neighbors
