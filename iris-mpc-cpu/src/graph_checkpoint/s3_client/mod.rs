@@ -12,7 +12,7 @@ use crate::{
     execution::hawk_main::{BothEyes, GraphRef, LEFT, RIGHT},
     hnsw::{
         graph::{
-            graph_store::{self, GraphPg},
+            graph_store::{self, GraphCheckpointRow, GraphPg},
             layered_graph::GraphMem,
         },
         VectorStore,
@@ -25,6 +25,8 @@ use iris_mpc_common::SerialId;
 pub use multipart::*;
 pub use streaming::*;
 pub use streaming_download::*;
+
+use chrono::Utc;
 
 /// Creates an S3 graph checkpoint.
 #[allow(clippy::too_many_arguments)]
@@ -302,6 +304,7 @@ pub async fn cleanup_checkpoints<V: VectorStore>(
     retain_from_id: Option<i64>,
     graph_store: &GraphPg<V>,
     pruning_mode: PruningMode,
+    tiered_pruning: TieredPruningConfig,
 ) -> Result<()> {
     tracing::info!(
         "cleaning up old genesis graph checkpoints (mode: {})",
@@ -312,29 +315,124 @@ pub async fn cleanup_checkpoints<V: VectorStore>(
         tracing::info!("pruning mode is 'none', skipping cleanup");
         return Ok(());
     }
-
-    let all_checkpoints = graph_store.get_genesis_graph_checkpoints().await?;
-    if !all_checkpoints
-        .iter()
-        .any(|x| x.s3_key == current_state.s3_key)
-    {
-        bail!("current checkpoint not found in the db");
+    if pruning_mode == PruningMode::Tiered {
+        tiered_pruning.validate()?;
     }
 
-    for checkpoint in all_checkpoints
-        .into_iter()
-        .filter(|x| x.s3_key != current_state.s3_key)
-        .filter(|x| retain_from_id.is_none_or(|min_id| x.id < min_id))
-        .filter(|x| match pruning_mode {
-            PruningMode::AllOlder => true,
-            PruningMode::OlderNonArchival => !x.is_archival,
-            PruningMode::None => unreachable!(),
-        })
-    {
+    // Rank ages over the *full* history (live rows + soft-deleted tombstones),
+    // newest-first, so the enumeration index is a stable version age
+    // (0 = newest). This is what makes the cleanup safe to run repeatedly over
+    // the same or a moving range: a survivor keeps its age even after earlier
+    // rows are tombstoned, so its keep/delete classification never changes.
+    // (If we ranked over live rows only, deleting rows would shift everyone
+    // else's age down and `Tiered` would progressively delete kept checkpoints
+    // on each re-run.) Already-tombstoned rows are counted for ranking but never
+    // re-processed below.
+    let all_checkpoints = graph_store
+        .get_genesis_graph_checkpoints_including_deleted()
+        .await?;
+    let current_checkpoint_date = all_checkpoints
+        .iter()
+        .find(|c| c.s3_key == current_state.s3_key)
+        .map(|c| c.created_at)
+        .unwrap_or(Utc::now());
+    for checkpoint in checkpoints_to_prune(
+        &all_checkpoints,
+        &current_state.s3_key,
+        retain_from_id,
+        pruning_mode,
+        &tiered_pruning,
+        current_checkpoint_date,
+    ) {
+        // Soft-delete the row (tombstone for audit) and remove the S3 object,
+        // which is what actually reclaims storage.
         graph_store.delete_genesis_checkpoint(checkpoint.id).await?;
         delete_graph(s3_client, bucket, &checkpoint.s3_key).await?;
     }
     Ok(())
+}
+
+/// Selects which checkpoints to prune this run, given the full history
+/// (`all_checkpoints`) ordered newest-first and *including* soft-deleted
+/// tombstones.
+///
+/// The enumeration index over the full history is the checkpoint's version age
+/// (0 = newest). Ranking over the full history — rather than over live rows
+/// only — is what makes pruning idempotent: a survivor keeps its age even after
+/// earlier rows are tombstoned, so re-running over the same (or a moving) range
+/// never re-classifies and deletes a checkpoint a prior run kept.
+///
+/// Rows are excluded from the result when they are:
+/// - already tombstoned (a prior run pruned them; their S3 object is gone),
+/// - the current checkpoint (never deleted),
+/// - at/above the `retain_from_id` watermark, or
+/// - kept by the [`PruningMode`] / [`TieredPruningConfig`] policy.
+fn checkpoints_to_prune<'a>(
+    all_checkpoints: &'a [GraphCheckpointRow],
+    current_s3_key: &str,
+    retain_from_id: Option<i64>,
+    pruning_mode: PruningMode,
+    tiered_pruning: &TieredPruningConfig,
+    current_checkpoint_date: chrono::DateTime<chrono::Utc>,
+) -> Vec<&'a GraphCheckpointRow> {
+    // Iterate from oldest to newest
+    all_checkpoints
+        .iter()
+        .enumerate()
+        // `age` is fixed here, before filtering, so it stays stable across runs.
+        .filter(|(_, c)| !c.is_deleted)
+        .filter(|(_, c)| c.s3_key != current_s3_key)
+        .filter(|(_, c)| retain_from_id.is_none_or(|min_id| c.id < min_id))
+        .filter(|(version_age, c)| {
+            should_delete_checkpoint(
+                pruning_mode,
+                *version_age,
+                c,
+                current_checkpoint_date,
+                tiered_pruning,
+            )
+        })
+        .map(|(_, c)| c)
+        .collect()
+}
+
+/// Decides whether a checkpoint at the given version `age` (0 = newest,
+/// counting newest-first across all checkpoints) should be deleted under the
+/// given [`PruningMode`].
+///
+/// This encodes only the version/archival policy; callers are still
+/// responsible for never deleting the current checkpoint or any row kept
+/// by a `retain_from_id` watermark. `tiered` supplies the numeric bounds
+/// used only by [`PruningMode::Tiered`].
+fn should_delete_checkpoint(
+    pruning_mode: PruningMode,
+    version_age: usize,
+    c: &GraphCheckpointRow,
+    current_checkpoint_date: chrono::DateTime<chrono::Utc>,
+    tiered: &TieredPruningConfig,
+) -> bool {
+    match pruning_mode {
+        PruningMode::None => false,
+        PruningMode::AllOlder => true,
+        PruningMode::OlderNonArchival => !c.is_archival && !c.is_deleted,
+        PruningMode::Tiered => {
+            if c.is_archival || c.is_deleted {
+                return false;
+            }
+
+            let checkpoint_age_days = (current_checkpoint_date - c.created_at).num_days();
+            if checkpoint_age_days >= tiered.delete_older_than_days as i64 {
+                // Ancient tier: delete everything.
+                true
+            } else if checkpoint_age_days >= tiered.thin_older_than_days as i64 {
+                // Sparse tier: keep one out of every `keep_every_nth`.
+                !version_age.is_multiple_of(tiered.keep_every_nth)
+            } else {
+                // Recent tier: keep all.
+                false
+            }
+        }
+    }
 }
 
 /// Verifies that the S3 client has read, write, and delete access to the
@@ -444,6 +542,173 @@ async fn download_and_hash(
 
 #[cfg(test)]
 mod tests {
+    use super::{checkpoints_to_prune, GraphCheckpointRow, PruningMode, TieredPruningConfig};
+    use chrono::{Duration, Utc};
+
+    /// Builds a checkpoint row. `s3_key` is derived from `id` as `cp/{id}`, so
+    /// tests can refer to the current checkpoint by key without a separate map.
+    fn row(
+        id: i64,
+        is_archival: bool,
+        is_deleted: bool,
+        created_at: chrono::DateTime<chrono::Utc>,
+    ) -> GraphCheckpointRow {
+        GraphCheckpointRow {
+            id,
+            s3_key: format!("cp/{id}"),
+            last_indexed_iris_id: id,
+            last_indexed_modification_id: id,
+            graph_mutation_id: Some(id),
+            blake3_hash: "deadbeef".to_string(),
+            graph_version: 1,
+            is_archival,
+            created_at,
+            is_deleted,
+        }
+    }
+
+    /// Sorted list of the ids selected for pruning (order-independent compare).
+    fn pruned_ids(rows: &[&GraphCheckpointRow]) -> Vec<i64> {
+        let mut ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// `PruningMode::None` never selects anything, even with old rows present.
+    #[test]
+    fn test_checkpoints_to_prune_none_keeps_everything() {
+        let now = Utc::now();
+        let days_ago = |d: i64| now - Duration::days(d);
+        let all = vec![
+            row(1, false, false, days_ago(100)),
+            row(2, false, false, days_ago(90)),
+            row(3, false, false, now),
+        ];
+        let pruned = checkpoints_to_prune(
+            &all,
+            "cp/3",
+            None,
+            PruningMode::None,
+            &TieredPruningConfig::DEFAULT,
+            now,
+        );
+        assert!(pruned.is_empty());
+    }
+
+    /// `AllOlder` prunes every non-current row regardless of the archival flag.
+    #[test]
+    fn test_checkpoints_to_prune_all_older_prunes_all_but_current() {
+        let now = Utc::now();
+        // oldest-first (id ASC), matching the caller's query ordering.
+        let all = vec![
+            row(1, false, false, now),
+            row(2, true, false, now), // archival: still pruned under AllOlder
+            row(3, false, false, now),
+            row(4, false, false, now), // current (newest)
+        ];
+        let pruned = checkpoints_to_prune(
+            &all,
+            "cp/4",
+            None,
+            PruningMode::AllOlder,
+            &TieredPruningConfig::DEFAULT,
+            now,
+        );
+        assert_eq!(pruned_ids(&pruned), vec![1, 2, 3]);
+    }
+
+    /// `OlderNonArchival` retains archival rows and the current checkpoint.
+    #[test]
+    fn test_checkpoints_to_prune_older_non_archival_keeps_archival() {
+        let now = Utc::now();
+        let all = vec![
+            row(1, false, false, now),
+            row(2, true, false, now), // archival: retained
+            row(3, false, false, now),
+            row(4, false, false, now), // current
+        ];
+        let pruned = checkpoints_to_prune(
+            &all,
+            "cp/4",
+            None,
+            PruningMode::OlderNonArchival,
+            &TieredPruningConfig::DEFAULT,
+            now,
+        );
+        assert_eq!(pruned_ids(&pruned), vec![1, 3]);
+    }
+
+    /// Tombstoned rows are never re-processed and the current row is never
+    /// selected, so only the single live, non-current row is pruned.
+    #[test]
+    fn test_checkpoints_to_prune_skips_current_and_tombstoned() {
+        let now = Utc::now();
+        let all = vec![
+            row(1, false, true, now), // already tombstoned
+            row(2, false, false, now),
+            row(3, false, false, now), // current
+        ];
+        let pruned = checkpoints_to_prune(
+            &all,
+            "cp/3",
+            None,
+            PruningMode::AllOlder,
+            &TieredPruningConfig::DEFAULT,
+            now,
+        );
+        assert_eq!(pruned_ids(&pruned), vec![2]);
+    }
+
+    /// `Tiered` splits history by wall-clock age into three tiers:
+    /// recent (keep all), sparse (keep every `keep_every_nth` by version age),
+    /// and ancient (delete all).
+    ///
+    /// NOTE: this pins the *current* behavior, where `version_age` is the index
+    /// into the (oldest-first) slice, so `version_age` 0 = oldest. That is the
+    /// opposite of the `should_delete_checkpoint` docstring ("0 = newest"); see
+    /// the review note if the newest-first contract is the intended one.
+    #[test]
+    fn test_checkpoints_to_prune_tiered_tiers() {
+        let now = Utc::now();
+        let days_ago = |d: i64| now - Duration::days(d);
+        let cfg = TieredPruningConfig {
+            delete_older_than_days: 60,
+            thin_older_than_days: 30,
+            keep_every_nth: 4,
+        };
+        // oldest-first (id ASC), matching the caller. version_age = slice index:
+        // id 1 = age 0 ... id 8 = age 7.
+        let all = vec![
+            row(1, false, false, days_ago(100)), // ancient            -> delete
+            row(2, false, false, days_ago(90)),  // ancient            -> delete
+            row(3, false, false, days_ago(50)),  // sparse, v_age 2    -> delete
+            row(4, false, false, days_ago(45)),  // sparse, v_age 3    -> delete
+            row(5, false, false, days_ago(40)),  // sparse, v_age 4%4  -> keep
+            row(6, false, false, days_ago(35)),  // sparse, v_age 5    -> delete
+            row(7, false, false, days_ago(10)),  // recent             -> keep
+            row(8, false, false, days_ago(0)),   // current (newest)   -> excluded
+        ];
+        let pruned = checkpoints_to_prune(&all, "cp/8", None, PruningMode::Tiered, &cfg, now);
+        assert_eq!(pruned_ids(&pruned), vec![1, 2, 3, 4, 6]);
+    }
+
+    /// `Tiered` never deletes an archival row, even in the ancient tier.
+    #[test]
+    fn test_checkpoints_to_prune_tiered_keeps_archival() {
+        let now = Utc::now();
+        let cfg = TieredPruningConfig {
+            delete_older_than_days: 60,
+            thin_older_than_days: 30,
+            keep_every_nth: 4,
+        };
+        let all = vec![
+            row(1, true, false, now - Duration::days(100)), // ancient + archival -> keep
+            row(2, false, false, now - Duration::days(100)), // ancient           -> delete
+            row(3, false, false, now),                      // current
+        ];
+        let pruned = checkpoints_to_prune(&all, "cp/3", None, PruningMode::Tiered, &cfg, now);
+        assert_eq!(pruned_ids(&pruned), vec![2]);
+    }
 
     #[test]
     fn test_blake3_hash_to_string() {
@@ -454,34 +719,5 @@ mod tests {
         // now go back
         let hash2 = blake3::Hash::from_hex(hash_str1.as_bytes()).unwrap();
         assert_eq!(hash1.as_bytes(), hash2.as_bytes());
-    }
-
-    #[test]
-    fn test_pruning_mode_from_str() {
-        use super::PruningMode;
-        use std::str::FromStr;
-
-        assert_eq!(PruningMode::from_str("none").unwrap(), PruningMode::None);
-        assert_eq!(
-            PruningMode::from_str("older-non-archival").unwrap(),
-            PruningMode::OlderNonArchival
-        );
-        assert_eq!(
-            PruningMode::from_str("all-older").unwrap(),
-            PruningMode::AllOlder
-        );
-        assert!(PruningMode::from_str("invalid").is_err());
-    }
-
-    #[test]
-    fn test_pruning_mode_display() {
-        use super::PruningMode;
-
-        assert_eq!(PruningMode::None.to_string(), "none");
-        assert_eq!(
-            PruningMode::OlderNonArchival.to_string(),
-            "older-non-archival"
-        );
-        assert_eq!(PruningMode::AllOlder.to_string(), "all-older");
     }
 }

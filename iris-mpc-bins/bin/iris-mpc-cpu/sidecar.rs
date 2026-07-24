@@ -17,7 +17,7 @@ use iris_mpc_common::tracing::initialize_tracing;
 use iris_mpc_cpu::{
     checkpoint_protocol::{sidecar_main, SidecarConfig},
     execution::hawk_main::{build_hawk_network_handle, HawkArgs},
-    graph_checkpoint::PruningMode,
+    graph_checkpoint::{PruningMode, TieredPruningConfig},
     hnsw::graph::graph_store::GraphPg,
 };
 use tokio::signal::unix::{signal, SignalKind};
@@ -115,6 +115,13 @@ pub struct SidecarArgs {
     ///   - none                 — do not prune any checkpoints
     ///   - older-non-archival   — prune older non-archival checkpoints (default)
     ///   - all-older            — prune all older checkpoints
+    ///   - tiered               — keep all versions newer than Y, keep every
+    ///                            Nth version between Y and X, and delete all
+    ///                            versions older than X. X/Y/N are read from the
+    ///                            PRUNING_TIERED_DELETE_OLDER_THAN,
+    ///                            PRUNING_TIERED_THIN_OLDER_THAN, and
+    ///                            PRUNING_TIERED_KEEP_EVERY_NTH (defaults to 4)
+    ///                            env vars.
     #[clap(long("pruning-mode"))]
     pruning_mode: Option<String>,
 }
@@ -175,6 +182,17 @@ async fn main() -> Result<()> {
         PruningMode::OlderNonArchival
     };
 
+    // Tiered bounds come from the PRUNING_TIERED_* env vars; only required when
+    // the tiered mode is selected.
+    let tiered_pruning = if pruning_mode == PruningMode::Tiered {
+        TieredPruningConfig::from_env().map_err(|e| {
+            eprintln!("Error: tiered pruning config invalid: {}", e);
+            e
+        })?
+    } else {
+        TieredPruningConfig::default()
+    };
+
     println!(
         "Starting WAL sidecar daemon: party={}, bucket={}",
         args.party_index, args.bucket
@@ -220,6 +238,7 @@ async fn main() -> Result<()> {
         checkpoint_window: args.checkpoint_window,
         is_archival: args.is_archival,
         pruning_mode,
+        tiered_pruning,
         one_shot: args.one_shot,
     };
 
