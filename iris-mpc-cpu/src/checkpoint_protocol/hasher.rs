@@ -2,13 +2,13 @@
 //!
 //! Cross-party determinism depends on two non-obvious invariants:
 //!
-//! - **`Layer.links: HashMap<V, Vec<V>>`** is serialized via the custom
-//!   `SortedLinks` wrapper in `layered_graph.rs`, which sorts entries by
-//!   key before emitting — so HashMap iteration order is not a hash risk.
-//! - **Per-key neighbor `Vec<V>`** is emitted in insertion order; the
-//!   planner is responsible for sorting neighbors before `set_links_trusted`, and
-//!   `Layer::add_neighbor` maintains sortedness. Bypassing the planner
-//!   breaks hash consensus.
+//! - **`Layer.links`** is serialized via the custom `SortedLinks` wrapper in
+//!   `layered_graph.rs`, which sorts entries by key before emitting — so
+//!   HashMap iteration order is not a hash risk.
+//! - **Per-key neighborhoods** are emitted as their Rice-coded blobs
+//!   (`EncodedNeighborhood`), which `Layer`'s mutators mint canonically from
+//!   sorted, deduplicated lists — one byte form per neighbor set. Ingesting a
+//!   non-canonical blob (`set_links_encoded_trusted`) breaks hash consensus.
 
 use crate::checkpoint_protocol::{Blake3Hash, Graph, GraphHasher};
 
