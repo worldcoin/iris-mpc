@@ -20,8 +20,7 @@ use crate::utils::runner::TestRun;
 use eyre::bail;
 use serial_test::serial;
 use workflows::{
-    wal_100::Wal100, wal_104::Wal104, wal_105::Wal105, wal_106::Wal106, wal_109::Wal109,
-    wal_110::Wal110,
+    wal_104::Wal104, wal_105::Wal105, wal_106::Wal106, wal_109::Wal109, wal_110::Wal110,
 };
 
 const RUST_LOG: &str = "info";
@@ -98,13 +97,6 @@ macro_rules! run_test {
 // ---------------------------------------------------------------------------
 // Test functions — one per scenario, run serially to avoid port/DB conflicts.
 // ---------------------------------------------------------------------------
-
-#[test]
-#[serial]
-#[ignore = "requires external setup"]
-fn test_wal_100() -> eyre::Result<()> {
-    run_test!(100, 1, Wal100::new())
-}
 
 // #[test]
 // #[serial]
