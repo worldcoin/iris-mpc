@@ -15,7 +15,7 @@ jobs:
   unit-tests:
     timeout-minutes: 20
     runs-on:
-      group: arc-public-4xlarge-amd64-runner
+      group: arc-public-8xlarge-amd64-runner
     permissions:
       contents: read
 
