@@ -57,7 +57,7 @@ use crate::{
     },
 };
 
-const RANGE_MAX_RETRIES: u32 = 10;
+const RANGE_MAX_RETRIES: u32 = 3;
 
 /// Log a download-progress line every this many ranges issued.
 const DOWNLOAD_PROGRESS_EVERY: usize = 64;

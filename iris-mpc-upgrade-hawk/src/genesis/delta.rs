@@ -262,18 +262,23 @@ pub(super) async fn exec_delta(
             shutdown_handler,
         )
         .await?;
+
+        // A failure here must abort the run: proceeding would checkpoint a
+        // graph with replays possibly unapplied and (below) drop the persisted
+        // force-include set — the only handle a rerun has on those serials.
+        tracing::info!("Waiting for version replays to be processed...");
+        shutdown_handler
+            .wait_for_pending_batches_completion()
+            .await
+            .map_err(|e| eyre!("waiting for pending version replays to complete: {e:?}"))?;
+        tracing::info!("All version replays have been processed");
+
         Ok((graph_changed, plan.repair))
     }
     .await;
 
     match res {
         Ok((graph_changed, repair)) => {
-            tracing::info!("Waiting for version replays to be processed...");
-            if let Err(e) = shutdown_handler.wait_for_pending_batches_completion().await {
-                tracing::error!("waiting for pending version replays to complete failed: {e:?}");
-            }
-            tracing::info!("All version replays have been processed");
-
             // Single end-of-delta cursor write (no per-replay cursor writes):
             // set to the global max persisted+completed source modification id
             // read before the pools loaded (safe under-claim).

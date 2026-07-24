@@ -2,8 +2,8 @@ use aws_sdk_s3::{config::Region, Client as S3Client};
 
 /// Creates an S3 client with the shared retry + per-attempt-timeout policy.
 ///
-/// Delegates to [`iris_mpc_cpu::graph_checkpoint::create_s3_client`] so hawk,
-/// genesis and the sidecar construct S3 clients identically.
+/// Delegates to [`iris_mpc_cpu::graph_checkpoint::create_s3_client`] so hawk
+/// and genesis construct S3 clients identically.
 ///
 /// # Arguments
 /// * `shared_config` - Base AWS SDK configuration to build from

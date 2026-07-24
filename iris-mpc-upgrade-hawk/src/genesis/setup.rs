@@ -678,27 +678,20 @@ async fn get_results_thread(
                             })
                             .collect();
 
-                    // A single Aurora transient here otherwise propagates out of
-                    // the results task and (via task_monitor) aborts the run.
-                    // The transaction is rolled back on failure, so each retry
-                    // restarts from a clean state.
-                    with_retry("persist batch", DB_RETRY_ATTEMPTS, || {
-                        let graph_store = &graph_store;
-                        let hnsw_iris_store = &hnsw_iris_store;
-                        let vids = &vector_ids_to_persist;
-                        let refs = &codes_and_masks;
-                        async move {
-                            let mut graph_tx = graph_store.tx().await?;
-                            hnsw_iris_store
-                                .insert_copy_irises(&mut graph_tx.tx, vids, refs)
-                                .await?;
-                            let mut db_tx = graph_tx.tx;
-                            set_last_indexed_iris_id(&mut db_tx, last_serial_id).await?;
-                            db_tx.commit().await?;
-                            Ok(())
-                        }
-                    })
-                    .await?;
+                    let mut graph_tx = graph_store.tx().await?;
+
+                    // Persist batch of Iris's to the HNSW graph store.
+                    hnsw_iris_store
+                        .insert_copy_irises(
+                            &mut graph_tx.tx,
+                            &vector_ids_to_persist,
+                            &codes_and_masks,
+                        )
+                        .await?;
+
+                    let mut db_tx = graph_tx.tx;
+                    set_last_indexed_iris_id(&mut db_tx, last_serial_id).await?;
+                    db_tx.commit().await?;
                     tracing::info!(
                         "Job Results :: Persisted last indexed id: batch-id={batch_id}"
                     );

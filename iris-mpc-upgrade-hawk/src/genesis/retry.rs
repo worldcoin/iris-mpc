@@ -1,15 +1,13 @@
 //! Bounded retry for idempotent genesis operations.
 //!
-//! A single transient (an Aurora connection blip, an S3 5xx) otherwise aborts
-//! the whole run — cheap to survive when the operation can be replayed cleanly.
+//! A single transient (an Aurora connection blip) otherwise aborts the whole
+//! run — cheap to survive when the operation can be replayed cleanly.
 
 use eyre::{eyre, Result};
 use std::{future::Future, time::Duration};
 
-/// Total attempts for the DB scans and the deferred row/cursor writes.
+/// Total attempts for the idempotent DB scans.
 pub(super) const DB_RETRY_ATTEMPTS: u32 = 3;
-/// Total attempts for a whole checkpoint upload (fresh S3 key per attempt).
-pub(super) const CHECKPOINT_UPLOAD_ATTEMPTS: u32 = 3;
 
 /// Run `op` up to `attempts` times, sleeping with exponential backoff between
 /// failures. The caller must guarantee `op` is idempotent: it re-runs from

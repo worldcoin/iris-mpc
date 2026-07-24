@@ -15,9 +15,10 @@ use tokio::{sync::Semaphore, task::JoinSet, time::sleep};
 pub const DEFAULT_CHECKPOINT_CHUNK_SIZE: usize = 100 * 1024 * 1024; // 100 MB chunks
 pub const DEFAULT_CHECKPOINT_PARALLELISM: usize = 32;
 const MULTIPART_THRESHOLD: usize = 5 * 1024 * 1024; // 5MB - S3 multipart minimum part size
-/// Total attempts per S3 transfer op (upload part, download range, simple PUT)
-/// before it aborts.
-const TRANSFER_MAX_RETRIES: u32 = 10;
+/// In-client retries per S3 transfer op (upload part, download range, simple
+/// PUT). Each try is itself SDK-retried per [`super::create_s3_client`], so
+/// this only needs to cover streamed-body failures the SDK does not retry.
+const TRANSFER_MAX_RETRIES: u32 = 3;
 /// Log an upload-progress line every this many parts issued.
 const UPLOAD_PROGRESS_EVERY: usize = 32;
 
