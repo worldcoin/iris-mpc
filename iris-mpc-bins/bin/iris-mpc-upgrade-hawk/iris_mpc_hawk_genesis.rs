@@ -3,7 +3,10 @@
 use clap::Parser;
 use eyre::{bail, Result};
 use iris_mpc_common::{config::Config, helpers::numactl, tracing::initialize_tracing, SerialId};
-use iris_mpc_cpu::{genesis::BatchSizeConfig, graph_checkpoint::PruningMode};
+use iris_mpc_cpu::{
+    genesis::BatchSizeConfig,
+    graph_checkpoint::{PruningMode, TieredPruningConfig},
+};
 use iris_mpc_upgrade_hawk::genesis::{exec, ExecutionArgs};
 
 #[derive(Parser)]
@@ -38,6 +41,13 @@ struct Args {
     ///   - none                 — do not prune any checkpoints
     ///   - older-non-archival   — prune older non-archival checkpoints (default)
     ///   - all-older            — prune all older checkpoints
+    ///   - tiered               — keep all versions newer than Y, keep every
+    ///                            Nth version between Y and X, and delete all
+    ///                            versions older than X. X/Y/N are read from the
+    ///                            PRUNING_TIERED_DELETE_OLDER_THAN_DAYS,
+    ///                            PRUNING_TIERED_THIN_OLDER_THAN_DAYS, and
+    ///                            PRUNING_TIERED_KEEP_EVERY_NTH (defaults to 4)
+    ///                            env vars.
     #[clap(long("pruning-mode"))]
     pruning_mode: Option<String>,
 
@@ -205,6 +215,17 @@ fn parse_args() -> Result<ExecutionArgs> {
         PruningMode::OlderNonArchival
     };
 
+    // Tiered bounds come from the PRUNING_TIERED_* env vars; only required when
+    // the tiered mode is selected.
+    let tiered_pruning = if pruning_mode == PruningMode::Tiered {
+        TieredPruningConfig::from_env().map_err(|e| {
+            eprintln!("Error: tiered pruning config invalid: {}", e);
+            e
+        })?
+    } else {
+        TieredPruningConfig::default()
+    };
+
     // Arg: base checkpoint hash (optional).
     let base_checkpoint_hash = args.base_checkpoint_hash.clone();
 
@@ -214,6 +235,7 @@ fn parse_args() -> Result<ExecutionArgs> {
         perform_snapshot,
         checkpoint_frequency,
         pruning_mode,
+        tiered_pruning,
         base_checkpoint_hash,
     })
 }

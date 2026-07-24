@@ -8,7 +8,8 @@ use eyre::{eyre, Result};
 use iris_mpc_common::{config::Config, helpers::sync::Modification, SerialId};
 pub use iris_mpc_cpu::genesis::BatchSizeConfig;
 use iris_mpc_cpu::{
-    genesis::state_accessor::set_last_indexed_modification_id, graph_checkpoint::PruningMode,
+    genesis::state_accessor::set_last_indexed_modification_id,
+    graph_checkpoint::{PruningMode, TieredPruningConfig},
 };
 
 pub use graph_checkpoint::{reset_to_checkpoint, upload_and_sync_genesis_checkpoint};
@@ -41,6 +42,9 @@ pub struct ExecutionArgs {
     // Controls which older checkpoints are pruned after loading a common checkpoint.
     pub pruning_mode: PruningMode,
 
+    // Numeric bounds for `PruningMode::Tiered`; ignored by other modes.
+    pub tiered_pruning: TieredPruningConfig,
+
     // Pinned base checkpoint blake3 hash; None selects the latest common checkpoint.
     pub base_checkpoint_hash: Option<String>,
 }
@@ -57,6 +61,7 @@ impl ExecutionArgs {
             perform_snapshot,
             checkpoint_frequency: args.checkpoint_frequency,
             pruning_mode: args.pruning_mode,
+            tiered_pruning: args.tiered_pruning,
             base_checkpoint_hash: None,
         }
     }

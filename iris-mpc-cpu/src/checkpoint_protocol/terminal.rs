@@ -9,7 +9,7 @@ use crate::checkpoint_protocol::{
 use crate::execution::hawk_main::{BothEyes, LEFT, RIGHT};
 use crate::graph_checkpoint::{
     cleanup_checkpoints, stream_serialize_and_upload_with, BlakeTeeWriter, GraphCheckpointState,
-    PruningMode, DEFAULT_STREAMING_PARALLELISM, DEFAULT_STREAMING_PART_SIZE,
+    PruningMode, TieredPruningConfig, DEFAULT_STREAMING_PARALLELISM, DEFAULT_STREAMING_PART_SIZE,
 };
 use crate::hnsw::{
     graph::{graph_store::GraphPg, layered_graph::GraphMem},
@@ -29,6 +29,7 @@ pub struct UploadAndRecord<'a, V: VectorStore> {
     pub party_id: usize,
     pub is_archival: bool,
     pub pruning_mode: PruningMode,
+    pub tiered_pruning: TieredPruningConfig,
 }
 
 impl<'a, V: VectorStore + Send + Sync> UploadAndRecord<'a, V> {
@@ -39,6 +40,7 @@ impl<'a, V: VectorStore + Send + Sync> UploadAndRecord<'a, V> {
         party_id: usize,
         is_archival: bool,
         pruning_mode: PruningMode,
+        tiered_pruning: TieredPruningConfig,
     ) -> Self {
         Self {
             graph_store,
@@ -47,6 +49,7 @@ impl<'a, V: VectorStore + Send + Sync> UploadAndRecord<'a, V> {
             party_id,
             is_archival,
             pruning_mode,
+            tiered_pruning,
         }
     }
 }
@@ -148,6 +151,7 @@ impl<V: VectorStore + Send + Sync> TerminalAction for UploadAndRecord<'_, V> {
             Some(base.checkpoint_id),
             self.graph_store,
             self.pruning_mode,
+            self.tiered_pruning,
         )
         .await
         {

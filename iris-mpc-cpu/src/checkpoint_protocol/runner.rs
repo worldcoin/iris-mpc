@@ -22,7 +22,7 @@ use crate::checkpoint_protocol::{
     SkipReason, UploadAndRecord,
 };
 use crate::execution::hawk_main::BothEyes;
-use crate::graph_checkpoint::PruningMode;
+use crate::graph_checkpoint::{PruningMode, TieredPruningConfig};
 use crate::hnsw::{
     graph::{graph_store::GraphPg, layered_graph::GraphMem},
     VectorStore,
@@ -107,6 +107,9 @@ pub struct SidecarConfig {
     pub is_archival: bool,
     /// Optionally remove old checkpoints from S3
     pub pruning_mode: PruningMode,
+    /// Numeric bounds for [`PruningMode::Tiered`]; ignored by other modes.
+    #[serde(default)]
+    pub tiered_pruning: TieredPruningConfig,
     /// Run exactly one cycle and exit instead of looping. Used when deployed
     /// as a CronJob: a transient/fatal cycle error returns `Err` (the next
     /// scheduled fire is the retry), so no party retries independently and
@@ -233,6 +236,7 @@ async fn sidecar_cycle<V: VectorStore + Send + Sync>(
         cfg.party_id,
         cfg.is_archival,
         cfg.pruning_mode,
+        cfg.tiered_pruning,
     );
     let hasher = Blake3GraphHasher::new();
 

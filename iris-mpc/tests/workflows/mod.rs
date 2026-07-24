@@ -138,6 +138,7 @@ pub fn run_sidecar(
                 checkpoint_window: config.sidecar.checkpoint_window,
                 is_archival: config.sidecar.is_archival,
                 pruning_mode: config.sidecar.pruning_mode,
+                tiered_pruning: config.sidecar.tiered_pruning,
                 one_shot: true,
             };
 
