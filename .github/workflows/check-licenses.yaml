@@ -7,7 +7,8 @@ on:
 
 jobs:
   cargo-deny:
-    runs-on: ubuntu-24.04
+    runs-on:
+      group: arc-public-xlarge-amd64-runner
     permissions:
       contents: read
     steps:

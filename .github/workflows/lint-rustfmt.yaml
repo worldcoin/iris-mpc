@@ -9,7 +9,8 @@ concurrency:
 
 jobs:
   fmt:
-    runs-on: ubuntu-22.04
+    runs-on:
+      group: arc-public-xlarge-amd64-runner
     permissions:
       contents: read
     steps:
