@@ -70,13 +70,107 @@ impl BatchStep1 {
     }
 }
 
-struct Step1 {
-    inner_join: VecEdges<(VectorId, BothEyes<bool>)>,
-    anti_join: BothEyes<VecEdges<VectorId>>,
+/// One request's search matches, split by how many eyes matched, plus per-eye
+/// saturation.
+///
+/// `matched_both` holds vectors that matched on both eyes directly in the search
+/// results. `matched_one_side[side]` holds vectors that matched only on `side`;
+/// the other eye is resolved later via `resolve` using the MPC `missing_is_match`.
+#[derive(Clone, Debug)]
+struct SearchJoin {
+    matched_both: VecEdges<(VectorId, BothEyes<bool>)>,
+    matched_one_side: BothEyes<VecEdges<VectorId>>,
     /// True per eye if any rotation's match results were saturated (supermatcher).
     saturated: BothEyes<bool>,
+}
+
+struct Step1 {
+    /// Search matches from the (possibly supermatcher-extended) results.
+    join: SearchJoin,
+    /// Search matches from the pre-extension results, present only for requests
+    /// whose search was extended by the supermatcher. `None` means no extension
+    /// happened.
+    pre_join: Option<SearchJoin>,
     luc_ids: Vec<VectorId>,
     request_type: RequestType,
+}
+
+impl SearchJoin {
+    /// Build by merging match results across all rotations
+    /// of both eyes. When `use_pre` is set, the pre-extension matches are used
+    /// for any rotation that was extended by the supermatcher (falling back to
+    /// the normal matches for rotations that were not extended).
+    fn from_rotations(
+        search_results: BothEyes<&VecRotations<HawkInsertPlan>>,
+        use_pre: bool,
+    ) -> SearchJoin {
+        let mut full_join: MapEdges<BothEyes<bool>> = HashMap::new();
+
+        let mut saturated = [false, false];
+        for (side, rotations) in izip!([LEFT, RIGHT], search_results) {
+            // Merge matches from all rotations.
+            for rotation in rotations.iter() {
+                let matches = if use_pre {
+                    rotation
+                        .classified
+                        .pre_extension
+                        .as_ref()
+                        .unwrap_or(&rotation.classified.matches)
+                } else {
+                    &rotation.classified.matches
+                };
+                if matches.saturated {
+                    saturated[side] = true;
+                }
+                for (vector_id, _) in matches.results.iter() {
+                    full_join.entry(*vector_id).or_default()[side] = true;
+                }
+            }
+        }
+
+        let full_join_partial_matches_ordered: Vec<_> = full_join
+            .into_iter()
+            .filter(|(_, [is_match_l, is_match_r])| *is_match_l || *is_match_r)
+            .sorted()
+            .collect();
+
+        let mut matched_both = Vec::new();
+        let mut matched_one_side: BothEyes<VecEdges<VectorId>> = [Vec::new(), Vec::new()];
+        for (vector_id, is_match_lr) in full_join_partial_matches_ordered {
+            match is_match_lr {
+                [true, true] => matched_both.push((vector_id, [true, true])),
+                [true, false] => matched_one_side[LEFT].push(vector_id),
+                [false, true] => matched_one_side[RIGHT].push(vector_id),
+                [false, false] => {}
+            }
+        }
+
+        SearchJoin {
+            matched_both,
+            matched_one_side,
+            saturated,
+        }
+    }
+
+    /// Resolve the one-sided matches into a full join using the MPC-computed
+    /// `missing_is_match` results for the opposite eye.
+    fn resolve(
+        &self,
+        missing_is_match: BothEyes<&MapEdges<bool>>,
+    ) -> VecEdges<(VectorId, BothEyes<bool>)> {
+        let mut full_join = self.matched_both.clone();
+        for id in &self.matched_one_side[LEFT] {
+            if let Some(right) = missing_is_match[RIGHT].get(id) {
+                full_join.push((*id, [true, *right]));
+            }
+        }
+        for id in &self.matched_one_side[RIGHT] {
+            if let Some(left) = missing_is_match[LEFT].get(id) {
+                full_join.push((*id, [*left, true]));
+            }
+        }
+        full_join
+    }
 }
 
 impl Step1 {
@@ -85,54 +179,22 @@ impl Step1 {
         luc_ids: Vec<VectorId>,
         request_type: RequestType,
     ) -> Step1 {
-        let mut full_join: MapEdges<BothEyes<bool>> = HashMap::new();
+        let join = SearchJoin::from_rotations(search_results, false);
 
-        let mut saturated = [false, false];
-        for (side, rotations) in izip!([LEFT, RIGHT], search_results) {
-            // Merge matches from all rotations.
-            for rotation in rotations.iter() {
-                if rotation.classified.matches.saturated {
-                    saturated[side] = true;
-                }
-                for (vector_id, _) in rotation.classified.matches.results.iter() {
-                    full_join.entry(*vector_id).or_default()[side] = true;
-                }
-            }
-        }
+        // Only build the pre-extension join when at least one rotation was
+        // actually extended by the supermatcher; otherwise it equals `join`.
+        let any_pre = search_results.iter().any(|rotations| {
+            rotations
+                .iter()
+                .any(|r| r.classified.pre_extension.is_some())
+        });
+        let pre_join = any_pre.then(|| SearchJoin::from_rotations(search_results, true));
 
-        let mut step1 = Step1::with_capacity(full_join.len());
-        step1.saturated = saturated;
-        step1.luc_ids = luc_ids;
-        step1.request_type = request_type;
-
-        let full_join_partial_matches_ordered: Vec<_> = full_join
-            .into_iter()
-            .filter(|(_, [is_match_l, is_match_r])| *is_match_l || *is_match_r)
-            .sorted()
-            .collect();
-
-        for (vector_id, is_match_lr) in full_join_partial_matches_ordered {
-            match is_match_lr {
-                [true, true] => step1.inner_join.push((vector_id, [true, true])),
-                [true, false] => step1.anti_join[LEFT].push(vector_id),
-                [false, true] => step1.anti_join[RIGHT].push(vector_id),
-                [false, false] => {}
-            }
-        }
-
-        step1
-    }
-
-    fn with_capacity(capacity: usize) -> Self {
         Step1 {
-            inner_join: Vec::with_capacity(capacity),
-            anti_join: [
-                Vec::with_capacity(capacity / 2),
-                Vec::with_capacity(capacity / 2),
-            ],
-            saturated: [false, false],
-            luc_ids: Vec::new(),
-            request_type: RequestType::Unsupported,
+            join,
+            pre_join,
+            luc_ids,
+            request_type,
         }
     }
 
@@ -145,14 +207,26 @@ impl Step1 {
 
     fn missing_vector_ids(&self, side: usize) -> VecEdges<VectorId> {
         let other_side = 1 - side;
-        let anti_join = &self.anti_join[other_side];
+        let matched_one_side = &self.join.matched_one_side[other_side];
+        // Include the pre-extension one-sided matches so the pre-extension outcome
+        // can be resolved from the same MPC results (its ids are a subset of
+        // `join`'s, but include them explicitly to be safe).
+        let pre_matched_one_side = self
+            .pre_join
+            .iter()
+            .flat_map(|j| j.matched_one_side[other_side].iter());
         // Always add reauth target so is_match is computed even if the search didn't hit it.
         let reauth_id = self.reauth_id().map(|(id, _)| id);
 
-        chain!(anti_join, &self.luc_ids, &reauth_id)
-            .cloned()
-            .unique()
-            .collect_vec()
+        chain!(
+            matched_one_side,
+            pre_matched_one_side,
+            &self.luc_ids,
+            &reauth_id
+        )
+        .cloned()
+        .unique()
+        .collect_vec()
     }
 
     fn step2(
@@ -171,44 +245,29 @@ impl Step1 {
             .collect_vec();
 
         let reauth_result = self.reauth_id().map(|(id, or_rule)| {
-            tracing::info!("Reauth ID: {id}, or_rule: {or_rule}");
-            tracing::info!(
-                "Left match: {}, missing_is_match[LEFT] {:?}",
-                missing_is_match[LEFT].get(&id).unwrap_or(&false),
-                missing_is_match[LEFT]
-            );
-            tracing::info!(
-                "Right match: {}, missing_is_match[RIGHT] {:?}",
-                missing_is_match[RIGHT].get(&id).unwrap_or(&false),
-                missing_is_match[RIGHT]
-            );
             let is_match =
                 [LEFT, RIGHT].map(|side| *missing_is_match[side].get(&id).unwrap_or(&false));
+            tracing::info!("Reauth ID: {id}, or_rule: {or_rule}, is_match: {is_match:?}");
             (id, or_rule, is_match)
         });
 
-        let mut step2 = Step2 {
-            full_join: self.inner_join,
+        let join = ResolvedJoin {
+            full_join: self.join.resolve(missing_is_match),
+            saturated: self.join.saturated,
+        };
+        let pre_join = self.pre_join.as_ref().map(|pre| ResolvedJoin {
+            full_join: pre.resolve(missing_is_match),
+            saturated: pre.saturated,
+        });
+
+        Step2 {
+            join,
+            pre_join,
             luc_results,
             reauth_result,
             intra_matches,
-            saturated: self.saturated,
             request_type: self.request_type,
-        };
-
-        for id in &self.anti_join[LEFT] {
-            if let Some(right) = missing_is_match[RIGHT].get(id) {
-                step2.full_join.push((*id, [true, *right]));
-            }
         }
-
-        for id in &self.anti_join[RIGHT] {
-            if let Some(left) = missing_is_match[LEFT].get(id) {
-                step2.full_join.push((*id, [*left, true]));
-            }
-        }
-
-        step2
     }
 }
 
@@ -255,6 +314,66 @@ pub const DECISION_FILTER: Filter = Filter {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BatchStep3(VecRequests<Step3>);
 
+/// Evaluate whether a uniqueness request matched, given its selected match ids
+/// and the decisions already made for earlier requests in the batch.
+///
+/// Returns `(is_match, because_supermatch)` where `because_supermatch` is true
+/// if a `Supermatch` (saturation) id was the reason a match was found. Note this
+/// depends on `Supermatch` being yielded last by `select`, so it is only set
+/// when no ordinary match short-circuited the search first.
+fn uniqueness_is_match(
+    ids: impl IntoIterator<Item = MatchId>,
+    prior_decisions: &[Decision],
+) -> (bool, bool) {
+    let mut because_supermatch = false;
+    let is_match = ids.into_iter().any(|id| match id {
+        Search(_) | Luc(_) | Reauth(_) => true,
+        Supermatch => {
+            because_supermatch = true;
+            true
+        }
+        IntraBatch(request_i) => {
+            match prior_decisions.get(request_i) {
+                // If the request we matched with will be inserted or updated,
+                // then we are blocked by this intra-batch match.
+                Some(decision) => decision.is_mutation(),
+                // The request we matched with is after us in the batch, so we are not blocked by it.
+                None => false,
+            }
+        }
+    });
+    (is_match, because_supermatch)
+}
+
+/// Supermatcher A/B comparison: for requests whose search was extended by the
+/// supermatcher, compare the extended search-match outcome against what the
+/// pre-extension search alone would have produced. The `Supermatch` (saturation)
+/// signal is excluded so we isolate whether the extended search surfaced a
+/// *real* neighbor match that the original search missed.
+fn record_extension_metrics(request: &Step3, filter: Filter, prior_decisions: &[Decision]) {
+    if !request.has_pre_extension() {
+        return;
+    }
+    let not_supermatch = |id: &MatchId| !matches!(id, Supermatch);
+    let (extended_match, _) = uniqueness_is_match(
+        request.select(filter).filter(not_supermatch),
+        prior_decisions,
+    );
+    let (pre_match, _) = uniqueness_is_match(
+        request.select_pre(filter).filter(not_supermatch),
+        prior_decisions,
+    );
+    match (pre_match, extended_match) {
+        (false, true) => {
+            metrics::counter!("supermatcher_extended_search_found_new_match").increment(1);
+        }
+        (true, false) => {
+            metrics::counter!("supermatcher_extended_search_lost_match").increment(1);
+        }
+        _ => {}
+    }
+}
+
 impl BatchStep3 {
     /// The final decision of what to do with a request.
     ///
@@ -284,22 +403,11 @@ impl BatchStep3 {
 
             let decision = match request.normal.request_type {
                 RequestType::Uniqueness(UniquenessRequest { skip_persistence }) => {
-                    let is_match = request.select(filter).any(|id| match id {
-                        Search(_) | Luc(_) | Reauth(_) => true,
-                        Supermatch => {
-                            because_supermatch = true;
-                            true
-                        }
-                        IntraBatch(request_i) => {
-                            match decisions.get(request_i) {
-                                // If the request we matched with will be inserted or updated,
-                                // then we are blocked by this intra-batch match.
-                                Some(decision) => decision.is_mutation(),
-                                // The request we matched with is after us in the batch, so we are not blocked by it.
-                                None => false,
-                            }
-                        }
-                    });
+                    let (is_match, bsm) = uniqueness_is_match(request.select(filter), &decisions);
+                    because_supermatch = bsm;
+
+                    record_extension_metrics(request, filter, &decisions);
+
                     if is_match {
                         NoMutation
                     } else if skip_persistence {
@@ -343,20 +451,50 @@ impl BatchStep3 {
 
 /// Results for one request.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Step2 {
+/// A search join after the missing-side MPC comparisons have been resolved,
+/// bundled with its per-eye saturation (supermatcher) flags.
+struct ResolvedJoin {
     full_join: VecEdges<(VectorId, BothEyes<bool>)>,
+    /// True per eye if any rotation's match results were saturated (supermatcher).
+    saturated: BothEyes<bool>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Step2 {
+    /// Search matches from the (possibly supermatcher-extended) results.
+    join: ResolvedJoin,
+    /// Search matches from the pre-extension results, present only when this
+    /// request's search was extended by the supermatcher. `None` means no
+    /// extension happened, in which case the pre-extension outcome equals `join`.
+    pre_join: Option<ResolvedJoin>,
     luc_results: VecEdges<(VectorId, BothEyes<bool>)>,
     reauth_result: Option<(VectorId, UseOrRule, BothEyes<bool>)>,
     intra_matches: Vec<IntraMatch>,
-    /// True per eye if any rotation's match results were saturated (supermatcher).
-    saturated: BothEyes<bool>,
     request_type: RequestType,
 }
 
 impl Step2 {
     /// The IDs of the vectors that matched this request.
     fn select(&self, filter: Filter) -> impl Iterator<Item = MatchId> + '_ {
-        let search = self
+        self.select_with(filter, &self.join)
+    }
+
+    /// Like `select`, but using the pre-extension search matches. When this
+    /// request's search was not extended by the supermatcher, this is identical
+    /// to `select`.
+    fn select_pre(&self, filter: Filter) -> impl Iterator<Item = MatchId> + '_ {
+        self.select_with(filter, self.pre_join.as_ref().unwrap_or(&self.join))
+    }
+
+    /// The IDs of the vectors that matched this request, evaluated against a
+    /// specific resolved `join` (the luc/reauth/intra contributions are
+    /// unaffected by supermatcher extension and always use `self`).
+    fn select_with<'a>(
+        &'a self,
+        filter: Filter,
+        join: &'a ResolvedJoin,
+    ) -> impl Iterator<Item = MatchId> + 'a {
+        let search = join
             .full_join
             .iter()
             .filter(move |(_, [l, r])| filter.search_rule(*l, *r))
@@ -380,7 +518,7 @@ impl Step2 {
             .map(|m| MatchId::IntraBatch(m.other_request_i));
 
         let supermatch = filter
-            .supermatch_rule(self.saturated)
+            .supermatch_rule(join.saturated)
             .then_some(MatchId::Supermatch);
 
         chain!(search, luc, reauth, intra, supermatch)
@@ -431,6 +569,22 @@ impl Step3 {
             matches!(filter.orient, Only(Mirror) | Both).then_some(self.mirror.select(filter)),
         )
         .flatten()
+    }
+
+    /// Like `select`, but using the pre-extension search matches on both
+    /// orientations. Identical to `select` for requests that were not extended.
+    fn select_pre(&self, filter: Filter) -> impl Iterator<Item = MatchId> + '_ {
+        chain!(
+            matches!(filter.orient, Only(Normal) | Both).then_some(self.normal.select_pre(filter)),
+            matches!(filter.orient, Only(Mirror) | Both).then_some(self.mirror.select_pre(filter)),
+        )
+        .flatten()
+    }
+
+    /// True if this request's search was extended by the supermatcher on either
+    /// orientation, so a pre-extension comparison is meaningful.
+    fn has_pre_extension(&self) -> bool {
+        self.normal.pre_join.is_some() || self.mirror.pre_join.is_some()
     }
 }
 
