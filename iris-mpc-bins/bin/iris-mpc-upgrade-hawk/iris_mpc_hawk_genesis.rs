@@ -41,13 +41,9 @@ struct Args {
     ///   - none                 — do not prune any checkpoints
     ///   - older-non-archival   — prune older non-archival checkpoints (default)
     ///   - all-older            — prune all older checkpoints
-    ///   - tiered               — keep all versions newer than Y, keep every
-    ///                            Nth version between Y and X, and delete all
-    ///                            versions older than X. X/Y/N are read from the
-    ///                            PRUNING_TIERED_DELETE_OLDER_THAN_DAYS,
-    ///                            PRUNING_TIERED_THIN_OLDER_THAN_DAYS, and
-    ///                            PRUNING_TIERED_KEEP_EVERY_NTH (defaults to 4)
-    ///                            env vars.
+    ///   - tiered               — keep the last PRUNING_TIERED_THIN_OLDER_THAN_DAYS checkpoints.
+    /// Then keep every PRUNING_TIERED_KEEP_EVERY_NTH checkpoint created before the last PRUNING_TIERED_THIN_OLDER_THAN_DAYS checkpoints.
+    /// Delete after PRUNING_TIERED_DELETE_OLDER_THAN_DAYS.
     #[clap(long("pruning-mode"))]
     pruning_mode: Option<String>,
 
