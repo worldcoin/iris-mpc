@@ -5,6 +5,7 @@ pub mod wal_105;
 pub mod wal_106;
 pub mod wal_109;
 pub mod wal_110;
+pub mod wal_111;
 
 use ampc_actor_utils::network::tcp::TlsConfig;
 use iris_mpc_common::postgres::{run_migrations, AccessMode, PostgresClient};

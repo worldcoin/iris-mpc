@@ -310,15 +310,8 @@ impl<V: VectorStore> GraphPg<V> {
         Ok(rows)
     }
 
-    /// Returns *all* genesis graph checkpoints in ascending id order,
+    /// Returns *all* genesis graph checkpoints in descending id order,
     /// including soft-deleted tombstones.
-    ///
-    /// Unlike [`Self::get_genesis_graph_checkpoints`], this does not filter out
-    /// `is_deleted` rows. It exists so version-age-based pruning
-    /// ([`crate::graph_checkpoint::PruningMode::Tiered`]) can rank a checkpoint
-    /// by its position in the full history: a survivor's age must not shift when
-    /// earlier rows are tombstoned, otherwise re-running the cleanup would
-    /// progressively re-classify and delete checkpoints that a prior run kept.
     pub async fn get_genesis_graph_checkpoints_including_deleted(
         &self,
     ) -> Result<Vec<GraphCheckpointRow>> {
@@ -336,7 +329,7 @@ impl<V: VectorStore> GraphPg<V> {
                 created_at,
                 is_deleted
             FROM genesis_graph_checkpoint
-            ORDER BY id ASC
+            ORDER BY id DESC
             "#,
         )
         .fetch_all(&self.pool)

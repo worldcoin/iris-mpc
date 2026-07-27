@@ -20,7 +20,7 @@ use crate::utils::runner::TestRun;
 use eyre::bail;
 use serial_test::serial;
 use workflows::{
-    wal_104::Wal104, wal_105::Wal105, wal_106::Wal106, wal_109::Wal109, wal_110::Wal110,
+    wal_104::Wal104, wal_105::Wal105, wal_106::Wal106, wal_109::Wal109, wal_110::Wal110, wal_111::Wal111,
 };
 
 const RUST_LOG: &str = "info";
@@ -154,4 +154,14 @@ fn test_wal_109() -> eyre::Result<()> {
 #[ignore = "requires external setup"]
 fn test_wal_110() -> eyre::Result<()> {
     run_test!(110, 1, Wal110::new())
+}
+
+/// Tiered pruning: a single sidecar cycle in `PruningMode::Tiered` prunes
+/// checkpoints across the recent / sparse / ancient tiers,
+/// preserving archival checkpoints and the agreed base.
+#[test]
+#[serial]
+#[ignore = "requires external setup"]
+fn test_wal_111() -> eyre::Result<()> {
+    run_test!(111, 1, Wal111::new())
 }

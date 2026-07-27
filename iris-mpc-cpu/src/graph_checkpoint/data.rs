@@ -15,12 +15,13 @@ pub const GRAPH_CHECKPOINT_ENDPOINT: &str = "graph-checkpoint";
 pub const DEFAULT_TIERED_KEEP_EVERY_NTH: usize = 4;
 
 pub const DEFAULT_TIERED_DELETE_OLDER_THAN_DAYS: usize = 60;
-pub const DEFAULT_TIERED_THIN_OLDER_THAN_DAYS: usize = 30;
+/// Default number of most-recent checkpoints kept unconditionally (recent tier).
+pub const DEFAULT_TIERED_KEEP_RECENT_COUNT: usize = 10;
 
 /// Env var holding the `delete_older_than_days` (`X`) bound for [`PruningMode::Tiered`].
 pub const ENV_TIERED_DELETE_OLDER_THAN_DAYS: &str = "PRUNING_TIERED_DELETE_OLDER_THAN_DAYS";
-/// Env var holding the `thin_older_than_days` (`Y`) bound for [`PruningMode::Tiered`].
-pub const ENV_TIERED_THIN_OLDER_THAN_DAYS: &str = "PRUNING_TIERED_THIN_OLDER_THAN_DAYS";
+/// Env var holding the `keep_recent_count` (`N`) bound for [`PruningMode::Tiered`].
+pub const ENV_TIERED_KEEP_RECENT_COUNT: &str = "PRUNING_TIERED_KEEP_RECENT_COUNT";
 /// Env var holding the `keep_every_nth` factor for [`PruningMode::Tiered`]
 /// (optional; defaults to [`DEFAULT_TIERED_KEEP_EVERY_NTH`]).
 pub const ENV_TIERED_KEEP_EVERY_NTH: &str = "PRUNING_TIERED_KEEP_EVERY_NTH";
@@ -38,11 +39,11 @@ pub enum PruningMode {
     OlderNonArchival,
     /// Prune all older checkpoints regardless of archival flag.
     AllOlder,
-    /// Tiered retention based on version age (0 = newest):
-    /// - keep every version newer than `thin_older_than_days` versions (recent tier),
-    /// - keep only every `keep_every_nth`-th version between `thin_older_than_days`
-    ///   and `delete_older_than_days` versions (sparse tier),
-    /// - delete every version older than `delete_older_than_days` versions.
+    /// Tiered retention (checkpoints ranked newest-first, recency rank 0 = newest):
+    /// - keep the `keep_recent_count` most recent checkpoints (recent tier),
+    /// - keep only every `keep_every_nth`-th older checkpoint that is still
+    ///   newer than `delete_older_than_days` days (sparse tier),
+    /// - delete every checkpoint older than `delete_older_than_days` days.
     ///
     /// The numeric bounds live in [`TieredPruningConfig`] (carried on the
     /// sidecar / genesis config), not in the variant itself.
@@ -51,19 +52,18 @@ pub enum PruningMode {
 
 /// Numeric tuning knobs for [`PruningMode::Tiered`].
 ///
-/// "Version age" is a checkpoint's rank when all checkpoints are ordered
-/// newest-first (0 = the newest checkpoint, 1 = the next newest, ...).
+/// The recent tier is defined by a *count* of the most recent checkpoints; the
+/// sparse and ancient tiers are defined by wall-clock age in days.
 ///
-/// Requires `thin_older_than_days <= delete_older_than_days` and `keep_every_nth >= 1`
-/// (enforced by [`TieredPruningConfig::validate`]).
+/// Requires `keep_every_nth >= 1` (enforced by [`TieredPruningConfig::validate`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub struct TieredPruningConfig {
     /// Delete all versions older than this many days (the `X` bound).
     #[serde(default = "default_delete_older_than_days")]
     pub delete_older_than_days: usize,
-    /// Start thinning versions older than this many days (the `Y` bound).
-    #[serde(default = "default_thin_older_than_days")]
-    pub thin_older_than_days: usize,
+    /// Always keep this many of the most recent checkpoints (recent tier).
+    #[serde(default = "default_keep_recent_count")]
+    pub keep_recent_count: usize,
     /// In the sparse tier, keep one version out of every `keep_every_nth`.
     #[serde(default = "default_keep_every_nth")]
     pub keep_every_nth: usize,
@@ -73,8 +73,8 @@ fn default_delete_older_than_days() -> usize {
     60
 }
 
-fn default_thin_older_than_days() -> usize {
-    30
+fn default_keep_recent_count() -> usize {
+    4
 }
 
 fn default_keep_every_nth() -> usize {
@@ -82,11 +82,10 @@ fn default_keep_every_nth() -> usize {
 }
 
 impl TieredPruningConfig {
-    /// Const-constructible default (usable in `const` items). All bounds zero
-    /// except `keep_every_nth`, which uses [`DEFAULT_TIERED_KEEP_EVERY_NTH`].
+    /// Const-constructible default (usable in `const` items).
     pub const DEFAULT: Self = Self {
         delete_older_than_days: DEFAULT_TIERED_DELETE_OLDER_THAN_DAYS,
-        thin_older_than_days: DEFAULT_TIERED_THIN_OLDER_THAN_DAYS,
+        keep_recent_count: DEFAULT_TIERED_KEEP_RECENT_COUNT,
         keep_every_nth: DEFAULT_TIERED_KEEP_EVERY_NTH,
     };
 }
@@ -100,11 +99,11 @@ impl Default for TieredPruningConfig {
 impl TieredPruningConfig {
     /// Builds a [`TieredPruningConfig`] from environment variables:
     /// - [`ENV_TIERED_DELETE_OLDER_THAN_DAYS`] (`X`, required),
-    /// - [`ENV_TIERED_THIN_OLDER_THAN_DAYS`] (`Y`, required),
-    /// - [`ENV_TIERED_KEEP_EVERY_NTH`] (`N`, optional, defaults to
+    /// - [`ENV_TIERED_KEEP_RECENT_COUNT`] (`N`, required),
+    /// - [`ENV_TIERED_KEEP_EVERY_NTH`] (optional, defaults to
     ///   [`DEFAULT_TIERED_KEEP_EVERY_NTH`]).
     ///
-    /// Requires `thin_older_than_days <= delete_older_than_days` and `keep_every_nth >= 1`.
+    /// Requires `keep_every_nth >= 1`.
     pub fn from_env() -> Result<Self, eyre::Error> {
         let required_usize = |name: &str| -> Result<usize, eyre::Error> {
             let raw = std::env::var(name)
@@ -114,7 +113,7 @@ impl TieredPruningConfig {
         };
 
         let delete_older_than_days = required_usize(ENV_TIERED_DELETE_OLDER_THAN_DAYS)?;
-        let thin_older_than_days = required_usize(ENV_TIERED_THIN_OLDER_THAN_DAYS)?;
+        let keep_recent_count = required_usize(ENV_TIERED_KEEP_RECENT_COUNT)?;
         let keep_every_nth = match std::env::var(ENV_TIERED_KEEP_EVERY_NTH) {
             Ok(raw) => raw
                 .parse::<usize>()
@@ -124,23 +123,15 @@ impl TieredPruningConfig {
 
         let cfg = Self {
             delete_older_than_days,
-            thin_older_than_days,
+            keep_recent_count,
             keep_every_nth,
         };
         cfg.validate()?;
         Ok(cfg)
     }
 
-    /// Validates the tiered bounds: `thin_older_than_days <= delete_older_than_days` and
-    /// `keep_every_nth >= 1`.
+    /// Validates the tiered bounds: `keep_every_nth >= 1`.
     pub fn validate(&self) -> Result<(), eyre::Error> {
-        if self.thin_older_than_days > self.delete_older_than_days {
-            return Err(eyre!(
-                "invalid tiered pruning config: thin_older_than_days ({}) must be <= delete_older_than_days ({})",
-                self.thin_older_than_days,
-                self.delete_older_than_days
-            ));
-        }
         if self.keep_every_nth < 1 {
             return Err(eyre!(
                 "invalid tiered pruning config: keep_every_nth must be >= 1"

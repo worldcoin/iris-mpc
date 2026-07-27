@@ -320,14 +320,7 @@ pub async fn cleanup_checkpoints<V: VectorStore>(
     }
 
     // Rank ages over the *full* history (live rows + soft-deleted tombstones),
-    // newest-first, so the enumeration index is a stable version age
-    // (0 = newest). This is what makes the cleanup safe to run repeatedly over
-    // the same or a moving range: a survivor keeps its age even after earlier
-    // rows are tombstoned, so its keep/delete classification never changes.
-    // (If we ranked over live rows only, deleting rows would shift everyone
-    // else's age down and `Tiered` would progressively delete kept checkpoints
-    // on each re-run.) Already-tombstoned rows are counted for ranking but never
-    // re-processed below.
+    // newest-first.
     let all_checkpoints = graph_store
         .get_genesis_graph_checkpoints_including_deleted()
         .await?;
@@ -375,7 +368,12 @@ fn checkpoints_to_prune<'a>(
     tiered_pruning: &TieredPruningConfig,
     current_checkpoint_date: chrono::DateTime<chrono::Utc>,
 ) -> Vec<&'a GraphCheckpointRow> {
-    // Iterate from oldest to newest
+    // Total history length (live + tombstoned). Used to convert the oldest-first
+    // enumeration index into a stable newest-first recency rank (0 = newest).
+    let total_checkpoints = all_checkpoints.len();
+    // Sort by id descending to iterate from newest to oldest
+    let mut sorted_checkpoints = all_checkpoints.to_vec();
+    sorted_checkpoints.sort_by_key(|c| -c.id);
     all_checkpoints
         .iter()
         .enumerate()
@@ -383,10 +381,11 @@ fn checkpoints_to_prune<'a>(
         .filter(|(_, c)| !c.is_deleted)
         .filter(|(_, c)| c.s3_key != current_s3_key)
         .filter(|(_, c)| retain_from_id.is_none_or(|min_id| c.id < min_id))
-        .filter(|(version_age, c)| {
+        .filter(|(recency_rank, c)| {
             should_delete_checkpoint(
                 pruning_mode,
-                *version_age,
+                total_checkpoints,
+                *recency_rank,
                 c,
                 current_checkpoint_date,
                 tiered_pruning,
@@ -403,10 +402,12 @@ fn checkpoints_to_prune<'a>(
 /// This encodes only the version/archival policy; callers are still
 /// responsible for never deleting the current checkpoint or any row kept
 /// by a `retain_from_id` watermark. `tiered` supplies the numeric bounds
-/// used only by [`PruningMode::Tiered`].
+/// used only by [`PruningMode::Tiered`]. `recency_rank` is the checkpoint's
+/// position counting newest-first (0 = newest), used by the tiered recent tier.
 fn should_delete_checkpoint(
     pruning_mode: PruningMode,
-    version_age: usize,
+    total_checkpoints: usize,
+    recency_rank: usize,
     c: &GraphCheckpointRow,
     current_checkpoint_date: chrono::DateTime<chrono::Utc>,
     tiered: &TieredPruningConfig,
@@ -420,17 +421,19 @@ fn should_delete_checkpoint(
                 return false;
             }
 
+            // Recent tier: always keep the `keep_recent_count` newest checkpoints.
+            if recency_rank < tiered.keep_recent_count {
+                return false;
+            }
+
             let checkpoint_age_days = (current_checkpoint_date - c.created_at).num_days();
             if checkpoint_age_days >= tiered.delete_older_than_days as i64 {
                 // Ancient tier: delete everything.
-                true
-            } else if checkpoint_age_days >= tiered.thin_older_than_days as i64 {
-                // Sparse tier: keep one out of every `keep_every_nth`.
-                !version_age.is_multiple_of(tiered.keep_every_nth)
-            } else {
-                // Recent tier: keep all.
-                false
+                return true;
             }
+            // Sparse tier: keep one out of every `keep_every_nth`.
+            let version_age = total_checkpoints - 1 - recency_rank;
+            !version_age.is_multiple_of(tiered.keep_every_nth)
         }
     }
 }
@@ -574,37 +577,36 @@ mod tests {
         ids
     }
 
-    /// `Tiered` splits history by wall-clock age into three tiers:
-    /// recent (keep all), sparse (keep every `keep_every_nth` by version age),
-    /// and ancient (delete all).
+    /// `Tiered` keeps the `keep_recent_count` newest checkpoints (recent tier),
+    /// thins older ones by `keep_every_nth` (sparse tier), and deletes everything
+    /// older than `delete_older_than_days` (ancient tier).
     ///
-    /// NOTE: this pins the *current* behavior, where `version_age` is the index
-    /// into the (oldest-first) slice, so `version_age` 0 = oldest. That is the
-    /// opposite of the `should_delete_checkpoint` docstring ("0 = newest"); see
-    /// the review note if the newest-first contract is the intended one.
+    /// `version_age` is the index into the (oldest-first) slice (0 = oldest);
+    /// `recency_rank = len - 1 - version_age` counts newest-first (0 = newest).
     #[test]
     fn test_checkpoints_to_prune_tiered_tiers() {
         let now = Utc::now();
         let days_ago = |d: i64| now - Duration::days(d);
         let cfg = TieredPruningConfig {
             delete_older_than_days: 60,
-            thin_older_than_days: 30,
+            keep_recent_count: 2,
             keep_every_nth: 4,
         };
         // oldest-first (id ASC), matching the caller. version_age = slice index:
-        // id 1 = age 0 ... id 8 = age 7.
+        // id 1 = v_age 0 ... id 8 = v_age 7; recency_rank = 7 - v_age.
         let all = vec![
-            row(1, false, false, days_ago(100)), // ancient            -> delete
-            row(2, false, false, days_ago(90)),  // ancient            -> delete
-            row(3, false, false, days_ago(50)),  // sparse, v_age 2    -> delete
-            row(4, false, false, days_ago(45)),  // sparse, v_age 3    -> delete
-            row(5, false, false, days_ago(40)),  // sparse, v_age 4%4  -> keep
-            row(6, false, false, days_ago(35)),  // sparse, v_age 5    -> delete
-            row(7, false, false, days_ago(10)),  // recent             -> keep
-            row(8, false, false, days_ago(0)),   // current (newest)   -> excluded
+            row(8, false, false, days_ago(0)), // current (newest)        -> excluded
+            row(7, false, false, days_ago(10)), // recent (rank 1 < 2)     -> keep
+            row(6, false, false, days_ago(20)), // recent (rank 2 < 2)     -> keep
+            row(5, false, false, days_ago(30)), // sparse, v_age 2         -> delete
+            row(4, false, false, days_ago(40)), // sparse, v_age 3         -> delete
+            row(3, false, false, days_ago(50)), // sparse, v_age 4%4       -> keep
+            row(2, false, false, days_ago(61)), // sparse, v_age 5         -> delete
+            row(1, false, false, days_ago(70)), // ancient (rank 7)        -> delete
+            row(0, false, false, days_ago(80)), // ancient (rank 8)        -> excluded
         ];
         let pruned = checkpoints_to_prune(&all, "cp/8", None, PruningMode::Tiered, &cfg, now);
-        assert_eq!(pruned_ids(&pruned), vec![1, 2, 3, 4, 6]);
+        assert_eq!(pruned_ids(&pruned), vec![0, 1, 2, 3, 5, 6]);
     }
 
     /// `Tiered` never deletes an archival row, even in the ancient tier.
@@ -613,7 +615,7 @@ mod tests {
         let now = Utc::now();
         let cfg = TieredPruningConfig {
             delete_older_than_days: 60,
-            thin_older_than_days: 30,
+            keep_recent_count: 1,
             keep_every_nth: 4,
         };
         let all = vec![
