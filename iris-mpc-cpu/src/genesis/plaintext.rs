@@ -214,8 +214,10 @@ pub async fn run_plaintext_genesis(mut state: GenesisState) -> Result<GenesisSta
                     })?;
                 }
             }
-            let irises = state.src_db.irises.get(&serial_id).unwrap().clone();
-            state.dst_db.irises.insert(serial_id, irises);
+            state
+                .dst_db
+                .irises
+                .insert(serial_id, (src_version, left_iris, right_iris));
             continue;
         }
 

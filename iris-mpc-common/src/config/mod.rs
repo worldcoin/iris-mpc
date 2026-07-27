@@ -336,9 +336,9 @@ pub struct Config {
     #[serde(default = "default_graph_checkpoint_bucket_region")]
     pub graph_checkpoint_bucket_region: String,
 
-    /// Bound on the per-exchange peer sync during genesis (`sync_state` /
-    /// `sync_peers`). Genesis-only; hawk-main calls the underlying sync
-    /// unwrapped. Set high (hours-scale) for the prod genesis run.
+    /// Bounds each genesis peer-sync exchange (`sync_state` / `sync_peers`);
+    /// hawk-main calls the sync unwrapped. Size it to the cross-party skew the
+    /// run can produce (hours for a full migration).
     #[serde(default = "default_genesis_sync_timeout_secs")]
     pub genesis_sync_timeout_secs: u64,
 }

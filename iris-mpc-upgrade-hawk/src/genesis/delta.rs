@@ -186,10 +186,9 @@ pub(super) async fn exec_delta(
         .as_ref()
         .ok_or(eyre!("Missing server coordination config"))?;
 
-    // Resolve the force-included serials before planning: from the legacy-base
-    // prune report when present, otherwise from any set a prior legacy-base run
-    // persisted (the report no longer exists once the base has been rewritten as
-    // V5, but its force-included content refreshes may not yet be durable).
+    // Force-include source: the legacy-base prune report when present, else the
+    // set a prior legacy-base run persisted (the report is gone once the base is
+    // V5, but its content refreshes may not yet be durable).
     let raw_forced: Vec<SerialId> = match prune_reports {
         Some(reports) => {
             let forced: Vec<SerialId> = reports
@@ -240,9 +239,6 @@ pub(super) async fn exec_delta(
         )
         .await?;
 
-        // Fail fast: every reinsert must resolve in both eyes' source registry
-        // before the first (hour-scale) replay, rather than aborting mid-run at
-        // the lazy per-serial lookup in the replay loop.
         validate_replay_resolvable(&plan.repair.graph_replay, registries).await?;
 
         // Persist the resolved force-include set before any graph mutation, so a
@@ -395,17 +391,15 @@ async fn compute_delta_plan(
         .copied()
         .collect();
 
-    // Force-include the damage classes resolved by the caller (multi-version /
-    // self-loop serials from a legacy-base prune report, or the list a prior
-    // legacy-base run persisted): a multi-version serial can collapse onto an
-    // entry whose version agrees with source, and a self-loop serial is version-
-    // and row-clean — neither is reachable by the join axes, and their version
-    // bookkeeping is known-unreliable, so only a rebuild from source content is
-    // sound. Checkpoint-derived, hence hash-agreed across parties.
+    // Force-include the caller's damage classes (multi-version / self-loop):
+    // a multi-version serial can collapse onto an entry whose version agrees
+    // with source, and a self-loop serial is version- and row-clean — no join
+    // axis reaches either, and their version bookkeeping is untrustworthy, so
+    // only a rebuild from source content is sound. The set is party-local
+    // until the union below reconciles it.
     //
-    // Intersect with the source registry first: a forced serial with no source
-    // row can never be replayed (it would abort every rerun at the registry
-    // lookup), so drop and log it the way source-missing serials are logged.
+    // Drop forced serials with no source row first: they can never be
+    // replayed, and would abort every rerun at the registry lookup.
     let mut forced: Vec<SerialId> = raw_forced
         .iter()
         .copied()
@@ -462,13 +456,12 @@ async fn compute_delta_plan(
     let repair_serials = union_repair_with_peers(&local_repair, &peer_sets);
 
     // 3. Tombstones among repair serials: the deletion list is the authority
-    //    (it is sync-verified identical across parties), unioned with the
-    //    content check against the party's dummy shares as a second net —
-    //    content alone cannot be trusted to cover deletions whose dummy
-    //    predates the current constant, and a serial matching the dummy while
-    //    absent from the list exposes a list gap. The classification gates the
-    //    reinsert flag, so parties must agree; a mismatch means source-level
-    //    inconsistency, which the repair must not paper over.
+    //    (sync-verified identical across parties), unioned with the dummy-share
+    //    content check as a second net — content alone misses deletions whose
+    //    dummy predates the current constant, and dummy content absent from the
+    //    list exposes a list gap. The classification gates the reinsert flag,
+    //    so parties must agree; a mismatch means source-level inconsistency,
+    //    which the repair must not paper over.
     let content_tombstones =
         gather_tombstones(config.party_id, &repair_serials, registries, worker_pools).await?;
     let listed_tombstones: HashSet<SerialId> = repair_serials
@@ -476,32 +469,28 @@ async fn compute_delta_plan(
         .copied()
         .filter(|s| excluded.contains(s))
         .collect();
-    let mut list_only: Vec<SerialId> = listed_tombstones
-        .difference(&content_tombstones)
-        .copied()
-        .collect();
-    list_only.sort_unstable();
-    if !list_only.is_empty() {
-        tracing::warn!(
-            "{} repair serials are in the deletion list but their content is \
-             not the current dummy (deletion mechanism drift?): {:?}",
-            list_only.len(),
-            &list_only[..list_only.len().min(100)],
-        );
-    }
-    let mut content_only: Vec<SerialId> = content_tombstones
-        .difference(&listed_tombstones)
-        .copied()
-        .collect();
-    content_only.sort_unstable();
-    if !content_only.is_empty() {
-        tracing::warn!(
-            "{} repair serials carry dummy content but are absent from the \
-             deletion list (list gap?): {:?}",
-            content_only.len(),
-            &content_only[..content_only.len().min(100)],
-        );
-    }
+    let warn_disagreement = |a: &HashSet<SerialId>, b: &HashSet<SerialId>, msg: &str| {
+        let mut only: Vec<SerialId> = a.difference(b).copied().collect();
+        only.sort_unstable();
+        if !only.is_empty() {
+            tracing::warn!(
+                "{} repair serials {msg}: {:?}",
+                only.len(),
+                &only[..only.len().min(100)],
+            );
+        }
+    };
+    warn_disagreement(
+        &listed_tombstones,
+        &content_tombstones,
+        "are in the deletion list but their content is not the current dummy \
+         (deletion mechanism drift?)",
+    );
+    warn_disagreement(
+        &content_tombstones,
+        &listed_tombstones,
+        "carry dummy content but are absent from the deletion list (list gap?)",
+    );
     let deleted: HashSet<SerialId> = listed_tombstones
         .union(&content_tombstones)
         .copied()
@@ -643,8 +632,8 @@ async fn apply_graph_repair(
 }
 
 /// Verify every planned reinsert resolves in both eyes' source registry — the
-/// same lookup the replay loop does lazily per serial. Converts an hour-N abort
-/// into a minute-0 one.
+/// same lookup the replay loop does lazily per serial — so the run aborts at
+/// plan time rather than hours into the replay.
 async fn validate_replay_resolvable(
     replay: &[SerialId],
     registries: &BothEyes<VectorIdRegistryRef>,
@@ -998,8 +987,6 @@ async fn flush_row_writes(
     // Log flush progress every this many chunks (~this many × CHUNK rows).
     const PROGRESS_EVERY: usize = 16;
 
-    let total_inserts = inserts.len();
-    let mut inserts_done = 0usize;
     for (chunk_idx, chunk) in inserts.chunks(CHUNK).enumerate() {
         let (vids, left_data, right_data) =
             fetch_pool_rows(chunk, registries, worker_pools).await?;
@@ -1024,14 +1011,15 @@ async fn flush_row_writes(
             );
         }
         tx.commit().await?;
-        inserts_done += chunk.len();
         if chunk_idx % PROGRESS_EVERY == 0 {
-            tracing::info!("row flush inserts: {inserts_done}/{total_inserts}");
+            tracing::info!(
+                "row flush inserts: {}/{}",
+                chunk_idx * CHUNK + chunk.len(),
+                inserts.len()
+            );
         }
     }
 
-    let total_updates = updates.len();
-    let mut updates_done = 0usize;
     for (chunk_idx, chunk) in updates.chunks(CHUNK).enumerate() {
         let (vids, left_data, right_data) =
             fetch_pool_rows(chunk, registries, worker_pools).await?;
@@ -1052,9 +1040,12 @@ async fn flush_row_writes(
             }
         }
         tx.commit().await?;
-        updates_done += chunk.len();
         if chunk_idx % PROGRESS_EVERY == 0 {
-            tracing::info!("row flush updates: {updates_done}/{total_updates}");
+            tracing::info!(
+                "row flush updates: {}/{}",
+                chunk_idx * CHUNK + chunk.len(),
+                updates.len()
+            );
         }
     }
 

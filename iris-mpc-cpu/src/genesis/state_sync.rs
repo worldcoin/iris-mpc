@@ -98,22 +98,14 @@ impl SyncResult {
 }
 
 /// Format a [`SyncState`] for error messages with the potentially huge
-/// `excluded_serial_ids` list capped to a sample.
+/// `excluded_serial_ids` list truncated to a sample (derived `Debug` shows
+/// every other field verbatim).
 fn summarize_sync_state(state: &SyncState) -> String {
     const SAMPLE: usize = 50;
-    let g = &state.genesis_config;
-    let excluded = &g.excluded_serial_ids;
-    format!(
-        "SyncState {{ common_config: {:?}, genesis_config: {{ batch_size_config: {:?}, \
-         max_indexation_id: {}, base_checkpoint_hash: {:?}, excluded_serial_ids: {} total, \
-         sample={:?} }} }}",
-        state.common_config,
-        g.batch_size_config,
-        g.max_indexation_id,
-        g.base_checkpoint_hash,
-        excluded.len(),
-        &excluded[..excluded.len().min(SAMPLE)],
-    )
+    let total = state.genesis_config.excluded_serial_ids.len();
+    let mut capped = state.clone();
+    capped.genesis_config.excluded_serial_ids.truncate(SAMPLE);
+    format!("{capped:?} (excluded_serial_ids: {total} total, first {SAMPLE} shown)")
 }
 
 #[cfg(test)]

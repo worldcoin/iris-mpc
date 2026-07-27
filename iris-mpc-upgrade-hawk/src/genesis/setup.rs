@@ -865,14 +865,12 @@ async fn init_graph_from_stores(
                             }
                         })
                         .await?;
-                    // The prune classifies any serial absent from `version_map`
-                    // as stale and silently drops it. The scan bound `max_index`
-                    // (= min(max_indexation_id, count)) must reach the base
-                    // height; otherwise the uncovered tail past it is prune-
-                    // erased — live serials the join can never repair, since both
-                    // pools are bounded identically. Within-bound holes prune
-                    // silently, which is acceptable: a graph node without source
-                    // content is unusable regardless.
+                    // Serials absent from `version_map` prune as stale, so the
+                    // scan bound (min(max_indexation_id, row count)) must reach
+                    // the base height — an uncovered tail would be prune-erased,
+                    // and the join, bounded identically, could never repair it.
+                    // Within-bound holes prune silently: a graph node without
+                    // source content is unusable regardless.
                     let base_height = state.last_indexed_iris_id;
                     if max_index < base_height as usize {
                         bail!(
@@ -880,9 +878,8 @@ async fn init_graph_from_stores(
                              base height ({base_height}); the uncovered tail would be prune-erased"
                         );
                     }
-                    // Downstream, the version-join sees pruned serials only as
-                    // absent from the graph — the specific drop cause is
-                    // consumed here and reported via the prune report.
+                    // The join sees pruned serials only as absent from the
+                    // graph — the specific cause lives in the prune report.
                     tracing::info!(
                         "Legacy {format} base: prune-at-read precedes the \
                          version-join; join reasons for pruned serials degrade \

@@ -449,12 +449,14 @@ macro_rules! legacy_prune_to_mem {
             !prune.deleted.contains(&id) && prune.version_map.get(&id) == Some(&version)
         };
         let mut report = PruneReport::default();
+        let layer0_len = src_layers.first().map_or(0, |l| l.links.len());
         // Serial → first key version seen; a second distinct version flags the
         // serial. Same (serial, version) on several layers is normal hierarchy.
-        let mut first_key_version: HashMap<u32, i16> = HashMap::new();
-        // Bottom-layer census: kept keys and the set of kept edge targets.
-        let mut bottom_keys: Vec<u32> = Vec::new();
-        let mut bottom_in_edge = Vec::<bool>::new();
+        let mut first_key_version: HashMap<u32, i16> = HashMap::with_capacity(layer0_len);
+        // Bottom-layer census: kept keys and the set of kept edge targets
+        // (indexed by serial; sized for the base, grown on demand past it).
+        let mut bottom_keys: Vec<u32> = Vec::with_capacity(layer0_len);
+        let mut bottom_in_edge = vec![false; prune.version_map.len() + 1];
         let mark_in_edge = |v: &mut Vec<bool>, id: u32| {
             let i = id as usize;
             if i >= v.len() {
@@ -475,13 +477,12 @@ macro_rules! legacy_prune_to_mem {
                     }
                     Some(_) => {}
                 }
-                // Self-loop fingerprints are recorded before any liveness
-                // filtering: the serial is damaged even if this key or edge
-                // is dropped.
-                if edges.0.iter().any(|e| e.id == key.id) {
-                    report.self_loop_serials.insert(key.id);
-                }
                 if !live_at(key.id, key.version) {
+                    // Self-loop fingerprints survive the drop: the serial is
+                    // damaged even though this key's edges go with it.
+                    if edges.0.iter().any(|e| e.id == key.id) {
+                        report.self_loop_serials.insert(key.id);
+                    }
                     if prune.deleted.contains(&key.id) {
                         report.nodes_dropped_deleted += 1;
                     } else {
@@ -492,10 +493,11 @@ macro_rules! legacy_prune_to_mem {
                 let mut kept: Vec<u32> = Vec::with_capacity(edges.0.len());
                 for e in edges.0 {
                     if e.id == key.id {
+                        report.self_loop_serials.insert(key.id);
                         report.edges_dropped_self_loop += 1;
                     } else if prune.deleted.contains(&e.id) {
                         report.edges_dropped_deleted += 1;
-                    } else if !live_at(e.id, e.version) {
+                    } else if prune.version_map.get(&e.id) != Some(&e.version) {
                         report.edges_dropped_stale += 1;
                     } else {
                         if layer_idx == 0 {

@@ -155,10 +155,10 @@ pub async fn get_last_indexed_modification_id(
     get_state_element(graph_store, STATE_KEY_LAST_INDEXED_MODIFICATION_ID).await
 }
 
-/// Persists the force-included serial set derived from a legacy-base prune
-/// report. A crash after the base is rewritten as V5 loses the report (it only
-/// exists for a legacy base), so a rerun reloads this to replay the same
-/// force-included content refreshes. Written at plan time, cleared after flush.
+/// Persists the force-included serial set from a legacy-base prune report.
+/// The report exists only while the base is legacy; a rerun after the V5
+/// rewrite reloads this set to repeat the same repairs. Written at plan time,
+/// cleared after the row flush.
 pub async fn set_delta_forced_serials(
     tx: &mut Transaction<'_, Postgres>,
     serials: &[SerialId],
