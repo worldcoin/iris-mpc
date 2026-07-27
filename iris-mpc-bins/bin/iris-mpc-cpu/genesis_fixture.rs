@@ -381,8 +381,10 @@ async fn provision(
         }
         let url = args.db_urls[party].clone();
         set.spawn(async move {
-            provision_party(party, url, template, src_schema, dst_schema, src_max, dst_max, chunk)
-                .await
+            provision_party(
+                party, url, template, src_schema, dst_schema, src_max, dst_max, chunk,
+            )
+            .await
         });
     }
     while let Some(joined) = set.join_next().await {
@@ -656,7 +658,8 @@ fn restrict_to_prefix(g: &mut GraphV4, max_serial: u32) -> (usize, usize) {
     while g.layers.len() > 1 && g.layers.last().is_some_and(|l| l.links.is_empty()) {
         g.layers.pop();
     }
-    g.entry_points.retain(|e| e.point.id <= max_serial && e.layer < g.layers.len());
+    g.entry_points
+        .retain(|e| e.point.id <= max_serial && e.layer < g.layers.len());
     if g.entry_points.is_empty() {
         // Every declared entry point was out of range: promote a surviving node
         // from the highest non-empty layer.
