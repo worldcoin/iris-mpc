@@ -17,7 +17,7 @@ env:
 jobs:
   test:
     runs-on:
-      labels: ubuntu-22.04-16core
+      group: arc-public-4xlarge-amd64-runner
 
     permissions:
       contents: read

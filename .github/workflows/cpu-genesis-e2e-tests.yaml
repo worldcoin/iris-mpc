@@ -14,7 +14,7 @@ jobs:
   cpu-e2e:
     timeout-minutes: 20
     runs-on:
-      labels: ubuntu-22.04-16core
+      group: arc-public-4xlarge-amd64-runner
     permissions:
       contents: read
       id-token: write

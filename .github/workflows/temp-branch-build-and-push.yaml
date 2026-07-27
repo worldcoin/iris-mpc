@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - "dev"
-      - "elenagryaznova/pop-4114-introduce-feature-flag-for-ignoring-unknown-migrations-iris"
+      - "elenagryaznova/pop-4122-iris-mpc-poison-message-block-at-ingest-head-crashloops-both"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
@@ -18,7 +18,7 @@ jobs:
   docker:
     timeout-minutes: 40
     runs-on:
-      labels: ubuntu-22.04-16core
+      group: arc-public-4xlarge-amd64-runner
     permissions:
       packages: write
       contents: read
