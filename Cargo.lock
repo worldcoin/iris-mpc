@@ -78,12 +78,13 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 [[package]]
 name = "ampc-actor-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=bcc6addbaab6297db7699a8c739d9056b0bdcbe#bcc6addbaab6297db7699a8c739d9056b0bdcbed"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=4ac477b756b6d8b157c3185cd40c1a733b62a703#4ac477b756b6d8b157c3185cd40c1a733b62a703"
 dependencies = [
  "aes-prng",
  "ampc-secret-sharing",
  "async-channel",
  "async-trait",
+ "backon",
  "blake3",
  "bytes",
  "clap",
@@ -95,6 +96,7 @@ dependencies = [
  "metrics",
  "num-traits",
  "num_enum",
+ "prost 0.13.5",
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "rand_distr",
@@ -105,13 +107,15 @@ dependencies = [
  "tokio",
  "tokio-rustls 0.26.4",
  "tokio-util",
+ "tonic",
+ "tonic-build",
  "tracing",
 ]
 
 [[package]]
 name = "ampc-anon-stats"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=bcc6addbaab6297db7699a8c739d9056b0bdcbe#bcc6addbaab6297db7699a8c739d9056b0bdcbed"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=4ac477b756b6d8b157c3185cd40c1a733b62a703#4ac477b756b6d8b157c3185cd40c1a733b62a703"
 dependencies = [
  "ampc-actor-utils",
  "ampc-secret-sharing",
@@ -137,7 +141,7 @@ dependencies = [
 [[package]]
 name = "ampc-secret-sharing"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=bcc6addbaab6297db7699a8c739d9056b0bdcbe#bcc6addbaab6297db7699a8c739d9056b0bdcbed"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=4ac477b756b6d8b157c3185cd40c1a733b62a703#4ac477b756b6d8b157c3185cd40c1a733b62a703"
 dependencies = [
  "aes-prng",
  "base64",
@@ -153,7 +157,7 @@ dependencies = [
 [[package]]
 name = "ampc-server-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=bcc6addbaab6297db7699a8c739d9056b0bdcbe#bcc6addbaab6297db7699a8c739d9056b0bdcbed"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=4ac477b756b6d8b157c3185cd40c1a733b62a703#4ac477b756b6d8b157c3185cd40c1a733b62a703"
 dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sqs",
@@ -1201,6 +1205,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cffb0e931875b666fc4fcb20fee52e9bbd1ef836fd9e9e04ec21555f9f85f7ef"
 dependencies = [
  "fastrand",
+ "gloo-timers",
  "tokio",
 ]
 
@@ -2538,6 +2543,18 @@ name = "glob"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
+
+[[package]]
+name = "gloo-timers"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbb143cf96099802033e0d4f4963b19fd2e0b728bcf076cd9cf7f6634f092994"
+dependencies = [
+ "futures-channel",
+ "futures-core",
+ "js-sys",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "group"

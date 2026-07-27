@@ -462,16 +462,32 @@ pub async fn build_hawk_network_handle(
     args: &HawkArgs,
     shutdown_ct: CancellationToken,
 ) -> Result<Box<dyn NetworkHandle>> {
-    let network_args = NetworkHandleArgs {
-        party_index: args.party_index,
-        addresses: args.addresses.clone(),
-        outbound_addresses: args.outbound_addrs.clone(),
-        connection_parallelism: args.connection_parallelism,
-        request_parallelism: args.request_parallelism,
-        sessions_per_request: SessionGroups::N_SESSIONS_PER_REQUEST,
-        tls: args.tls.clone(),
-    };
-    build_network_handle(network_args, shutdown_ct).await
+    #[cfg(feature = "grpc")]
+    {
+        use ampc_actor_utils::network;
+        network::grpc::build_network_handle(network::grpc::GrpcNetworkHandleArgs {
+            party_index: args.party_index,
+            addresses: args.addresses.clone(),
+            outbound_addresses: args.outbound_addrs.clone(),
+            connection_parallelism: args.connection_parallelism,
+            request_parallelism: args.request_parallelism,
+            timeout_duration: std::time::Duration::from_secs(5),
+        })
+        .await
+    }
+    #[cfg(not(feature = "grpc"))]
+    {
+        let network_args = NetworkHandleArgs {
+            party_index: args.party_index,
+            addresses: args.addresses.clone(),
+            outbound_addresses: args.outbound_addrs.clone(),
+            connection_parallelism: args.connection_parallelism,
+            request_parallelism: args.request_parallelism,
+            sessions_per_request: SessionGroups::N_SESSIONS_PER_REQUEST,
+            tls: args.tls.clone(),
+        };
+        build_network_handle(network_args, shutdown_ct).await
+    }
 }
 
 impl HawkActor {

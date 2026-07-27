@@ -85,6 +85,8 @@ db_dependent = []
 networking_metrics = []
 chacha_prf = []
 phase_trace = []
+# use the grpc networking stack
+grpc = ["ampc-actor-utils/grpc"]
 
 [[bench]]
 name = "hnsw"
