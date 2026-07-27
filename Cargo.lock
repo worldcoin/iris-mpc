@@ -78,7 +78,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 [[package]]
 name = "ampc-actor-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=4ac477b756b6d8b157c3185cd40c1a733b62a703#4ac477b756b6d8b157c3185cd40c1a733b62a703"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=7fc8c34f505ae6279ff27d95fcb5a8a3c3fcea31#7fc8c34f505ae6279ff27d95fcb5a8a3c3fcea31"
 dependencies = [
  "aes-prng",
  "ampc-secret-sharing",
@@ -115,7 +115,7 @@ dependencies = [
 [[package]]
 name = "ampc-anon-stats"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=4ac477b756b6d8b157c3185cd40c1a733b62a703#4ac477b756b6d8b157c3185cd40c1a733b62a703"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=7fc8c34f505ae6279ff27d95fcb5a8a3c3fcea31#7fc8c34f505ae6279ff27d95fcb5a8a3c3fcea31"
 dependencies = [
  "ampc-actor-utils",
  "ampc-secret-sharing",
@@ -141,7 +141,7 @@ dependencies = [
 [[package]]
 name = "ampc-secret-sharing"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=4ac477b756b6d8b157c3185cd40c1a733b62a703#4ac477b756b6d8b157c3185cd40c1a733b62a703"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=7fc8c34f505ae6279ff27d95fcb5a8a3c3fcea31#7fc8c34f505ae6279ff27d95fcb5a8a3c3fcea31"
 dependencies = [
  "aes-prng",
  "base64",
@@ -157,7 +157,7 @@ dependencies = [
 [[package]]
 name = "ampc-server-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=4ac477b756b6d8b157c3185cd40c1a733b62a703#4ac477b756b6d8b157c3185cd40c1a733b62a703"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=7fc8c34f505ae6279ff27d95fcb5a8a3c3fcea31#7fc8c34f505ae6279ff27d95fcb5a8a3c3fcea31"
 dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sqs",
