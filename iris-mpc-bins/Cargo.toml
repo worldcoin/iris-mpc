@@ -82,6 +82,7 @@ iris-mpc-upgrade = { path = "../iris-mpc-upgrade" }
 iris-mpc-store = { path = "../iris-mpc-store" }
 iris-mpc-upgrade-hawk = { path = "../iris-mpc-upgrade-hawk" }
 iris-mpc-utils = { path = "../iris-mpc-utils" }
+bincode.workspace = true
 blake3.workspace = true
 aws-smithy-types = "1.2.9"
 clap_builder = "4.5.51"
@@ -179,6 +180,10 @@ path = "bin/iris-mpc-cpu/graph_utils.rs"
 [[bin]]
 name = "db-sanity-check"
 path = "bin/iris-mpc-cpu/db_sanity_check.rs"
+
+[[bin]]
+name = "genesis-fixture"
+path = "bin/iris-mpc-cpu/genesis_fixture.rs"
 
 # ---------------------
 # binaries for iris-mpc-gpu

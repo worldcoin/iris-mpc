@@ -21,12 +21,21 @@ if [ -z "${GENESIS_CHECKPOINT_FREQUENCY}" ]; then
 fi
 
 
-echo "Starting genesis with max height: ${GENESIS_MAX_HEIGHT}, batch size: ${GENESIS_BATCH_SIZE}"
+optional_args=()
+if [ -n "${GENESIS_BASE_CHECKPOINT_HASH}" ]; then
+    optional_args+=("--base-checkpoint-hash=${GENESIS_BASE_CHECKPOINT_HASH}")
+fi
+if [ -n "${GENESIS_PRUNING_MODE}" ]; then
+    optional_args+=("--pruning-mode=${GENESIS_PRUNING_MODE}")
+fi
+
+echo "Starting genesis with max height: ${GENESIS_MAX_HEIGHT}, batch size: ${GENESIS_BATCH_SIZE}, optional args: ${optional_args[*]}"
 /bin/iris-mpc-hawk-genesis \
     --max-height=${GENESIS_MAX_HEIGHT} \
     --batch-size=${GENESIS_BATCH_SIZE} \
     --perform-snapshot=false \
-    --checkpoint-frequency=${GENESIS_CHECKPOINT_FREQUENCY}
+    --checkpoint-frequency=${GENESIS_CHECKPOINT_FREQUENCY} \
+    "${optional_args[@]}"
 genesis_exit_code=$?
 
 # Check if genesis exited due to a shutdown signal
