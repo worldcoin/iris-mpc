@@ -58,12 +58,15 @@ startupProbe:
     port: health
 
 resources:
+  # the rehearsal fixture is ~10k serials: small requests let the pod land on an
+  # existing node instead of waiting for Karpenter, which is what desynchronises
+  # the three parties' startup and trips the heartbeat-init panic.
   limits:
-    cpu: 28
-    memory: 450Gi
+    cpu: 8
+    memory: 32Gi
   requests:
-    cpu: 28
-    memory: 450Gi
+    cpu: 8
+    memory: 32Gi
 
 imagePullSecrets:
   - name: github-secret

@@ -21,7 +21,7 @@ env:
     value: "7200"
 
   - name: SMPC__SEPARATE_TOKIO_CORES_PER_NODE
-    value: "8"
+    value: "2"
 
   - name: RUST_LOG
     value: "info"
