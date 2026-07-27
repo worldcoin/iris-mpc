@@ -78,7 +78,7 @@ impl BatchStep1 {
 /// the other eye is resolved later via `resolve` using the MPC `missing_is_match`.
 #[derive(Clone, Debug)]
 struct SearchJoin {
-    matched_both: VecEdges<(VectorId, BothEyes<bool>)>,
+    matched_both: VecEdges<VectorId>,
     matched_one_side: BothEyes<VecEdges<VectorId>>,
     /// True per eye if any rotation's match results were saturated (supermatcher).
     saturated: BothEyes<bool>,
@@ -138,7 +138,7 @@ impl SearchJoin {
         let mut matched_one_side: BothEyes<VecEdges<VectorId>> = [Vec::new(), Vec::new()];
         for (vector_id, is_match_lr) in full_join_partial_matches_ordered {
             match is_match_lr {
-                [true, true] => matched_both.push((vector_id, [true, true])),
+                [true, true] => matched_both.push(vector_id),
                 [true, false] => matched_one_side[LEFT].push(vector_id),
                 [false, true] => matched_one_side[RIGHT].push(vector_id),
                 [false, false] => {}
@@ -158,7 +158,11 @@ impl SearchJoin {
         &self,
         missing_is_match: BothEyes<&MapEdges<bool>>,
     ) -> VecEdges<(VectorId, BothEyes<bool>)> {
-        let mut full_join = self.matched_both.clone();
+        let mut full_join: Vec<_> = self
+            .matched_both
+            .iter()
+            .map(|id| (*id, [true, true]))
+            .collect();
         for id in &self.matched_one_side[LEFT] {
             if let Some(right) = missing_is_match[RIGHT].get(id) {
                 full_join.push((*id, [true, *right]));
