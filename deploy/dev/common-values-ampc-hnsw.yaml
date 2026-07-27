@@ -1,7 +1,7 @@
 image: "ghcr.io/worldcoin/iris-mpc-genesis:67f5e8705c9a0c81287b1f33a3b513f5cb05f1d6-arm64"
 
 environment: dev
-replicaCount: 1
+replicaCount: 0
 
 strategy:
   type: Recreate
@@ -35,6 +35,10 @@ ports:
     protocol: TCP
 
 livenessProbe:
+  # genesis idles after a completed run, with no coordination server left to
+  # answer: a restart here would start an unwanted pinned rerun.
+  periodSeconds: 30
+  failureThreshold: 10000
   httpGet:
     path: /health
     port: health
