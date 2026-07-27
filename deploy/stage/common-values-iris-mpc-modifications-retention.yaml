@@ -5,9 +5,9 @@
 # (SMPC_stage_N), namespace (iris-mpc-db-exporter), and DB reachability are exercised
 # before prod enablement.
 #
-# Runs in the iris-mpc-db-exporter namespace — the existing CronJob precedent for reaching
-# the GPU iris Aurora from generic nodes (its `application` secret holds
-# DATABASE_AURORA_URL; no pod SG or dedicated pool needed, mirroring iris-mpc-db-exporter).
+# Runs in the iris-mpc-db-exporter namespace for its `application` secret
+# (DATABASE_AURORA_URL). NOTE the original "generic nodes reach the Aurora, mirroring
+# iris-mpc-db-exporter" assumption held on prod but NOT on stage — see nodeSelector below.
 image: "ghcr.io/worldcoin/retention-reaper:v0.32.6@sha256:366cc7dcd9e9132bbfe2b5719332ff8d1f301ed5b487cbfc458fbc97cca92ace"
 
 # STAGE LIVE: dry-run cleared — the reaper now performs the real guarded DELETE against
@@ -40,5 +40,22 @@ resources:
     cpu: "100m"
     memory: 128Mi
 
+# Schedule onto the dedicated anon-stats-server node pool. On smpcv2 stage, Aurora
+# reachability is granted per node pool (not per-pod SG): every scheduled run
+# 2026-07-21 → 2026-07-27 landed on a generic node and died on the eager first
+# connection ("pool timed out while waiting for an open connection", sqlx 30s), while
+# the anon-stats reaper — same Aurora, same daily cadence — succeeds from this pool
+# (its values document this exact failure mode). The db-exporter only "works from
+# generic nodes" because its 25Gi request happens to land it on big-pool nodes.
+# Mirrors deploy/stage/common-values-anon-stats-retention.yaml.
 nodeSelector:
   kubernetes.io/arch: amd64
+  workload: anon-stats-server
+
+# The dedicated pool is tainted; mirror the anon-stats-server toleration so the reaper
+# schedules there.
+tolerations:
+  - key: dedicated
+    operator: Equal
+    value: anonStatsServer
+    effect: NoSchedule
