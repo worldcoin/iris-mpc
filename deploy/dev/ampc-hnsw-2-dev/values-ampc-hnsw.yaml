@@ -3,13 +3,22 @@ env:
     value: "wf-smpcv2-dev-hnsw-performance-reports"
     
   - name: GENESIS_MAX_HEIGHT
-    value: "1750064"
+    value: "10600"
 
   - name: GENESIS_BATCH_SIZE
     value: "static:8"
 
   - name: GENESIS_CHECKPOINT_FREQUENCY
-    value: "10000"
+    value: "100000"
+
+  - name: GENESIS_BASE_CHECKPOINT_HASH
+    value: "008d1cc79afce21d5a0a79562b56feba5375bf7cbbbd7cd05b115f3b9094f105"
+
+  - name: GENESIS_PRUNING_MODE
+    value: "none"
+
+  - name: SMPC__GENESIS_SYNC_TIMEOUT_SECS
+    value: "7200"
 
   - name: SMPC__SEPARATE_TOKIO_CORES_PER_NODE
     value: "8"
@@ -62,10 +71,10 @@ env:
     value: "SMPC"
 
   - name: SMPC__HNSW_SCHEMA_NAME_SUFFIX
-    value: "_minfhd_SMALL_JUNE_2026"
+    value: "_v5reh_dst"
 
   - name: SMPC__GPU_SCHEMA_NAME_SUFFIX
-    value: "_gpu1M"
+    value: "_v5reh_src"
 
   - name: SMPC__HNSW_PARAM_M
     value: "320"
