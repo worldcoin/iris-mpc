@@ -95,7 +95,7 @@ impl TestRun for Wal111 {
         let nodes = self.nodes.as_ref().unwrap();
 
         // assert_checkpoint_count already verifies the S3 object count per party.
-        let post = WalAssertions::new().assert_checkpoint_count(4);
+        let post = WalAssertions::new().assert_checkpoint_count(6);
         nodes.apply_uniform_assertions(&post).await?;
 
         let mut checkpoints = nodes.0[0]
