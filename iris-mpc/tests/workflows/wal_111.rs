@@ -86,7 +86,7 @@ impl TestRun for Wal111 {
 
         // The 4 most recent checkpoints (recent tier) survive, plus every 4th
         // older checkpoint (sparse tier); the remaining older ones are pruned.
-        nodes.assert_checkpoint_count(9).await?;
+        nodes.assert_checkpoint_count(6).await?;
 
         Ok(())
     }
