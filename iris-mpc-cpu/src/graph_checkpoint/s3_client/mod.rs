@@ -637,4 +637,33 @@ mod tests {
         let hash2 = blake3::Hash::from_hex(hash_str1.as_bytes()).unwrap();
         assert_eq!(hash1.as_bytes(), hash2.as_bytes());
     }
+
+    #[test]
+    fn test_pruning_mode_from_str() {
+        use super::PruningMode;
+        use std::str::FromStr;
+
+        assert_eq!(PruningMode::from_str("none").unwrap(), PruningMode::None);
+        assert_eq!(
+            PruningMode::from_str("older-non-archival").unwrap(),
+            PruningMode::OlderNonArchival
+        );
+        assert_eq!(
+            PruningMode::from_str("all-older").unwrap(),
+            PruningMode::AllOlder
+        );
+        assert!(PruningMode::from_str("invalid").is_err());
+    }
+
+    #[test]
+    fn test_pruning_mode_display() {
+        use super::PruningMode;
+
+        assert_eq!(PruningMode::None.to_string(), "none");
+        assert_eq!(
+            PruningMode::OlderNonArchival.to_string(),
+            "older-non-archival"
+        );
+        assert_eq!(PruningMode::AllOlder.to_string(), "all-older");
+    }
 }
