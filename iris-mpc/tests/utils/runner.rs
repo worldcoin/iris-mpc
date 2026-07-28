@@ -151,8 +151,12 @@ impl CpuTestContext {
                 .force_path_style(true)
                 .build(),
         );
+        let configs = Self::load_configs(&env);
+        Self::ensure_party_databases(&configs)
+            .await
+            .expect("failed to create per-party test databases");
         Self {
-            configs: Self::load_configs(&env),
+            configs,
             s3_client,
             env,
             kind,
@@ -164,6 +168,46 @@ impl CpuTestContext {
     fn load_configs(env: &TestEnvironment) -> CpuConfigs {
         crate::utils::configs::hardcoded_configs(env)
     }
+
+    /// Create each party's database if it does not yet exist.
+    ///
+    /// The parties run on separate databases (see `configs::make_config`) so
+    /// their concurrent startup migrations don't deadlock on a shared advisory
+    /// lock. Postgres has no `CREATE DATABASE IF NOT EXISTS`, so we connect to
+    /// the always-present `postgres` maintenance database, check `pg_database`,
+    /// and create any missing party DB. Done once here, sequentially, before any
+    /// party or hawk server connects — so there is no create-time race.
+    async fn ensure_party_databases(configs: &CpuConfigs) -> eyre::Result<()> {
+        use sqlx::{Connection, Executor, PgConnection};
+
+        for cfg in configs.iter() {
+            let (maintenance_url, db_name) = maintenance_url_and_db(&cfg.db_url)?;
+            let mut conn = PgConnection::connect(&maintenance_url).await?;
+            let exists: Option<i32> =
+                sqlx::query_scalar("SELECT 1 FROM pg_database WHERE datname = $1")
+                    .bind(&db_name)
+                    .fetch_optional(&mut conn)
+                    .await?;
+            if exists.is_none() {
+                // db_name is `cpu_party_db_{0,1,2}` (see make_config) — no user
+                // input — but quote the identifier defensively regardless.
+                conn.execute(format!("CREATE DATABASE \"{db_name}\"").as_str())
+                    .await?;
+                tracing::info!("created per-party test database {db_name}");
+            }
+            conn.close().await?;
+        }
+        Ok(())
+    }
+}
+
+/// Split a party `db_url` into (`maintenance_url` pointing at the `postgres`
+/// database on the same server, the party's `db_name`).
+fn maintenance_url_and_db(db_url: &str) -> eyre::Result<(String, String)> {
+    let (prefix, db_name) = db_url
+        .rsplit_once('/')
+        .ok_or_else(|| eyre::eyre!("db_url has no '/': {db_url}"))?;
+    Ok((format!("{prefix}/postgres"), db_name.to_string()))
 }
 
 /// Execution environment — controls addresses and S3 endpoint.
