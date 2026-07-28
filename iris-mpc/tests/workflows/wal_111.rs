@@ -106,7 +106,7 @@ impl TestRun for Wal111 {
         // Validate most recent 4 are not deleted
         // Sort checkpoints by id descending
         checkpoints.sort_by_key(|c| -c.id);
-        for checkpoint in checkpoints.iter().take(4) {
+        for checkpoint in checkpoints.iter().take(5) {
             eyre::ensure!(
                 !checkpoint.is_deleted,
                 "checkpoint {:#?} should not be deleted",
