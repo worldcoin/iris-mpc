@@ -470,7 +470,7 @@ pub async fn build_hawk_network_handle(
             addresses: args.addresses.clone(),
             outbound_addresses: args.outbound_addrs.clone(),
             connection_parallelism: args.connection_parallelism,
-            request_parallelism: args.request_parallelism,
+            request_parallelism: args.request_parallelism * SessionGroups::N_SESSIONS_PER_REQUEST,
             timeout_duration: std::time::Duration::from_secs(5),
         })
         .await
