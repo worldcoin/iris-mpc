@@ -115,11 +115,17 @@ pub struct SidecarArgs {
     ///   - none                 — do not prune any checkpoints
     ///   - older-non-archival   — prune older non-archival checkpoints (default)
     ///   - all-older            — prune all older checkpoints
-    ///   - tiered               — keep the last PRUNING_TIERED_KEEP_RECENT_COUNT checkpoints.
-    ///                           Then keep every PRUNING_TIERED_KEEP_EVERY_NTH older checkpoint.
-    ///                           Delete after PRUNING_TIERED_DELETE_OLDER_THAN_DAYS.
+    ///   - tiered               — keep the last --pruning-tiered-keep-recent-count checkpoints,
+    ///                             then keep every --pruning-tiered-keep-every-nth older
+    ///                             checkpoint, and delete after
+    ///                             --pruning-tiered-delete-older-than-days.
     #[clap(long("pruning-mode"))]
     pruning_mode: Option<String>,
+
+    /// Numeric bounds for `--pruning-mode tiered` (each flag also reads its
+    /// PRUNING_TIERED_* env var; ignored for non-tiered modes).
+    #[clap(flatten)]
+    tiered_pruning: TieredPruningConfig,
 }
 
 impl SidecarArgs {
@@ -178,16 +184,16 @@ async fn main() -> Result<()> {
         PruningMode::OlderNonArchival
     };
 
-    // Tiered bounds come from the PRUNING_TIERED_* env vars; only required when
-    // the tiered mode is selected.
-    let tiered_pruning = if pruning_mode == PruningMode::Tiered {
-        TieredPruningConfig::from_env().map_err(|e| {
+    // Tiered bounds are parsed by clap (CLI flags with PRUNING_TIERED_* env
+    // fallbacks). They are always carried, but only validated when the tiered
+    // mode is selected (ignored by other modes).
+    let tiered_pruning = args.tiered_pruning;
+    if pruning_mode == PruningMode::Tiered {
+        tiered_pruning.validate().map_err(|e| {
             eprintln!("Error: tiered pruning config invalid: {}", e);
             e
-        })?
-    } else {
-        TieredPruningConfig::default()
-    };
+        })?;
+    }
 
     println!(
         "Starting WAL sidecar daemon: party={}, bucket={}",

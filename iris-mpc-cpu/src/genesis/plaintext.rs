@@ -129,7 +129,7 @@ impl Default for GenesisArgs {
             batch_size_config: BatchSizeConfig::Static { size: 1 },
             checkpoint_frequency: 100_000,
             pruning_mode: PruningMode::OlderNonArchival,
-            tiered_pruning: TieredPruningConfig::DEFAULT,
+            tiered_pruning: TieredPruningConfig::default(),
         }
     }
 }

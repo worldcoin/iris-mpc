@@ -56,29 +56,32 @@ pub enum PruningMode {
 /// sparse and ancient tiers are defined by wall-clock age in days.
 ///
 /// Requires `keep_every_nth >= 1` (enforced by [`TieredPruningConfig::validate`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, clap::Args)]
+// Missing fields fall back to `TieredPruningConfig::default()` (the
+// `DEFAULT_TIERED_*` values), matching the clap `default_value_t` defaults.
+#[serde(default)]
 pub struct TieredPruningConfig {
     /// Delete all versions older than this many days (the `X` bound).
-    #[serde(default = "default_delete_older_than_days")]
+    #[clap(
+        long = "pruning-tiered-delete-older-than-days",
+        env = ENV_TIERED_DELETE_OLDER_THAN_DAYS,
+        default_value_t = DEFAULT_TIERED_DELETE_OLDER_THAN_DAYS
+    )]
     pub delete_older_than_days: usize,
     /// Always keep this many of the most recent checkpoints (recent tier).
-    #[serde(default = "default_keep_recent_count")]
+    #[clap(
+        long = "pruning-tiered-keep-recent-count",
+        env = ENV_TIERED_KEEP_RECENT_COUNT,
+        default_value_t = DEFAULT_TIERED_KEEP_RECENT_COUNT
+    )]
     pub keep_recent_count: usize,
     /// In the sparse tier, keep one version out of every `keep_every_nth`.
-    #[serde(default = "default_keep_every_nth")]
+    #[clap(
+        long = "pruning-tiered-keep-every-nth",
+        env = ENV_TIERED_KEEP_EVERY_NTH,
+        default_value_t = DEFAULT_TIERED_KEEP_EVERY_NTH
+    )]
     pub keep_every_nth: usize,
-}
-
-fn default_delete_older_than_days() -> usize {
-    60
-}
-
-fn default_keep_recent_count() -> usize {
-    4
-}
-
-fn default_keep_every_nth() -> usize {
-    4
 }
 
 impl TieredPruningConfig {
@@ -97,39 +100,6 @@ impl Default for TieredPruningConfig {
 }
 
 impl TieredPruningConfig {
-    /// Builds a [`TieredPruningConfig`] from environment variables:
-    /// - [`ENV_TIERED_DELETE_OLDER_THAN_DAYS`] (`X`, required),
-    /// - [`ENV_TIERED_KEEP_RECENT_COUNT`] (`N`, required),
-    /// - [`ENV_TIERED_KEEP_EVERY_NTH`] (optional, defaults to
-    ///   [`DEFAULT_TIERED_KEEP_EVERY_NTH`]).
-    ///
-    /// Requires `keep_every_nth >= 1`.
-    pub fn from_env() -> Result<Self, eyre::Error> {
-        let required_usize = |name: &str| -> Result<usize, eyre::Error> {
-            let raw = std::env::var(name)
-                .map_err(|_| eyre!("tiered pruning mode requires env var {name} to be set"))?;
-            raw.parse::<usize>()
-                .map_err(|e| eyre!("invalid {name} value '{raw}': {e}"))
-        };
-
-        let delete_older_than_days = required_usize(ENV_TIERED_DELETE_OLDER_THAN_DAYS)?;
-        let keep_recent_count = required_usize(ENV_TIERED_KEEP_RECENT_COUNT)?;
-        let keep_every_nth = match std::env::var(ENV_TIERED_KEEP_EVERY_NTH) {
-            Ok(raw) => raw
-                .parse::<usize>()
-                .map_err(|e| eyre!("invalid {ENV_TIERED_KEEP_EVERY_NTH} value '{raw}': {e}"))?,
-            Err(_) => DEFAULT_TIERED_KEEP_EVERY_NTH,
-        };
-
-        let cfg = Self {
-            delete_older_than_days,
-            keep_recent_count,
-            keep_every_nth,
-        };
-        cfg.validate()?;
-        Ok(cfg)
-    }
-
     /// Validates the tiered bounds: `keep_every_nth >= 1`.
     pub fn validate(&self) -> Result<(), eyre::Error> {
         if self.keep_every_nth < 1 {
