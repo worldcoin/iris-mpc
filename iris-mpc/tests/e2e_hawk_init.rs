@@ -163,3 +163,5 @@ fn test_wal_109() -> eyre::Result<()> {
 fn test_wal_110() -> eyre::Result<()> {
     run_test!(110, 1, Wal110::new())
 }
+
+// ci-bisect: no-op comment to satisfy the changed-files gate (DO NOT MERGE)
