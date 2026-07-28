@@ -115,10 +115,7 @@ pub struct SidecarArgs {
     ///   - none                 — do not prune any checkpoints
     ///   - older-non-archival   — prune older non-archival checkpoints (default)
     ///   - all-older            — prune all older checkpoints
-    ///   - tiered               — keep the last --pruning-tiered-keep-recent-count checkpoints,
-    ///                             then keep every --pruning-tiered-keep-every-nth older
-    ///                             checkpoint, and delete after
-    ///                             --pruning-tiered-delete-older-than-days.
+    ///   - tiered               — keep the last --pruning-tiered-keep-recent-count checkpoints, then keep every --pruning-tiered-keep-every-nth older checkpoint, and delete after --pruning-tiered-delete-older-than-days
     #[clap(long("pruning-mode"))]
     pruning_mode: Option<String>,
 
