@@ -102,6 +102,11 @@ impl Default for TieredPruningConfig {
 impl TieredPruningConfig {
     /// Validates the tiered bounds: `keep_every_nth >= 1`.
     pub fn validate(&self) -> Result<(), eyre::Error> {
+        if self.delete_older_than_days < 1 {
+            return Err(eyre!(
+                "invalid tiered pruning config: delete_older_than_days must be >= 1"
+            ));
+        }
         if self.keep_every_nth < 1 {
             return Err(eyre!(
                 "invalid tiered pruning config: keep_every_nth must be >= 1"
