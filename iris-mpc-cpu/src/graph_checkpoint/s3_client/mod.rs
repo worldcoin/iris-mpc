@@ -26,8 +26,6 @@ pub use multipart::*;
 pub use streaming::*;
 pub use streaming_download::*;
 
-use chrono::Utc;
-
 /// Creates an S3 graph checkpoint.
 #[allow(clippy::too_many_arguments)]
 pub async fn upload_graph_checkpoint(
@@ -326,9 +324,9 @@ pub async fn cleanup_checkpoints<V: VectorStore>(
         .await?;
     let current_checkpoint_date = all_checkpoints
         .iter()
-        .find(|c| c.s3_key == current_state.s3_key)
-        .map(|c| c.created_at)
-        .unwrap_or(Utc::now());
+        .find(|x| x.s3_key == current_state.s3_key)
+        .ok_or_else(|| eyre!("current checkpoint not found in the db"))?
+        .created_at;
     for checkpoint in checkpoints_to_prune(
         &all_checkpoints,
         &current_state.s3_key,
