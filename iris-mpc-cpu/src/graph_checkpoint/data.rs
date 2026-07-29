@@ -91,15 +91,7 @@ impl TieredPruningConfig {
         keep_recent_count: DEFAULT_TIERED_KEEP_RECENT_COUNT,
         keep_every_nth: DEFAULT_TIERED_KEEP_EVERY_NTH,
     };
-}
 
-impl Default for TieredPruningConfig {
-    fn default() -> Self {
-        Self::DEFAULT
-    }
-}
-
-impl TieredPruningConfig {
     /// Validates the tiered bounds: `keep_every_nth >= 1`.
     pub fn validate(&self) -> Result<(), eyre::Error> {
         if self.delete_older_than_days < 1 {
@@ -113,6 +105,12 @@ impl TieredPruningConfig {
             ));
         }
         Ok(())
+    }
+}
+
+impl Default for TieredPruningConfig {
+    fn default() -> Self {
+        Self::DEFAULT
     }
 }
 

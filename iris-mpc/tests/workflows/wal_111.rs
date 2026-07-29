@@ -98,7 +98,7 @@ impl TestRun for Wal111 {
         let post = WalAssertions::new().assert_checkpoint_count(6);
         nodes.apply_uniform_assertions(&post).await?;
 
-        let mut checkpoints = nodes.0[0]
+        let checkpoints = nodes.0[0]
             .store
             .graph
             .get_genesis_graph_checkpoints_including_deleted()
@@ -107,9 +107,6 @@ impl TestRun for Wal111 {
         for i in 0..checkpoints.len() - 1 {
             assert!(checkpoints[i].id > checkpoints[i + 1].id);
         }
-        // Validate most recent 4 are not deleted
-        // Sort checkpoints by id descending
-        checkpoints.sort_by_key(|c| -c.id);
         for checkpoint in checkpoints.iter().take(4) {
             eyre::ensure!(
                 !checkpoint.is_deleted,
