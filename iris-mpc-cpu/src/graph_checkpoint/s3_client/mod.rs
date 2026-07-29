@@ -406,7 +406,7 @@ fn should_delete_checkpoint(
     tiered: &TieredPruningConfig,
 ) -> bool {
     if c.is_deleted {
-        return true;
+        return false;
     }
     match pruning_mode {
         PruningMode::None => false,
