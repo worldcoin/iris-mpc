@@ -10,6 +10,12 @@ on:
       - iris-mpc-anon-stats-server/**
       - iris-mpc-bins/bin/iris-mpc-anon-stats-server/**
       - iris-mpc-common/**
+      # Root manifest changes (e.g. an ampc-common rev bump) change what this
+      # binary compiles but live outside the crate paths above — without these
+      # the image silently isn't rebuilt on a dependency bump (missed on the
+      # 2026-07-28 ampc-common #130 bump).
+      - Cargo.toml
+      - Cargo.lock
       - .github/workflows/build-and-push-anon-stats-server.yaml
 
   release:
