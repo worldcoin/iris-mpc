@@ -41,9 +41,12 @@ const S3_OPERATION_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Build an S3 client with the shared retry + per-attempt-timeout policy.
 ///
-/// The single place genesis and hawk-main construct S3 clients, so the retry
-/// budget and attempt timeout stay identical across both (the sidecar builds
-/// its own plain client).
+/// The single place genesis, hawk-main, and the WAL sidecar construct S3
+/// clients, so the retry budget and attempt timeout stay identical across all
+/// three. Operation-level retry loops belong here, not at call sites; the one
+/// exception is the per-range fetch in `streaming_download`, which retries body
+/// reads the SDK policy cannot see.
+///
 /// `region_override` selects a bucket region that differs from `sdk_config`'s
 /// (the graph-checkpoint bucket); pass `None` to inherit the SDK region.
 pub fn create_s3_client(

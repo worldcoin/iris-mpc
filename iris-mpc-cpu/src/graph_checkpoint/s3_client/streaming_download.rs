@@ -24,11 +24,14 @@
 //! (`Range: bytes=START-END`), up to [`DEFAULT_DOWNLOAD_PARALLELISM`] in
 //! flight at once and emitted in ascending offset order. Each range is
 //! fetched independently and retried up to [`RANGE_MAX_RETRIES`] times with
-//! [`RANGE_RETRY_DELAY`] between attempts before it bubbles up as a fatal
+//! [`super::retry_backoff`] between attempts before it bubbles up as a fatal
 //! error. Transient network errors thus cost at most one range re-fetch,
 //! not a full restart of the download.
 //!
-//! The `head_object` size probe is subject to the same per-attempt retry.
+//! The `head_object` size probe carries no such loop: it is a plain
+//! request/response with no body to drain, so the SDK's own retry policy
+//! (set in [`super::create_s3_client`]) covers it with better error
+//! classification than a blanket retry-everything arm.
 //!
 //! # Contract on the byte stream
 //!
@@ -133,7 +136,7 @@ where
         return Err(eyre!("range_size must be > 0"));
     }
 
-    let total_size = head_object_size_with_retry(s3_client, bucket, key).await?;
+    let total_size = head_object_size(s3_client, bucket, key).await?;
 
     let stream = Box::pin(range_stream(
         s3_client.clone(),
@@ -205,7 +208,7 @@ pub async fn stream_download_and_deserialize_graph_pair_with(
         return Err(eyre!("pipe_capacity must be > 0"));
     }
 
-    let total_size = head_object_size_with_retry(s3_client, bucket, key).await?;
+    let total_size = head_object_size(s3_client, bucket, key).await?;
     let stream = Box::pin(range_stream(
         s3_client.clone(),
         bucket.to_string(),
@@ -230,32 +233,23 @@ pub async fn stream_download_and_deserialize_graph_pair_with(
     Ok((graphs, reports, hash))
 }
 
-/// `HeadObject` for `content_length`, retried per [`RANGE_MAX_RETRIES`].
-async fn head_object_size_with_retry(s3_client: &S3Client, bucket: &str, key: &str) -> Result<u64> {
-    let mut attempts: u32 = 0;
-    loop {
-        match s3_client.head_object().bucket(bucket).key(key).send().await {
-            Ok(out) => {
-                let len = out
-                    .content_length()
-                    .ok_or_else(|| eyre!("head_object {bucket}/{key}: missing content_length"))?;
-                if len < 0 {
-                    return Err(eyre!("head_object {bucket}/{key}: negative content_length"));
-                }
-                return Ok(len as u64);
-            }
-            Err(e) if attempts < RANGE_MAX_RETRIES => {
-                attempts += 1;
-                tracing::warn!("Retry {attempts} for head_object s3://{bucket}/{key}: {e:?}");
-                sleep(super::retry_backoff(attempts)).await;
-            }
-            Err(e) => {
-                return Err(eyre!(
-                    "head_object s3://{bucket}/{key} failed after {attempts} retries: {e:?}"
-                ));
-            }
-        }
+/// `HeadObject` for `content_length`. Transient-failure retry is the SDK's
+/// job here — see the module docs.
+async fn head_object_size(s3_client: &S3Client, bucket: &str, key: &str) -> Result<u64> {
+    let out = s3_client
+        .head_object()
+        .bucket(bucket)
+        .key(key)
+        .send()
+        .await
+        .map_err(|e| eyre!("head_object s3://{bucket}/{key} failed: {e:?}"))?;
+    let len = out
+        .content_length()
+        .ok_or_else(|| eyre!("head_object {bucket}/{key}: missing content_length"))?;
+    if len < 0 {
+        return Err(eyre!("head_object {bucket}/{key}: negative content_length"));
     }
+    Ok(len as u64)
 }
 
 /// Produce the object's ranges in ascending offset order, keeping up to
@@ -312,6 +306,13 @@ fn range_stream(
 /// Fetch one S3 range. Buffers the response body in memory so a mid-body
 /// network failure cleanly maps to a retry of the same range — no partial
 /// bytes leak into the downstream tee.
+///
+/// This is the one place in the S3 layer that hand-rolls a retry loop, and
+/// deliberately so: the SDK's [`RetryConfig`](aws_sdk_s3::config::retry::RetryConfig)
+/// stops caring once the response headers arrive, so a failure while draining
+/// `body` is not retried by it. Every other operation here is a plain
+/// request/response and is covered by the client-level policy — do not add
+/// loops around those.
 async fn fetch_range(s3_client: &S3Client, bucket: &str, key: &str, range: &str) -> Result<Bytes> {
     let mut attempts: u32 = 0;
     loop {

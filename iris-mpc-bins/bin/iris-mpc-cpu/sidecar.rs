@@ -17,7 +17,7 @@ use iris_mpc_common::tracing::initialize_tracing;
 use iris_mpc_cpu::{
     checkpoint_protocol::{sidecar_main, SidecarConfig},
     execution::hawk_main::{build_hawk_network_handle, HawkArgs},
-    graph_checkpoint::PruningMode,
+    graph_checkpoint::{create_s3_client, PruningMode},
     hnsw::graph::graph_store::GraphPg,
 };
 use tokio::signal::unix::{signal, SignalKind};
@@ -200,8 +200,11 @@ async fn main() -> Result<()> {
     let graph_store: GraphPg<iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store> =
         GraphPg::new(&postgres).await?;
 
+    // Built through the shared helper so the sidecar's uploads carry the same
+    // retry budget and per-attempt timeout as hawk-main and genesis. Path-style
+    // addressing is off, matching prod/stage.
     let aws_cfg = aws_config::from_env().load().await;
-    let s3_client = aws_sdk_s3::Client::new(&aws_cfg);
+    let s3_client = create_s3_client(&aws_cfg, false, None);
 
     // TLS is supplied via SMPC__TLS__* env vars (same path as Hawk Main), not
     // CLI flags; load it from the SMPC-prefixed config and feed it through.
