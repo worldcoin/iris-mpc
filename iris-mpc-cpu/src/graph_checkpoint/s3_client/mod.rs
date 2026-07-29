@@ -337,10 +337,9 @@ pub async fn cleanup_checkpoints<V: VectorStore>(
         &tiered_pruning,
         current_checkpoint_date,
     ) {
-        // Soft-delete the row (tombstone for audit) and remove the S3 object,
-        // which is what actually reclaims storage.
-        graph_store.delete_genesis_checkpoint(checkpoint.id).await?;
         delete_graph(s3_client, bucket, &checkpoint.s3_key).await?;
+        // Soft-delete the row (tombstone for audit)
+        graph_store.delete_genesis_checkpoint(checkpoint.id).await?;
     }
     Ok(())
 }

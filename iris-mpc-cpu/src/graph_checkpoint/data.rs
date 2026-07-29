@@ -28,7 +28,7 @@ pub const ENV_TIERED_KEEP_EVERY_NTH: &str = "PRUNING_TIERED_KEEP_EVERY_NTH";
 
 /// Controls which older checkpoints are deleted during cleanup.
 ///
-/// "Version age" is a checkpoint's rank when all checkpoints are ordered
+/// "Recency rank" is a checkpoint's rank when all checkpoints are ordered
 /// newest-first (0 = the newest checkpoint, 1 = the next newest, ...).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
