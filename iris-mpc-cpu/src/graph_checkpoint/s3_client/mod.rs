@@ -349,14 +349,13 @@ pub async fn cleanup_checkpoints<V: VectorStore>(
 /// (`all_checkpoints`) ordered newest-first and *including* soft-deleted
 /// tombstones.
 ///
-/// The enumeration index over the full history is the checkpoint's version age
+/// The enumeration index over the full history is the checkpoint's recency rank
 /// (0 = newest). Ranking over the full history — rather than over live rows
-/// only — is what makes pruning idempotent: a survivor keeps its age even after
+/// only — is what makes pruning idempotent: a survivor keeps its rank even after
 /// earlier rows are tombstoned, so re-running over the same (or a moving) range
 /// never re-classifies and deletes a checkpoint a prior run kept.
 ///
 /// Rows are excluded from the result when they are:
-/// - already tombstoned (a prior run pruned them; their S3 object is gone),
 /// - the current checkpoint (never deleted),
 /// - at/above the `retain_from_id` watermark, or
 /// - kept by the [`PruningMode`] / [`TieredPruningConfig`] policy.
@@ -368,17 +367,18 @@ fn checkpoints_to_prune<'a>(
     tiered_pruning: &TieredPruningConfig,
     current_checkpoint_date: chrono::DateTime<chrono::Utc>,
 ) -> Vec<&'a GraphCheckpointRow> {
-    // Total history length (live + tombstoned). Used to convert the oldest-first
-    // enumeration index into a stable newest-first recency rank (0 = newest).
+    // Total history length (live + tombstoned). Used to calculate the version age.
     let total_checkpoints = all_checkpoints.len();
     // Sort by id descending to iterate from newest to oldest
-    let mut sorted_checkpoints = all_checkpoints.to_vec();
-    sorted_checkpoints.sort_by_key(|c| -c.id);
+    // Validate all_checkpoints are sorted by id descending
+    for i in 0..all_checkpoints.len() - 1 {
+        assert!(all_checkpoints[i].id > all_checkpoints[i + 1].id);
+    }
     all_checkpoints
         .iter()
         .enumerate()
-        // `age` is fixed here, before filtering, so it stays stable across runs.
-        .filter(|(_, c)| !c.is_deleted)
+        // `recency_rank` is fixed here, before filtering, so it stays stable
+        // across runs.
         .filter(|(_, c)| c.s3_key != current_s3_key)
         .filter(|(_, c)| retain_from_id.is_none_or(|min_id| c.id < min_id))
         .filter(|(recency_rank, c)| {
@@ -392,18 +392,11 @@ fn checkpoints_to_prune<'a>(
             )
         })
         .map(|(_, c)| c)
-        .collect()
+        .collect::<Vec<&GraphCheckpointRow>>()
 }
 
-/// Decides whether a checkpoint at the given version `age` (0 = newest,
-/// counting newest-first across all checkpoints) should be deleted under the
-/// given [`PruningMode`].
-///
-/// This encodes only the version/archival policy; callers are still
-/// responsible for never deleting the current checkpoint or any row kept
-/// by a `retain_from_id` watermark. `tiered` supplies the numeric bounds
-/// used only by [`PruningMode::Tiered`]. `recency_rank` is the checkpoint's
-/// position counting newest-first (0 = newest), used by the tiered recent tier.
+/// Decides whether a single checkpoint should be pruned under the given
+/// [`PruningMode`].
 fn should_delete_checkpoint(
     pruning_mode: PruningMode,
     total_checkpoints: usize,
@@ -412,12 +405,15 @@ fn should_delete_checkpoint(
     current_checkpoint_date: chrono::DateTime<chrono::Utc>,
     tiered: &TieredPruningConfig,
 ) -> bool {
+    if c.is_deleted {
+        return true;
+    }
     match pruning_mode {
         PruningMode::None => false,
         PruningMode::AllOlder => true,
-        PruningMode::OlderNonArchival => !c.is_archival && !c.is_deleted,
+        PruningMode::OlderNonArchival => !c.is_archival,
         PruningMode::Tiered => {
-            if c.is_archival || c.is_deleted {
+            if c.is_archival {
                 return false;
             }
 

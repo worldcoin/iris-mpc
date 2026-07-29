@@ -103,28 +103,35 @@ impl TestRun for Wal111 {
             .graph
             .get_genesis_graph_checkpoints_including_deleted()
             .await?;
+        // Assert checkpoints are sorted by id descending
+        for i in 0..checkpoints.len() - 1 {
+            assert!(checkpoints[i].id > checkpoints[i + 1].id);
+        }
         // Validate most recent 4 are not deleted
         // Sort checkpoints by id descending
         checkpoints.sort_by_key(|c| -c.id);
-        for checkpoint in checkpoints.iter().take(5) {
+        for checkpoint in checkpoints.iter().take(4) {
             eyre::ensure!(
                 !checkpoint.is_deleted,
                 "checkpoint {:#?} should not be deleted",
                 checkpoint
             );
         }
-        // Validate each 4th is deleted from the oldest
-        for (i, checkpoint) in checkpoints.iter().skip(4).rev().enumerate() {
-            if i % 4 == 0 {
+        // Among the older checkpoints (sparse tier), every 4th by version age
+        // (version_age % 4 == 0, counting oldest-first) is kept and the rest are
+        // deleted. Iterating the older slice oldest-first makes `i` equal the
+        // version age, so `version_age % 4 == 0` marks the survivors.
+        for (version_age, checkpoint) in checkpoints.iter().skip(4).rev().enumerate() {
+            if version_age % 4 == 0 {
                 eyre::ensure!(
-                    checkpoint.is_deleted,
-                    "checkpoint {:#?} should be deleted",
+                    !checkpoint.is_deleted,
+                    "checkpoint {:#?} should not be deleted",
                     checkpoint
                 );
             } else {
                 eyre::ensure!(
-                    !checkpoint.is_deleted,
-                    "checkpoint {:#?} should not be deleted",
+                    checkpoint.is_deleted,
+                    "checkpoint {:#?} should be deleted",
                     checkpoint
                 );
             }
