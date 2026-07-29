@@ -1,6 +1,7 @@
 use crate::s3_importer::create_db_chunks_s3_client;
 use crate::{
-    fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, S3Store, S3StoredIris, Store,
+    fetch_and_parse_chunks, last_snapshot_timestamp, DbStoredIris, S3IrisShares, S3Store,
+    S3StoredIris, Store,
 };
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use aws_config::Region;
@@ -220,18 +221,46 @@ async fn load_iris_db_internal(
                 continue;
             }
 
-            actor.load_single_record_from_s3(
-                iris.serial_id() - 1,
-                iris.vector_id(),
-                iris.left_code_odd(),
-                iris.left_code_even(),
-                iris.right_code_odd(),
-                iris.right_code_even(),
-                iris.left_mask_odd(),
-                iris.left_mask_even(),
-                iris.right_mask_odd(),
-                iris.right_mask_even(),
-            );
+            match iris.shares() {
+                S3IrisShares::LegacyLimbs {
+                    left_code_odd,
+                    left_code_even,
+                    left_mask_odd,
+                    left_mask_even,
+                    right_code_odd,
+                    right_code_even,
+                    right_mask_odd,
+                    right_mask_even,
+                } => {
+                    actor.load_single_record_from_s3(
+                        iris.serial_id() - 1,
+                        iris.vector_id(),
+                        left_code_odd,
+                        left_code_even,
+                        right_code_odd,
+                        right_code_even,
+                        left_mask_odd,
+                        left_mask_even,
+                        right_mask_odd,
+                        right_mask_even,
+                    );
+                }
+                S3IrisShares::PlainU16 {
+                    left_code,
+                    left_mask,
+                    right_code,
+                    right_mask,
+                } => {
+                    actor.load_single_record_from_db(
+                        iris.serial_id() - 1,
+                        iris.vector_id(),
+                        left_code,
+                        left_mask,
+                        right_code,
+                        right_mask,
+                    );
+                }
+            }
             actor.increment_db_size(serial_id - 1);
 
             time_loading_into_memory += load_summary_ts.elapsed();

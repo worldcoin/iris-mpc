@@ -13,17 +13,15 @@ extern "C" __global__ void xor_assign_u8(U8 *lhs, U8 *rhs, size_t n)
     }
 }
 
-extern "C" __global__ void matmul_correct_and_reduce(int *c, unsigned short *output, int *a0Sums, int *a1Sums, int *b0Sums, int *b1Sums, size_t dbLength, size_t numElements, size_t offset, unsigned short multiplier, unsigned short *rngMasks0, unsigned short *rngMasks1)
+// The balanced-limb GEMM (see the u16-gemm crate) is exact mod 2^16, so the
+// epilogue is a plain truncation: two's-complement i32 -> u16 IS reduction
+// mod 2^16. No zero-point corrections, no sums.
+extern "C" __global__ void matmul_reduce(int *c, unsigned short *output, size_t numElements, unsigned short multiplier, unsigned short *rngMasks0, unsigned short *rngMasks1)
 {
     size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < numElements)
     {
-        unsigned int queryIdx = idx / dbLength;
-        unsigned int dbIdx = idx % dbLength;
-        int s0 = a0Sums[offset + dbIdx] + b0Sums[queryIdx];
-        int s1 = a1Sums[offset + dbIdx] + b1Sums[queryIdx];
-        unsigned short result = c[idx] + (s0 << 7) + ((s0 + s1) << 15);
-        output[idx] = result * multiplier + rngMasks0[idx] - rngMasks1[idx];
+        output[idx] = (unsigned short)c[idx] * multiplier + rngMasks0[idx] - rngMasks1[idx];
     }
 }
 

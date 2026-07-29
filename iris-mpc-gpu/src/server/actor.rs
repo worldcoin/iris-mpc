@@ -13,7 +13,7 @@ use crate::{
         device_manager::DeviceManager,
         htod_on_stream_sync,
         query_processor::{
-            CompactQuery, CudaVec2DSlicerRawPointer, DeviceCompactQuery, DeviceCompactSums,
+            compute_dot_reducers, CompactQuery, CudaVec2DSlicerRawPointer, DeviceCompactQuery,
         },
     },
     server::{
@@ -885,7 +885,7 @@ impl ServerActor {
                 .clone(),
         };
 
-        let (compact_device_queries_side1, compact_device_sums_side1) = record_stream_time!(
+        let compact_device_queries_side1 = record_stream_time!(
             &self.device_manager,
             &self.streams[0],
             events,
@@ -894,20 +894,11 @@ impl ServerActor {
             {
                 // This needs to be max_batch_size, even though the query can be shorter to have
                 // enough padding for GEMM
-                let compact_device_queries_side1 = compact_query_side1.htod_transfer(
+                compact_query_side1.htod_transfer(
                     &self.device_manager,
                     &self.streams[0],
                     self.max_batch_size,
-                )?;
-
-                let compact_device_sums_side1 = compact_device_queries_side1.query_sums(
-                    &self.codes_engine,
-                    &self.masks_engine,
-                    &self.streams[0],
-                    &self.cublas_handles[0],
-                )?;
-
-                (compact_device_queries_side1, compact_device_sums_side1)
+                )?
             }
         );
 
@@ -919,7 +910,6 @@ impl ServerActor {
         // prefilter the database with a higher threshold, also saving anon stats
         let one_sided_distance_cache_side1 = self.compare_query_against_db_and_self_prefiltering(
             &compact_device_queries_side1,
-            &compact_device_sums_side1,
             &mut events,
             self.full_scan_side,
             batch_size,
@@ -1008,7 +998,6 @@ impl ServerActor {
         let (partial_results_with_rotations_side1, _) = self
             .compare_query_against_db_subset_and_self(
                 &compact_device_queries_side1,
-                &compact_device_sums_side1,
                 &mut events,
                 self.full_scan_side,
                 batch_size,
@@ -1045,7 +1034,7 @@ impl ServerActor {
                 .clone(),
         };
 
-        let (compact_device_queries_side2, compact_device_sums_side2) = record_stream_time!(
+        let compact_device_queries_side2 = record_stream_time!(
             &self.device_manager,
             &self.streams[0],
             events,
@@ -1054,20 +1043,11 @@ impl ServerActor {
             {
                 // This needs to be MAX_BATCH_SIZE, even though the query can be shorter to have
                 // enough padding for GEMM
-                let compact_device_queries_side2 = compact_query_side2.htod_transfer(
+                compact_query_side2.htod_transfer(
                     &self.device_manager,
                     &self.streams[0],
                     self.max_batch_size,
-                )?;
-
-                let compact_device_sums_side2 = compact_device_queries_side2.query_sums(
-                    &self.codes_engine,
-                    &self.masks_engine,
-                    &self.streams[0],
-                    &self.cublas_handles[0],
-                )?;
-
-                (compact_device_queries_side2, compact_device_sums_side2)
+                )?
             }
         );
 
@@ -1075,7 +1055,6 @@ impl ServerActor {
         let (partial_results_with_rotations_side2, one_sided_distance_cache_side2) = self
             .compare_query_against_db_subset_and_self(
                 &compact_device_queries_side2,
-                &compact_device_sums_side2,
                 &mut events,
                 other_side,
                 batch_size,
@@ -1558,9 +1537,7 @@ impl ServerActor {
                                     Eye::Right => &self.left_mask_db_slices,
                                 },
                                 &compact_device_queries_side1,
-                                &compact_device_sums_side1,
                                 &compact_device_queries_side2,
-                                &compact_device_sums_side2,
                                 insertion_idx,
                                 self.current_db_sizes[i],
                                 i,
@@ -1615,9 +1592,7 @@ impl ServerActor {
                                     Eye::Right => &self.left_mask_db_slices,
                                 },
                                 &compact_device_queries_side1,
-                                &compact_device_sums_side1,
                                 &compact_device_queries_side2,
-                                &compact_device_sums_side2,
                                 reauth_pos,
                                 device_db_index as usize,
                                 i,
@@ -1789,7 +1764,6 @@ impl ServerActor {
     fn compare_query_against_self(
         &mut self,
         compact_device_queries: &DeviceCompactQuery,
-        compact_device_sums: &DeviceCompactSums,
         events: &mut HashMap<&str, Vec<Vec<CUevent>>>,
         eye_db: Eye,
     ) {
@@ -1823,11 +1797,10 @@ impl ServerActor {
                 );
                 tracing::info!(party_id = self.party_id, "compute_dot_reducers start");
 
-                compact_device_sums.compute_dot_reducers(
+                compute_dot_reducers(
                     &mut self.batch_codes_engine,
                     &mut self.batch_masks_engine,
                     &self.query_db_size,
-                    0,
                     batch_streams,
                 );
                 tracing::info!(party_id = self.party_id, "batch_dot end");
@@ -1900,7 +1873,6 @@ impl ServerActor {
     fn compare_query_against_db_subset_and_self(
         &mut self,
         compact_device_queries: &DeviceCompactQuery,
-        compact_device_sums: &DeviceCompactSums,
         events: &mut HashMap<&str, Vec<Vec<CUevent>>>,
         eye_db: Eye,
         batch_size: usize,
@@ -1921,12 +1893,7 @@ impl ServerActor {
         };
 
         // ---- START BATCH DEDUP ----
-        self.compare_query_against_self(
-            compact_device_queries,
-            compact_device_sums,
-            events,
-            eye_db,
-        );
+        self.compare_query_against_self(compact_device_queries, events, eye_db);
         // ---- END BATCH DEDUP ----
 
         // if the subset is completely empty, we can skip the whole process after we do the batch check
@@ -2014,11 +1981,9 @@ impl ServerActor {
                 "db_reduce",
                 self.enable_debug_timing,
                 {
-                    compact_device_sums.compute_dot_reducer_against_prepared_db(
+                    compute_dot_reducers(
                         &mut self.codes_engine,
                         &mut self.masks_engine,
-                        &self.code_chunk_buffers[0].sums,
-                        &self.mask_chunk_buffers[0].sums,
                         &dot_chunk_size,
                         &self.streams[0],
                     );
@@ -2246,7 +2211,6 @@ impl ServerActor {
     fn compare_query_against_db_and_self_prefiltering(
         &mut self,
         compact_device_queries: &DeviceCompactQuery,
-        compact_device_sums: &DeviceCompactSums,
         events: &mut HashMap<&str, Vec<Vec<CUevent>>>,
         eye_db: Eye,
         batch_size: usize,
@@ -2409,13 +2373,10 @@ impl ServerActor {
                 "db_reduce",
                 self.enable_debug_timing,
                 {
-                    compact_device_sums.compute_dot_reducer_against_db(
+                    compute_dot_reducers(
                         &mut self.codes_engine,
                         &mut self.masks_engine,
-                        code_db_slices,
-                        mask_db_slices,
                         &dot_chunk_size,
-                        offset,
                         request_streams,
                     );
                 }
@@ -2641,7 +2602,7 @@ impl ServerActor {
         if !batch.deletion_requests_indices.is_empty() {
             tracing::info!("Performing deletions");
             let (dummy_code_share, dummy_mask_share) = get_dummy_shares_for_deletion(self.party_id);
-            let (dummy_queries, dummy_sums) =
+            let dummy_queries =
                 self.prepare_device_query_for_shares(&dummy_code_share, &dummy_mask_share)?;
 
             for deletion_index in batch.deletion_requests_indices.clone() {
@@ -2667,9 +2628,7 @@ impl ServerActor {
                     &self.right_code_db_slices,
                     &self.right_mask_db_slices,
                     &dummy_queries,
-                    &dummy_sums,
                     &dummy_queries,
-                    &dummy_sums,
                     0,
                     device_db_index as usize,
                     device_index as usize,
@@ -2685,9 +2644,9 @@ impl ServerActor {
                 batch.identity_update_indices.clone(),
                 batch.identity_update_shares.clone()
             ) {
-                let (queries_left, sums_left) =
+                let queries_left =
                     self.prepare_device_query_for_shares(&shares.code_left, &shares.mask_left)?;
-                let (queries_right, sums_right) =
+                let queries_right =
                     self.prepare_device_query_for_shares(&shares.code_right, &shares.mask_right)?;
 
                 let device_index = update_index % self.device_manager.device_count() as u32;
@@ -2712,9 +2671,7 @@ impl ServerActor {
                     &self.right_code_db_slices,
                     &self.right_mask_db_slices,
                     &queries_left,
-                    &sums_left,
                     &queries_right,
-                    &sums_right,
                     0,
                     device_db_index as usize,
                     device_index as usize,
@@ -2803,7 +2760,7 @@ impl ServerActor {
         &self,
         code_share: &GaloisRingIrisCodeShare,
         mask_share: &GaloisRingTrimmedMaskCodeShare,
-    ) -> Result<(DeviceCompactQuery, DeviceCompactSums)> {
+    ) -> Result<DeviceCompactQuery> {
         let compact_query = {
             let code = preprocess_query(
                 &code_share
@@ -2832,14 +2789,7 @@ impl ServerActor {
             self.max_batch_size,
         )?;
 
-        let compact_device_sums = compact_device_queries.query_sums(
-            &self.codes_engine,
-            &self.masks_engine,
-            &self.streams[0],
-            &self.cublas_handles[0],
-        )?;
-
-        Ok((compact_device_queries, compact_device_sums))
+        Ok(compact_device_queries)
     }
 
     fn allocate_or_policy_bitmap(&mut self, bitmap: Vec<u64>) -> Vec<CudaSlice<u64>> {
@@ -3552,49 +3502,35 @@ fn write_db_at_index(
     right_code_db_slices: &SlicedProcessedDatabase,
     right_mask_db_slices: &SlicedProcessedDatabase,
     compact_device_queries_left: &DeviceCompactQuery,
-    compact_device_sums_left: &DeviceCompactSums,
     compact_device_queries_right: &DeviceCompactQuery,
-    compact_device_sums_right: &DeviceCompactSums,
     src_index: usize,
     dst_index: usize,
     device_index: usize,
     streams: &[CudaStream],
 ) {
-    for (engine, db, query, sums) in [
+    for (engine, db, query) in [
         (
             code_engine,
             left_code_db_slices,
             &compact_device_queries_left.code_query_insert,
-            &compact_device_sums_left.code_query_insert,
         ),
         (
             mask_engine,
             left_mask_db_slices,
             &compact_device_queries_left.mask_query_insert,
-            &compact_device_sums_left.mask_query_insert,
         ),
         (
             code_engine,
             right_code_db_slices,
             &compact_device_queries_right.code_query_insert,
-            &compact_device_sums_right.code_query_insert,
         ),
         (
             mask_engine,
             right_mask_db_slices,
             &compact_device_queries_right.mask_query_insert,
-            &compact_device_sums_right.mask_query_insert,
         ),
     ] {
-        db.write_at_index(
-            engine,
-            query,
-            sums,
-            src_index,
-            dst_index,
-            device_index,
-            streams,
-        );
+        db.write_at_index(engine, query, src_index, dst_index, device_index, streams);
     }
 }
 
@@ -3721,17 +3657,9 @@ impl InMemoryStore for ServerActor {
     }
 
     fn preprocess_db(&mut self) {
-        // we also register the memory allocated, page-locking it for more performance
+        // The balanced-limb encoding needs no precomputed sums; we only
+        // register the allocated memory, page-locking it for more performance.
         self.register_host_memory();
-
-        self.left_code_db_slices
-            .preprocess(&self.codes_engine, &self.current_db_sizes);
-        self.left_mask_db_slices
-            .preprocess(&self.masks_engine, &self.current_db_sizes);
-        self.right_code_db_slices
-            .preprocess(&self.codes_engine, &self.current_db_sizes);
-        self.right_mask_db_slices
-            .preprocess(&self.masks_engine, &self.current_db_sizes);
     }
 
     fn current_db_sizes(&self) -> impl std::fmt::Debug {

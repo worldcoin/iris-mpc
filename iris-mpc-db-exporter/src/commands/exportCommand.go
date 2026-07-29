@@ -154,7 +154,8 @@ func ExportCommand(ctx context.Context, mode, outputFolder string, store iris.St
 
 	// Get current time in unix format. It's stored as BIGINT in postgres
 	unixTime := time.Now().Unix()
-	timestampFilePath := fmt.Sprintf("%s/%s/%d_%d_%d", outputFolder, persistence.TimestampsFolder, unixTime, batchSize, totalIrises)
+	timestampFilePath := fmt.Sprintf("%s/%s/%s", outputFolder, persistence.TimestampsFolder,
+		timestampMarkerName(unixTime, batchSize, totalIrises, converter.FormatVersion()))
 
 	o11y.S(ctx).Infof("Total irises: %d", totalIrises)
 
@@ -245,4 +246,17 @@ func ExportCommand(ctx context.Context, mode, outputFolder string, store iris.St
 
 	// Create the file with the date of the beginning of the export to mark the completion of the export
 	err = writer.Persist(timestampFilePath, []byte{})
+}
+
+// timestampMarkerName builds the snapshot marker file name. Format 1 keeps
+// the historical 3-part name ({unixTime}_{batchSize}_{lastSerialId}); newer
+// formats append the version as a 4th part so importers can select the right
+// record decoder. Record sizes are identical across formats, so the marker
+// name is the only format signal.
+func timestampMarkerName(unixTime int64, batchSize, totalIrises, formatVersion int) string {
+	name := fmt.Sprintf("%d_%d_%d", unixTime, batchSize, totalIrises)
+	if formatVersion != converter.FormatLegacyLimbs {
+		name = fmt.Sprintf("%s_%d", name, formatVersion)
+	}
+	return name
 }

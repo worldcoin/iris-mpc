@@ -7,22 +7,55 @@ import (
 	"github.com/worldcoin/iris-mpc-db-exporter/src/iris"
 )
 
+const (
+	// FormatLegacyLimbs (format 1) stores each share as two byte planes with
+	// every u16 half encoded as (byte - 128) — the zero-point limb layout of
+	// the old GPU kernel. Implied by 3-part snapshot marker names.
+	FormatLegacyLimbs = 1
+	// FormatPlainU16 (format 2) stores each share verbatim as little-endian
+	// u16 bytes, identical to the database representation. Importers derive
+	// their compute encoding at load time.
+	FormatPlainU16 = 2
+)
+
 type BinaryConverter struct {
 	SingleRowTotalSize  int
 	SingleCodeSize      int
 	SingleMaskSize      int
 	SingleIdSize        int
 	SingleVersionIdSize int
+	formatVersion       int
 }
 
-func NewBinaryConverter(codeSize, maskSize, idSize, versionIdSize int) *BinaryConverter {
+func NewBinaryConverter(codeSize, maskSize, idSize, versionIdSize, formatVersion int) *BinaryConverter {
+	if formatVersion != FormatLegacyLimbs && formatVersion != FormatPlainU16 {
+		panic(fmt.Sprintf("unsupported export format version %d", formatVersion))
+	}
 	return &BinaryConverter{
 		SingleCodeSize:      codeSize,
 		SingleMaskSize:      maskSize,
 		SingleIdSize:        idSize,
 		SingleVersionIdSize: versionIdSize,
 		SingleRowTotalSize:  (codeSize * 2) + (maskSize * 2) + idSize + versionIdSize,
+		formatVersion:       formatVersion,
 	}
+}
+
+func (c *BinaryConverter) FormatVersion() int {
+	return c.formatVersion
+}
+
+// storeShare writes one share's bytes at `offset` in the layout selected by
+// the converter's format version and returns the next offset. Both layouts
+// occupy exactly len(input) bytes.
+func (c *BinaryConverter) storeShare(input []byte, output []byte, offset int) int {
+	if c.formatVersion == FormatPlainU16 {
+		// The database column already holds little-endian u16 shares; the
+		// plain format is a verbatim copy.
+		copy(output[offset:offset+len(input)], input)
+		return offset + len(input)
+	}
+	return storeAsEvenOddPairs(input, output, offset)
 }
 
 func (c *BinaryConverter) validateStoredIris(iris iris.StoredIris) error {
@@ -75,10 +108,10 @@ func (c *BinaryConverter) Convert(data []iris.StoredIris) ([]byte, error) {
 		// Step 2: Write masks and codes as even odd pairs
 		// Offset points where we left off in this row:
 		offset := start + c.SingleIdSize
-		offset = storeAsEvenOddPairs(item.LeftCode, outputArray, offset)
-		offset = storeAsEvenOddPairs(item.LeftMask, outputArray, offset)
-		offset = storeAsEvenOddPairs(item.RightCode, outputArray, offset)
-		offset = storeAsEvenOddPairs(item.RightMask, outputArray, offset)
+		offset = c.storeShare(item.LeftCode, outputArray, offset)
+		offset = c.storeShare(item.LeftMask, outputArray, offset)
+		offset = c.storeShare(item.RightCode, outputArray, offset)
+		offset = c.storeShare(item.RightMask, outputArray, offset)
 
 		// Step 3: Write version id
 		versionIdBytes := make([]byte, c.SingleVersionIdSize)
@@ -104,10 +137,10 @@ func (c *BinaryConverter) ConvertSingle(item iris.StoredIris) ([]byte, error) {
 	// Step 2: Write masks and codes as even odd pairs
 	// Offsets for subsequent data, observe that the helper is mutating the array in place
 	offset := c.SingleIdSize
-	offset = storeAsEvenOddPairs(item.LeftCode, outputArray, offset)
-	offset = storeAsEvenOddPairs(item.LeftMask, outputArray, offset)
-	offset = storeAsEvenOddPairs(item.RightCode, outputArray, offset)
-	offset = storeAsEvenOddPairs(item.RightMask, outputArray, offset)
+	offset = c.storeShare(item.LeftCode, outputArray, offset)
+	offset = c.storeShare(item.LeftMask, outputArray, offset)
+	offset = c.storeShare(item.RightCode, outputArray, offset)
+	offset = c.storeShare(item.RightMask, outputArray, offset)
 
 	// Step 3: Write version id
 	versionIdBytes := make([]byte, c.SingleVersionIdSize)

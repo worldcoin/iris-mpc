@@ -49,7 +49,6 @@ fn bench_memcpy(c: &mut Criterion) {
             let preprocessed_query = device_manager
                 .htod_transfer_query(&preprocessed_query, &streams, QUERY_SIZE, IRIS_CODE_LENGTH)
                 .unwrap();
-            let query_sums = engine.query_sums(&preprocessed_query, &streams, &blass);
             engine.dot(
                 &preprocessed_query,
                 &db_slices.code_gr,
@@ -58,7 +57,7 @@ fn bench_memcpy(c: &mut Criterion) {
                 &streams,
                 &blass,
             );
-            engine.dot_reduce(&query_sums, &db_slices.code_sums_gr, &db_sizes, 0, &streams);
+            engine.dot_reduce(&db_sizes, &streams);
             device_manager.await_streams(&streams);
         });
     });
