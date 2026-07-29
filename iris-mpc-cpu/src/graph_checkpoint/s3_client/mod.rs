@@ -615,9 +615,9 @@ mod tests {
             keep_every_nth: 4,
         };
         let all = vec![
-            row(1, true, false, now - Duration::days(100)), // ancient + archival -> keep
+            row(3, false, false, now),                       // current
             row(2, false, false, now - Duration::days(100)), // ancient           -> delete
-            row(3, false, false, now),                      // current
+            row(1, true, false, now - Duration::days(100)),  // ancient + archival -> keep
         ];
         let pruned = checkpoints_to_prune(&all, "cp/3", None, PruningMode::Tiered, &cfg, now);
         assert_eq!(pruned_ids(&pruned), vec![2]);
