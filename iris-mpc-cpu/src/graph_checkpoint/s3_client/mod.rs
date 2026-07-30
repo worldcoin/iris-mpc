@@ -327,14 +327,15 @@ pub async fn cleanup_checkpoints<V: VectorStore>(
         .find(|x| x.s3_key == current_state.s3_key)
         .ok_or_else(|| eyre!("current checkpoint not found in the db"))?
         .created_at;
-    for checkpoint in checkpoints_to_prune(
+    let checkpoints = checkpoints_to_prune(
         &all_checkpoints,
         &current_state.s3_key,
         retain_from_id,
         pruning_mode,
         &tiered_pruning,
         current_checkpoint_date,
-    ) {
+    )?;
+    for checkpoint in checkpoints {
         delete_graph(s3_client, bucket, &checkpoint.s3_key).await?;
         // Soft-delete the row (tombstone for audit)
         graph_store.delete_genesis_checkpoint(checkpoint.id).await?;
@@ -363,15 +364,21 @@ fn checkpoints_to_prune<'a>(
     pruning_mode: PruningMode,
     tiered_pruning: &TieredPruningConfig,
     current_checkpoint_date: chrono::DateTime<chrono::Utc>,
-) -> Vec<&'a GraphCheckpointRow> {
+) -> Result<Vec<&'a GraphCheckpointRow>> {
+    // Validate all_checkpoints are sorted by id descending
+    for i in 0..all_checkpoints.len() - 1 {
+        if all_checkpoints[i].id <= all_checkpoints[i + 1].id {
+            return Err(eyre!(
+                "checkpoints are not sorted by id descending: {} <= {}",
+                all_checkpoints[i].id,
+                all_checkpoints[i + 1].id
+            ));
+        }
+    }
     // Total history length (live + tombstoned). Used to calculate the version age.
     let total_checkpoints = all_checkpoints.len();
     // Sort by id descending to iterate from newest to oldest
-    // Validate all_checkpoints are sorted by id descending
-    for i in 0..all_checkpoints.len() - 1 {
-        assert!(all_checkpoints[i].id > all_checkpoints[i + 1].id);
-    }
-    all_checkpoints
+    let checkpoints = all_checkpoints
         .iter()
         .enumerate()
         // `recency_rank` is fixed here, before filtering, so it stays stable
@@ -389,7 +396,8 @@ fn checkpoints_to_prune<'a>(
             )
         })
         .map(|(_, c)| c)
-        .collect::<Vec<&GraphCheckpointRow>>()
+        .collect::<Vec<&GraphCheckpointRow>>();
+    Ok(checkpoints)
 }
 
 /// Decides whether a single checkpoint should be pruned under the given
@@ -585,8 +593,8 @@ mod tests {
             keep_recent_count: 2,
             keep_every_nth: 4,
         };
-        // oldest-first (id ASC), matching the caller. version_age = slice index:
-        // id 1 = v_age 0 ... id 8 = v_age 7; recency_rank = 7 - v_age.
+        // newest-first (id DESC), matching the caller. version_age = len - 1 - slice index:
+        // id 8 = v_age 8 ... id 1 = v_age 1; recency_rank = slice index.
         let all = vec![
             row(8, false, false, days_ago(0)), // current (newest)        -> excluded
             row(7, false, false, days_ago(10)), // recent (rank 1 < 2)     -> keep
@@ -599,7 +607,8 @@ mod tests {
             row(0, false, false, days_ago(80)), // ancient (rank 8)        -> excluded
         ];
         let pruned = checkpoints_to_prune(&all, "cp/8", None, PruningMode::Tiered, &cfg, now);
-        assert_eq!(pruned_ids(&pruned), vec![0, 1, 2, 3, 5, 6]);
+        assert!(pruned.is_ok());
+        assert_eq!(pruned_ids(&pruned.unwrap()), vec![0, 1, 2, 3, 5, 6]);
     }
 
     /// `Tiered` never deletes an archival row, even in the ancient tier.
@@ -617,7 +626,8 @@ mod tests {
             row(1, true, false, now - Duration::days(100)),  // ancient + archival -> keep
         ];
         let pruned = checkpoints_to_prune(&all, "cp/3", None, PruningMode::Tiered, &cfg, now);
-        assert_eq!(pruned_ids(&pruned), vec![2]);
+        assert!(pruned.is_ok());
+        assert_eq!(pruned_ids(&pruned.unwrap()), vec![2]);
     }
 
     #[test]
