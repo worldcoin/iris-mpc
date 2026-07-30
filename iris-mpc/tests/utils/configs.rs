@@ -101,12 +101,7 @@ pub fn make_hawk_config(
             image_name: String::new(),
             heartbeat_interval_secs: 2,
             heartbeat_initial_retries: 10,
-            // 100ms, not the 1s production default: every startup barrier polls
-            // peers at this cadence, and with 3 parties on loopback the coarse
-            // interval is pure wall-clock. The visibility barrier this PR adds
-            // makes that cost land ~24 times over the suite, which was enough to
-            // push a ~18min suite past its 20min ceiling.
-            http_query_retry_delay_ms: 100,
+            http_query_retry_delay_ms: 1000,
             http_query_timeout_ms: 10000,
             startup_sync_timeout_secs: 300,
             startup_visibility_barrier_disabled: false,

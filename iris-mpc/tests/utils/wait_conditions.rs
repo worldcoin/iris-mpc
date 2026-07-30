@@ -68,9 +68,7 @@ pub async fn wait_for_all_ready(
             image_name: String::new(),
             heartbeat_interval_secs: 2,
             heartbeat_initial_retries: 10,
-            // Matches configs.rs: 100ms so the harness's own readiness poll
-            // isn't a second source of coarse-cadence wall-clock.
-            http_query_retry_delay_ms: 100,
+            http_query_retry_delay_ms: 1000,
             http_query_timeout_ms: 10000,
             startup_sync_timeout_secs: 300,
             startup_visibility_barrier_disabled: false,
