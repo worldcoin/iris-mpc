@@ -430,10 +430,10 @@ fn should_delete_checkpoint(
                 // Ancient tier: delete everything.
                 return true;
             }
-            // Version age is the index into the (oldest-first) slice (0 = oldest);
+            // Sequence rank is the index into the (oldest-first) slice (0 = oldest);
             // Sparse tier: keep one out of every `keep_every_nth`.
-            let version_age = total_checkpoints - 1 - recency_rank;
-            !version_age.is_multiple_of(tiered.keep_every_nth)
+            let sequence_rank = total_checkpoints - 1 - recency_rank;
+            !sequence_rank.is_multiple_of(tiered.keep_every_nth)
         }
     }
 }
