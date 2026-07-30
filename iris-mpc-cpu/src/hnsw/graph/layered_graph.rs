@@ -721,6 +721,16 @@ impl GraphMem {
             .unwrap_or_default()
     }
 
+    /// Stored neighbor count of `base` at `lc`, read from the encoding header
+    /// without decoding. Counts raw entries — an upper bound on the active
+    /// degree. 0 if `base`/`lc` absent.
+    pub fn raw_degree(&self, base: &SerialId, lc: usize) -> usize {
+        self.layers
+            .get(lc)
+            .and_then(|layer| layer.get_links(base))
+            .map_or(0, |n| n.degree())
+    }
+
     /// Current `VectorId` of an in-graph node, from the content clock. `None`
     /// means not live — callers must not fabricate a version for it.
     pub fn vector_id_of(&self, serial: SerialId) -> Option<VectorId> {
