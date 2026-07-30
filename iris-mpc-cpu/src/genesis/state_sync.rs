@@ -85,17 +85,27 @@ impl SyncResult {
 impl SyncResult {
     /// Check if the common part of the config is the same across all nodes.
     pub fn check_synced_state(&self) -> Result<()> {
-        let my_state = self.my_state.clone();
         for state in &self.all_states {
             ensure!(
-                *state == my_state,
-                "Inconsistent genesis config: \nhave: {:?} \ngot: {:?}",
-                my_state,
-                state
+                *state == self.my_state,
+                "Inconsistent genesis config: \nhave: {} \ngot: {}",
+                summarize_sync_state(&self.my_state),
+                summarize_sync_state(state)
             );
         }
         Ok(())
     }
+}
+
+/// Format a [`SyncState`] for error messages with the potentially huge
+/// `excluded_serial_ids` list truncated to a sample (derived `Debug` shows
+/// every other field verbatim).
+fn summarize_sync_state(state: &SyncState) -> String {
+    const SAMPLE: usize = 50;
+    let total = state.genesis_config.excluded_serial_ids.len();
+    let mut capped = state.clone();
+    capped.genesis_config.excluded_serial_ids.truncate(SAMPLE);
+    format!("{capped:?} (excluded_serial_ids: {total} total, first {SAMPLE} shown)")
 }
 
 #[cfg(test)]

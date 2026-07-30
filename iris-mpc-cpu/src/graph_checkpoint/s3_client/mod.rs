@@ -1,8 +1,15 @@
 mod multipart;
 mod streaming;
 mod streaming_download;
-use std::{io::Cursor, time::Instant};
+use std::{
+    io::Cursor,
+    time::{Duration, Instant},
+};
 
+use aws_config::SdkConfig;
+use aws_sdk_s3::config::{
+    retry::RetryConfig, timeout::TimeoutConfig, Builder as S3ConfigBuilder, Region,
+};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client as S3Client;
 use bytes::Bytes;
@@ -17,7 +24,7 @@ use crate::{
         },
         VectorStore,
     },
-    utils::serialization::graph::{GraphFormat, LegacyPruneContext},
+    utils::serialization::graph::{GraphFormat, LegacyPruneContext, PruneReport},
 };
 
 use crate::graph_checkpoint::data::*;
@@ -25,6 +32,50 @@ use iris_mpc_common::SerialId;
 pub use multipart::*;
 pub use streaming::*;
 pub use streaming_download::*;
+
+/// Retry budget applied to every S3 client built by [`create_s3_client`].
+const S3_MAX_ATTEMPTS: u32 = 5;
+/// Per-attempt timeout: a hung request is abandoned so the retry can fire,
+/// instead of stalling the whole run behind one dead connection.
+const S3_OPERATION_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Build an S3 client with the shared retry + per-attempt-timeout policy.
+///
+/// The single place genesis and hawk-main construct S3 clients, so the retry
+/// budget and attempt timeout stay identical across both (the sidecar builds
+/// its own plain client).
+/// `region_override` selects a bucket region that differs from `sdk_config`'s
+/// (the graph-checkpoint bucket); pass `None` to inherit the SDK region.
+pub fn create_s3_client(
+    sdk_config: &SdkConfig,
+    force_path_style: bool,
+    region_override: Option<Region>,
+) -> S3Client {
+    let mut builder = S3ConfigBuilder::from(sdk_config)
+        .force_path_style(force_path_style)
+        .retry_config(RetryConfig::standard().with_max_attempts(S3_MAX_ATTEMPTS))
+        .timeout_config(
+            TimeoutConfig::builder()
+                .operation_attempt_timeout(S3_OPERATION_ATTEMPT_TIMEOUT)
+                .build(),
+        );
+    if let Some(region) = region_override {
+        builder = builder.region(region);
+    }
+    S3Client::from_conf(builder.build())
+}
+
+/// Exponential backoff with full jitter for the in-client range/part retry
+/// loops. `attempt` is 1-based; the delay doubles from 500 ms, caps at 30 s,
+/// and jitters uniformly in `[0, delay]` to spread reconnect storms.
+pub(super) fn retry_backoff(attempt: u32) -> Duration {
+    const BASE_MS: u64 = 500;
+    const CAP: Duration = Duration::from_secs(30);
+    let exp = BASE_MS.saturating_mul(1u64 << (attempt.saturating_sub(1)).min(6));
+    let capped = Duration::from_millis(exp).min(CAP);
+    let jitter = rand::random::<f64>() * capped.as_secs_f64();
+    Duration::from_secs_f64(jitter)
+}
 
 /// Creates an S3 graph checkpoint.
 #[allow(clippy::too_many_arguments)]
@@ -174,6 +225,19 @@ pub async fn download_graph_checkpoint(
     state: &GraphCheckpointState,
     prune: Option<LegacyPruneContext>,
 ) -> Result<BothEyes<GraphMem>> {
+    let (graphs, _reports) =
+        download_graph_checkpoint_pruned(s3_client, bucket, state, prune).await?;
+    Ok(graphs)
+}
+
+/// Like [`download_graph_checkpoint`], also returning the per-eye
+/// [`PruneReport`] when a legacy (V3/V4) base was pruned at read.
+pub async fn download_graph_checkpoint_pruned(
+    s3_client: &S3Client,
+    bucket: &str,
+    state: &GraphCheckpointState,
+    prune: Option<LegacyPruneContext>,
+) -> Result<(BothEyes<GraphMem>, Option<[PruneReport; 2]>)> {
     let format = GraphFormat::try_from(state.graph_version)?;
     if format == GraphFormat::Raw {
         bail!("Unexpected graph checkpoint format: Raw");
@@ -195,9 +259,17 @@ pub async fn download_graph_checkpoint(
         );
     }
     let start = Instant::now();
-    let (graphs, hash_bytes) =
-        stream_download_and_deserialize_graph_pair(s3_client, bucket, &state.s3_key, format, prune)
-            .await?;
+    let (graphs, reports, hash_bytes) = stream_download_and_deserialize_graph_pair_with(
+        s3_client,
+        bucket,
+        &state.s3_key,
+        format,
+        prune,
+        DEFAULT_DOWNLOAD_PIPE_CAPACITY,
+        DEFAULT_DOWNLOAD_RANGE_SIZE,
+        DEFAULT_DOWNLOAD_PARALLELISM,
+    )
+    .await?;
     metrics::histogram!("genesis_checkpoint_download_duration")
         .record(start.elapsed().as_secs_f64());
 
@@ -211,7 +283,7 @@ pub async fn download_graph_checkpoint(
         ));
     }
     tracing::info!("BLAKE3 hash verified successfully: {}", computed_hash);
-    Ok(graphs)
+    Ok((graphs, reports))
 }
 
 // this is used for the genesis integration tests.
