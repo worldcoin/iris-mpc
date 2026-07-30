@@ -20,10 +20,6 @@ struct Args {
     #[clap(long("batch-size"))]
     batch_size: Option<String>,
 
-    // Whether to perform a snapshot.
-    #[clap(long("perform-snapshot"))]
-    perform_snapshot: Option<String>,
-
     // CLI argument deprecated -- must specify "false" if provided.
     #[clap(long("use-backup-as-source"))]
     use_backup_as_source: Option<String>,
@@ -47,8 +43,7 @@ struct Args {
     base_checkpoint_hash: Option<String>,
 }
 
-/// Process main entry point: performs initial indexation of HNSW graph and optionally
-/// creates a db snapshot within AWS RDS cluster.
+/// Process main entry point: performs initial indexation of HNSW graph.
 fn main() -> Result<()> {
     // Override ptmalloc2's mmap threshold if set. This pins the dynamic
     // threshold, preventing it from ratcheting up over time.
@@ -144,22 +139,6 @@ fn parse_args() -> Result<ExecutionArgs> {
         .ok_or_else(|| eyre::eyre!("--batch-size argument is required."))?;
     let batch_size_config = BatchSizeConfig::parse(batch_size_arg)?;
 
-    // Arg: perform snapshot.
-    let perform_snapshot = if let Some(perform_snapshot_arg) = args.perform_snapshot.as_ref() {
-        perform_snapshot_arg.parse().map_err(|_| {
-            eprintln!(
-                "Error: --perform-snapshot argument must be a valid boolean. Value: {}",
-                perform_snapshot_arg
-            );
-            eyre::eyre!(
-                "--perform-snapshot argument must be a valid boolean. Value: {}",
-                perform_snapshot_arg
-            )
-        })?
-    } else {
-        false
-    };
-
     // Arg: use_backup_as_source deprecated (if specified, must parse to boolean false).
     if let Some(arg_str) = args.use_backup_as_source.as_ref() {
         match arg_str.parse::<bool>() {
@@ -211,7 +190,6 @@ fn parse_args() -> Result<ExecutionArgs> {
     Ok(ExecutionArgs {
         batch_size_config,
         max_indexation_id,
-        perform_snapshot,
         checkpoint_frequency,
         pruning_mode,
         base_checkpoint_hash,
