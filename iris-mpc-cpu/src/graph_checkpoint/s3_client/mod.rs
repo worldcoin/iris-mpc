@@ -381,8 +381,6 @@ fn checkpoints_to_prune<'a>(
     let checkpoints = all_checkpoints
         .iter()
         .enumerate()
-        // `recency_rank` is fixed here, before filtering, so it stays stable
-        // across runs.
         .filter(|(_, c)| c.s3_key != current_s3_key)
         .filter(|(_, c)| retain_from_id.is_none_or(|min_id| c.id < min_id))
         .filter(|(recency_rank, c)| {
@@ -432,6 +430,7 @@ fn should_delete_checkpoint(
                 // Ancient tier: delete everything.
                 return true;
             }
+            // Version age is the index into the (oldest-first) slice (0 = oldest);
             // Sparse tier: keep one out of every `keep_every_nth`.
             let version_age = total_checkpoints - 1 - recency_rank;
             !version_age.is_multiple_of(tiered.keep_every_nth)
