@@ -1766,3 +1766,109 @@ fn insert_apply_all_short_circuits_on_first_violation() {
     assert!(graph.layers[0].get_links(&1).is_some());
     assert!(graph.layers[0].get_links(&2).is_none());
 }
+
+/// `last_invalidation_seq` moves only on `RemoveNode` and re-minting
+/// `AddNode`; fresh `AddNode`s and edge ops leave it alone. The staleness
+/// filter still physically drops a removed node from a neighborhood stamped
+/// before the removal.
+#[tokio::test]
+async fn invalidation_seq_transitions_and_filter_still_drops_stale_edges() {
+    let node = |id: VectorId| MutationOp::AddNode {
+        id,
+        height: 1,
+        update_ep: UpdateEntryPoint::False,
+    };
+    let v = VectorId::from_serial_id;
+    let mut g = GraphMem::new();
+    assert_eq!(g.last_invalidation_seq, 0);
+
+    // Fresh mints and edges: no invalidation.
+    g.insert_apply(&GraphMutation {
+        seq_no: 1,
+        as_of: 0,
+        ops: vec![node(v(1)), node(v(2)), node(v(3))],
+    })
+    .unwrap();
+    g.insert_apply(&GraphMutation {
+        seq_no: 2,
+        as_of: 1,
+        ops: vec![MutationOp::AddEdges {
+            base: 1,
+            neighbors: vec![2, 3],
+            layer: 0,
+            edge_type: EdgeType::All,
+        }],
+    })
+    .unwrap();
+    assert_eq!(g.last_invalidation_seq, 0);
+
+    // RemoveNode invalidates.
+    g.insert_apply(&GraphMutation {
+        seq_no: 3,
+        as_of: 2,
+        ops: vec![MutationOp::RemoveNode { id: v(3) }],
+    })
+    .unwrap();
+    assert_eq!(g.last_invalidation_seq, 3);
+
+    // Node 1's list was stamped at 2 < 3: raw still holds 3, active does not.
+    assert_eq!(g.get_raw_links(&1, 0), vec![2, 3]);
+    assert_eq!(g.get_active_links(&1, 0), vec![v(2)]);
+
+    // Touching node 1's list runs the filter (old stamp predates the
+    // invalidation) and physically drops 3.
+    g.insert_apply(&GraphMutation {
+        seq_no: 4,
+        as_of: 3,
+        ops: vec![
+            node(v(4)),
+            MutationOp::AddEdges {
+                base: 4,
+                neighbors: vec![1],
+                layer: 0,
+                edge_type: EdgeType::All,
+            },
+        ],
+    })
+    .unwrap();
+    assert_eq!(g.last_invalidation_seq, 3, "fresh mint must not invalidate");
+    assert_eq!(g.get_raw_links(&1, 0), vec![2, 4]);
+
+    // Re-stamped at 4 >= 3: further touches take the skip path and stay
+    // equivalent (debug_assert in edit_neighborhood guards the skip).
+    g.insert_apply(&GraphMutation {
+        seq_no: 5,
+        as_of: 4,
+        ops: vec![
+            node(v(5)),
+            MutationOp::AddEdges {
+                base: 5,
+                neighbors: vec![1],
+                layer: 0,
+                edge_type: EdgeType::All,
+            },
+        ],
+    })
+    .unwrap();
+    assert_eq!(g.get_raw_links(&1, 0), vec![2, 4, 5]);
+
+    // Re-minting an existing serial invalidates.
+    g.insert_apply(&GraphMutation {
+        seq_no: 6,
+        as_of: 5,
+        ops: vec![MutationOp::AddNode {
+            id: VectorId::new(2, 1),
+            height: 1,
+            update_ep: UpdateEntryPoint::False,
+        }],
+    })
+    .unwrap();
+    assert_eq!(g.last_invalidation_seq, 6);
+
+    // A load seeds the watermark conservatively but compares equal.
+    let bytes = bincode::serialize(&g).unwrap();
+    let loaded: GraphMem = bincode::deserialize(&bytes).unwrap();
+    assert_eq!(loaded.last_invalidation_seq, loaded.last_update_seq_no);
+    assert_eq!(g, loaded);
+    assert_eq!(g.checksum(), loaded.checksum());
+}

@@ -147,7 +147,7 @@ pub struct EntryPoint {
 }
 
 /// An in-memory implementation of an HNSW hierarchical graph.
-#[derive(Default, PartialEq, Eq, Debug)]
+#[derive(Default, Debug)]
 pub struct GraphMem {
     /// Entry points for HNSW search.
     ///
@@ -176,6 +176,14 @@ pub struct GraphMem {
     /// serialized, recomputed by `from_parts`, kept in sync by the mutation
     /// apply. Private so all construction routes through `from_parts`.
     node_init_hash: SetHash,
+
+    /// Seq_no of the last op that can invalidate existing edges: a
+    /// `RemoveNode`, or an `AddNode` re-minting a live serial. A neighborhood
+    /// stamped at or after it provably holds no stale edge, so
+    /// [`Self::edit_neighborhood`] skips the staleness filter. Derived,
+    /// in-memory only: `from_parts` seeds it conservatively at
+    /// `last_update_seq_no`. Excluded from `PartialEq` like `node_init_hash`.
+    last_invalidation_seq: u64,
 }
 
 impl Display for GraphMem {
@@ -219,9 +227,24 @@ impl Clone for GraphMem {
             last_update_seq_no: self.last_update_seq_no,
             node_init: self.node_init.clone(),
             node_init_hash: self.node_init_hash.clone(),
+            last_invalidation_seq: self.last_invalidation_seq,
         }
     }
 }
+
+/// Equality over the semantic state only; derived fields (`node_init_hash`,
+/// `last_invalidation_seq`) are excluded — a conservatively seeded load
+/// compares equal to the mint it round-trips.
+impl PartialEq for GraphMem {
+    fn eq(&self, other: &Self) -> bool {
+        self.entry_points == other.entry_points
+            && self.layers == other.layers
+            && self.last_update_seq_no == other.last_update_seq_no
+            && self.node_init == other.node_init
+    }
+}
+
+impl Eq for GraphMem {}
 
 impl<'de> Deserialize<'de> for GraphMem {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
@@ -255,6 +278,7 @@ impl GraphMem {
             last_update_seq_no: 0,
             node_init: HashMap::new(),
             node_init_hash: SetHash::default(),
+            last_invalidation_seq: 0,
         }
     }
 
@@ -279,6 +303,9 @@ impl GraphMem {
             last_update_seq_no,
             node_init,
             node_init_hash,
+            // Loaded neighborhoods' history is unknown; treat everything at or
+            // before the load point as potentially invalidated.
+            last_invalidation_seq: last_update_seq_no,
         }
     }
 
@@ -416,6 +443,8 @@ impl GraphMem {
                         self.node_init_hash
                             .remove(Self::node_init_contribution(sid, old));
                     }
+                    // Edges to the removed node are now stale everywhere.
+                    self.last_invalidation_seq = seq_no;
                 }
                 MutationOp::AddNode {
                     id,
@@ -446,6 +475,10 @@ impl GraphMem {
                     if let Some(old) = self.node_init.insert(sid, init) {
                         self.node_init_hash
                             .remove(Self::node_init_contribution(sid, old));
+                        // Re-mint: edges to the serial's old content are now
+                        // stale. A fresh serial invalidates nothing — no list
+                        // can hold an edge to a node minted after its stamp.
+                        self.last_invalidation_seq = seq_no;
                     }
                     self.node_init_hash
                         .add_unordered(Self::node_init_contribution(sid, init));
@@ -548,8 +581,13 @@ impl GraphMem {
         F: FnOnce(&mut Vec<SerialId>),
     {
         let content = &self.node_init;
+        // A certificate at or past the last invalidating op covers no stale
+        // edge — the filter would keep everything, so it is skipped.
+        let invalidation_seq = self.last_invalidation_seq;
         self.layers[lc].edit_links(node, tick, |old_seq, nbrs| {
-            nbrs.retain(|z| is_active(content, *z, old_seq));
+            if old_seq < invalidation_seq {
+                nbrs.retain(|z| is_active(content, *z, old_seq));
+            }
             f(nbrs);
             debug_assert!(
                 nbrs.iter().all(|z| is_active(content, *z, tick.value())),
