@@ -179,8 +179,8 @@ pub fn compute_version_join(
 
 /// Split the (cross-eye union) repair set into per-action lists.
 ///
-/// `deleted` holds the tombstones (serials whose source content is the
-/// deletion dummy); `serials_in_graph` holds serials with at least one graph
+/// `deleted` holds the serials classified as tombstones (deletion list ∪
+/// dummy source content); `serials_in_graph` holds serials with at least one graph
 /// key in either eye. Tombstones without graph presence get no graph job;
 /// tombstones with a stale HNSW row go to `stale_tombstone_rows`, those
 /// without a row are already covered by `insert_missing_rows` (inserted with
