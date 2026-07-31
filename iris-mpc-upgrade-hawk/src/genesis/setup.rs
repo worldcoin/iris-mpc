@@ -356,6 +356,7 @@ pub(super) async fn exec_setup(args: &ExecutionArgs, config: &Config) -> Result<
             None,
             &graph_store_arc,
             args.pruning_mode,
+            args.tiered_pruning,
         )
         .await
         {
