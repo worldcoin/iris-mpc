@@ -150,9 +150,16 @@ podAnnotations:
   karpenter.sh/do-not-disrupt: "true"
 
 nodeSelector:
+  application: hnsw-test
   kubernetes.io/arch: arm64
   karpenter.sh/capacity-type: on-demand
   topology.k8s.aws/zone-id: "euc1-az1"
+
+tolerations:
+  - key: application
+    value: hnsw-test
+    operator: Equal
+    effect: NoSchedule  
 
 affinity:
   nodeAffinity:
