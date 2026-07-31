@@ -1,4 +1,4 @@
-use iris_mpc_cpu::graph_checkpoint::PruningMode;
+use iris_mpc_cpu::graph_checkpoint::{PruningMode, TieredPruningConfig};
 
 pub mod configs;
 pub mod cpu_node;
@@ -53,6 +53,7 @@ pub struct SidecarTestConfig {
     pub checkpoint_window: usize,
     pub is_archival: bool,
     pub pruning_mode: PruningMode,
+    pub tiered_pruning: TieredPruningConfig,
 }
 
 impl Default for SidecarTestConfig {
@@ -66,6 +67,7 @@ impl Default for SidecarTestConfig {
             checkpoint_window: 10,
             is_archival: false,
             pruning_mode: PruningMode::None,
+            tiered_pruning: TieredPruningConfig::default(),
         }
     }
 }

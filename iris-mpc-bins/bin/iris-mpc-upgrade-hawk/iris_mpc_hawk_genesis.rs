@@ -3,7 +3,10 @@
 use clap::Parser;
 use eyre::{bail, Result};
 use iris_mpc_common::{config::Config, helpers::numactl, tracing::initialize_tracing, SerialId};
-use iris_mpc_cpu::{genesis::BatchSizeConfig, graph_checkpoint::PruningMode};
+use iris_mpc_cpu::{
+    genesis::BatchSizeConfig,
+    graph_checkpoint::{PruningMode, TieredPruningConfig},
+};
 use iris_mpc_upgrade_hawk::genesis::{exec, ExecutionArgs};
 
 #[derive(Parser)]
@@ -38,8 +41,14 @@ struct Args {
     ///   - none                 — do not prune any checkpoints
     ///   - older-non-archival   — prune older non-archival checkpoints (default)
     ///   - all-older            — prune all older checkpoints
+    ///   - tiered               — keep the last --pruning-tiered-keep-recent-count checkpoints, then keep every --pruning-tiered-keep-every-nth older checkpoint, and delete after --pruning-tiered-delete-older-than-days
     #[clap(long("pruning-mode"))]
     pruning_mode: Option<String>,
+
+    /// Numeric bounds for `--pruning-mode tiered` (each flag also reads its
+    /// PRUNING_TIERED_* env var; ignored for non-tiered modes).
+    #[clap(flatten)]
+    tiered_pruning: TieredPruningConfig,
 
     /// Base checkpoint blake3 hash to pin (hex). Optional; when omitted the
     /// latest common checkpoint is used.
@@ -205,6 +214,17 @@ fn parse_args() -> Result<ExecutionArgs> {
         PruningMode::OlderNonArchival
     };
 
+    // Tiered bounds are parsed by clap (CLI flags with PRUNING_TIERED_* env
+    // fallbacks). They are always carried, but only validated when the tiered
+    // mode is selected (ignored by other modes).
+    let tiered_pruning = args.tiered_pruning;
+    if pruning_mode == PruningMode::Tiered {
+        tiered_pruning.validate().map_err(|e| {
+            eprintln!("Error: tiered pruning config invalid: {}", e);
+            e
+        })?;
+    }
+
     // Arg: base checkpoint hash (optional).
     let base_checkpoint_hash = args.base_checkpoint_hash.clone();
 
@@ -214,6 +234,7 @@ fn parse_args() -> Result<ExecutionArgs> {
         perform_snapshot,
         checkpoint_frequency,
         pruning_mode,
+        tiered_pruning,
         base_checkpoint_hash,
     })
 }
