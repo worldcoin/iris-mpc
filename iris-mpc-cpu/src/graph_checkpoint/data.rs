@@ -10,7 +10,26 @@ pub type GraphCheckpointHashes = [Blake3Hash; 10];
 pub const GRAPH_CHECKPOINT_ROUTE: &str = "/graph-checkpoint";
 pub const GRAPH_CHECKPOINT_ENDPOINT: &str = "graph-checkpoint";
 
+/// Default retention factor for the sparse tier of [`PruningMode::Tiered`]:
+/// keep every 4th version once a checkpoint is old enough to be thinned.
+pub const DEFAULT_TIERED_KEEP_EVERY_NTH: usize = 4;
+
+pub const DEFAULT_TIERED_DELETE_OLDER_THAN_DAYS: usize = 60;
+/// Default number of most-recent checkpoints kept unconditionally (recent tier).
+pub const DEFAULT_TIERED_KEEP_RECENT_COUNT: usize = 10;
+
+/// Env var holding the `delete_older_than_days` (`X`) bound for [`PruningMode::Tiered`].
+pub const ENV_TIERED_DELETE_OLDER_THAN_DAYS: &str = "PRUNING_TIERED_DELETE_OLDER_THAN_DAYS";
+/// Env var holding the `keep_recent_count` (`N`) bound for [`PruningMode::Tiered`].
+pub const ENV_TIERED_KEEP_RECENT_COUNT: &str = "PRUNING_TIERED_KEEP_RECENT_COUNT";
+/// Env var holding the `keep_every_nth` factor for [`PruningMode::Tiered`]
+/// (optional; defaults to [`DEFAULT_TIERED_KEEP_EVERY_NTH`]).
+pub const ENV_TIERED_KEEP_EVERY_NTH: &str = "PRUNING_TIERED_KEEP_EVERY_NTH";
+
 /// Controls which older checkpoints are deleted during cleanup.
+///
+/// "Recency rank" is a checkpoint's rank when all checkpoints are ordered
+/// newest-first (0 = the newest checkpoint, 1 = the next newest, ...).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PruningMode {
@@ -20,6 +39,79 @@ pub enum PruningMode {
     OlderNonArchival,
     /// Prune all older checkpoints regardless of archival flag.
     AllOlder,
+    /// Tiered retention (checkpoints ranked newest-first, recency rank 0 = newest):
+    /// - keep the `keep_recent_count` most recent checkpoints (recent tier),
+    /// - keep only every `keep_every_nth`-th older checkpoint that is still
+    ///   newer than `delete_older_than_days` days (sparse tier),
+    /// - delete every checkpoint older than `delete_older_than_days` days.
+    ///
+    /// The numeric bounds live in [`TieredPruningConfig`] (carried on the
+    /// sidecar / genesis config), not in the variant itself.
+    Tiered,
+}
+
+/// Numeric tuning knobs for [`PruningMode::Tiered`].
+///
+/// The recent tier is defined by a *count* of the most recent checkpoints; the
+/// sparse and ancient tiers are defined by wall-clock age in days.
+///
+/// Requires `keep_every_nth >= 1` (enforced by [`TieredPruningConfig::validate`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, clap::Args)]
+// Missing fields fall back to `TieredPruningConfig::default()` (the
+// `DEFAULT_TIERED_*` values), matching the clap `default_value_t` defaults.
+#[serde(default)]
+pub struct TieredPruningConfig {
+    /// Delete all versions older than this many days (the `X` bound).
+    #[clap(
+        long = "pruning-tiered-delete-older-than-days",
+        env = ENV_TIERED_DELETE_OLDER_THAN_DAYS,
+        default_value_t = DEFAULT_TIERED_DELETE_OLDER_THAN_DAYS
+    )]
+    pub delete_older_than_days: usize,
+    /// Always keep this many of the most recent checkpoints (recent tier).
+    #[clap(
+        long = "pruning-tiered-keep-recent-count",
+        env = ENV_TIERED_KEEP_RECENT_COUNT,
+        default_value_t = DEFAULT_TIERED_KEEP_RECENT_COUNT
+    )]
+    pub keep_recent_count: usize,
+    /// In the sparse tier, keep one version out of every `keep_every_nth`.
+    #[clap(
+        long = "pruning-tiered-keep-every-nth",
+        env = ENV_TIERED_KEEP_EVERY_NTH,
+        default_value_t = DEFAULT_TIERED_KEEP_EVERY_NTH
+    )]
+    pub keep_every_nth: usize,
+}
+
+impl TieredPruningConfig {
+    /// Const-constructible default (usable in `const` items).
+    pub const DEFAULT: Self = Self {
+        delete_older_than_days: DEFAULT_TIERED_DELETE_OLDER_THAN_DAYS,
+        keep_recent_count: DEFAULT_TIERED_KEEP_RECENT_COUNT,
+        keep_every_nth: DEFAULT_TIERED_KEEP_EVERY_NTH,
+    };
+
+    /// Validates the tiered bounds: `keep_every_nth >= 1`.
+    pub fn validate(&self) -> Result<(), eyre::Error> {
+        if self.delete_older_than_days < 1 {
+            return Err(eyre!(
+                "invalid tiered pruning config: delete_older_than_days must be >= 1"
+            ));
+        }
+        if self.keep_every_nth < 1 {
+            return Err(eyre!(
+                "invalid tiered pruning config: keep_every_nth must be >= 1"
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for TieredPruningConfig {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
 }
 
 impl Display for PruningMode {
@@ -28,6 +120,7 @@ impl Display for PruningMode {
             PruningMode::None => write!(f, "none"),
             PruningMode::OlderNonArchival => write!(f, "older-non-archival"),
             PruningMode::AllOlder => write!(f, "all-older"),
+            PruningMode::Tiered => write!(f, "tiered"),
         }
     }
 }
@@ -40,8 +133,10 @@ impl FromStr for PruningMode {
             "none" => Ok(PruningMode::None),
             "older-non-archival" => Ok(PruningMode::OlderNonArchival),
             "all-older" => Ok(PruningMode::AllOlder),
+            "tiered" => Ok(PruningMode::Tiered),
             _ => Err(eyre!(
-                "invalid pruning mode: '{}', expected one of: none, older-non-archival, all-older",
+                "invalid pruning mode: '{}', expected one of: none, older-non-archival, \
+                 all-older, tiered",
                 s
             )),
         }

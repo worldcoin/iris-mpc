@@ -9,7 +9,7 @@
 
 use ampc_server_utils::{
     get_others_sync_state, init_heartbeat_task, set_node_ready, shutdown_handler::ShutdownHandler,
-    start_coordination_server_with_extra_routes, wait_for_others_ready, wait_for_others_unready,
+    start_coordination_server_with_extra_routes, wait_for_others_ready, wait_for_startup_barriers,
     BatchSyncSharedState, TaskMonitor,
 };
 use aws_sdk_rds::Client as RDSClient;
@@ -221,11 +221,18 @@ pub(super) async fn exec_setup(args: &ExecutionArgs, config: &Config) -> Result<
     .await;
     task_monitor_bg.check_tasks();
 
-    // Coordinator: await network state = UNREADY.
-    wait_for_others_unready(server_coord_config, &verified_peers, &my_uuid).await?;
+    // Coordinator: await network state = UNREADY + full mutual peer visibility.
+    wait_for_startup_barriers(server_coord_config, &verified_peers, &my_uuid).await?;
     tracing::info!("Network status = UNREADY");
     // Coordinator: await network state = HEALTHY.
-    init_heartbeat_task(server_coord_config, &mut task_monitor_bg, &shutdown_handler).await?;
+    let verified_peers = verified_peers.lock().await.clone();
+    init_heartbeat_task(
+        server_coord_config,
+        &mut task_monitor_bg,
+        &shutdown_handler,
+        verified_peers.clone(),
+    )
+    .await?;
     task_monitor_bg.check_tasks();
     tracing::info!("Network status = HEALTHY");
 
@@ -349,6 +356,7 @@ pub(super) async fn exec_setup(args: &ExecutionArgs, config: &Config) -> Result<
             None,
             &graph_store_arc,
             args.pruning_mode,
+            args.tiered_pruning,
         )
         .await
         {
@@ -361,7 +369,7 @@ pub(super) async fn exec_setup(args: &ExecutionArgs, config: &Config) -> Result<
     let ct = shutdown_handler.get_network_cancellation_token();
     tokio::select! {
         _ = ct.cancelled() => Err(eyre!("ready check failed")),
-        r = wait_for_others_ready(server_coord_config) => r
+        r = wait_for_others_ready(server_coord_config, verified_peers) => r
     }?;
     task_monitor_bg.check_tasks();
     tracing::info!("Network status = READY");
