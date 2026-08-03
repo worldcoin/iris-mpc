@@ -178,10 +178,11 @@ pub struct GraphMem {
     node_init_hash: SetHash,
 
     /// Seq_no of the last op that can invalidate existing edges: a
-    /// `RemoveNode`, or an `AddNode` re-minting a live serial. A neighborhood
-    /// stamped at or after it holds no stale edge — a precondition on loaded
-    /// state, guaranteed by `from_parts` seeding past the load point so every
-    /// loaded neighborhood is filtered on first touch. Lets
+    /// `RemoveNode`, or an `AddNode` re-minting a live serial. Invariant: a
+    /// neighborhood stamped at or after it holds no stale edge — seeded past
+    /// the load point by `from_parts` (every loaded neighborhood filters on
+    /// first touch) and maintained inductively by the edits themselves; a
+    /// `new` graph is empty, vacuously clean. Lets
     /// [`Self::edit_neighborhood`] skip the staleness filter. Derived and
     /// in-memory only.
     last_invalidation_seq: u64,

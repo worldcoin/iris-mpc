@@ -1940,4 +1940,8 @@ async fn loaded_phantom_edge_is_dropped_on_first_touch() {
         g.get_active_links(&1, 0),
         vec![VectorId::from_serial_id(2), VectorId::from_serial_id(4)]
     );
+
+    // A zero-height load (legacy migration paths) seeds past 0 as well.
+    let empty = GraphMem::from_parts(vec![], vec![Layer::new()], 0, HashMap::new());
+    assert_eq!(empty.last_invalidation_seq, 1);
 }
