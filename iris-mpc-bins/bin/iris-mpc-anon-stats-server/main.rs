@@ -12,7 +12,7 @@ use ampc_anon_stats::{
 };
 use ampc_server_utils::{
     init_heartbeat_task, shutdown_handler::ShutdownHandler, wait_for_others_ready,
-    wait_for_others_unready, TaskMonitor,
+    wait_for_startup_barriers, TaskMonitor,
 };
 use aws_sdk_s3::{config::Builder as S3ConfigBuilder, Client as S3Client};
 use aws_sdk_sns::{config::Region, types::MessageAttributeValue, Client as SNSClient};
@@ -990,12 +990,14 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| "8080".to_string());
     info!("Healthcheck server running on port {}", health_port);
 
-    wait_for_others_unready(server_coord_config, &verified_peers, &uuid).await?;
+    wait_for_startup_barriers(server_coord_config, &verified_peers, &uuid).await?;
 
+    let verified_peers = verified_peers.lock().await.clone();
     init_heartbeat_task(
         server_coord_config,
         &mut background_tasks,
         &shutdown_handler,
+        verified_peers.clone(),
     )
     .await
     .wrap_err("failed to start heartbeat task")?;
@@ -1023,7 +1025,7 @@ async fn main() -> Result<()> {
         AnonStatsProcessor::new(config.clone(), anon_stats_store, sns_client, s3_client);
 
     coordination_handles.set_ready();
-    wait_for_others_ready(server_coord_config)
+    wait_for_others_ready(server_coord_config, verified_peers)
         .await
         .wrap_err("waiting for other anon stats servers to become ready")?;
 

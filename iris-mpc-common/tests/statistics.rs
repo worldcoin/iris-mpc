@@ -220,6 +220,8 @@ mod tests {
             DistanceFunction::FHD,
             AnonStatsResultSource::Legacy,
             Some(AnonStatsOperation::Uniqueness),
+            None,
+            None,
         );
         stats.fill_buckets(&buckets_2d_cumulative, 1.0, None);
 

@@ -1,8 +1,15 @@
 mod multipart;
 mod streaming;
 mod streaming_download;
-use std::{io::Cursor, time::Instant};
+use std::{
+    io::Cursor,
+    time::{Duration, Instant},
+};
 
+use aws_config::SdkConfig;
+use aws_sdk_s3::config::{
+    retry::RetryConfig, timeout::TimeoutConfig, Builder as S3ConfigBuilder, Region,
+};
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::Client as S3Client;
 use bytes::Bytes;
@@ -12,12 +19,12 @@ use crate::{
     execution::hawk_main::{BothEyes, GraphRef, LEFT, RIGHT},
     hnsw::{
         graph::{
-            graph_store::{self, GraphPg},
+            graph_store::{self, GraphCheckpointRow, GraphPg},
             layered_graph::GraphMem,
         },
         VectorStore,
     },
-    utils::serialization::graph::{GraphFormat, LegacyPruneContext},
+    utils::serialization::graph::{GraphFormat, LegacyPruneContext, PruneReport},
 };
 
 use crate::graph_checkpoint::data::*;
@@ -25,6 +32,50 @@ use iris_mpc_common::SerialId;
 pub use multipart::*;
 pub use streaming::*;
 pub use streaming_download::*;
+
+/// Retry budget applied to every S3 client built by [`create_s3_client`].
+const S3_MAX_ATTEMPTS: u32 = 5;
+/// Per-attempt timeout: a hung request is abandoned so the retry can fire,
+/// instead of stalling the whole run behind one dead connection.
+const S3_OPERATION_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Build an S3 client with the shared retry + per-attempt-timeout policy.
+///
+/// The single place genesis and hawk-main construct S3 clients, so the retry
+/// budget and attempt timeout stay identical across both (the sidecar builds
+/// its own plain client).
+/// `region_override` selects a bucket region that differs from `sdk_config`'s
+/// (the graph-checkpoint bucket); pass `None` to inherit the SDK region.
+pub fn create_s3_client(
+    sdk_config: &SdkConfig,
+    force_path_style: bool,
+    region_override: Option<Region>,
+) -> S3Client {
+    let mut builder = S3ConfigBuilder::from(sdk_config)
+        .force_path_style(force_path_style)
+        .retry_config(RetryConfig::standard().with_max_attempts(S3_MAX_ATTEMPTS))
+        .timeout_config(
+            TimeoutConfig::builder()
+                .operation_attempt_timeout(S3_OPERATION_ATTEMPT_TIMEOUT)
+                .build(),
+        );
+    if let Some(region) = region_override {
+        builder = builder.region(region);
+    }
+    S3Client::from_conf(builder.build())
+}
+
+/// Exponential backoff with full jitter for the in-client range/part retry
+/// loops. `attempt` is 1-based; the delay doubles from 500 ms, caps at 30 s,
+/// and jitters uniformly in `[0, delay]` to spread reconnect storms.
+pub(super) fn retry_backoff(attempt: u32) -> Duration {
+    const BASE_MS: u64 = 500;
+    const CAP: Duration = Duration::from_secs(30);
+    let exp = BASE_MS.saturating_mul(1u64 << (attempt.saturating_sub(1)).min(6));
+    let capped = Duration::from_millis(exp).min(CAP);
+    let jitter = rand::random::<f64>() * capped.as_secs_f64();
+    Duration::from_secs_f64(jitter)
+}
 
 /// Creates an S3 graph checkpoint.
 #[allow(clippy::too_many_arguments)]
@@ -174,6 +225,19 @@ pub async fn download_graph_checkpoint(
     state: &GraphCheckpointState,
     prune: Option<LegacyPruneContext>,
 ) -> Result<BothEyes<GraphMem>> {
+    let (graphs, _reports) =
+        download_graph_checkpoint_pruned(s3_client, bucket, state, prune).await?;
+    Ok(graphs)
+}
+
+/// Like [`download_graph_checkpoint`], also returning the per-eye
+/// [`PruneReport`] when a legacy (V3/V4) base was pruned at read.
+pub async fn download_graph_checkpoint_pruned(
+    s3_client: &S3Client,
+    bucket: &str,
+    state: &GraphCheckpointState,
+    prune: Option<LegacyPruneContext>,
+) -> Result<(BothEyes<GraphMem>, Option<[PruneReport; 2]>)> {
     let format = GraphFormat::try_from(state.graph_version)?;
     if format == GraphFormat::Raw {
         bail!("Unexpected graph checkpoint format: Raw");
@@ -195,9 +259,17 @@ pub async fn download_graph_checkpoint(
         );
     }
     let start = Instant::now();
-    let (graphs, hash_bytes) =
-        stream_download_and_deserialize_graph_pair(s3_client, bucket, &state.s3_key, format, prune)
-            .await?;
+    let (graphs, reports, hash_bytes) = stream_download_and_deserialize_graph_pair_with(
+        s3_client,
+        bucket,
+        &state.s3_key,
+        format,
+        prune,
+        DEFAULT_DOWNLOAD_PIPE_CAPACITY,
+        DEFAULT_DOWNLOAD_RANGE_SIZE,
+        DEFAULT_DOWNLOAD_PARALLELISM,
+    )
+    .await?;
     metrics::histogram!("genesis_checkpoint_download_duration")
         .record(start.elapsed().as_secs_f64());
 
@@ -211,7 +283,7 @@ pub async fn download_graph_checkpoint(
         ));
     }
     tracing::info!("BLAKE3 hash verified successfully: {}", computed_hash);
-    Ok(graphs)
+    Ok((graphs, reports))
 }
 
 // this is used for the genesis integration tests.
@@ -302,6 +374,7 @@ pub async fn cleanup_checkpoints<V: VectorStore>(
     retain_from_id: Option<i64>,
     graph_store: &GraphPg<V>,
     pruning_mode: PruningMode,
+    tiered_pruning: TieredPruningConfig,
 ) -> Result<()> {
     tracing::info!(
         "cleaning up old genesis graph checkpoints (mode: {})",
@@ -312,29 +385,129 @@ pub async fn cleanup_checkpoints<V: VectorStore>(
         tracing::info!("pruning mode is 'none', skipping cleanup");
         return Ok(());
     }
-
-    let all_checkpoints = graph_store.get_genesis_graph_checkpoints().await?;
-    if !all_checkpoints
-        .iter()
-        .any(|x| x.s3_key == current_state.s3_key)
-    {
-        bail!("current checkpoint not found in the db");
+    if pruning_mode == PruningMode::Tiered {
+        tiered_pruning.validate()?;
     }
 
-    for checkpoint in all_checkpoints
-        .into_iter()
-        .filter(|x| x.s3_key != current_state.s3_key)
-        .filter(|x| retain_from_id.is_none_or(|min_id| x.id < min_id))
-        .filter(|x| match pruning_mode {
-            PruningMode::AllOlder => true,
-            PruningMode::OlderNonArchival => !x.is_archival,
-            PruningMode::None => unreachable!(),
-        })
-    {
-        graph_store.delete_genesis_checkpoint(checkpoint.id).await?;
+    // Rank ages over the *full* history (live rows + soft-deleted tombstones),
+    // newest-first.
+    let all_checkpoints = graph_store
+        .get_genesis_graph_checkpoints_including_deleted()
+        .await?;
+    let current_checkpoint_date = all_checkpoints
+        .iter()
+        .find(|x| x.s3_key == current_state.s3_key)
+        .ok_or_else(|| eyre!("current checkpoint not found in the db"))?
+        .created_at;
+    let checkpoints = checkpoints_to_prune(
+        &all_checkpoints,
+        &current_state.s3_key,
+        retain_from_id,
+        pruning_mode,
+        &tiered_pruning,
+        current_checkpoint_date,
+    )?;
+    for checkpoint in checkpoints {
         delete_graph(s3_client, bucket, &checkpoint.s3_key).await?;
+        // Soft-delete the row (tombstone for audit)
+        graph_store.delete_genesis_checkpoint(checkpoint.id).await?;
     }
     Ok(())
+}
+
+/// Selects which checkpoints to prune this run, given the full history
+/// (`all_checkpoints`) ordered newest-first and *including* soft-deleted
+/// tombstones.
+///
+/// The enumeration index over the full history is the checkpoint's recency rank
+/// (0 = newest). Ranking over the full history — rather than over live rows
+/// only — is what makes pruning idempotent: a survivor keeps its rank even after
+/// earlier rows are tombstoned, so re-running over the same (or a moving) range
+/// never re-classifies and deletes a checkpoint a prior run kept.
+///
+/// Rows are excluded from the result when they are:
+/// - the current checkpoint (never deleted),
+/// - at/above the `retain_from_id` watermark, or
+/// - kept by the [`PruningMode`] / [`TieredPruningConfig`] policy.
+fn checkpoints_to_prune<'a>(
+    all_checkpoints: &'a [GraphCheckpointRow],
+    current_s3_key: &str,
+    retain_from_id: Option<i64>,
+    pruning_mode: PruningMode,
+    tiered_pruning: &TieredPruningConfig,
+    current_checkpoint_date: chrono::DateTime<chrono::Utc>,
+) -> Result<Vec<&'a GraphCheckpointRow>> {
+    // Validate all_checkpoints are sorted by id descending
+    for i in 0..all_checkpoints.len() - 1 {
+        if all_checkpoints[i].id <= all_checkpoints[i + 1].id {
+            return Err(eyre!(
+                "checkpoints are not sorted by id descending: {} <= {}",
+                all_checkpoints[i].id,
+                all_checkpoints[i + 1].id
+            ));
+        }
+    }
+    // Total history length (live + tombstoned). Used to calculate the version age.
+    let total_checkpoints = all_checkpoints.len();
+    // Sort by id descending to iterate from newest to oldest
+    let checkpoints = all_checkpoints
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.s3_key != current_s3_key)
+        .filter(|(_, c)| retain_from_id.is_none_or(|min_id| c.id < min_id))
+        .filter(|(recency_rank, c)| {
+            should_delete_checkpoint(
+                pruning_mode,
+                total_checkpoints,
+                *recency_rank,
+                c,
+                current_checkpoint_date,
+                tiered_pruning,
+            )
+        })
+        .map(|(_, c)| c)
+        .collect::<Vec<&GraphCheckpointRow>>();
+    Ok(checkpoints)
+}
+
+/// Decides whether a single checkpoint should be pruned under the given
+/// [`PruningMode`].
+fn should_delete_checkpoint(
+    pruning_mode: PruningMode,
+    total_checkpoints: usize,
+    recency_rank: usize,
+    c: &GraphCheckpointRow,
+    current_checkpoint_date: chrono::DateTime<chrono::Utc>,
+    tiered: &TieredPruningConfig,
+) -> bool {
+    if c.is_deleted {
+        return false;
+    }
+    match pruning_mode {
+        PruningMode::None => false,
+        PruningMode::AllOlder => true,
+        PruningMode::OlderNonArchival => !c.is_archival,
+        PruningMode::Tiered => {
+            if c.is_archival {
+                return false;
+            }
+
+            // Recent tier: always keep the `keep_recent_count` newest checkpoints.
+            if recency_rank < tiered.keep_recent_count {
+                return false;
+            }
+
+            let checkpoint_age_days = (current_checkpoint_date - c.created_at).num_days();
+            if checkpoint_age_days >= tiered.delete_older_than_days as i64 {
+                // Ancient tier: delete everything.
+                return true;
+            }
+            // Sequence rank is the index into the (oldest-first) slice (0 = oldest);
+            // Sparse tier: keep one out of every `keep_every_nth`.
+            let sequence_rank = total_checkpoints - 1 - recency_rank;
+            !sequence_rank.is_multiple_of(tiered.keep_every_nth)
+        }
+    }
 }
 
 /// Verifies that the S3 client has read, write, and delete access to the
@@ -444,6 +617,89 @@ async fn download_and_hash(
 
 #[cfg(test)]
 mod tests {
+    use super::{checkpoints_to_prune, GraphCheckpointRow, PruningMode, TieredPruningConfig};
+    use chrono::{Duration, Utc};
+
+    /// Builds a checkpoint row. `s3_key` is derived from `id` as `cp/{id}`, so
+    /// tests can refer to the current checkpoint by key without a separate map.
+    fn row(
+        id: i64,
+        is_archival: bool,
+        is_deleted: bool,
+        created_at: chrono::DateTime<chrono::Utc>,
+    ) -> GraphCheckpointRow {
+        GraphCheckpointRow {
+            id,
+            s3_key: format!("cp/{id}"),
+            last_indexed_iris_id: id,
+            last_indexed_modification_id: id,
+            graph_mutation_id: Some(id),
+            blake3_hash: "deadbeef".to_string(),
+            graph_version: 1,
+            is_archival,
+            created_at,
+            is_deleted,
+        }
+    }
+
+    /// Sorted list of the ids selected for pruning (order-independent compare).
+    fn pruned_ids(rows: &[&GraphCheckpointRow]) -> Vec<i64> {
+        let mut ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    /// `Tiered` keeps the `keep_recent_count` newest checkpoints (recent tier),
+    /// thins older ones by `keep_every_nth` (sparse tier), and deletes everything
+    /// older than `delete_older_than_days` (ancient tier).
+    ///
+    /// `version_age` is the index into the (oldest-first) slice (0 = oldest);
+    /// `recency_rank = len - 1 - version_age` counts newest-first (0 = newest).
+    #[test]
+    fn test_checkpoints_to_prune_tiered_tiers() {
+        let now = Utc::now();
+        let days_ago = |d: i64| now - Duration::days(d);
+        let cfg = TieredPruningConfig {
+            delete_older_than_days: 60,
+            keep_recent_count: 2,
+            keep_every_nth: 4,
+        };
+        // newest-first (id DESC), matching the caller. version_age = len - 1 - slice index:
+        // id 8 = v_age 8 ... id 1 = v_age 1; recency_rank = slice index.
+        let all = vec![
+            row(8, false, false, days_ago(0)), // current (newest)        -> excluded
+            row(7, false, false, days_ago(10)), // recent (rank 1 < 2)     -> keep
+            row(6, false, false, days_ago(20)), // recent (rank 2 < 2)     -> keep
+            row(5, false, false, days_ago(30)), // sparse, v_age 2         -> delete
+            row(4, false, false, days_ago(40)), // sparse, v_age 3         -> delete
+            row(3, false, false, days_ago(50)), // sparse, v_age 4%4       -> keep
+            row(2, false, false, days_ago(61)), // sparse, v_age 5         -> delete
+            row(1, false, false, days_ago(70)), // ancient (rank 7)        -> delete
+            row(0, false, false, days_ago(80)), // ancient (rank 8)        -> excluded
+        ];
+        let pruned = checkpoints_to_prune(&all, "cp/8", None, PruningMode::Tiered, &cfg, now);
+        assert!(pruned.is_ok());
+        assert_eq!(pruned_ids(&pruned.unwrap()), vec![0, 1, 2, 3, 5, 6]);
+    }
+
+    /// `Tiered` never deletes an archival row, even in the ancient tier.
+    #[test]
+    fn test_checkpoints_to_prune_tiered_keeps_archival() {
+        let now = Utc::now();
+        let cfg = TieredPruningConfig {
+            delete_older_than_days: 60,
+            keep_recent_count: 1,
+            keep_every_nth: 4,
+        };
+        let all = vec![
+            row(3, false, false, now),                       // current
+            row(2, false, false, now - Duration::days(100)), // ancient           -> delete
+            row(1, true, false, now - Duration::days(100)),  // ancient + archival -> keep
+        ];
+        let pruned = checkpoints_to_prune(&all, "cp/3", None, PruningMode::Tiered, &cfg, now);
+        assert!(pruned.is_ok());
+        assert_eq!(pruned_ids(&pruned.unwrap()), vec![2]);
+    }
 
     #[test]
     fn test_blake3_hash_to_string() {

@@ -152,6 +152,69 @@ mod tests {
         Ok(())
     }
 
+    /// Soft-delete tombstones a row: it disappears from every read path
+    /// (list / latest / by-key) but physically remains in the table.
+    #[tokio::test]
+    async fn test_soft_delete_hides_but_retains_row() -> eyre::Result<()> {
+        let store = TestGraphPg::<PlaintextStore>::new().await?;
+
+        for (s3_key, iris_id, mut_id) in [
+            ("cp/1", 100_i64, 100_i64),
+            ("cp/2", 200_i64, 200_i64),
+            ("cp/3", 300_i64, 300_i64),
+        ] {
+            let mut graph_tx = store.tx().await?;
+            GraphPg::<PlaintextStore>::insert_genesis_graph_checkpoint(
+                &mut graph_tx.tx,
+                s3_key,
+                iris_id,
+                mut_id,
+                Some(mut_id + 1),
+                "deadbeefcafebabe",
+                false,
+                1,
+            )
+            .await?;
+            graph_tx.tx.commit().await?;
+        }
+
+        // New rows get a non-null created_at default and are not deleted.
+        let rows = store.graph.get_genesis_graph_checkpoints().await?;
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().all(|r| !r.is_deleted));
+
+        // Soft-delete the middle checkpoint (cp/2).
+        let middle = rows.iter().find(|r| r.s3_key == "cp/2").unwrap();
+        store.graph.delete_genesis_checkpoint(middle.id).await?;
+
+        // Excluded from list, latest, and by-key lookups.
+        let live = store.graph.get_genesis_graph_checkpoints().await?;
+        assert_eq!(live.len(), 2);
+        assert!(live.iter().all(|r| r.s3_key != "cp/2"));
+        assert_eq!(
+            store
+                .graph
+                .get_latest_genesis_graph_checkpoint()
+                .await?
+                .unwrap()
+                .s3_key,
+            "cp/3"
+        );
+        assert!(store
+            .graph
+            .get_genesis_graph_checkpoint_by_key("cp/2")
+            .await?
+            .is_none());
+
+        // But the tombstone physically remains in the table.
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM genesis_graph_checkpoint")
+            .fetch_one(store.graph.pool())
+            .await?;
+        assert_eq!(total, 3, "soft-deleted row must be retained");
+
+        Ok(())
+    }
+
     /// `mutations_in_range` deserializes each row into `BothEyes<Vec<GraphMutation>>`,
     /// preserves left/right attribution, and yields rows in modification_id order.
     #[tokio::test]
