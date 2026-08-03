@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/anon-stats-server:v0.32.6@sha256:bb88af42ca4a1c4af2803adb65f9ca09da6028011dad55d607b3c8affd6b0f6a"
+image: "ghcr.io/worldcoin/anon-stats-server:v0.32.8@sha256:fb42e8448cfdd2cee01db069a17ed4181318f3290457024f5662cc30562a20f7"
 
 environment: prod
 replicaCount: 1
