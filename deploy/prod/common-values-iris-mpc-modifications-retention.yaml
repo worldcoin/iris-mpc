@@ -1,9 +1,11 @@
 # POP-3931 — `modifications` retention CronJob (prod, smpcv2 clusters — the GPU MPCV2
 # DB's copy). Companion to the hnsw-side reaper (common-values-ampc-hnsw-modifications-
 # retention.yaml): same binary, same guard, different database. Runs in the
-# iris-mpc-db-exporter namespace — the proven CronJob precedent for reaching the iris
-# Aurora from generic nodes (its `application` secret already holds DATABASE_AURORA_URL;
-# no pod SG or dedicated pool needed, mirroring iris-mpc-db-exporter itself).
+# iris-mpc-db-exporter namespace (its `application` secret already holds
+# DATABASE_AURORA_URL). Pinned to the anon-stats-server node pool: generic nodes reach
+# the Aurora only from some nodes (intermittent "pool timed out"/"failed to connect to
+# postgres" — same class as the stage fix in #2303); the anon-stats reaper connects from
+# this pool with a 13-day clean record.
 image: "ghcr.io/worldcoin/retention-reaper:v0.32.6@sha256:366cc7dcd9e9132bbfe2b5719332ff8d1f301ed5b487cbfc458fbc97cca92ace"
 
 # ENABLED IN DRY-RUN (POP-4134 prod enablement): un-suspended + ENABLED + DRY_RUN=true —
@@ -40,3 +42,10 @@ resources:
 
 nodeSelector:
   kubernetes.io/arch: amd64
+  workload: anon-stats-server
+
+tolerations:
+  - key: dedicated
+    operator: Equal
+    value: anonStatsServer
+    effect: NoSchedule
