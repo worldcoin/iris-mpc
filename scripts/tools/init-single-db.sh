@@ -32,6 +32,22 @@ gzip -dc "/tmp/${IRISES_FILE}.gz" > "/tmp/${IRISES_FILE}"
 cat "/tmp/${GRAPH_FILE}" "/tmp/${GRAPH_FILE}" > /tmp/combined.dat
 mv /tmp/combined.dat "/tmp/${GRAPH_FILE}"
 
+# ---------------------------------------------------------------------------
+# The checkpoint written below must be in the current graph format (v5). If the
+# downloaded graph is in an older format, upgrade it in place first.
+# ---------------------------------------------------------------------------
+if [ "${GRAPH_FORMAT}" != "v5" ]; then
+  echo "upgrading graph pair from ${GRAPH_FORMAT} to v5"
+  /bin/graph-utils upgrade-format \
+    --src-format "${GRAPH_FORMAT}" \
+    --pair \
+    "/tmp/${GRAPH_FILE}" \
+    "/tmp/${GRAPH_FILE}.v5"
+  mv "/tmp/${GRAPH_FILE}.v5" "/tmp/${GRAPH_FILE}"
+  GRAPH_FORMAT="v5"
+  echo "graph upgrade done"
+fi
+
 echo "starting iris init"
 /bin/init-single-db \
   --party-id "$PARTY_ID" \
