@@ -212,13 +212,18 @@ impl Step1 {
     fn missing_vector_ids(&self, side: usize) -> VecEdges<VectorId> {
         let other_side = 1 - side;
         let matched_one_side = &self.join.matched_one_side[other_side];
-        // Include the pre-extension one-sided matches so the pre-extension outcome
-        // can be resolved from the same MPC results (its ids are a subset of
-        // `join`'s, but include them explicitly to be safe).
+
+        // Include the pre-extension one-sided matches so the pre-extension outcome can be
+        // resolved from the same MPC results. This is needed because a) one-sided matches
+        // pre-extension may become two-sided matches post-extension, and thus would not appear
+        // in post-extension `match_one_side`, and b) initial and extended results are derived
+        // from independent searches, so could diverge (slightly) due to the approximate nature
+        // of HNSW search results.
         let pre_matched_one_side = self
             .pre_join
             .iter()
             .flat_map(|j| j.matched_one_side[other_side].iter());
+
         // Always add reauth target so is_match is computed even if the search didn't hit it.
         let reauth_id = self.reauth_id().map(|(id, _)| id);
 
