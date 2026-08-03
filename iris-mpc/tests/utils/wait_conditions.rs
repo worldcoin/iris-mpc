@@ -1,18 +1,50 @@
 use std::time::Duration;
 
-use ampc_server_utils::{wait_for_others_ready, ServerCoordinationConfig};
-use eyre::bail;
+use ampc_server_utils::{
+    try_get_endpoint_other_nodes, ReadyProbeResponse, ServerCoordinationConfig,
+};
+use eyre::{bail, WrapErr};
 use futures::future::try_join_all;
 use tokio::task::JoinSet;
 use tokio::time::timeout;
 
 use super::{CpuConfigs, COUNT_OF_PARTIES};
 
+/// Poll every peer's `/health` until all of them report `is_ready`.
+///
+/// Deliberately does NOT use `ampc_server_utils::wait_for_others_ready`: that
+/// function fails fast on any peer UUID outside the caller's startup-verified
+/// set, which is correct for a cluster member but wrong for this harness — the
+/// harness never runs the startup handshake, so it holds no verified set and
+/// every peer would look like a restarted node.
+async fn wait_until_peers_ready(coord: &ServerCoordinationConfig) -> eyre::Result<()> {
+    let retry_delay = Duration::from_millis(coord.http_query_retry_delay_ms);
+
+    loop {
+        if let Ok(responses) = try_get_endpoint_other_nodes(coord, "health").await {
+            let mut all_ready = true;
+            for (_status, body) in responses {
+                let probe: ReadyProbeResponse = serde_json::from_slice(&body)
+                    .wrap_err("Failed to deserialize ReadyProbeResponse")?;
+                if !probe.is_ready {
+                    all_ready = false;
+                }
+            }
+
+            if all_ready {
+                return Ok(());
+            }
+        }
+
+        tokio::time::sleep(retry_delay).await;
+    }
+}
+
 /// Wait for all 3 parties' coordination servers to signal ready.
 ///
-/// Calls `wait_for_others_ready(&server_coord_config)` for each party in parallel
-/// (via `try_join_all`), wrapped in a `tokio::select!` that also monitors the
-/// `JoinSet` for any unexpected early task exit.
+/// Polls each party's peer view in parallel (via `try_join_all`), wrapped in a
+/// `tokio::select!` that also monitors the `JoinSet` for any unexpected early
+/// task exit.
 ///
 /// Pattern taken from `iris-mpc-upgrade-hawk/tests/e2e_hawk.rs`.
 pub async fn wait_for_all_ready(
@@ -39,8 +71,9 @@ pub async fn wait_for_all_ready(
             http_query_retry_delay_ms: 1000,
             http_query_timeout_ms: 10000,
             startup_sync_timeout_secs: 300,
+            startup_visibility_barrier_disabled: false,
         };
-        async move { wait_for_others_ready(&coord).await }
+        async move { wait_until_peers_ready(&coord).await }
     });
 
     let ready_all = try_join_all(ready_futures);

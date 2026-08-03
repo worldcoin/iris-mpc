@@ -290,8 +290,17 @@ async fn load_iris_db_internal(
     }
 
     if !all_serial_ids.is_empty() {
-        tracing::error!("Not all serial_ids were loaded: {:?}", all_serial_ids);
-        bail!("Not all serial_ids were loaded: {:?}", all_serial_ids);
+        let sample: Vec<i64> = all_serial_ids.iter().copied().take(50).collect();
+        tracing::error!(
+            "Not all serial_ids were loaded: {} missing, sample={:?}",
+            all_serial_ids.len(),
+            sample
+        );
+        bail!(
+            "Not all serial_ids were loaded: {} missing, sample={:?}",
+            all_serial_ids.len(),
+            sample
+        );
     }
 
     tracing::info!("Preprocessing db");

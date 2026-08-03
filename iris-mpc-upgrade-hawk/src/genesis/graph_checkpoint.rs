@@ -27,7 +27,7 @@ pub async fn upload_and_sync_genesis_checkpoint(
     tx_results: &Sender<JobResult>,
     hawk_handle: &mut GenesisHawkHandle,
 ) -> Result<()> {
-    let checkpoint_state = match upload_graph_checkpoint(
+    let checkpoint_state = upload_graph_checkpoint(
         checkpoint_bucket,
         party_id,
         imem_graph_stores,
@@ -39,17 +39,12 @@ pub async fn upload_and_sync_genesis_checkpoint(
         is_archival,
     )
     .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!(
-                "failed to upload genesis checkpoint for last_indexed_id: {}: {}",
-                last_indexed_id,
-                e
-            );
-            bail!(e);
-        }
-    };
+    .map_err(|e| {
+        tracing::error!(
+            "failed to upload genesis checkpoint for last_indexed_id {last_indexed_id}: {e}"
+        );
+        e
+    })?;
 
     let (tx, done_rx) = oneshot::channel();
     let result = JobResult::new_s3_checkpoint(checkpoint_state, tx);

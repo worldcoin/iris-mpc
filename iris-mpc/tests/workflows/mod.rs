@@ -1,4 +1,3 @@
-pub mod wal_100;
 #[allow(dead_code)]
 pub mod wal_102;
 pub mod wal_104;
@@ -6,6 +5,7 @@ pub mod wal_105;
 pub mod wal_106;
 pub mod wal_109;
 pub mod wal_110;
+pub mod wal_111;
 
 use ampc_actor_utils::network::tcp::TlsConfig;
 use iris_mpc_common::postgres::{run_migrations, AccessMode, PostgresClient};
@@ -138,6 +138,7 @@ pub fn run_sidecar(
                 checkpoint_window: config.sidecar.checkpoint_window,
                 is_archival: config.sidecar.is_archival,
                 pruning_mode: config.sidecar.pruning_mode,
+                tiered_pruning: config.sidecar.tiered_pruning,
                 one_shot: true,
             };
 

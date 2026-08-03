@@ -22,7 +22,10 @@ use iris_mpc_cpu::{
         iris_worker::IrisWorkerPool, state_check::SetHash, BothEyes, GraphRef, HawkOps, LEFT, RIGHT,
     },
     genesis::{
-        state_accessor::set_last_indexed_modification_id,
+        state_accessor::{
+            get_delta_forced_serials, set_delta_forced_serials, set_last_indexed_modification_id,
+            unset_delta_forced_serials,
+        },
         version_join::{
             compute_version_join, make_repair_plan, versions_per_serial, RepairPlan,
             VersionJoinPlan,
@@ -32,6 +35,7 @@ use iris_mpc_cpu::{
     hawkers::aby3::aby3_store::{Aby3Store, VectorIdRegistryRef},
     hnsw::graph::graph_store::GraphPg,
     protocol::shared_iris::ArcIris,
+    utils::serialization::graph::PruneReport,
 };
 use iris_mpc_store::{ExplicitVersionToken, Store as IrisStore, StoredIrisRef};
 use itertools::izip;
@@ -43,6 +47,7 @@ use std::{
 use tokio::{sync::mpsc::Sender, time::timeout};
 
 use super::graph_checkpoint::upload_and_sync_genesis_checkpoint;
+use super::retry::{with_retry, DB_RETRY_ATTEMPTS};
 use super::{ExecutionContextInfo, PERSIST_DELAY};
 
 // Delta consensus exchange over the coordination server: each node publishes
@@ -135,6 +140,9 @@ async fn delta_exchange_barrier(
 struct DeltaPlan {
     repair: RepairPlan,
     graph_versions: [HashMap<SerialId, Vec<VersionId>>; 2],
+    /// The registry-resolved force-included serials, echoed back so the caller
+    /// can persist them (only meaningful on a legacy base).
+    forced: Vec<SerialId>,
 }
 
 /// Apply the version-join delta: reconcile the graph and HNSW iris store to the
@@ -167,6 +175,7 @@ pub(super) async fn exec_delta(
     hnsw_iris_store: &IrisStore,
     imem_graph_stores: &Arc<BothEyes<GraphRef>>,
     delta_exchange: &DeltaExchangeSlots,
+    prune_reports: Option<&[PruneReport; 2]>,
     mut hawk_handle: GenesisHawkHandle,
     tx_results: &Sender<JobResult>,
     task_monitor_bg: &mut TaskMonitor,
@@ -177,6 +186,43 @@ pub(super) async fn exec_delta(
         .as_ref()
         .ok_or(eyre!("Missing server coordination config"))?;
 
+    // Force-include source: the legacy-base prune report when present, else the
+    // set a prior legacy-base run persisted (the report is gone once the base is
+    // V5, but its content refreshes may not yet be durable).
+    let raw_forced: Vec<SerialId> = match prune_reports {
+        Some(reports) => {
+            let forced: Vec<SerialId> = reports
+                .iter()
+                .flat_map(|r| {
+                    r.multi_version_serials
+                        .iter()
+                        .chain(r.self_loop_serials.iter())
+                })
+                .copied()
+                .collect();
+            tracing::info!(
+                "Prune report present: {} raw force-include serials \
+                 (multi_version l/r: {}/{}, self_loop l/r: {}/{})",
+                forced.len(),
+                reports[LEFT].multi_version_serials.len(),
+                reports[RIGHT].multi_version_serials.len(),
+                reports[LEFT].self_loop_serials.len(),
+                reports[RIGHT].self_loop_serials.len(),
+            );
+            forced
+        }
+        None => {
+            let loaded = get_delta_forced_serials(graph_store.clone()).await?;
+            if !loaded.is_empty() {
+                tracing::info!(
+                    "Reloaded {} persisted force-include serials from a prior legacy-base run",
+                    loaded.len()
+                );
+            }
+            loaded
+        }
+    };
+
     let res: Result<(bool, RepairPlan)> = async {
         let plan = compute_delta_plan(
             config,
@@ -186,11 +232,24 @@ pub(super) async fn exec_delta(
             hnsw_iris_store,
             imem_graph_stores,
             delta_exchange,
+            &raw_forced,
             &mut hawk_handle,
             server_coord_config,
             shutdown_handler,
         )
         .await?;
+
+        validate_replay_resolvable(&plan.repair.graph_replay, registries).await?;
+
+        // Persist the resolved force-include set before any graph mutation, so a
+        // crash after the base is rewritten as V5 (report gone) can still replay
+        // it. Only meaningful on a legacy base; the loaded set is already stored.
+        if prune_reports.is_some() && !plan.forced.is_empty() {
+            let mut tx = graph_store.tx().await?;
+            set_delta_forced_serials(&mut tx.tx, &plan.forced).await?;
+            tx.tx.commit().await?;
+        }
+
         let graph_changed = apply_graph_repair(
             config,
             &plan,
@@ -199,16 +258,23 @@ pub(super) async fn exec_delta(
             shutdown_handler,
         )
         .await?;
+
+        // A failure here must abort the run: proceeding would checkpoint a
+        // graph with replays possibly unapplied and (below) drop the persisted
+        // force-include set — the only handle a rerun has on those serials.
+        tracing::info!("Waiting for version replays to be processed...");
+        shutdown_handler
+            .wait_for_pending_batches_completion()
+            .await
+            .map_err(|e| eyre!("waiting for pending version replays to complete: {e:?}"))?;
+        tracing::info!("All version replays have been processed");
+
         Ok((graph_changed, plan.repair))
     }
     .await;
 
     match res {
         Ok((graph_changed, repair)) => {
-            tracing::info!("Waiting for version replays to be processed...");
-            let _ = shutdown_handler.wait_for_pending_batches_completion().await;
-            tracing::info!("All version replays have been processed");
-
             // Single end-of-delta cursor write (no per-replay cursor writes):
             // set to the global max persisted+completed source modification id
             // read before the pools loaded (safe under-claim).
@@ -244,6 +310,12 @@ pub(super) async fn exec_delta(
             // row-level repair triggers is now safe.
             flush_row_writes(&repair, registries, worker_pools, hnsw_iris_store).await?;
 
+            // The force-included content refreshes are now durable; drop the
+            // persisted list so a later rerun does not replay them.
+            let mut graph_tx = graph_store.tx().await?;
+            unset_delta_forced_serials(&mut graph_tx.tx).await?;
+            graph_tx.tx.commit().await?;
+
             Ok(hawk_handle)
         }
         Err(err) => {
@@ -274,6 +346,7 @@ async fn compute_delta_plan(
     hnsw_iris_store: &IrisStore,
     imem_graph_stores: &Arc<BothEyes<GraphRef>>,
     delta_exchange: &DeltaExchangeSlots,
+    raw_forced: &[SerialId],
     hawk_handle: &mut GenesisHawkHandle,
     server_coord_config: &ServerCoordinationConfig,
     shutdown_handler: &Arc<ShutdownHandler>,
@@ -281,7 +354,8 @@ async fn compute_delta_plan(
     // S_cp: the checkpoint's last indexed iris id (ctx.last_indexed_id was set
     // to it during reset). Serials are compared over 1..=S_cp.
     let max_serial = ctx.last_indexed_id;
-    // Logged cross-check only; tombstones are detected from source content.
+    // Authority for tombstone classification (unioned with the content check
+    // in step 3) and input to the comparison log.
     let excluded: HashSet<SerialId> = ctx.excluded_serial_ids.iter().copied().collect();
 
     // 1. Build the version state per eye and compute per-eye plans.
@@ -316,6 +390,53 @@ async fn compute_delta_plan(
         .chain(plans[RIGHT].graph_repair.iter())
         .copied()
         .collect();
+
+    // Force-include the caller's damage classes (multi-version / self-loop):
+    // a multi-version serial can collapse onto an entry whose version agrees
+    // with source, and a self-loop serial is version- and row-clean — no join
+    // axis reaches either, and their version bookkeeping is untrustworthy, so
+    // only a rebuild from source content is sound. The set is party-local
+    // until the union below reconciles it.
+    //
+    // Drop forced serials with no source row first: they can never be
+    // replayed, and would abort every rerun at the registry lookup.
+    let mut forced: Vec<SerialId> = raw_forced
+        .iter()
+        .copied()
+        .filter(|&s| s > 0 && s <= max_serial)
+        .collect();
+    forced.sort_unstable();
+    forced.dedup();
+    let resolved = registries[LEFT].get_vector_ids(&forced).await;
+    let mut dropped: Vec<SerialId> = Vec::new();
+    let forced: Vec<SerialId> = forced
+        .into_iter()
+        .zip(resolved)
+        .filter_map(|(serial, vid)| {
+            if vid.is_some() {
+                Some(serial)
+            } else {
+                dropped.push(serial);
+                None
+            }
+        })
+        .collect();
+    if !dropped.is_empty() {
+        tracing::warn!(
+            "force-include: {} serials dropped (absent from source registry), sample={:?}",
+            dropped.len(),
+            &dropped[..dropped.len().min(50)],
+        );
+    }
+    if !forced.is_empty() {
+        tracing::info!(
+            "force-including {} serials into the repair set",
+            forced.len()
+        );
+        metrics::gauge!("genesis_version_join_force_included_count").set(forced.len() as f64);
+        local_repair.extend(forced.iter().copied());
+    }
+
     local_repair.sort_unstable();
     local_repair.dedup();
 
@@ -334,12 +455,46 @@ async fn compute_delta_plan(
     .await?;
     let repair_serials = union_repair_with_peers(&local_repair, &peer_sets);
 
-    // 3. Tombstones among repair serials, by content check against the
-    //    party's dummy shares. The classification gates the reinsert flag,
-    //    so parties must agree; a mismatch means source-level content
-    //    inconsistency, which the repair must not paper over.
-    let deleted =
+    // 3. Tombstones among repair serials: the deletion list is the authority
+    //    (sync-verified identical across parties), unioned with the dummy-share
+    //    content check as a second net — content alone misses deletions whose
+    //    dummy predates the current constant, and dummy content absent from the
+    //    list exposes a list gap. The classification gates the reinsert flag,
+    //    so parties must agree; a mismatch means source-level inconsistency,
+    //    which the repair must not paper over.
+    let content_tombstones =
         gather_tombstones(config.party_id, &repair_serials, registries, worker_pools).await?;
+    let listed_tombstones: HashSet<SerialId> = repair_serials
+        .iter()
+        .copied()
+        .filter(|s| excluded.contains(s))
+        .collect();
+    let warn_disagreement = |a: &HashSet<SerialId>, b: &HashSet<SerialId>, msg: &str| {
+        let mut only: Vec<SerialId> = a.difference(b).copied().collect();
+        only.sort_unstable();
+        if !only.is_empty() {
+            tracing::warn!(
+                "{} repair serials {msg}: {:?}",
+                only.len(),
+                &only[..only.len().min(100)],
+            );
+        }
+    };
+    warn_disagreement(
+        &listed_tombstones,
+        &content_tombstones,
+        "are in the deletion list but their content is not the current dummy \
+         (deletion mechanism drift?)",
+    );
+    warn_disagreement(
+        &content_tombstones,
+        &listed_tombstones,
+        "carry dummy content but are absent from the deletion list (list gap?)",
+    );
+    let deleted: HashSet<SerialId> = listed_tombstones
+        .union(&content_tombstones)
+        .copied()
+        .collect();
     let deleted_hash = {
         let mut h = SetHash::default();
         for s in &deleted {
@@ -391,6 +546,7 @@ async fn compute_delta_plan(
     Ok(DeltaPlan {
         repair,
         graph_versions,
+        forced,
     })
 }
 
@@ -475,16 +631,55 @@ async fn apply_graph_repair(
     Ok(!items.is_empty())
 }
 
+/// Verify every planned reinsert resolves in both eyes' source registry — the
+/// same lookup the replay loop does lazily per serial — so the run aborts at
+/// plan time rather than hours into the replay.
+async fn validate_replay_resolvable(
+    replay: &[SerialId],
+    registries: &BothEyes<VectorIdRegistryRef>,
+) -> Result<()> {
+    if replay.is_empty() {
+        return Ok(());
+    }
+    for side in [LEFT, RIGHT] {
+        let resolved = registries[side].get_vector_ids(replay).await;
+        let missing: Vec<SerialId> = replay
+            .iter()
+            .copied()
+            .zip(resolved)
+            .filter_map(|(serial, vid)| vid.is_none().then_some(serial))
+            .collect();
+        if !missing.is_empty() {
+            bail!(
+                "{} planned replay serials do not resolve in the source registry (eye {}), \
+                 sample={:?}",
+                missing.len(),
+                side,
+                &missing[..missing.len().min(50)],
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Scan the HNSW iris store's `(serial → version)` index over `1..=max_serial`.
 async fn get_versions_from_iris_store(
     hnsw_iris_store: &IrisStore,
     max_serial: SerialId,
 ) -> Result<HashMap<SerialId, i16>> {
     use futures::TryStreamExt;
-    let rows: Vec<(i64, i16)> = hnsw_iris_store
-        .stream_iris_ids(max_serial as usize)
-        .try_collect()
-        .await?;
+    // Collect-into-map and idempotent, so a retry restarts the stream cleanly.
+    let rows: Vec<(i64, i16)> = with_retry("hnsw version scan", DB_RETRY_ATTEMPTS, || {
+        let store = &hnsw_iris_store;
+        async move {
+            store
+                .stream_iris_ids(max_serial as usize)
+                .try_collect::<Vec<(i64, i16)>>()
+                .await
+                .map_err(eyre::Report::from)
+        }
+    })
+    .await?;
     Ok(rows
         .into_iter()
         .map(|(id, version)| (id as SerialId, version))
@@ -789,8 +984,10 @@ async fn flush_row_writes(
         return Ok(());
     }
     const CHUNK: usize = 1024;
+    // Log flush progress every this many chunks (~this many × CHUNK rows).
+    const PROGRESS_EVERY: usize = 16;
 
-    for chunk in inserts.chunks(CHUNK) {
+    for (chunk_idx, chunk) in inserts.chunks(CHUNK).enumerate() {
         let (vids, left_data, right_data) =
             fetch_pool_rows(chunk, registries, worker_pools).await?;
         let refs: Vec<StoredIrisRef> = izip!(&vids, &left_data, &right_data)
@@ -803,13 +1000,27 @@ async fn flush_row_writes(
             })
             .collect();
         let mut tx = hnsw_iris_store.tx().await?;
-        hnsw_iris_store
+        let inserted = hnsw_iris_store
             .insert_copy_irises(&mut tx, &vids, &refs)
             .await?;
+        if inserted.len() != refs.len() {
+            bail!(
+                "row flush insert wrote {} of {} rows (unexpected conflict or partial insert)",
+                inserted.len(),
+                refs.len(),
+            );
+        }
         tx.commit().await?;
+        if chunk_idx % PROGRESS_EVERY == 0 {
+            tracing::info!(
+                "row flush inserts: {}/{}",
+                chunk_idx * CHUNK + chunk.len(),
+                inserts.len()
+            );
+        }
     }
 
-    for chunk in updates.chunks(CHUNK) {
+    for (chunk_idx, chunk) in updates.chunks(CHUNK).enumerate() {
         let (vids, left_data, right_data) =
             fetch_pool_rows(chunk, registries, worker_pools).await?;
         let mut tx = hnsw_iris_store.tx().await?;
@@ -829,6 +1040,13 @@ async fn flush_row_writes(
             }
         }
         tx.commit().await?;
+        if chunk_idx % PROGRESS_EVERY == 0 {
+            tracing::info!(
+                "row flush updates: {}/{}",
+                chunk_idx * CHUNK + chunk.len(),
+                updates.len()
+            );
+        }
     }
 
     tracing::info!(
