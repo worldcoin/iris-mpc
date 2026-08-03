@@ -363,15 +363,39 @@ fn record_extension_metrics(request: &Step3, filter: Filter, prior_decisions: &[
     if !request.has_pre_extension() {
         return;
     }
+
+    // Final extended search matching determination, including possible rejection due to
+    // saturation of extended search results
+    let (extended_decision, _) = uniqueness_is_match(request.select(filter), prior_decisions);
+
     let not_supermatch = |id: &MatchId| !matches!(id, Supermatch);
+
+    // Extended matching determination, excluding rejection due to saturation of extended search
+    // results -- did we find a real match in the extended results?
     let (extended_match, _) = uniqueness_is_match(
         request.select(filter).filter(not_supermatch),
         prior_decisions,
     );
+
+    // Matching determination pre-extension -- this exludes rejection due to saturated search
+    // results, since the results have not been expanded.
     let (pre_match, _) = uniqueness_is_match(
         request.select_pre(filter).filter(not_supermatch),
         prior_decisions,
     );
+
+    match (pre_match, extended_decision) {
+        (false, true) => {
+            metrics::counter!("supermatcher_extended_search_changed_decision_to_reject")
+                .increment(1);
+        }
+        (true, false) => {
+            metrics::counter!("supermatcher_extended_search_changed_decision_to_accept")
+                .increment(1);
+        }
+        _ => {}
+    }
+
     match (pre_match, extended_match) {
         (false, true) => {
             metrics::counter!("supermatcher_extended_search_found_new_match").increment(1);
@@ -381,6 +405,9 @@ fn record_extension_metrics(request: &Step3, filter: Filter, prior_decisions: &[
         }
         _ => {}
     }
+
+    // Unconditionally count when a request had some pre-extension in one of its searches.
+    metrics::counter!("supermatcher_extended_search_requests").increment(1);
 }
 
 impl BatchStep3 {
