@@ -4,7 +4,7 @@ use eyre::Result;
 use iris_mpc_common::config::Config;
 use iris_mpc_cpu::{
     genesis::{get_iris_deletions, plaintext::GenesisArgs, BatchSizeConfig},
-    graph_checkpoint::PruningMode,
+    graph_checkpoint::{PruningMode, TieredPruningConfig},
 };
 use itertools::izip;
 use rand::{thread_rng, Rng};
@@ -27,6 +27,7 @@ pub const DEFAULT_GENESIS_ARGS: GenesisArgs = GenesisArgs {
     batch_size_config: BatchSizeConfig::Static { size: 1 },
     checkpoint_frequency: 100_000,
     pruning_mode: PruningMode::OlderNonArchival,
+    tiered_pruning: TieredPruningConfig::DEFAULT,
 };
 
 pub fn get_node_configs() -> [Config; 3] {
