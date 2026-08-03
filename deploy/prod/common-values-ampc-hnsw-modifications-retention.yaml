@@ -14,7 +14,7 @@ suspend: false
 
 env:
   RETENTION__ENABLED: "true"
-  RETENTION__DRY_RUN: "true"
+  RETENTION__DRY_RUN: "false"
 
 replicaCount: 1
 
