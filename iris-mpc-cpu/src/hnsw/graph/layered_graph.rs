@@ -179,9 +179,11 @@ pub struct GraphMem {
 
     /// Seq_no of the last op that can invalidate existing edges: a
     /// `RemoveNode`, or an `AddNode` re-minting a live serial. A neighborhood
-    /// stamped at or after it holds no stale edge, so
-    /// [`Self::edit_neighborhood`] skips the staleness filter. Derived and
-    /// in-memory only; `from_parts` seeds it conservatively.
+    /// stamped at or after it holds no stale edge — a precondition on loaded
+    /// state, guaranteed by `from_parts` seeding past the load point so every
+    /// loaded neighborhood is filtered on first touch. Lets
+    /// [`Self::edit_neighborhood`] skip the staleness filter. Derived and
+    /// in-memory only.
     last_invalidation_seq: u64,
 }
 
@@ -236,10 +238,19 @@ impl Clone for GraphMem {
 /// compares equal to the mint it round-trips.
 impl PartialEq for GraphMem {
     fn eq(&self, other: &Self) -> bool {
-        self.entry_points == other.entry_points
-            && self.layers == other.layers
-            && self.last_update_seq_no == other.last_update_seq_no
-            && self.node_init == other.node_init
+        // Destructured so a new field forces a decision here.
+        let Self {
+            entry_points,
+            layers,
+            last_update_seq_no,
+            node_init,
+            node_init_hash: _,
+            last_invalidation_seq: _,
+        } = self;
+        *entry_points == other.entry_points
+            && *layers == other.layers
+            && *last_update_seq_no == other.last_update_seq_no
+            && *node_init == other.node_init
     }
 }
 
@@ -302,9 +313,10 @@ impl GraphMem {
             last_update_seq_no,
             node_init,
             node_init_hash,
-            // History before the load point is unknown; treat it as
-            // potentially invalidating.
-            last_invalidation_seq: last_update_seq_no,
+            // History at or before the load point is unknown (legacy
+            // prune/migration can leave edges to absent serials); seed past it
+            // so every loaded neighborhood is filtered on first touch.
+            last_invalidation_seq: last_update_seq_no.saturating_add(1),
         }
     }
 
@@ -586,6 +598,12 @@ impl GraphMem {
         self.layers[lc].edit_links(node, tick, |old_seq, nbrs| {
             if old_seq < invalidation_seq {
                 nbrs.retain(|z| is_active(content, *z, old_seq));
+            } else {
+                // The skip's precondition: the filter would drop nothing.
+                debug_assert!(
+                    nbrs.iter().all(|z| is_active(content, *z, old_seq)),
+                    "skipped a staleness filter that would have dropped an edge"
+                );
             }
             f(nbrs);
             debug_assert!(

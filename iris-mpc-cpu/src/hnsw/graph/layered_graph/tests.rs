@@ -3,8 +3,9 @@ use std::{collections::HashMap, sync::Arc};
 use crate::{
     hawkers::{aby3::aby3_store::FhdOps, plaintext_store::PlaintextStore},
     hnsw::{
-        graph::layered_graph::migrate, vector_store::VectorStoreMut, GraphMem, HnswSearcher,
-        VectorStore,
+        graph::layered_graph::{migrate, Layer, NodeInit},
+        vector_store::VectorStoreMut,
+        GraphMem, HnswSearcher, VectorStore,
     },
 };
 use aes_prng::AesRng;
@@ -1865,10 +1866,78 @@ async fn invalidation_seq_transitions_and_filter_still_drops_stale_edges() {
     .unwrap();
     assert_eq!(g.last_invalidation_seq, 6);
 
-    // A load seeds the watermark conservatively but compares equal.
+    // A load seeds the watermark past the load point but compares equal.
     let bytes = bincode::serialize(&g).unwrap();
     let loaded: GraphMem = bincode::deserialize(&bytes).unwrap();
-    assert_eq!(loaded.last_invalidation_seq, loaded.last_update_seq_no);
+    assert_eq!(loaded.last_invalidation_seq, loaded.last_update_seq_no + 1);
     assert_eq!(g, loaded);
     assert_eq!(g.checksum(), loaded.checksum());
+}
+
+/// A loaded graph may hold raw edges to serials absent from the content
+/// clock (legacy prune/migration damage). Seeding the watermark past the
+/// load point forces the first touch to filter them out — even when a later
+/// fresh mint reuses the phantom serial.
+#[tokio::test]
+async fn loaded_phantom_edge_is_dropped_on_first_touch() {
+    // Node 1 -> [2, 500] stamped at the load height; 500 has no clock entry.
+    let mut layer = Layer::new();
+    layer.set_links_trusted(1, vec![2, 500], 5);
+    layer.set_links_trusted(2, vec![1], 5);
+    let node_init = HashMap::from([
+        (
+            1,
+            NodeInit {
+                seq_no: 1,
+                version: 0,
+            },
+        ),
+        (
+            2,
+            NodeInit {
+                seq_no: 1,
+                version: 0,
+            },
+        ),
+    ]);
+    let mut g = GraphMem::from_parts(vec![], vec![layer], 5, node_init);
+    assert_eq!(g.last_invalidation_seq, 6);
+
+    // A fresh mint reuses the phantom serial: it must not resurrect the edge.
+    g.insert_apply(&GraphMutation {
+        seq_no: 6,
+        as_of: 5,
+        ops: vec![MutationOp::AddNode {
+            id: VectorId::new(500, 3),
+            height: 1,
+            update_ep: UpdateEntryPoint::False,
+        }],
+    })
+    .unwrap();
+
+    // First touch of node 1's list filters against its old stamp: the
+    // phantom edge to 500 is dropped, the new edge to 4 is added.
+    g.insert_apply(&GraphMutation {
+        seq_no: 7,
+        as_of: 6,
+        ops: vec![
+            MutationOp::AddNode {
+                id: VectorId::from_serial_id(4),
+                height: 1,
+                update_ep: UpdateEntryPoint::False,
+            },
+            MutationOp::AddEdges {
+                base: 4,
+                neighbors: vec![1],
+                layer: 0,
+                edge_type: EdgeType::All,
+            },
+        ],
+    })
+    .unwrap();
+    assert_eq!(g.get_raw_links(&1, 0), vec![2, 4]);
+    assert_eq!(
+        g.get_active_links(&1, 0),
+        vec![VectorId::from_serial_id(2), VectorId::from_serial_id(4)]
+    );
 }
