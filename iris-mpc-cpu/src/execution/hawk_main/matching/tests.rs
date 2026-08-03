@@ -325,6 +325,7 @@ fn run_test_matching(tc: &TestCase) -> BatchStep3 {
                         results: matches,
                         saturated: side_saturated,
                     },
+                    pre_extension: None,
                 },
                 plan: InsertPlanV {
                     query: Aby3Query::new(QueryId::new()),
