@@ -179,10 +179,9 @@ pub struct GraphMem {
 
     /// Seq_no of the last op that can invalidate existing edges: a
     /// `RemoveNode`, or an `AddNode` re-minting a live serial. A neighborhood
-    /// stamped at or after it provably holds no stale edge, so
-    /// [`Self::edit_neighborhood`] skips the staleness filter. Derived,
-    /// in-memory only: `from_parts` seeds it conservatively at
-    /// `last_update_seq_no`. Excluded from `PartialEq` like `node_init_hash`.
+    /// stamped at or after it holds no stale edge, so
+    /// [`Self::edit_neighborhood`] skips the staleness filter. Derived and
+    /// in-memory only; `from_parts` seeds it conservatively.
     last_invalidation_seq: u64,
 }
 
@@ -303,8 +302,8 @@ impl GraphMem {
             last_update_seq_no,
             node_init,
             node_init_hash,
-            // Loaded neighborhoods' history is unknown; treat everything at or
-            // before the load point as potentially invalidated.
+            // History before the load point is unknown; treat it as
+            // potentially invalidating.
             last_invalidation_seq: last_update_seq_no,
         }
     }
@@ -759,9 +758,11 @@ impl GraphMem {
             .unwrap_or_default()
     }
 
-    /// Stored neighbor count of `base` at `lc`, read from the encoding header
-    /// without decoding. Counts raw entries — an upper bound on the active
-    /// degree. 0 if `base`/`lc` absent.
+    /// Return the raw stored neighbor count of `base` at `lc` — a header
+    /// read, no decode.
+    ///
+    /// Counts raw entries, an upper bound on the active degree. 0 if
+    /// `base`/`lc` absent.
     pub fn raw_degree(&self, base: &SerialId, lc: usize) -> usize {
         self.layers
             .get(lc)
