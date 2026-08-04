@@ -778,7 +778,7 @@ fn run_test_matching(tc: &TestCase) -> MatchResults {
     let resolved_mirror = resolved.clone();
 
     // Return the final decision for the request.
-    resolved.decide(resolved_mirror)
+    ResolvedBatch::decide(resolved, resolved_mirror)
 }
 
 /// Assert that two sets are equal, ignoring order, and without duplicates.

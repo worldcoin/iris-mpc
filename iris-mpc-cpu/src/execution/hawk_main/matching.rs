@@ -569,9 +569,12 @@ impl ResolvedBatch {
     /// This is the one place decisions are computed and the one place the per-request
     /// supermatcher metrics are emitted; callers read the stored vector afterwards via
     /// `MatchResults::decisions()`.
-    pub fn decide(self, mirror: Self) -> MatchResults {
-        assert_eq!(self.0.len(), mirror.0.len());
-        let requests = izip!(self.0, mirror.0)
+    ///
+    /// Note that `normal` and `mirror` inputs play non-equivalent roles in the decision
+    /// procedure, so it is important to provide the inputs in the correct order.
+    pub fn decide(normal: Self, mirror: Self) -> MatchResults {
+        assert_eq!(normal.0.len(), mirror.0.len());
+        let requests = izip!(normal.0, mirror.0)
             .map(|(normal, mirror)| RequestMatches { normal, mirror })
             .collect_vec();
 

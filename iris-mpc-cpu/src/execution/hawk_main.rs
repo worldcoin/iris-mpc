@@ -1867,7 +1867,7 @@ impl HawkHandle {
             (
                 search_normal,
                 search_mirror,
-                matches_normal.decide(matches_mirror),
+                matching::ResolvedBatch::decide(matches_normal, matches_mirror),
             )
         };
         let sessions_mutations = &sessions.for_mutations(Orientation::Normal);
