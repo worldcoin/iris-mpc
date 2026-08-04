@@ -1362,14 +1362,14 @@ impl HawkRequest {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HawkResult {
     batch: BatchQuery,
-    match_results: matching::BatchStep3,
+    match_results: matching::MatchResults,
     connect_plans: HawkMutation,
 }
 
 impl HawkResult {
     fn new(
         batch: BatchQuery,
-        match_results: matching::BatchStep3,
+        match_results: matching::MatchResults,
         connect_plans: HawkMutation,
     ) -> Self {
         HawkResult {
@@ -1840,14 +1840,14 @@ impl HawkHandle {
 
             // Organize results per orientation. Consult the matching module for details on organizing steps.
             let match_result = {
-                let step1 = matching::BatchStep1::new(&search_results, &luc_ids, request_types);
+                let pending = matching::PendingBatch::new(&search_results, &luc_ids, request_types);
 
-                // Fetch the missing vector IDs for each side and calculate their is_match.
-                let missing_is_match =
-                    is_match_batch(search_queries, step1.missing_vector_ids(), sessions_search)
+                // Compare the other eye for vectors that matched on only one side.
+                let comparison_results =
+                    is_match_batch(search_queries, pending.ids_to_compare(), sessions_search)
                         .await?;
 
-                step1.step2(&missing_is_match, intra_results.await???)
+                pending.resolve(&comparison_results, intra_results.await???)
             };
 
             Ok((search_results, match_result))
@@ -1867,7 +1867,7 @@ impl HawkHandle {
             (
                 search_normal,
                 search_mirror,
-                matches_normal.step3(matches_mirror),
+                matches_normal.decide(matches_mirror),
             )
         };
         let sessions_mutations = &sessions.for_mutations(Orientation::Normal);
@@ -1934,7 +1934,7 @@ impl HawkHandle {
         hawk_actor: &mut HawkActor,
         sessions: &BothEyes<Vec<HawkSession>>,
         search_results: BothEyes<VecRequests<VecRotations<HawkInsertPlan>>>,
-        match_result: &matching::BatchStep3,
+        match_result: &matching::MatchResults,
         identity_updates: IdentityUpdatePlan,
         request: &HawkRequest,
     ) -> Result<HawkMutation> {

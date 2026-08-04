@@ -302,15 +302,15 @@ fn test_matching() {
     ];
 
     for case in &cases {
-        let batch_step_3 = run_test_matching(case);
-        let decisions = batch_step_3.decisions();
+        let results = run_test_matching(case);
+        let decisions = results.decisions();
         assert_eq!(
             decisions,
             vec![case.expected_decision],
             "Failed for case: {case:?}",
         );
 
-        let match_ids = batch_step_3.select(HawkResult::MATCH_IDS_FILTER);
+        let match_ids = results.select(HawkResult::MATCH_IDS_FILTER);
         let [match_ids] = match_ids.try_into().unwrap();
         assert_equal_sets(&match_ids, &case.expected_matches, case);
     }
@@ -387,16 +387,16 @@ struct BaselineSearch {
 }
 
 /// The single request in a one-request test batch.
-fn request_0(batch: &BatchStep3) -> &Step3 {
+fn request_0(batch: &MatchResults) -> &RequestMatches {
     &batch.0[0]
 }
 
 /// The match ids the pre-extension (baseline) search alone would have produced.
-fn baseline_match_ids(batch: &BatchStep3, filter: Filter) -> Vec<MatchId> {
+fn baseline_match_ids(batch: &MatchResults, filter: Filter) -> Vec<MatchId> {
     request_0(batch).select_pre(filter).collect_vec()
 }
 
-fn run_test_matching(tc: &TestCase) -> BatchStep3 {
+fn run_test_matching(tc: &TestCase) -> MatchResults {
     let req_i = 0;
     let distance = || DistanceShare::new(Share::default(), Share::default());
 
@@ -472,9 +472,9 @@ fn run_test_matching(tc: &TestCase) -> BatchStep3 {
     ];
     let luc_ids = vec![vec![LUC_REQUESTED, LUC_REQUESTED_DUP]];
     let request_types = vec![tc.request_type];
-    let batch1 = BatchStep1::new(&search_results, &luc_ids, request_types);
+    let pending = PendingBatch::new(&search_results, &luc_ids, request_types);
 
-    let missing_ids = batch1.missing_vector_ids();
+    let missing_ids = pending.ids_to_compare();
 
     // We will inspect the other side of partial search results.
     let mut expect_left = vec![RIGHT_MATCH, LUC_REQUESTED, LUC_REQUESTED_DUP];
@@ -537,13 +537,13 @@ fn run_test_matching(tc: &TestCase) -> BatchStep3 {
     // Simulate `intra_batch_is_match(..)`
     let intra_matches = vec![vec![]];
 
-    let batch2 = batch1.step2(&missing_is_match, intra_matches);
+    let resolved = pending.resolve(&missing_is_match, intra_matches);
 
     // Do the same with mirrored matching. Amazingly, we got exactly the same result in this test.
-    let batch2_mirror = batch2.clone();
+    let resolved_mirror = resolved.clone();
 
     // Return the final decision for the request.
-    batch2.step3(batch2_mirror)
+    resolved.decide(resolved_mirror)
 }
 
 /// Assert that two sets are equal, ignoring order, and without duplicates.
