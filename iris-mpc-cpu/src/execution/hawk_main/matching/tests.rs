@@ -188,18 +188,63 @@ fn test_evaluate_uniqueness() {
     );
 }
 
+/// One scenario for [`run_test_matching`]: a few knobs describing what the searches and
+/// the MPC comparisons found, plus what the pipeline is expected to conclude.
+///
+/// The fields fall into three groups: what the HNSW searches returned (`search_match`,
+/// `saturated`, `pre_extension`), what the follow-up MPC comparisons answered
+/// (`other_side_match`, `reauth_match`), and what kind of request this is
+/// (`request_type`). `expected_decision` and `expected_matches` are the assertions, and
+/// are read only by [`test_matching`]'s loop — tests that assert directly leave them at
+/// their [`Default`] values.
+///
+/// Everything not named in a literal comes from [`TestCase::default`]: a uniqueness
+/// request that persists, whose searches found no full match and were not saturated, and
+/// whose comparisons all came back negative.
 #[derive(Clone, Debug)]
 struct TestCase {
+    /// Whether both eyes' searches found `BOTH_MATCH`, the fixture's only two-eyed hit.
+    /// This is the one way to get a match that needs no MPC comparison to confirm, since
+    /// the AND rule over both eyes is already satisfied by the search results alone.
     search_match: bool,
+
+    /// The answer the simulated MPC comparison gives for every id compared against the
+    /// **left** eye — that is, for ids the right eye's search hit but the left eye never
+    /// inspected. The right eye's comparisons are always negative, so this is the only
+    /// knob for turning a one-eyed search hit into a confirmed two-eyed match.
     other_side_match: bool,
+
+    /// The answer the simulated MPC comparison gives for the `REAUTH` target on both
+    /// eyes, overriding `other_side_match` for that id. Only meaningful for
+    /// [`RequestType::Reauth`] cases, where it decides whether the reauth succeeds.
     reauth_match: bool,
+
     /// Saturated flags per eye: [left, right]. Simulates super-matcher.
+    ///
+    /// A saturated search returned nearly as many matches as `ef`, so more probably
+    /// exist beyond what was retrieved. That alone counts as a match
+    /// ([`MatchId::Supermatch`]) and blocks insertion, even with no concrete match id.
     saturated: BothEyes<bool>,
+
     /// Simulates a supermatcher extended search: what the original search alone found.
     /// `None` means no extension happened.
+    ///
+    /// When set, the fixture's search results become the *extended* ones and this becomes
+    /// the baseline they are compared against, which is what drives the A/B metrics in
+    /// [`extension_outcome`]. Setting it also grows the set of ids sent for MPC
+    /// comparison, since baseline one-eyed hits need their other eye resolved too.
     pre_extension: Option<BaselineSearch>,
+
+    /// The [`Decision`] the pipeline should reach for this request.
     expected_decision: Decision,
+
+    /// The match ids the request should report under [`HawkResult::MATCH_IDS_FILTER`],
+    /// compared as a set.
     expected_matches: Vec<MatchId>,
+
+    /// Which kind of request this is, selecting the branch [`ResolvedBatch::decide`] takes:
+    /// uniqueness (with or without persistence), identity match check, reauth, or
+    /// unsupported.
     request_type: RequestType,
 }
 
@@ -544,6 +589,41 @@ fn baseline_match_ids(batch: &MatchResults, filter: Filter) -> Vec<MatchId> {
         .collect_vec()
 }
 
+/// Drive one [`TestCase`] through the whole matching pipeline and return the result.
+///
+/// This fabricates a plausible pair of eye searches, then plays the part of the two
+/// asynchronous helpers the real pipeline depends on — the MPC other-eye comparisons
+/// (`is_match_batch`) and the intra-batch comparisons (`intra_batch_is_match`) — so the
+/// matching logic can be tested without any MPC session or network:
+///
+/// 1. Build a [`HawkInsertPlan`] per eye from the fixture ids below, replicated across
+///    every rotation, and hand both to [`PendingBatch::new`].
+/// 2. Ask for [`PendingBatch::ids_to_compare`] and **assert the exact set** for each eye.
+///    This assertion runs for every case, so each one re-checks which vectors the
+///    pipeline decides need an other-eye comparison.
+/// 3. Answer those comparisons from the test case: every left-eye comparison returns
+///    `other_side_match`, every right-eye one returns `false`, and `REAUTH` returns
+///    `reauth_match` on both eyes.
+/// 4. Report no intra-batch matches, then resolve via [`PendingBatch::resolve`].
+/// 5. Combine orientations with [`ResolvedBatch::decide`], using a clone of the resolved
+///    batch as the mirror.
+///
+/// The searches are the same every time apart from the test case's knobs. Each fixture id
+/// exercises one path: `BOTH_MATCH` is the only id both eyes match (when `search_match`);
+/// `LEFT_MATCH` and `RIGHT_MATCH` are hit by one eye and need the other compared;
+/// `BOTH_FOUND` was seen by both eyes but matched only on the left; `LUC_REQUESTED` is
+/// compared on both eyes because the request asked for it, and `LUC_REQUESTED_DUP` is an
+/// alias of `LEFT_MATCH` that proves duplicates are collapsed; `REAUTH` is compared even
+/// though no search hit it; and `BASELINE_ONLY` appears solely in the pre-extension
+/// baseline, so it is reached only through [`TestCase::pre_extension`].
+///
+/// Two limits are worth highlighting:
+///
+/// - **One request per batch.** Intra-batch matching is therefore never exercised — a
+///   request has no peers to be blocked by.
+/// - **The mirror orientation is a clone of the normal one.** No case here can produce a
+///   disagreement between orientations, so anything that depends on their asymmetry is
+///   invisible.
 fn run_test_matching(tc: &TestCase) -> MatchResults {
     let req_i = 0;
     let distance = || DistanceShare::new(Share::default(), Share::default());
@@ -557,7 +637,11 @@ fn run_test_matching(tc: &TestCase) -> MatchResults {
         match_right.push(BOTH_MATCH);
     }
 
-    let saturated = tc.saturated;
+    // Build one eye's search result: the same `HawkInsertPlan` for every rotation, holding
+    // the ids this eye matched plus the ids it merely inspected (which reach only the HNSW
+    // links, not the `classified` matches the matching logic reads). `side_saturated` is
+    // this eye's saturation flag; a `Some` baseline simulates a supermatcher extension,
+    // making `match_ids` the extended results and the baseline the pre-extension ones.
     let search_result = |match_ids: Vec<VectorId>,
                          non_match_ids: Vec<VectorId>,
                          side_saturated: bool,
@@ -598,6 +682,7 @@ fn run_test_matching(tc: &TestCase) -> MatchResults {
         ])
     };
 
+    let saturated = tc.saturated;
     let baseline_for = |side: usize| {
         tc.pre_extension
             .as_ref()
@@ -620,6 +705,7 @@ fn run_test_matching(tc: &TestCase) -> MatchResults {
     ];
     let luc_ids = vec![vec![LUC_REQUESTED, LUC_REQUESTED_DUP]];
     let request_types = vec![tc.request_type];
+
     let pending = PendingBatch::new(&search_results, &luc_ids, request_types);
 
     let ids_to_compare = pending.ids_to_compare();
