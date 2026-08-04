@@ -331,8 +331,8 @@ fn test_baseline_selection_differs_from_extended() {
             ],
             saturated: [true, false],
         }),
-        expected_decision: Decision::NoMutation,
-        expected_matches: vec![MatchId::Search(BOTH_MATCH)],
+        // `expected_decision`/`expected_matches` are omitted: this test asserts
+        // directly below rather than through `test_matching`'s table loop.
         ..TestCase::default()
     };
     let batch = run_test_matching(&case);
@@ -349,8 +349,6 @@ fn test_baseline_selection_differs_from_extended() {
 fn test_baseline_equals_extended_without_extension() {
     let case = TestCase {
         search_match: true,
-        expected_decision: Decision::NoMutation,
-        expected_matches: vec![MatchId::Search(BOTH_MATCH)],
         ..TestCase::default()
     };
     let batch = run_test_matching(&case);
