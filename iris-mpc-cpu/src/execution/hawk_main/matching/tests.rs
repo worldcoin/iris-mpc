@@ -393,7 +393,9 @@ fn request_0(batch: &MatchResults) -> &RequestMatches {
 
 /// The match ids the pre-extension (baseline) search alone would have produced.
 fn baseline_match_ids(batch: &MatchResults, filter: Filter) -> Vec<MatchId> {
-    request_0(batch).select_pre(filter).collect_vec()
+    request_0(batch)
+        .select(filter, SearchVariant::Baseline)
+        .collect_vec()
 }
 
 fn run_test_matching(tc: &TestCase) -> MatchResults {

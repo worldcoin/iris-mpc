@@ -72,6 +72,54 @@ impl PendingBatch {
     }
 }
 
+/// A value in the form decisions are actually made on, plus the pre-extension
+/// counterfactual retained for supermatcher A/B metrics.
+///
+/// `baseline` is `Some` only when the supermatcher re-searched with a larger `ef` for at
+/// least one rotation of this request. When it is `None`, `effective` *is* the baseline:
+/// no extension happened, so the two would be identical.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WithBaseline<T> {
+    effective: T,
+    baseline: Option<T>,
+}
+
+/// Which form of the search results to evaluate.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum SearchVariant {
+    /// The results decisions are made on: extended, if the supermatcher ran.
+    Effective,
+    /// What the original search alone would have produced.
+    Baseline,
+}
+
+impl<T> WithBaseline<T> {
+    /// The requested form, falling back to `effective` when no extension happened.
+    fn get(&self, variant: SearchVariant) -> &T {
+        match variant {
+            SearchVariant::Effective => &self.effective,
+            SearchVariant::Baseline => self.baseline.as_ref().unwrap_or(&self.effective),
+        }
+    }
+
+    /// Every stored form: one item when no extension happened, two when it did.
+    fn variants(&self) -> impl Iterator<Item = &T> + '_ {
+        chain!(std::iter::once(&self.effective), &self.baseline)
+    }
+
+    /// True if the supermatcher extended this request's search.
+    fn was_extended(&self) -> bool {
+        self.baseline.is_some()
+    }
+
+    fn map<U>(&self, f: impl Fn(&T) -> U) -> WithBaseline<U> {
+        WithBaseline {
+            effective: f(&self.effective),
+            baseline: self.baseline.as_ref().map(f),
+        }
+    }
+}
+
 /// One request's search matches, split by how many eyes matched, plus per-eye
 /// saturation.
 ///
@@ -87,24 +135,18 @@ struct UnresolvedJoin {
 }
 
 struct PendingRequest {
-    /// Search matches from the (possibly supermatcher-extended) results.
-    join: UnresolvedJoin,
-    /// Search matches from the pre-extension results, present only for requests
-    /// whose search was extended by the supermatcher. `None` means no extension
-    /// happened.
-    pre_join: Option<UnresolvedJoin>,
+    /// Search matches, in the form decisions are made on plus the pre-extension baseline.
+    search: WithBaseline<UnresolvedJoin>,
     luc_ids: Vec<VectorId>,
     request_type: RequestType,
 }
 
 impl UnresolvedJoin {
-    /// Build by merging match results across all rotations
-    /// of both eyes. When `use_pre` is set, the pre-extension matches are used
-    /// for any rotation that was extended by the supermatcher (falling back to
-    /// the normal matches for rotations that were not extended).
+    /// Build by merging match results across all rotations of both eyes, reading the
+    /// requested form of each rotation's results.
     fn from_rotations(
         search_results: BothEyes<&VecRotations<HawkInsertPlan>>,
-        use_pre: bool,
+        variant: SearchVariant,
     ) -> UnresolvedJoin {
         let mut hits_by_id: MapEdges<BothEyes<bool>> = HashMap::new();
 
@@ -112,14 +154,13 @@ impl UnresolvedJoin {
         for (side, rotations) in izip!([LEFT, RIGHT], search_results) {
             // Merge matches from all rotations.
             for rotation in rotations.iter() {
-                let matches = if use_pre {
-                    rotation
+                let matches = match variant {
+                    SearchVariant::Effective => &rotation.classified.matches,
+                    SearchVariant::Baseline => rotation
                         .classified
                         .pre_extension
                         .as_ref()
-                        .unwrap_or(&rotation.classified.matches)
-                } else {
-                    &rotation.classified.matches
+                        .unwrap_or(&rotation.classified.matches),
                 };
                 if matches.saturated {
                     saturated[side] = true;
@@ -154,28 +195,28 @@ impl UnresolvedJoin {
         }
     }
 
-    /// Resolve the one-sided matches into a full join using the MPC-computed
-    /// `comparison_results` for the opposite eye.
-    fn resolve(
-        &self,
-        comparison_results: BothEyes<&MapEdges<bool>>,
-    ) -> VecEdges<(VectorId, BothEyes<bool>)> {
-        let mut full_join: Vec<_> = self
+    /// Resolve the one-eyed matches into a full join, using the MPC comparison results
+    /// for the opposite eye.
+    fn resolve(&self, comparison_results: BothEyes<&MapEdges<bool>>) -> ResolvedJoin {
+        let mut matches: Vec<_> = self
             .matched_both_eyes
             .iter()
             .map(|id| (*id, [true, true]))
             .collect();
         for id in &self.matched_one_eye[LEFT] {
             if let Some(right) = comparison_results[RIGHT].get(id) {
-                full_join.push((*id, [true, *right]));
+                matches.push((*id, [true, *right]));
             }
         }
         for id in &self.matched_one_eye[RIGHT] {
             if let Some(left) = comparison_results[LEFT].get(id) {
-                full_join.push((*id, [*left, true]));
+                matches.push((*id, [*left, true]));
             }
         }
-        full_join
+        ResolvedJoin {
+            matches,
+            saturated: self.saturated,
+        }
     }
 }
 
@@ -185,20 +226,23 @@ impl PendingRequest {
         luc_ids: Vec<VectorId>,
         request_type: RequestType,
     ) -> PendingRequest {
-        let join = UnresolvedJoin::from_rotations(search_results, false);
+        let effective = UnresolvedJoin::from_rotations(search_results, SearchVariant::Effective);
 
-        // Only build the pre-extension join when at least one rotation was
-        // actually extended by the supermatcher; otherwise it equals `join`.
-        let any_pre = search_results.iter().any(|rotations| {
+        // Only build the baseline join when at least one rotation was actually extended
+        // by the supermatcher; otherwise it would equal `effective`.
+        let was_extended = search_results.iter().any(|rotations| {
             rotations
                 .iter()
                 .any(|r| r.classified.pre_extension.is_some())
         });
-        let pre_join = any_pre.then(|| UnresolvedJoin::from_rotations(search_results, true));
+        let baseline = was_extended
+            .then(|| UnresolvedJoin::from_rotations(search_results, SearchVariant::Baseline));
 
         PendingRequest {
-            join,
-            pre_join,
+            search: WithBaseline {
+                effective,
+                baseline,
+            },
             luc_ids,
             request_type,
         }
@@ -211,33 +255,29 @@ impl PendingRequest {
         }
     }
 
+    /// The vectors whose `eye_to_compare` side must be compared via MPC before this
+    /// request's matches can be resolved.
+    ///
+    /// Baseline one-sided matches are included alongside the effective ones, so the
+    /// pre-extension outcome can be resolved from the same MPC results. This is needed
+    /// because a) a one-sided match in the baseline may become a two-sided match after
+    /// extension, and so would not appear in the effective `matched_one_eye`, and
+    /// b) baseline and extended results come from independent searches, so they can
+    /// diverge slightly given the approximate nature of HNSW search.
     fn ids_to_compare(&self, eye_to_compare: usize) -> VecEdges<VectorId> {
         let matched_eye = 1 - eye_to_compare;
-        let matched_one_side = &self.join.matched_one_eye[matched_eye];
+        let one_eyed = self
+            .search
+            .variants()
+            .flat_map(|join| join.matched_one_eye[matched_eye].iter());
 
-        // Include the pre-extension one-sided matches so the pre-extension outcome can be
-        // resolved from the same MPC results. This is needed because a) one-sided matches
-        // pre-extension may become two-sided matches post-extension, and thus would not appear
-        // in post-extension `matched_one_eye`, and b) initial and extended results are derived
-        // from independent searches, so could diverge (slightly) due to the approximate nature
-        // of HNSW search results.
-        let pre_matched_one_side = self
-            .pre_join
-            .iter()
-            .flat_map(|j| j.matched_one_eye[matched_eye].iter());
-
-        // Always add reauth target so is_match is computed even if the search didn't hit it.
+        // Always add the reauth target so is_match is computed even if the search missed it.
         let reauth_id = self.reauth_id().map(|(id, _)| id);
 
-        chain!(
-            matched_one_side,
-            pre_matched_one_side,
-            &self.luc_ids,
-            &reauth_id
-        )
-        .cloned()
-        .unique()
-        .collect_vec()
+        chain!(one_eyed, &self.luc_ids, &reauth_id)
+            .cloned()
+            .unique()
+            .collect_vec()
     }
 
     fn resolve(
@@ -262,18 +302,8 @@ impl PendingRequest {
             (id, or_rule, is_match)
         });
 
-        let join = ResolvedJoin {
-            matches: self.join.resolve(comparison_results),
-            saturated: self.join.saturated,
-        };
-        let pre_join = self.pre_join.as_ref().map(|pre| ResolvedJoin {
-            matches: pre.resolve(comparison_results),
-            saturated: pre.saturated,
-        });
-
         ResolvedRequest {
-            join,
-            pre_join,
+            search: self.search.map(|join| join.resolve(comparison_results)),
             luc_results,
             reauth_result,
             intra_matches,
@@ -366,27 +396,28 @@ fn record_extension_metrics(
     filter: Filter,
     prior_decisions: &[Decision],
 ) {
-    if !request.has_pre_extension() {
+    if !request.was_extended() {
         return;
     }
 
-    // Final extended search matching determination, including possible rejection due to
-    // saturation of extended search results
-    let (extended_decision, _) = uniqueness_is_match(request.select(filter), prior_decisions);
-
-    let not_supermatch = |id: &MatchId| !matches!(id, Supermatch);
-
-    // Extended matching determination, excluding rejection due to saturation of extended search
-    // results -- did we find a real match in the extended results?
-    let (extended_match, _) = uniqueness_is_match(
-        request.select(filter).filter(not_supermatch),
+    let (extended_decision, _) = uniqueness_is_match(
+        request.select(filter, SearchVariant::Effective),
         prior_decisions,
     );
 
-    // Matching determination pre-extension -- this exludes rejection due to saturated search
-    // results, since the results have not been expanded.
+    let not_supermatch = |id: &MatchId| !matches!(id, Supermatch);
+
+    let (extended_match, _) = uniqueness_is_match(
+        request
+            .select(filter, SearchVariant::Effective)
+            .filter(not_supermatch),
+        prior_decisions,
+    );
+
     let (pre_match, _) = uniqueness_is_match(
-        request.select_pre(filter).filter(not_supermatch),
+        request
+            .select(filter, SearchVariant::Baseline)
+            .filter(not_supermatch),
         prior_decisions,
     );
 
@@ -445,7 +476,10 @@ impl MatchResults {
 
             let decision = match request.normal.request_type {
                 RequestType::Uniqueness(UniquenessRequest { skip_persistence }) => {
-                    let (is_match, bsm) = uniqueness_is_match(request.select(filter), &decisions);
+                    let (is_match, bsm) = uniqueness_is_match(
+                        request.select(filter, SearchVariant::Effective),
+                        &decisions,
+                    );
                     because_supermatch = bsm;
 
                     record_extension_metrics(request, filter, &decisions);
@@ -486,7 +520,11 @@ impl MatchResults {
     pub fn select(&self, filter: Filter) -> VecRequests<Vec<MatchId>> {
         self.0
             .iter()
-            .map(|step| step.select(filter).collect_vec())
+            .map(|request| {
+                request
+                    .select(filter, SearchVariant::Effective)
+                    .collect_vec()
+            })
             .collect_vec()
     }
 }
@@ -503,12 +541,8 @@ struct ResolvedJoin {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ResolvedRequest {
-    /// Search matches from the (possibly supermatcher-extended) results.
-    join: ResolvedJoin,
-    /// Search matches from the pre-extension results, present only when this
-    /// request's search was extended by the supermatcher. `None` means no
-    /// extension happened, in which case the pre-extension outcome equals `join`.
-    pre_join: Option<ResolvedJoin>,
+    /// Resolved search matches, in the form decisions are made on plus the baseline.
+    search: WithBaseline<ResolvedJoin>,
     luc_results: VecEdges<(VectorId, BothEyes<bool>)>,
     reauth_result: Option<(VectorId, UseOrRule, BothEyes<bool>)>,
     intra_matches: Vec<IntraMatch>,
@@ -517,25 +551,12 @@ struct ResolvedRequest {
 
 impl ResolvedRequest {
     /// The IDs of the vectors that matched this request.
-    fn select(&self, filter: Filter) -> impl Iterator<Item = MatchId> + '_ {
-        self.select_with(filter, &self.join)
-    }
+    ///
+    /// The luc, reauth and intra-batch contributions are unaffected by supermatcher
+    /// extension, so only the search join varies with `variant`.
+    fn select(&self, filter: Filter, variant: SearchVariant) -> impl Iterator<Item = MatchId> + '_ {
+        let join = self.search.get(variant);
 
-    /// Like `select`, but using the pre-extension search matches. When this
-    /// request's search was not extended by the supermatcher, this is identical
-    /// to `select`.
-    fn select_pre(&self, filter: Filter) -> impl Iterator<Item = MatchId> + '_ {
-        self.select_with(filter, self.pre_join.as_ref().unwrap_or(&self.join))
-    }
-
-    /// The IDs of the vectors that matched this request, evaluated against a
-    /// specific resolved `join` (the luc/reauth/intra contributions are
-    /// unaffected by supermatcher extension and always use `self`).
-    fn select_with<'a>(
-        &'a self,
-        filter: Filter,
-        join: &'a ResolvedJoin,
-    ) -> impl Iterator<Item = MatchId> + 'a {
         let search = join
             .matches
             .iter()
@@ -604,29 +625,21 @@ struct RequestMatches {
 }
 
 impl RequestMatches {
-    /// The IDs of the vectors that matched at least partially.
-    fn select(&self, filter: Filter) -> impl Iterator<Item = MatchId> + '_ {
+    /// The IDs of the vectors that matched at least partially, in both orientations.
+    fn select(&self, filter: Filter, variant: SearchVariant) -> impl Iterator<Item = MatchId> + '_ {
         chain!(
-            matches!(filter.orient, Only(Normal) | Both).then_some(self.normal.select(filter)),
-            matches!(filter.orient, Only(Mirror) | Both).then_some(self.mirror.select(filter)),
+            matches!(filter.orient, Only(Normal) | Both)
+                .then_some(self.normal.select(filter, variant)),
+            matches!(filter.orient, Only(Mirror) | Both)
+                .then_some(self.mirror.select(filter, variant)),
         )
         .flatten()
     }
 
-    /// Like `select`, but using the pre-extension search matches on both
-    /// orientations. Identical to `select` for requests that were not extended.
-    fn select_pre(&self, filter: Filter) -> impl Iterator<Item = MatchId> + '_ {
-        chain!(
-            matches!(filter.orient, Only(Normal) | Both).then_some(self.normal.select_pre(filter)),
-            matches!(filter.orient, Only(Mirror) | Both).then_some(self.mirror.select_pre(filter)),
-        )
-        .flatten()
-    }
-
-    /// True if this request's search was extended by the supermatcher on either
-    /// orientation, so a pre-extension comparison is meaningful.
-    fn has_pre_extension(&self) -> bool {
-        self.normal.pre_join.is_some() || self.mirror.pre_join.is_some()
+    /// True if the supermatcher extended this request's search in either orientation,
+    /// so a baseline comparison is meaningful.
+    fn was_extended(&self) -> bool {
+        self.normal.search.was_extended() || self.mirror.search.was_extended()
     }
 }
 
