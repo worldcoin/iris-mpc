@@ -31,9 +31,8 @@
 
 use super::{
     intra_batch::IntraMatch, BothEyes, HawkInsertPlan, MapEdges, Orientation, StoreId, UseOrRule,
-    VecEdges, VecRequests, VectorId, LEFT, RIGHT,
+    VecEdges, VecRequests, VecRotations, VectorId, LEFT, RIGHT,
 };
-use crate::execution::hawk_main::VecRotations;
 use itertools::{chain, izip, Itertools};
 use std::collections::HashMap;
 
@@ -145,22 +144,19 @@ impl Decision {
     }
 }
 
-// TODO: This could move to `BatchQuery` and maybe use the original types in `smpc_request.rs`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum RequestType {
     /// A request to check if a vector is unique.
-    Uniqueness(UniquenessRequest),
+    Uniqueness { skip_persistence: bool },
     /// A request to check if a vector is unique without inserting it.
     IdentityMatchCheck,
     /// A request to check if a vector matches a target and replace it.
-    Reauth(Option<(VectorId, UseOrRule)>),
+    Reauth {
+        /// Target vector id and whether to use an OR-rule for comparison
+        target: Option<(VectorId, UseOrRule)>,
+    },
     /// Other features.
     Unsupported,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct UniquenessRequest {
-    pub skip_persistence: bool,
 }
 
 /// A value in the form decisions are actually made on, plus the pre-extension
@@ -306,7 +302,7 @@ impl PendingRequest {
 
     fn reauth_id(&self) -> Option<(VectorId, UseOrRule)> {
         match self.request_type {
-            RequestType::Reauth(r) => r,
+            RequestType::Reauth { target } => target,
             _ => None,
         }
     }
@@ -594,7 +590,7 @@ impl ResolvedBatch {
             let mut only_supermatch = false;
 
             let decision = match request.normal.request_type {
-                RequestType::Uniqueness(UniquenessRequest { skip_persistence }) => {
+                RequestType::Uniqueness { skip_persistence } => {
                     let outcome = evaluate_uniqueness(
                         request.select(filter, SearchVariant::Effective),
                         &decisions,
@@ -616,7 +612,7 @@ impl ResolvedBatch {
                 // Identity Match Check request. Nothing to do.
                 RequestType::IdentityMatchCheck => NoMutation,
                 // Reauth request.
-                RequestType::Reauth(_) => match request.normal.reauth_result {
+                RequestType::Reauth { .. } => match request.normal.reauth_result {
                     Some((id, or_rule, matches)) if filter.reauth_rule(or_rule, matches) => {
                         ReauthUpdate(id)
                     }

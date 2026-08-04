@@ -117,7 +117,7 @@ use itertools::{izip, Itertools};
 use matching::{
     Decision, Filter, MatchId,
     OnlyOrBoth::{Both, Only},
-    RequestType, UniquenessRequest, DECISION_FILTER,
+    RequestType, DECISION_FILTER,
 };
 use rand::{thread_rng, Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
@@ -1214,28 +1214,30 @@ impl HawkRequest {
             .iter()
             .enumerate()
             .map(|(i, request_type)| match request_type.as_str() {
-                UNIQUENESS_MESSAGE_TYPE => Uniqueness(UniquenessRequest {
+                UNIQUENESS_MESSAGE_TYPE => Uniqueness {
                     skip_persistence: *self.batch.skip_persistence.get(i).unwrap(),
-                }),
-                REAUTH_MESSAGE_TYPE => Reauth(if orient == Orientation::Normal {
-                    let request_id = &self.batch.request_ids[i];
+                },
+                REAUTH_MESSAGE_TYPE => Reauth {
+                    target: if orient == Orientation::Normal {
+                        let request_id = &self.batch.request_ids[i];
 
-                    let or_rule = *self
-                        .batch
-                        .reauth_use_or_rule
-                        .get(request_id)
-                        .unwrap_or(&false);
+                        let or_rule = *self
+                            .batch
+                            .reauth_use_or_rule
+                            .get(request_id)
+                            .unwrap_or(&false);
 
-                    self.batch
-                        .reauth_target_indices
-                        .get(request_id)
-                        .map(|&idx| {
-                            let target_id = registry.from_0_indices(&[idx])[0];
-                            (target_id, or_rule)
-                        })
-                } else {
-                    None
-                }),
+                        self.batch
+                            .reauth_target_indices
+                            .get(request_id)
+                            .map(|&idx| {
+                                let target_id = registry.from_0_indices(&[idx])[0];
+                                (target_id, or_rule)
+                            })
+                    } else {
+                        None
+                    },
+                },
                 RESET_CHECK_MESSAGE_TYPE => IdentityMatchCheck,
                 RECOVERY_CHECK_MESSAGE_TYPE => IdentityMatchCheck,
                 _ => Unsupported,

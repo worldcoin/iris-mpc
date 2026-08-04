@@ -258,9 +258,9 @@ impl Default for TestCase {
             pre_extension: None,
             expected_decision: NoMutation,
             expected_matches: vec![],
-            request_type: RequestType::Uniqueness(UniquenessRequest {
+            request_type: RequestType::Uniqueness {
                 skip_persistence: false,
-            }),
+            },
         }
     }
 }
@@ -279,9 +279,9 @@ fn test_matching() {
         TestCase {
             search_match: false,
             other_side_match: false,
-            request_type: RequestType::Uniqueness(UniquenessRequest {
+            request_type: RequestType::Uniqueness {
                 skip_persistence: true,
-            }),
+            },
             expected_decision: Decision::UniqueInsertSkipped,
             expected_matches: vec![],
             ..TestCase::default()
@@ -318,14 +318,18 @@ fn test_matching() {
         },
         // ### Reauth requests
         TestCase {
-            request_type: RequestType::Reauth(Some((REAUTH, false as UseOrRule))),
+            request_type: RequestType::Reauth {
+                target: Some((REAUTH, false as UseOrRule)),
+            },
             reauth_match: true,
             expected_decision: Decision::ReauthUpdate(REAUTH),
             expected_matches: vec![MatchId::Reauth(REAUTH)],
             ..TestCase::default()
         },
         TestCase {
-            request_type: RequestType::Reauth(Some((REAUTH, false as UseOrRule))),
+            request_type: RequestType::Reauth {
+                target: Some((REAUTH, false as UseOrRule)),
+            },
             reauth_match: false,
             expected_decision: Decision::NoMutation,
             expected_matches: vec![],
@@ -363,9 +367,9 @@ fn test_matching() {
         },
         // Saturated with skip_persistence → still NoMutation (supermatch overrides)
         TestCase {
-            request_type: RequestType::Uniqueness(UniquenessRequest {
+            request_type: RequestType::Uniqueness {
                 skip_persistence: true,
-            }),
+            },
             saturated: [true, false],
             expected_decision: Decision::NoMutation,
             expected_matches: vec![MatchId::Supermatch],
@@ -718,7 +722,7 @@ fn run_test_matching(tc: &TestCase) -> MatchResults {
     // it was already inspected and optimize it away, but we do not.
 
     // For a reauth request, we will inspect the reauth target vector.
-    if matches!(tc.request_type, RequestType::Reauth(_)) {
+    if matches!(tc.request_type, RequestType::Reauth { .. }) {
         expect_left.push(REAUTH);
         expect_right.push(REAUTH);
     }
@@ -764,7 +768,7 @@ fn run_test_matching(tc: &TestCase) -> MatchResults {
     }
 
     // Make the reauth request match.
-    if matches!(tc.request_type, RequestType::Reauth(_)) {
+    if matches!(tc.request_type, RequestType::Reauth { .. }) {
         *comparison_results[LEFT][req_i].get_mut(&REAUTH).unwrap() = tc.reauth_match;
         *comparison_results[RIGHT][req_i].get_mut(&REAUTH).unwrap() = tc.reauth_match;
     }
