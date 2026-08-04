@@ -424,6 +424,82 @@ fn test_baseline_equals_extended_without_extension() {
     assert_equal_sets(&baseline, &extended[0], "baseline equals extended");
 }
 
+/// The extended search found a full match the original search had missed.
+#[test]
+fn test_extension_outcome_found_new_match() {
+    let case = TestCase {
+        search_match: true,
+        saturated: [false, false],
+        pre_extension: Some(BaselineSearch {
+            matched: [
+                vec![LEFT_MATCH, BOTH_FOUND, BASELINE_ONLY],
+                vec![RIGHT_MATCH],
+            ],
+            saturated: [true, false],
+        }),
+        // `expected_decision` / `expected_matches` are omitted: this test asserts on
+        // `extension_outcome` directly and never goes through `test_matching`'s loop.
+        ..TestCase::default()
+    };
+    let results = run_test_matching(&case);
+    let request = request_0(&results);
+
+    assert!(request.was_extended());
+    assert_eq!(
+        extension_outcome(request, DECISION_FILTER, &[]),
+        ExtensionOutcome {
+            extended_decision: true,
+            extended_match: true,
+            // Saturation is excluded, so the original search alone found nothing.
+            baseline_match: false,
+        },
+    );
+}
+
+/// The extended search lost a full match the original search had found.
+#[test]
+fn test_extension_outcome_lost_match() {
+    let case = TestCase {
+        search_match: false,
+        saturated: [false, false],
+        pre_extension: Some(BaselineSearch {
+            matched: [
+                vec![LEFT_MATCH, BOTH_FOUND, BOTH_MATCH],
+                vec![RIGHT_MATCH, BOTH_MATCH],
+            ],
+            saturated: [false, false],
+        }),
+        ..TestCase::default()
+    };
+    let results = run_test_matching(&case);
+    let request = request_0(&results);
+
+    assert!(request.was_extended());
+    assert_eq!(
+        extension_outcome(request, DECISION_FILTER, &[]),
+        ExtensionOutcome {
+            extended_decision: false,
+            extended_match: false,
+            baseline_match: true,
+        },
+    );
+}
+
+/// Without an extension the two views agree, so nothing is reported as changed.
+#[test]
+fn test_extension_outcome_without_extension() {
+    let case = TestCase {
+        search_match: true,
+        ..TestCase::default()
+    };
+    let results = run_test_matching(&case);
+    let request = request_0(&results);
+
+    assert!(!request.was_extended());
+    let outcome = extension_outcome(request, DECISION_FILTER, &[]);
+    assert_eq!(outcome.baseline_match, outcome.extended_match);
+}
+
 // ### Hypothetical search results
 /// Left matches; right was inspected but does not match.
 const BOTH_FOUND: VectorId = VectorId::from_serial_id(1);

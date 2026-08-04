@@ -400,45 +400,44 @@ fn evaluate_uniqueness(
     }
 }
 
-/// Supermatcher A/B comparison: for requests whose search was extended by the
-/// supermatcher, compare the extended search-match outcome against what the
-/// pre-extension search alone would have produced. The `Supermatch` (saturation)
-/// signal is excluded so we isolate whether the extended search surfaced a
-/// *real* neighbor match that the original search missed.
-fn record_extension_metrics(
+/// Supermatcher A/B comparison: the three match determinations an extended search is
+/// judged by. Only meaningful for requests where `RequestMatches::was_extended()`.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct ExtensionOutcome {
+    /// Final call on the extended results, including rejection due to saturation.
+    extended_decision: bool,
+    /// The extended results ignoring saturation: did the extended search surface a
+    /// *real* neighbour match that the original search missed?
+    extended_match: bool,
+    /// What the original search alone would have concluded. Saturation is excluded here
+    /// too, since those results were never expanded.
+    baseline_match: bool,
+}
+
+fn extension_outcome(
     request: &RequestMatches,
     filter: Filter,
     prior_decisions: &[Decision],
-) {
-    if !request.was_extended() {
-        return;
-    }
-
-    let extended_decision = evaluate_uniqueness(
-        request.select(filter, SearchVariant::Effective),
-        prior_decisions,
-    )
-    .is_match;
-
+) -> ExtensionOutcome {
     let not_supermatch = |id: &MatchId| !matches!(id, Supermatch);
+    let evaluate = |variant, exclude_supermatch: bool| {
+        let ids = request.select(filter, variant);
+        if exclude_supermatch {
+            evaluate_uniqueness(ids.filter(not_supermatch), prior_decisions).is_match
+        } else {
+            evaluate_uniqueness(ids, prior_decisions).is_match
+        }
+    };
 
-    let extended_match = evaluate_uniqueness(
-        request
-            .select(filter, SearchVariant::Effective)
-            .filter(not_supermatch),
-        prior_decisions,
-    )
-    .is_match;
+    ExtensionOutcome {
+        extended_decision: evaluate(SearchVariant::Effective, false),
+        extended_match: evaluate(SearchVariant::Effective, true),
+        baseline_match: evaluate(SearchVariant::Baseline, true),
+    }
+}
 
-    let pre_match = evaluate_uniqueness(
-        request
-            .select(filter, SearchVariant::Baseline)
-            .filter(not_supermatch),
-        prior_decisions,
-    )
-    .is_match;
-
-    match (pre_match, extended_decision) {
+fn record_extension_metrics(outcome: &ExtensionOutcome) {
+    match (outcome.baseline_match, outcome.extended_decision) {
         (false, true) => {
             metrics::counter!("supermatcher_extended_search_changed_decision_to_reject")
                 .increment(1);
@@ -450,7 +449,7 @@ fn record_extension_metrics(
         _ => {}
     }
 
-    match (pre_match, extended_match) {
+    match (outcome.baseline_match, outcome.extended_match) {
         (false, true) => {
             metrics::counter!("supermatcher_extended_search_found_new_match").increment(1);
         }
@@ -460,7 +459,7 @@ fn record_extension_metrics(
         _ => {}
     }
 
-    // Unconditionally count when a request had some pre-extension in one of its searches.
+    // Unconditionally count when a request had an extended search.
     metrics::counter!("supermatcher_extended_search_requests").increment(1);
 }
 
@@ -500,7 +499,9 @@ impl MatchResults {
                     because_supermatch = outcome.only_supermatch;
                     let is_match = outcome.is_match;
 
-                    record_extension_metrics(request, filter, &decisions);
+                    if request.was_extended() {
+                        record_extension_metrics(&extension_outcome(request, filter, &decisions));
+                    }
 
                     if is_match {
                         NoMutation
