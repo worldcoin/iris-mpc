@@ -485,7 +485,10 @@ fn test_extension_outcome_lost_match() {
     );
 }
 
-/// Without an extension the two views agree, so nothing is reported as changed.
+/// Without an extension *and* without saturation, all three determinations agree: this
+/// fixture has `saturated: [false, false]`, so `extended_decision` (which includes
+/// saturation) coincides with `extended_match`/`baseline_match` (which exclude it). A
+/// fixture with saturation would not pin this equality.
 #[test]
 fn test_extension_outcome_without_extension() {
     let case = TestCase {
@@ -619,7 +622,7 @@ fn run_test_matching(tc: &TestCase) -> MatchResults {
     let request_types = vec![tc.request_type];
     let pending = PendingBatch::new(&search_results, &luc_ids, request_types);
 
-    let missing_ids = pending.ids_to_compare();
+    let ids_to_compare = pending.ids_to_compare();
 
     // We will inspect the other side of partial search results.
     let mut expect_left = vec![RIGHT_MATCH, LUC_REQUESTED, LUC_REQUESTED_DUP];
@@ -653,36 +656,37 @@ fn run_test_matching(tc: &TestCase) -> MatchResults {
     let expect_right = expect_right.into_iter().unique().collect_vec();
 
     assert_equal_sets(
-        &missing_ids[LEFT][req_i],
+        &ids_to_compare[LEFT][req_i],
         &expect_left,
-        "Left side missing IDs",
+        "Left side ids to compare",
     );
     assert_equal_sets(
-        &missing_ids[RIGHT][req_i],
+        &ids_to_compare[RIGHT][req_i],
         &expect_right,
-        "Right side missing IDs",
+        "Right side ids to compare",
     );
 
-    // Simulate `calculate_missing_is_match(..)`.
+    // Simulate the caller's `is_match_batch(..)` (in `hawk_main/is_match_batch.rs`),
+    // which computes these comparisons and passes them into `PendingBatch::resolve`.
     // Make it match or not depending on `with_other_side_match`.
-    let mut missing_is_match = [vec![HashMap::new()], vec![HashMap::new()]];
-    for id in &missing_ids[LEFT][req_i] {
-        missing_is_match[LEFT][req_i].insert(*id, tc.other_side_match);
+    let mut comparison_results = [vec![HashMap::new()], vec![HashMap::new()]];
+    for id in &ids_to_compare[LEFT][req_i] {
+        comparison_results[LEFT][req_i].insert(*id, tc.other_side_match);
     }
-    for id in &missing_ids[RIGHT][req_i] {
-        missing_is_match[RIGHT][req_i].insert(*id, false);
+    for id in &ids_to_compare[RIGHT][req_i] {
+        comparison_results[RIGHT][req_i].insert(*id, false);
     }
 
     // Make the reauth request match.
     if matches!(tc.request_type, RequestType::Reauth(_)) {
-        *missing_is_match[LEFT][req_i].get_mut(&REAUTH).unwrap() = tc.reauth_match;
-        *missing_is_match[RIGHT][req_i].get_mut(&REAUTH).unwrap() = tc.reauth_match;
+        *comparison_results[LEFT][req_i].get_mut(&REAUTH).unwrap() = tc.reauth_match;
+        *comparison_results[RIGHT][req_i].get_mut(&REAUTH).unwrap() = tc.reauth_match;
     }
 
     // Simulate `intra_batch_is_match(..)`
     let intra_matches = vec![vec![]];
 
-    let resolved = pending.resolve(&missing_is_match, intra_matches);
+    let resolved = pending.resolve(&comparison_results, intra_matches);
 
     // Do the same with mirrored matching. Amazingly, we got exactly the same result in this test.
     let resolved_mirror = resolved.clone();

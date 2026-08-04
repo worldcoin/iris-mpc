@@ -6,17 +6,18 @@
 //! every id seen on one eye only, we compare the other eye explicitly via MPC, and only
 //! then apply the final matching logic.
 //!
-//! The pipeline runs in three stages:
+//! The pipeline runs in two stages:
 //!
 //! 1. [`PendingBatch::new`] organizes the nearest-neighbour results for one orientation.
 //!    Then:
 //!    1. [`PendingBatch::ids_to_compare`] gives the vectors found on one eye only.
 //!    2. The caller computes their `is_match` on the other eye with MPC.
-//!    3. [`PendingBatch::resolve`] takes those results back.
+//!    3. [`PendingBatch::resolve`] takes those results back, producing a
+//!       [`ResolvedBatch`].
 //! 2. [`ResolvedBatch::decide`] combines the normal and mirror orientations and makes the
 //!    final decision for every request. It is also the only place per-batch supermatcher
-//!    metrics are emitted.
-//! 3. [`MatchResults`] exposes the decisions and the matched ids for reporting.
+//!    metrics are emitted. The resulting [`MatchResults`] exposes those decisions and the
+//!    matched ids for reporting.
 //!
 //! Terms used throughout:
 //!
@@ -211,9 +212,11 @@ enum SearchVariant {
 }
 
 // ===========================================================================
-// Stage 1: join the two eyes' search results
+// Stage 1: join the two eyes' search results, then resolve one-eyed matches via MPC
 // ===========================================================================
 
+/// One orientation's per-request search results, not yet resolved against the other
+/// eye. Consumed by [`PendingBatch::resolve`].
 pub struct PendingBatch(VecRequests<PendingRequest>);
 
 impl PendingBatch {
@@ -264,6 +267,8 @@ impl PendingBatch {
     }
 }
 
+/// One request's search results for one orientation, not yet resolved against the
+/// other eye.
 struct PendingRequest {
     /// Search matches, in the form decisions are made on plus the pre-extension baseline.
     search: WithBaseline<UnresolvedJoin>,
@@ -457,13 +462,16 @@ impl UnresolvedJoin {
 }
 
 // ===========================================================================
-// Stage 2: resolve one-eyed matches with the MPC comparison results
+// Resolved types: request and batch state produced by Stage 1
 // ===========================================================================
 
-/// Results for a batch of requests.
+/// All requests for one orientation, with the other-eye comparisons applied. Consumed
+/// by [`Self::decide`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedBatch(VecRequests<ResolvedRequest>);
 
+/// One resolved request: search, LUC, reauth, and intra-batch matches for one
+/// orientation, after MPC resolution.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ResolvedRequest {
     /// Resolved search matches, in the form decisions are made on plus the baseline.
@@ -521,7 +529,7 @@ struct ResolvedJoin {
 }
 
 // ===========================================================================
-// Stage 3: combine orientations and decide
+// Stage 2: combine orientations, decide, and expose results
 // ===========================================================================
 
 /// Combines the results from mirrored checks.
@@ -730,19 +738,20 @@ fn extension_outcome(
     prior_decisions: &[Decision],
 ) -> ExtensionOutcome {
     let not_supermatch = |id: &MatchId| !matches!(id, Supermatch);
-    let evaluate = |variant, exclude_supermatch: bool| {
-        let ids = request.select(filter, variant);
-        if exclude_supermatch {
-            evaluate_uniqueness(ids.filter(not_supermatch), prior_decisions).is_match
-        } else {
-            evaluate_uniqueness(ids, prior_decisions).is_match
-        }
+    let is_match =
+        |variant| evaluate_uniqueness(request.select(filter, variant), prior_decisions).is_match;
+    let is_real_match = |variant| {
+        evaluate_uniqueness(
+            request.select(filter, variant).filter(not_supermatch),
+            prior_decisions,
+        )
+        .is_match
     };
 
     ExtensionOutcome {
-        extended_decision: evaluate(SearchVariant::Effective, false),
-        extended_match: evaluate(SearchVariant::Effective, true),
-        baseline_match: evaluate(SearchVariant::Baseline, true),
+        extended_decision: is_match(SearchVariant::Effective),
+        extended_match: is_real_match(SearchVariant::Effective),
+        baseline_match: is_real_match(SearchVariant::Baseline),
     }
 }
 
