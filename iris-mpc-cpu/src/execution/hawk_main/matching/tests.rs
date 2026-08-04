@@ -129,6 +129,9 @@ struct TestCase {
     reauth_match: bool,
     /// Saturated flags per eye: [left, right]. Simulates super-matcher.
     saturated: BothEyes<bool>,
+    /// Simulates a supermatcher extended search: what the original search alone found.
+    /// `None` means no extension happened.
+    pre_extension: Option<BaselineSearch>,
     expected_decision: Decision,
     expected_matches: Vec<MatchId>,
     request_type: RequestType,
@@ -141,6 +144,7 @@ impl Default for TestCase {
             other_side_match: false,
             reauth_match: false,
             saturated: [false, false],
+            pre_extension: None,
             expected_decision: NoMutation,
             expected_matches: vec![],
             request_type: RequestType::Uniqueness(UniquenessRequest {
@@ -263,6 +267,38 @@ fn test_matching() {
             expected_matches: vec![],
             ..TestCase::default()
         },
+        // ### Super-matcher extended search
+        // The extended search found BOTH_MATCH, which the original search missed;
+        // extending also resolved the left eye's saturation.
+        TestCase {
+            search_match: true,
+            saturated: [false, false],
+            pre_extension: Some(BaselineSearch {
+                matched: [
+                    vec![LEFT_MATCH, BOTH_FOUND, BASELINE_ONLY],
+                    vec![RIGHT_MATCH],
+                ],
+                saturated: [true, false],
+            }),
+            expected_decision: Decision::NoMutation,
+            expected_matches: vec![MatchId::Search(BOTH_MATCH)],
+            ..TestCase::default()
+        },
+        // The extended search *lost* a match the original search had found.
+        TestCase {
+            search_match: false,
+            saturated: [false, false],
+            pre_extension: Some(BaselineSearch {
+                matched: [
+                    vec![LEFT_MATCH, BOTH_FOUND, BOTH_MATCH],
+                    vec![RIGHT_MATCH, BOTH_MATCH],
+                ],
+                saturated: [false, false],
+            }),
+            expected_decision: Decision::UniqueInsert,
+            expected_matches: vec![],
+            ..TestCase::default()
+        },
     ];
 
     for case in &cases {
@@ -280,6 +316,50 @@ fn test_matching() {
     }
 }
 
+/// The pre-extension (baseline) view of a request is selected independently of the
+/// extended view: here the original search found no full match, only saturation,
+/// while the extended search found one.
+#[test]
+fn test_baseline_selection_differs_from_extended() {
+    let case = TestCase {
+        search_match: true,
+        saturated: [false, false],
+        pre_extension: Some(BaselineSearch {
+            matched: [
+                vec![LEFT_MATCH, BOTH_FOUND, BASELINE_ONLY],
+                vec![RIGHT_MATCH],
+            ],
+            saturated: [true, false],
+        }),
+        expected_decision: Decision::NoMutation,
+        expected_matches: vec![MatchId::Search(BOTH_MATCH)],
+        ..TestCase::default()
+    };
+    let batch = run_test_matching(&case);
+
+    let extended = batch.select(HawkResult::MATCH_IDS_FILTER);
+    assert_equal_sets(&extended[0], &[MatchId::Search(BOTH_MATCH)], "extended");
+
+    let baseline = baseline_match_ids(&batch, HawkResult::MATCH_IDS_FILTER);
+    assert_equal_sets(&baseline, &[MatchId::Supermatch], "baseline");
+}
+
+/// A request with no extended search has no separate baseline: the two views agree.
+#[test]
+fn test_baseline_equals_extended_without_extension() {
+    let case = TestCase {
+        search_match: true,
+        expected_decision: Decision::NoMutation,
+        expected_matches: vec![MatchId::Search(BOTH_MATCH)],
+        ..TestCase::default()
+    };
+    let batch = run_test_matching(&case);
+
+    let extended = batch.select(HawkResult::MATCH_IDS_FILTER);
+    let baseline = baseline_match_ids(&batch, HawkResult::MATCH_IDS_FILTER);
+    assert_equal_sets(&baseline, &extended[0], "baseline equals extended");
+}
+
 // ### Hypothetical search results
 /// Left matches; right was inspected but does not match.
 const BOTH_FOUND: VectorId = VectorId::from_serial_id(1);
@@ -295,6 +375,28 @@ const LUC_REQUESTED: VectorId = VectorId::from_serial_id(5);
 const LUC_REQUESTED_DUP: VectorId = LEFT_MATCH;
 /// The request wants us to reauthenticate this ID.
 const REAUTH: VectorId = VectorId::from_serial_id(6);
+/// Only the pre-extension (baseline) search found this, on the left eye.
+const BASELINE_ONLY: VectorId = VectorId::from_serial_id(7);
+
+/// A simulated pre-extension (baseline) search result: what each eye's search found
+/// *before* the supermatcher re-searched with a larger `ef`.
+#[derive(Clone, Debug)]
+struct BaselineSearch {
+    /// Matching vector ids per eye: `[left, right]`.
+    matched: BothEyes<Vec<VectorId>>,
+    /// Saturation flag per eye: `[left, right]`.
+    saturated: BothEyes<bool>,
+}
+
+/// The single request in a one-request test batch.
+fn request_0(batch: &BatchStep3) -> &Step3 {
+    &batch.0[0]
+}
+
+/// The match ids the pre-extension (baseline) search alone would have produced.
+fn baseline_match_ids(batch: &BatchStep3, filter: Filter) -> Vec<MatchId> {
+    request_0(batch).select_pre(filter).collect_vec()
+}
 
 fn run_test_matching(tc: &TestCase) -> BatchStep3 {
     let req_i = 0;
@@ -310,42 +412,64 @@ fn run_test_matching(tc: &TestCase) -> BatchStep3 {
     }
 
     let saturated = tc.saturated;
-    let search_result =
-        |match_ids: Vec<VectorId>, non_match_ids: Vec<VectorId>, side_saturated: bool| {
-            let links_unstructured = vec![chain!(match_ids.clone(), non_match_ids).collect_vec()];
+    let search_result = |match_ids: Vec<VectorId>,
+                         non_match_ids: Vec<VectorId>,
+                         side_saturated: bool,
+                         baseline: Option<(Vec<VectorId>, bool)>| {
+        let links_unstructured = vec![chain!(match_ids.clone(), non_match_ids).collect_vec()];
 
-            let matches: Vec<_> = match_ids.iter().cloned().map(|v| (v, distance())).collect();
-            let insert_plan = HawkInsertPlan {
-                classified: ClassifiedMatches {
-                    anon_stats_matches: SaturableMatches {
-                        results: matches.clone(),
-                        saturated: side_saturated,
-                    },
-                    matches: SaturableMatches {
-                        results: matches,
-                        saturated: side_saturated,
-                    },
-                    pre_extension: None,
+        let as_results =
+            |ids: &[VectorId]| -> Vec<_> { ids.iter().cloned().map(|v| (v, distance())).collect() };
+
+        let matches: Vec<_> = as_results(&match_ids);
+        let pre_extension = baseline.map(|(ids, saturated)| SaturableMatches {
+            results: as_results(&ids),
+            saturated,
+        });
+
+        let insert_plan = HawkInsertPlan {
+            classified: ClassifiedMatches {
+                anon_stats_matches: SaturableMatches {
+                    results: matches.clone(),
+                    saturated: side_saturated,
                 },
-                plan: InsertPlanV {
-                    query: Aby3Query::new(QueryId::new()),
-                    links: links_unstructured,
-                    update_ep: UpdateEntryPoint::False,
-                    as_of: 0,
+                matches: SaturableMatches {
+                    results: matches,
+                    saturated: side_saturated,
                 },
-            };
-            VecRotations::from(vec![
-                insert_plan;
-                HAWK_BASE_ROTATIONS_MASK.count_ones() as usize
-            ])
+                pre_extension,
+            },
+            plan: InsertPlanV {
+                query: Aby3Query::new(QueryId::new()),
+                links: links_unstructured,
+                update_ep: UpdateEntryPoint::False,
+                as_of: 0,
+            },
         };
+        VecRotations::from(vec![
+            insert_plan;
+            HAWK_BASE_ROTATIONS_MASK.count_ones() as usize
+        ])
+    };
+
+    let baseline_for = |side: usize| {
+        tc.pre_extension
+            .as_ref()
+            .map(|b| (b.matched[side].clone(), b.saturated[side]))
+    };
 
     let search_results = [
-        vec![search_result(match_left, non_match_left, saturated[LEFT])],
+        vec![search_result(
+            match_left,
+            non_match_left,
+            saturated[LEFT],
+            baseline_for(LEFT),
+        )],
         vec![search_result(
             match_right,
             non_match_right,
             saturated[RIGHT],
+            baseline_for(RIGHT),
         )],
     ];
     let luc_ids = vec![vec![LUC_REQUESTED, LUC_REQUESTED_DUP]];
@@ -366,6 +490,24 @@ fn run_test_matching(tc: &TestCase) -> BatchStep3 {
         expect_left.push(REAUTH);
         expect_right.push(REAUTH);
     }
+
+    // Baseline one-sided matches also need an other-eye comparison, so that the
+    // pre-extension outcome can be resolved from the same MPC results.
+    if let Some(baseline) = &tc.pre_extension {
+        for id in &baseline.matched[LEFT] {
+            if !baseline.matched[RIGHT].contains(id) {
+                expect_right.push(*id);
+            }
+        }
+        for id in &baseline.matched[RIGHT] {
+            if !baseline.matched[LEFT].contains(id) {
+                expect_left.push(*id);
+            }
+        }
+    }
+    // `assert_equal_sets` rejects duplicates, and a baseline hit may already be expected.
+    let expect_left = expect_left.into_iter().unique().collect_vec();
+    let expect_right = expect_right.into_iter().unique().collect_vec();
 
     assert_equal_sets(
         &missing_ids[LEFT][req_i],
