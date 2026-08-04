@@ -498,6 +498,7 @@ fn test_extension_outcome_without_extension() {
     assert!(!request.was_extended());
     let outcome = extension_outcome(request, DECISION_FILTER, &[]);
     assert_eq!(outcome.baseline_match, outcome.extended_match);
+    assert_eq!(outcome.baseline_match, outcome.extended_decision);
 }
 
 // ### Hypothetical search results
