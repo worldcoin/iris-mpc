@@ -372,7 +372,7 @@ fn test_matching() {
         let decisions = results.decisions();
         assert_eq!(
             decisions,
-            vec![case.expected_decision],
+            [case.expected_decision].as_slice(),
             "Failed for case: {case:?}",
         );
 
@@ -530,7 +530,7 @@ struct BaselineSearch {
 
 /// The single request in a one-request test batch.
 fn request_0(batch: &MatchResults) -> &RequestMatches {
-    &batch.0[0]
+    &batch.requests[0]
 }
 
 /// The match ids the pre-extension (baseline) search alone would have produced.

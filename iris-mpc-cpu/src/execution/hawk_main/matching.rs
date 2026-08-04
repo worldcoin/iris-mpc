@@ -317,13 +317,82 @@ impl PendingRequest {
 pub struct ResolvedBatch(VecRequests<ResolvedRequest>);
 
 impl ResolvedBatch {
+    /// Combine both orientations and make the final decision for every request.
+    ///
+    /// Emulates inserting entries one by one: intra-batch matches only count if the
+    /// request they matched is itself being inserted or updated. Applies supermatcher
+    /// rejection — if any rotation's match results were saturated on either eye, and
+    /// nothing else matched, the decision is `NoMutation`.
+    ///
+    /// This is the one place decisions are computed and the one place the per-request
+    /// supermatcher metrics are emitted; callers read the stored vector afterwards via
+    /// `MatchResults::decisions()`.
     pub fn decide(self, mirror: Self) -> MatchResults {
         assert_eq!(self.0.len(), mirror.0.len());
-        MatchResults(
-            izip!(self.0, mirror.0)
-                .map(|(normal, mirror)| RequestMatches { normal, mirror })
-                .collect_vec(),
-        )
+        let requests = izip!(self.0, mirror.0)
+            .map(|(normal, mirror)| RequestMatches { normal, mirror })
+            .collect_vec();
+
+        tracing::info!(
+            "Calculating decisions for batch of {} requests",
+            requests.len()
+        );
+        let filter = DECISION_FILTER;
+        let mut decisions = Vec::<Decision>::with_capacity(requests.len());
+
+        for request in &requests {
+            tracing::info!(
+                "Processing request type normal: {:?} mirror {:?}",
+                request.normal.request_type,
+                request.mirror.request_type,
+            );
+            let mut only_supermatch = false;
+
+            let decision = match request.normal.request_type {
+                RequestType::Uniqueness(UniquenessRequest { skip_persistence }) => {
+                    let outcome = evaluate_uniqueness(
+                        request.select(filter, SearchVariant::Effective),
+                        &decisions,
+                    );
+                    only_supermatch = outcome.only_supermatch;
+
+                    if request.was_extended() {
+                        record_extension_metrics(&extension_outcome(request, filter, &decisions));
+                    }
+
+                    if outcome.is_match {
+                        NoMutation
+                    } else if skip_persistence {
+                        UniqueInsertSkipped
+                    } else {
+                        UniqueInsert
+                    }
+                }
+                // Identity Match Check request. Nothing to do.
+                RequestType::IdentityMatchCheck => NoMutation,
+                // Reauth request.
+                RequestType::Reauth(_) => match request.normal.reauth_result {
+                    Some((id, or_rule, matches)) if filter.reauth_rule(or_rule, matches) => {
+                        ReauthUpdate(id)
+                    }
+                    _ => NoMutation,
+                },
+                // Unsupported request. Nothing to do.
+                RequestType::Unsupported => NoMutation,
+            };
+
+            if only_supermatch {
+                tracing::info!("Supermatcher rejection");
+                metrics::counter!("supermatcher_rejections").increment(1);
+            }
+            tracing::info!("Pushing decision: {decision:?}");
+            decisions.push(decision);
+        }
+
+        MatchResults {
+            requests,
+            decisions,
+        }
     }
 }
 
@@ -352,8 +421,13 @@ pub const DECISION_FILTER: Filter = Filter {
     intra_batch: true,
 };
 
+/// The final match results for a batch: what each request matched, and what to do
+/// about it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MatchResults(VecRequests<RequestMatches>);
+pub struct MatchResults {
+    requests: VecRequests<RequestMatches>,
+    decisions: VecRequests<Decision>,
+}
 
 /// The outcome of evaluating a uniqueness request against its selected match ids.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -464,80 +538,14 @@ fn record_extension_metrics(outcome: &ExtensionOutcome) {
 }
 
 impl MatchResults {
-    /// The final decision of what to do with a request.
-    ///
-    /// Emulate the behavior of inserting entries one by one. Intra-batch matches
-    /// only count if they are being inserted themselves.
-    ///
-    /// Applies supermatcher rejection: if any rotation's match results were
-    /// saturated on either eye, the decision is forced to `NoMutation`.
-    pub fn decisions(&self) -> VecRequests<Decision> {
-        tracing::info!(
-            "Calculating decisions for batch of {} requests",
-            self.0.len()
-        );
-        use Decision::*;
-
-        let filter = DECISION_FILTER;
-
-        let mut decisions = Vec::<Decision>::with_capacity(self.0.len());
-
-        for request in &self.0 {
-            tracing::info!(
-                "Processing request type normal: {:?} mirror {:?}",
-                request.normal.request_type,
-                request.mirror.request_type,
-            );
-            let mut because_supermatch = false;
-
-            let decision = match request.normal.request_type {
-                RequestType::Uniqueness(UniquenessRequest { skip_persistence }) => {
-                    let outcome = evaluate_uniqueness(
-                        request.select(filter, SearchVariant::Effective),
-                        &decisions,
-                    );
-                    because_supermatch = outcome.only_supermatch;
-                    let is_match = outcome.is_match;
-
-                    if request.was_extended() {
-                        record_extension_metrics(&extension_outcome(request, filter, &decisions));
-                    }
-
-                    if is_match {
-                        NoMutation
-                    } else if skip_persistence {
-                        UniqueInsertSkipped
-                    } else {
-                        UniqueInsert
-                    }
-                }
-                // Identity Match Check request. Nothing to do.
-                RequestType::IdentityMatchCheck => NoMutation,
-                // Reauth request.
-                RequestType::Reauth(_) => match request.normal.reauth_result {
-                    Some((id, or_rule, matches)) if filter.reauth_rule(or_rule, matches) => {
-                        ReauthUpdate(id)
-                    }
-                    _ => NoMutation,
-                },
-                // Unsupported request. Nothing to do.
-                RequestType::Unsupported => NoMutation,
-            };
-
-            if because_supermatch {
-                tracing::info!("Supermatcher rejection");
-                metrics::counter!("supermatcher_rejections").increment(1);
-            }
-            tracing::info!("Pushing decision: {decision:?}");
-            decisions.push(decision);
-        }
-
-        decisions
+    /// The final decision of what to do with each request, decided by `decide`.
+    pub fn decisions(&self) -> &[Decision] {
+        &self.decisions
     }
 
     /// The IDs of the vectors that matched at least partially.
     pub fn select(&self, filter: Filter) -> VecRequests<Vec<MatchId>> {
-        self.0
+        self.requests
             .iter()
             .map(|request| {
                 request

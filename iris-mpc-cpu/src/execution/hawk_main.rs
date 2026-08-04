@@ -1901,7 +1901,7 @@ impl HawkHandle {
             hawk_actor,
             sessions_mutations,
             search_normal,
-            &match_result,
+            match_result.decisions(),
             identity_updates,
             &request,
         )
@@ -1934,13 +1934,12 @@ impl HawkHandle {
         hawk_actor: &mut HawkActor,
         sessions: &BothEyes<Vec<HawkSession>>,
         search_results: BothEyes<VecRequests<VecRotations<HawkInsertPlan>>>,
-        match_result: &matching::MatchResults,
+        decisions: &[Decision],
         identity_updates: IdentityUpdatePlan,
         request: &HawkRequest,
     ) -> Result<HawkMutation> {
         use Decision::*;
         let start = Instant::now();
-        let decisions = match_result.decisions();
         let requests_order = &request.batch.requests_order;
 
         // Fetch targeted vector IDs of reauths and identity updates (None for uniqueness insertions).
