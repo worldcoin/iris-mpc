@@ -122,6 +122,72 @@ fn test_supermatch_rule() {
     }
 }
 
+#[test]
+fn test_evaluate_uniqueness() {
+    let v = VectorId::from_serial_id(1);
+
+    // Nothing matched.
+    assert_eq!(
+        evaluate_uniqueness([], &[]),
+        UniquenessOutcome {
+            is_match: false,
+            only_supermatch: false,
+        },
+    );
+    // Saturation alone is the only reason this is a match.
+    assert_eq!(
+        evaluate_uniqueness([Supermatch], &[]),
+        UniquenessOutcome {
+            is_match: true,
+            only_supermatch: true,
+        },
+    );
+    // An ordinary match takes priority, whichever order the ids arrive in. The
+    // supermatch-first case is real: `RequestMatches::select` yields every id of the
+    // normal orientation, including its supermatch, before any mirror id.
+    for ids in [vec![Search(v), Supermatch], vec![Supermatch, Search(v)]] {
+        assert_eq!(
+            evaluate_uniqueness(ids.clone(), &[]),
+            UniquenessOutcome {
+                is_match: true,
+                only_supermatch: false,
+            },
+            "for ids {ids:?}",
+        );
+    }
+    // An intra-batch peer blocks us only if it is itself being inserted or updated.
+    assert_eq!(
+        evaluate_uniqueness([IntraBatch(0)], &[UniqueInsert]),
+        UniquenessOutcome {
+            is_match: true,
+            only_supermatch: false,
+        },
+    );
+    assert_eq!(
+        evaluate_uniqueness([IntraBatch(0)], &[NoMutation]),
+        UniquenessOutcome {
+            is_match: false,
+            only_supermatch: false,
+        },
+    );
+    // A peer later in the batch has no decision yet, so it does not block us.
+    assert_eq!(
+        evaluate_uniqueness([IntraBatch(5)], &[]),
+        UniquenessOutcome {
+            is_match: false,
+            only_supermatch: false,
+        },
+    );
+    // A non-blocking peer does not displace the supermatch attribution.
+    assert_eq!(
+        evaluate_uniqueness([Supermatch, IntraBatch(0)], &[NoMutation]),
+        UniquenessOutcome {
+            is_match: true,
+            only_supermatch: true,
+        },
+    );
+}
+
 #[derive(Clone, Debug)]
 struct TestCase {
     search_match: bool,

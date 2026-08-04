@@ -355,35 +355,49 @@ pub const DECISION_FILTER: Filter = Filter {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MatchResults(VecRequests<RequestMatches>);
 
-/// Evaluate whether a uniqueness request matched, given its selected match ids
-/// and the decisions already made for earlier requests in the batch.
+/// The outcome of evaluating a uniqueness request against its selected match ids.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct UniquenessOutcome {
+    /// True if anything at all blocks insertion.
+    is_match: bool,
+    /// True if search saturation was the *only* thing blocking insertion.
+    only_supermatch: bool,
+}
+
+/// Evaluate whether a uniqueness request matched, given its selected match ids and the
+/// decisions already made for earlier requests in the batch.
 ///
-/// Returns `(is_match, because_supermatch)` where `because_supermatch` is true
-/// if a `Supermatch` (saturation) id was the reason a match was found. Note this
-/// depends on `Supermatch` being yielded last by `select`, so it is only set
-/// when no ordinary match short-circuited the search first.
-fn uniqueness_is_match(
+/// Attribution to saturation is order-independent: a supermatch is the *only* reason for
+/// a match only when no ordinary id matched, in either orientation.
+fn evaluate_uniqueness(
     ids: impl IntoIterator<Item = MatchId>,
     prior_decisions: &[Decision],
-) -> (bool, bool) {
-    let mut because_supermatch = false;
-    let is_match = ids.into_iter().any(|id| match id {
-        Search(_) | Luc(_) | Reauth(_) => true,
-        Supermatch => {
-            because_supermatch = true;
-            true
-        }
-        IntraBatch(request_i) => {
-            match prior_decisions.get(request_i) {
-                // If the request we matched with will be inserted or updated,
-                // then we are blocked by this intra-batch match.
-                Some(decision) => decision.is_mutation(),
-                // The request we matched with is after us in the batch, so we are not blocked by it.
-                None => false,
+) -> UniquenessOutcome {
+    let mut ordinary_match = false;
+    let mut supermatch = false;
+
+    for id in ids {
+        match id {
+            Search(_) | Luc(_) | Reauth(_) => ordinary_match = true,
+            Supermatch => supermatch = true,
+            IntraBatch(request_i) => {
+                // We are blocked by an intra-batch match only if the request we matched
+                // with will itself be inserted or updated. A request after us in the
+                // batch has no decision yet, so it does not block us.
+                if prior_decisions
+                    .get(request_i)
+                    .is_some_and(Decision::is_mutation)
+                {
+                    ordinary_match = true;
+                }
             }
         }
-    });
-    (is_match, because_supermatch)
+    }
+
+    UniquenessOutcome {
+        is_match: ordinary_match || supermatch,
+        only_supermatch: supermatch && !ordinary_match,
+    }
 }
 
 /// Supermatcher A/B comparison: for requests whose search was extended by the
@@ -400,26 +414,29 @@ fn record_extension_metrics(
         return;
     }
 
-    let (extended_decision, _) = uniqueness_is_match(
+    let extended_decision = evaluate_uniqueness(
         request.select(filter, SearchVariant::Effective),
         prior_decisions,
-    );
+    )
+    .is_match;
 
     let not_supermatch = |id: &MatchId| !matches!(id, Supermatch);
 
-    let (extended_match, _) = uniqueness_is_match(
+    let extended_match = evaluate_uniqueness(
         request
             .select(filter, SearchVariant::Effective)
             .filter(not_supermatch),
         prior_decisions,
-    );
+    )
+    .is_match;
 
-    let (pre_match, _) = uniqueness_is_match(
+    let pre_match = evaluate_uniqueness(
         request
             .select(filter, SearchVariant::Baseline)
             .filter(not_supermatch),
         prior_decisions,
-    );
+    )
+    .is_match;
 
     match (pre_match, extended_decision) {
         (false, true) => {
@@ -476,11 +493,12 @@ impl MatchResults {
 
             let decision = match request.normal.request_type {
                 RequestType::Uniqueness(UniquenessRequest { skip_persistence }) => {
-                    let (is_match, bsm) = uniqueness_is_match(
+                    let outcome = evaluate_uniqueness(
                         request.select(filter, SearchVariant::Effective),
                         &decisions,
                     );
-                    because_supermatch = bsm;
+                    because_supermatch = outcome.only_supermatch;
+                    let is_match = outcome.is_match;
 
                     record_extension_metrics(request, filter, &decisions);
 
