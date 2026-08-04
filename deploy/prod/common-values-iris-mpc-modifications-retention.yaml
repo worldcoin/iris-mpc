@@ -8,11 +8,10 @@
 # this pool with a 13-day clean record.
 image: "ghcr.io/worldcoin/retention-reaper:v0.32.6@sha256:366cc7dcd9e9132bbfe2b5719332ff8d1f301ed5b487cbfc458fbc97cca92ace"
 
-# ENABLED IN DRY-RUN (POP-4134 prod enablement): un-suspended + ENABLED + DRY_RUN=true —
-# runs daily and PREVIEWS the guarded DELETE (read-only COUNT, no rows removed). Expect
-# would-delete 0 until ~30d after the prod created_at migration (backfill) + the
-# newest-10k floor. Flip DRY_RUN to "false" per the POP-4134 ladder once previews + the
-# POP-4136 monitors look right.
+# LIVE DELETION (POP-4134): ENABLED + DRY_RUN=false — the daily run executes the guarded
+# DELETE on rows past the retention window, bounded by the newest-10k floor. Deleted rows
+# are unrecoverable. Kill switch: RETENTION__DRY_RUN back to "true" reverts to read-only
+# previews; suspend: true stops runs entirely.
 suspend: false
 
 env:
