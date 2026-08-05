@@ -187,6 +187,23 @@ impl fmt::Display for Phase {
     }
 }
 
+/// Inverse of [`Phase::as_str`], for `startup_hold_at_phase`.
+impl std::str::FromStr for Phase {
+    type Err = eyre::Report;
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value {
+            "discover" => Ok(Phase::Discover),
+            "propose" => Ok(Phase::Propose),
+            "commit" => Ok(Phase::Commit),
+            "converge" => Ok(Phase::Converge),
+            "load" => Ok(Phase::Load),
+            "serving" => Ok(Phase::Serving),
+            other => bail!("unknown startup phase {other:?}"),
+        }
+    }
+}
+
 /// A 32-byte SHA-256 digest, carried as a lowercase hex string in JSON so the
 /// document stays greppable in logs and readable with `curl`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -411,6 +428,9 @@ pub struct StartupState {
 #[derive(Debug, Clone)]
 pub struct StartupStateHandle {
     state: Arc<RwLock<StartupState>>,
+    /// Test hook from `Config::startup_hold_at_phase`; see
+    /// [`StartupStateHandle::with_hold_at`].
+    hold_at: Option<Phase>,
 }
 
 impl StartupStateHandle {
@@ -430,7 +450,22 @@ impl StartupStateHandle {
                 facts,
                 epoch: None,
             })),
+            hold_at: None,
         }
+    }
+
+    /// Park this party forever once it has entered `phase`.
+    ///
+    /// The park happens *after* the phase (and, for [`Phase::Commit`], the
+    /// epoch) is published and the state lock is released, so peers and the
+    /// coordination server keep seeing a node that is legitimately sitting in
+    /// that phase — which is precisely the state an e2e test wants to kill.
+    ///
+    /// Test-only, driven by `Config::startup_hold_at_phase`. `None` in every
+    /// production path.
+    pub fn with_hold_at(mut self, phase: Option<Phase>) -> Self {
+        self.hold_at = phase;
+        self
     }
 
     /// Router to hand to `start_coordination_server_with_extra_routes`.
@@ -494,6 +529,14 @@ impl StartupStateHandle {
             elapsed.num_seconds()
         );
         metrics::counter!("startup_phase_entered", "phase" => phase.as_str()).increment(1);
+
+        if self.hold_at == Some(phase) {
+            tracing::warn!(
+                "startup_hold_at_phase={phase}: parking in this phase indefinitely. This is a \
+                 test hook — the node will not start."
+            );
+            std::future::pending::<()>().await;
+        }
     }
 
     /// Record the derived epoch. Called once, on entering [`Phase::Commit`].
@@ -1198,6 +1241,52 @@ mod tests {
         let parsed: AgreedPlan = serde_json::from_str(&json).unwrap();
         assert_eq!(plan, parsed);
         assert_eq!(plan.epoch(), parsed.epoch());
+    }
+
+    #[test]
+    fn phase_names_round_trip() {
+        // `startup_hold_at_phase` is matched against `as_str`, so the two
+        // directions must not drift apart.
+        for phase in [
+            Phase::Discover,
+            Phase::Propose,
+            Phase::Commit,
+            Phase::Converge,
+            Phase::Load,
+            Phase::Serving,
+        ] {
+            assert_eq!(phase.as_str().parse::<Phase>().unwrap(), phase);
+        }
+        assert!("laod".parse::<Phase>().is_err());
+    }
+
+    #[tokio::test]
+    async fn a_hold_publishes_its_phase_before_parking() {
+        // The whole point of the hook: peers must see a party legitimately
+        // sitting in the held phase, so `enter` has to publish before it parks.
+        let facts = PartyFacts::from_sync_state(&state(100, None)).digest();
+        let handle = StartupStateHandle::new(1, facts).with_hold_at(Some(Phase::Propose));
+
+        let entering = tokio::spawn({
+            let handle = handle.clone();
+            async move { handle.enter(Phase::Propose).await }
+        });
+
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while handle.snapshot().await.phase != Phase::Propose {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("held phase never became visible");
+
+        assert!(!entering.is_finished(), "enter returned instead of parking");
+        entering.abort();
+
+        // A phase that is not the held one still advances normally.
+        let handle = StartupStateHandle::new(1, facts).with_hold_at(Some(Phase::Load));
+        handle.enter(Phase::Propose).await;
+        assert_eq!(handle.snapshot().await.phase, Phase::Propose);
     }
 
     #[tokio::test]
