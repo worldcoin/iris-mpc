@@ -82,6 +82,7 @@ env:
   SMPC__ENABLE_MODIFICATIONS_SYNC: "true"
   SMPC__ENABLE_MODIFICATIONS_REPLAY: "true"
   SMPC__ENABLE_DEBUG_TIMING: "true"
+  SMPC__GPU_SCHEMA_NAME_SUFFIX: "benchmark-g7e-12xlarge"
 
 strategy:
   type: Recreate
