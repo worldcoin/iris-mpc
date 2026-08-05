@@ -8,6 +8,33 @@
 //! `/startup-state` document so a test can act on a party's real phase instead
 //! of guessing with sleeps.
 //!
+//! # Why the kill point is a configured hold, not a poll
+//!
+//! `startup_120` and `startup_121` have to stop a party *in* a named startup
+//! phase. Polling `/startup-state` for that cannot work: on an empty local fleet
+//! `propose -> load` takes ~180 ms end to end, so a 100 ms poll grid (stretched
+//! further by three parties saturating every core with worker pools) routinely
+//! first observes the party already several phases past the intended kill point,
+//! by which time it has published its epoch and released its peers' commit
+//! barrier — and the survivors are then correctly, not wrongly, in `load`.
+//!
+//! So the party is *held* instead: [`HawkFleet::start_party_holding_at`] sets
+//! `Config::startup_hold_at_phase`, and the party parks in that phase until it is
+//! stopped. The restart is spawned without the hold. The hold is excluded from
+//! `CommonConfig`, so it does not perturb the startup epoch either party derives.
+//!
+//! # Why the commit-barrier budget is overridable
+//!
+//! `wait_for_epoch_commit` treats an unreachable peer as "it is restarting, keep
+//! waiting" — which is exactly what makes rejoin work, and exactly why a party
+//! that *dies* is indistinguishable from one that is coming back. The survivors
+//! then wait out the whole `startup_sync_timeout_secs` budget, 300s by default,
+//! which is longer than [`FLEET_TIMEOUT`]: a workflow whose expected outcome is
+//! "the fleet gives up" would hit the harness deadline instead of the behaviour
+//! it is asserting. [`FleetOptions::startup_sync_timeout_secs`] shortens the
+//! budget for those workflows. Rejoin workflows leave it at the default, since
+//! there the survivors *must* outlast a peer restart.
+//!
 //! # Why the startup-epoch workflows kill during the handshake
 //!
 //! `startup_120` and `startup_121` stop a party during the startup *handshake*,
@@ -46,7 +73,28 @@ pub const RESTARTED_PARTY: usize = 2;
 /// CI machine.
 pub const FLEET_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Spawn `server_main` for one party.
+/// Startup-config overrides for one party.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PartyOverrides {
+    /// Park on entering this phase and stay there until stopped.
+    pub hold_at: Option<Phase>,
+    /// Replaces `ServerCoordinationConfig::startup_sync_timeout_secs`, which
+    /// bounds the startup barriers — including the commit barrier.
+    pub startup_sync_timeout_secs: Option<u64>,
+}
+
+/// Startup-config overrides for a whole fleet.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FleetOptions {
+    /// Phase each party parks in, if any. Applies to the parties' first boot;
+    /// a restart via [`HawkFleet::start_party`] is always hold-free.
+    pub holds: [Option<Phase>; COUNT_OF_PARTIES],
+    /// Barrier budget for every party, inherited by restarts. See the module
+    /// docs for when a workflow needs to shorten it.
+    pub startup_sync_timeout_secs: Option<u64>,
+}
+
+/// Spawn `server_main` for one party, applying `overrides` to its config.
 ///
 /// `server_main` holds `!Send` state, so the party runs on its own OS thread via
 /// `spawn_blocking` with a dedicated multi-thread runtime.
@@ -60,8 +108,17 @@ pub fn spawn_hawk_party(
     configs: &CpuConfigs,
     shutdown: CancellationToken,
     ctx: &CpuTestContext,
+    overrides: PartyOverrides,
 ) -> JoinHandle<eyre::Result<()>> {
-    let config = crate::utils::configs::make_hawk_config(&configs[party], configs, &ctx.env);
+    let mut config = crate::utils::configs::make_hawk_config(&configs[party], configs, &ctx.env);
+    config.startup_hold_at_phase = overrides.hold_at.map(|phase| phase.as_str().to_string());
+    if let Some(secs) = overrides.startup_sync_timeout_secs {
+        config
+            .server_coordination
+            .as_mut()
+            .expect("test configs always set server_coordination")
+            .startup_sync_timeout_secs = secs;
+    }
     let abort = ctx.abort.clone();
 
     tokio::spawn(async move {
@@ -103,6 +160,9 @@ pub struct HawkFleet {
     tasks: [Option<JoinHandle<eyre::Result<()>>>; COUNT_OF_PARTIES],
     tokens: [Option<CancellationToken>; COUNT_OF_PARTIES],
     configs: CpuConfigs,
+    /// Kept so restarts get the same barrier budget as the first boot; the
+    /// holds deliberately are not kept.
+    startup_sync_timeout_secs: Option<u64>,
 }
 
 /// Cancel and abort every party when the fleet goes out of scope.
@@ -154,6 +214,19 @@ impl HawkFleet {
     /// "still listening" is also a far better diagnostic than letting one party
     /// die of `Address already in use` several seconds into its startup.
     pub async fn start_all(configs: &CpuConfigs, ctx: &CpuTestContext) -> eyre::Result<Self> {
+        Self::start_all_with(configs, ctx, FleetOptions::default()).await
+    }
+
+    /// Start all three parties under `options`.
+    ///
+    /// A hold has to be in place from the party's *first* boot: it is the only
+    /// way to be sure the party has not already run past the phase the workflow
+    /// means to stop it in. See [`HawkFleet::start_party_holding_at`].
+    pub async fn start_all_with(
+        configs: &CpuConfigs,
+        ctx: &CpuTestContext,
+        options: FleetOptions,
+    ) -> eyre::Result<Self> {
         for config in configs.iter() {
             wait_for_port_free(config.healthcheck_port, Duration::from_secs(30))
                 .await
@@ -164,21 +237,44 @@ impl HawkFleet {
             tasks: [None, None, None],
             tokens: [None, None, None],
             configs: configs.clone(),
+            startup_sync_timeout_secs: options.startup_sync_timeout_secs,
         };
         for party in 0..COUNT_OF_PARTIES {
-            fleet.start_party(party, ctx);
+            match options.holds[party] {
+                Some(phase) => fleet.start_party_holding_at(party, ctx, phase),
+                None => fleet.start_party(party, ctx),
+            }
         }
         Ok(fleet)
     }
 
     /// Start (or restart) one party. The party must not currently be running.
     pub fn start_party(&mut self, party: usize, ctx: &CpuTestContext) {
+        self.spawn(party, ctx, None);
+    }
+
+    /// Start one party that parks on entering `phase` and stays there until it is
+    /// stopped, so a test can kill it at an exact point in the handshake.
+    ///
+    /// See the module docs for why this is a configured hold rather than a
+    /// well-timed poll. A held party never becomes ready, so every workflow using
+    /// this must stop it — [`HawkFleet::stop_party`] or the `Drop` backstop.
+    pub fn start_party_holding_at(&mut self, party: usize, ctx: &CpuTestContext, phase: Phase) {
+        self.spawn(party, ctx, Some(phase));
+        tracing::info!("fleet: party {party} will hold at phase {phase}");
+    }
+
+    fn spawn(&mut self, party: usize, ctx: &CpuTestContext, hold_at: Option<Phase>) {
         assert!(
             self.tasks[party].is_none(),
             "party {party} is already running"
         );
         let token = CancellationToken::new();
-        let task = spawn_hawk_party(party, &self.configs, token.clone(), ctx);
+        let overrides = PartyOverrides {
+            hold_at,
+            startup_sync_timeout_secs: self.startup_sync_timeout_secs,
+        };
+        let task = spawn_hawk_party(party, &self.configs, token.clone(), ctx, overrides);
         self.tokens[party] = Some(token);
         self.tasks[party] = Some(task);
         tracing::info!("fleet: started party {party}");
@@ -243,14 +339,22 @@ impl HawkFleet {
         }
     }
 
-    /// Wait until a party's phase reaches at least `at_least`.
+    /// Wait until a party is sitting in exactly `phase`.
+    ///
+    /// Exact, not `>=`: the callers stop the party at this point, and a party
+    /// already past it has published state its peers have acted on, which makes
+    /// the rest of the workflow assert against a different scenario than the one
+    /// it describes. Overshoot therefore fails here — loudly, naming the phase
+    /// actually seen — instead of surfacing later as a confusing assertion about
+    /// a peer that behaved correctly. Pair with
+    /// [`HawkFleet::start_party_holding_at`], which makes overshoot impossible.
     ///
     /// Tolerates connection failures while the party's coordination server is
     /// still coming up.
     pub async fn wait_for_phase(
         &self,
         party: usize,
-        at_least: Phase,
+        phase: Phase,
         dur: Duration,
     ) -> eyre::Result<StartupState> {
         let port = self.configs[party].healthcheck_port;
@@ -259,7 +363,12 @@ impl HawkFleet {
 
         loop {
             match fetch_startup_state(port).await {
-                Ok(state) if state.phase >= at_least => return Ok(state),
+                Ok(state) if state.phase == phase => return Ok(state),
+                Ok(state) if state.phase > phase => bail!(
+                    "party {party} ran past phase {phase} to {} before it could be observed — \
+                     it should have been started with a hold at {phase}",
+                    state.phase
+                ),
                 Ok(state) => last = Some(state.phase),
                 Err(err) => tracing::debug!("party {party} startup state unavailable: {err:#}"),
             }
@@ -268,7 +377,7 @@ impl HawkFleet {
 
             if tokio::time::Instant::now() >= deadline {
                 bail!(
-                    "party {party} did not reach phase {at_least} within {dur:?} (last seen {:?})",
+                    "party {party} did not reach phase {phase} within {dur:?} (last seen {:?})",
                     last
                 );
             }

@@ -141,6 +141,13 @@ pub async fn server_main(config: Config) -> Result<()> {
     let startup_state = StartupStateHandle::new(
         server_coord_config.party_id,
         PartyFacts::from_sync_state(&my_state).digest(),
+    )
+    .with_hold_at(
+        config
+            .startup_hold_at_phase
+            .as_deref()
+            .map(str::parse::<Phase>)
+            .transpose()?,
     );
 
     let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server_with_extra_routes(

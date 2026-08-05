@@ -1,30 +1,65 @@
 /// startup_121 — one party restarts during the startup handshake with *changed*
 /// data, and the whole fleet must refuse to come up.
 ///
-/// Setup: three empty parties. Exec: party 2 is stopped once it reaches
-/// [`Phase::Commit`], an extra iris row is inserted into its database, and it is
-/// restarted. Every party must exit and none may report ready.
+/// Setup: three empty parties, party 2 configured to hold in [`Phase::Propose`].
+/// Exec: once the survivors have committed an epoch derived from party 2's facts,
+/// party 2 is stopped, an extra iris row is inserted into its database, and it is
+/// restarted without the hold. Every party must exit and none may report ready.
 ///
 /// The surviving parties hold an epoch derived from party 2's previous facts; it
 /// now derives a different one. Nobody may proceed, because the agreed plan
 /// describes a fleet state that no longer exists.
 ///
-/// Deliberately does not assert the error text. The mismatch is caught by whichever
-/// check the survivors reach first — the commit barrier if they are still parked,
-/// the startup watch if they had already moved into converge/load — and in the
-/// latter case the cross-party checkpoint round inside the load can surface its own
-/// peer timeout first. What is invariant, and all this workflow needs, is that
-/// nobody serves.
+/// Deliberately does not assert the error text, and deliberately does not require
+/// every party to name the mismatch. The party that comes back always detects it:
+/// its first barrier round sees both peers on the old epoch. Its *peers* usually do
+/// not — it publishes the new epoch and then bails within milliseconds, far inside
+/// their poll interval, after which their polls only see a closed port, which the
+/// barrier correctly reads as "a peer is restarting" rather than as disagreement.
+/// They therefore exit on the barrier's own timeout. Both routes satisfy what this
+/// workflow actually needs: nobody serves, and the fleet tears itself down.
+///
+/// Hence [`BARRIER_TIMEOUT_SECS`]. With the 300s default, the survivors would still
+/// be waiting long after `FLEET_TIMEOUT`, and the workflow would fail on the
+/// harness deadline while the fleet was behaving exactly as designed.
+///
+/// The hold is at `Propose`, i.e. *before* party 2 publishes an epoch, which keeps
+/// the survivors parked in the commit barrier. Holding at `Commit` instead would
+/// release them into the DB load while party 2 has no MPC listener, and they would
+/// die of a checkpoint peer timeout before the data was even changed — a pass for
+/// entirely the wrong reason.
 ///
 /// See [`crate::utils::hawk_fleet`] for why the kill point is the handshake rather
 /// than the DB load.
 use crate::utils::{
     cpu_node::CpuNodes,
-    hawk_fleet::{HawkFleet, FLEET_TIMEOUT, RESTARTED_PARTY},
+    hawk_fleet::{FleetOptions, HawkFleet, FLEET_TIMEOUT, RESTARTED_PARTY},
     runner::{CpuTestContext, TestRun},
+    COUNT_OF_PARTIES,
 };
 use iris_mpc::server::startup_phase::Phase;
 use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
+use std::array;
+
+/// Commit-barrier budget for every party in this workflow.
+///
+/// Long enough that the returning party gets its chance to publish a mismatched
+/// epoch — a restart costs about eleven seconds here, ten of them the empty-queue
+/// long poll in `build_sync_state` — and short enough that a fleet which never
+/// observes it still gives up well inside `FLEET_TIMEOUT`. Whichever way it goes,
+/// `exec` finishes in under a minute instead of waiting out the 300s default.
+const BARRIER_TIMEOUT_SECS: u64 = 30;
+
+/// Substrings identifying a party that failed *on the epoch comparison* rather
+/// than on a barrier timeout. The two checks that can reach an
+/// `EpochVerdict::Void` word it differently, and either one proves the
+/// comparison under test actually ran.
+const EPOCH_MISMATCH_ERRORS: [&str; 2] = [
+    // wait_for_epoch_commit
+    "startup epoch mismatch",
+    // spawn_startup_watch
+    "startup watch found a peer on a different epoch",
+];
 
 #[derive(Default)]
 pub struct Startup121 {
@@ -49,16 +84,33 @@ impl TestRun for Startup121 {
         // Hand the fleet to `self` before anything can fail, so `teardown` always
         // gets a chance to stop it. `HawkFleet::drop` is the backstop, but a
         // graceful stop leaves the ports free for the next workflow sooner.
-        self.fleet = Some(HawkFleet::start_all(&ctx.configs, ctx).await?);
+        // Party 2 holds in Propose from its first boot; the survivors are not held.
+        let options = FleetOptions {
+            holds: array::from_fn(|party| (party == RESTARTED_PARTY).then_some(Phase::Propose)),
+            startup_sync_timeout_secs: Some(BARRIER_TIMEOUT_SECS),
+        };
+        self.fleet = Some(HawkFleet::start_all_with(&ctx.configs, ctx, options).await?);
         let fleet = self.fleet.as_mut().unwrap();
 
-        // Kill at Commit, not Propose: the survivors must already have derived an
-        // epoch from this party's *old* facts. Otherwise they would simply read the
-        // new ones on restart and legitimately agree — correct behaviour, but not
-        // the case under test.
         fleet
-            .wait_for_phase(RESTARTED_PARTY, Phase::Commit, FLEET_TIMEOUT)
+            .wait_for_phase(RESTARTED_PARTY, Phase::Propose, FLEET_TIMEOUT)
             .await?;
+
+        // The survivors must already hold an epoch derived from this party's *old*
+        // facts before it goes away — otherwise they would read the new ones on
+        // restart and legitimately agree, which is correct behaviour but not the
+        // case under test. Reaching Commit is exactly that: the epoch is derived
+        // and published, and they are now parked in the commit barrier waiting for
+        // party 2, which never publishes one because it is held in Propose.
+        for party in 0..COUNT_OF_PARTIES {
+            if party == RESTARTED_PARTY {
+                continue;
+            }
+            fleet
+                .wait_for_phase(party, Phase::Commit, FLEET_TIMEOUT)
+                .await?;
+        }
+
         fleet.stop_party(RESTARTED_PARTY).await?;
 
         // Change the party's data while it is down. One extra iris row moves
@@ -75,6 +127,7 @@ impl TestRun for Startup121 {
             "inserted iris {next_id} into party {RESTARTED_PARTY} to change its startup facts"
         );
 
+        // Restarted without the hold: it re-derives an epoch, now a different one.
         fleet.start_party(RESTARTED_PARTY, ctx);
 
         // Every party must exit. `wait_all_exited` fails if any is still running at
@@ -82,12 +135,25 @@ impl TestRun for Startup121 {
         let outcomes = fleet.wait_all_exited(FLEET_TIMEOUT).await?;
         tracing::info!("fleet refused to start: {outcomes:?}");
 
-        // At least one party must have *failed*, not merely stopped. All-clean
-        // exits would mean the fleet wound down for some other reason — the test
-        // process aborting, say — and this workflow would pass without ever having
-        // exercised a mismatch.
-        if outcomes.iter().all(|o| o.contains("without an error")) {
-            eyre::bail!("no party reported an error; the mismatch was never detected: {outcomes:?}");
+        // Some party must have named the mismatch. This is the assertion that ties
+        // the workflow to the check under test: the survivors' own error is a
+        // barrier *timeout*, which a peer that never came back at all would produce
+        // just as well, so "the fleet exited" on its own would pass this workflow
+        // even with the epoch comparison broken.
+        //
+        // Deterministic despite the timing: the returning party's first barrier
+        // round reads both peers still publishing the old epoch, so it is always
+        // the one to report this. Its peers usually do not — see the doc comment.
+        let detected = outcomes.iter().any(|outcome| {
+            EPOCH_MISMATCH_ERRORS
+                .iter()
+                .any(|reason| outcome.contains(reason))
+        });
+        if !detected {
+            eyre::bail!(
+                "no party detected the epoch mismatch; the fleet stopped for some other \
+                 reason: {outcomes:?}"
+            );
         }
         Ok(())
     }
