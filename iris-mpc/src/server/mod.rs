@@ -238,11 +238,28 @@ pub async fn server_main(config: Config) -> Result<()> {
         //
         // SAFETY DEPENDENCY: peers serve their SyncState from a snapshot taken
         // at THEIR boot, so an exchanged frontier can under-report persists
-        // made after that peer booted. This is sound today only because the
-        // startup unready-gate + heartbeat teardown force full-fleet restarts
-        // (every frontier is rebuilt after its party's last commit). If
-        // coordination is ever relaxed to allow solo restarts, this exchange
-        // must move to a live DB read in the sync endpoint.
+        // made after that peer booted. Under-reporting releases rows the peers
+        // moved past, and this party re-forms them — a permanent batch
+        // divergence.
+        //
+        // What makes this sound is NOT that restarts are always fleet-wide —
+        // `spawn_startup_watch` deliberately lets a peer rejoin a startup in
+        // progress, so that is no longer true. It is sound because a party only
+        // persists rows in the main loop, i.e. after it is ready, and the
+        // startup unready-gate (`wait_for_others_unready`) refuses to let this
+        // startup proceed alongside a peer that is already serving: such a peer
+        // is `is_ready` and has not verified our UUID, so we never get here.
+        // Every snapshot we read therefore belongs to a party that has not
+        // persisted anything since taking it.
+        //
+        // A rejoining peer does not weaken this: rejoin requires its facts —
+        // including its own frontier — to be unchanged, and it re-reads the same
+        // peer snapshots, so it computes the same frontier it would have on a
+        // cold fleet boot.
+        //
+        // If the unready gate is ever relaxed to let a startup proceed while a
+        // peer is serving, this exchange must move to a live DB read in the sync
+        // endpoint.
         let fleet_frontier = sync_result.max_persisted_sequence_number();
         if let Some(frontier) = &fleet_frontier {
             let marked = iris_store
@@ -335,10 +352,17 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     // A verdict reached during the load can only be acted on here: the load
     // does not poll the (cooperative) shutdown handler, so this is the first
-    // point where a peer that changed its data mid-load stops us. Take the peer
-    // set only after the check — from here on `verified_peers` is frozen and the
-    // heartbeat owns supervision.
+    // point where a peer that changed its data mid-load stops us.
     startup_watch.check()?;
+
+    // Re-run the commit barrier before freezing the peer set. The watch records
+    // a rejoined peer's new UUID only on its next poll, so a peer that came back
+    // late in the load could still be missing from `verified_peers` at this
+    // instant — and everything downstream (the heartbeat's first-contact check,
+    // `wait_for_others_ready`) reads the frozen snapshot and kills the node on an
+    // unknown UUID. Blocking here until every peer currently reports our epoch
+    // makes the rejoin deterministic instead of a race against the poll cadence.
+    wait_for_epoch_commit(&server_coord_config, &verified_peers, plan.epoch()).await?;
 
     let verified_peers = verified_peers.lock().await.clone();
     init_heartbeat_task(
