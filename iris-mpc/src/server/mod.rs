@@ -1,3 +1,8 @@
+pub mod startup_phase;
+
+use crate::server::startup_phase::{
+    observe_peer_epochs, AgreedPlan, PartyFacts, Phase, StartupStateHandle,
+};
 use crate::services::aws::clients::AwsClients;
 use crate::services::processors::batch::{receive_batch_stream, spawn_db_backed_ingest_task};
 use crate::services::processors::job::{process_job_result, BatchTimings};
@@ -66,6 +71,10 @@ pub const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
 pub const MAX_CONCURRENT_REQUESTS: usize = 32;
 const PEER_ROUND_TIMEOUT: Duration = Duration::from_secs(10);
 const CHECKPOINT_WINDOW: usize = 10;
+/// Wall-clock budget for the observation-only peer epoch comparison. Kept short:
+/// nothing depends on the outcome yet, so it must not add materially to startup.
+const EPOCH_OBSERVATION_BUDGET: Duration = Duration::from_secs(30);
+const EPOCH_OBSERVATION_RETRY_DELAY: Duration = Duration::from_millis(500);
 
 /// Main logic for initialization and execution of AMPC iris uniqueness server
 /// nodes.
@@ -128,22 +137,56 @@ pub async fn server_main(config: Config) -> Result<()> {
         server_coord_config.healthcheck_ports
     );
 
+    // Live startup-state document, published alongside the coordination
+    // server's own routes. Unlike `/startup-sync` — which serves a `my_state`
+    // clone captured at construction — this is read from a shared handle, so
+    // peers see the phase we are actually in. Created before the server starts
+    // because its router has to be handed to it.
+    let startup_state = StartupStateHandle::new(
+        server_coord_config.party_id,
+        PartyFacts::from_sync_state(&my_state).digest(),
+    );
+
     let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server_with_extra_routes(
         &server_coord_config,
         &mut background_tasks,
         &shutdown_handler,
         &my_state,
         Some(batch_sync_shared_state.clone()),
-        None,
+        Some(startup_state.router()),
     )
     .await;
+    startup_state.set_uuid(my_uuid.clone()).await;
     tracing::info!("Coordination server started");
 
     // Startup barriers: un-ready sync + full mutual peer visibility
     wait_for_startup_barriers(&server_coord_config, &verified_peers, &my_uuid).await?;
+    startup_state.enter(Phase::Propose).await;
 
     let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
+
+    // Derive this startup's epoch from the exchanged states. Every party
+    // computes it from the same three fact sets, so agreement needs no extra
+    // round trip
+    let plan = AgreedPlan::from_states(&sync_result.all_states)?;
+    tracing::info!(
+        "Derived startup epoch {} over {} parties (my facts {})",
+        plan.epoch(),
+        plan.party_count(),
+        startup_state.snapshot().await.facts.short()
+    );
+    startup_state.set_epoch(plan.epoch()).await;
+    startup_state.enter(Phase::Commit).await;
+    observe_peer_epochs(
+        &server_coord_config,
+        plan.epoch(),
+        EPOCH_OBSERVATION_BUDGET,
+        EPOCH_OBSERVATION_RETRY_DELAY,
+    )
+    .await;
+
+    startup_state.enter(Phase::Converge).await;
 
     // Handle modifications sync
     if config.enable_modifications_sync {
@@ -245,6 +288,8 @@ pub async fn server_main(config: Config) -> Result<()> {
         return Ok(());
     }
 
+    startup_state.enter(Phase::Load).await;
+
     let mut hawk_actor = init_hawk_actor(
         &config,
         &aws_clients.checkpoint_s3_client,
@@ -292,6 +337,7 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     set_node_ready(is_ready_flag);
     wait_for_others_ready(&server_coord_config, verified_peers).await?;
+    startup_state.enter(Phase::Serving).await;
 
     background_tasks.check_tasks();
 
