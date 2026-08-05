@@ -1,7 +1,7 @@
 pub mod startup_phase;
 
 use crate::server::startup_phase::{
-    observe_peer_epochs, AgreedPlan, PartyFacts, Phase, StartupStateHandle,
+    spawn_startup_watch, wait_for_epoch_commit, AgreedPlan, PartyFacts, Phase, StartupStateHandle,
 };
 use crate::services::aws::clients::AwsClients;
 use crate::services::processors::batch::{receive_batch_stream, spawn_db_backed_ingest_task};
@@ -71,10 +71,6 @@ pub const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
 pub const MAX_CONCURRENT_REQUESTS: usize = 32;
 const PEER_ROUND_TIMEOUT: Duration = Duration::from_secs(10);
 const CHECKPOINT_WINDOW: usize = 10;
-/// Wall-clock budget for the observation-only peer epoch comparison. Kept short:
-/// nothing depends on the outcome yet, so it must not add materially to startup.
-const EPOCH_OBSERVATION_BUDGET: Duration = Duration::from_secs(30);
-const EPOCH_OBSERVATION_RETRY_DELAY: Duration = Duration::from_millis(500);
 
 /// Main logic for initialization and execution of AMPC iris uniqueness server
 /// nodes.
@@ -168,7 +164,7 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     // Derive this startup's epoch from the exchanged states. Every party
     // computes it from the same three fact sets, so agreement needs no extra
-    // round trip
+    // round trip and no leader.
     let plan = AgreedPlan::from_states(&sync_result.all_states)?;
     tracing::info!(
         "Derived startup epoch {} over {} parties (my facts {})",
@@ -178,13 +174,22 @@ pub async fn server_main(config: Config) -> Result<()> {
     );
     startup_state.set_epoch(plan.epoch()).await;
     startup_state.enter(Phase::Commit).await;
-    observe_peer_epochs(
-        &server_coord_config,
+
+    // Commit barrier. Nothing below may mutate local storage until every party
+    // has published this same epoch: converging under a plan a peer never
+    // agreed to is the divergence this prevents.
+    wait_for_epoch_commit(&server_coord_config, &verified_peers, plan.epoch()).await?;
+
+    // From here until we are ready, the epoch is what identifies a peer — not
+    // its UUID — so a peer that restarts and re-derives this epoch rejoins
+    // without forcing us to reload. Armed before converge because the DB load
+    // below is long and nothing else watches peers during it.
+    let startup_watch = spawn_startup_watch(
+        server_coord_config.clone(),
+        Arc::clone(&verified_peers),
+        Arc::clone(&shutdown_handler),
         plan.epoch(),
-        EPOCH_OBSERVATION_BUDGET,
-        EPOCH_OBSERVATION_RETRY_DELAY,
-    )
-    .await;
+    );
 
     startup_state.enter(Phase::Converge).await;
 
@@ -290,6 +295,9 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     startup_state.enter(Phase::Load).await;
 
+    // Don't start the load if converge already voided the epoch.
+    startup_watch.check()?;
+
     let mut hawk_actor = init_hawk_actor(
         &config,
         &aws_clients.checkpoint_s3_client,
@@ -325,6 +333,13 @@ pub async fn server_main(config: Config) -> Result<()> {
     )
     .await?;
 
+    // A verdict reached during the load can only be acted on here: the load
+    // does not poll the (cooperative) shutdown handler, so this is the first
+    // point where a peer that changed its data mid-load stops us. Take the peer
+    // set only after the check — from here on `verified_peers` is frozen and the
+    // heartbeat owns supervision.
+    startup_watch.check()?;
+
     let verified_peers = verified_peers.lock().await.clone();
     init_heartbeat_task(
         &server_coord_config,
@@ -338,6 +353,7 @@ pub async fn server_main(config: Config) -> Result<()> {
     set_node_ready(is_ready_flag);
     wait_for_others_ready(&server_coord_config, verified_peers).await?;
     startup_state.enter(Phase::Serving).await;
+    startup_watch.stop();
 
     background_tasks.check_tasks();
 
