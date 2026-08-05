@@ -38,32 +38,91 @@
 //! party's facts changing from "same as peers" to "different" still moves the
 //! epoch.
 //!
-//! # Current status: observation only
+//! # The surviving peers are the durable record
 //!
-//! Nothing here fails a startup yet. [`StartupStateHandle`] publishes the live
-//! document on [`STARTUP_STATE_ROUTE`] and [`observe_peer_epochs`] logs whether
-//! the parties agree, so epoch determinism can be confirmed on a real cluster
-//! before any teardown decision depends on it. Enforcement (the commit barrier
-//! and the rejoin acceptance path) comes next, and needs the durable per-party
-//! generation counter that [`StartupState::generation`] is reserved for.
+//! There is deliberately no persisted epoch table. The authority on "which
+//! startup is in progress" is the set of peers still running it, held in their
+//! live [`StartupStateHandle`]s and served on [`STARTUP_STATE_ROUTE`]. A
+//! restarting party does not read a local record and try to prove it still
+//! matches; it simply rebuilds its [`SyncState`] from its DB and re-derives the
+//! epoch from its peers' boot snapshots. It reproduces the in-flight epoch
+//! **exactly when its own facts are unchanged**, so the rejoin condition checks
+//! itself — no durable state, no schema migration, and no generation counter to
+//! guard against stale records, because in-process state cannot go stale.
+//!
+//! If every party restarts at once there is no epoch to rejoin, and all three
+//! derive a fresh one from current data. That is the correct outcome, not a
+//! degradation.
+//!
+//! # What rejoin covers, and what it does not
+//!
+//! Rejoin works whenever the restarting party's facts are unchanged. That covers
+//! the whole [`Phase::Load`] window — the long one, and the reason any of this
+//! exists — provided [`Phase::Converge`] had no work to do, which is the normal
+//! case for a healthy fleet: nothing to roll forward, no rows to skip ahead.
+//!
+//! It does not cover a restart *after* a converge that actually mutated local
+//! state. Such a party recomputes different facts, derives a different epoch, and
+//! the fleet restarts. Two consequences worth knowing:
+//!
+//! - the crash-recovery boot — the one where converge has real work — is also
+//!   the one that cannot rejoin, so it behaves exactly as it does today;
+//! - with `db_backed_ingest` disabled, `next_sns_sequence_num` is a live SQS
+//!   queue head that the converge-phase queue trim moves, so rejoin after
+//!   converge is unavailable on that path for the same reason.
+//!
+//! Both fall back to a full-fleet restart, which is what happens today
+//! unconditionally. Nothing gets worse; the common case gets much better.
+//!
+//! Extending rejoin to a mutated converge means predicting each party's
+//! post-converge facts and pinning them in the plan — real work, and only worth
+//! doing if the crash-during-converge window turns out to matter in practice.
+//!
+//! # Why an unchanged epoch also means converge is safe to replay
+//!
+//! A rejoining party re-runs its own converge, so replay has to be harmless. It
+//! is, and not by luck: the facts projection was chosen to *see* every
+//! converge-phase mutation, so "facts unchanged" already implies "converge had
+//! no effect".
+//!
+//! - `sync_modifications` moves modification statuses and iris rows → visible in
+//!   `db_len` and the modifications digest;
+//! - `sync_graph_mutations` inserts graph WAL rows → visible in the modifications
+//!   digest, which folds in `graph_mutation_bytes`;
+//! - the ingest frontier skip-ahead moves the persisted frontier → visible in
+//!   `max_persisted_sequence_number`;
+//! - the SQS queue trim moves the queue head → visible in
+//!   `next_sns_sequence_num`.
+//!
+//! The one exception is releasing unpersisted ingest claims, which touches only
+//! rows above the frontier and so is invisible to the projection. That step is
+//! idempotent by construction — releasing an already-released claim is a no-op,
+//! and re-formation is deterministic — so replaying it is safe regardless.
+//!
+//! Anything added to converge later must either be fact-visible or idempotent.
+//! A mutation that is neither would let a party rejoin having silently applied it
+//! twice.
 //!
 //! [`wait_for_others_ready`]: ampc_server_utils::wait_for_others_ready
 
+use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use ampc_server_utils::{try_get_endpoint_other_nodes, ServerCoordinationConfig};
 use axum::routing::get;
 use axum::Router;
 use chrono::{DateTime, Utc};
-use eyre::{bail, Result};
+use eyre::{bail, eyre, Result, WrapErr};
 use iris_mpc_common::config::CommonConfig;
 use iris_mpc_common::helpers::sha256::sha256_bytes;
 use iris_mpc_common::helpers::sync::{Modification, SyncState};
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sodiumoxide::hex;
+use std::collections::HashSet;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
+use tokio::task::JoinHandle;
 
 /// Axum path serving the live startup-state document.
 pub const STARTUP_STATE_ROUTE: &str = "/startup-state";
@@ -154,14 +213,15 @@ impl Serialize for Digest {
 }
 
 impl<'de> Deserialize<'de> for Digest {
-    fn deserialize<D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> std::result::Result<Self, D::Error> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
         let bytes = hex::decode(&s)
             .map_err(|_| D::Error::custom(format!("digest is not valid hex: {s}")))?;
         let bytes: [u8; 32] = bytes.try_into().map_err(|_| {
-            D::Error::custom(format!("digest must be 32 bytes, got {} hex chars", s.len()))
+            D::Error::custom(format!(
+                "digest must be 32 bytes, got {} hex chars",
+                s.len()
+            ))
         })?;
         Ok(Digest(bytes))
     }
@@ -325,10 +385,13 @@ pub struct StartupState {
     /// be handed to it — correlation-only data, so it is not worth inverting
     /// that ordering upstream.
     pub uuid: Option<String>,
-    /// Durable, monotonic per party: bumped whenever a party abandons an epoch,
-    /// so a stale document from a previous attempt cannot be mistaken for the
-    /// current one (the ABA guard). Always 0 until the epoch record is
-    /// persisted, which enforcement will add.
+    /// Reserved, always 0.
+    ///
+    /// Intended as an ABA guard for a durable epoch record; the peer-memory
+    /// design made that record unnecessary (see the module docs), so nothing
+    /// sets it. Retained as a `serde(default)` field so documents stay
+    /// compatible in both directions across a rolling deploy.
+    #[serde(default)]
     pub generation: u64,
     pub phase: Phase,
     pub phase_started_at: DateTime<Utc>,
@@ -445,111 +508,338 @@ impl StartupStateHandle {
     }
 }
 
-/// Poll peers' startup-state documents and report whether they derived the same
-/// epoch.
+/// Fetch and parse every peer's startup-state document.
 ///
-/// Observation only: every outcome — disagreement, unreachable peer, timeout —
-/// is logged and counted, never returned as an error. The point is to confirm
-/// on a live cluster that the canonicalization really is deterministic across
-/// parties before anything is allowed to fail on it.
-pub async fn observe_peer_epochs(
+/// A peer whose document cannot be parsed is an error rather than a skipped
+/// entry: a caller counting agreeing peers must not be able to reach quorum
+/// because a disagreeing peer was quietly dropped.
+async fn poll_peer_states(
     config: &ServerCoordinationConfig,
-    my_epoch: Epoch,
     budget: Duration,
-    retry_delay: Duration,
-) {
+) -> Result<Vec<StartupState>> {
+    // `try_get_endpoint_other_nodes` retries internally against its own
+    // `startup_sync_timeout_secs` budget, which is unrelated to the caller's,
+    // so cap it here rather than inheriting it.
+    let responses = tokio::time::timeout(
+        budget,
+        try_get_endpoint_other_nodes(config, STARTUP_STATE_ENDPOINT),
+    )
+    .await
+    .map_err(|_| eyre!("timed out polling peer startup state after {:?}", budget))??;
+
+    responses
+        .into_iter()
+        .map(|(status, body)| {
+            serde_json::from_slice::<StartupState>(&body).wrap_err_with(|| {
+                format!("failed to deserialize peer startup state (status {status})")
+            })
+        })
+        .collect()
+}
+
+/// Record a peer incarnation as seen, so the coordination server advertises it
+/// on `/health` and the `ampc-server-utils` checks downstream accept it.
+///
+/// This is bookkeeping, not authorization: it says "this incarnation exists and
+/// we have observed it", which is exactly what
+/// `wait_until_startup_visibility_is_complete` needs from us before a restarted
+/// peer can get far enough to publish an epoch at all. Withholding it until the
+/// epoch matched would deadlock — the peer cannot pass its visibility barrier
+/// until we list its UUID, and it cannot publish an epoch until it passes that
+/// barrier. Authorization lives entirely in the epoch comparison below.
+async fn record_peer_uuids(verified_peers: &Arc<Mutex<HashSet<String>>>, peers: &[StartupState]) {
+    let mut verified = verified_peers.lock().await;
+    for peer in peers {
+        if let Some(uuid) = &peer.uuid {
+            if verified.insert(uuid.clone()) {
+                tracing::info!(
+                    "Recorded peer party {} incarnation {} (phase {})",
+                    peer.party_id,
+                    uuid,
+                    peer.phase
+                );
+            }
+        }
+    }
+}
+
+/// What a round of peer observations says about the epoch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum EpochVerdict {
+    /// Every peer published this epoch.
+    Committed,
+    /// One or more peers have not published an epoch yet: either they have not
+    /// reached [`Phase::Commit`], or they restarted and are on their way back.
+    Pending(Vec<(usize, Phase)>),
+    /// A peer published a different epoch, so the agreed plan is void.
+    Void(Vec<(usize, Option<Epoch>)>),
+}
+
+/// Classify one round of peer documents against our own epoch.
+///
+/// Shared by the commit barrier and the startup watch so the two cannot drift
+/// apart on what counts as disagreement. Fails closed in both directions:
+/// [`EpochVerdict::Void`] takes precedence over [`EpochVerdict::Pending`], and an
+/// empty peer list is `Pending` rather than a vacuous `Committed`.
+fn classify_peers(my_epoch: Epoch, peers: &[StartupState]) -> EpochVerdict {
+    let void: Vec<_> = peers
+        .iter()
+        .filter(|peer| peer.epoch.is_some_and(|epoch| epoch != my_epoch))
+        .map(|peer| (peer.party_id, peer.epoch))
+        .collect();
+
+    if !void.is_empty() {
+        return EpochVerdict::Void(void);
+    }
+
+    if peers.is_empty() {
+        return EpochVerdict::Pending(Vec::new());
+    }
+
+    let pending: Vec<_> = peers
+        .iter()
+        .filter(|peer| peer.epoch.is_none())
+        .map(|peer| (peer.party_id, peer.phase))
+        .collect();
+
+    if pending.is_empty() {
+        EpochVerdict::Committed
+    } else {
+        EpochVerdict::Pending(pending)
+    }
+}
+
+/// Commit barrier: hold until every peer has published *this* epoch.
+///
+/// Nothing may mutate local storage before this returns. Converging under a plan
+/// a peer never agreed to is the failure mode the barrier exists to prevent.
+///
+/// # What a mismatch does and does not mean
+///
+/// A mismatch is *not* "the parties' data diverged" — divergence is normal and
+/// is precisely what the modifications roll-forward exists to repair. The epoch
+/// is a digest of the whole starting configuration, differences included, so
+/// three parties that legitimately disagree about their persisted frontier still
+/// derive the same epoch from the same three fact sets.
+///
+/// A mismatch means the parties saw *different inputs*: some party's facts
+/// changed between the exchange and now, which in practice means it restarted
+/// and came back with different data. The agreed plan is then void, and every
+/// party must abandon it and re-derive from current state — the full-fleet
+/// restart this returns an error to trigger.
+pub async fn wait_for_epoch_commit(
+    config: &ServerCoordinationConfig,
+    verified_peers: &Arc<Mutex<HashSet<String>>>,
+    my_epoch: Epoch,
+) -> Result<()> {
+    tracing::info!("Waiting for peers to commit startup epoch {}", my_epoch);
+
+    let budget = Duration::from_secs(config.startup_sync_timeout_secs);
+    let retry_delay = Duration::from_millis(config.http_query_retry_delay_ms);
     let deadline = Instant::now() + budget;
 
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            tracing::warn!(
-                "Could not confirm peer startup epochs within {:?}; proceeding (observation only)",
+            metrics::counter!("startup_epoch_commit_timeout").increment(1);
+            bail!(
+                "peers did not commit startup epoch {} within {:?}",
+                my_epoch,
                 budget
             );
-            metrics::counter!("startup_epoch_observation_timeout").increment(1);
-            return;
         }
 
-        // `try_get_endpoint_other_nodes` retries internally against its own
-        // `startup_sync_timeout_secs` budget, which is unrelated to ours, so
-        // cap it here rather than inheriting it.
-        let responses = match tokio::time::timeout(
-            remaining,
-            try_get_endpoint_other_nodes(config, STARTUP_STATE_ENDPOINT),
-        )
-        .await
-        {
-            Ok(Ok(responses)) => responses,
-            Ok(Err(err)) => {
+        let peers = match poll_peer_states(config, remaining).await {
+            Ok(peers) => peers,
+            Err(err) => {
                 tracing::warn!("Failed to poll peer startup state: {:?}", err);
                 tokio::time::sleep(retry_delay.min(remaining)).await;
                 continue;
             }
-            Err(_) => continue, // deadline hit; handled at the top of the loop
         };
 
-        let mut peers = Vec::with_capacity(responses.len());
-        for (status, body) in responses {
-            match serde_json::from_slice::<StartupState>(&body) {
-                Ok(state) => peers.push(state),
-                Err(err) => {
-                    tracing::warn!(
-                        "Failed to deserialize peer startup state (status {}): {:?}",
-                        status,
-                        err
+        record_peer_uuids(verified_peers, &peers).await;
+
+        match classify_peers(my_epoch, &peers) {
+            EpochVerdict::Void(disagreeing) => {
+                metrics::counter!("startup_epoch_mismatch").increment(1);
+                bail!(
+                    "startup epoch mismatch: mine is {}, peers report {:?}. The agreed plan is \
+                     void; every party must restart and re-derive from current state.",
+                    my_epoch,
+                    format_epochs(&disagreeing)
+                );
+            }
+            EpochVerdict::Committed => {
+                tracing::info!(
+                    "Startup epoch {} committed by all {} parties",
+                    my_epoch,
+                    peers.len() + 1
+                );
+                metrics::counter!("startup_epoch_agreement").increment(1);
+                return Ok(());
+            }
+            EpochVerdict::Pending(pending) => {
+                tracing::debug!("Peers have not committed an epoch yet: {:?}", pending);
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                tokio::time::sleep(retry_delay.min(remaining)).await;
+            }
+        }
+    }
+}
+
+fn format_epochs(peers: &[(usize, Option<Epoch>)]) -> Vec<(usize, String)> {
+    peers
+        .iter()
+        .map(|(party_id, epoch)| {
+            (
+                *party_id,
+                epoch
+                    .map(|epoch| epoch.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+            )
+        })
+        .collect()
+}
+
+/// Guard for the background task that watches peers across the converge and
+/// load phases. Aborts the task when dropped.
+pub struct StartupWatch {
+    task: JoinHandle<()>,
+    /// Set once, to the reason the epoch was voided.
+    verdict: Arc<StdMutex<Option<String>>>,
+}
+
+impl StartupWatch {
+    /// Fail if the watch observed a peer on a different epoch.
+    ///
+    /// Call at every point where startup can still be abandoned cheaply. In
+    /// particular, call it after the DB load: `trigger_manual_shutdown` is
+    /// cooperative, and the load does not poll it, so a verdict reached while
+    /// loading is only acted on once the load returns.
+    pub fn check(&self) -> Result<()> {
+        let verdict = self
+            .verdict
+            .lock()
+            .expect("startup watch verdict mutex poisoned")
+            .clone();
+        match verdict {
+            Some(reason) => bail!("{reason}"),
+            None => Ok(()),
+        }
+    }
+
+    /// Stop watching. Called on reaching [`Phase::Serving`], after which the
+    /// heartbeat owns peer supervision and its UUID-mismatch teardown is the
+    /// correct policy — a peer that restarts once sessions exist cannot rejoin.
+    pub fn stop(self) {
+        self.task.abort();
+    }
+}
+
+impl Drop for StartupWatch {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+/// Watch peers for the duration of converge and load — the window in which
+/// nothing else is looking.
+///
+/// This closes the gap that forces today's full-fleet restarts. The heartbeat is
+/// only armed after the load, so a peer that dies during the load is invisible
+/// until the ready barrier, and a peer that *restarts* during it is rejected
+/// outright: its new UUID is absent from the frozen `verified_peers` set, so
+/// `wait_for_others_ready` and the heartbeat's first-contact check both kill an
+/// otherwise healthy node.
+///
+/// The watch replaces that identity test with the epoch test:
+///
+/// - peer republishes this epoch (whatever its UUID) — it is provably resuming
+///   the same startup, so it is recorded as verified and both parties carry on.
+///   A restart is invisible to us, which is the entire point;
+/// - peer publishes a different epoch — its data changed, the plan is void, and
+///   we abandon startup;
+/// - peer publishes no epoch, or is unreachable — it is mid-restart. Tolerated:
+///   it will either republish this epoch or a different one, and the ready
+///   barrier still bounds how long a peer may fail to arrive.
+///
+/// Note what makes the first case work without any durable record: a restarting
+/// peer rebuilds its [`SyncState`] from its DB and re-derives the epoch from its
+/// peers' boot snapshots, so it reproduces this epoch **exactly when its own
+/// facts are unchanged** — the rejoin condition is self-checking. It therefore
+/// holds for the common case of a converge that had no work to do, and correctly
+/// fails when converge actually mutated local state (see the module docs).
+pub fn spawn_startup_watch(
+    config: ServerCoordinationConfig,
+    verified_peers: Arc<Mutex<HashSet<String>>>,
+    shutdown_handler: Arc<ShutdownHandler>,
+    epoch: Epoch,
+) -> StartupWatch {
+    let verdict = Arc::new(StdMutex::new(None));
+
+    let task = tokio::spawn({
+        let verdict = Arc::clone(&verdict);
+        // Reuse the heartbeat cadence: this is the same job, over the phase of
+        // startup where the heartbeat itself cannot yet run.
+        let poll_interval = Duration::from_secs(config.heartbeat_interval_secs);
+
+        async move {
+            loop {
+                tokio::time::sleep(poll_interval).await;
+
+                if shutdown_handler.is_shutting_down() {
+                    tracing::info!("Startup watch stopping: shutdown already in progress");
+                    return;
+                }
+
+                let peers = match poll_peer_states(&config, poll_interval).await {
+                    Ok(peers) => peers,
+                    Err(err) => {
+                        // Expected while a peer restarts; the ready barrier and
+                        // heartbeat bound the terminal cases.
+                        tracing::warn!("Startup watch could not poll peers: {:?}", err);
+                        continue;
+                    }
+                };
+
+                record_peer_uuids(&verified_peers, &peers).await;
+
+                if let EpochVerdict::Void(disagreeing) = classify_peers(epoch, &peers) {
+                    let disagreeing = format_epochs(&disagreeing);
+                    let reason = format!(
+                        "startup watch found a peer on a different epoch: mine is {epoch}, peers \
+                         report {disagreeing:?}. The agreed plan is void; abandoning startup so \
+                         every party re-derives from current state."
+                    );
+                    tracing::error!("{}", reason);
+                    metrics::counter!("startup_epoch_mismatch").increment(1);
+
+                    *verdict
+                        .lock()
+                        .expect("startup watch verdict mutex poisoned") = Some(reason);
+
+                    if !shutdown_handler.is_shutting_down() {
+                        shutdown_handler.trigger_manual_shutdown();
+                    }
+                    return;
+                }
+
+                for peer in &peers {
+                    tracing::debug!(
+                        "Startup watch: party {} in phase {} (epoch {})",
+                        peer.party_id,
+                        peer.phase,
+                        peer.epoch
+                            .map(|e| e.short())
+                            .unwrap_or_else(|| "pending".to_string())
                     );
                 }
             }
         }
+    });
 
-        // A peer that has not reached Commit yet has no epoch to compare;
-        // that is expected, since the three parties get here independently.
-        let pending: Vec<_> = peers
-            .iter()
-            .filter(|peer| peer.epoch.is_none())
-            .map(|peer| (peer.party_id, peer.phase))
-            .collect();
-
-        if !pending.is_empty() {
-            tracing::debug!("Peers have not derived an epoch yet: {:?}", pending);
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            tokio::time::sleep(retry_delay.min(remaining)).await;
-            continue;
-        }
-
-        let disagreeing: Vec<_> = peers
-            .iter()
-            .filter(|peer| peer.epoch != Some(my_epoch))
-            .map(|peer| {
-                (
-                    peer.party_id,
-                    peer.epoch.map(|e| e.to_string()),
-                    peer.facts.short(),
-                )
-            })
-            .collect();
-
-        if disagreeing.is_empty() {
-            tracing::info!(
-                "Startup epoch {} agreed by all {} parties",
-                my_epoch,
-                peers.len() + 1
-            );
-            metrics::counter!("startup_epoch_agreement").increment(1);
-        } else {
-            // Under enforcement this is the "initial sync is void, restart the
-            // fleet" trigger. For now it is loud but harmless.
-            tracing::error!(
-                "Startup epoch MISMATCH: mine is {}, peers report {:?}. Under enforcement this \
-                 would void the epoch and restart the fleet.",
-                my_epoch,
-                disagreeing
-            );
-            metrics::counter!("startup_epoch_mismatch").increment(1);
-        }
-        return;
-    }
+    StartupWatch { task, verdict }
 }
 
 fn digest_common_config(config: &CommonConfig) -> Digest {
@@ -862,6 +1152,116 @@ mod tests {
         assert_eq!(parsed.party_id, 1);
         assert_eq!(parsed.generation, 0);
         assert_eq!(parsed.uuid.as_deref(), Some("uuid-1"));
+    }
+
+    fn peer(party_id: usize, phase: Phase, epoch: Option<Epoch>) -> StartupState {
+        StartupState {
+            party_id,
+            uuid: Some(format!("uuid-{party_id}")),
+            generation: 0,
+            phase,
+            phase_started_at: Utc::now(),
+            facts: PartyFacts::from_sync_state(&state(100, None)).digest(),
+            epoch,
+        }
+    }
+
+    fn other_epoch() -> Epoch {
+        let mut changed = fleet();
+        changed[0].db_len = 12_345;
+        AgreedPlan::from_states(&changed).unwrap().epoch()
+    }
+
+    #[test]
+    fn all_peers_on_my_epoch_is_committed() {
+        let mine = AgreedPlan::from_states(&fleet()).unwrap().epoch();
+        let peers = [
+            peer(1, Phase::Commit, Some(mine)),
+            peer(2, Phase::Load, Some(mine)),
+        ];
+        assert_eq!(classify_peers(mine, &peers), EpochVerdict::Committed);
+    }
+
+    #[test]
+    fn a_peer_without_an_epoch_is_pending_not_void() {
+        // Either it has not reached Commit, or it restarted and is on its way
+        // back. Neither is a disagreement.
+        let mine = AgreedPlan::from_states(&fleet()).unwrap().epoch();
+        let peers = [
+            peer(1, Phase::Commit, Some(mine)),
+            peer(2, Phase::Discover, None),
+        ];
+        assert_eq!(
+            classify_peers(mine, &peers),
+            EpochVerdict::Pending(vec![(2, Phase::Discover)])
+        );
+    }
+
+    #[test]
+    fn a_peer_on_a_different_epoch_voids_the_plan() {
+        // The motivating failure: a peer restarted with changed data.
+        let mine = AgreedPlan::from_states(&fleet()).unwrap().epoch();
+        let theirs = other_epoch();
+        let peers = [
+            peer(1, Phase::Commit, Some(mine)),
+            peer(2, Phase::Commit, Some(theirs)),
+        ];
+        assert_eq!(
+            classify_peers(mine, &peers),
+            EpochVerdict::Void(vec![(2, Some(theirs))])
+        );
+    }
+
+    #[test]
+    fn void_takes_precedence_over_pending() {
+        // Fail closed: one peer still arriving must not mask another peer that
+        // has already proven the plan void.
+        let mine = AgreedPlan::from_states(&fleet()).unwrap().epoch();
+        let theirs = other_epoch();
+        let peers = [
+            peer(1, Phase::Discover, None),
+            peer(2, Phase::Commit, Some(theirs)),
+        ];
+        assert_eq!(
+            classify_peers(mine, &peers),
+            EpochVerdict::Void(vec![(2, Some(theirs))])
+        );
+    }
+
+    #[test]
+    fn no_peers_is_pending_not_vacuously_committed() {
+        // A round that saw nobody must never satisfy the commit barrier.
+        let mine = AgreedPlan::from_states(&fleet()).unwrap().epoch();
+        assert_eq!(classify_peers(mine, &[]), EpochVerdict::Pending(Vec::new()));
+    }
+
+    #[test]
+    fn rejoin_condition_is_self_checking() {
+        // The core claim of the peer-memory design. A restarting party rebuilds
+        // its own state from its DB and re-derives the epoch from its peers'
+        // (unchanged) boot snapshots.
+        let original = fleet();
+        let in_flight = AgreedPlan::from_states(&original).unwrap().epoch();
+
+        // Facts unchanged across the restart — converge had no work to do — so
+        // the party reproduces the in-flight epoch and rejoins.
+        let mut rebooted = original.clone();
+        rebooted[0] = state(100, Some("0000000000000010"));
+        assert_eq!(
+            in_flight,
+            AgreedPlan::from_states(&rebooted).unwrap().epoch(),
+            "an unchanged party must reproduce the in-flight epoch"
+        );
+
+        // Facts changed across the restart — converge mutated local state, or the
+        // data really did move — so the epoch differs and the fleet restarts.
+        let mut rebooted = original.clone();
+        rebooted[0] = state(101, Some("0000000000000011"));
+        assert_ne!(
+            in_flight,
+            AgreedPlan::from_states(&rebooted).unwrap().epoch(),
+            "a changed party must not be able to rejoin"
+        );
     }
 
     #[test]
