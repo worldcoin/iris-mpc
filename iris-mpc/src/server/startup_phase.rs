@@ -106,11 +106,11 @@
 //! [`wait_for_others_ready`]: ampc_server_utils::wait_for_others_ready
 
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
-use ampc_server_utils::{try_get_endpoint_other_nodes, ServerCoordinationConfig};
+use ampc_server_utils::{get_check_addresses, ServerCoordinationConfig};
 use axum::routing::get;
 use axum::Router;
 use chrono::{DateTime, Utc};
-use eyre::{bail, eyre, Result, WrapErr};
+use eyre::{bail, Result};
 use iris_mpc_common::config::CommonConfig;
 use iris_mpc_common::helpers::sha256::sha256_bytes;
 use iris_mpc_common::helpers::sync::{Modification, SyncState};
@@ -127,8 +127,8 @@ use tokio::task::JoinHandle;
 /// Axum path serving the live startup-state document.
 pub const STARTUP_STATE_ROUTE: &str = "/startup-state";
 
-/// The same route as an endpoint name, for
-/// [`try_get_endpoint_other_nodes`]-style peer polling.
+/// The same route without its leading slash, which is the form
+/// `get_check_addresses` wants when building peer URLs.
 pub const STARTUP_STATE_ENDPOINT: &str = "startup-state";
 
 /// Domain separators. Every digest in this module is tagged so that a byte
@@ -158,7 +158,11 @@ pub enum Phase {
     /// Applying the agreed plan to local storage (modifications roll-forward,
     /// graph WAL, ingest frontier skip-ahead, queue trim).
     Converge,
-    /// Local-only heavy work: the iris/graph DB load.
+    /// The DB load. Mostly local, but NOT peer-independent: `init_hawk_actor`
+    /// runs `restart_from_checkpoint`, a cross-party consensus round with a 10s
+    /// `PEER_ROUND_TIMEOUT`, concurrently with the iris load. A peer that
+    /// vanishes here fails its peers inside the load, before the epoch layer
+    /// gets to decide anything — so rejoin does not yet cover this window.
     Load,
     /// Ready, heartbeat armed, main loop running.
     Serving,
@@ -508,33 +512,80 @@ impl StartupStateHandle {
     }
 }
 
-/// Fetch and parse every peer's startup-state document.
+/// Fetch and parse every peer's startup-state document, once.
 ///
-/// A peer whose document cannot be parsed is an error rather than a skipped
-/// entry: a caller counting agreeing peers must not be able to reach quorum
-/// because a disagreeing peer was quietly dropped.
+/// Deliberately does **not** use `try_get_endpoint_other_nodes`. That helper
+/// `tokio::spawn`s a retry task per peer and only aborts them along its own
+/// timeout path, so wrapping it in an outer `tokio::time::timeout` — which is the
+/// only way to bound it against a caller's deadline rather than its own
+/// `startup_sync_timeout_secs` — cancels the wrapper while leaving the spawned
+/// retries running. Every polling round then leaked two tasks that kept hammering
+/// a down peer at `http_query_retry_delay_ms` for the next five minutes, with the
+/// log volume to match.
+///
+/// This is a single attempt with no internal retry and nothing spawned: the
+/// callers' own loops supply the retry, and they can therefore stop it.
+///
+/// Returns what it managed to read plus a description of each peer it could not,
+/// rather than failing on the first unreachable one. A down peer must not blind
+/// us to the other: the reachable peer's UUID still needs recording (that is what
+/// lets a *restarting* peer past its visibility barrier), and its epoch is still
+/// worth checking for disagreement. Callers that need all peers — the commit
+/// barrier — check `failures` themselves.
 async fn poll_peer_states(
     config: &ServerCoordinationConfig,
-    budget: Duration,
-) -> Result<Vec<StartupState>> {
-    // `try_get_endpoint_other_nodes` retries internally against its own
-    // `startup_sync_timeout_secs` budget, which is unrelated to the caller's,
-    // so cap it here rather than inheriting it.
-    let responses = tokio::time::timeout(
-        budget,
-        try_get_endpoint_other_nodes(config, STARTUP_STATE_ENDPOINT),
-    )
-    .await
-    .map_err(|_| eyre!("timed out polling peer startup state after {:?}", budget))??;
+    request_timeout: Duration,
+) -> (Vec<StartupState>, Vec<String>) {
+    let urls = get_check_addresses(
+        &config.node_hostnames,
+        &config.healthcheck_ports,
+        STARTUP_STATE_ENDPOINT,
+    );
+    let client = reqwest::Client::new();
+    let mut states = Vec::with_capacity(urls.len().saturating_sub(1));
+    let mut failures = Vec::new();
 
-    responses
-        .into_iter()
-        .map(|(status, body)| {
-            serde_json::from_slice::<StartupState>(&body).wrap_err_with(|| {
-                format!("failed to deserialize peer startup state (status {status})")
-            })
-        })
-        .collect()
+    for (party_id, url) in urls.iter().enumerate() {
+        if party_id == config.party_id {
+            continue;
+        }
+        match fetch_peer_state(&client, url, request_timeout).await {
+            Ok(state) => states.push(state),
+            Err(failure) => failures.push(failure),
+        }
+    }
+
+    (states, failures)
+}
+
+/// One peer, one attempt. `Err` carries a ready-to-log description.
+async fn fetch_peer_state(
+    client: &reqwest::Client,
+    url: &str,
+    request_timeout: Duration,
+) -> std::result::Result<StartupState, String> {
+    let response = match tokio::time::timeout(request_timeout, client.get(url).send()).await {
+        Ok(Ok(response)) => response,
+        Ok(Err(err)) => return Err(format!("GET {url} failed: {err}")),
+        Err(_) => return Err(format!("GET {url} timed out after {request_timeout:?}")),
+    };
+
+    let status = response.status();
+    let body = match tokio::time::timeout(request_timeout, response.bytes()).await {
+        Ok(Ok(body)) => body,
+        Ok(Err(err)) => return Err(format!("reading body of {url} failed: {err}")),
+        Err(_) => {
+            return Err(format!(
+                "reading body of {url} timed out after {request_timeout:?}"
+            ))
+        }
+    };
+
+    // A document we cannot parse is a failure, never a skipped entry: a caller
+    // counting agreeing peers must not reach quorum because a disagreeing peer
+    // was quietly dropped.
+    serde_json::from_slice::<StartupState>(&body)
+        .map_err(|err| format!("unparseable startup state from {url} (status {status}): {err}"))
 }
 
 /// Record a peer incarnation as seen, so the coordination server advertises it
@@ -636,9 +687,12 @@ pub async fn wait_for_epoch_commit(
 
     let budget = Duration::from_secs(config.startup_sync_timeout_secs);
     let retry_delay = Duration::from_millis(config.http_query_retry_delay_ms);
+    let request_timeout = Duration::from_millis(config.http_query_timeout_ms);
     let deadline = Instant::now() + budget;
+    let mut attempt: u32 = 0;
 
     loop {
+        attempt += 1;
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             metrics::counter!("startup_epoch_commit_timeout").increment(1);
@@ -649,16 +703,20 @@ pub async fn wait_for_epoch_commit(
             );
         }
 
-        let peers = match poll_peer_states(config, remaining).await {
-            Ok(peers) => peers,
-            Err(err) => {
-                tracing::warn!("Failed to poll peer startup state: {:?}", err);
-                tokio::time::sleep(retry_delay.min(remaining)).await;
-                continue;
-            }
-        };
+        let (peers, failures) = poll_peer_states(config, request_timeout.min(remaining)).await;
 
+        // Record before deciding: a peer that is still coming back needs its new
+        // UUID published by us before it can pass its own visibility barrier.
         record_peer_uuids(verified_peers, &peers).await;
+
+        if !failures.is_empty() {
+            // Routine — a peer may be restarting, and we are the thing keeping the
+            // fleet from proceeding without it. The barrier requires every peer, so
+            // wait rather than classifying a partial view.
+            log_poll_failure(attempt, &failures);
+            tokio::time::sleep(retry_delay.min(remaining)).await;
+            continue;
+        }
 
         match classify_peers(my_epoch, &peers) {
             EpochVerdict::Void(disagreeing) => {
@@ -685,6 +743,19 @@ pub async fn wait_for_epoch_commit(
                 tokio::time::sleep(retry_delay.min(remaining)).await;
             }
         }
+    }
+}
+
+/// Log polling failures at WARN on the first attempt and every tenth after that,
+/// DEBUG otherwise.
+///
+/// Mirrors `wait_for_others_unready`'s cadence: a recoverable peer outage polled
+/// every second or two must not flood the log pipeline for the whole outage.
+fn log_poll_failure(attempt: u32, failures: &[String]) {
+    if attempt == 1 || attempt.is_multiple_of(10) {
+        tracing::warn!("Could not poll peer startup state (attempt {attempt}): {failures:?}");
+    } else {
+        tracing::debug!("Could not poll peer startup state (attempt {attempt}): {failures:?}");
     }
 }
 
@@ -743,8 +814,8 @@ impl Drop for StartupWatch {
     }
 }
 
-/// Watch peers for the duration of converge and load — the window in which
-/// nothing else is looking.
+/// Watch peers for the duration of converge and load — the window in which no
+/// *coordination* check is looking.
 ///
 /// This closes the gap that forces today's full-fleet restarts. The heartbeat is
 /// only armed after the load, so a peer that dies during the load is invisible
@@ -783,8 +854,11 @@ pub fn spawn_startup_watch(
         // Reuse the heartbeat cadence: this is the same job, over the phase of
         // startup where the heartbeat itself cannot yet run.
         let poll_interval = Duration::from_secs(config.heartbeat_interval_secs);
+        let request_timeout = Duration::from_millis(config.http_query_timeout_ms);
 
         async move {
+            let mut failures: u32 = 0;
+
             loop {
                 tokio::time::sleep(poll_interval).await;
 
@@ -793,15 +867,19 @@ pub fn spawn_startup_watch(
                     return;
                 }
 
-                let peers = match poll_peer_states(&config, poll_interval).await {
-                    Ok(peers) => peers,
-                    Err(err) => {
-                        // Expected while a peer restarts; the ready barrier and
-                        // heartbeat bound the terminal cases.
-                        tracing::warn!("Startup watch could not poll peers: {:?}", err);
-                        continue;
-                    }
-                };
+                let (peers, poll_failures) = poll_peer_states(&config, request_timeout).await;
+
+                if poll_failures.is_empty() {
+                    failures = 0;
+                } else {
+                    // Expected while a peer restarts — the case this watch exists
+                    // to absorb — so it is rate-limited rather than warned on every
+                    // round. The ready barrier and the heartbeat bound the terminal
+                    // cases. Unlike the commit barrier we carry on with a partial
+                    // view: a reachable peer on the wrong epoch is still a verdict.
+                    failures += 1;
+                    log_poll_failure(failures, &poll_failures);
+                }
 
                 record_peer_uuids(&verified_peers, &peers).await;
 

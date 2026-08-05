@@ -1,3 +1,6 @@
+pub mod startup_120;
+pub mod startup_121;
+
 #[allow(dead_code)]
 pub mod wal_102;
 pub mod wal_104;
@@ -20,7 +23,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{info_span, Instrument};
 
-use crate::utils::{runner::CpuTestContext, CpuNodeConfig};
+use crate::utils::{runner::CpuTestContext, CpuNodeConfig, TEST_THREAD_STACK_SIZE};
 
 /// Spawn `server_main` (hawk_main) for all 3 parties concurrently.
 ///
@@ -48,6 +51,7 @@ pub fn run_hawk(
             tokio::task::spawn_blocking(move || {
                 let rt = tokio::runtime::Builder::new_multi_thread()
                     .enable_all()
+                    .thread_stack_size(TEST_THREAD_STACK_SIZE)
                     .build()
                     .expect("failed to build server runtime");
                 let span = info_span!("mpc_node", idx = party_idx);

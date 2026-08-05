@@ -20,7 +20,13 @@ use crate::utils::runner::TestRun;
 use eyre::bail;
 use serial_test::serial;
 use workflows::{
-    wal_104::Wal104, wal_105::Wal105, wal_106::Wal106, wal_109::Wal109, wal_110::Wal110,
+    startup_120::Startup120,
+    startup_121::Startup121,
+    wal_104::Wal104,
+    wal_105::Wal105,
+    wal_106::Wal106,
+    wal_109::Wal109,
+    wal_110::Wal110,
     wal_111::Wal111,
 };
 
@@ -56,7 +62,12 @@ macro_rules! run_test {
             bail!("A previous test has failed, aborting further tests.");
         }
 
-        let rt = tokio::runtime::Runtime::new()?;
+        // Not `Runtime::new()`: its 2 MB blocking-thread stacks are too small for
+        // `server_main`'s future. See `utils::TEST_THREAD_STACK_SIZE`.
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .thread_stack_size(utils::TEST_THREAD_STACK_SIZE)
+            .build()?;
         rt.block_on(async {
             let ctx = utils::runner::CpuTestContext::new($kind, $idx).await;
 
@@ -165,4 +176,28 @@ fn test_wal_110() -> eyre::Result<()> {
 #[ignore = "requires external setup"]
 fn test_wal_111() -> eyre::Result<()> {
     run_test!(111, 1, Wal111::new())
+}
+
+// ---------------------------------------------------------------------------
+// startup_120 – startup_121: single-party restart during the startup handshake,
+// exercising the data-derived startup epoch.
+// ---------------------------------------------------------------------------
+
+/// Rejoin: one party restarts mid-handshake with unchanged data. It rejoins the
+/// same startup epoch; the other two neither restart nor advance past the commit
+/// barrier while it is gone.
+#[test]
+#[serial]
+#[ignore = "requires external setup"]
+fn test_startup_120() -> eyre::Result<()> {
+    run_test!(120, 1, Startup120::new())
+}
+
+/// Mismatch: one party restarts mid-handshake with changed data, so it derives a
+/// different epoch than its peers hold. No party may come up.
+#[test]
+#[serial]
+#[ignore = "requires external setup"]
+fn test_startup_121() -> eyre::Result<()> {
+    run_test!(121, 1, Startup121::new())
 }
