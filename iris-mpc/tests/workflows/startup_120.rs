@@ -7,15 +7,15 @@
 /// must come ready.
 ///
 /// Asserts the point of keying startup on the data — the restart is absorbed.
-/// Before the fleet digest this could not work at all: the returning party minted a
-/// fresh UUID, absent from the survivors' startup-verified set, so
+/// Before the fleet sync-state digest this could not work at all: the returning party
+/// minted a fresh UUID, absent from the survivors' startup-verified set, so
 /// `wait_for_others_ready` and the heartbeat's first-contact check killed two
 /// healthy nodes.
 ///
 /// Also covers a potential deadlock: party 2's visibility barrier needs the
 /// survivors to publish its *new* UUID, and they can only do that from inside
-/// `wait_for_fleet_digest_commit`, which records peer UUIDs *before* it evaluates
-/// the digest. Reverse that ordering and this workflow hangs.
+/// `wait_for_fleet_sync_state_digest_commit`, which records peer UUIDs *before* it
+/// evaluates the digest. Reverse that ordering and this workflow hangs.
 ///
 /// See [`crate::utils::hawk_fleet`] for why the kill point is the handshake rather
 /// than the DB load.
@@ -59,9 +59,10 @@ impl TestRun for Startup120 {
         let fleet = self.fleet.as_mut().unwrap();
 
         // Kill at Propose — after the mutual-visibility barriers, before the party
-        // has published a fleet digest. That ordering makes this deterministic: with
-        // no digest from this party the survivors cannot satisfy their commit barrier,
-        // so they cannot have moved on whatever interleaving they were in.
+        // has published a fleet sync-state digest. That ordering makes this
+        // deterministic: with no digest from this party the survivors cannot satisfy
+        // their commit barrier, so they cannot have moved on whatever interleaving
+        // they were in.
         fleet
             .wait_for_phase(RESTARTED_PARTY, Phase::Propose, FLEET_TIMEOUT)
             .await?;
@@ -94,11 +95,11 @@ impl TestRun for Startup120 {
         // absorbed a peer restart instead of reloading.
         fleet.assert_others_running(RESTARTED_PARTY)?;
 
-        // All three converged on one fleet digest, so the restarted party rejoined
-        // the fleet's startup rather than forming a separate one.
+        // All three converged on one fleet sync-state digest, so the restarted party
+        // rejoined the fleet's startup rather than forming a separate one.
         tracing::info!(
-            "all parties agree on startup fleet digest {}",
-            fleet.agreed_fleet_digest().await?
+            "all parties agree on startup fleet sync-state digest {}",
+            fleet.agreed_fleet_sync_state_digest().await?
         );
         Ok(())
     }

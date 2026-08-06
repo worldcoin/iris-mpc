@@ -350,8 +350,8 @@ pub struct Config {
     /// in production; leaving it set wedges the node.
     ///
     /// Deliberately absent from [`CommonConfig`]: it must not reach the cross-party
-    /// config hash, or holding one party would change the startup fleet digest and
-    /// break the very agreement the tests exercise.
+    /// config hash, or holding one party would change the startup fleet sync-state
+    /// digest and break the very agreement the tests exercise.
     #[serde(default)]
     pub startup_hold_at_phase: Option<String>,
 }

@@ -1,8 +1,8 @@
 pub mod startup_phase;
 
 use crate::server::startup_phase::{
-    hash_fleet_sync_states, hash_sync_state, spawn_startup_watch, wait_for_fleet_digest_commit,
-    Phase, StartupStateHandle,
+    hash_fleet_sync_states, hash_sync_state, spawn_startup_watch,
+    wait_for_fleet_sync_state_digest_commit, Phase, StartupStateHandle,
 };
 use crate::services::aws::clients::AwsClients;
 use crate::services::processors::batch::{receive_batch_stream, spawn_db_backed_ingest_task};
@@ -171,29 +171,36 @@ pub async fn server_main(config: Config) -> Result<()> {
     // Digest the exchanged states into the value that keys this startup. Every
     // party computes it from the same states, so agreement needs no extra round
     // trip and no leader.
-    let fleet_digest = hash_fleet_sync_states(&sync_result.all_states)?;
+    let fleet_sync_state_digest = hash_fleet_sync_states(&sync_result.all_states)?;
     tracing::info!(
-        "Derived startup fleet digest {} over {} parties",
-        fleet_digest,
+        "Derived startup fleet sync-state digest {} over {} parties",
+        fleet_sync_state_digest,
         sync_result.all_states.len()
     );
-    startup_state.set_fleet_digest(fleet_digest).await;
+    startup_state
+        .set_fleet_sync_state_digest(fleet_sync_state_digest)
+        .await;
     startup_state.enter(Phase::Commit).await;
 
     // Commit barrier. Nothing below may mutate local storage until every party has
-    // published this same fleet digest: converging over states a peer never agreed
-    // to is the divergence this prevents.
-    wait_for_fleet_digest_commit(&server_coord_config, &verified_peers, fleet_digest).await?;
+    // published this same fleet sync-state digest: converging over states a peer
+    // never agreed to is the divergence this prevents.
+    wait_for_fleet_sync_state_digest_commit(
+        &server_coord_config,
+        &verified_peers,
+        fleet_sync_state_digest,
+    )
+    .await?;
 
-    // From here until we are ready, the fleet digest is what identifies a peer — not
-    // its UUID — so a peer that restarts and recomputes this digest rejoins without
+    // From here until we are ready, the fleet sync-state digest is what identifies a
+    // peer — not its UUID — so a peer that restarts and recomputes it rejoins without
     // forcing us to reload. Armed before converge because the DB load below is long
     // and nothing else watches peers during it.
     let startup_watch = spawn_startup_watch(
         server_coord_config.clone(),
         Arc::clone(&verified_peers),
         Arc::clone(&shutdown_handler),
-        fleet_digest,
+        fleet_sync_state_digest,
     );
 
     startup_state.enter(Phase::Converge).await;
@@ -356,7 +363,12 @@ pub async fn server_main(config: Config) -> Result<()> {
     // in the load could still be missing from `verified_peers` — and everything
     // downstream (the heartbeat's first-contact check, `wait_for_others_ready`)
     // reads the frozen snapshot and kills the node on an unknown UUID.
-    wait_for_fleet_digest_commit(&server_coord_config, &verified_peers, fleet_digest).await?;
+    wait_for_fleet_sync_state_digest_commit(
+        &server_coord_config,
+        &verified_peers,
+        fleet_sync_state_digest,
+    )
+    .await?;
 
     let verified_peers = verified_peers.lock().await.clone();
     init_heartbeat_task(

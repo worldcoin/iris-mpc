@@ -13,17 +13,17 @@
 //! The startup workflows have to stop a party *in* a named phase. Polling
 //! `/startup-state` for that cannot work: on an empty local fleet `propose -> load`
 //! takes ~180 ms end to end, so a 100 ms poll grid routinely first observes the
-//! party already past the intended kill point, having published its fleet digest
-//! and released its peers' commit barrier. So the party is *held* instead:
+//! party already past the intended kill point, having published its fleet sync-state
+//! digest and released its peers' commit barrier. So the party is *held* instead:
 //! [`HawkFleet::start_party`] sets `Config::startup_hold_at_phase` and the party
 //! parks there until stopped; the restart is spawned without the hold. The hold is
 //! excluded from `CommonConfig`, so it does not perturb the derived digest.
 //!
 //! # Why the commit-barrier budget is overridable
 //!
-//! `wait_for_fleet_digest_commit` treats an unreachable peer as "it is restarting,
-//! keep waiting" — which is what makes rejoin work, and why a party that *dies*
-//! is indistinguishable from one coming back. The survivors then wait out the whole
+//! `wait_for_fleet_sync_state_digest_commit` treats an unreachable peer as "it is
+//! restarting, keep waiting" — which is what makes rejoin work, and why a party that
+//! *dies* is indistinguishable from one coming back. The survivors then wait out the whole
 //! 300s `startup_sync_timeout_secs`, longer than [`FLEET_TIMEOUT`], so a workflow
 //! whose expected outcome is "the fleet gives up" would hit the harness deadline
 //! instead of the behaviour it asserts. [`FleetOptions::startup_sync_timeout_secs`]
@@ -35,7 +35,8 @@
 //! `init_hawk_actor` runs `restart_from_checkpoint` — a cross-party consensus round
 //! with a 10s `PEER_ROUND_TIMEOUT` — concurrently with the iris load via
 //! `try_join!`. A party that disappears during the load therefore fails its peers
-//! *inside* the load, whatever the fleet digest comparison would have decided.
+//! *inside* the load, whatever the fleet sync-state digest comparison would have
+//! decided.
 //! Killing during the handshake parks the survivors in the commit barrier, where
 //! the outcome is determined entirely by the digest logic under test. A load-window
 //! rejoin test becomes meaningful once the checkpoint round tolerates a peer
@@ -367,21 +368,21 @@ impl HawkFleet {
             .phase)
     }
 
-    /// Every party's published fleet digest. Fails if any party has not derived one,
-    /// or if they do not all agree.
-    pub async fn agreed_fleet_digest(&self) -> eyre::Result<SyncStateDigest> {
+    /// Every party's published fleet sync-state digest. Fails if any party has not
+    /// derived one, or if they do not all agree.
+    pub async fn agreed_fleet_sync_state_digest(&self) -> eyre::Result<SyncStateDigest> {
         let mut digests = Vec::with_capacity(COUNT_OF_PARTIES);
         for party in 0..COUNT_OF_PARTIES {
             let state = fetch_startup_state(self.configs[party].healthcheck_port).await?;
-            digests.push(state.fleet_digest.ok_or_else(|| {
+            digests.push(state.fleet_sync_state_digest.ok_or_else(|| {
                 eyre!(
-                    "party {party} has not derived a fleet digest (phase {})",
+                    "party {party} has not derived a fleet sync-state digest (phase {})",
                     state.phase
                 )
             })?);
         }
         if digests.iter().any(|digest| *digest != digests[0]) {
-            bail!("parties disagree on the startup fleet digest: {digests:?}");
+            bail!("parties disagree on the startup fleet sync-state digest: {digests:?}");
         }
         Ok(digests[0])
     }
