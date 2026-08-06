@@ -13,17 +13,13 @@ pub const COUNT_OF_PARTIES: usize = 3;
 
 /// Stack size for every thread that may poll a `server_main` future.
 ///
-/// `server_main` is a very large async fn — large enough that both it and this
-/// test binary need `#![recursion_limit = "256"]` — and its future lives on the
-/// stack of whichever thread polls it. Production polls it with
-/// `runtime.block_on` on the **main** thread, which gets the 8 MB Linux default.
-/// The harness instead polls it on a tokio **blocking-pool** thread
-/// (`spawn_blocking` → inner `rt.block_on`), and those default to 2 MB
-/// (`thread_stack_size`, honoured by the blocking pool as well as by workers).
-///
-/// That 4x gap means the harness overflows on futures production handles
-/// comfortably: adding a handful of locals to `server_main` was enough to abort
-/// a worker with "has overflowed its stack" partway through converge. Give the
+/// `server_main`'s future is very large and lives on the stack of whichever thread
+/// polls it. Production polls it with `runtime.block_on` on the **main** thread,
+/// which gets the 8 MB Linux default; the harness polls it on a tokio
+/// blocking-pool thread (`spawn_blocking` → inner `rt.block_on`), which defaults to
+/// 2 MB. That 4x gap means the harness overflows on futures production handles
+/// comfortably — adding a handful of locals to `server_main` was enough to abort a
+/// worker with "has overflowed its stack" partway through converge — so give the
 /// harness more headroom than production rather than budgeting to the byte.
 pub const TEST_THREAD_STACK_SIZE: usize = 16 * 1024 * 1024;
 

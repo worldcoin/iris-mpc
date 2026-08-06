@@ -6,22 +6,15 @@
 /// party 2 is stopped, an extra iris row is inserted into its database, and it is
 /// restarted without the hold. Every party must exit and none may report ready.
 ///
-/// The surviving parties hold an epoch derived from party 2's previous facts; it
-/// now derives a different one. Nobody may proceed, because the agreed plan
-/// describes a fleet state that no longer exists.
-///
-/// Deliberately does not assert the error text, and deliberately does not require
-/// every party to name the mismatch. The party that comes back always detects it:
-/// its first barrier round sees both peers on the old epoch. Its *peers* usually do
-/// not — it publishes the new epoch and then bails within milliseconds, far inside
-/// their poll interval, after which their polls only see a closed port, which the
-/// barrier correctly reads as "a peer is restarting" rather than as disagreement.
-/// They therefore exit on the barrier's own timeout. Both routes satisfy what this
-/// workflow actually needs: nobody serves, and the fleet tears itself down.
-///
-/// Hence [`BARRIER_TIMEOUT_SECS`]. With the 300s default, the survivors would still
-/// be waiting long after `FLEET_TIMEOUT`, and the workflow would fail on the
-/// harness deadline while the fleet was behaving exactly as designed.
+/// Only *some* party has to name the mismatch. The one that comes back always
+/// detects it: its first barrier round sees both peers on the old epoch. Its peers
+/// usually do not — it publishes the new epoch and bails within milliseconds, far
+/// inside their poll interval, after which their polls only see a closed port, which
+/// the barrier correctly reads as "a peer is restarting" rather than as
+/// disagreement, so they exit on their own timeout. Both routes satisfy what this
+/// workflow needs: nobody serves, and the fleet tears itself down. Hence
+/// [`BARRIER_TIMEOUT_SECS`] — with the 300s default the survivors would still be
+/// waiting long after `FLEET_TIMEOUT`.
 ///
 /// The hold is at `Propose`, i.e. *before* party 2 publishes an epoch, which keeps
 /// the survivors parked in the commit barrier. Holding at `Commit` instead would
@@ -82,9 +75,7 @@ impl TestRun for Startup121 {
     async fn exec(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
         // Hand the fleet to `self` before anything can fail, so `teardown` always
-        // gets a chance to stop it. `HawkFleet::drop` is the backstop, but a
-        // graceful stop leaves the ports free for the next workflow sooner.
-        // Party 2 holds in Propose from its first boot; the survivors are not held.
+        // gets a chance to stop it (`HawkFleet::drop` is the backstop).
         let options = FleetOptions {
             holds: array::from_fn(|party| (party == RESTARTED_PARTY).then_some(Phase::Propose)),
             startup_sync_timeout_secs: Some(BARRIER_TIMEOUT_SECS),
@@ -98,14 +89,11 @@ impl TestRun for Startup121 {
 
         // The survivors must already hold an epoch derived from this party's *old*
         // facts before it goes away — otherwise they would read the new ones on
-        // restart and legitimately agree, which is correct behaviour but not the
-        // case under test. Reaching Commit is exactly that: the epoch is derived
-        // and published, and they are now parked in the commit barrier waiting for
-        // party 2, which never publishes one because it is held in Propose.
-        for party in 0..COUNT_OF_PARTIES {
-            if party == RESTARTED_PARTY {
-                continue;
-            }
+        // restart and legitimately agree, which is correct behaviour but not the case
+        // under test. Reaching Commit is exactly that, and leaves them parked in the
+        // commit barrier waiting for party 2, which never publishes an epoch because
+        // it is held in Propose.
+        for party in (0..COUNT_OF_PARTIES).filter(|p| *p != RESTARTED_PARTY) {
             fleet
                 .wait_for_phase(party, Phase::Commit, FLEET_TIMEOUT)
                 .await?;
@@ -128,22 +116,17 @@ impl TestRun for Startup121 {
         );
 
         // Restarted without the hold: it re-derives an epoch, now a different one.
-        fleet.start_party(RESTARTED_PARTY, ctx);
+        fleet.start_party(RESTARTED_PARTY, ctx, None);
 
         // Every party must exit. `wait_all_exited` fails if any is still running at
         // the deadline, which is what a silently-accepted mismatch would look like.
         let outcomes = fleet.wait_all_exited(FLEET_TIMEOUT).await?;
         tracing::info!("fleet refused to start: {outcomes:?}");
 
-        // Some party must have named the mismatch. This is the assertion that ties
-        // the workflow to the check under test: the survivors' own error is a
-        // barrier *timeout*, which a peer that never came back at all would produce
-        // just as well, so "the fleet exited" on its own would pass this workflow
-        // even with the epoch comparison broken.
-        //
-        // Deterministic despite the timing: the returning party's first barrier
-        // round reads both peers still publishing the old epoch, so it is always
-        // the one to report this. Its peers usually do not — see the doc comment.
+        // Some party must have named the mismatch. This ties the workflow to the
+        // check under test: the survivors' own error is a barrier *timeout*, which a
+        // peer that never came back at all would produce just as well, so "the fleet
+        // exited" alone would pass even with the epoch comparison broken.
         let detected = outcomes.iter().any(|outcome| {
             EPOCH_MISMATCH_ERRORS
                 .iter()

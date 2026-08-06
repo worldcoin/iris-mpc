@@ -1,7 +1,8 @@
 pub mod startup_phase;
 
 use crate::server::startup_phase::{
-    spawn_startup_watch, wait_for_epoch_commit, AgreedPlan, PartyFacts, Phase, StartupStateHandle,
+    derive_epoch, facts_digest, spawn_startup_watch, wait_for_epoch_commit, Phase,
+    StartupStateHandle,
 };
 use crate::services::aws::clients::AwsClients;
 use crate::services::processors::batch::{receive_batch_stream, spawn_db_backed_ingest_task};
@@ -133,16 +134,14 @@ pub async fn server_main(config: Config) -> Result<()> {
         server_coord_config.healthcheck_ports
     );
 
-    // Live startup-state document, published alongside the coordination
-    // server's own routes. Unlike `/startup-sync` — which serves a `my_state`
-    // clone captured at construction — this is read from a shared handle, so
-    // peers see the phase we are actually in. Created before the server starts
-    // because its router has to be handed to it.
+    // Live startup-state document, published alongside the coordination server's
+    // own routes. Unlike `/startup-sync` — which serves a `my_state` clone captured
+    // at construction — this is read from a shared handle, so peers see the phase
+    // we are actually in. Created before the server starts because its router has
+    // to be handed to it.
     let startup_state = StartupStateHandle::new(
         server_coord_config.party_id,
-        PartyFacts::from_sync_state(&my_state).digest(),
-    )
-    .with_hold_at(
+        facts_digest(&my_state),
         config
             .startup_hold_at_phase
             .as_deref()
@@ -169,33 +168,32 @@ pub async fn server_main(config: Config) -> Result<()> {
     let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
 
-    // Derive this startup's epoch from the exchanged states. Every party
-    // computes it from the same three fact sets, so agreement needs no extra
-    // round trip and no leader.
-    let plan = AgreedPlan::from_states(&sync_result.all_states)?;
+    // Derive this startup's epoch from the exchanged states. Every party computes
+    // it from the same fact sets, so agreement needs no extra round trip and no
+    // leader.
+    let epoch = derive_epoch(&sync_result.all_states)?;
     tracing::info!(
-        "Derived startup epoch {} over {} parties (my facts {})",
-        plan.epoch(),
-        plan.party_count(),
-        startup_state.snapshot().await.facts.short()
+        "Derived startup epoch {} over {} parties",
+        epoch,
+        sync_result.all_states.len()
     );
-    startup_state.set_epoch(plan.epoch()).await;
+    startup_state.set_epoch(epoch).await;
     startup_state.enter(Phase::Commit).await;
 
-    // Commit barrier. Nothing below may mutate local storage until every party
-    // has published this same epoch: converging under a plan a peer never
-    // agreed to is the divergence this prevents.
-    wait_for_epoch_commit(&server_coord_config, &verified_peers, plan.epoch()).await?;
+    // Commit barrier. Nothing below may mutate local storage until every party has
+    // published this same epoch: converging under a plan a peer never agreed to is
+    // the divergence this prevents.
+    wait_for_epoch_commit(&server_coord_config, &verified_peers, epoch).await?;
 
-    // From here until we are ready, the epoch is what identifies a peer — not
-    // its UUID — so a peer that restarts and re-derives this epoch rejoins
-    // without forcing us to reload. Armed before converge because the DB load
-    // below is long and nothing else watches peers during it.
+    // From here until we are ready, the epoch is what identifies a peer — not its
+    // UUID — so a peer that restarts and re-derives this epoch rejoins without
+    // forcing us to reload. Armed before converge because the DB load below is long
+    // and nothing else watches peers during it.
     let startup_watch = spawn_startup_watch(
         server_coord_config.clone(),
         Arc::clone(&verified_peers),
         Arc::clone(&shutdown_handler),
-        plan.epoch(),
+        epoch,
     );
 
     startup_state.enter(Phase::Converge).await;
@@ -244,29 +242,21 @@ pub async fn server_main(config: Config) -> Result<()> {
         // apart.
         //
         // SAFETY DEPENDENCY: peers serve their SyncState from a snapshot taken
-        // at THEIR boot, so an exchanged frontier can under-report persists
-        // made after that peer booted. Under-reporting releases rows the peers
-        // moved past, and this party re-forms them — a permanent batch
-        // divergence.
+        // at THEIR boot, so an exchanged frontier can under-report persists made
+        // after that peer booted, releasing rows the peers moved past for this
+        // party to re-form — a permanent batch divergence.
         //
-        // What makes this sound is NOT that restarts are always fleet-wide —
-        // `spawn_startup_watch` deliberately lets a peer rejoin a startup in
-        // progress, so that is no longer true. It is sound because a party only
-        // persists rows in the main loop, i.e. after it is ready, and the
-        // startup unready-gate (`wait_for_others_unready`) refuses to let this
-        // startup proceed alongside a peer that is already serving: such a peer
-        // is `is_ready` and has not verified our UUID, so we never get here.
-        // Every snapshot we read therefore belongs to a party that has not
-        // persisted anything since taking it.
+        // This is sound not because restarts are fleet-wide (`spawn_startup_watch`
+        // deliberately lets a peer rejoin a startup in progress) but because a
+        // party only persists rows once it is serving, and the startup unready-gate
+        // (`wait_for_others_unready`) refuses to proceed alongside a peer that is
+        // already serving. Every snapshot we read therefore belongs to a party that
+        // has not persisted anything since taking it. A rejoining peer re-reads the
+        // same snapshots and requires its own facts to be unchanged, so it computes
+        // the frontier it would have on a cold fleet boot.
         //
-        // A rejoining peer does not weaken this: rejoin requires its facts —
-        // including its own frontier — to be unchanged, and it re-reads the same
-        // peer snapshots, so it computes the same frontier it would have on a
-        // cold fleet boot.
-        //
-        // If the unready gate is ever relaxed to let a startup proceed while a
-        // peer is serving, this exchange must move to a live DB read in the sync
-        // endpoint.
+        // If that gate is ever relaxed, this exchange must move to a live DB read
+        // in the sync endpoint.
         let fleet_frontier = sync_result.max_persisted_sequence_number();
         if let Some(frontier) = &fleet_frontier {
             let marked = iris_store
@@ -357,19 +347,16 @@ pub async fn server_main(config: Config) -> Result<()> {
     )
     .await?;
 
-    // A verdict reached during the load can only be acted on here: the load
-    // does not poll the (cooperative) shutdown handler, so this is the first
-    // point where a peer that changed its data mid-load stops us.
+    // A verdict reached during the load can only be acted on here: the load does
+    // not poll the (cooperative) shutdown handler.
     startup_watch.check()?;
 
-    // Re-run the commit barrier before freezing the peer set. The watch records
-    // a rejoined peer's new UUID only on its next poll, so a peer that came back
-    // late in the load could still be missing from `verified_peers` at this
-    // instant — and everything downstream (the heartbeat's first-contact check,
-    // `wait_for_others_ready`) reads the frozen snapshot and kills the node on an
-    // unknown UUID. Blocking here until every peer currently reports our epoch
-    // makes the rejoin deterministic instead of a race against the poll cadence.
-    wait_for_epoch_commit(&server_coord_config, &verified_peers, plan.epoch()).await?;
+    // Re-run the commit barrier before freezing the peer set. The watch records a
+    // rejoined peer's new UUID only on its next poll, so a peer that came back late
+    // in the load could still be missing from `verified_peers` — and everything
+    // downstream (the heartbeat's first-contact check, `wait_for_others_ready`)
+    // reads the frozen snapshot and kills the node on an unknown UUID.
+    wait_for_epoch_commit(&server_coord_config, &verified_peers, epoch).await?;
 
     let verified_peers = verified_peers.lock().await.clone();
     init_heartbeat_task(
