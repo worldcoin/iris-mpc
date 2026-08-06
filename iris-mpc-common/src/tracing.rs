@@ -1,7 +1,7 @@
 use ampc_server_utils::ServiceConfig;
 use eyre::Result;
 use metrics_exporter_statsd::StatsdBuilder;
-use std::{backtrace::Backtrace, panic};
+use std::{backtrace::Backtrace, io::IsTerminal, panic};
 use telemetry_batteries::tracing::{datadog::DatadogBattery, TracingShutdownHandle};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -56,8 +56,14 @@ pub fn initialize_tracing(service_config: Option<ServiceConfig>) -> Result<Traci
         }));
         Ok(tracing_shutdown_handle)
     } else {
+        // `fmt` enables ANSI on the feature flag alone, never checking for a tty.
         tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer().pretty().compact())
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .pretty()
+                    .compact()
+                    .with_ansi(std::io::stdout().is_terminal()),
+            )
             .with(
                 tracing_subscriber::EnvFilter::try_from_default_env()
                     .unwrap_or_else(|_| "info".into()),
