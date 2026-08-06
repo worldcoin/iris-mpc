@@ -68,15 +68,14 @@ use ampc_server_utils::{get_check_addresses, ServerCoordinationConfig};
 use axum::routing::get;
 use axum::Router;
 use chrono::{DateTime, Utc};
-use eyre::{bail, eyre, Result};
+use eyre::{bail, Result};
 use iris_mpc_common::config::CommonConfig;
 use iris_mpc_common::helpers::sha256::sha256_bytes;
 use iris_mpc_common::helpers::sync::{Modification, SyncState};
-use serde::de::Error as _;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use sodiumoxide::hex;
 use std::collections::HashSet;
-use std::fmt;
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
@@ -102,8 +101,21 @@ const EPOCH_DOMAIN: &[u8] = b"iris-mpc/startup-epoch/v1";
 /// distinction the coordination server cannot express today, since `/health`
 /// answers 200 unconditionally and `/ready` only flips after the load completes.
 /// Ordered by progress: a node only ever moves forward within one epoch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    derive_more::FromStr,
+    derive_more::Display,
+)]
+#[display(rename_all = "lowercase")]
+#[from_str(rename_all = "lowercase")]
 pub enum Phase {
     /// Coordination server up, peers not yet mutually visible.
     Discover,
@@ -124,9 +136,9 @@ pub enum Phase {
     Serving,
 }
 
+#[cfg(test)]
 impl Phase {
-    /// Every variant, in progress order.
-    pub const ALL: [Phase; 6] = [
+    const ALL: &'static [Phase] = &[
         Phase::Discover,
         Phase::Propose,
         Phase::Commit,
@@ -134,41 +146,27 @@ impl Phase {
         Phase::Load,
         Phase::Serving,
     ];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Phase::Discover => "discover",
-            Phase::Propose => "propose",
-            Phase::Commit => "commit",
-            Phase::Converge => "converge",
-            Phase::Load => "load",
-            Phase::Serving => "serving",
-        }
-    }
-}
-
-impl fmt::Display for Phase {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-/// Inverse of [`Phase::as_str`], for `startup_hold_at_phase`.
-impl std::str::FromStr for Phase {
-    type Err = eyre::Report;
-
-    fn from_str(value: &str) -> Result<Self> {
-        Phase::ALL
-            .into_iter()
-            .find(|phase| phase.as_str() == value)
-            .ok_or_else(|| eyre!("unknown startup phase {value:?}"))
-    }
 }
 
 /// A 32-byte SHA-256 digest, carried as a lowercase hex string in JSON so the
 /// document stays greppable in logs and readable with `curl`.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Digest([u8; 32]);
+#[derive(
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    derive_more::Debug,
+    derive_more::Display,
+)]
+#[serde_as]
+#[display("{}", hex::encode(_0))] // _0 accesses the inner [u8; 32]
+#[debug("{self}")] // Delegates Debug directly to Display
+pub struct Digest(#[serde_as(as = "Hex")] [u8; 32]);
 
 impl Digest {
     fn of(bytes: &[u8]) -> Self {
@@ -181,57 +179,28 @@ impl Digest {
     }
 }
 
-impl fmt::Debug for Digest {
-    // Hex rather than the derived byte array, so `{:?}` on anything containing a
-    // digest stays readable in errors and logs.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{self}")
-    }
-}
-
-impl fmt::Display for Digest {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&hex::encode(self.0))
-    }
-}
-
-impl Serialize for Digest {
-    // Spelled out because `eyre::Result` is in scope for the rest of the module.
-    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
-        serializer.serialize_str(&hex::encode(self.0))
-    }
-}
-
-impl<'de> Deserialize<'de> for Digest {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
-        let s = String::deserialize(deserializer)?;
-        let bytes = hex::decode(&s)
-            .map_err(|_| D::Error::custom(format!("digest is not valid hex: {s}")))?;
-        let bytes: [u8; 32] = bytes.try_into().map_err(|_| {
-            D::Error::custom(format!(
-                "digest must be 32 bytes, got {} hex chars",
-                s.len()
-            ))
-        })?;
-        Ok(Digest(bytes))
-    }
-}
-
 /// The epoch id: a digest over the sorted multiset of all parties' fact
 /// digests. Distinct from [`Digest`] only in the type system, to keep a facts
 /// digest from being passed where an epoch is expected.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    derive_more::Display,
+)]
+#[display("{}", _0)]
 pub struct Epoch(Digest);
 
 impl Epoch {
     pub fn short(&self) -> String {
         self.0.short()
-    }
-}
-
-impl fmt::Display for Epoch {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
     }
 }
 
@@ -400,7 +369,7 @@ impl StartupStateHandle {
             phase,
             elapsed.num_seconds()
         );
-        metrics::counter!("startup_phase_entered", "phase" => phase.as_str()).increment(1);
+        metrics::counter!("startup_phase_entered", "phase" => phase.to_string()).increment(1);
 
         if self.hold_at == Some(phase) {
             tracing::warn!(
@@ -1032,8 +1001,8 @@ mod tests {
     fn phase_names_round_trip() {
         // `startup_hold_at_phase` is matched against `as_str`, so the two
         // directions must not drift apart.
-        for phase in Phase::ALL {
-            assert_eq!(phase.as_str().parse::<Phase>().unwrap(), phase);
+        for &phase in Phase::ALL {
+            assert_eq!(phase.to_string().parse::<Phase>().unwrap(), phase);
         }
         assert!("laod".parse::<Phase>().is_err());
     }
