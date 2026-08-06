@@ -10,46 +10,36 @@
 //!
 //! # Why the kill point is a configured hold, not a poll
 //!
-//! `startup_120` and `startup_121` have to stop a party *in* a named startup
-//! phase. Polling `/startup-state` for that cannot work: on an empty local fleet
-//! `propose -> load` takes ~180 ms end to end, so a 100 ms poll grid (stretched
-//! further by three parties saturating every core with worker pools) routinely
-//! first observes the party already several phases past the intended kill point,
-//! by which time it has published its epoch and released its peers' commit
-//! barrier — and the survivors are then correctly, not wrongly, in `load`.
-//!
-//! So the party is *held* instead: [`HawkFleet::start_party_holding_at`] sets
-//! `Config::startup_hold_at_phase`, and the party parks in that phase until it is
-//! stopped. The restart is spawned without the hold. The hold is excluded from
-//! `CommonConfig`, so it does not perturb the startup epoch either party derives.
+//! The startup workflows have to stop a party *in* a named phase. Polling
+//! `/startup-state` for that cannot work: on an empty local fleet `propose -> load`
+//! takes ~180 ms end to end, so a 100 ms poll grid routinely first observes the
+//! party already past the intended kill point, having published its epoch and
+//! released its peers' commit barrier. So the party is *held* instead:
+//! [`HawkFleet::start_party`] sets `Config::startup_hold_at_phase` and the party
+//! parks there until stopped; the restart is spawned without the hold. The hold is
+//! excluded from `CommonConfig`, so it does not perturb the derived epoch.
 //!
 //! # Why the commit-barrier budget is overridable
 //!
 //! `wait_for_epoch_commit` treats an unreachable peer as "it is restarting, keep
-//! waiting" — which is exactly what makes rejoin work, and exactly why a party
-//! that *dies* is indistinguishable from one that is coming back. The survivors
-//! then wait out the whole `startup_sync_timeout_secs` budget, 300s by default,
-//! which is longer than [`FLEET_TIMEOUT`]: a workflow whose expected outcome is
-//! "the fleet gives up" would hit the harness deadline instead of the behaviour
-//! it is asserting. [`FleetOptions::startup_sync_timeout_secs`] shortens the
-//! budget for those workflows. Rejoin workflows leave it at the default, since
-//! there the survivors *must* outlast a peer restart.
+//! waiting" — which is what makes rejoin work, and why a party that *dies* is
+//! indistinguishable from one coming back. The survivors then wait out the whole
+//! 300s `startup_sync_timeout_secs`, longer than [`FLEET_TIMEOUT`], so a workflow
+//! whose expected outcome is "the fleet gives up" would hit the harness deadline
+//! instead of the behaviour it asserts. [`FleetOptions::startup_sync_timeout_secs`]
+//! shortens it for those. Rejoin workflows leave the default, since there the
+//! survivors *must* outlast a peer restart.
 //!
-//! # Why the startup-epoch workflows kill during the handshake
+//! # Why the startup workflows kill during the handshake
 //!
-//! `startup_120` and `startup_121` stop a party during the startup *handshake*,
-//! never during the DB load. That is a deliberate limit, not convenience.
-//!
-//! `init_hawk_actor` runs `restart_from_checkpoint` — a cross-party consensus
-//! round with a 10s `PEER_ROUND_TIMEOUT` — concurrently with the iris load via
+//! `init_hawk_actor` runs `restart_from_checkpoint` — a cross-party consensus round
+//! with a 10s `PEER_ROUND_TIMEOUT` — concurrently with the iris load via
 //! `try_join!`. A party that disappears during the load therefore fails its peers
 //! *inside* the load, whatever the epoch layer would have decided. Killing during
 //! the handshake parks the survivors in the commit barrier, where the outcome is
-//! determined entirely by the epoch logic under test.
-//!
-//! A load-window rejoin test becomes meaningful once the checkpoint round
-//! tolerates a peer restart, or once `Phase::Load` is split into a local iris
-//! phase and a cross-party graph phase.
+//! determined entirely by the epoch logic under test. A load-window rejoin test
+//! becomes meaningful once the checkpoint round tolerates a peer restart, or once
+//! `Phase::Load` is split into local iris and cross-party graph phases.
 
 use std::time::Duration;
 
@@ -73,46 +63,38 @@ pub const RESTARTED_PARTY: usize = 2;
 /// CI machine.
 pub const FLEET_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// Startup-config overrides for one party.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct PartyOverrides {
-    /// Park on entering this phase and stay there until stopped.
-    pub hold_at: Option<Phase>,
-    /// Replaces `ServerCoordinationConfig::startup_sync_timeout_secs`, which
-    /// bounds the startup barriers — including the commit barrier.
-    pub startup_sync_timeout_secs: Option<u64>,
-}
-
 /// Startup-config overrides for a whole fleet.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct FleetOptions {
-    /// Phase each party parks in, if any. Applies to the parties' first boot;
-    /// a restart via [`HawkFleet::start_party`] is always hold-free.
+    /// Phase each party parks in, if any. Applies to the parties' first boot; a
+    /// restart is spawned by the workflow and passes its own hold (normally none).
     pub holds: [Option<Phase>; COUNT_OF_PARTIES],
-    /// Barrier budget for every party, inherited by restarts. See the module
-    /// docs for when a workflow needs to shorten it.
+    /// Replaces `ServerCoordinationConfig::startup_sync_timeout_secs`, which bounds
+    /// the startup barriers — including the commit barrier. Inherited by restarts.
+    /// See the module docs for when a workflow needs to shorten it.
     pub startup_sync_timeout_secs: Option<u64>,
 }
 
-/// Spawn `server_main` for one party, applying `overrides` to its config.
+/// Spawn `server_main` for one party.
 ///
 /// `server_main` holds `!Send` state, so the party runs on its own OS thread via
 /// `spawn_blocking` with a dedicated multi-thread runtime.
 ///
-/// Mirrors the per-party body of [`crate::workflows::run_hawk`], which spawns
-/// all three into a `JoinSet` under one shared token. That function is left
-/// alone because every `wal_*` test depends on its cancellation semantics; the
-/// two must be kept in sync.
-pub fn spawn_hawk_party(
+/// Mirrors the per-party body of [`crate::workflows::run_hawk`], which spawns all
+/// three into a `JoinSet` under one shared token. That function is left alone
+/// because every `wal_*` test depends on its cancellation semantics; the two must
+/// be kept in sync.
+fn spawn_hawk_party(
     party: usize,
     configs: &CpuConfigs,
     shutdown: CancellationToken,
     ctx: &CpuTestContext,
-    overrides: PartyOverrides,
+    hold_at: Option<Phase>,
+    startup_sync_timeout_secs: Option<u64>,
 ) -> JoinHandle<eyre::Result<()>> {
     let mut config = crate::utils::configs::make_hawk_config(&configs[party], configs, &ctx.env);
-    config.startup_hold_at_phase = overrides.hold_at.map(|phase| phase.as_str().to_string());
-    if let Some(secs) = overrides.startup_sync_timeout_secs {
+    config.startup_hold_at_phase = hold_at.map(|phase| phase.as_str().to_string());
+    if let Some(secs) = startup_sync_timeout_secs {
         config
             .server_coordination
             .as_mut()
@@ -144,7 +126,7 @@ pub fn spawn_hawk_party(
 }
 
 /// Read one party's `/startup-state` document.
-pub async fn fetch_startup_state(port: u16) -> eyre::Result<StartupState> {
+async fn fetch_startup_state(port: u16) -> eyre::Result<StartupState> {
     let url = format!("http://127.0.0.1:{port}/startup-state");
     let body = reqwest::get(&url)
         .await
@@ -219,9 +201,9 @@ impl HawkFleet {
 
     /// Start all three parties under `options`.
     ///
-    /// A hold has to be in place from the party's *first* boot: it is the only
-    /// way to be sure the party has not already run past the phase the workflow
-    /// means to stop it in. See [`HawkFleet::start_party_holding_at`].
+    /// A hold has to be in place from a party's *first* boot: it is the only way to
+    /// be sure it has not already run past the phase the workflow means to stop it
+    /// in. See [`HawkFleet::start_party`].
     pub async fn start_all_with(
         configs: &CpuConfigs,
         ctx: &CpuTestContext,
@@ -240,44 +222,35 @@ impl HawkFleet {
             startup_sync_timeout_secs: options.startup_sync_timeout_secs,
         };
         for party in 0..COUNT_OF_PARTIES {
-            match options.holds[party] {
-                Some(phase) => fleet.start_party_holding_at(party, ctx, phase),
-                None => fleet.start_party(party, ctx),
-            }
+            fleet.start_party(party, ctx, options.holds[party]);
         }
         Ok(fleet)
     }
 
-    /// Start (or restart) one party. The party must not currently be running.
-    pub fn start_party(&mut self, party: usize, ctx: &CpuTestContext) {
-        self.spawn(party, ctx, None);
-    }
-
-    /// Start one party that parks on entering `phase` and stays there until it is
-    /// stopped, so a test can kill it at an exact point in the handshake.
+    /// Start (or restart) one party, which must not currently be running.
     ///
-    /// See the module docs for why this is a configured hold rather than a
-    /// well-timed poll. A held party never becomes ready, so every workflow using
-    /// this must stop it — [`HawkFleet::stop_party`] or the `Drop` backstop.
-    pub fn start_party_holding_at(&mut self, party: usize, ctx: &CpuTestContext, phase: Phase) {
-        self.spawn(party, ctx, Some(phase));
-        tracing::info!("fleet: party {party} will hold at phase {phase}");
-    }
-
-    fn spawn(&mut self, party: usize, ctx: &CpuTestContext, hold_at: Option<Phase>) {
+    /// With `hold_at` set the party parks on entering that phase and stays there
+    /// until stopped, so a test can kill it at an exact point in the handshake (see
+    /// the module docs for why this is a hold rather than a well-timed poll). A held
+    /// party never becomes ready, so the workflow must stop it — via
+    /// [`HawkFleet::stop_party`] or the `Drop` backstop.
+    pub fn start_party(&mut self, party: usize, ctx: &CpuTestContext, hold_at: Option<Phase>) {
         assert!(
             self.tasks[party].is_none(),
             "party {party} is already running"
         );
         let token = CancellationToken::new();
-        let overrides = PartyOverrides {
+        let task = spawn_hawk_party(
+            party,
+            &self.configs,
+            token.clone(),
+            ctx,
             hold_at,
-            startup_sync_timeout_secs: self.startup_sync_timeout_secs,
-        };
-        let task = spawn_hawk_party(party, &self.configs, token.clone(), ctx, overrides);
+            self.startup_sync_timeout_secs,
+        );
         self.tokens[party] = Some(token);
         self.tasks[party] = Some(task);
-        tracing::info!("fleet: started party {party}");
+        tracing::info!("fleet: started party {party} (hold_at {hold_at:?})");
     }
 
     /// Stop one party and wait until its coordination port is free again, so a
@@ -307,28 +280,23 @@ impl HawkFleet {
             }
         }
 
-        self.wait_for_port_closed(party, Duration::from_secs(30))
-            .await?;
+        // `server_main`'s `TaskMonitor` aborts the coordination listener when the
+        // future is dropped, but the socket close is not synchronous with the task
+        // returning; binding too early would fail the restarted party's listener.
+        wait_for_port_free(
+            self.configs[party].healthcheck_port,
+            Duration::from_secs(30),
+        )
+        .await
+        .wrap_err_with(|| format!("party {party} did not release its coordination port"))?;
         tracing::info!("fleet: stopped party {party}");
         Ok(())
     }
 
-    /// Wait for a stopped party's coordination port to be released.
-    ///
-    /// `server_main`'s `TaskMonitor` aborts the coordination listener when the
-    /// future is dropped, but the socket close is not synchronous with the task
-    /// returning; binding too early would fail the restarted party's listener.
-    async fn wait_for_port_closed(&self, party: usize, dur: Duration) -> eyre::Result<()> {
-        let port = self.configs[party].healthcheck_port;
-        wait_for_port_free(port, dur)
-            .await
-            .wrap_err_with(|| format!("party {party} did not release its coordination port"))
-    }
-
     /// Fail if a party is not running, or if its task has already exited.
     ///
-    /// This is the assertion the rejoin test rests on: the parties that were
-    /// never touched must still be in their original process.
+    /// This is the assertion the rejoin test rests on: the parties that were never
+    /// touched must still be in their original process.
     pub fn assert_still_running(&self, party: usize) -> eyre::Result<()> {
         match &self.tasks[party] {
             None => bail!("party {party} is not running"),
@@ -339,18 +307,24 @@ impl HawkFleet {
         }
     }
 
+    /// [`HawkFleet::assert_still_running`] for every party but `except`.
+    pub fn assert_others_running(&self, except: usize) -> eyre::Result<()> {
+        (0..COUNT_OF_PARTIES)
+            .filter(|party| *party != except)
+            .try_for_each(|party| self.assert_still_running(party))
+    }
+
     /// Wait until a party is sitting in exactly `phase`.
     ///
-    /// Exact, not `>=`: the callers stop the party at this point, and a party
-    /// already past it has published state its peers have acted on, which makes
-    /// the rest of the workflow assert against a different scenario than the one
-    /// it describes. Overshoot therefore fails here — loudly, naming the phase
-    /// actually seen — instead of surfacing later as a confusing assertion about
-    /// a peer that behaved correctly. Pair with
-    /// [`HawkFleet::start_party_holding_at`], which makes overshoot impossible.
+    /// Exact, not `>=`: the callers act on the party at this point, and one already
+    /// past it has published state its peers have acted on, so the rest of the
+    /// workflow would assert against a different scenario than the one it describes.
+    /// Overshoot therefore fails here, naming the phase actually seen, rather than
+    /// surfacing later as a confusing assertion about a peer that behaved correctly.
+    /// Pair with a `hold_at`, which makes overshoot impossible.
     ///
-    /// Tolerates connection failures while the party's coordination server is
-    /// still coming up.
+    /// Tolerates connection failures while the party's coordination server is still
+    /// coming up.
     pub async fn wait_for_phase(
         &self,
         party: usize,
@@ -392,17 +366,23 @@ impl HawkFleet {
             .phase)
     }
 
-    /// Every party's published epoch. Fails if any party has not derived one.
-    pub async fn epochs(&self) -> eyre::Result<[Epoch; COUNT_OF_PARTIES]> {
+    /// Every party's published epoch. Fails if any party has not derived one, or if
+    /// they do not all agree.
+    pub async fn agreed_epoch(&self) -> eyre::Result<Epoch> {
         let mut epochs = Vec::with_capacity(COUNT_OF_PARTIES);
         for party in 0..COUNT_OF_PARTIES {
             let state = fetch_startup_state(self.configs[party].healthcheck_port).await?;
-            let epoch = state
-                .epoch
-                .ok_or_else(|| eyre!("party {party} has not derived an epoch (phase {})", state.phase))?;
-            epochs.push(epoch);
+            epochs.push(state.epoch.ok_or_else(|| {
+                eyre!(
+                    "party {party} has not derived an epoch (phase {})",
+                    state.phase
+                )
+            })?);
         }
-        Ok([epochs[0], epochs[1], epochs[2]])
+        if epochs.iter().any(|epoch| *epoch != epochs[0]) {
+            bail!("parties disagree on the startup epoch: {epochs:?}");
+        }
+        Ok(epochs[0])
     }
 
     /// Wait until all three parties report `is_ready` on `/health`.
@@ -448,13 +428,9 @@ impl HawkFleet {
     /// Wait until every running party's task has exited, returning one outcome
     /// description per party.
     ///
-    /// Used by the mismatch workflow: a peer returning with changed data must stop
-    /// the whole fleet, not just itself.
-    ///
-    /// Fails if any party died of a port conflict. That is a harness failure — a
-    /// previous fleet leaked — and it is indistinguishable from success to a
-    /// caller that only asserts "nobody came up", so it has to be rejected here
-    /// rather than silently passing a workflow for the wrong reason.
+    /// Fails if any party died of a port conflict: that is a harness failure (a
+    /// previous fleet leaked) and is indistinguishable from success to a caller that
+    /// only asserts "nobody came up", so it must not silently pass a workflow.
     pub async fn wait_all_exited(&mut self, dur: Duration) -> eyre::Result<Vec<String>> {
         let deadline = tokio::time::Instant::now() + dur;
         let mut errors = Vec::new();
