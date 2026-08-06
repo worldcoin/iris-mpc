@@ -11,6 +11,7 @@ args:
 env:
   SMPC__CPU_DATABASE__SCHEMA: "SMPC_rerand_genesis_restored_v2_prod_0"
   SMPC__GRAPH_CHECKPOINT_BUCKET_NAME: "ampc-hnsw-graph-store-node-0-prod-eu-central-1"
+  SMPC__SERVICE__SERVICE_NAME: "wal-sidecar-hnsw-0"
 
 initContainer:
   enabled: true
