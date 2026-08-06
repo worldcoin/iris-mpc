@@ -59,8 +59,8 @@ env:
   SMPC__LOAD_CHUNKS_PARALLELISM: "64"
   SMPC__LOAD_CHUNKS_BUFFER_SIZE: "1024"
   SMPC__CLEAR_DB_BEFORE_INIT: "true"
-  SMPC__INIT_DB_SIZE: "0" # "1200000"
-  SMPC__MAX_DB_SIZE: "100000" # "1300000"
+  SMPC__INIT_DB_SIZE: "6000000" # "1200000"
+  SMPC__MAX_DB_SIZE: "7000000" # "1300000"
   SMPC__MAX_BATCH_SIZE: "64"
   SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT: "500"
   SMPC__MATCH_DISTANCES_BUFFER_SIZE: "64"
@@ -82,6 +82,7 @@ env:
   SMPC__ENABLE_MODIFICATIONS_SYNC: "true"
   SMPC__ENABLE_MODIFICATIONS_REPLAY: "true"
   SMPC__ENABLE_DEBUG_TIMING: "true"
+  SMPC__GPU_SCHEMA_NAME_SUFFIX: "benchmark-g7e-12xlarge"
 
 strategy:
   type: Recreate
@@ -116,12 +117,12 @@ startupProbe:
 resources:
   limits:
     cpu: 28
-    memory: 100Gi
+    memory: 510Gi
     nvidia.com/gpu: 1
     vpc.amazonaws.com/efa: 1
   requests:
     cpu: 27
-    memory: 99Gi
+    memory: 510Gi
     nvidia.com/gpu: 1
     vpc.amazonaws.com/efa: 1
 
