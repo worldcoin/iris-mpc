@@ -2,13 +2,13 @@
 /// data, and the whole fleet must refuse to come up.
 ///
 /// Setup: three empty parties, party 2 configured to hold in [`Phase::Propose`].
-/// Exec: once the survivors have committed a fleet digest derived from party 2's
-/// `SyncState`, party 2 is stopped, an extra iris row is inserted into its database,
+/// Exec: once the survivors have committed a fleet sync-state digest derived from
+/// party 2's `SyncState`, party 2 is stopped, an extra iris row is inserted into its database,
 /// and it is restarted without the hold. Every party must exit and none may report
 /// ready.
 ///
 /// Only *some* party has to name the mismatch. The one that comes back always
-/// detects it: its first barrier round sees both peers on the old fleet digest. Its
+/// detects it: its first barrier round sees both peers on the old digest. Its
 /// peers usually do not — it publishes the new digest and bails within milliseconds,
 /// far inside their poll interval, after which their polls only see a closed port, which
 /// the barrier correctly reads as "a peer is restarting" rather than as
@@ -17,8 +17,9 @@
 /// [`BARRIER_TIMEOUT_SECS`] — with the 300s default the survivors would still be
 /// waiting long after `FLEET_TIMEOUT`.
 ///
-/// The hold is at `Propose`, i.e. *before* party 2 publishes a fleet digest, which
-/// keeps the survivors parked in the commit barrier. Holding at `Commit` instead would
+/// The hold is at `Propose`, i.e. *before* party 2 publishes a fleet sync-state
+/// digest, which keeps the survivors parked in the commit barrier. Holding at
+/// `Commit` instead would
 /// release them into the DB load while party 2 has no MPC listener, and they would
 /// die of a checkpoint peer timeout before the data was even changed — a pass for
 /// entirely the wrong reason.
@@ -44,15 +45,15 @@ use std::array;
 /// `exec` finishes in under a minute instead of waiting out the 300s default.
 const BARRIER_TIMEOUT_SECS: u64 = 30;
 
-/// Substrings identifying a party that failed *on the fleet digest comparison*
-/// rather than on a barrier timeout. The two checks that can reach an
+/// Substrings identifying a party that failed *on the fleet sync-state digest
+/// comparison* rather than on a barrier timeout. The two checks that can reach an
 /// `AgreementVerdict::Void` word it differently, and either one proves the
 /// comparison under test actually ran.
-const FLEET_DIGEST_MISMATCH_ERRORS: [&str; 2] = [
-    // wait_for_fleet_digest_commit
-    "startup fleet digest mismatch",
+const FLEET_SYNC_STATE_DIGEST_MISMATCH_ERRORS: [&str; 2] = [
+    // wait_for_fleet_sync_state_digest_commit
+    "startup fleet sync-state digest mismatch",
     // spawn_startup_watch
-    "startup watch found a peer on a different fleet digest",
+    "startup watch found a peer on a different fleet sync-state digest",
 ];
 
 #[derive(Default)]
@@ -88,8 +89,8 @@ impl TestRun for Startup121 {
             .wait_for_phase(RESTARTED_PARTY, Phase::Propose, FLEET_TIMEOUT)
             .await?;
 
-        // The survivors must already hold a fleet digest derived from this party's
-        // *old* SyncState before it goes away — otherwise they would read the new one
+        // The survivors must already hold a fleet sync-state digest derived from this
+        // party's *old* SyncState before it goes away — otherwise they would read the new one
         // on restart and legitimately agree, which is correct behaviour but not the
         // case under test. Reaching Commit is exactly that, and leaves them parked in
         // the commit barrier waiting for party 2, which never publishes a digest
@@ -116,8 +117,8 @@ impl TestRun for Startup121 {
             "inserted iris {next_id} into party {RESTARTED_PARTY} to change its SyncState"
         );
 
-        // Restarted without the hold: it re-derives a fleet digest, now a different
-        // one.
+        // Restarted without the hold: it re-derives a fleet sync-state digest, now a
+        // different one.
         fleet.start_party(RESTARTED_PARTY, ctx, None);
 
         // Every party must exit. `wait_all_exited` fails if any is still running at
@@ -130,14 +131,14 @@ impl TestRun for Startup121 {
         // peer that never came back at all would produce just as well, so "the fleet
         // exited" alone would pass even with the digest comparison broken.
         let detected = outcomes.iter().any(|outcome| {
-            FLEET_DIGEST_MISMATCH_ERRORS
+            FLEET_SYNC_STATE_DIGEST_MISMATCH_ERRORS
                 .iter()
                 .any(|reason| outcome.contains(reason))
         });
         if !detected {
             eyre::bail!(
-                "no party detected the fleet digest mismatch; the fleet stopped for some other \
-                 reason: {outcomes:?}"
+                "no party detected the fleet sync-state digest mismatch; the fleet stopped for \
+                 some other reason: {outcomes:?}"
             );
         }
         Ok(())
@@ -151,7 +152,7 @@ impl TestRun for Startup121 {
             if let Ok(response) = reqwest::get(&url).await {
                 if response.status().is_success() {
                     eyre::bail!(
-                        "party {} reports ready after a fleet digest mismatch",
+                        "party {} reports ready after a fleet sync-state digest mismatch",
                         config.party_id
                     );
                 }
