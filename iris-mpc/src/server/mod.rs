@@ -1,8 +1,8 @@
 pub mod startup_phase;
 
 use crate::server::startup_phase::{
-    derive_epoch, facts_digest, spawn_startup_watch, wait_for_epoch_commit, Phase,
-    StartupStateHandle,
+    hash_fleet_sync_states, hash_sync_state, spawn_startup_watch, wait_for_fleet_digest_commit,
+    Phase, StartupStateHandle,
 };
 use crate::services::aws::clients::AwsClients;
 use crate::services::processors::batch::{receive_batch_stream, spawn_db_backed_ingest_task};
@@ -141,7 +141,7 @@ pub async fn server_main(config: Config) -> Result<()> {
     // to be handed to it.
     let startup_state = StartupStateHandle::new(
         server_coord_config.party_id,
-        facts_digest(&my_state),
+        hash_sync_state(&my_state),
         config
             .startup_hold_at_phase
             .as_deref()
@@ -168,32 +168,32 @@ pub async fn server_main(config: Config) -> Result<()> {
     let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
 
-    // Derive this startup's epoch from the exchanged states. Every party computes
-    // it from the same fact sets, so agreement needs no extra round trip and no
-    // leader.
-    let epoch = derive_epoch(&sync_result.all_states)?;
+    // Digest the exchanged states into the value that keys this startup. Every
+    // party computes it from the same states, so agreement needs no extra round
+    // trip and no leader.
+    let fleet_digest = hash_fleet_sync_states(&sync_result.all_states)?;
     tracing::info!(
-        "Derived startup epoch {} over {} parties",
-        epoch,
+        "Derived startup fleet digest {} over {} parties",
+        fleet_digest,
         sync_result.all_states.len()
     );
-    startup_state.set_epoch(epoch).await;
+    startup_state.set_fleet_digest(fleet_digest).await;
     startup_state.enter(Phase::Commit).await;
 
     // Commit barrier. Nothing below may mutate local storage until every party has
-    // published this same epoch: converging under a plan a peer never agreed to is
-    // the divergence this prevents.
-    wait_for_epoch_commit(&server_coord_config, &verified_peers, epoch).await?;
+    // published this same fleet digest: converging over states a peer never agreed
+    // to is the divergence this prevents.
+    wait_for_fleet_digest_commit(&server_coord_config, &verified_peers, fleet_digest).await?;
 
-    // From here until we are ready, the epoch is what identifies a peer — not its
-    // UUID — so a peer that restarts and re-derives this epoch rejoins without
+    // From here until we are ready, the fleet digest is what identifies a peer — not
+    // its UUID — so a peer that restarts and recomputes this digest rejoins without
     // forcing us to reload. Armed before converge because the DB load below is long
     // and nothing else watches peers during it.
     let startup_watch = spawn_startup_watch(
         server_coord_config.clone(),
         Arc::clone(&verified_peers),
         Arc::clone(&shutdown_handler),
-        epoch,
+        fleet_digest,
     );
 
     startup_state.enter(Phase::Converge).await;
@@ -252,7 +252,7 @@ pub async fn server_main(config: Config) -> Result<()> {
         // (`wait_for_others_unready`) refuses to proceed alongside a peer that is
         // already serving. Every snapshot we read therefore belongs to a party that
         // has not persisted anything since taking it. A rejoining peer re-reads the
-        // same snapshots and requires its own facts to be unchanged, so it computes
+        // same snapshots and requires its own SyncState to be unchanged, so it computes
         // the frontier it would have on a cold fleet boot.
         //
         // If that gate is ever relaxed, this exchange must move to a live DB read
@@ -309,7 +309,7 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     startup_state.enter(Phase::Load).await;
 
-    // Don't start the load if converge already voided the epoch.
+    // Don't start the load if converge already voided this startup.
     startup_watch.check()?;
 
     let mut hawk_actor = init_hawk_actor(
@@ -356,7 +356,7 @@ pub async fn server_main(config: Config) -> Result<()> {
     // in the load could still be missing from `verified_peers` — and everything
     // downstream (the heartbeat's first-contact check, `wait_for_others_ready`)
     // reads the frozen snapshot and kills the node on an unknown UUID.
-    wait_for_epoch_commit(&server_coord_config, &verified_peers, epoch).await?;
+    wait_for_fleet_digest_commit(&server_coord_config, &verified_peers, fleet_digest).await?;
 
     let verified_peers = verified_peers.lock().await.clone();
     init_heartbeat_task(

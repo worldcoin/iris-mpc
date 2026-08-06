@@ -1,4 +1,4 @@
-//! Startup phase tracking and the data-derived *epoch* that keys it.
+//! Startup phase tracking and the data-derived [`SyncStateDigest`] that keys it.
 //!
 //! # Why this exists
 //!
@@ -10,56 +10,59 @@
 //! the multi-minute DB load whenever one peer bounces, even with the data
 //! unchanged.
 //!
-//! So startup coordination is keyed on the *data* instead. An [`Epoch`] is a
-//! digest of the whole starting configuration: every party's DB length,
-//! ingest/queue frontier, modifications tail and common config. It is a
+//! So startup coordination is keyed on the *data* instead. A fleet-wide
+//! [`SyncStateDigest`] covers the whole starting configuration: every party's DB
+//! length, ingest/queue frontier, modifications tail and common config. It is a
 //! deterministic function of the exchanged [`SyncState`]s, so all parties derive
 //! it with no extra round trip and no leader. A peer that restarts and recomputes
-//! the same epoch is provably resuming the same startup and may rejoin; one that
-//! comes back with different facts derives a different epoch, which is exactly
-//! the signal that the initial sync is void and the whole fleet must restart.
+//! the same fleet digest is provably resuming the same startup and may rejoin; one
+//! that comes back with a different [`SyncState`] computes a different fleet
+//! digest, which is exactly the signal that the initial sync is void and the whole
+//! fleet must restart.
 //!
 //! [`SyncState`] carries no party id and peers are polled in an arbitrary order,
-//! so the epoch digests the *sorted multiset* of per-party fact digests rather
-//! than a party-indexed vector. Duplicates are preserved, so a party's facts
-//! changing from "same as peers" to "different" still moves the epoch.
+//! so the fleet digest covers the *sorted multiset* of per-party digests rather
+//! than a party-indexed vector. Duplicates are preserved, so one party's
+//! [`SyncState`] changing from "same as peers" to "different" still changes the
+//! fleet digest.
 //!
 //! # The surviving peers are the durable record
 //!
-//! There is deliberately no persisted epoch table. The authority on which startup
+//! There is deliberately no persisted digest table. The authority on which startup
 //! is in progress is the set of peers still running it, published on
 //! [`STARTUP_STATE_ROUTE`] from their live [`StartupStateHandle`]s. A restarting
-//! party rebuilds its [`SyncState`] from its DB and re-derives the epoch from its
-//! peers' boot snapshots; it reproduces the in-flight epoch **exactly when its own
-//! facts are unchanged**, so the rejoin condition checks itself — no durable
-//! state, no migration, no staleness guard. If every party restarts at once there
-//! is no epoch to rejoin and all three derive a fresh one, which is the correct
-//! outcome rather than a degradation.
+//! party rebuilds its [`SyncState`] from its DB and re-derives the fleet digest
+//! from its peers' boot snapshots; it reproduces the in-flight fleet digest
+//! **exactly when its own [`SyncState`] is unchanged**, so the rejoin condition
+//! checks itself — no durable state, no migration, no staleness guard. If every
+//! party restarts at once there is no in-flight fleet digest to rejoin and all
+//! three derive a fresh one, which is the correct outcome rather than a
+//! degradation.
 //!
 //! # What rejoin covers
 //!
-//! Rejoin works whenever the restarting party's facts are unchanged, which covers
-//! the whole [`Phase::Load`] window — the long one, and the reason any of this
-//! exists — provided [`Phase::Converge`] had no work to do, the normal case for a
-//! healthy fleet.
+//! Rejoin works whenever the restarting party's [`SyncState`] is unchanged, which
+//! covers the whole [`Phase::Load`] window — the long one, and the reason any of
+//! this exists — provided [`Phase::Converge`] had no work to do, the normal case
+//! for a healthy fleet.
 //!
 //! It does not cover a restart after a converge that actually mutated local
-//! state: such a party recomputes different facts and the fleet restarts, exactly
+//! state: such a party computes a different digest and the fleet restarts, exactly
 //! as it does today unconditionally. So the crash-recovery boot, the one where
 //! converge has real work, is also the one that cannot rejoin. Same for
 //! `next_sns_sequence_num` with `db_backed_ingest` disabled, where it is a live
 //! SQS queue head that the converge-phase trim moves.
 //!
-//! Replaying converge on a rejoin is safe because the facts projection was chosen
-//! to *see* every converge-phase mutation, so "facts unchanged" already implies
-//! "converge had no effect": `sync_modifications` shows up in `db_len` and the
-//! modifications digest, `sync_graph_mutations` in that digest via
+//! Replaying converge on a rejoin is safe because [`hash_sync_state`] projects
+//! [`SyncState`] so as to *see* every converge-phase mutation, so "same digest"
+//! already implies "converge had no effect": `sync_modifications` shows up in
+//! `db_len` and the modifications digest, `sync_graph_mutations` in that digest via
 //! `graph_mutation_bytes`, the ingest frontier skip-ahead in
 //! `max_persisted_sequence_number`, the queue trim in `next_sns_sequence_num`. The
 //! one exception, releasing unpersisted ingest claims, touches only rows above the
 //! frontier and is idempotent by construction. Anything added to converge later
-//! must be fact-visible or idempotent, or a party could rejoin having silently
-//! applied it twice.
+//! must be visible to [`hash_sync_state`] or idempotent, or a party could rejoin
+//! having silently applied it twice.
 //!
 //! [`wait_for_others_ready`]: ampc_server_utils::wait_for_others_ready
 
@@ -91,16 +94,16 @@ pub const STARTUP_STATE_ENDPOINT: &str = "startup-state";
 /// Domain separators. Every digest in this module is tagged so that a byte
 /// string which is valid input to one level of the construction cannot be
 /// reinterpreted at another level.
-const FACTS_DOMAIN: &[u8] = b"iris-mpc/startup-facts/v1";
+const SYNC_STATE_DOMAIN: &[u8] = b"iris-mpc/startup-sync-state/v1";
 const MODIFICATIONS_DOMAIN: &[u8] = b"iris-mpc/startup-modifications/v1";
-const EPOCH_DOMAIN: &[u8] = b"iris-mpc/startup-epoch/v1";
+const FLEET_DOMAIN: &[u8] = b"iris-mpc/startup-fleet-sync-state/v1";
 
 /// Where a node is in its startup sequence.
 ///
 /// Published to peers so they can tell "still loading" from "dead" — a
 /// distinction the coordination server cannot express today, since `/health`
 /// answers 200 unconditionally and `/ready` only flips after the load completes.
-/// Ordered by progress: a node only ever moves forward within one epoch.
+/// Ordered by progress: a node only ever moves forward within one startup.
 #[derive(
     Debug,
     Clone,
@@ -119,18 +122,18 @@ const EPOCH_DOMAIN: &[u8] = b"iris-mpc/startup-epoch/v1";
 pub enum Phase {
     /// Coordination server up, peers not yet mutually visible.
     Discover,
-    /// Mutual visibility established; exchanging startup facts.
+    /// Mutual visibility established; exchanging [`SyncState`]s.
     Propose,
-    /// Facts exchanged and an epoch derived from them.
+    /// States exchanged and the fleet digest derived from them.
     Commit,
-    /// Applying the agreed plan to local storage (modifications roll-forward,
-    /// graph WAL, ingest frontier skip-ahead, queue trim).
+    /// Applying the synchronized [`SyncState`]s to local storage (modifications
+    /// roll-forward, graph WAL, ingest frontier skip-ahead, queue trim).
     Converge,
     /// The DB load. NOT peer-independent: `init_hawk_actor` runs
     /// `restart_from_checkpoint`, a cross-party consensus round with a 10s
     /// `PEER_ROUND_TIMEOUT`, concurrently with the iris load. A peer that vanishes
-    /// here fails its peers inside the load, before the epoch layer gets to decide
-    /// anything — so rejoin does not yet cover this window.
+    /// here fails its peers inside the load, before the fleet digest comparison
+    /// gets to decide anything — so rejoin does not yet cover this window.
     Load,
     /// Ready, heartbeat armed, main loop running.
     Serving,
@@ -148,8 +151,12 @@ impl Phase {
     ];
 }
 
-/// A 32-byte SHA-256 digest, carried as a lowercase hex string in JSON so the
-/// document stays greppable in logs and readable with `curl`.
+/// A 32-byte SHA-256 digest over one or more [`SyncState`]s: over a single
+/// party's, from [`hash_sync_state`], or over the whole fleet's, from
+/// [`hash_fleet_sync_states`].
+///
+/// Carried as a lowercase hex string in JSON so the document stays greppable in
+/// logs and readable with `curl`.
 #[derive(
     Clone,
     Copy,
@@ -166,11 +173,11 @@ impl Phase {
 #[serde_as]
 #[display("{}", hex::encode(_0))] // _0 accesses the inner [u8; 32]
 #[debug("{self}")] // Delegates Debug directly to Display
-pub struct Digest(#[serde_as(as = "Hex")] [u8; 32]);
+pub struct SyncStateDigest(#[serde_as(as = "Hex")] [u8; 32]);
 
-impl Digest {
-    fn of(bytes: &[u8]) -> Self {
-        Digest(sha256_bytes(bytes))
+impl SyncStateDigest {
+    fn from_bytes(bytes: &[u8]) -> Self {
+        SyncStateDigest(sha256_bytes(bytes))
     }
 
     /// Short form for log lines, where the full 64 hex chars are noise.
@@ -179,32 +186,7 @@ impl Digest {
     }
 }
 
-/// The epoch id: a digest over the sorted multiset of all parties' fact
-/// digests. Distinct from [`Digest`] only in the type system, to keep a facts
-/// digest from being passed where an epoch is expected.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Serialize,
-    Deserialize,
-    derive_more::Display,
-)]
-#[display("{}", _0)]
-pub struct Epoch(Digest);
-
-impl Epoch {
-    pub fn short(&self) -> String {
-        self.0.short()
-    }
-}
-
-/// Canonical digest of one party's startup facts: everything about its local
+/// Canonical digest of one party's [`SyncState`]: everything about its local
 /// state that the startup sync reads, and that must therefore be identical
 /// across a restart for a rejoin to be safe.
 ///
@@ -215,51 +197,56 @@ impl Epoch {
 ///
 /// Encoded by hand rather than via `serde_json` so the wire format of
 /// [`SyncState`] can evolve (field renames, `serde(default)` additions) without
-/// silently changing every epoch. Every variable-length field is length-prefixed,
-/// so no two distinct fact sets can encode to the same bytes by shifting a
-/// boundary.
-pub fn facts_digest(state: &SyncState) -> Digest {
-    let modifications = digest_modifications(&state.modifications, &state.graph_mutation_bytes);
-
+/// silently changing every digest. Every variable-length field is
+/// length-prefixed, so no two distinct states can encode to the same bytes by
+/// shifting a boundary.
+pub fn hash_sync_state(state: &SyncState) -> SyncStateDigest {
     let mut buf = Vec::with_capacity(128);
-    buf.extend_from_slice(FACTS_DOMAIN);
+    buf.extend_from_slice(SYNC_STATE_DOMAIN);
     buf.extend_from_slice(&state.db_len.to_be_bytes());
     push_opt_u128(&mut buf, state.next_sns_sequence_num);
     push_opt_str(&mut buf, state.max_persisted_sequence_number.as_deref());
-    buf.extend_from_slice(&digest_common_config(&state.common_config).0);
-    buf.extend_from_slice(&modifications.0);
-    Digest::of(&buf)
+    buf.extend_from_slice(&digest_common_config(&state.common_config));
+    buf.extend_from_slice(&digest_modifications(
+        &state.modifications,
+        &state.graph_mutation_bytes,
+    ));
+    SyncStateDigest::from_bytes(&buf)
 }
 
-/// Derive this startup's epoch from all parties' states, including this party's
-/// own.
+/// Digest all parties' states, including this party's own, into the one value
+/// they all key this startup on.
 ///
 /// `states` is expected to be [`SyncResult::all_states`], which is
 /// `[my_state] ++ peers`.
 ///
 /// [`SyncResult::all_states`]: iris_mpc_common::helpers::sync::SyncResult
-pub fn derive_epoch(states: &[SyncState]) -> Result<Epoch> {
+pub fn hash_fleet_sync_states(states: &[SyncState]) -> Result<SyncStateDigest> {
     if states.len() < 2 {
         bail!(
-            "cannot derive a startup epoch from {} state(s): it is only meaningful over the whole \
-             fleet",
+            "cannot digest a fleet of {} state(s): the fleet digest is only meaningful over every \
+             party",
             states.len()
         );
     }
 
-    let mut facts: Vec<Digest> = states.iter().map(facts_digest).collect();
-    // Sort so the epoch is independent of the order peers were polled in.
-    facts.sort_unstable();
+    let mut digests: Vec<SyncStateDigest> = states.iter().map(hash_sync_state).collect();
+    // Sort so the fleet digest is independent of the order peers were polled in.
+    digests.sort_unstable();
 
-    let mut buf = Vec::with_capacity(EPOCH_DOMAIN.len() + 8 + facts.len() * 32);
-    buf.extend_from_slice(EPOCH_DOMAIN);
+    let mut buf = Vec::with_capacity(
+        FLEET_DOMAIN.len()
+            + std::mem::size_of::<u64>()
+            + (digests.len() * std::mem::size_of::<SyncStateDigest>()),
+    );
+    buf.extend_from_slice(FLEET_DOMAIN);
     // Party count is part of the preimage: a two-party and a three-party fleet
     // that happen to share a digest prefix must not collide.
-    buf.extend_from_slice(&(facts.len() as u64).to_be_bytes());
-    for digest in &facts {
+    buf.extend_from_slice(&(digests.len() as u64).to_be_bytes());
+    for digest in &digests {
         buf.extend_from_slice(&digest.0);
     }
-    Ok(Epoch(Digest::of(&buf)))
+    Ok(SyncStateDigest::from_bytes(&buf))
 }
 
 /// The single document a node publishes about its own startup.
@@ -280,11 +267,12 @@ pub struct StartupState {
     pub uuid: Option<String>,
     pub phase: Phase,
     pub phase_started_at: DateTime<Utc>,
-    /// Digest of this party's own facts, known from the moment its
-    /// [`SyncState`] is built — i.e. before any peer has been contacted.
-    pub facts: Digest,
-    /// `None` until the facts exchange completes and the epoch is derived.
-    pub epoch: Option<Epoch>,
+    /// Digest of this party's own [`SyncState`], known from the moment that state
+    /// is built — i.e. before any peer has been contacted.
+    pub sync_state_digest: SyncStateDigest,
+    /// Digest over every party's [`SyncState`], `None` until the state exchange
+    /// completes and it can be derived.
+    pub fleet_digest: Option<SyncStateDigest>,
 }
 
 /// Live, shared handle to this node's [`StartupState`]; the write side of
@@ -308,15 +296,19 @@ impl StartupStateHandle {
     /// every production path: the party parks forever on entering that phase,
     /// *after* publishing it, so peers keep seeing a node legitimately sitting
     /// there — which is precisely the state an e2e test wants to kill.
-    pub fn new(party_id: usize, facts: Digest, hold_at: Option<Phase>) -> Self {
+    pub fn new(
+        party_id: usize,
+        sync_state_digest: SyncStateDigest,
+        hold_at: Option<Phase>,
+    ) -> Self {
         StartupStateHandle {
             state: Arc::new(RwLock::new(StartupState {
                 party_id,
                 uuid: None,
                 phase: Phase::Discover,
                 phase_started_at: Utc::now(),
-                facts,
-                epoch: None,
+                sync_state_digest,
+                fleet_digest: None,
             })),
             hold_at,
         }
@@ -325,8 +317,8 @@ impl StartupStateHandle {
     /// Router to hand to `start_coordination_server_with_extra_routes`.
     ///
     /// Always answers 200: the document is meaningful in every phase, and a
-    /// pre-agreement node is described by `epoch: null` rather than by an error
-    /// status. Peers distinguish the cases by reading the fields.
+    /// pre-agreement node is described by `fleet_digest: null` rather than by an
+    /// error status. Peers distinguish the cases by reading the fields.
     pub fn router(&self) -> Router {
         let state = Arc::clone(&self.state);
         Router::new().route(
@@ -380,9 +372,9 @@ impl StartupStateHandle {
         }
     }
 
-    /// Record the derived epoch. Called once, on entering [`Phase::Commit`].
-    pub async fn set_epoch(&self, epoch: Epoch) {
-        self.state.write().await.epoch = Some(epoch);
+    /// Record the derived fleet digest. Called once, on entering [`Phase::Commit`].
+    pub async fn set_fleet_digest(&self, digest: SyncStateDigest) {
+        self.state.write().await.fleet_digest = Some(digest);
     }
 }
 
@@ -398,8 +390,8 @@ impl StartupStateHandle {
 /// Returns what it managed to read plus a description of each peer it could not,
 /// rather than failing on the first unreachable one. A down peer must not blind us
 /// to the other: the reachable peer's UUID still needs recording (that is what
-/// lets a *restarting* peer past its visibility barrier), and its epoch is still
-/// worth checking for disagreement. Callers that need every peer — the commit
+/// lets a *restarting* peer past its visibility barrier), and its fleet digest is
+/// still worth checking for disagreement. Callers that need every peer — the commit
 /// barrier — check `failures` themselves.
 async fn poll_peer_states(
     config: &ServerCoordinationConfig,
@@ -458,11 +450,12 @@ async fn fetch_peer_state(
 /// Record a peer incarnation as seen, so the coordination server advertises it on
 /// `/health` and the `ampc-server-utils` checks downstream accept it.
 ///
-/// Bookkeeping, not authorization — which lives entirely in the epoch comparison.
-/// `wait_until_startup_visibility_is_complete` needs this from us before a
-/// restarted peer can get far enough to publish an epoch at all, so withholding it
-/// until the epoch matched would deadlock: the peer cannot pass its visibility
-/// barrier until we list its UUID, and cannot publish an epoch until it does.
+/// Bookkeeping, not authorization — which lives entirely in the fleet digest
+/// comparison. `wait_until_startup_visibility_is_complete` needs this from us
+/// before a restarted peer can get far enough to publish a fleet digest at all, so
+/// withholding it until the digests matched would deadlock: the peer cannot pass
+/// its visibility barrier until we list its UUID, and cannot publish a digest
+/// until it does.
 async fn record_peer_uuids(verified_peers: &Arc<Mutex<HashSet<String>>>, peers: &[StartupState]) {
     let mut verified = verified_peers.lock().await;
     for peer in peers {
@@ -479,71 +472,75 @@ async fn record_peer_uuids(verified_peers: &Arc<Mutex<HashSet<String>>>, peers: 
     }
 }
 
-/// What a round of peer observations says about the epoch.
+/// What a round of peer observations says about the fleet digest.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum EpochVerdict {
-    /// Every peer published this epoch.
+enum AgreementVerdict {
+    /// Every peer published this fleet digest.
     Committed,
-    /// One or more peers have not published an epoch yet: either they have not
-    /// reached [`Phase::Commit`], or they restarted and are on their way back.
+    /// One or more peers have not published a fleet digest yet: either they have
+    /// not reached [`Phase::Commit`], or they restarted and are on their way back.
     Pending(Vec<(usize, Phase)>),
-    /// A peer published a different epoch, so the agreed plan is void.
-    Void(Vec<(usize, Option<Epoch>)>),
+    /// A peer published a different fleet digest, so this startup is void.
+    Void(Vec<(usize, Option<SyncStateDigest>)>),
 }
 
-/// Classify one round of peer documents against our own epoch.
+/// Classify one round of peer documents against our own fleet digest.
 ///
 /// Shared by the commit barrier and the startup watch so the two cannot drift on
-/// what counts as disagreement. Fails closed both ways: [`EpochVerdict::Void`]
-/// beats [`EpochVerdict::Pending`], and an empty peer list is `Pending` rather
+/// what counts as disagreement. Fails closed both ways: [`AgreementVerdict::Void`]
+/// beats [`AgreementVerdict::Pending`], and an empty peer list is `Pending` rather
 /// than a vacuous `Committed`.
-fn classify_peers(my_epoch: Epoch, peers: &[StartupState]) -> EpochVerdict {
+fn classify_peers(my_digest: SyncStateDigest, peers: &[StartupState]) -> AgreementVerdict {
     let void: Vec<_> = peers
         .iter()
-        .filter(|peer| peer.epoch.is_some_and(|epoch| epoch != my_epoch))
-        .map(|peer| (peer.party_id, peer.epoch))
+        .filter(|peer| peer.fleet_digest.is_some_and(|digest| digest != my_digest))
+        .map(|peer| (peer.party_id, peer.fleet_digest))
         .collect();
 
     if !void.is_empty() {
-        return EpochVerdict::Void(void);
+        return AgreementVerdict::Void(void);
     }
 
     if peers.is_empty() {
-        return EpochVerdict::Pending(Vec::new());
+        return AgreementVerdict::Pending(Vec::new());
     }
 
     let pending: Vec<_> = peers
         .iter()
-        .filter(|peer| peer.epoch.is_none())
+        .filter(|peer| peer.fleet_digest.is_none())
         .map(|peer| (peer.party_id, peer.phase))
         .collect();
 
     if pending.is_empty() {
-        EpochVerdict::Committed
+        AgreementVerdict::Committed
     } else {
-        EpochVerdict::Pending(pending)
+        AgreementVerdict::Pending(pending)
     }
 }
 
-/// Commit barrier: hold until every peer has published *this* epoch.
+/// Commit barrier: hold until every peer has published *this* fleet digest.
 ///
-/// Nothing may mutate local storage before this returns. Converging under a plan
-/// a peer never agreed to is the failure mode the barrier exists to prevent.
+/// Nothing may mutate local storage before this returns. Converging over states a
+/// peer never agreed to is the failure mode the barrier exists to prevent.
 ///
 /// A mismatch is *not* "the parties' data diverged" — divergence is normal, and is
-/// what the modifications roll-forward exists to repair. The epoch digests the
-/// whole starting configuration, differences included, so parties that legitimately
-/// disagree about their persisted frontier still derive the same epoch. A mismatch
-/// means the parties saw *different inputs*: some party's facts changed between the
-/// exchange and now, in practice because it restarted with different data. The
-/// agreed plan is void, and the error returned here triggers the full-fleet restart
-/// that makes every party re-derive from current state.
-pub async fn wait_for_epoch_commit(
+/// what the modifications roll-forward exists to repair. The fleet digest covers
+/// the whole starting configuration, differences included, so parties that
+/// legitimately disagree about their persisted frontier still derive the same fleet
+/// digest. A mismatch means the parties saw *different inputs*: some party's
+/// [`SyncState`] changed between the exchange and now, in practice because it
+/// restarted with different data. This startup is void, and the error returned here
+/// triggers the full-fleet restart that makes every party re-derive from current
+/// state.
+pub async fn wait_for_fleet_digest_commit(
     config: &ServerCoordinationConfig,
     verified_peers: &Arc<Mutex<HashSet<String>>>,
-    my_epoch: Epoch,
+    my_digest: SyncStateDigest,
 ) -> Result<()> {
-    tracing::info!("Waiting for peers to commit startup epoch {}", my_epoch);
+    tracing::info!(
+        "Waiting for peers to commit startup fleet digest {}",
+        my_digest
+    );
 
     let budget = Duration::from_secs(config.startup_sync_timeout_secs);
     let retry_delay = Duration::from_millis(config.http_query_retry_delay_ms);
@@ -555,10 +552,10 @@ pub async fn wait_for_epoch_commit(
         attempt += 1;
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            metrics::counter!("startup_epoch_commit_timeout").increment(1);
+            metrics::counter!("startup_fleet_digest_commit_timeout").increment(1);
             bail!(
-                "peers did not commit startup epoch {} within {:?}",
-                my_epoch,
+                "peers did not commit startup fleet digest {} within {:?}",
+                my_digest,
                 budget
             );
         }
@@ -577,27 +574,27 @@ pub async fn wait_for_epoch_commit(
             continue;
         }
 
-        match classify_peers(my_epoch, &peers) {
-            EpochVerdict::Void(disagreeing) => {
-                metrics::counter!("startup_epoch_mismatch").increment(1);
+        match classify_peers(my_digest, &peers) {
+            AgreementVerdict::Void(disagreeing) => {
+                metrics::counter!("startup_fleet_digest_mismatch").increment(1);
                 bail!(
-                    "startup epoch mismatch: mine is {}, peers report {:?}. The agreed plan is \
-                     void; every party must restart and re-derive from current state.",
-                    my_epoch,
+                    "startup fleet digest mismatch: mine is {}, peers report {:?}. This startup \
+                     is void; every party must restart and re-derive from current state.",
+                    my_digest,
                     disagreeing
                 );
             }
-            EpochVerdict::Committed => {
+            AgreementVerdict::Committed => {
                 tracing::info!(
-                    "Startup epoch {} committed by all {} parties",
-                    my_epoch,
+                    "Startup fleet digest {} committed by all {} parties",
+                    my_digest,
                     peers.len() + 1
                 );
-                metrics::counter!("startup_epoch_agreement").increment(1);
+                metrics::counter!("startup_fleet_digest_agreement").increment(1);
                 return Ok(());
             }
-            EpochVerdict::Pending(pending) => {
-                tracing::debug!("Peers have not committed an epoch yet: {:?}", pending);
+            AgreementVerdict::Pending(pending) => {
+                tracing::debug!("Peers have not committed a fleet digest yet: {:?}", pending);
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 tokio::time::sleep(retry_delay.min(remaining)).await;
             }
@@ -622,12 +619,12 @@ fn log_poll_failure(attempt: u32, failures: &[String]) {
 /// phases. Aborts the task when dropped.
 pub struct StartupWatch {
     task: JoinHandle<()>,
-    /// Set once, to the reason the epoch was voided.
+    /// Set once, to the reason this startup was voided.
     verdict: Arc<OnceLock<String>>,
 }
 
 impl StartupWatch {
-    /// Fail if the watch observed a peer on a different epoch.
+    /// Fail if the watch observed a peer on a different fleet digest.
     ///
     /// Call at every point where startup can still be abandoned cheaply. In
     /// particular, call it after the DB load: `trigger_manual_shutdown` is
@@ -664,21 +661,21 @@ impl Drop for StartupWatch {
 /// `wait_for_others_ready` and the heartbeat's first-contact check both kill an
 /// otherwise healthy node.
 ///
-/// The watch replaces that identity test with the epoch test:
+/// The watch replaces that identity test with the fleet digest test:
 ///
-/// - peer republishes this epoch (whatever its UUID) — it is provably resuming
-///   the same startup, so it is recorded as verified and both parties carry on.
-///   A restart is invisible to us, which is the entire point;
-/// - peer publishes a different epoch — its data changed, the plan is void, and
-///   we abandon startup;
-/// - peer publishes no epoch, or is unreachable — it is mid-restart. Tolerated:
-///   it will either republish this epoch or a different one, and the ready
-///   barrier still bounds how long a peer may fail to arrive.
+/// - peer republishes this fleet digest (whatever its UUID) — it is provably
+///   resuming the same startup, so it is recorded as verified and both parties
+///   carry on. A restart is invisible to us, which is the entire point;
+/// - peer publishes a different fleet digest — its data changed, this startup is
+///   void, and we abandon it;
+/// - peer publishes no fleet digest, or is unreachable — it is mid-restart.
+///   Tolerated: it will either republish this digest or a different one, and the
+///   ready barrier still bounds how long a peer may fail to arrive.
 pub fn spawn_startup_watch(
     config: ServerCoordinationConfig,
     verified_peers: Arc<Mutex<HashSet<String>>>,
     shutdown_handler: Arc<ShutdownHandler>,
-    epoch: Epoch,
+    fleet_digest: SyncStateDigest,
 ) -> StartupWatch {
     let verdict = Arc::new(OnceLock::new());
 
@@ -709,21 +706,21 @@ pub fn spawn_startup_watch(
                     // to absorb — so it is rate-limited rather than warned on every
                     // round. The ready barrier and the heartbeat bound the terminal
                     // cases. Unlike the commit barrier we carry on with a partial
-                    // view: a reachable peer on the wrong epoch is still a verdict.
+                    // view: a reachable peer on the wrong digest is still a verdict.
                     failures += 1;
                     log_poll_failure(failures, &poll_failures);
                 }
 
                 record_peer_uuids(&verified_peers, &peers).await;
 
-                if let EpochVerdict::Void(disagreeing) = classify_peers(epoch, &peers) {
+                if let AgreementVerdict::Void(disagreeing) = classify_peers(fleet_digest, &peers) {
                     let reason = format!(
-                        "startup watch found a peer on a different epoch: mine is {epoch}, peers \
-                         report {disagreeing:?}. The agreed plan is void; abandoning startup so \
-                         every party re-derives from current state."
+                        "startup watch found a peer on a different fleet digest: mine is \
+                         {fleet_digest}, peers report {disagreeing:?}. This startup is void; \
+                         abandoning it so every party re-derives from current state."
                     );
                     tracing::error!("{}", reason);
-                    metrics::counter!("startup_epoch_mismatch").increment(1);
+                    metrics::counter!("startup_fleet_digest_mismatch").increment(1);
 
                     let _ = verdict.set(reason);
 
@@ -735,11 +732,11 @@ pub fn spawn_startup_watch(
 
                 for peer in &peers {
                     tracing::debug!(
-                        "Startup watch: party {} in phase {} (epoch {})",
+                        "Startup watch: party {} in phase {} (fleet digest {})",
                         peer.party_id,
                         peer.phase,
-                        peer.epoch
-                            .map(|e| e.short())
+                        peer.fleet_digest
+                            .map(|digest| digest.short())
                             .unwrap_or_else(|| "pending".to_string())
                     );
                 }
@@ -750,17 +747,20 @@ pub fn spawn_startup_watch(
     StartupWatch { task, verdict }
 }
 
-fn digest_common_config(config: &CommonConfig) -> Digest {
+/// SHA-256 of the common config, as bytes to fold into [`hash_sync_state`]'s
+/// preimage.
+fn digest_common_config(config: &CommonConfig) -> Vec<u8> {
     // `CommonConfig` is all scalars, `Vec`s and `Option`s — no maps — so
     // `serde_json` field order is the declaration order and the encoding is
     // deterministic. It is also already compared field-by-field across parties
     // by `SyncResult::check_common_config`, so any difference the digest sees
     // is a difference that check would reject anyway.
     let bytes = serde_json::to_vec(config).expect("CommonConfig serialization to JSON failed");
-    Digest::of(&bytes)
+    sha256_bytes(&bytes).to_vec()
 }
 
-/// Digest the modifications tail together with its graph WAL entries.
+/// SHA-256 of the modifications tail together with its graph WAL entries, as
+/// bytes to fold into [`hash_sync_state`]'s preimage.
 ///
 /// `graph_mutation_bytes` is parallel-by-index to `modifications`, so the two
 /// are zipped before being sorted by modification id — canonicalizing the order
@@ -769,7 +769,7 @@ fn digest_common_config(config: &CommonConfig) -> Digest {
 fn digest_modifications(
     modifications: &[Modification],
     graph_mutation_bytes: &[Option<Vec<u8>>],
-) -> Digest {
+) -> Vec<u8> {
     let mut rows: Vec<(&Modification, Option<&Vec<u8>>)> = modifications
         .iter()
         .enumerate()
@@ -796,7 +796,7 @@ fn digest_modifications(
             None => buf.push(0),
         }
     }
-    Digest::of(&buf)
+    sha256_bytes(&buf).to_vec()
 }
 
 // Canonical encoding helpers. Every variable-length value is length-prefixed
@@ -873,62 +873,62 @@ mod tests {
         ]
     }
 
-    fn epoch_of(states: &[SyncState]) -> Epoch {
-        derive_epoch(states).unwrap()
+    fn fleet_digest_of(states: &[SyncState]) -> SyncStateDigest {
+        hash_fleet_sync_states(states).unwrap()
     }
 
     #[test]
-    fn epoch_is_independent_of_collection_order() {
+    fn fleet_digest_is_independent_of_collection_order() {
         // The whole design rests on this: each party polls its peers in its own
-        // order, yet all must derive the same epoch with no extra round trip.
-        let baseline = epoch_of(&fleet());
+        // order, yet all must derive the same fleet digest with no extra round trip.
+        let baseline = fleet_digest_of(&fleet());
 
         let mut rotated = fleet();
         rotated.rotate_left(1);
-        assert_eq!(baseline, epoch_of(&rotated));
+        assert_eq!(baseline, fleet_digest_of(&rotated));
 
         let mut reversed = fleet();
         reversed.reverse();
-        assert_eq!(baseline, epoch_of(&reversed));
+        assert_eq!(baseline, fleet_digest_of(&reversed));
     }
 
     #[test]
-    fn epoch_changes_when_any_party_fact_changes() {
-        let baseline = epoch_of(&fleet());
+    fn fleet_digest_changes_when_any_party_state_changes() {
+        let baseline = fleet_digest_of(&fleet());
 
         // The motivating case: a peer restarts and comes back with a different
-        // persisted frontier. That must void the epoch.
+        // persisted frontier. That must void this startup.
         let mut changed = fleet();
         changed[2].max_persisted_sequence_number = Some("0000000000000011".to_string());
         assert_ne!(
             baseline,
-            epoch_of(&changed),
-            "a changed persisted frontier must change the epoch"
+            fleet_digest_of(&changed),
+            "a changed persisted frontier must change the fleet digest"
         );
 
         let mut changed = fleet();
         changed[0].db_len += 1;
-        assert_ne!(baseline, epoch_of(&changed));
+        assert_ne!(baseline, fleet_digest_of(&changed));
 
         let mut changed = fleet();
         changed[1].modifications[0].status = "COMPLETED_WITH_ERROR".to_string();
-        assert_ne!(baseline, epoch_of(&changed));
+        assert_ne!(baseline, fleet_digest_of(&changed));
 
         let mut changed = fleet();
         changed[1].modifications[0].persisted = false;
-        assert_ne!(baseline, epoch_of(&changed));
+        assert_ne!(baseline, fleet_digest_of(&changed));
 
         let mut changed = fleet();
         changed[1].next_sns_sequence_num = None;
-        assert_ne!(baseline, epoch_of(&changed));
+        assert_ne!(baseline, fleet_digest_of(&changed));
 
         let mut changed = fleet();
         changed[0].graph_mutation_bytes = vec![Some(vec![0xcd; 16]), None];
-        assert_ne!(baseline, epoch_of(&changed));
+        assert_ne!(baseline, fleet_digest_of(&changed));
     }
 
     #[test]
-    fn duplicate_facts_are_kept_as_a_multiset() {
+    fn duplicate_party_digests_are_kept_as_a_multiset() {
         // Two parties in sync and one behind must not hash the same as three
         // parties in sync: collapsing duplicates would erase the difference.
         let all_agree = vec![
@@ -936,18 +936,18 @@ mod tests {
             state(100, Some("0000000000000010")),
             state(100, Some("0000000000000010")),
         ];
-        assert_ne!(epoch_of(&fleet()), epoch_of(&all_agree));
+        assert_ne!(fleet_digest_of(&fleet()), fleet_digest_of(&all_agree));
     }
 
     #[test]
-    fn party_count_is_part_of_the_epoch() {
+    fn party_count_is_part_of_the_fleet_digest() {
         let states = fleet();
-        assert_ne!(epoch_of(&states), epoch_of(&states[..2]));
+        assert_ne!(fleet_digest_of(&states), fleet_digest_of(&states[..2]));
     }
 
     #[test]
-    fn a_single_state_cannot_derive_an_epoch() {
-        assert!(derive_epoch(&fleet()[..1]).is_err());
+    fn a_single_state_cannot_make_a_fleet_digest() {
+        assert!(hash_fleet_sync_states(&fleet()[..1]).is_err());
     }
 
     #[test]
@@ -962,7 +962,7 @@ mod tests {
         b.modifications[0].request_type = "abc".to_string();
         b.modifications[0].status = "d".to_string();
 
-        assert_ne!(facts_digest(&a), facts_digest(&b));
+        assert_ne!(hash_sync_state(&a), hash_sync_state(&b));
     }
 
     #[test]
@@ -974,7 +974,7 @@ mod tests {
         reversed.modifications.reverse();
         reversed.graph_mutation_bytes.reverse();
 
-        assert_eq!(facts_digest(&forward), facts_digest(&reversed));
+        assert_eq!(hash_sync_state(&forward), hash_sync_state(&reversed));
     }
 
     #[test]
@@ -985,16 +985,19 @@ mod tests {
         let mut mispaired = forward.clone();
         mispaired.modifications.reverse();
 
-        assert_ne!(facts_digest(&forward), facts_digest(&mispaired));
+        assert_ne!(hash_sync_state(&forward), hash_sync_state(&mispaired));
     }
 
     #[test]
-    fn epoch_survives_a_json_round_trip() {
-        // Peers parse the epoch out of each other's documents, so the hex encoding
-        // has to be exact.
-        let epoch = epoch_of(&fleet());
-        let json = serde_json::to_string(&epoch).unwrap();
-        assert_eq!(serde_json::from_str::<Epoch>(&json).unwrap(), epoch);
+    fn a_digest_survives_a_json_round_trip() {
+        // Peers parse the fleet digest out of each other's documents, so the hex
+        // encoding has to be exact.
+        let digest = fleet_digest_of(&fleet());
+        let json = serde_json::to_string(&digest).unwrap();
+        assert_eq!(
+            serde_json::from_str::<SyncStateDigest>(&json).unwrap(),
+            digest
+        );
     }
 
     #[test]
@@ -1011,8 +1014,8 @@ mod tests {
     async fn a_hold_publishes_its_phase_before_parking() {
         // The whole point of the hook: peers must see a party legitimately
         // sitting in the held phase, so `enter` has to publish before it parks.
-        let facts = facts_digest(&state(100, None));
-        let handle = StartupStateHandle::new(1, facts, Some(Phase::Propose));
+        let digest = hash_sync_state(&state(100, None));
+        let handle = StartupStateHandle::new(1, digest, Some(Phase::Propose));
 
         let entering = tokio::spawn({
             let handle = handle.clone();
@@ -1031,147 +1034,150 @@ mod tests {
         entering.abort();
 
         // A phase that is not the held one still advances normally.
-        let handle = StartupStateHandle::new(1, facts, Some(Phase::Load));
+        let handle = StartupStateHandle::new(1, digest, Some(Phase::Load));
         handle.enter(Phase::Propose).await;
         assert_eq!(handle.snapshot().await.phase, Phase::Propose);
     }
 
     #[tokio::test]
-    async fn published_document_tracks_phase_and_epoch() {
-        let facts = facts_digest(&state(100, None));
-        let handle = StartupStateHandle::new(1, facts, None);
+    async fn published_document_tracks_phase_and_fleet_digest() {
+        let digest = hash_sync_state(&state(100, None));
+        let handle = StartupStateHandle::new(1, digest, None);
 
         let initial = handle.snapshot().await;
         assert_eq!(initial.phase, Phase::Discover);
-        assert!(initial.epoch.is_none());
+        assert!(initial.fleet_digest.is_none());
         assert!(initial.uuid.is_none());
-        assert_eq!(initial.facts, facts);
+        assert_eq!(initial.sync_state_digest, digest);
 
         handle.set_uuid("uuid-1".to_string()).await;
 
-        let epoch = epoch_of(&fleet());
+        let fleet_digest = fleet_digest_of(&fleet());
         handle.enter(Phase::Propose).await;
         handle.enter(Phase::Commit).await;
-        handle.set_epoch(epoch).await;
+        handle.set_fleet_digest(fleet_digest).await;
 
         let committed = handle.snapshot().await;
         assert_eq!(committed.phase, Phase::Commit);
-        assert_eq!(committed.epoch, Some(epoch));
+        assert_eq!(committed.fleet_digest, Some(fleet_digest));
 
         // The document must survive the wire: peers parse exactly this.
         let json = serde_json::to_string(&committed).unwrap();
         let parsed: StartupState = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.epoch, Some(epoch));
+        assert_eq!(parsed.fleet_digest, Some(fleet_digest));
         assert_eq!(parsed.phase, Phase::Commit);
         assert_eq!(parsed.party_id, 1);
         assert_eq!(parsed.uuid.as_deref(), Some("uuid-1"));
     }
 
-    fn peer(party_id: usize, phase: Phase, epoch: Option<Epoch>) -> StartupState {
+    fn peer(party_id: usize, phase: Phase, fleet_digest: Option<SyncStateDigest>) -> StartupState {
         StartupState {
             party_id,
             uuid: Some(format!("uuid-{party_id}")),
             phase,
             phase_started_at: Utc::now(),
-            facts: facts_digest(&state(100, None)),
-            epoch,
+            sync_state_digest: hash_sync_state(&state(100, None)),
+            fleet_digest,
         }
     }
 
-    fn other_epoch() -> Epoch {
+    fn other_fleet_digest() -> SyncStateDigest {
         let mut changed = fleet();
         changed[0].db_len = 12_345;
-        epoch_of(&changed)
+        fleet_digest_of(&changed)
     }
 
     #[test]
-    fn all_peers_on_my_epoch_is_committed() {
-        let mine = epoch_of(&fleet());
+    fn all_peers_on_my_fleet_digest_is_committed() {
+        let mine = fleet_digest_of(&fleet());
         let peers = [
             peer(1, Phase::Commit, Some(mine)),
             peer(2, Phase::Load, Some(mine)),
         ];
-        assert_eq!(classify_peers(mine, &peers), EpochVerdict::Committed);
+        assert_eq!(classify_peers(mine, &peers), AgreementVerdict::Committed);
     }
 
     #[test]
-    fn a_peer_without_an_epoch_is_pending_not_void() {
+    fn a_peer_without_a_fleet_digest_is_pending_not_void() {
         // Either it has not reached Commit, or it restarted and is on its way
         // back. Neither is a disagreement.
-        let mine = epoch_of(&fleet());
+        let mine = fleet_digest_of(&fleet());
         let peers = [
             peer(1, Phase::Commit, Some(mine)),
             peer(2, Phase::Discover, None),
         ];
         assert_eq!(
             classify_peers(mine, &peers),
-            EpochVerdict::Pending(vec![(2, Phase::Discover)])
+            AgreementVerdict::Pending(vec![(2, Phase::Discover)])
         );
     }
 
     #[test]
-    fn a_peer_on_a_different_epoch_voids_the_plan() {
+    fn a_peer_on_a_different_fleet_digest_voids_the_startup() {
         // The motivating failure: a peer restarted with changed data.
-        let mine = epoch_of(&fleet());
-        let theirs = other_epoch();
+        let mine = fleet_digest_of(&fleet());
+        let theirs = other_fleet_digest();
         let peers = [
             peer(1, Phase::Commit, Some(mine)),
             peer(2, Phase::Commit, Some(theirs)),
         ];
         assert_eq!(
             classify_peers(mine, &peers),
-            EpochVerdict::Void(vec![(2, Some(theirs))])
+            AgreementVerdict::Void(vec![(2, Some(theirs))])
         );
     }
 
     #[test]
     fn void_takes_precedence_over_pending() {
         // Fail closed: one peer still arriving must not mask another peer that
-        // has already proven the plan void.
-        let mine = epoch_of(&fleet());
-        let theirs = other_epoch();
+        // has already proven this startup void.
+        let mine = fleet_digest_of(&fleet());
+        let theirs = other_fleet_digest();
         let peers = [
             peer(1, Phase::Discover, None),
             peer(2, Phase::Commit, Some(theirs)),
         ];
         assert_eq!(
             classify_peers(mine, &peers),
-            EpochVerdict::Void(vec![(2, Some(theirs))])
+            AgreementVerdict::Void(vec![(2, Some(theirs))])
         );
     }
 
     #[test]
     fn no_peers_is_pending_not_vacuously_committed() {
         // A round that saw nobody must never satisfy the commit barrier.
-        let mine = epoch_of(&fleet());
-        assert_eq!(classify_peers(mine, &[]), EpochVerdict::Pending(Vec::new()));
+        let mine = fleet_digest_of(&fleet());
+        assert_eq!(
+            classify_peers(mine, &[]),
+            AgreementVerdict::Pending(Vec::new())
+        );
     }
 
     #[test]
     fn rejoin_condition_is_self_checking() {
         // The core claim of the peer-memory design. A restarting party rebuilds
-        // its own state from its DB and re-derives the epoch from its peers'
+        // its own state from its DB and re-derives the fleet digest from its peers'
         // (unchanged) boot snapshots.
         let original = fleet();
-        let in_flight = epoch_of(&original);
+        let in_flight = fleet_digest_of(&original);
 
-        // Facts unchanged across the restart — converge had no work to do — so
-        // the party reproduces the in-flight epoch and rejoins.
+        // State unchanged across the restart — converge had no work to do — so
+        // the party reproduces the in-flight fleet digest and rejoins.
         let mut rebooted = original.clone();
         rebooted[0] = state(100, Some("0000000000000010"));
         assert_eq!(
             in_flight,
-            epoch_of(&rebooted),
-            "an unchanged party must reproduce the in-flight epoch"
+            fleet_digest_of(&rebooted),
+            "an unchanged party must reproduce the in-flight fleet digest"
         );
 
-        // Facts changed across the restart — converge mutated local state, or the
-        // data really did move — so the epoch differs and the fleet restarts.
+        // State changed across the restart — converge mutated local state, or the
+        // data really did move — so the digest differs and the fleet restarts.
         let mut rebooted = original.clone();
         rebooted[0] = state(101, Some("0000000000000011"));
         assert_ne!(
             in_flight,
-            epoch_of(&rebooted),
+            fleet_digest_of(&rebooted),
             "a changed party must not be able to rejoin"
         );
     }
