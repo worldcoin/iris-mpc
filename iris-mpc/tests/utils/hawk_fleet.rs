@@ -95,7 +95,7 @@ fn spawn_hawk_party(
     startup_sync_timeout_secs: Option<u64>,
 ) -> JoinHandle<eyre::Result<()>> {
     let mut config = crate::utils::configs::make_hawk_config(&configs[party], configs, &ctx.env);
-    config.startup_hold_at_phase = hold_at.map(|phase| phase.as_str().to_string());
+    config.startup_hold_at_phase = hold_at.map(|phase| phase.to_string());
     if let Some(secs) = startup_sync_timeout_secs {
         config
             .server_coordination
@@ -191,16 +191,6 @@ async fn wait_for_port_free(port: u16, dur: Duration) -> eyre::Result<()> {
 }
 
 impl HawkFleet {
-    /// Start all three parties, once their coordination ports are free.
-    ///
-    /// The wait covers a previous fleet still shutting down: `Drop` cancels but
-    /// cannot join, so ports may be released a moment later. Failing here with
-    /// "still listening" is also a far better diagnostic than letting one party
-    /// die of `Address already in use` several seconds into its startup.
-    pub async fn start_all(configs: &CpuConfigs, ctx: &CpuTestContext) -> eyre::Result<Self> {
-        Self::start_all_with(configs, ctx, FleetOptions::default()).await
-    }
-
     /// Start all three parties under `options`.
     ///
     /// A hold has to be in place from a party's *first* boot: it is the only way to
