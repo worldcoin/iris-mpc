@@ -235,13 +235,14 @@ async fn classify_and_extend(
             .search(aby3_store, graph_store, query, ef_supermatch)
             .await?;
 
-        let supermatch_classified = classify_edges(
+        let mut supermatch_classified = classify_edges(
             &supermatch_neighbors.edges,
             aby3_store,
             ef_supermatch,
             margin,
         )
         .await?;
+        supermatch_classified.pre_extension = Some(classified.matches);
 
         if supermatch_classified.anon_stats_matches.saturated {
             tracing::warn!(
@@ -309,6 +310,7 @@ async fn classify_edges(
             results: anon_stats_matches,
             saturated: anon_stats_saturated,
         },
+        pre_extension: None,
     })
 }
 

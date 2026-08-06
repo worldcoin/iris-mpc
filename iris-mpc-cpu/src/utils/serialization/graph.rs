@@ -440,9 +440,32 @@ pub fn read_graph_pair_pruned<R: std::io::Read + ?Sized>(
 /// `$layers`/`$entry_points` are moved out (distinct fields → partial move).
 /// At most one version per serial matches `version_map`, so multi-version
 /// stragglers collapse deterministically onto the live entry.
-/// `set_links_trusted` recomputes each layer's `set_hash`.
+///
+/// Per-node work (edge filtering, canonicalization, Rice encoding) runs on
+/// the rayon pool; a sequential pass merges outcomes into each `Layer` and
+/// the report. Every merged quantity is order-agnostic (sums, sets, sorted
+/// vecs, the commutative `set_hash`), so the output is independent of
+/// scheduling.
 macro_rules! legacy_prune_to_mem {
     ($layers:expr, $entry_points:expr, $last_update_seq_no:expr, $prune:expr) => {{
+        use rayon::prelude::*;
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        // Parallel-pass outcome for one node key.
+        enum NodeOutcome {
+            Dropped {
+                deleted: bool,
+                self_loop: bool,
+            },
+            Kept {
+                encoded: EncodedNeighborhood,
+                out_degree: usize,
+                dropped_deleted: u64,
+                dropped_stale: u64,
+                dropped_self_loop: u64,
+            },
+        }
+
         let src_layers = $layers;
         let prune = $prune;
         let live_at = |id: u32, version: i16| {
@@ -453,73 +476,117 @@ macro_rules! legacy_prune_to_mem {
         // Serial → first key version seen; a second distinct version flags the
         // serial. Same (serial, version) on several layers is normal hierarchy.
         let mut first_key_version: HashMap<u32, i16> = HashMap::with_capacity(layer0_len);
-        // Bottom-layer census: kept keys and the set of kept edge targets
-        // (indexed by serial; sized for the base, grown on demand past it).
+        // Bottom-layer census: kept keys and the set of kept edge targets, as
+        // an atomic bitset. Kept ids version-match `version_map`, so its max
+        // key bounds every id marked or queried here.
         let mut bottom_keys: Vec<u32> = Vec::with_capacity(layer0_len);
-        let mut bottom_in_edge = vec![false; prune.version_map.len() + 1];
-        let mark_in_edge = |v: &mut Vec<bool>, id: u32| {
-            let i = id as usize;
-            if i >= v.len() {
-                v.resize(i + 1, false);
-            }
-            v[i] = true;
-        };
+        let max_serial = prune.version_map.keys().copied().max().unwrap_or(0) as usize;
+        let bottom_in_edge: Vec<AtomicU64> = std::iter::repeat_with(|| AtomicU64::new(0))
+            .take(max_serial / 64 + 1)
+            .collect();
         let mut layers = Vec::with_capacity(src_layers.len());
         for (layer_idx, layer) in src_layers.into_iter().enumerate() {
-            let mut out = Layer::with_capacity(layer.links.len());
-            for (key, edges) in layer.links {
-                match first_key_version.get(&key.id) {
-                    None => {
-                        first_key_version.insert(key.id, key.version);
+            let outcomes: Vec<(u32, i16, NodeOutcome)> = layer
+                .links
+                .into_par_iter()
+                .map(|(key, edges)| {
+                    if !live_at(key.id, key.version) {
+                        // Self-loop fingerprints survive the drop: the serial
+                        // is damaged even though this key's edges go with it.
+                        let outcome = NodeOutcome::Dropped {
+                            deleted: prune.deleted.contains(&key.id),
+                            self_loop: edges.0.iter().any(|e| e.id == key.id),
+                        };
+                        return (key.id, key.version, outcome);
                     }
-                    Some(&v) if v != key.version => {
-                        report.multi_version_serials.insert(key.id);
+                    let mut kept: Vec<u32> = Vec::with_capacity(edges.0.len());
+                    let (mut dropped_deleted, mut dropped_stale, mut dropped_self_loop) = (0, 0, 0);
+                    for e in edges.0 {
+                        if e.id == key.id {
+                            dropped_self_loop += 1;
+                        } else if prune.deleted.contains(&e.id) {
+                            dropped_deleted += 1;
+                        } else if prune.version_map.get(&e.id) != Some(&e.version) {
+                            dropped_stale += 1;
+                        } else {
+                            if layer_idx == 0 {
+                                let i = e.id as usize;
+                                bottom_in_edge[i / 64]
+                                    .fetch_or(1u64 << (i % 64), Ordering::Relaxed);
+                            }
+                            kept.push(e.id);
+                        }
+                    }
+                    // Canonical form for `set_links_encoded_trusted`.
+                    kept.sort_unstable();
+                    kept.dedup();
+                    let out_degree = kept.len();
+                    let encoded = EncodedNeighborhood::encode(&kept)
+                        .unwrap_or_else(|e| panic!("canonicalized neighbor list must encode: {e}"));
+                    let outcome = NodeOutcome::Kept {
+                        encoded,
+                        out_degree,
+                        dropped_deleted,
+                        dropped_stale,
+                        dropped_self_loop,
+                    };
+                    (key.id, key.version, outcome)
+                })
+                .collect();
+            let mut out = Layer::with_capacity(outcomes.len());
+            for (id, version, outcome) in outcomes {
+                match first_key_version.get(&id) {
+                    None => {
+                        first_key_version.insert(id, version);
+                    }
+                    Some(&v) if v != version => {
+                        report.multi_version_serials.insert(id);
                     }
                     Some(_) => {}
                 }
-                if !live_at(key.id, key.version) {
-                    // Self-loop fingerprints survive the drop: the serial is
-                    // damaged even though this key's edges go with it.
-                    if edges.0.iter().any(|e| e.id == key.id) {
-                        report.self_loop_serials.insert(key.id);
-                    }
-                    if prune.deleted.contains(&key.id) {
-                        report.nodes_dropped_deleted += 1;
-                    } else {
-                        report.nodes_dropped_stale += 1;
-                    }
-                    continue;
-                }
-                let mut kept: Vec<u32> = Vec::with_capacity(edges.0.len());
-                for e in edges.0 {
-                    if e.id == key.id {
-                        report.self_loop_serials.insert(key.id);
-                        report.edges_dropped_self_loop += 1;
-                    } else if prune.deleted.contains(&e.id) {
-                        report.edges_dropped_deleted += 1;
-                    } else if prune.version_map.get(&e.id) != Some(&e.version) {
-                        report.edges_dropped_stale += 1;
-                    } else {
-                        if layer_idx == 0 {
-                            mark_in_edge(&mut bottom_in_edge, e.id);
+                match outcome {
+                    NodeOutcome::Dropped { deleted, self_loop } => {
+                        if self_loop {
+                            report.self_loop_serials.insert(id);
                         }
-                        kept.push(e.id);
+                        if deleted {
+                            report.nodes_dropped_deleted += 1;
+                        } else {
+                            report.nodes_dropped_stale += 1;
+                        }
+                    }
+                    NodeOutcome::Kept {
+                        encoded,
+                        out_degree,
+                        dropped_deleted,
+                        dropped_stale,
+                        dropped_self_loop,
+                    } => {
+                        if dropped_self_loop > 0 {
+                            report.self_loop_serials.insert(id);
+                        }
+                        report.edges_dropped_deleted += dropped_deleted;
+                        report.edges_dropped_stale += dropped_stale;
+                        report.edges_dropped_self_loop += dropped_self_loop;
+                        if layer_idx == 0 {
+                            bottom_keys.push(id);
+                            if out_degree == 0 {
+                                report.zero_out_degree.push(id);
+                            }
+                        }
+                        out.set_links_encoded_trusted(id, encoded, 0);
                     }
                 }
-                if layer_idx == 0 {
-                    bottom_keys.push(key.id);
-                    if kept.is_empty() {
-                        report.zero_out_degree.push(key.id);
-                    }
-                }
-                out.set_links_trusted(key.id, kept, 0);
             }
             layers.push(out);
         }
         report.zero_in_degree = bottom_keys
             .iter()
             .copied()
-            .filter(|&id| !bottom_in_edge.get(id as usize).copied().unwrap_or(false))
+            .filter(|&id| {
+                let i = id as usize;
+                bottom_in_edge[i / 64].load(Ordering::Relaxed) & (1u64 << (i % 64)) == 0
+            })
             .collect();
         report.zero_in_degree.sort_unstable();
         report.zero_out_degree.sort_unstable();
