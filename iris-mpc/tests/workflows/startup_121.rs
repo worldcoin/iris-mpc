@@ -2,22 +2,23 @@
 /// data, and the whole fleet must refuse to come up.
 ///
 /// Setup: three empty parties, party 2 configured to hold in [`Phase::Propose`].
-/// Exec: once the survivors have committed an epoch derived from party 2's facts,
-/// party 2 is stopped, an extra iris row is inserted into its database, and it is
-/// restarted without the hold. Every party must exit and none may report ready.
+/// Exec: once the survivors have committed a fleet digest derived from party 2's
+/// `SyncState`, party 2 is stopped, an extra iris row is inserted into its database,
+/// and it is restarted without the hold. Every party must exit and none may report
+/// ready.
 ///
 /// Only *some* party has to name the mismatch. The one that comes back always
-/// detects it: its first barrier round sees both peers on the old epoch. Its peers
-/// usually do not — it publishes the new epoch and bails within milliseconds, far
-/// inside their poll interval, after which their polls only see a closed port, which
+/// detects it: its first barrier round sees both peers on the old fleet digest. Its
+/// peers usually do not — it publishes the new digest and bails within milliseconds,
+/// far inside their poll interval, after which their polls only see a closed port, which
 /// the barrier correctly reads as "a peer is restarting" rather than as
 /// disagreement, so they exit on their own timeout. Both routes satisfy what this
 /// workflow needs: nobody serves, and the fleet tears itself down. Hence
 /// [`BARRIER_TIMEOUT_SECS`] — with the 300s default the survivors would still be
 /// waiting long after `FLEET_TIMEOUT`.
 ///
-/// The hold is at `Propose`, i.e. *before* party 2 publishes an epoch, which keeps
-/// the survivors parked in the commit barrier. Holding at `Commit` instead would
+/// The hold is at `Propose`, i.e. *before* party 2 publishes a fleet digest, which
+/// keeps the survivors parked in the commit barrier. Holding at `Commit` instead would
 /// release them into the DB load while party 2 has no MPC listener, and they would
 /// die of a checkpoint peer timeout before the data was even changed — a pass for
 /// entirely the wrong reason.
@@ -37,21 +38,21 @@ use std::array;
 /// Commit-barrier budget for every party in this workflow.
 ///
 /// Long enough that the returning party gets its chance to publish a mismatched
-/// epoch — a restart costs about eleven seconds here, ten of them the empty-queue
+/// digest — a restart costs about eleven seconds here, ten of them the empty-queue
 /// long poll in `build_sync_state` — and short enough that a fleet which never
 /// observes it still gives up well inside `FLEET_TIMEOUT`. Whichever way it goes,
 /// `exec` finishes in under a minute instead of waiting out the 300s default.
 const BARRIER_TIMEOUT_SECS: u64 = 30;
 
-/// Substrings identifying a party that failed *on the epoch comparison* rather
-/// than on a barrier timeout. The two checks that can reach an
-/// `EpochVerdict::Void` word it differently, and either one proves the
+/// Substrings identifying a party that failed *on the fleet digest comparison*
+/// rather than on a barrier timeout. The two checks that can reach an
+/// `AgreementVerdict::Void` word it differently, and either one proves the
 /// comparison under test actually ran.
-const EPOCH_MISMATCH_ERRORS: [&str; 2] = [
-    // wait_for_epoch_commit
-    "startup epoch mismatch",
+const FLEET_DIGEST_MISMATCH_ERRORS: [&str; 2] = [
+    // wait_for_fleet_digest_commit
+    "startup fleet digest mismatch",
     // spawn_startup_watch
-    "startup watch found a peer on a different epoch",
+    "startup watch found a peer on a different fleet digest",
 ];
 
 #[derive(Default)]
@@ -87,12 +88,12 @@ impl TestRun for Startup121 {
             .wait_for_phase(RESTARTED_PARTY, Phase::Propose, FLEET_TIMEOUT)
             .await?;
 
-        // The survivors must already hold an epoch derived from this party's *old*
-        // facts before it goes away — otherwise they would read the new ones on
-        // restart and legitimately agree, which is correct behaviour but not the case
-        // under test. Reaching Commit is exactly that, and leaves them parked in the
-        // commit barrier waiting for party 2, which never publishes an epoch because
-        // it is held in Propose.
+        // The survivors must already hold a fleet digest derived from this party's
+        // *old* SyncState before it goes away — otherwise they would read the new one
+        // on restart and legitimately agree, which is correct behaviour but not the
+        // case under test. Reaching Commit is exactly that, and leaves them parked in
+        // the commit barrier waiting for party 2, which never publishes a digest
+        // because it is held in Propose.
         for party in (0..COUNT_OF_PARTIES).filter(|p| *p != RESTARTED_PARTY) {
             fleet
                 .wait_for_phase(party, Phase::Commit, FLEET_TIMEOUT)
@@ -102,9 +103,9 @@ impl TestRun for Startup121 {
         fleet.stop_party(RESTARTED_PARTY).await?;
 
         // Change the party's data while it is down. One extra iris row moves
-        // `db_len`, which is part of the fact digest; appending at `count + 1` keeps
-        // the `COUNT(*) == MAX(id)` store invariant intact so the party fails on the
-        // epoch, not on `check_store_consistency`.
+        // `db_len`, which is part of the sync-state digest; appending at `count + 1`
+        // keeps the `COUNT(*) == MAX(id)` store invariant intact so the party fails on
+        // the digest, not on `check_store_consistency`.
         let node = &nodes.0[RESTARTED_PARTY];
         let next_id = node.store.iris_store.count_irises().await? as i64 + 1;
         let code = vec![0u16; IRIS_CODE_LENGTH];
@@ -112,10 +113,11 @@ impl TestRun for Startup121 {
         node.insert_iris_share(next_id, &code, &mask, &code, &mask)
             .await?;
         tracing::info!(
-            "inserted iris {next_id} into party {RESTARTED_PARTY} to change its startup facts"
+            "inserted iris {next_id} into party {RESTARTED_PARTY} to change its SyncState"
         );
 
-        // Restarted without the hold: it re-derives an epoch, now a different one.
+        // Restarted without the hold: it re-derives a fleet digest, now a different
+        // one.
         fleet.start_party(RESTARTED_PARTY, ctx, None);
 
         // Every party must exit. `wait_all_exited` fails if any is still running at
@@ -126,15 +128,15 @@ impl TestRun for Startup121 {
         // Some party must have named the mismatch. This ties the workflow to the
         // check under test: the survivors' own error is a barrier *timeout*, which a
         // peer that never came back at all would produce just as well, so "the fleet
-        // exited" alone would pass even with the epoch comparison broken.
+        // exited" alone would pass even with the digest comparison broken.
         let detected = outcomes.iter().any(|outcome| {
-            EPOCH_MISMATCH_ERRORS
+            FLEET_DIGEST_MISMATCH_ERRORS
                 .iter()
                 .any(|reason| outcome.contains(reason))
         });
         if !detected {
             eyre::bail!(
-                "no party detected the epoch mismatch; the fleet stopped for some other \
+                "no party detected the fleet digest mismatch; the fleet stopped for some other \
                  reason: {outcomes:?}"
             );
         }
@@ -149,7 +151,7 @@ impl TestRun for Startup121 {
             if let Ok(response) = reqwest::get(&url).await {
                 if response.status().is_success() {
                     eyre::bail!(
-                        "party {} reports ready after an epoch mismatch",
+                        "party {} reports ready after a fleet digest mismatch",
                         config.party_id
                     );
                 }

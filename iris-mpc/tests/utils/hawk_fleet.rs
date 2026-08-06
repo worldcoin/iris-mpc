@@ -2,7 +2,7 @@
 //!
 //! [`super::wait_conditions`] treats the fleet as a unit: one
 //! `CancellationToken` for all three parties and a `JoinSet` that only reports
-//! *that* something exited. The startup-epoch tests need finer control — stop
+//! *that* something exited. The startup-sync tests need finer control — stop
 //! exactly one party, prove the other two are still running, restart the first
 //! — so this module keeps a `JoinHandle` and a token per party, and exposes the
 //! `/startup-state` document so a test can act on a party's real phase instead
@@ -13,17 +13,17 @@
 //! The startup workflows have to stop a party *in* a named phase. Polling
 //! `/startup-state` for that cannot work: on an empty local fleet `propose -> load`
 //! takes ~180 ms end to end, so a 100 ms poll grid routinely first observes the
-//! party already past the intended kill point, having published its epoch and
-//! released its peers' commit barrier. So the party is *held* instead:
+//! party already past the intended kill point, having published its fleet digest
+//! and released its peers' commit barrier. So the party is *held* instead:
 //! [`HawkFleet::start_party`] sets `Config::startup_hold_at_phase` and the party
 //! parks there until stopped; the restart is spawned without the hold. The hold is
-//! excluded from `CommonConfig`, so it does not perturb the derived epoch.
+//! excluded from `CommonConfig`, so it does not perturb the derived digest.
 //!
 //! # Why the commit-barrier budget is overridable
 //!
-//! `wait_for_epoch_commit` treats an unreachable peer as "it is restarting, keep
-//! waiting" — which is what makes rejoin work, and why a party that *dies* is
-//! indistinguishable from one coming back. The survivors then wait out the whole
+//! `wait_for_fleet_digest_commit` treats an unreachable peer as "it is restarting,
+//! keep waiting" — which is what makes rejoin work, and why a party that *dies*
+//! is indistinguishable from one coming back. The survivors then wait out the whole
 //! 300s `startup_sync_timeout_secs`, longer than [`FLEET_TIMEOUT`], so a workflow
 //! whose expected outcome is "the fleet gives up" would hit the harness deadline
 //! instead of the behaviour it asserts. [`FleetOptions::startup_sync_timeout_secs`]
@@ -35,17 +35,18 @@
 //! `init_hawk_actor` runs `restart_from_checkpoint` — a cross-party consensus round
 //! with a 10s `PEER_ROUND_TIMEOUT` — concurrently with the iris load via
 //! `try_join!`. A party that disappears during the load therefore fails its peers
-//! *inside* the load, whatever the epoch layer would have decided. Killing during
-//! the handshake parks the survivors in the commit barrier, where the outcome is
-//! determined entirely by the epoch logic under test. A load-window rejoin test
-//! becomes meaningful once the checkpoint round tolerates a peer restart, or once
-//! `Phase::Load` is split into local iris and cross-party graph phases.
+//! *inside* the load, whatever the fleet digest comparison would have decided.
+//! Killing during the handshake parks the survivors in the commit barrier, where
+//! the outcome is determined entirely by the digest logic under test. A load-window
+//! rejoin test becomes meaningful once the checkpoint round tolerates a peer
+//! restart, or once `Phase::Load` is split into local iris and cross-party graph
+//! phases.
 
 use std::time::Duration;
 
 use ampc_server_utils::ReadyProbeResponse;
 use eyre::{bail, eyre, WrapErr};
-use iris_mpc::server::startup_phase::{Epoch, Phase, StartupState};
+use iris_mpc::server::startup_phase::{Phase, StartupState, SyncStateDigest};
 use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -54,7 +55,7 @@ use tracing::{info_span, Instrument};
 use super::runner::CpuTestContext;
 use super::{CpuConfigs, COUNT_OF_PARTIES, TEST_THREAD_STACK_SIZE};
 
-/// Party the startup-epoch workflows restart. Arbitrary — nothing in the design
+/// Party the startup-sync workflows restart. Arbitrary — nothing in the design
 /// distinguishes the parties and the commit barrier is symmetric.
 pub const RESTARTED_PARTY: usize = 2;
 
@@ -366,23 +367,23 @@ impl HawkFleet {
             .phase)
     }
 
-    /// Every party's published epoch. Fails if any party has not derived one, or if
-    /// they do not all agree.
-    pub async fn agreed_epoch(&self) -> eyre::Result<Epoch> {
-        let mut epochs = Vec::with_capacity(COUNT_OF_PARTIES);
+    /// Every party's published fleet digest. Fails if any party has not derived one,
+    /// or if they do not all agree.
+    pub async fn agreed_fleet_digest(&self) -> eyre::Result<SyncStateDigest> {
+        let mut digests = Vec::with_capacity(COUNT_OF_PARTIES);
         for party in 0..COUNT_OF_PARTIES {
             let state = fetch_startup_state(self.configs[party].healthcheck_port).await?;
-            epochs.push(state.epoch.ok_or_else(|| {
+            digests.push(state.fleet_digest.ok_or_else(|| {
                 eyre!(
-                    "party {party} has not derived an epoch (phase {})",
+                    "party {party} has not derived a fleet digest (phase {})",
                     state.phase
                 )
             })?);
         }
-        if epochs.iter().any(|epoch| *epoch != epochs[0]) {
-            bail!("parties disagree on the startup epoch: {epochs:?}");
+        if digests.iter().any(|digest| *digest != digests[0]) {
+            bail!("parties disagree on the startup fleet digest: {digests:?}");
         }
-        Ok(epochs[0])
+        Ok(digests[0])
     }
 
     /// Wait until all three parties report `is_ready` on `/health`.

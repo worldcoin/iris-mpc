@@ -174,12 +174,12 @@ fn test_wal_111() -> eyre::Result<()> {
 
 // ---------------------------------------------------------------------------
 // startup_120 – startup_121: single-party restart during the startup handshake,
-// exercising the data-derived startup epoch.
+// exercising the data-derived startup fleet digest.
 // ---------------------------------------------------------------------------
 
-/// Rejoin: one party restarts mid-handshake with unchanged data. It rejoins the
-/// same startup epoch; the other two neither restart nor advance past the commit
-/// barrier while it is gone.
+/// Rejoin: one party restarts mid-handshake with unchanged data. It recomputes the
+/// same fleet digest and rejoins; the other two neither restart nor advance past the
+/// commit barrier while it is gone.
 #[test]
 #[serial]
 #[ignore = "requires external setup"]
@@ -188,7 +188,7 @@ fn test_startup_120() -> eyre::Result<()> {
 }
 
 /// Mismatch: one party restarts mid-handshake with changed data, so it derives a
-/// different epoch than its peers hold. No party may come up.
+/// different fleet digest than its peers hold. No party may come up.
 #[test]
 #[serial]
 #[ignore = "requires external setup"]
