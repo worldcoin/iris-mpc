@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "dev"
+      - "sw/harden_state_machine"
 
     paths-ignore:
       - "deploy/**"
