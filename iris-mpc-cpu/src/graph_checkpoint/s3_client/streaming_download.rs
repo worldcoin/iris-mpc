@@ -24,7 +24,7 @@
 //! (`Range: bytes=START-END`), up to [`DEFAULT_DOWNLOAD_PARALLELISM`] in
 //! flight at once and emitted in ascending offset order. Each range is
 //! fetched independently and retried up to [`RANGE_MAX_RETRIES`] times with
-//! [`RANGE_RETRY_DELAY`] between attempts before it bubbles up as a fatal
+//! `RANGE_RETRY_DELAY` between attempts before it bubbles up as a fatal
 //! error. Transient network errors thus cost at most one range re-fetch,
 //! not a full restart of the download.
 //!

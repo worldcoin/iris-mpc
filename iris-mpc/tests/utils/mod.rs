@@ -2,6 +2,7 @@ use iris_mpc_cpu::graph_checkpoint::{PruningMode, TieredPruningConfig};
 
 pub mod configs;
 pub mod cpu_node;
+pub mod hawk_fleet;
 pub mod key_rotation;
 pub mod runner;
 pub mod wait_conditions;
@@ -9,6 +10,14 @@ pub mod wal_builder;
 
 /// Number of MPC parties.
 pub const COUNT_OF_PARTIES: usize = 3;
+
+/// Stack size for every thread the harness owns: the runtime's workers and the
+/// thread `run_test!` polls the test body on.
+///
+/// `server_main`'s future is very large, but it no longer lives on a thread stack —
+/// [`hawk_fleet::hawk_party`] is `tokio::spawn`ed, which moves the future into a
+/// heap-allocated task.
+pub const TEST_THREAD_STACK_SIZE: usize = 16 * 1024 * 1024;
 
 pub const MIN_MUTATIONS_PER_SIDECAR_CYCLE: usize = 5;
 
