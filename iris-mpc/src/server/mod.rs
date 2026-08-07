@@ -1,7 +1,7 @@
 pub mod startup_phase;
 
 use crate::server::startup_phase::{
-    hash_fleet_sync_states, hash_sync_state, spawn_startup_watch,
+    hash_fleet_sync_states, hash_sync_state, spawn_desync_watch,
     wait_for_fleet_sync_state_digest_commit, Phase, StartupStateHandle,
 };
 use crate::services::aws::clients::AwsClients;
@@ -134,11 +134,6 @@ pub async fn server_main(config: Config) -> Result<()> {
         server_coord_config.healthcheck_ports
     );
 
-    // Live startup-state document, published alongside the coordination server's
-    // own routes. Unlike `/startup-sync` — which serves a `my_state` clone captured
-    // at construction — this is read from a shared handle, so peers see the phase
-    // we are actually in. Created before the server starts because its router has
-    // to be handed to it.
     let startup_state = StartupStateHandle::new(
         server_coord_config.party_id,
         hash_sync_state(&my_state),
@@ -168,9 +163,6 @@ pub async fn server_main(config: Config) -> Result<()> {
     let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
 
-    // Digest the exchanged states into the value that keys this startup. Every
-    // party computes it from the same states, so agreement needs no extra round
-    // trip and no leader.
     let fleet_sync_state_digest = hash_fleet_sync_states(&sync_result.all_states)?;
     tracing::info!(
         "Derived startup fleet sync-state digest {} over {} parties",
@@ -182,9 +174,6 @@ pub async fn server_main(config: Config) -> Result<()> {
         .await;
     startup_state.enter(Phase::Commit).await;
 
-    // Commit barrier. Nothing below may mutate local storage until every party has
-    // published this same fleet sync-state digest: converging over states a peer
-    // never agreed to is the divergence this prevents.
     wait_for_fleet_sync_state_digest_commit(
         &server_coord_config,
         &verified_peers,
@@ -192,11 +181,7 @@ pub async fn server_main(config: Config) -> Result<()> {
     )
     .await?;
 
-    // From here until we are ready, the fleet sync-state digest is what identifies a
-    // peer — not its UUID — so a peer that restarts and recomputes it rejoins without
-    // forcing us to reload. Armed before converge because the DB load below is long
-    // and nothing else watches peers during it.
-    let startup_watch = spawn_startup_watch(
+    let desync_watch = spawn_desync_watch(
         server_coord_config.clone(),
         Arc::clone(&verified_peers),
         Arc::clone(&shutdown_handler),
@@ -253,7 +238,7 @@ pub async fn server_main(config: Config) -> Result<()> {
         // after that peer booted, releasing rows the peers moved past for this
         // party to re-form — a permanent batch divergence.
         //
-        // This is sound not because restarts are fleet-wide (`spawn_startup_watch`
+        // This is sound not because restarts are fleet-wide (`spawn_desync_watch`
         // deliberately lets a peer rejoin a startup in progress) but because a
         // party only persists rows once it is serving, and the startup unready-gate
         // (`wait_for_others_unready`) refuses to proceed alongside a peer that is
@@ -315,9 +300,7 @@ pub async fn server_main(config: Config) -> Result<()> {
     }
 
     startup_state.enter(Phase::Load).await;
-
-    // Don't start the load if converge already voided this startup.
-    startup_watch.check()?;
+    desync_watch.check()?;
 
     let mut hawk_actor = init_hawk_actor(
         &config,
@@ -354,9 +337,7 @@ pub async fn server_main(config: Config) -> Result<()> {
     )
     .await?;
 
-    // A verdict reached during the load can only be acted on here: the load does
-    // not poll the (cooperative) shutdown handler.
-    startup_watch.check()?;
+    desync_watch.check()?;
 
     // Re-run the commit barrier before freezing the peer set. The watch records a
     // rejoined peer's new UUID only on its next poll, so a peer that came back late
@@ -383,7 +364,7 @@ pub async fn server_main(config: Config) -> Result<()> {
     set_node_ready(is_ready_flag);
     wait_for_others_ready(&server_coord_config, verified_peers).await?;
     startup_state.enter(Phase::Serving).await;
-    startup_watch.stop();
+    desync_watch.stop();
 
     background_tasks.check_tasks();
 

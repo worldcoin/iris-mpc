@@ -1,13 +1,5 @@
 //! Per-party control over the three `server_main` instances.
 //!
-//! [`super::wait_conditions`] treats the fleet as a unit: one
-//! `CancellationToken` for all three parties and a `JoinSet` that only reports
-//! *that* something exited. The startup-sync tests need finer control — stop
-//! exactly one party, prove the other two are still running, restart the first
-//! — so this module keeps a `JoinHandle` and a token per party, and exposes the
-//! `/startup-state` document so a test can act on a party's real phase instead
-//! of guessing with sleeps.
-//!
 //! # Why the kill point is a configured hold, not a poll
 //!
 //! The startup workflows have to stop a party *in* a named phase. Polling
@@ -38,10 +30,7 @@
 //! *inside* the load, whatever the fleet sync-state digest comparison would have
 //! decided.
 //! Killing during the handshake parks the survivors in the commit barrier, where
-//! the outcome is determined entirely by the digest logic under test. A load-window
-//! rejoin test becomes meaningful once the checkpoint round tolerates a peer
-//! restart, or once `Phase::Load` is split into local iris and cross-party graph
-//! phases.
+//! the outcome is determined entirely by the digest logic under test.
 
 use std::time::Duration;
 
@@ -80,13 +69,6 @@ pub struct FleetOptions {
 
 /// One party's `server_main`, ended by whichever of `shutdown` or `abort` fires
 /// first.
-///
-/// `server_main` holds `!Send` state, so the party runs on its own OS thread via
-/// `spawn_blocking` with a dedicated multi-thread runtime. The returned future is
-/// `Send`, which leaves supervision to the caller: [`HawkFleet::start_party`]
-/// spawns one task per party so it can stop them individually, while
-/// [`crate::workflows::run_hawk`] collects all three into a `JoinSet` under one
-/// shared token.
 pub async fn hawk_party(
     party: usize,
     config: Config,
@@ -136,18 +118,6 @@ pub struct HawkFleet {
 }
 
 /// Cancel and abort every party when the fleet goes out of scope.
-///
-/// Essential, not tidiness. Dropping a `JoinHandle` *detaches* its task, so
-/// without this a workflow that fails partway through `exec` — before it hands
-/// the fleet to `self` — leaves three `server_main` instances running with their
-/// coordination ports held, and the next workflow in the same test process dies
-/// with `Address already in use`.
-///
-/// Cancelling the token is the part that matters: the party runs inside
-/// `spawn_blocking`, which cannot be aborted once started, so it only stops when
-/// `server_main`'s `select!` observes the cancellation. The port is therefore
-/// freed shortly *after* the drop, not during it — which is why
-/// [`HawkFleet::start_all`] waits for ports rather than assuming they are free.
 impl Drop for HawkFleet {
     fn drop(&mut self) {
         for party in 0..COUNT_OF_PARTIES {
@@ -247,8 +217,6 @@ impl HawkFleet {
             .take()
             .ok_or_else(|| eyre!("party {party} has a token but no task"))?;
 
-        // `&mut task` so the handle survives a timeout and can be aborted. Letting
-        // it drop would detach the task instead of stopping it.
         match tokio::time::timeout(Duration::from_secs(60), &mut task).await {
             Ok(Ok(Ok(()))) => {}
             Ok(Ok(Err(err))) => {
@@ -262,9 +230,6 @@ impl HawkFleet {
             }
         }
 
-        // `server_main`'s `TaskMonitor` aborts the coordination listener when the
-        // future is dropped, but the socket close is not synchronous with the task
-        // returning; binding too early would fail the restarted party's listener.
         wait_for_port_free(
             self.configs[party].healthcheck_port,
             Duration::from_secs(30),
@@ -275,10 +240,6 @@ impl HawkFleet {
         Ok(())
     }
 
-    /// Fail if a party is not running, or if its task has already exited.
-    ///
-    /// This is the assertion the rejoin test rests on: the parties that were never
-    /// touched must still be in their original process.
     pub fn assert_still_running(&self, party: usize) -> eyre::Result<()> {
         match &self.tasks[party] {
             None => bail!("party {party} is not running"),
