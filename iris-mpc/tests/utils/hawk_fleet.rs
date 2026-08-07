@@ -95,6 +95,17 @@ pub async fn hawk_party(
     .and_then(|r| r)
 }
 
+/// Read one party's `/health` document.
+async fn fetch_health(port: u16) -> eyre::Result<ReadyProbeResponse> {
+    let url = format!("http://127.0.0.1:{port}/health");
+    reqwest::get(&url)
+        .await
+        .wrap_err_with(|| format!("GET {url} failed"))?
+        .json::<ReadyProbeResponse>()
+        .await
+        .wrap_err_with(|| format!("deserializing {url} failed"))
+}
+
 /// Read one party's `/startup-state` document.
 async fn fetch_startup_state(port: u16) -> eyre::Result<StartupState> {
     let url = format!("http://127.0.0.1:{port}/startup-state");
@@ -309,28 +320,30 @@ impl HawkFleet {
             .phase)
     }
 
-    /// One party's own sync-state digest, once it is publishing `/startup-state`.
+    /// Wait until a party publishes `/startup-state` with its coordination UUID set,
+    /// and return the whole document.
     ///
-    /// Polls rather than reading once: the digest is computed *before* the
-    /// coordination server exists (it is an argument to `StartupStateHandle::new`),
-    /// so after a restart there is a window — the migrations plus the ~10s
-    /// empty-queue long poll in `build_sync_state` — where nothing answers the port.
-    /// Once the route answers, the digest is already there.
+    /// Polls rather than reading once: `party_sync_state_digest` is computed *before*
+    /// the coordination server exists (it is an argument to `StartupStateHandle::new`)
+    /// and the UUID is set just after, so on a fresh boot there is a window — the
+    /// migrations plus the ~10s empty-queue long poll in `build_sync_state` — where
+    /// nothing answers the port, then a brief one where `uuid` is still `None`.
     ///
-    /// Unlike [`HawkFleet::agreed_fleet_sync_state_digest`] this is peer-independent,
-    /// which is what lets a workflow compare a party's state across a restart
-    /// without needing its peers to be alive.
-    pub async fn wait_for_party_sync_state_digest(
+    /// Unlike [`HawkFleet::agreed_fleet_sync_state_digest`] this reads one party in
+    /// isolation, which is what lets a workflow compare a party against itself across
+    /// a restart without needing its peers to be alive.
+    pub async fn wait_for_startup_state(
         &self,
         party: usize,
         dur: Duration,
-    ) -> eyre::Result<SyncStateDigest> {
+    ) -> eyre::Result<StartupState> {
         let port = self.configs[party].healthcheck_port;
         let deadline = tokio::time::Instant::now() + dur;
 
         loop {
             match fetch_startup_state(port).await {
-                Ok(state) => return Ok(state.party_sync_state_digest),
+                Ok(state) if state.uuid.is_some() => return Ok(state),
+                Ok(_) => tracing::debug!("party {party} has not minted a UUID yet"),
                 Err(err) => tracing::debug!("party {party} startup state unavailable: {err:#}"),
             }
 
@@ -340,6 +353,45 @@ impl HawkFleet {
                 bail!("party {party} did not publish a startup state within {dur:?}");
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// One party's `/health` document.
+    pub async fn health(&self, party: usize) -> eyre::Result<ReadyProbeResponse> {
+        fetch_health(self.configs[party].healthcheck_port).await
+    }
+
+    /// Wait until a party has committed to tearing itself down: either it reports
+    /// `shutting_down` on `/health`, or its task has already exited.
+    ///
+    /// Deciding and finishing are separate events here, and only the decision is on
+    /// a bounded clock — `trigger_manual_shutdown` flips the flag immediately, while
+    /// `server_main` does not currently return on it, so a party can outlive its own
+    /// decision indefinitely. Either observation settles the question a workflow is
+    /// asking, and accepting both means a workflow written against today's behaviour
+    /// keeps passing if the exit path is later fixed.
+    pub async fn wait_for_teardown(&self, party: usize, dur: Duration) -> eyre::Result<()> {
+        let deadline = tokio::time::Instant::now() + dur;
+
+        loop {
+            if self.assert_still_running(party).is_err() {
+                tracing::info!("party {party} exited rather than only flagging shutdown");
+                return Ok(());
+            }
+
+            match self.health(party).await {
+                Ok(probe) if probe.shutting_down => return Ok(()),
+                Ok(_) => {}
+                Err(err) => tracing::debug!("party {party} health unreadable: {err:#}"),
+            }
+
+            if tokio::time::Instant::now() >= deadline {
+                bail!(
+                    "party {party} neither flagged shutdown nor exited within {dur:?}; it is still \
+                     serving after a peer restarted"
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
         }
     }
 
