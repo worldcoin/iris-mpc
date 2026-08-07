@@ -1,7 +1,7 @@
 //! Startup phase tracking and the data-derived [`SyncStateDigest`] that keys it.
 //!
 //! Peer coordination during startup is keyed on a random per-boot UUID: the
-//! heartbeat's first-contact check and [`wait_for_others_ready`] reject any peer
+//! heartbeat's first-contact check and `wait_for_others_ready` reject any peer
 //! whose UUID is outside the startup-verified set. That is the right policy once
 //! a node is serving — MPC session state shared with a restarted peer is
 //! unrecoverable — but during startup it forces every party to restart and re-run
