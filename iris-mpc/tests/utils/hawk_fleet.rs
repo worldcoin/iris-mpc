@@ -48,6 +48,7 @@ use std::time::Duration;
 use ampc_server_utils::ReadyProbeResponse;
 use eyre::{bail, eyre, WrapErr};
 use iris_mpc::server::startup_phase::{Phase, StartupState, SyncStateDigest};
+use iris_mpc_common::config::Config;
 use tokio::net::TcpStream;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -77,54 +78,39 @@ pub struct FleetOptions {
     pub startup_sync_timeout_secs: Option<u64>,
 }
 
-/// Spawn `server_main` for one party.
+/// One party's `server_main`, ended by whichever of `shutdown` or `abort` fires
+/// first.
 ///
 /// `server_main` holds `!Send` state, so the party runs on its own OS thread via
-/// `spawn_blocking` with a dedicated multi-thread runtime.
-///
-/// Mirrors the per-party body of [`crate::workflows::run_hawk`], which spawns all
-/// three into a `JoinSet` under one shared token. That function is left alone
-/// because every `wal_*` test depends on its cancellation semantics; the two must
-/// be kept in sync.
-fn spawn_hawk_party(
+/// `spawn_blocking` with a dedicated multi-thread runtime. The returned future is
+/// `Send`, which leaves supervision to the caller: [`HawkFleet::start_party`]
+/// spawns one task per party so it can stop them individually, while
+/// [`crate::workflows::run_hawk`] collects all three into a `JoinSet` under one
+/// shared token.
+pub async fn hawk_party(
     party: usize,
-    configs: &CpuConfigs,
+    config: Config,
     shutdown: CancellationToken,
-    ctx: &CpuTestContext,
-    hold_at: Option<Phase>,
-    startup_sync_timeout_secs: Option<u64>,
-) -> JoinHandle<eyre::Result<()>> {
-    let mut config = crate::utils::configs::make_hawk_config(&configs[party], configs, &ctx.env);
-    config.startup_hold_at_phase = hold_at.map(|phase| phase.to_string());
-    if let Some(secs) = startup_sync_timeout_secs {
-        config
-            .server_coordination
-            .as_mut()
-            .expect("test configs always set server_coordination")
-            .startup_sync_timeout_secs = secs;
-    }
-    let abort = ctx.abort.clone();
-
-    tokio::spawn(async move {
-        tokio::task::spawn_blocking(move || {
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .enable_all()
-                .thread_stack_size(TEST_THREAD_STACK_SIZE)
-                .build()
-                .expect("failed to build server runtime");
-            let span = info_span!("mpc_node", idx = party);
-            rt.block_on(async move {
-                tokio::select! {
-                    res = iris_mpc::server::server_main(config).instrument(span) => res,
-                    _ = shutdown.cancelled() => Ok(()),
-                    _ = abort.cancelled() => Ok(()),
-                }
-            })
+    abort: CancellationToken,
+) -> eyre::Result<()> {
+    tokio::task::spawn_blocking(move || {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .thread_stack_size(TEST_THREAD_STACK_SIZE)
+            .build()
+            .expect("failed to build server runtime");
+        let span = info_span!("mpc_node", idx = party);
+        rt.block_on(async move {
+            tokio::select! {
+                res = iris_mpc::server::server_main(config).instrument(span) => res,
+                _ = shutdown.cancelled() => Ok(()),
+                _ = abort.cancelled() => Ok(()),
+            }
         })
-        .await
-        .map_err(|e| eyre!("server task panicked: {e}"))
-        .and_then(|r| r)
     })
+    .await
+    .map_err(|e| eyre!("server task panicked: {e}"))
+    .and_then(|r| r)
 }
 
 /// Read one party's `/startup-state` document.
@@ -231,15 +217,19 @@ impl HawkFleet {
             self.tasks[party].is_none(),
             "party {party} is already running"
         );
+        let mut config =
+            crate::utils::configs::make_hawk_config(&self.configs[party], &self.configs, &ctx.env);
+        config.startup_hold_at_phase = hold_at.map(|phase| phase.to_string());
+        if let Some(secs) = self.startup_sync_timeout_secs {
+            config
+                .server_coordination
+                .as_mut()
+                .expect("test configs always set server_coordination")
+                .startup_sync_timeout_secs = secs;
+        }
+
         let token = CancellationToken::new();
-        let task = spawn_hawk_party(
-            party,
-            &self.configs,
-            token.clone(),
-            ctx,
-            hold_at,
-            self.startup_sync_timeout_secs,
-        );
+        let task = tokio::spawn(hawk_party(party, config, token.clone(), ctx.abort.clone()));
         self.tokens[party] = Some(token);
         self.tasks[party] = Some(task);
         tracing::info!("fleet: started party {party} (hold_at {hold_at:?})");
