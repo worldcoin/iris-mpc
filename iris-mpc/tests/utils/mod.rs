@@ -13,14 +13,14 @@ pub const COUNT_OF_PARTIES: usize = 3;
 
 /// Stack size for every thread that may poll a `server_main` future.
 ///
-/// `server_main`'s future is very large and lives on the stack of whichever thread
-/// polls it. Production polls it with `runtime.block_on` on the **main** thread,
-/// which gets the 8 MB Linux default; the harness polls it on a tokio
-/// blocking-pool thread (`spawn_blocking` → inner `rt.block_on`), which defaults to
-/// 2 MB. That 4x gap means the harness overflows on futures production handles
-/// comfortably — adding a handful of locals to `server_main` was enough to abort a
-/// worker with "has overflowed its stack" partway through converge — so give the
-/// harness more headroom than production rather than budgeting to the byte.
+/// Stack size for the harness runtime's threads.
+///
+/// `server_main`'s future is very large. It no longer lives on a thread stack —
+/// [`hawk_fleet::hawk_party`] is `tokio::spawn`ed, which moves the future into a
+/// heap-allocated task — so this is no longer load-bearing for that. It is kept as
+/// headroom for the deep poll chains under `server_main`, which historically
+/// overflowed the 2 MB tokio default ("has overflowed its stack" partway through
+/// converge) back when `rt.block_on` polled the whole future on the stack.
 pub const TEST_THREAD_STACK_SIZE: usize = 16 * 1024 * 1024;
 
 pub const MIN_MUTATIONS_PER_SIDECAR_CYCLE: usize = 5;

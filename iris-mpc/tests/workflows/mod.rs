@@ -30,8 +30,7 @@ use crate::utils::{hawk_fleet::hawk_party, runner::CpuTestContext, CpuNodeConfig
 /// `shutdown` and joined as a unit.
 ///
 /// Per-party control — stopping one party while the others keep running — is
-/// [`crate::utils::hawk_fleet::HawkFleet`] instead; both build on
-/// [`hawk_party`], which owns the `!Send` thread-per-party detail.
+/// [`crate::utils::hawk_fleet::HawkFleet`] instead; both build on [`hawk_party`].
 pub fn run_hawk(
     configs: &[CpuNodeConfig; 3],
     shutdown: CancellationToken,

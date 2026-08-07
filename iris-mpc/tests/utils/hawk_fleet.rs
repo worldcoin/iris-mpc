@@ -44,7 +44,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info_span, Instrument};
 
 use super::runner::CpuTestContext;
-use super::{CpuConfigs, COUNT_OF_PARTIES, TEST_THREAD_STACK_SIZE};
+use super::{CpuConfigs, COUNT_OF_PARTIES};
 
 /// Party the startup-sync workflows restart. Arbitrary — nothing in the design
 /// distinguishes the parties and the commit barrier is symmetric.
@@ -75,24 +75,12 @@ pub async fn hawk_party(
     shutdown: CancellationToken,
     abort: CancellationToken,
 ) -> eyre::Result<()> {
-    tokio::task::spawn_blocking(move || {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .thread_stack_size(TEST_THREAD_STACK_SIZE)
-            .build()
-            .expect("failed to build server runtime");
-        let span = info_span!("mpc_node", idx = party);
-        rt.block_on(async move {
-            tokio::select! {
-                res = iris_mpc::server::server_main(config).instrument(span) => res,
-                _ = shutdown.cancelled() => Ok(()),
-                _ = abort.cancelled() => Ok(()),
-            }
-        })
-    })
-    .await
-    .map_err(|e| eyre!("server task panicked: {e}"))
-    .and_then(|r| r)
+    let span = info_span!("mpc_node", idx = party);
+    tokio::select! {
+        res = iris_mpc::server::server_main(config).instrument(span) => res,
+        _ = shutdown.cancelled() => Ok(()),
+        _ = abort.cancelled() => Ok(()),
+    }
 }
 
 /// Read one party's `/health` document.
