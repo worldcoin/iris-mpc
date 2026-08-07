@@ -309,6 +309,40 @@ impl HawkFleet {
             .phase)
     }
 
+    /// One party's own sync-state digest, once it is publishing `/startup-state`.
+    ///
+    /// Polls rather than reading once: the digest is computed *before* the
+    /// coordination server exists (it is an argument to `StartupStateHandle::new`),
+    /// so after a restart there is a window — the migrations plus the ~10s
+    /// empty-queue long poll in `build_sync_state` — where nothing answers the port.
+    /// Once the route answers, the digest is already there.
+    ///
+    /// Unlike [`HawkFleet::agreed_fleet_sync_state_digest`] this is peer-independent,
+    /// which is what lets a workflow compare a party's state across a restart
+    /// without needing its peers to be alive.
+    pub async fn wait_for_party_sync_state_digest(
+        &self,
+        party: usize,
+        dur: Duration,
+    ) -> eyre::Result<SyncStateDigest> {
+        let port = self.configs[party].healthcheck_port;
+        let deadline = tokio::time::Instant::now() + dur;
+
+        loop {
+            match fetch_startup_state(port).await {
+                Ok(state) => return Ok(state.party_sync_state_digest),
+                Err(err) => tracing::debug!("party {party} startup state unavailable: {err:#}"),
+            }
+
+            self.assert_still_running(party)?;
+
+            if tokio::time::Instant::now() >= deadline {
+                bail!("party {party} did not publish a startup state within {dur:?}");
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
     /// Every party's published fleet sync-state digest. Fails if any party has not
     /// derived one, or if they do not all agree.
     pub async fn agreed_fleet_sync_state_digest(&self) -> eyre::Result<SyncStateDigest> {

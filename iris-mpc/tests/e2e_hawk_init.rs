@@ -20,8 +20,8 @@ use crate::utils::runner::TestRun;
 use eyre::bail;
 use serial_test::serial;
 use workflows::{
-    startup_120::Startup120, startup_121::Startup121, wal_104::Wal104, wal_105::Wal105,
-    wal_106::Wal106, wal_109::Wal109, wal_110::Wal110, wal_111::Wal111,
+    startup_120::Startup120, startup_121::Startup121, startup_122::Startup122, wal_104::Wal104,
+    wal_105::Wal105, wal_106::Wal106, wal_109::Wal109, wal_110::Wal110, wal_111::Wal111,
 };
 
 const RUST_LOG: &str = "info";
@@ -173,8 +173,9 @@ fn test_wal_111() -> eyre::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// startup_120 – startup_121: single-party restart during the startup handshake,
-// exercising the data-derived startup fleet sync-state digest.
+// startup_120 – startup_122: single-party restart around the startup handshake,
+// exercising the data-derived startup fleet sync-state digest and the boundary
+// past which it no longer permits a rejoin.
 // ---------------------------------------------------------------------------
 
 /// Rejoin: one party restarts mid-handshake with unchanged data. It recomputes the
@@ -194,4 +195,14 @@ fn test_startup_120() -> eyre::Result<()> {
 #[ignore = "requires external setup"]
 fn test_startup_121() -> eyre::Result<()> {
     run_test!(121, 1, Startup121::new())
+}
+
+/// Too late: one party restarts after the fleet is serving, with unchanged data and
+/// so an unchanged sync state. The rejoin is scoped to startup, so it must still be
+/// refused and no party may be left serving.
+#[test]
+#[serial]
+#[ignore = "requires external setup"]
+fn test_startup_122() -> eyre::Result<()> {
+    run_test!(122, 1, Startup122::new())
 }
