@@ -11,16 +11,12 @@ pub mod wal_builder;
 /// Number of MPC parties.
 pub const COUNT_OF_PARTIES: usize = 3;
 
-/// Stack size for every thread that may poll a `server_main` future.
+/// Stack size for every thread the harness owns: the runtime's workers and the
+/// thread `run_test!` polls the test body on.
 ///
-/// Stack size for the harness runtime's threads.
-///
-/// `server_main`'s future is very large. It no longer lives on a thread stack —
+/// `server_main`'s future is very large, but it no longer lives on a thread stack —
 /// [`hawk_fleet::hawk_party`] is `tokio::spawn`ed, which moves the future into a
-/// heap-allocated task — so this is no longer load-bearing for that. It is kept as
-/// headroom for the deep poll chains under `server_main`, which historically
-/// overflowed the 2 MB tokio default ("has overflowed its stack" partway through
-/// converge) back when `rt.block_on` polled the whole future on the stack.
+/// heap-allocated task.
 pub const TEST_THREAD_STACK_SIZE: usize = 16 * 1024 * 1024;
 
 pub const MIN_MUTATIONS_PER_SIDECAR_CYCLE: usize = 5;

@@ -56,70 +56,81 @@ macro_rules! run_test {
             bail!("A previous test has failed, aborting further tests.");
         }
 
-        // Not `Runtime::new()`: the parties run as spawned tasks on this runtime and
-        // want more than the 2 MB default. See `utils::TEST_THREAD_STACK_SIZE`.
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .thread_stack_size(utils::TEST_THREAD_STACK_SIZE)
-            .build()?;
-        rt.block_on(async {
-            let ctx = utils::runner::CpuTestContext::new($kind, $idx).await;
+        // Run the body on a thread we own. The party futures are `tokio::spawn`ed onto
+        // the runtime's workers, but the test body — context construction plus the
+        // composed setup/execute/teardown future — is polled by `block_on` on the
+        // calling thread, and libtest picks that thread's stack size, not us. That
+        // future is large enough to blow it.
+        let body = std::thread::Builder::new()
+            .name(format!("test-{}-{}", $kind, $idx))
+            .stack_size(utils::TEST_THREAD_STACK_SIZE)
+            .spawn(move || -> eyre::Result<()> {
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .thread_stack_size(utils::TEST_THREAD_STACK_SIZE)
+                    .build()?;
+                rt.block_on(async {
+                    let ctx = utils::runner::CpuTestContext::new($kind, $idx).await;
 
-            // One-time global setup: runs only for the first test in the suite.
-            // Tests are serial so there is no concurrent access concern here.
-            if !GLOBAL_SETUP_DONE.load(Ordering::SeqCst) {
-                match utils::key_rotation::global_setup(ctx.env.s3_endpoint()).await {
-                    Ok(()) => GLOBAL_SETUP_DONE.store(true, Ordering::SeqCst),
-                    Err(e) => {
+                    // One-time global setup: runs only for the first test in the suite.
+                    // Tests are serial so there is no concurrent access concern here.
+                    if !GLOBAL_SETUP_DONE.load(Ordering::SeqCst) {
+                        match utils::key_rotation::global_setup(ctx.env.s3_endpoint()).await {
+                            Ok(()) => GLOBAL_SETUP_DONE.store(true, Ordering::SeqCst),
+                            Err(e) => {
+                                TEST_FAILED.store(true, Ordering::SeqCst);
+                                return Err(e.wrap_err("global setup failed"));
+                            }
+                        }
+                    }
+
+                    // Cancel ctx.abort on Ctrl+C so that run_hawk!/run_sidecar! can
+                    // shut down their services cleanly rather than being dropped
+                    // mid-flight.
+                    //
+                    // Keeps listening rather than firing once.
+                    {
+                        let abort = ctx.abort.clone();
+                        tokio::spawn(async move {
+                            loop {
+                                if tokio::signal::ctrl_c().await.is_err() {
+                                    return;
+                                }
+                                if abort.is_cancelled() {
+                                    tracing::error!("Ctrl+C again — exiting immediately");
+                                    std::process::exit(130);
+                                }
+                                tracing::warn!(
+                                    "Ctrl+C received — aborting test (press again to force exit)"
+                                );
+                                abort.cancel();
+                            }
+                        });
+                    }
+
+                    let mut test = $test;
+                    let r = test.run(&ctx).await;
+
+                    let aborted = ctx.abort.is_cancelled();
+                    if r.is_err() || aborted {
                         TEST_FAILED.store(true, Ordering::SeqCst);
-                        return Err(e.wrap_err("global setup failed"));
                     }
-                }
-            }
-
-            // Cancel ctx.abort on Ctrl+C so that run_hawk!/run_sidecar! can
-            // shut down their services cleanly rather than being dropped mid-flight.
-            //
-            // Keeps listening rather than firing once. Tokio installs the process-wide
-            // SIGINT handler on first use and never removes it, so from the moment this
-            // task runs the default "terminate the process" action is gone for good. A
-            // one-shot listener therefore leaves every later Ctrl+C with nothing
-            // listening AND no default behaviour — the binary becomes unkillable from
-            // the terminal. The second press is a hard exit, which is the only escape
-            // from a wedged teardown.
-            {
-                let abort = ctx.abort.clone();
-                tokio::spawn(async move {
-                    loop {
-                        if tokio::signal::ctrl_c().await.is_err() {
-                            return;
-                        }
-                        if abort.is_cancelled() {
-                            tracing::error!("Ctrl+C again — exiting immediately");
-                            std::process::exit(130);
-                        }
-                        tracing::warn!(
-                            "Ctrl+C received — aborting test (press again to force exit)"
-                        );
-                        abort.cancel();
+                    // A real phase error is the more informative one, so it wins; the
+                    // abort only has to supply a failure when every phase happened to
+                    // return `Ok`.
+                    if aborted && r.is_ok() {
+                        bail!("aborted by Ctrl+C");
                     }
-                });
-            }
+                    r
+                })
+            })?;
 
-            let mut test = $test;
-            let r = test.run(&ctx).await;
-
-            let aborted = ctx.abort.is_cancelled();
-            if r.is_err() || aborted {
-                TEST_FAILED.store(true, Ordering::SeqCst);
-            }
-            // A real phase error is the more informative one, so it wins; the abort
-            // only has to supply a failure when every phase happened to return `Ok`.
-            if aborted && r.is_ok() {
-                bail!("aborted by Ctrl+C");
-            }
-            r
-        })
+        // Re-raise a panic as a panic so the harness still prints the assertion
+        // message and location instead of an opaque join error.
+        match body.join() {
+            Ok(r) => r,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }};
 }
 
