@@ -1,5 +1,6 @@
 pub mod startup_120;
 pub mod startup_121;
+pub mod startup_122;
 
 #[allow(dead_code)]
 pub mod wal_102;
