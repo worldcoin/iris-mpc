@@ -79,11 +79,28 @@ macro_rules! run_test {
 
             // Cancel ctx.abort on Ctrl+C so that run_hawk!/run_sidecar! can
             // shut down their services cleanly rather than being dropped mid-flight.
+            //
+            // Keeps listening rather than firing once. Tokio installs the process-wide
+            // SIGINT handler on first use and never removes it, so from the moment this
+            // task runs the default "terminate the process" action is gone for good. A
+            // one-shot listener therefore leaves every later Ctrl+C with nothing
+            // listening AND no default behaviour — the binary becomes unkillable from
+            // the terminal. The second press is a hard exit, which is the only escape
+            // from a wedged teardown.
             {
                 let abort = ctx.abort.clone();
                 tokio::spawn(async move {
-                    if tokio::signal::ctrl_c().await.is_ok() {
-                        tracing::warn!("Ctrl+C received — aborting test");
+                    loop {
+                        if tokio::signal::ctrl_c().await.is_err() {
+                            return;
+                        }
+                        if abort.is_cancelled() {
+                            tracing::error!("Ctrl+C again — exiting immediately");
+                            std::process::exit(130);
+                        }
+                        tracing::warn!(
+                            "Ctrl+C received — aborting test (press again to force exit)"
+                        );
                         abort.cancel();
                     }
                 });
@@ -92,8 +109,14 @@ macro_rules! run_test {
             let mut test = $test;
             let r = test.run(&ctx).await;
 
-            if r.is_err() && !ctx.abort.is_cancelled() {
+            let aborted = ctx.abort.is_cancelled();
+            if r.is_err() || aborted {
                 TEST_FAILED.store(true, Ordering::SeqCst);
+            }
+            // A real phase error is the more informative one, so it wins; the abort
+            // only has to supply a failure when every phase happened to return `Ok`.
+            if aborted && r.is_ok() {
+                bail!("aborted by Ctrl+C");
             }
             r
         })
