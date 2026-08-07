@@ -344,14 +344,6 @@ pub struct Config {
 
     /// Test hook: park the startup sequence indefinitely on *entering* this phase,
     /// named as in `Phase::to_string()` (`"propose"`, `"commit"`, ...).
-    ///
-    /// Exists because those phases are milliseconds wide on an empty fleet, far too
-    /// narrow for an e2e test to land a kill in by polling `/startup-state`. Unset
-    /// in production; leaving it set wedges the node.
-    ///
-    /// Deliberately absent from [`CommonConfig`]: it must not reach the cross-party
-    /// config hash, or holding one party would change the startup fleet sync-state
-    /// digest and break the very agreement the tests exercise.
     #[serde(default)]
     pub startup_hold_at_phase: Option<String>,
 }

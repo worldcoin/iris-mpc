@@ -1,7 +1,5 @@
 //! Startup phase tracking and the data-derived [`SyncStateDigest`] that keys it.
 //!
-//! # Why this exists
-//!
 //! Peer coordination during startup is keyed on a random per-boot UUID: the
 //! heartbeat's first-contact check and [`wait_for_others_ready`] reject any peer
 //! whose UUID is outside the startup-verified set. That is the right policy once
@@ -19,51 +17,6 @@
 //! rejoin; one that comes back with a different [`SyncState`] computes a different
 //! one, which is exactly the signal that the initial sync is void and the whole
 //! fleet must restart.
-//!
-//! [`SyncState`] carries no party id and peers are polled in an arbitrary order, so
-//! the fleet sync-state digest covers the *sorted multiset* of per-party digests
-//! rather than a party-indexed vector. Duplicates are preserved, so one party's
-//! [`SyncState`] changing from "same as peers" to "different" still changes the
-//! fleet sync-state digest.
-//!
-//! # The surviving peers are the durable record
-//!
-//! There is deliberately no persisted digest table. The authority on which startup
-//! is in progress is the set of peers still running it, published on
-//! [`STARTUP_STATE_ROUTE`] from their live [`StartupStateHandle`]s. A restarting
-//! party rebuilds its [`SyncState`] from its DB and re-derives the fleet sync-state
-//! digest from its peers' boot snapshots; it reproduces the in-flight one **exactly
-//! when its own [`SyncState`] is unchanged**, so the rejoin condition checks itself
-//! — no durable state, no migration, no staleness guard. If every party restarts at
-//! once there is no in-flight digest to rejoin and all three derive a fresh one,
-//! which is the correct outcome rather than a degradation.
-//!
-//! # What rejoin covers
-//!
-//! Rejoin works whenever the restarting party's [`SyncState`] is unchanged, which
-//! covers the whole [`Phase::Load`] window — the long one, and the reason any of
-//! this exists — provided [`Phase::Converge`] had no work to do, the normal case
-//! for a healthy fleet.
-//!
-//! It does not cover a restart after a converge that actually mutated local
-//! state: such a party computes a different digest and the fleet restarts, exactly
-//! as it does today unconditionally. So the crash-recovery boot, the one where
-//! converge has real work, is also the one that cannot rejoin. Same for
-//! `next_sns_sequence_num` with `db_backed_ingest` disabled, where it is a live
-//! SQS queue head that the converge-phase trim moves.
-//!
-//! Replaying converge on a rejoin is safe because [`hash_sync_state`] projects
-//! [`SyncState`] so as to *see* every converge-phase mutation, so "same digest"
-//! already implies "converge had no effect": `sync_modifications` shows up in
-//! `db_len` and the modifications digest, `sync_graph_mutations` in that digest via
-//! `graph_mutation_bytes`, the ingest frontier skip-ahead in
-//! `max_persisted_sequence_number`, the queue trim in `next_sns_sequence_num`. The
-//! one exception, releasing unpersisted ingest claims, touches only rows above the
-//! frontier and is idempotent by construction. Anything added to converge later
-//! must be visible to [`hash_sync_state`] or idempotent, or a party could rejoin
-//! having silently applied it twice.
-//!
-//! [`wait_for_others_ready`]: ampc_server_utils::wait_for_others_ready
 
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use ampc_server_utils::{get_check_addresses, ServerCoordinationConfig};
@@ -100,7 +53,7 @@ const FLEET_DOMAIN: &[u8] = b"iris-mpc/startup-fleet-sync-state/v1";
 /// Where a node is in its startup sequence.
 ///
 /// Published to peers so they can tell "still loading" from "dead" — a
-/// distinction the coordination server cannot express today, since `/health`
+/// distinction the coordination server cannot express, since `/health`
 /// answers 200 unconditionally and `/ready` only flips after the load completes.
 /// Ordered by progress: a node only ever moves forward within one startup.
 #[derive(
@@ -188,17 +141,6 @@ impl SyncStateDigest {
 /// Canonical digest of one party's [`SyncState`]: everything about its local
 /// state that the startup sync reads, and that must therefore be identical
 /// across a restart for a rejoin to be safe.
-///
-/// A deliberate projection of [`SyncState`], not the whole struct:
-/// `graph_mutation_bytes` is folded into the modifications digest (it is
-/// parallel-by-index to `modifications` and can be megabytes), and nothing is
-/// included that is not part of the startup decision.
-///
-/// Encoded by hand rather than via `serde_json` so the wire format of
-/// [`SyncState`] can evolve (field renames, `serde(default)` additions) without
-/// silently changing every digest. Every variable-length field is
-/// length-prefixed, so no two distinct states can encode to the same bytes by
-/// shifting a boundary.
 pub fn hash_sync_state(state: &SyncState) -> SyncStateDigest {
     let mut buf = Vec::with_capacity(128);
     buf.extend_from_slice(SYNC_STATE_DOMAIN);
@@ -213,13 +155,8 @@ pub fn hash_sync_state(state: &SyncState) -> SyncStateDigest {
     SyncStateDigest::from_bytes(&buf)
 }
 
-/// Digest all parties' states, including this party's own, into the one value
+/// Hash all parties' states, including this party's own, into the one value
 /// they all key this startup on.
-///
-/// `states` is expected to be [`SyncResult::all_states`], which is
-/// `[my_state] ++ peers`.
-///
-/// [`SyncResult::all_states`]: iris_mpc_common::helpers::sync::SyncResult
 pub fn hash_fleet_sync_states(states: &[SyncState]) -> Result<SyncStateDigest> {
     if states.len() < 2 {
         bail!(
@@ -248,13 +185,6 @@ pub fn hash_fleet_sync_states(states: &[SyncState]) -> Result<SyncStateDigest> {
     Ok(SyncStateDigest::from_bytes(&buf))
 }
 
-/// The single document a node publishes about its own startup.
-///
-/// Consolidates what is spread across `/health`, `/ready` and `/startup-sync`
-/// today, and unlike `/startup-sync` — which serves a `my_state` clone captured
-/// when the coordination server was constructed — it is read live from
-/// [`StartupStateHandle`], so it reflects the node's current phase rather than
-/// its state at boot.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StartupState {
     pub party_id: usize,
@@ -291,10 +221,7 @@ impl StartupStateHandle {
     /// passed in as an extra route; the UUID it mints arrives afterwards via
     /// [`StartupStateHandle::set_uuid`].
     ///
-    /// `hold_at` is the test hook from `Config::startup_hold_at_phase`, `None` in
-    /// every production path: the party parks forever on entering that phase,
-    /// *after* publishing it, so peers keep seeing a node legitimately sitting
-    /// there — which is precisely the state an e2e test wants to kill.
+    /// `hold_at` is the test hook from `Config::startup_hold_at_phase`,
     pub fn new(
         party_id: usize,
         party_sync_state_digest: SyncStateDigest,
@@ -378,21 +305,8 @@ impl StartupStateHandle {
     }
 }
 
-/// Fetch and parse every peer's startup-state document, once.
-///
-/// Deliberately does **not** use `try_get_endpoint_other_nodes`: that helper
-/// `tokio::spawn`s a retry task per peer and only aborts them along its own
-/// timeout path, so bounding it against a caller's deadline with an outer
-/// `tokio::time::timeout` leaks two tasks per polling round that keep hammering a
-/// down peer for the next five minutes. This is a single attempt with nothing
-/// spawned; the callers' loops supply the retry and can therefore stop it.
-///
-/// Returns what it managed to read plus a description of each peer it could not,
-/// rather than failing on the first unreachable one. A down peer must not blind us
-/// to the other: the reachable peer's UUID still needs recording (that is what
-/// lets a *restarting* peer past its visibility barrier), and its fleet sync-state
-/// digest is still worth checking for disagreement. Callers that need every peer —
-/// the commit barrier — check `failures` themselves.
+/// Fetch and parse every peer's startup-state.
+/// Returns what it managed to read plus a description of each peer it could not.
 async fn poll_peer_states(
     config: &ServerCoordinationConfig,
     request_timeout: Duration,
@@ -424,11 +338,6 @@ async fn poll_peer_states(
     (states, failures)
 }
 
-/// One peer, one attempt. `Err` carries a ready-to-log description.
-///
-/// A document we cannot parse is a failure, never a skipped entry: a caller
-/// counting agreeing peers must not reach quorum because a disagreeing peer was
-/// quietly dropped.
 async fn fetch_peer_state(
     client: &reqwest::Client,
     url: &str,
@@ -447,15 +356,6 @@ async fn fetch_peer_state(
         .map_err(|err| format!("unparseable startup state from {url}: {err}"))
 }
 
-/// Record a peer incarnation as seen, so the coordination server advertises it on
-/// `/health` and the `ampc-server-utils` checks downstream accept it.
-///
-/// Bookkeeping, not authorization — which lives entirely in the fleet sync-state
-/// digest comparison. `wait_until_startup_visibility_is_complete` needs this from us
-/// before a restarted peer can get far enough to publish a digest at all, so
-/// withholding it until the digests matched would deadlock: the peer cannot pass
-/// its visibility barrier until we list its UUID, and cannot publish a digest
-/// until it does.
 async fn record_peer_uuids(verified_peers: &Arc<Mutex<HashSet<String>>>, peers: &[StartupState]) {
     let mut verified = verified_peers.lock().await;
     for peer in peers {
@@ -611,11 +511,6 @@ pub async fn wait_for_fleet_sync_state_digest_commit(
     }
 }
 
-/// Log polling failures at WARN on the first attempt and every tenth after that,
-/// DEBUG otherwise.
-///
-/// Mirrors `wait_for_others_unready`'s cadence: a recoverable peer outage polled
-/// every second or two must not flood the log pipeline for the whole outage.
 fn log_poll_failure(attempt: u32, failures: &[String]) {
     if attempt == 1 || attempt.is_multiple_of(10) {
         tracing::warn!("Could not poll peer startup state (attempt {attempt}): {failures:?}");
@@ -626,13 +521,13 @@ fn log_poll_failure(attempt: u32, failures: &[String]) {
 
 /// Guard for the background task that watches peers across the converge and load
 /// phases. Aborts the task when dropped.
-pub struct StartupWatch {
+pub struct DesyncWatch {
     task: JoinHandle<()>,
     /// Set once, to the reason this startup was voided.
     verdict: Arc<OnceLock<String>>,
 }
 
-impl StartupWatch {
+impl DesyncWatch {
     /// Fail if the watch observed a peer on a different fleet sync-state digest.
     ///
     /// Call at every point where startup can still be abandoned cheaply. In
@@ -654,38 +549,26 @@ impl StartupWatch {
     }
 }
 
-impl Drop for StartupWatch {
+impl Drop for DesyncWatch {
     fn drop(&mut self) {
         self.task.abort();
     }
 }
 
-/// Watch peers for the duration of converge and load — the window in which no
-/// *coordination* check is looking.
-///
-/// This closes the gap that forces today's full-fleet restarts. The heartbeat is
-/// only armed after the load, so a peer that dies during the load is invisible
-/// until the ready barrier, and a peer that *restarts* during it is rejected
-/// outright: its new UUID is absent from the frozen `verified_peers` set, so
-/// `wait_for_others_ready` and the heartbeat's first-contact check both kill an
-/// otherwise healthy node.
-///
-/// The watch replaces that identity test with the fleet sync-state digest test:
-///
+/// Handles the following conditions:
 /// - peer republishes this digest (whatever its UUID) — it is provably resuming the
-///   same startup, so it is recorded as verified and both parties carry on. A
-///   restart is invisible to us, which is the entire point;
+///   same startup, so it is recorded as verified and both parties carry on.
 /// - peer publishes a different digest — its data changed, this startup is void, and
-///   we abandon it;
+///   we abandon it.
 /// - peer publishes no digest, or is unreachable — it is mid-restart. Tolerated: it
 ///   will either republish this digest or a different one, and the ready barrier
 ///   still bounds how long a peer may fail to arrive.
-pub fn spawn_startup_watch(
+pub fn spawn_desync_watch(
     config: ServerCoordinationConfig,
     verified_peers: Arc<Mutex<HashSet<String>>>,
     shutdown_handler: Arc<ShutdownHandler>,
     fleet_sync_state_digest: SyncStateDigest,
-) -> StartupWatch {
+) -> DesyncWatch {
     let verdict = Arc::new(OnceLock::new());
 
     let task = tokio::spawn({
@@ -711,11 +594,6 @@ pub fn spawn_startup_watch(
                 if poll_failures.is_empty() {
                     failures = 0;
                 } else {
-                    // Expected while a peer restarts — the case this watch exists
-                    // to absorb — so it is rate-limited rather than warned on every
-                    // round. The ready barrier and the heartbeat bound the terminal
-                    // cases. Unlike the commit barrier we carry on with a partial
-                    // view: a reachable peer on the wrong digest is still a verdict.
                     failures += 1;
                     log_poll_failure(failures, &poll_failures);
                 }
@@ -755,17 +633,12 @@ pub fn spawn_startup_watch(
         }
     });
 
-    StartupWatch { task, verdict }
+    DesyncWatch { task, verdict }
 }
 
 /// SHA-256 of the common config, as bytes to fold into [`hash_sync_state`]'s
 /// preimage.
 fn digest_common_config(config: &CommonConfig) -> Vec<u8> {
-    // `CommonConfig` is all scalars, `Vec`s and `Option`s — no maps — so
-    // `serde_json` field order is the declaration order and the encoding is
-    // deterministic. It is also already compared field-by-field across parties
-    // by `SyncResult::check_common_config`, so any difference the digest sees
-    // is a difference that check would reject anyway.
     let bytes = serde_json::to_vec(config).expect("CommonConfig serialization to JSON failed");
     sha256_bytes(&bytes).to_vec()
 }
