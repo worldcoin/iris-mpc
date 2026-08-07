@@ -56,8 +56,8 @@ macro_rules! run_test {
             bail!("A previous test has failed, aborting further tests.");
         }
 
-        // Not `Runtime::new()`: its 2 MB blocking-thread stacks are too small for
-        // `server_main`'s future. See `utils::TEST_THREAD_STACK_SIZE`.
+        // Not `Runtime::new()`: the parties run as spawned tasks on this runtime and
+        // want more than the 2 MB default. See `utils::TEST_THREAD_STACK_SIZE`.
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .thread_stack_size(utils::TEST_THREAD_STACK_SIZE)

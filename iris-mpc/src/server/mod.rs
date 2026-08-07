@@ -1144,7 +1144,14 @@ async fn run_main_server_loop(
                     .unwrap_or_else(|| Utc::now().format("run-%Y%m%dT%H%M%SZ").to_string());
                 let hash_prefix = hex::encode(&batch_hash[0..4]);
 
-                match guard.report().build() {
+                // Bound to a local before the `match`, not inlined into the
+                // scrutinee. `guard.report()` yields a `ReportBuilder`, which is
+                // `!Send` (it holds a `Box<dyn Fn(&mut Frames)>`), and temporaries in
+                // a match scrutinee stay alive for the whole `match` — including the
+                // `upload_file_to_s3` awaits in the arms below. That would make all
+                // of `server_main` `!Send` and unspawnable. The `;` here drops it.
+                let built = guard.report().build();
+                match built {
                     Ok(report) => {
                         if !config.pprof_profile_only {
                             let mut svg = Vec::new();
