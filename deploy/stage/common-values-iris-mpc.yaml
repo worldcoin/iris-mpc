@@ -6,7 +6,7 @@ replicaCount: 1
 # Common environment variables shared across all iris-mpc nodes.
 # Defined as a map so Helm deep-merges with per-node env maps.
 env:
-  RUST_LOG: "debug"
+  RUST_LOG: "info"
   RUST_BACKTRACE: "full"
   NCCL_SOCKET_IFNAME: "eth,ens"
   FI_EFA_USE_DEVICE_RDMA: "1"
@@ -85,7 +85,7 @@ env:
   SMPC__ENABLE_MODIFICATIONS_SYNC: "true"
   SMPC__ENABLE_MODIFICATIONS_REPLAY: "true"
   SMPC__ENABLE_DEBUG_TIMING: "true"
-  SMPC__GPU_SCHEMA_NAME_SUFFIX: "benchmark-g7e-12xlarge"
+  SMPC__GPU_SCHEMA_NAME_SUFFIX: "benchmark-g7e-12xlarge-v2"
 
 strategy:
   type: Recreate
@@ -122,12 +122,12 @@ resources:
     cpu: 28
     memory: 480Gi
     nvidia.com/gpu: 1
-    vpc.amazonaws.com/efa: 1
+    vpc.amazonaws.com/efa: 2
   requests:
     cpu: 27
     memory: 480Gi
     nvidia.com/gpu: 1
-    vpc.amazonaws.com/efa: 1
+    vpc.amazonaws.com/efa: 2
 
 imagePullSecrets:
   - name: github-secret
