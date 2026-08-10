@@ -22,4 +22,4 @@ jobs:
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
 
       - name: ampc-common pin is on main
-        run: bash scripts/check-ampc-common-pin.sh Cargo.lock
+        run: bash scripts/check-ampc-common-pin.sh
