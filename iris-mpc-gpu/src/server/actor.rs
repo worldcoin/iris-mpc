@@ -48,7 +48,7 @@ use iris_mpc_common::{
             UNIQUENESS_MESSAGE_TYPE,
         },
     },
-    iris_db::get_dummy_shares_for_deletion,
+    iris_db::{get_dummy_shares_for_deletion, iris::IrisCode},
     job::{JobSubmissionHandle, ServerJobResult},
     VectorId,
 };
@@ -57,6 +57,7 @@ use iris_mpc_cpu::shares::{
     RingElement,
 };
 use itertools::{izip, Itertools};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use ring::hkdf::{Algorithm, Okm, Salt, HKDF_SHA256};
 use std::{
     collections::{HashMap, HashSet},
@@ -3739,11 +3740,80 @@ impl InMemoryStore for ServerActor {
     }
 
     fn fake_db(&mut self, fake_db_size: usize) {
+        // Same seed as iris-mpc-bins `RNG_SEED_INIT_DB` so all parties generate
+        // consistent shares without writing to Postgres.
+        const RNG_SEED: u64 = 42;
+
         tracing::warn!(
-            "Faking db with {} entries, returned results will be random.",
+            "Generating fake db with {} entries in GPU memory (not persisted). \
+             Match results use seeded random shares.",
             fake_db_size
         );
-        self.current_db_sizes =
-            vec![fake_db_size / self.current_db_sizes.len(); self.current_db_sizes.len()];
+
+        if fake_db_size > self.max_db_size {
+            panic!(
+                "fake_db_size ({}) exceeds max_db_size ({})",
+                fake_db_size, self.max_db_size
+            );
+        }
+
+        self.current_db_sizes = vec![0; self.device_manager.device_count()];
+
+        let mut rng = StdRng::seed_from_u64(RNG_SEED);
+        let party_id = self.party_id;
+        let started = Instant::now();
+
+        for i in 0..fake_db_size {
+            if i % 100_000 == 0 {
+                tracing::info!(
+                    "Fake iris db: generated {} / {} entries ({:.2} entries/s)",
+                    i,
+                    fake_db_size,
+                    if i == 0 {
+                        0.0
+                    } else {
+                        i as f64 / started.elapsed().as_secs_f64()
+                    }
+                );
+            }
+
+            let mut iris_rng = StdRng::from_seed(rng.gen());
+            let iris = IrisCode::random_rng(&mut iris_rng);
+
+            let share = GaloisRingIrisCodeShare::encode_iris_code(
+                &iris.code,
+                &iris.mask,
+                &mut StdRng::seed_from_u64(RNG_SEED),
+            )[party_id]
+                .clone();
+
+            let mask: GaloisRingTrimmedMaskCodeShare = GaloisRingIrisCodeShare::encode_mask_code(
+                &iris.mask,
+                &mut StdRng::seed_from_u64(RNG_SEED),
+            )[party_id]
+                .clone()
+                .into();
+
+            self.load_single_record_from_db(
+                i,
+                VectorId::from_serial_id((i + 1) as u32),
+                &share.coefs,
+                &mask.coefs,
+                &share.coefs,
+                &mask.coefs,
+            );
+            self.increment_db_size(i);
+        }
+
+        tracing::info!(
+            "Fake iris db: generated {} entries in {:?}; preprocessing",
+            fake_db_size,
+            started.elapsed()
+        );
+        self.preprocess_db();
+        tracing::info!(
+            "Fake iris db ready [DB sizes: {:?}]",
+            self.current_db_sizes()
+        );
     }
 }
