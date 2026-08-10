@@ -7,6 +7,10 @@ concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
   cancel-in-progress: true
 
+# Checkout only. The ampc-common fetch is an unauthenticated read of a public repo.
+permissions:
+  contents: read
+
 jobs:
   # Deliberately no paths filter. A skipped job never reports a status, so a
   # required check with a paths filter blocks every PR that does not touch the
