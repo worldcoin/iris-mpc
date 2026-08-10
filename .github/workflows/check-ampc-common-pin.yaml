@@ -1,0 +1,25 @@
+name: Check ampc-common pin
+
+on:
+  pull_request:
+
+concurrency:
+  group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
+  cancel-in-progress: true
+
+# Checkout only. The ampc-common fetch is an unauthenticated read of a public repo.
+permissions:
+  contents: read
+
+jobs:
+  # Deliberately no paths filter. A skipped job never reports a status, so a
+  # required check with a paths filter blocks every PR that does not touch the
+  # lockfile. The script is a shallow fetch and finishes in seconds.
+  ancestry:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+
+      - name: ampc-common pin is on main
+        run: bash scripts/check-ampc-common-pin.sh
