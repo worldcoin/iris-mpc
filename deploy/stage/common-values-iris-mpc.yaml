@@ -8,8 +8,11 @@ replicaCount: 1
 env:
   RUST_LOG: "debug"
   RUST_BACKTRACE: "full"
-  NCCL_SOCKET_IFNAME: "ens,eth"
+  NCCL_SOCKET_IFNAME: "eth,ens"
+  FI_EFA_USE_DEVICE_RDMA: "1"
   NCCL_IB_CUDA_SUPPORT: "1"
+  FI_PROVIDER: "efa"
+  NCCL_IB_TIMEOUT: "30"
   NCCL_COMM_ID: "iris-mpc-node.1.stage.smpcv2.worldcoin.dev:4000"
   SMPC__ENVIRONMENT: "stage"
   SMPC__DATABASE__URL:
