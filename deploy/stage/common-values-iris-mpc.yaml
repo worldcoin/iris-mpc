@@ -122,12 +122,12 @@ resources:
     cpu: 28
     memory: 480Gi
     nvidia.com/gpu: 1
-    vpc.amazonaws.com/efa: 2
+    vpc.amazonaws.com/efa: 1
   requests:
     cpu: 27
     memory: 480Gi
     nvidia.com/gpu: 1
-    vpc.amazonaws.com/efa: 2
+    vpc.amazonaws.com/efa: 1
 
 imagePullSecrets:
   - name: github-secret
