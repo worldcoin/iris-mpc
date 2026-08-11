@@ -108,12 +108,18 @@ while IFS= read -r line; do
     continue
   fi
   # Inline table, only when it closes on the same line (TOML forbids multiline
-  # inline tables); an unclosed one falls through to key accumulation.
-  if [[ "$line" == *ampc-common* && "$line" =~ $re_inline_git && "$line" == *\}* ]]; then
-    inline_rev=""
-    [[ "$line" =~ $re_inline_rev ]] && inline_rev="${BASH_REMATCH[1]}"
-    check_manifest_pin "$line" "$inline_rev"
-    continue
+  # inline tables); an unclosed one falls through to key accumulation. Only
+  # the part inside the braces is parsed: a trailing comment could otherwise
+  # smuggle in a rev the check accepts while cargo follows an unpinned branch,
+  # or drag an unrelated dependency into the ampc-common check.
+  if [[ "$line" == *\}* ]]; then
+    inline="${line%%\}*}"
+    if [[ "$inline" == *ampc-common* && "$inline" =~ $re_inline_git ]]; then
+      inline_rev=""
+      [[ "$inline" =~ $re_inline_rev ]] && inline_rev="${BASH_REMATCH[1]}"
+      check_manifest_pin "$line" "$inline_rev"
+      continue
+    fi
   fi
   if [[ "$line" =~ $re_key ]]; then
     dep_name="${BASH_REMATCH[2]}"
