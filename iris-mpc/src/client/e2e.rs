@@ -40,7 +40,6 @@ const DEFAULT_MAX_CONCURRENT_REQUESTS: usize = 5;
 const DEFAULT_BATCH_SIZE: usize = 10;
 const DEFAULT_N_BATCHES: usize = 5;
 
-const WAIT_AFTER_BATCH: Duration = Duration::from_secs(10);
 const RECEIVER_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 
@@ -308,13 +307,11 @@ impl E2EClient {
                 handles.push(handle);
                 party_shares_index += 1;
             }
-            for handle in handles {
-                handle.await??;
-            }
-            println!("Batch {} sent!", batch_idx + 1);
+            println!("Batch {} enqueued!", batch_idx + 1);
             batch_idx += 1;
-            sleep(WAIT_AFTER_BATCH).await;
         }
+
+        println!("All batches sent!");
 
         Ok(())
     }
@@ -322,8 +319,8 @@ impl E2EClient {
     async fn run_e2e_test(&self) -> Result<()> {
         let used_file_indices = Arc::new(Mutex::new(HashSet::new()));
         let used_response_indices = Arc::new(Mutex::new(HashSet::new()));
+        let mut handles = Vec::new();
         for batch_idx in 0..self.n_batches {
-            let mut handles = Vec::new();
             for _batch_query_idx in 0..self.batch_size {
                 let expected_results = self.expected_results.clone();
                 let requests = self.requests.clone();
@@ -442,14 +439,11 @@ impl E2EClient {
                 });
                 handles.push(handle);
             }
+            println!("Batch {} enqueued!", batch_idx);
+        }
 
-            // Wait for all tasks in this batch to complete.
-            for handle in handles {
-                handle.await??;
-            }
-
-            println!("Batch {} sent!", batch_idx);
-            sleep(WAIT_AFTER_BATCH).await;
+        for handle in handles {
+            handle.await??;
         }
         println!("All batches sent!");
         Ok(())
