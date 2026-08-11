@@ -44,6 +44,44 @@ const WAIT_AFTER_BATCH: Duration = Duration::from_secs(10);
 const RECEIVER_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const ENROLLMENT_REQUEST_TYPE: &str = "enrollment";
 
+/// Build the SQS client used for results, optionally with a different profile/region
+/// than the SNS/S3 request path.
+async fn build_response_sqs_client(opts: &Opt) -> SqsClient {
+    let region = opts
+        .response_queue_region
+        .clone()
+        .or_else(|| parse_region_from_sqs_url(&opts.response_queue_url))
+        .unwrap_or_else(|| opts.region.clone());
+
+    let mut loader = aws_config::from_env()
+        .region(Region::new(region))
+        .retry_config(RetryConfig::standard().with_max_attempts(20));
+    if let Some(profile) = &opts.response_queue_profile {
+        loader = loader.profile_name(profile);
+    }
+    let shared_config = loader.load().await;
+
+    let mut sqs_config_builder = aws_sdk_sqs::config::Builder::from(&shared_config);
+    if let Some(endpoint_url) = opts.endpoint_url.as_ref() {
+        sqs_config_builder = sqs_config_builder.endpoint_url(endpoint_url);
+    }
+    SqsClient::from_conf(sqs_config_builder.build())
+}
+
+/// Parse region from an SQS queue URL like
+/// `https://sqs.eu-central-1.amazonaws.com/123/queue.fifo`.
+fn parse_region_from_sqs_url(queue_url: &str) -> Option<String> {
+    let host = queue_url.strip_prefix("https://")?;
+    let host = host.split('/').next()?;
+    let rest = host.strip_prefix("sqs.")?;
+    let region = rest.strip_suffix(".amazonaws.com")?;
+    if region.is_empty() {
+        None
+    } else {
+        Some(region.to_string())
+    }
+}
+
 #[derive(Debug, Parser, Clone)]
 pub struct Opt {
     #[arg(long, env, required = true)]
@@ -60,6 +98,16 @@ pub struct Opt {
 
     #[arg(long, env, required = true)]
     pub response_queue_url: String,
+
+    /// Optional AWS profile used only for the response SQS client (e.g. results
+    /// live in a different account than the input SNS topic / shares bucket).
+    #[arg(long, env)]
+    pub response_queue_profile: Option<String>,
+
+    /// Optional AWS region for the response SQS client. Defaults to the region
+    /// embedded in `--response-queue-url`, then to `--region`.
+    #[arg(long, env)]
+    pub response_queue_region: Option<String>,
 
     #[arg(long, env)]
     pub rng_seed: Option<u64>,
@@ -128,7 +176,7 @@ pub struct E2EClient {
 
 impl E2EClient {
     pub async fn new(opts: Opt) -> Self {
-        // Initialize AWS clients
+        // Initialize AWS clients for request path (SNS + S3).
         let region = Region::new(opts.region.clone());
         let shared_config = aws_config::from_env()
             .region(region)
@@ -146,7 +194,7 @@ impl E2EClient {
         }
         let s3_client = S3Client::from_conf(s3_config_builder.build());
         let sns_client = Arc::new(SnsClient::from_conf(sns_config_builder.build()));
-        let sqs_client = SqsClient::new(&shared_config);
+        let sqs_client = build_response_sqs_client(&opts).await;
 
         Self {
             request_topic_arn: opts.request_topic_arn,
@@ -558,7 +606,7 @@ impl E2EClient {
             disable_anonymized_stats: None,
         };
 
-        let message_attributes = {
+        let mut message_attributes = {
             let mut attrs = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
             attrs.extend(
                 [
@@ -580,8 +628,31 @@ impl E2EClient {
             );
             attrs
         };
+        // Add forward_iris_shares attribute to the message attributes
+        message_attributes.insert(
+            "forward_iris_shares".to_string(),
+            MessageAttributeValue::builder()
+                .data_type("String")
+                .string_value("true")
+                .build()
+                .unwrap(),
+        );
 
-        self.sns_client
+        println!(
+            "SNS publish request_id={} topic={} message_group_id={} attributes:",
+            party_shares.signup_id, self.request_topic_arn, ENROLLMENT_REQUEST_TYPE
+        );
+        for (key, value) in &message_attributes {
+            println!(
+                "  {} => data_type={} string_value={:?}",
+                key,
+                value.data_type(),
+                value.string_value()
+            );
+        }
+
+        let publish_out = self
+            .sns_client
             .clone()
             .publish()
             .topic_arn(self.request_topic_arn.clone())
@@ -590,6 +661,13 @@ impl E2EClient {
             .set_message_attributes(Some(message_attributes))
             .send()
             .await?;
+
+        println!(
+            "SNS publish ok request_id={} message_id={:?} sequence_number={:?}",
+            party_shares.signup_id,
+            publish_out.message_id(),
+            publish_out.sequence_number()
+        );
 
         Ok(())
     }
