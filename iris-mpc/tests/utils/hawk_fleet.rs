@@ -86,7 +86,13 @@ pub async fn hawk_party(
 /// Read one party's `/health` document.
 async fn fetch_health(port: u16) -> eyre::Result<ReadyProbeResponse> {
     let url = format!("http://127.0.0.1:{port}/health");
-    reqwest::get(&url)
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .wrap_err("building reqwest client failed")?;
+    client
+        .get(&url)
+        .send()
         .await
         .wrap_err_with(|| format!("GET {url} failed"))?
         .json::<ReadyProbeResponse>()
@@ -97,7 +103,14 @@ async fn fetch_health(port: u16) -> eyre::Result<ReadyProbeResponse> {
 /// Read one party's `/startup-state` document.
 async fn fetch_startup_state(port: u16) -> eyre::Result<StartupState> {
     let url = format!("http://127.0.0.1:{port}/startup-state");
-    let body = reqwest::get(&url)
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+        .wrap_err("building reqwest client failed")?;
+
+    let body = client
+        .get(&url)
+        .send()
         .await
         .wrap_err_with(|| format!("GET {url} failed"))?
         .bytes()

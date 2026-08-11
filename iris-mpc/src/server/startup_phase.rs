@@ -298,8 +298,7 @@ impl StartupStateHandle {
         }
     }
 
-    /// Record the derived fleet sync-state digest. Called once, on entering
-    /// [`Phase::Commit`].
+    /// Record the derived fleet sync-state digest
     pub async fn set_fleet_sync_state_digest(&self, digest: SyncStateDigest) {
         self.state.write().await.fleet_sync_state_digest = Some(digest);
     }
@@ -347,6 +346,11 @@ async fn fetch_peer_state(
         .send()
         .await
         .map_err(|err| format!("GET {url} failed: {err}"))?;
+
+    if !response.status().is_success() {
+        return Err(format!("GET {url} returned {}", response.status()));
+    }
+
     let body = response
         .bytes()
         .await
