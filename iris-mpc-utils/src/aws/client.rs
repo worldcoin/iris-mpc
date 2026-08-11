@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use async_from::AsyncFrom;
 use async_stream::stream;
@@ -7,7 +7,7 @@ use aws_sdk_s3::{
     Client as S3Client,
 };
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
-use aws_sdk_sns::Client as SNSClient;
+use aws_sdk_sns::{types::MessageAttributeValue, Client as SNSClient};
 use aws_sdk_sqs::Client as SQSClient;
 use futures::stream::Stream;
 use serde_json;
@@ -121,7 +121,7 @@ impl AwsClient {
             .topic_arn(self.config().sns_request_topic_arn())
             .message_group_id(sns_msg_info.group_id())
             .message(sns_msg_info.body())
-            .set_message_attributes(Some(create_sns_message_attributes(sns_msg_info.kind())))
+            .set_message_attributes(Some(request_sns_message_attributes(sns_msg_info.kind())))
             .send()
             .await
             .map(|_| {})
@@ -150,7 +150,7 @@ impl AwsClient {
                         .id(format!("msg-{}-{}", chunk_idx, idx))
                         .message(msg.body())
                         .message_group_id(msg.group_id())
-                        .set_message_attributes(Some(create_sns_message_attributes(msg.kind())))
+                        .set_message_attributes(Some(request_sns_message_attributes(msg.kind())))
                         .build()
                 })
                 .collect();
@@ -332,6 +332,22 @@ impl AwsClient {
         // Merge all queue streams into one
         futures::stream::select_all(queue_streams)
     }
+}
+
+const FORWARD_IRIS_SHARES_ATTRIBUTE: &str = "forward_iris_shares";
+
+/// SNS message attributes for requests published by this client.
+fn request_sns_message_attributes(message_type: &str) -> HashMap<String, MessageAttributeValue> {
+    let mut attrs = create_sns_message_attributes(message_type);
+    attrs.insert(
+        FORWARD_IRIS_SHARES_ATTRIBUTE.to_string(),
+        MessageAttributeValue::builder()
+            .data_type("String")
+            .string_value("true")
+            .build()
+            .unwrap(),
+    );
+    attrs
 }
 
 /// Receipt handle info for message deletion
