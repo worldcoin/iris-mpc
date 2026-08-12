@@ -155,6 +155,10 @@ impl ChaChaCudaRng {
 
     pub fn fill_rng_no_host_copy(&mut self, buf_size_bytes: usize, stream: &CudaStream) {
         assert!(self.rng_chunk.is_some());
+        assert!(
+            buf_size_bytes.is_multiple_of(64),
+            "buf_size_bytes must be a multiple of 64"
+        );
 
         let mut buf = self
             .rng_chunk
