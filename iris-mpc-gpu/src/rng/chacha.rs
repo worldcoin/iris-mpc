@@ -178,10 +178,6 @@ impl ChaChaCudaRng {
         self.output_buffer.as_deref()
     }
 
-    pub fn get_mut_chacha(&mut self) -> &mut ChaChaCtx {
-        &mut self.chacha.chacha_ctx
-    }
-
     pub fn cuda_slice(&self) -> Option<&CudaSlice<u32>> {
         self.rng_chunk.as_ref()
     }
