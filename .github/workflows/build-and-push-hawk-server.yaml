@@ -107,6 +107,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           build-args: |
             ARCHITECTURE=${{ matrix.build_architecture }}
+            IRIS_MPC_GIT_HASH=${{ github.sha }}
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
           file: ${{ matrix.dockerfile }}

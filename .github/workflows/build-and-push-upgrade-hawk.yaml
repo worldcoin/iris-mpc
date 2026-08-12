@@ -58,6 +58,7 @@ jobs:
           platforms: linux/arm64
           build-args: |
             ARCHITECTURE=aarch64
+            IRIS_MPC_GIT_HASH=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           file: Dockerfile.arm64.genesis.hawk

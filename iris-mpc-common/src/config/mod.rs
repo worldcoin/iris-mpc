@@ -719,10 +719,38 @@ where
     }
 }
 
+/// Build-time identity of this binary: crate version plus the git commit it was
+/// built from, e.g. `"0.1.0+9f2c1ab3de77"` (or `"...-dirty"` for an uncommitted
+/// tree, `"...+unknown"` when the build had no git metadata at all).
+///
+/// See `build.rs` for how the commit is resolved.
+pub const SOFTWARE_VERSION: &str =
+    concat!(env!("CARGO_PKG_VERSION"), "+", env!("IRIS_MPC_GIT_HASH"));
+
 /// This struct is used to extract the common configuration for all servers from their respective configs.
 /// It is later used to to hash the config and check if it is the same across all servers as a basic sanity check during startup.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CommonConfig {
+    /// Build-time software version of the binary that produced this config.
+    ///
+    /// Folding the version into the common config means the startup exchange
+    /// that already compares this struct across parties also enforces that all
+    /// three parties run the same build. That matters because the MPC protocol,
+    /// the on-wire message formats and the graph/DB encodings are only
+    /// guaranteed to agree between identical builds: a mixed-version fleet
+    /// fails in obscure ways (silent divergence, mismatched hashes) long after
+    /// startup, so we would rather refuse to start.
+    ///
+    /// Deliberately the *whole* version and not a coarser marker: any commit
+    /// difference is treated as a mismatch, since we cannot know from the
+    /// version alone whether the delta touched the protocol. A rolling deploy
+    /// therefore has to bring all three parties to the same commit.
+    ///
+    /// `serde(default)` so a peer on an older build (which does not send the
+    /// field) yields a clear version mismatch rather than a deserialization
+    /// error.
+    #[serde(default)]
+    software_version: String,
     environment: String,
     results_topic_arn: String,
     processing_timeout_secs: u64,
@@ -782,6 +810,11 @@ pub struct CommonConfig {
 impl CommonConfig {
     pub fn get_max_modifications_lookback(&self) -> usize {
         self.max_modifications_lookback
+    }
+
+    /// Build-time software version of the party this config came from.
+    pub fn software_version(&self) -> &str {
+        &self.software_version
     }
 }
 
@@ -891,6 +924,7 @@ impl From<Config> for CommonConfig {
         );
 
         Self {
+            software_version: SOFTWARE_VERSION.to_string(),
             environment,
             results_topic_arn,
             processing_timeout_secs,
@@ -965,5 +999,39 @@ mod tests {
         // The ingest tuning knobs (db_ingest_sqs_wait_secs, backoff params)
         // deliberately live only on Config, not CommonConfig: they may skew
         // across parties during rolling deploys without splitting the fleet.
+    }
+
+    #[test]
+    fn software_version_is_part_of_common_config_equality() {
+        // This is the gate that stops a mixed-version fleet from starting.
+        // If the field ever leaves CommonConfig, the check silently vanishes.
+        let base = CommonConfig::default();
+        let other_build = CommonConfig {
+            software_version: "0.0.0+deadbeef".to_string(),
+            ..Default::default()
+        };
+        assert_ne!(base, other_build);
+    }
+
+    #[test]
+    fn software_version_carries_crate_version_and_commit() {
+        let (crate_version, commit) = SOFTWARE_VERSION
+            .split_once('+')
+            .expect("SOFTWARE_VERSION must be <crate version>+<commit>");
+        assert_eq!(crate_version, env!("CARGO_PKG_VERSION"));
+        // "unknown" when the build had no git metadata (e.g. a source tarball);
+        // still a valid version string, it just weakens the cross-party check.
+        assert!(!commit.is_empty());
+    }
+
+    #[test]
+    fn common_config_from_config_stamps_the_build_version() {
+        // Every Config field has a serde default, so "{}" is the all-defaults
+        // config (Config itself does not derive Default).
+        let config: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            CommonConfig::from(config).software_version(),
+            SOFTWARE_VERSION
+        );
     }
 }
