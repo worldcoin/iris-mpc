@@ -724,8 +724,17 @@ where
 /// tree, `"...+unknown"` when the build had no git metadata at all).
 ///
 /// See `build.rs` for how the commit is resolved.
-pub const SOFTWARE_VERSION: &str =
-    concat!(env!("CARGO_PKG_VERSION"), "+", env!("IRIS_MPC_GIT_HASH"));
+///
+/// `option_env!` rather than `env!` on purpose: tools that compile this crate
+/// without running build scripts (rust-analyzer with build scripts disabled,
+/// for one) would otherwise fail to compile it outright. A missing commit is
+/// meant to degrade the cross-party check to a crate-version comparison, not to
+/// break the build. If you see `+unknown` in a real binary's logs, the build
+/// script did not run and the commit half of the check is inert.
+pub const SOFTWARE_VERSION: &str = match option_env!("IRIS_MPC_SOFTWARE_VERSION") {
+    Some(version) => version,
+    None => concat!(env!("CARGO_PKG_VERSION"), "+unknown"),
+};
 
 /// This struct is used to extract the common configuration for all servers from their respective configs.
 /// It is later used to to hash the config and check if it is the same across all servers as a basic sanity check during startup.
