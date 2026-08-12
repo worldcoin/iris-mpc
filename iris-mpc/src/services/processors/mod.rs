@@ -23,16 +23,18 @@ pub type ParseSharesTaskResult = Result<(GaloisShares, GaloisShares), Report>;
 fn decode_iris_message_shares(
     code_share: String,
     mask_share: String,
+    party_id: usize,
 ) -> Result<(
     GaloisRingIrisCodeShare,
     GaloisRingTrimmedMaskCodeShare,
     GaloisRingIrisCodeShare,
     GaloisRingTrimmedMaskCodeShare,
 )> {
-    let iris_share = GaloisRingIrisCodeShare::from_base64(&code_share)
+    let iris_share = GaloisRingIrisCodeShare::from_base64_for_party(&code_share, party_id)
         .context("Failed to base64 parse iris code")?;
-    let mask_share: GaloisRingIrisCodeShare = GaloisRingIrisCodeShare::from_base64(&mask_share)
-        .context("Failed to base64 parse iris mask")?;
+    let mask_share: GaloisRingIrisCodeShare =
+        GaloisRingIrisCodeShare::from_base64_for_party(&mask_share, party_id)
+            .context("Failed to base64 parse iris mask")?;
 
     let iris_share_mirrored = iris_share.mirrored_code();
     let mask_share_mirrored = mask_share.mirrored_mask();
@@ -89,12 +91,14 @@ pub fn get_iris_shares_parse_task(
                 decode_iris_message_shares(
                     iris_message_share.left_iris_code_shares,
                     iris_message_share.left_mask_code_shares,
+                    party_id,
                 )?;
 
             let (right_code, right_mask, right_code_mirrored, right_mask_mirrored) =
                 decode_iris_message_shares(
                     iris_message_share.right_iris_code_shares,
                     iris_message_share.right_mask_code_shares,
+                    party_id,
                 )?;
 
             // Preprocess shares for left eye.
