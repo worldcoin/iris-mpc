@@ -189,16 +189,28 @@ impl ConsensusTransport for MockTransport {
 
 #[derive(Clone)]
 struct MockMaterializer {
-    /// Records the `freeze` passed on each invocation. (Base is discarded —
-    /// no test inspects it; existing assertions only look at length / freeze.)
+    /// Records the `freeze` passed on each invocation.
     freezes: Arc<Mutex<Vec<FreezeHeight>>>,
+    /// Records the agreed base passed on each invocation.
+    bases: Arc<Mutex<Vec<CheckpointMeta>>>,
+    /// `checkpoint_id`s that `filter_available` treats as having no object in
+    /// storage. Empty by default: every candidate survives the filter.
+    missing: Vec<i64>,
 }
 
 impl MockMaterializer {
     fn new() -> Self {
         Self {
             freezes: Arc::new(Mutex::new(vec![])),
+            bases: Arc::new(Mutex::new(vec![])),
+            missing: vec![],
         }
+    }
+
+    /// Marks the given `checkpoint_id`s as having no object in storage.
+    fn with_missing(mut self, missing: Vec<i64>) -> Self {
+        self.missing = missing;
+        self
     }
 }
 
@@ -206,11 +218,22 @@ impl MockMaterializer {
 impl Materializer for MockMaterializer {
     async fn snapshot(
         &mut self,
-        _base: CheckpointMeta,
+        base: CheckpointMeta,
         freeze: FreezeHeight,
     ) -> Result<Graph, CycleError> {
         self.freezes.lock().unwrap().push(freeze);
+        self.bases.lock().unwrap().push(base);
         Ok(empty_graph())
+    }
+
+    async fn filter_available(
+        &self,
+        candidates: Vec<CheckpointMeta>,
+    ) -> Result<Vec<CheckpointMeta>, CycleError> {
+        Ok(candidates
+            .into_iter()
+            .filter(|c| !self.missing.contains(&c.checkpoint_id))
+            .collect())
     }
 }
 
@@ -607,6 +630,109 @@ async fn most_recent_common_falls_back_to_shared_ancestor() {
     assert!(matches!(outcome, Outcome::Finalized { .. }));
     assert_eq!(mat.freezes.lock().unwrap().len(), 1);
     assert_eq!(fin.calls.lock().unwrap().len(), 1);
+}
+
+/// The retry policy the runner's daemon loops depend on: a rejected base is
+/// retryable (the row was tombstoned, so the next cycle re-bases), a fatal is
+/// not.
+#[test]
+fn base_rejected_is_retryable_and_fatal_is_not() {
+    assert!(CycleError::Transient("blip".into()).is_retryable());
+    assert!(CycleError::BaseRejected("tombstoned".into()).is_retryable());
+    assert!(!CycleError::Fatal("divergence".into()).is_retryable());
+}
+
+/// A checkpoint row whose S3 object is gone must not be advertised in Phase 1:
+/// `MostRecentCommon` then agrees on the newest row that is actually
+/// materializable, and the missing one never reaches `snapshot`.
+#[tokio::test]
+async fn missing_s3_object_is_dropped_from_base_proposals() {
+    let mut mat = MockMaterializer::new().with_missing(vec![5]);
+    let mut fin = MockFinalizer::new();
+    // Local table has cp(5) and cp(4), but cp(5)'s object is gone.
+    let store = MockStore {
+        recent: vec![meta(5, Some(50)), meta(4, Some(40))],
+        max_id: 200,
+    };
+    let canned = vec![
+        // Phase 1: both peers still hold cp(5) — only this party filters it.
+        vec![
+            ConsensusMessage::BaseProposal {
+                recent: vec![meta(5, Some(50)), meta(4, Some(40))],
+            },
+            ConsensusMessage::BaseProposal {
+                recent: vec![meta(5, Some(50)), meta(4, Some(40))],
+            },
+        ],
+        vec![
+            ConsensusMessage::HeightProposal { height: 200 },
+            ConsensusMessage::HeightProposal { height: 200 },
+        ],
+        vec![
+            ConsensusMessage::HashProposal { hash: hash_a() },
+            ConsensusMessage::HashProposal { hash: hash_a() },
+        ],
+    ];
+    let transport = MockTransport::new(canned);
+    let hasher = ConstHasher(hash_a());
+
+    let outcome = run_cycle(
+        &mut mat,
+        &mut fin,
+        &transport,
+        &store,
+        &hasher,
+        &MostRecentCommon,
+        &cfg(0),
+    )
+    .await
+    .expect("cp(4) is a viable base");
+
+    assert!(matches!(outcome, Outcome::Finalized { .. }));
+    let bases = mat.bases.lock().unwrap();
+    assert_eq!(bases.len(), 1);
+    assert_eq!(
+        bases[0].checkpoint_id, 4,
+        "base must fall back past the checkpoint missing from storage"
+    );
+}
+
+/// With `StrictLatest`, filtering the local head leaves nothing in common with
+/// the peers' heads — the cycle skips instead of proposing a dead base.
+#[tokio::test]
+async fn missing_s3_object_on_head_skips_under_strict_latest() {
+    let mut mat = MockMaterializer::new().with_missing(vec![5]);
+    let mut fin = MockFinalizer::new();
+    let store = MockStore {
+        recent: vec![meta(5, Some(50)), meta(4, Some(40))],
+        max_id: 200,
+    };
+    let canned = vec![vec![
+        ConsensusMessage::BaseProposal {
+            recent: vec![meta(5, Some(50))],
+        },
+        ConsensusMessage::BaseProposal {
+            recent: vec![meta(5, Some(50))],
+        },
+    ]];
+    let outcome = run_cycle(
+        &mut mat,
+        &mut fin,
+        &MockTransport::new(canned),
+        &store,
+        &ConstHasher(hash_a()),
+        &StrictLatest,
+        &cfg(0),
+    )
+    .await
+    .expect("skip, not error");
+
+    assert!(matches!(
+        outcome,
+        Outcome::Skipped(SkipReason::NoCommonBase)
+    ));
+    assert!(mat.bases.lock().unwrap().is_empty());
+    assert!(fin.calls.lock().unwrap().is_empty());
 }
 
 /// If no entry appears in every peer's list, even `MostRecentCommon` skips.
