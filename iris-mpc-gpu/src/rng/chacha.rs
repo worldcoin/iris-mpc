@@ -19,8 +19,8 @@ impl ChachaCommon {
     pub const CHACHA_FILL_FUNCTION_NAME: &str = "chacha12";
     pub const CHACHA_XOR_FUNCTION_NAME: &str = "chacha12_xor";
 
-    pub fn init(dev: &Arc<CudaDevice>, seed: [u32; 8]) -> Self {
-        let chacha_ctx = ChaChaCtx::init(seed, 0, 0);
+    pub fn init(dev: &Arc<CudaDevice>, seed: [u32; 8], nonce: u64) -> Self {
+        let chacha_ctx = ChaChaCtx::init(seed, 0, nonce);
         let state_gpu_buf = dev.htod_sync_copy(chacha_ctx.state.as_ref()).unwrap();
 
         Self {
@@ -90,7 +90,7 @@ pub struct ChaChaCudaRng {
 impl ChaChaCudaRng {
     // takes number of bytes to produce, buffer has u32 datatype so will produce
     // buf_size/4 u32s
-    pub fn init(buf_size_bytes: usize, dev: Arc<CudaDevice>, seed: [u32; 8]) -> Self {
+    pub fn init(buf_size_bytes: usize, dev: Arc<CudaDevice>, seed: [u32; 8], nonce: u64) -> Self {
         let ptx = compile_ptx(ChachaCommon::CHACHA_PTX_SRC).unwrap();
 
         assert!(
@@ -111,7 +111,7 @@ impl ChaChaCudaRng {
             )
             .unwrap();
 
-        let chacha = ChachaCommon::init(&dev, seed);
+        let chacha = ChachaCommon::init(&dev, seed, nonce);
 
         if buf_size_bytes == 0 {
             return Self {
@@ -133,8 +133,8 @@ impl ChaChaCudaRng {
             chacha,
         }
     }
-    pub fn init_empty(dev: Arc<CudaDevice>, seed: [u32; 8]) -> Self {
-        Self::init(0, dev, seed)
+    pub fn init_empty(dev: Arc<CudaDevice>, seed: [u32; 8], nonce: u64) -> Self {
+        Self::init(0, dev, seed, nonce)
     }
 
     pub fn fill_rng(&mut self) {
@@ -263,7 +263,7 @@ mod tests {
     fn test_chacha_rng() {
         // This call to CudaDevice::new is only used in context of a test - not used in
         // the server binary
-        let mut rng = ChaChaCudaRng::init(1024 * 1024, CudaDevice::new(0).unwrap(), [0u32; 8]);
+        let mut rng = ChaChaCudaRng::init(1024 * 1024, CudaDevice::new(0).unwrap(), [0u32; 8], 0);
         rng.fill_rng();
         let zeros = rng.data().unwrap().iter().filter(|x| x == &&0).count();
         // we would expect no 0s in the output buffer even 1 is 1/4096;

@@ -15,7 +15,7 @@ pub struct ChaChaCudaCorrRng {
 impl ChaChaCudaCorrRng {
     // takes number of bytes to produce, buffer has u32 datatype so will produce
     // buf_size/4 u32s
-    pub fn init(dev: Arc<CudaDevice>, seed1: [u32; 8], seed2: [u32; 8]) -> Self {
+    pub fn init(dev: Arc<CudaDevice>, seed1: [u32; 8], seed2: [u32; 8], nonce: u64) -> Self {
         let ptx = compile_ptx(ChachaCommon::CHACHA_PTX_SRC).unwrap();
 
         dev.load_ptx(
@@ -40,8 +40,8 @@ impl ChaChaCudaCorrRng {
             )
             .unwrap();
 
-        let chacha1 = ChachaCommon::init(&dev, seed1);
-        let chacha2 = ChachaCommon::init(&dev, seed2);
+        let chacha1 = ChachaCommon::init(&dev, seed1, nonce);
+        let chacha2 = ChachaCommon::init(&dev, seed2, nonce);
 
         Self {
             fill_kernel,
@@ -87,7 +87,7 @@ mod tests {
         // the server binary
         let dev = CudaDevice::new(0).unwrap();
         let stream = dev.fork_default_stream().unwrap();
-        let mut rng = ChaChaCudaCorrRng::init(dev.clone(), [0u32; 8], [1u32; 8]);
+        let mut rng = ChaChaCudaCorrRng::init(dev.clone(), [0u32; 8], [1u32; 8], 0);
         let mut buf = dev.alloc_zeros(1024 * 1024).unwrap();
         rng.fill_rng_into(&mut buf.slice_mut(..), &stream);
         let data = dtoh_on_stream_sync(&buf, &dev, &stream).unwrap();
@@ -108,9 +108,9 @@ mod tests {
         let seed1 = [0u32; 8];
         let seed2 = [1u32; 8];
         let seed3 = [2u32; 8];
-        let mut rng1 = ChaChaCudaCorrRng::init(dev.clone(), seed1, seed2);
-        let mut rng2 = ChaChaCudaCorrRng::init(dev.clone(), seed2, seed3);
-        let mut rng3 = ChaChaCudaCorrRng::init(dev.clone(), seed3, seed1);
+        let mut rng1 = ChaChaCudaCorrRng::init(dev.clone(), seed1, seed2, 0);
+        let mut rng2 = ChaChaCudaCorrRng::init(dev.clone(), seed2, seed3, 0);
+        let mut rng3 = ChaChaCudaCorrRng::init(dev.clone(), seed3, seed1, 0);
 
         let mut buf = dev.alloc_zeros(1024 * 1024).unwrap();
         rng1.fill_rng_into(&mut buf.slice_mut(..), &stream);

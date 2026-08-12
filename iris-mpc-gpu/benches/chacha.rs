@@ -9,13 +9,13 @@ pub fn criterion_benchmark_chacha12_runner(c: &mut Criterion, buf_size_bytes: us
     ));
 
     group.throughput(criterion::Throughput::Bytes(buf_size_bytes as u64));
-    let mut chacha = ChaChaCudaRng::init(buf_size_bytes, CudaDevice::new(0).unwrap(), [0u32; 8]);
+    let mut chacha = ChaChaCudaRng::init(buf_size_bytes, CudaDevice::new(0).unwrap(), [0u32; 8], 0);
     group.bench_function("with copy to host", move |b| {
         b.iter(|| {
             chacha.fill_rng();
         })
     });
-    let mut chacha = ChaChaCudaRng::init(buf_size_bytes, CudaDevice::new(0).unwrap(), [0u32; 8]);
+    let mut chacha = ChaChaCudaRng::init(buf_size_bytes, CudaDevice::new(0).unwrap(), [0u32; 8], 0);
     let dev = CudaDevice::new(0).unwrap();
     let stream = dev.fork_default_stream().unwrap();
     group.bench_function("without copy to host", move |b| {
