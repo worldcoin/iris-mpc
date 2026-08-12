@@ -619,6 +619,15 @@ impl DistanceComparator {
         let mut matches = vec![];
         for i in 0..self.device_manager.device_count() {
             let len = counters[i][0] as usize;
+            if len > DB_CHUNK_SIZE {
+                tracing::error!(
+                    "Partial results buffer overflow on device {}: {} matches found, only {} recorded; excess matches were dropped",
+                    i,
+                    len,
+                    DB_CHUNK_SIZE
+                );
+                metrics::counter!("partial_results.buffer_overflow").increment(1);
+            }
             let mut ids = results[i][..min(len, DB_CHUNK_SIZE)]
                 .iter()
                 .copied()
