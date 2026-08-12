@@ -807,7 +807,9 @@ impl ShareDB {
 
             // Prepare randomness to mask results
             if self.is_remote {
-                let len: usize = (chunk_sizes[idx] * self.query_length).div_ceil(64) * 64;
+                let len: usize = (chunk_sizes[idx] * self.query_length * mem::size_of::<u16>())
+                    .div_ceil(64)
+                    * 64;
                 self.rngs[idx].0.fill_rng_no_host_copy(len, &streams[idx]);
                 self.rngs[idx].1.fill_rng_no_host_copy(len, &streams[idx]);
             }
