@@ -15,19 +15,21 @@ use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
 use iris_mpc_common::helpers::sync::{Modification, SyncResult};
 use iris_mpc_common::iris_db::get_dummy_shares_for_deletion;
 use iris_mpc_store::{Store, StoredIrisRef};
+use sqlx::{Postgres, Transaction};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
 // Graph mutations are already in the WAL (hawk_graph_mutations table) from when
 // they were originally committed, keyed by modification_id. Actual mutation application
 // to GraphMem happens during startup delta replay (checkpoint load → WAL replay), not here.
-pub async fn sync_modifications(
+/// Rolls modifications forward; the caller must commit the returned transaction.
+pub async fn sync_modifications<'a>(
     config: &Config,
-    store: &Store,
+    store: &'a Store,
     aws_clients: &AwsClients,
     shares_encryption_key_pair: &SharesEncryptionKeyPairs,
     sync_result: SyncResult,
-) -> eyre::Result<(), Report> {
+) -> eyre::Result<Transaction<'a, Postgres>, Report> {
     let (mut to_update, to_delete) = sync_result.compare_modifications();
     tracing::info!(
         "Modifications to update: {:?}, to delete: {:?}",
@@ -124,8 +126,7 @@ pub async fn sync_modifications(
             .await?;
     }
 
-    iris_tx.commit().await?;
-    Ok(())
+    Ok(iris_tx)
 }
 
 pub async fn send_last_modifications_to_sns(

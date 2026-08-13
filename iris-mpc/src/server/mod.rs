@@ -147,7 +147,7 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     // Handle modifications sync
     if config.enable_modifications_sync {
-        sync_modifications(
+        let mut tx = sync_modifications(
             &config,
             &iris_store,
             &aws_clients,
@@ -156,8 +156,10 @@ pub async fn server_main(config: Config) -> Result<()> {
         )
         .await?;
         // insert the WAL entries so that init_hawk_actor rolls the graph forward to
-        // the correct height.
-        sync_graph_mutations(&sync_result, &graph_store).await?;
+        // the correct height. Shares the modifications-sync transaction so a crash
+        // cannot leave the iris store ahead of the WAL.
+        sync_graph_mutations(&sync_result, &graph_store, &mut tx).await?;
+        tx.commit().await?;
     }
 
     if config.enable_modifications_replay {
