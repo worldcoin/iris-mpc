@@ -29,12 +29,6 @@ FROM build-image AS build-app
 WORKDIR /src/iris-mpc
 COPY . .
 
-# .dockerignore excludes .git, so the build script cannot derive the commit
-# itself. Pass it in so the binary can enforce that all MPC parties run the
-# same build (see iris-mpc-common/build.rs).
-ARG IRIS_MPC_GIT_HASH
-ENV IRIS_MPC_GIT_HASH=$IRIS_MPC_GIT_HASH
-
 ENV RUSTFLAGS="-C force-frame-pointers=yes"
 RUN cargo build -p iris-mpc-bins --release --bin iris-mpc-hawk
 

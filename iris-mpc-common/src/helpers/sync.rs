@@ -178,7 +178,7 @@ impl SyncResult {
 
     /// Check if the common part of the config is the same across all nodes.
     pub fn check_common_config(&self) -> Result<()> {
-        self.check_software_version()?;
+        self.check_binary_hash()?;
         let my_config = &self.my_state.common_config;
         for SyncState {
             common_config: other_config,
@@ -195,20 +195,15 @@ impl SyncResult {
         Ok(())
     }
 
-    /// Ensure every party is running the same build of the software.
-    ///
-    /// `software_version` is a field of [`CommonConfig`], so the whole-struct
-    /// equality check above already catches a mismatch. This runs first purely
-    /// for the error message: a version diff is actionable, whereas a diff of
-    /// two full config dumps buries the one line that matters.
-    pub fn check_software_version(&self) -> Result<()> {
-        let mine = self.my_state.common_config.software_version();
+    pub fn check_binary_hash(&self) -> Result<()> {
+        let mine = self.my_state.common_config.binary_hash();
         for state in self.all_states.iter() {
-            let theirs = state.common_config.software_version();
+            let theirs = state.common_config.binary_hash();
             ensure!(
                 mine == theirs,
-                "Software version mismatch across MPC parties: this node is running \
-                 {mine}, a peer is running {theirs}. All parties must run the same build."
+                "Binary mismatch across MPC parties: this node is running blake3 \
+                 {mine}, a peer is running blake3 {theirs}. All parties must run the \
+                 same image."
             );
         }
         Ok(())

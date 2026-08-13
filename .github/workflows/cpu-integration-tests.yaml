@@ -89,8 +89,6 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: hawk-server-local-build:latest
-          build-args: |
-            IRIS_MPC_GIT_HASH=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

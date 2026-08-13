@@ -7,6 +7,7 @@ use clap::Parser;
 use eyre::Result;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
+use std::sync::OnceLock;
 
 pub mod json_wrapper;
 
@@ -719,47 +720,46 @@ where
     }
 }
 
-/// Build-time identity of this binary: crate version plus the git commit it was
-/// built from, e.g. `"0.1.0+9f2c1ab3de77"` (or `"...-dirty"` for an uncommitted
-/// tree, `"...+unknown"` when the build had no git metadata at all).
-///
-/// See `build.rs` for how the commit is resolved.
-///
-/// `option_env!` rather than `env!` on purpose: tools that compile this crate
-/// without running build scripts (rust-analyzer with build scripts disabled,
-/// for one) would otherwise fail to compile it outright. A missing commit is
-/// meant to degrade the cross-party check to a crate-version comparison, not to
-/// break the build. If you see `+unknown` in a real binary's logs, the build
-/// script did not run and the commit half of the check is inert.
-pub const SOFTWARE_VERSION: &str = match option_env!("IRIS_MPC_SOFTWARE_VERSION") {
-    Some(version) => version,
-    None => concat!(env!("CARGO_PKG_VERSION"), "+unknown"),
-};
+/// Stand-in digest for when the running executable cannot be hashed at all
+/// (no `/proc`, or the exe path is unreadable). Every party in that situation
+/// reports the same string, so the cross-party check degrades to a no-op
+/// rather than falsely splitting a healthy fleet.
+pub const BINARY_HASH_UNAVAILABLE: &str = "unavailable";
+
+/// Blake3 digest of the running executable, hex-encoded, or
+/// [`BINARY_HASH_UNAVAILABLE`] if it could not be read.
+pub fn binary_hash() -> &'static str {
+    static BINARY_HASH: OnceLock<String> = OnceLock::new();
+    BINARY_HASH.get_or_init(|| {
+        hash_own_executable().unwrap_or_else(|error| {
+            tracing::warn!(
+                "Could not hash the running executable ({error}); the cross-party \
+                 binary check is disabled for this node."
+            );
+            BINARY_HASH_UNAVAILABLE.to_string()
+        })
+    })
+}
+
+fn hash_own_executable() -> std::io::Result<String> {
+    let exe = std::fs::File::open("/proc/self/exe")
+        .or_else(|_| std::fs::File::open(std::env::current_exe()?))?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update_reader(exe)?;
+    Ok(hasher.finalize().to_hex().to_string())
+}
 
 /// This struct is used to extract the common configuration for all servers from their respective configs.
 /// It is later used to to hash the config and check if it is the same across all servers as a basic sanity check during startup.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CommonConfig {
-    /// Build-time software version of the binary that produced this config.
-    ///
-    /// Folding the version into the common config means the startup exchange
-    /// that already compares this struct across parties also enforces that all
-    /// three parties run the same build. That matters because the MPC protocol,
-    /// the on-wire message formats and the graph/DB encodings are only
-    /// guaranteed to agree between identical builds: a mixed-version fleet
-    /// fails in obscure ways (silent divergence, mismatched hashes) long after
-    /// startup, so we would rather refuse to start.
-    ///
-    /// Deliberately the *whole* version and not a coarser marker: any commit
-    /// difference is treated as a mismatch, since we cannot know from the
-    /// version alone whether the delta touched the protocol. A rolling deploy
-    /// therefore has to bring all three parties to the same commit.
+    /// Blake3 digest of the executable that produced this config, from
+    /// [`binary_hash`].
     ///
     /// `serde(default)` so a peer on an older build (which does not send the
-    /// field) yields a clear version mismatch rather than a deserialization
-    /// error.
+    /// field) yields a clear mismatch rather than a deserialization error.
     #[serde(default)]
-    software_version: String,
+    binary_hash: String,
     environment: String,
     results_topic_arn: String,
     processing_timeout_secs: u64,
@@ -821,9 +821,8 @@ impl CommonConfig {
         self.max_modifications_lookback
     }
 
-    /// Build-time software version of the party this config came from.
-    pub fn software_version(&self) -> &str {
-        &self.software_version
+    pub fn binary_hash(&self) -> &str {
+        &self.binary_hash
     }
 }
 
@@ -933,7 +932,7 @@ impl From<Config> for CommonConfig {
         );
 
         Self {
-            software_version: SOFTWARE_VERSION.to_string(),
+            binary_hash: binary_hash().to_string(),
             environment,
             results_topic_arn,
             processing_timeout_secs,
@@ -1011,36 +1010,42 @@ mod tests {
     }
 
     #[test]
-    fn software_version_is_part_of_common_config_equality() {
-        // This is the gate that stops a mixed-version fleet from starting.
+    fn binary_hash_is_part_of_common_config_equality() {
+        // This is the gate that stops a mixed-binary fleet from starting.
         // If the field ever leaves CommonConfig, the check silently vanishes.
         let base = CommonConfig::default();
         let other_build = CommonConfig {
-            software_version: "0.0.0+deadbeef".to_string(),
+            binary_hash: "deadbeef".to_string(),
             ..Default::default()
         };
         assert_ne!(base, other_build);
     }
 
     #[test]
-    fn software_version_carries_crate_version_and_commit() {
-        let (crate_version, commit) = SOFTWARE_VERSION
-            .split_once('+')
-            .expect("SOFTWARE_VERSION must be <crate version>+<commit>");
-        assert_eq!(crate_version, env!("CARGO_PKG_VERSION"));
-        // "unknown" when the build had no git metadata (e.g. a source tarball);
-        // still a valid version string, it just weakens the cross-party check.
-        assert!(!commit.is_empty());
+    fn binary_hash_is_the_blake3_digest_of_the_test_binary() {
+        // Under `cargo test` the running executable is the test harness, which
+        // is a perfectly ordinary file — so the real hashing path is exercised
+        // here, not the degraded one.
+        let hash = binary_hash();
+        assert_ne!(
+            hash, BINARY_HASH_UNAVAILABLE,
+            "the running test binary should be hashable"
+        );
+        assert_eq!(
+            hash.len(),
+            blake3::OUT_LEN * 2,
+            "expected hex-encoded blake3"
+        );
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+        // Cached, so repeated reads cannot disagree mid-run.
+        assert_eq!(hash, binary_hash());
     }
 
     #[test]
-    fn common_config_from_config_stamps_the_build_version() {
+    fn common_config_from_config_stamps_the_binary_hash() {
         // Every Config field has a serde default, so "{}" is the all-defaults
         // config (Config itself does not derive Default).
         let config: Config = serde_json::from_str("{}").unwrap();
-        assert_eq!(
-            CommonConfig::from(config).software_version(),
-            SOFTWARE_VERSION
-        );
+        assert_eq!(CommonConfig::from(config).binary_hash(), binary_hash());
     }
 }
