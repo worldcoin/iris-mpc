@@ -760,6 +760,24 @@ impl Aby3Store<FhdOps> {
         query: &Aby3Query,
         vectors: &[VectorId],
     ) -> Result<FullRotationThresholdResult> {
+        self.eval_distance_batch_full_rotation_thresholds_with_forced_anon_stats(
+            query,
+            vectors,
+            &[],
+        )
+        .await
+    }
+
+    /// GPU-compatible exact scan with selected records retained for anonymous
+    /// statistics regardless of the anonymous-statistics threshold. The CUDA
+    /// actor uses this for reauthentication targets.
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
+    pub async fn eval_distance_batch_full_rotation_thresholds_with_forced_anon_stats(
+        &mut self,
+        query: &Aby3Query,
+        vectors: &[VectorId],
+        forced_anon_stats_vectors: &[usize],
+    ) -> Result<FullRotationThresholdResult> {
         if vectors.is_empty() {
             return Ok(FullRotationThresholdResult {
                 matches: Vec::new(),
@@ -788,7 +806,7 @@ impl Aby3Store<FhdOps> {
         let anon_gt =
             fhd_greater_than_anon_stats_threshold(&mut self.session, &code_dots, &mask_dots)
                 .await?;
-        let anon_rotation_bits = open_bin(&mut self.session, &anon_gt)
+        let mut anon_rotation_bits = open_bin(&mut self.session, &anon_gt)
             .await?
             .into_iter()
             .map(|bit| !bool::from(bit))
@@ -798,6 +816,17 @@ impl Aby3Store<FhdOps> {
             anon_rotation_bits.len() == code_dots.len(),
             "anonymous threshold result has unexpected length"
         );
+
+        // CUDA unions the reauthentication target into the public candidate
+        // bitmap and stores all of its rotations, even those outside the
+        // anonymous-statistics threshold.
+        for &vector in forced_anon_stats_vectors {
+            eyre::ensure!(
+                vector < vectors.len(),
+                "forced anonymous-statistics vector index is out of bounds"
+            );
+            anon_rotation_bits[vector * ROTATIONS..(vector + 1) * ROTATIONS].fill(true);
+        }
 
         // Exactly like the GPU actor, collapse the wider public prefilter to a
         // record bitmap, then run the strict threshold over all 31 rotations

@@ -153,6 +153,25 @@ type PartialDistancesMap = BTreeMap<
     ),
 >;
 
+/// Test-only snapshot of the distance bundles retained for anonymized statistics.
+///
+/// The GPU parity test reconstructs these replicated shares across all three
+/// parties and compares them with the GPU actor's retained bundles.
+#[cfg(feature = "gpu-parity")]
+#[derive(Debug, Clone)]
+pub struct AnonStatsParityEntry {
+    pub match_id: i64,
+    pub operation: AnonStatsOperation,
+    pub distances: Vec<Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>>,
+}
+
+#[cfg(feature = "gpu-parity")]
+#[derive(Debug, Clone)]
+pub struct AnonStatsParityBatch {
+    pub orientation: AnonStatsOrientation,
+    pub eyes: [Vec<AnonStatsParityEntry>; 2],
+}
+
 mod identity_update;
 pub mod insert;
 mod intra_batch;
@@ -359,6 +378,9 @@ pub struct HawkActor {
 
     /// Store for persisting detailed anonymized statistics.
     anon_stats_store: Option<AnonStatsStore>,
+
+    #[cfg(feature = "gpu-parity")]
+    anon_stats_parity_tx: Option<mpsc::UnboundedSender<AnonStatsParityBatch>>,
 
     // ---- Networking ----
     /// Handle for managing network connections and creating MPC sessions with peers.
@@ -612,6 +634,8 @@ impl HawkActor {
             registry: registries,
             graph_store,
             anon_stats_store: None,
+            #[cfg(feature = "gpu-parity")]
+            anon_stats_parity_tx: None,
             networking,
             party_id,
             error_ct: CancellationToken::new(),
@@ -721,6 +745,14 @@ impl HawkActor {
 
     pub fn set_anon_stats_store(&mut self, store: Option<AnonStatsStore>) {
         self.anon_stats_store = store;
+    }
+
+    #[cfg(feature = "gpu-parity")]
+    pub fn set_anon_stats_parity_capture(
+        &mut self,
+        tx: mpsc::UnboundedSender<AnonStatsParityBatch>,
+    ) {
+        self.anon_stats_parity_tx = Some(tx);
     }
 
     /// Replaces the network handle used by this actor to create MPC sessions.
@@ -972,6 +1004,7 @@ impl HawkActor {
         &mut self,
         search_results: &BothEyes<VecRequests<VecRotations<HawkInsertPlan>>>,
         request_types: &[String],
+        skip_persistence: &[bool],
         orientation: Orientation,
     ) -> Result<()> {
         let anon_orientation = match orientation {
@@ -988,10 +1021,31 @@ impl HawkActor {
                 sided_search_results.len(),
             );
 
-            let partial_distances = self.get_partial_distances(sided_search_results, request_types);
+            let partial_distances =
+                self.get_partial_distances(sided_search_results, request_types, skip_persistence);
             per_side_distances[side] = partial_distances.clone();
             self.persist_cached_distances(side, anon_orientation, partial_distances)
                 .await?;
+        }
+
+        #[cfg(feature = "gpu-parity")]
+        if let Some(tx) = &self.anon_stats_parity_tx {
+            let eyes = per_side_distances.each_ref().map(|distances| {
+                distances
+                    .iter()
+                    .map(
+                        |(&match_id, &(operation, ref shares))| AnonStatsParityEntry {
+                            match_id,
+                            operation,
+                            distances: shares.clone(),
+                        },
+                    )
+                    .collect()
+            });
+            let _ = tx.send(AnonStatsParityBatch {
+                orientation: anon_orientation,
+                eyes,
+            });
         }
 
         // Persist 2D distances (combined left + right)
@@ -1006,10 +1060,14 @@ impl HawkActor {
         &mut self,
         search_results: &[VecRotations<HawkInsertPlan>],
         request_types: &[String],
+        skip_persistence: &[bool],
     ) -> PartialDistancesMap {
         // maps query_id and db_id to an operation and a vector of distances.
         let mut distances_with_ids: PartialDistancesMap = BTreeMap::new();
         for (query_idx, vec_rots) in search_results.iter().enumerate() {
+            if skip_persistence.get(query_idx).copied().unwrap_or(false) {
+                continue;
+            }
             let operation = request_types
                 .get(query_idx)
                 .map(|rt| {
@@ -2045,11 +2103,34 @@ impl HawkHandle {
         // Compute search results for a given orientation and compute matching information
         let do_search = async |orient| -> Result<_> {
             let search_queries = &request.queries(orient);
-            let (luc_ids, request_types) = {
+            let (luc_ids, request_types, forced_anon_stats_ids) = {
                 // Choice of LEFT registry is arbitrary — both sides are in sync
                 // w.r.t. stored vector ids.
                 let reg = hawk_actor.registry[LEFT].read().await;
-                (request.luc_ids(&reg), request.request_types(&reg, orient))
+                let forced_anon_stats_ids = request
+                    .batch
+                    .request_types
+                    .iter()
+                    .enumerate()
+                    .map(|(index, request_type)| {
+                        if request_type.as_str() != REAUTH_MESSAGE_TYPE {
+                            return Vec::new();
+                        }
+                        let request_id = &request.batch.request_ids[index];
+                        request
+                            .batch
+                            .reauth_target_indices
+                            .get(request_id)
+                            .map(|&target| reg.from_0_indices(&[target])[0])
+                            .into_iter()
+                            .collect()
+                    })
+                    .collect::<Vec<_>>();
+                (
+                    request.luc_ids(&reg),
+                    request.request_types(&reg, orient),
+                    forced_anon_stats_ids,
+                )
             };
 
             // Job that computes intra-batch matches. Note that it is awaited later, allowing it
@@ -2105,6 +2186,7 @@ impl HawkHandle {
                     search_params,
                     full_scan_side,
                     &extra_candidate_ids,
+                    &forced_anon_stats_ids,
                 )
                 .await?
             } else {
@@ -2174,6 +2256,7 @@ impl HawkHandle {
             .update_anon_stats(
                 &search_normal,
                 &request.batch.request_types,
+                &request.batch.skip_persistence,
                 Orientation::Normal,
             )
             .await?;
@@ -2182,6 +2265,7 @@ impl HawkHandle {
                 .update_anon_stats(
                     search_mirror,
                     &request.batch.request_types,
+                    &request.batch.skip_persistence,
                     Orientation::Mirror,
                 )
                 .await?;

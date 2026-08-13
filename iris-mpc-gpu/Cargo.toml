@@ -39,7 +39,7 @@ tokio-util.workspace = true
 
 [features]
 default = []
-gpu_dependent = []
+gpu_dependent = ["iris-mpc-cpu/gpu-parity"]
 
 [[bench]]
 name = "preprocessing"

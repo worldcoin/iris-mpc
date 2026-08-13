@@ -88,6 +88,7 @@ networking_metrics = []
 chacha_prf = []
 aes_rng_prf = ["ampc-actor-utils/aes_rng_prf"]
 phase_trace = []
+gpu-parity = []
 
 [[bench]]
 name = "hnsw"

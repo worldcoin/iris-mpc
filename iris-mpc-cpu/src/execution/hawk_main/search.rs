@@ -178,6 +178,7 @@ pub async fn linear_scan_cascade<const ROTMASK: u32>(
     search_params: SearchParams,
     full_scan_side: Eye,
     extra_candidate_ids: &VecRequests<Vec<VectorId>>,
+    forced_anon_stats_ids: &VecRequests<Vec<VectorId>>,
 ) -> Result<SearchResults<ROTMASK>> {
     debug_assert_eq!(search_params.mode, HawkSearchMode::LinearScan);
 
@@ -187,6 +188,7 @@ pub async fn linear_scan_cascade<const ROTMASK: u32>(
     let n_requests = search_queries[LEFT].len();
     assert_eq!(n_requests, search_queries[RIGHT].len());
     assert_eq!(n_requests, extra_candidate_ids.len());
+    assert_eq!(n_requests, forced_anon_stats_ids.len());
 
     let first_eye = match full_scan_side {
         Eye::Left => LEFT,
@@ -225,6 +227,7 @@ pub async fn linear_scan_cascade<const ROTMASK: u32>(
         &search_params,
         first_eye,
         full_scan_ids,
+        Arc::new(forced_anon_stats_ids.clone()),
     )
     .await?;
 
@@ -263,6 +266,7 @@ pub async fn linear_scan_cascade<const ROTMASK: u32>(
         &search_params,
         second_eye,
         Arc::new(second_stage_ids),
+        Arc::new(forced_anon_stats_ids.clone()),
     )
     .await?;
 
@@ -295,9 +299,11 @@ async fn linear_scan_eye<const ROTMASK: u32>(
     search_params: &SearchParams,
     eye: usize,
     candidate_ids: Arc<VecRequests<Arc<[VectorId]>>>,
+    forced_anon_stats_ids: Arc<VecRequests<Vec<VectorId>>>,
 ) -> Result<VecRequests<VecRotationSupport<HawkInsertPlan, ROTMASK>>> {
     let n_requests = search_queries[eye].len();
     assert_eq!(n_requests, candidate_ids.len());
+    assert_eq!(n_requests, forced_anon_stats_ids.len());
     let n_rotations = ROTMASK.count_ones() as usize;
     let central_rotation = n_rotations / 2;
 
@@ -340,6 +346,7 @@ async fn linear_scan_eye<const ROTMASK: u32>(
             let search_queries = search_queries.clone();
             let search_params = search_params.clone();
             let candidate_ids = candidate_ids.clone();
+            let forced_anon_stats_ids = forced_anon_stats_ids.clone();
             async move {
                 let mut vector_store = session.aby3_store.write().await;
                 let graph_store = session.graph_store.clone().read_owned().await;
@@ -352,6 +359,7 @@ async fn linear_scan_eye<const ROTMASK: u32>(
                         &mut vector_store,
                         &graph_store,
                         &candidate_ids[chunk.i_request][chunk.range],
+                        &forced_anon_stats_ids[chunk.i_request],
                     )
                     .await?;
                     results.push((chunk.i_request, chunk.i_chunk, result));
@@ -479,6 +487,7 @@ async fn per_session<const ROTMASK: u32>(
                         &mut vector_store,
                         &graph_store,
                         vector_ids,
+                        &[],
                     )
                     .await?
                 } else {
@@ -540,6 +549,7 @@ async fn per_linear_scan_query(
     aby3_store: &mut Aby3Store<HawkOps>,
     graph_store: &GraphMem,
     vector_ids: &[VectorId],
+    forced_anon_stats_ids: &[VectorId],
 ) -> Result<HawkInsertPlan> {
     let start = Instant::now();
     let mut classified = ClassifiedMatches::default();
@@ -555,8 +565,16 @@ async fn per_linear_scan_query(
             .reserve(vector_ids.len().min(4096));
 
         for ids in vector_ids.chunks(LINEAR_SCAN_CHUNK_SIZE) {
+            let forced_anon_stats_vectors = forced_anon_stats_ids
+                .iter()
+                .filter_map(|id| ids.binary_search(id).ok())
+                .collect::<Vec<_>>();
             let thresholds = aby3_store
-                .eval_distance_batch_full_rotation_thresholds(&query, ids)
+                .eval_distance_batch_full_rotation_thresholds_with_forced_anon_stats(
+                    &query,
+                    ids,
+                    &forced_anon_stats_vectors,
+                )
                 .await?;
             classified.matches.results.extend(
                 ids.iter()
@@ -994,12 +1012,14 @@ mod tests {
         );
 
         let extra_candidate_ids = vec![Vec::new(); batch_size];
+        let forced_anon_stats_ids = vec![Vec::new(); batch_size];
         let result = linear_scan_cascade(
             &sessions,
             &request.queries(Orientation::Normal),
             search_params,
             Eye::Left,
             &extra_candidate_ids,
+            &forced_anon_stats_ids,
         )
         .await?;
 
