@@ -97,11 +97,6 @@ name = "iris-mpc-gpu"
 path = "bin/iris-mpc/server/iris_mpc_linear_scan.rs"
 
 [[bin]]
-name = "iris-mpc-gpu-reference"
-path = "bin/iris-mpc/server.rs"
-required-features = ["gpu-reference"]
-
-[[bin]]
 name = "iris-mpc-hawk"
 path = "bin/iris-mpc/server/iris_mpc_hawk.rs"
 
