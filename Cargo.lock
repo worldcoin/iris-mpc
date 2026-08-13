@@ -3438,7 +3438,6 @@ version = "0.1.0"
 dependencies = [
  "ampc-server-utils",
  "aws-config",
- "aws-sdk-rds",
  "aws-sdk-s3",
  "axum 0.7.9",
  "bincode",
