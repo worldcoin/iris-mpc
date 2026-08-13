@@ -17,6 +17,8 @@ helpers = [
 phase_trace = ["iris-mpc-cpu/phase_trace"]
 explicit-sns-batching = ["iris-mpc/explicit-sns-batching", "iris-mpc-common/explicit-sns-batching", "iris-mpc-utils/explicit-sns-batching"]
 networking_metrics = ["iris-mpc-cpu/networking_metrics"]
+aes_rng_prf = ["ampc-actor-utils/aes_rng_prf", "iris-mpc-cpu/aes_rng_prf"]
+gpu-reference = ["dep:cudarc", "dep:iris-mpc-gpu"]
 
 [dependencies]
 aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display" }
@@ -30,7 +32,7 @@ aws-sdk-sqs = { workspace = true, optional = true }
 aws-sdk-s3 = { workspace = true }
 aws-sdk-secretsmanager = { workspace = true, optional = true }
 base64.workspace = true
-cudarc.workspace = true
+cudarc = { workspace = true, optional = true }
 chrono.workspace = true
 clap.workspace = true
 config = { version = "0.15.19", default-features = false }
@@ -77,7 +79,7 @@ uuid.workspace = true
 iris-mpc = { path = "../iris-mpc" }
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-cpu = { path = "../iris-mpc-cpu" }
-iris-mpc-gpu = { path = "../iris-mpc-gpu" }
+iris-mpc-gpu = { path = "../iris-mpc-gpu", optional = true }
 iris-mpc-upgrade = { path = "../iris-mpc-upgrade" }
 iris-mpc-store = { path = "../iris-mpc-store" }
 iris-mpc-upgrade-hawk = { path = "../iris-mpc-upgrade-hawk" }
@@ -92,7 +94,12 @@ clap_builder = "4.5.51"
 
 [[bin]]
 name = "iris-mpc-gpu"
+path = "bin/iris-mpc/server/iris_mpc_linear_scan.rs"
+
+[[bin]]
+name = "iris-mpc-gpu-reference"
 path = "bin/iris-mpc/server.rs"
+required-features = ["gpu-reference"]
 
 [[bin]]
 name = "iris-mpc-hawk"
@@ -187,6 +194,7 @@ path = "bin/iris-mpc-cpu/db_sanity_check.rs"
 [[bin]]
 name = "nccl"
 path = "bin/iris-mpc-gpu/nccl.rs"
+required-features = ["gpu-reference"]
 
 # ---------------------
 # binaries for iris-mpc-upgrade

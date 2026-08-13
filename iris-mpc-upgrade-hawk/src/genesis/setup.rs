@@ -471,6 +471,8 @@ async fn build_hawk_networking(
         hnsw_min_layer_search_batch_size: config.hnsw_min_layer_search_batch_size,
         hnsw_prf_key: config.hawk_prf_key,
         disable_persistence: config.disable_persistence,
+        return_partial_results: config.return_partial_results,
+        full_scan_side: config.full_scan_side,
         hnsw_disable_memory_persistence: config.hnsw_disable_memory_persistence,
         tls: config.tls.clone(),
         numa: config.hawk_numa,
@@ -844,6 +846,7 @@ async fn init_graph_from_stores(
                 parallelism: iris_db_parallelism,
                 s3_max_serial_id: Some(max_index),
                 shutdown_handler,
+                resident_side: None,
             },
         ));
 

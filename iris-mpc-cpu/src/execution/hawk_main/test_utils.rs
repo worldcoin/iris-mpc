@@ -26,6 +26,14 @@ use super::{
 };
 
 pub async fn setup_hawk_actors() -> Result<Vec<HawkActor>> {
+    setup_hawk_actors_with_mode(false).await
+}
+
+pub async fn setup_linear_scan_actors() -> Result<Vec<HawkActor>> {
+    setup_hawk_actors_with_mode(true).await
+}
+
+async fn setup_hawk_actors_with_mode(linear_scan: bool) -> Result<Vec<HawkActor>> {
     let go = |addresses: Vec<String>, index: usize| {
         async move {
             let args = HawkArgs::parse_from([
@@ -41,7 +49,11 @@ pub async fn setup_hawk_actors() -> Result<Vec<HawkActor>> {
             // Make the test async.
             sleep(Duration::from_millis(index as u64)).await;
 
-            HawkActor::from_cli(&args, CancellationToken::new()).await
+            if linear_scan {
+                HawkActor::from_cli_linear_scan(&args, CancellationToken::new()).await
+            } else {
+                HawkActor::from_cli(&args, CancellationToken::new()).await
+            }
         }
     };
 

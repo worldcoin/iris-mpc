@@ -43,7 +43,7 @@ use iris_mpc_cpu::execution::hawk_main::worker_pool_initializer::{
 };
 use iris_mpc_cpu::execution::hawk_main::{
     build_hawk_network_handle, GraphStore, HawkActor, HawkArgs, HawkHandle, HawkOps,
-    ServerJobResult, HAWK_DISTANCE_MODE,
+    HawkSearchMode, ServerJobResult, HAWK_DISTANCE_MODE,
 };
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
@@ -70,10 +70,25 @@ const CHECKPOINT_WINDOW: usize = 10;
 /// Main logic for initialization and execution of AMPC iris uniqueness server
 /// nodes.
 pub async fn server_main(config: Config) -> Result<()> {
-    tracing::info!("Starting ampc-hnsw server with configuration: {:?}", config);
+    server_main_with_search_mode(config, HawkSearchMode::Hnsw).await
+}
+
+/// Run the production service with the exact CPU linear-scan backend. This is
+/// the drop-in service entrypoint that replaces the CUDA actor while retaining
+/// the existing queue, persistence, coordination, and response pipeline.
+pub async fn linear_scan_server_main(config: Config) -> Result<()> {
+    server_main_with_search_mode(config, HawkSearchMode::LinearScan).await
+}
+
+async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMode) -> Result<()> {
+    tracing::info!(
+        ?search_mode,
+        "Starting AMPC CPU server with configuration: {:?}",
+        config
+    );
     let shutdown_handler = init_shutdown_handler(&config).await;
 
-    process_config(&config);
+    process_config(&config, search_mode);
 
     if config.db_backed_ingest && config.disable_persistence {
         bail!(
@@ -98,7 +113,7 @@ pub async fn server_main(config: Config) -> Result<()> {
         );
     }
 
-    let (iris_store, graph_store) = prepare_stores(&config).await?;
+    let (iris_store, graph_store) = prepare_stores(&config, search_mode).await?;
 
     let aws_clients = init_aws_services(&config).await?;
     let shares_encryption_key_pair = get_shares_encryption_key_pair(&config, &aws_clients).await?;
@@ -106,7 +121,14 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     maybe_seed_random_shares(&config, &iris_store).await?;
     check_store_consistency(&config, &iris_store).await?;
-    let my_state = build_sync_state(&config, &aws_clients, &iris_store, &graph_store).await?;
+    let my_state = build_sync_state(
+        &config,
+        &aws_clients,
+        &iris_store,
+        &graph_store,
+        search_mode,
+    )
+    .await?;
 
     let mut background_tasks = TaskMonitor::new();
 
@@ -157,7 +179,9 @@ pub async fn server_main(config: Config) -> Result<()> {
         .await?;
         // insert the WAL entries so that init_hawk_actor rolls the graph forward to
         // the correct height.
-        sync_graph_mutations(&sync_result, &graph_store).await?;
+        if search_mode == HawkSearchMode::Hnsw {
+            sync_graph_mutations(&sync_result, &graph_store).await?;
+        }
     }
 
     if config.enable_modifications_replay {
@@ -252,6 +276,7 @@ pub async fn server_main(config: Config) -> Result<()> {
         &iris_store,
         &graph_store,
         &shutdown_handler,
+        search_mode,
     )
     .await?;
 
@@ -321,6 +346,9 @@ pub async fn server_main(config: Config) -> Result<()> {
     };
 
     let sidecar_future = async move {
+        if search_mode == HawkSearchMode::LinearScan {
+            return Ok(());
+        }
         let config = config.read().await;
         // ensure the sidecar specific setup code only runs if sidecar is enabled in the config
         // if sidecar returns an error, log it and return Ok so that it doesn't interfere with server_main()
@@ -344,7 +372,7 @@ pub async fn server_main(config: Config) -> Result<()> {
                 .wrap_err("failed to create AWS clients")?;
             // the sidecar needs its own graph store and this function transforms config to the
             // appropriate schema name when creating the pg client
-            let (_iris_store, graph_store) = prepare_stores(&config)
+            let (_iris_store, graph_store) = prepare_stores(&config, HawkSearchMode::Hnsw)
                 .await
                 .wrap_err("failed to prepare stores")?;
             let network_args = NetworkHandleArgs {
@@ -394,9 +422,15 @@ async fn init_shutdown_handler(config: &Config) -> Arc<ShutdownHandler> {
 }
 
 /// Validates server config and initializes associated static state.
-fn process_config(config: &Config) {
-    if config.cpu_database.is_none() {
-        panic!("Missing CPU dB config settings",);
+fn process_config(config: &Config, search_mode: HawkSearchMode) {
+    match search_mode {
+        HawkSearchMode::Hnsw if config.cpu_database.is_none() => {
+            panic!("Missing CPU dB config settings")
+        }
+        HawkSearchMode::LinearScan if config.database.is_none() => {
+            panic!("Missing GPU-compatible dB config settings")
+        }
+        _ => {}
     }
     // Load batch_size config
     tracing::info!("Set max batch size to {}", config.max_batch_size);
@@ -404,26 +438,33 @@ fn process_config(config: &Config) {
 
 /// Returns initialized PostgreSQL clients for interacting
 /// with iris share and HNSW graph stores.
-async fn prepare_stores(config: &Config) -> Result<(Store, GraphPg<Aby3Store<HawkOps>>), Report> {
-    let hawk_schema_name = format!(
-        "{}{}_{}_{}",
-        config.schema_name, config.hnsw_schema_name_suffix, config.environment, config.party_id
-    );
-
-    // HNSW will always use the CPU__DATABASE_* both for irises and graph
-    let hawk_db_config = config
-        .cpu_database
-        .as_ref()
-        .ok_or(eyre!("Missing CPU database config"))?;
-    let hawk_postgres_client = PostgresClient::new(
-        &hawk_db_config.url,
-        &hawk_schema_name,
-        AccessMode::ReadWrite,
-    )
-    .await?;
+async fn prepare_stores(
+    config: &Config,
+    search_mode: HawkSearchMode,
+) -> Result<(Store, GraphPg<Aby3Store<HawkOps>>), Report> {
+    let (schema_name, db_config) = match search_mode {
+        HawkSearchMode::Hnsw => (
+            config.get_cpu_db_schema(),
+            config
+                .cpu_database
+                .as_ref()
+                .ok_or(eyre!("Missing CPU database config"))?,
+        ),
+        // Preserve the deployed GPU service's database and schema contract;
+        // only the compute actor changes.
+        HawkSearchMode::LinearScan => (
+            config.get_gpu_db_schema(),
+            config
+                .database
+                .as_ref()
+                .ok_or(eyre!("Missing GPU-compatible database config"))?,
+        ),
+    };
+    let hawk_postgres_client =
+        PostgresClient::new(&db_config.url, &schema_name, AccessMode::ReadWrite).await?;
     run_migrations(
         &hawk_postgres_client.pool,
-        hawk_db_config.ignore_missing_migrations,
+        db_config.ignore_missing_migrations,
     )
     .await?;
 
@@ -554,6 +595,7 @@ async fn build_sync_state(
     aws_clients: &AwsClients,
     store: &Store,
     graph_store: &GraphPg<Aby3Store<HawkOps>>,
+    search_mode: HawkSearchMode,
 ) -> Result<SyncState> {
     let db_len = store.count_irises().await? as u64;
     let modifications = store
@@ -585,7 +627,9 @@ async fn build_sync_state(
     // Fetch graph mutations for all modifications in the lookback window so
     // they can be exchanged with the other parties via the SyncState payload.
     // We only need mutations starting from the oldest modification we track.
-    let graph_mutation_bytes = if let Some(min_id) = modifications.iter().map(|m| m.id).min() {
+    let graph_mutation_bytes = if search_mode == HawkSearchMode::LinearScan {
+        vec![]
+    } else if let Some(min_id) = modifications.iter().map(|m| m.id).min() {
         let mutation_map: HashMap<i64, Vec<u8>> = graph_store
             .get_hawk_graph_mutations_from(min_id)
             .await?
@@ -674,6 +718,8 @@ fn build_hawk_args(config: &Config) -> Result<(HawkArgs, Vec<String>, Vec<String
         hnsw_min_layer_search_batch_size: config.hnsw_min_layer_search_batch_size,
         hnsw_prf_key: config.hawk_prf_key,
         disable_persistence: config.disable_persistence,
+        return_partial_results: config.return_partial_results,
+        full_scan_side: config.full_scan_side,
         hnsw_disable_memory_persistence: config.hnsw_disable_memory_persistence,
         tls: config.tls.clone(),
         numa: config.hawk_numa,
@@ -693,6 +739,7 @@ async fn init_hawk_actor(
     iris_store: &Store,
     graph_store: &GraphPg<Aby3Store<HawkOps>>,
     shutdown_handler: &Arc<ShutdownHandler>,
+    search_mode: HawkSearchMode,
 ) -> Result<HawkActor> {
     let (hawk_args, inbound, outbound) = build_hawk_args(config)?;
 
@@ -711,11 +758,12 @@ async fn init_hawk_actor(
         );
     }
 
-    let parallelism = config
-        .cpu_database
-        .as_ref()
-        .ok_or_else(|| eyre!("Missing database config"))?
-        .load_parallelism;
+    let parallelism = match search_mode {
+        HawkSearchMode::Hnsw => config.cpu_database.as_ref(),
+        HawkSearchMode::LinearScan => config.database.as_ref(),
+    }
+    .ok_or_else(|| eyre!("Missing database config"))?
+    .load_parallelism;
     let store_len = iris_store.count_irises().await?;
     tracing::info!(
         "Initialize iris db: Loading from DB (parallelism: {})",
@@ -733,6 +781,12 @@ async fn init_hawk_actor(
                 parallelism,
                 s3_max_serial_id: None,
                 shutdown_handler: Arc::clone(shutdown_handler),
+                resident_side: (search_mode == HawkSearchMode::LinearScan).then_some(match config
+                    .full_scan_side
+                {
+                    ampc_anon_stats::types::Eye::Left => 0,
+                    ampc_anon_stats::types::Eye::Right => 1,
+                }),
             },
         ));
 
@@ -741,6 +795,11 @@ async fn init_hawk_actor(
     let mut networking = build_hawk_network_handle(&hawk_args, ct).await?;
 
     let graph_load_future = async move {
+        if search_mode == HawkSearchMode::LinearScan {
+            tracing::info!("Linear scan does not require an HNSW checkpoint");
+            return Ok(([GraphMem::new(), GraphMem::new()], networking));
+        }
+
         // Install the graph via the WAL-based consensus checkpoint protocol.
         // Falls back to an empty graph when no checkpoint row exists yet
         // (fresh deployment or pre-checkpoint migration path).
@@ -805,7 +864,12 @@ async fn init_hawk_actor(
         now.elapsed()
     );
 
-    Ok(HawkActor::new(hawk_args, networking, initialized, graph))
+    Ok(match search_mode {
+        HawkSearchMode::Hnsw => HawkActor::new(hawk_args, networking, initialized, graph),
+        HawkSearchMode::LinearScan => {
+            HawkActor::new_linear_scan(hawk_args, networking, initialized, graph)
+        }
+    })
 }
 
 /// Spawns thread responsible for communicating back results from batch query processing.

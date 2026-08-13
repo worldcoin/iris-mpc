@@ -35,6 +35,7 @@ ndarray = "0.16.0"
 float_eq = "1"
 tracing-subscriber.workspace = true
 uuid.workspace = true
+tokio-util.workspace = true
 
 [features]
 default = []
@@ -51,3 +52,8 @@ harness = false
 [[bench]]
 name = "transpose"
 harness = false
+
+[[bench]]
+name = "linear_scan_dot"
+harness = false
+required-features = ["gpu_dependent"]

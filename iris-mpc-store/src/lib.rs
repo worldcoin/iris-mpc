@@ -276,6 +276,27 @@ impl Store {
         Ok(iris)
     }
 
+    /// Fetch a sparse set of irises in one round trip.
+    ///
+    /// Results are ordered by database ID. Callers that require input order
+    /// should key them by [`DbStoredIris::vector_id`].
+    pub async fn get_iris_data_by_ids(&self, ids: &[i64]) -> Result<Vec<DbStoredIris>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(sqlx::query_as::<_, DbStoredIris>(
+            r#"
+            SELECT *
+            FROM irises
+            WHERE id = ANY($1)
+            ORDER BY id ASC
+            "#,
+        )
+        .bind(ids)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
     /// Stream irises in parallel, without a particular order.
     pub async fn stream_irises_par(
         &self,
@@ -1146,6 +1167,12 @@ pub mod tests {
         assert_eq!(got_len, 3);
         assert_eq!(got_par.len(), 3);
         assert_eq!(got.len(), 3);
+
+        let sparse = store.get_iris_data_by_ids(&[3, 1, 999]).await?;
+        assert_eq!(
+            sparse.iter().map(DbStoredIris::id).collect::<Vec<_>>(),
+            vec![1, 3]
+        );
 
         for i in 0..3 {
             assert_eq!(got[i].serial_id(), i + 1);

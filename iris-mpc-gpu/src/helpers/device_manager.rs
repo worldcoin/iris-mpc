@@ -221,17 +221,23 @@ impl DeviceManager {
         for (device_index, device) in self.devices().iter().enumerate() {
             device.bind_to_thread().unwrap();
             unsafe {
-                let _ = cudarc::driver::sys::lib().cuMemHostRegister_v2(
-                    db.code_gr.limb_0[device_index] as *mut _,
-                    max_size * code_length,
-                    CU_MEMHOSTALLOC_PORTABLE,
-                );
+                cudarc::driver::sys::lib()
+                    .cuMemHostRegister_v2(
+                        db.code_gr.limb_0[device_index] as *mut _,
+                        max_size * code_length,
+                        CU_MEMHOSTALLOC_PORTABLE,
+                    )
+                    .result()
+                    .expect("failed to page-lock database limb 0 for asynchronous CUDA copies");
 
-                let _ = cudarc::driver::sys::lib().cuMemHostRegister_v2(
-                    db.code_gr.limb_1[device_index] as *mut _,
-                    max_size * code_length,
-                    CU_MEMHOSTALLOC_PORTABLE,
-                );
+                cudarc::driver::sys::lib()
+                    .cuMemHostRegister_v2(
+                        db.code_gr.limb_1[device_index] as *mut _,
+                        max_size * code_length,
+                        CU_MEMHOSTALLOC_PORTABLE,
+                    )
+                    .result()
+                    .expect("failed to page-lock database limb 1 for asynchronous CUDA copies");
             }
             self.track_locked_db(db.code_gr.clone());
         }

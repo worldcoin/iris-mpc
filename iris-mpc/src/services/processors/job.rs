@@ -63,8 +63,15 @@ pub async fn process_job_result(
         match_ids,
         partial_match_ids_left,
         partial_match_ids_right,
+        partial_match_rotation_indices_left,
+        partial_match_rotation_indices_right,
         partial_match_counters_left,
         partial_match_counters_right,
+        full_face_mirror_match_ids,
+        full_face_mirror_partial_match_ids_left,
+        full_face_mirror_partial_match_ids_right,
+        full_face_mirror_partial_match_counters_left,
+        full_face_mirror_partial_match_counters_right,
         left_iris_requests,
         right_iris_requests,
         deleted_ids,
@@ -103,24 +110,14 @@ pub async fn process_job_result(
                     true => Some(match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>()),
                     false => None,
                 },
-                match partial_match_ids_left[i].is_empty() {
-                    false => Some(
-                        partial_match_ids_left[i]
-                            .iter()
-                            .map(|x| x + 1)
-                            .collect::<Vec<_>>(),
-                    ),
-                    true => None,
-                },
-                match partial_match_ids_right[i].is_empty() {
-                    false => Some(
-                        partial_match_ids_right[i]
-                            .iter()
-                            .map(|x| x + 1)
-                            .collect::<Vec<_>>(),
-                    ),
-                    true => None,
-                },
+                partial_match_ids_left
+                    .get(i)
+                    .filter(|ids| !ids.is_empty())
+                    .map(|ids| ids.iter().map(|x| x + 1).collect::<Vec<_>>()),
+                partial_match_ids_right
+                    .get(i)
+                    .filter(|ids| !ids.is_empty())
+                    .map(|ids| ids.iter().map(|x| x + 1).collect::<Vec<_>>()),
                 Some(matched_batch_request_ids[i].clone()),
                 match partial_match_counters_right.is_empty() {
                     false => Some(partial_match_counters_right[i]),
@@ -130,13 +127,30 @@ pub async fn process_job_result(
                     false => Some(partial_match_counters_left[i]),
                     true => None,
                 },
-                None, // partial_match_rotation_indices_left - not applicable for CPU
-                None, // partial_match_rotation_indices_right - not applicable for CPU
-                None, // not applicable for hnsw
-                None, // not applicable for hnsw
-                None, // not applicable for hnsw
-                None, // not applicable for hnsw
-                None, // not applicable for hnsw
+                partial_match_rotation_indices_left
+                    .get(i)
+                    .filter(|rotations| !rotations.is_empty())
+                    .cloned(),
+                partial_match_rotation_indices_right
+                    .get(i)
+                    .filter(|rotations| !rotations.is_empty())
+                    .cloned(),
+                full_face_mirror_match_ids
+                    .get(i)
+                    .filter(|ids| !ids.is_empty())
+                    .map(|ids| ids.iter().map(|x| x + 1).collect::<Vec<_>>()),
+                full_face_mirror_partial_match_ids_left
+                    .get(i)
+                    .filter(|ids| !ids.is_empty())
+                    .map(|ids| ids.iter().map(|x| x + 1).collect::<Vec<_>>()),
+                full_face_mirror_partial_match_ids_right
+                    .get(i)
+                    .filter(|ids| !ids.is_empty())
+                    .map(|ids| ids.iter().map(|x| x + 1).collect::<Vec<_>>()),
+                (!full_face_mirror_partial_match_counters_left.is_empty())
+                    .then_some(full_face_mirror_partial_match_counters_left[i]),
+                (!full_face_mirror_partial_match_counters_right.is_empty())
+                    .then_some(full_face_mirror_partial_match_counters_right[i]),
                 match full_face_mirror_attack_detected.is_empty() {
                     false => full_face_mirror_attack_detected[i],
                     true => false,

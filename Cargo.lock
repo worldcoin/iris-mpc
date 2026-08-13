@@ -3365,6 +3365,7 @@ dependencies = [
  "ring",
  "static_assertions",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
  "uuid",

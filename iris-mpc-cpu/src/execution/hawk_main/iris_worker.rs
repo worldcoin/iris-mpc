@@ -18,21 +18,33 @@ use eyre::Result;
 use futures::future::{try_join_all, BoxFuture};
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
-    VectorId,
+    VectorId, ROTATIONS,
 };
+use iris_mpc_store::Store;
 use itertools::{izip, Itertools};
 use std::{
     collections::HashMap,
     fmt::Debug,
     iter,
+    num::NonZeroUsize,
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, RwLock,
     },
     time::Instant,
 };
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, RwLock as AsyncRwLock};
 use tracing::info;
+
+/// Production task size for full-rotation linear-scan dot products.
+/// Full-scan dot work per pinned worker task. 256 amortizes channel and task
+/// overhead without the load imbalance observed at 512 on r8g.24xlarge.
+pub const DEFAULT_FULL_ROTATION_TASK_SIZE: usize = 256;
+
+fn default_full_rotation_task_size() -> NonZeroUsize {
+    NonZeroUsize::new(DEFAULT_FULL_ROTATION_TASK_SIZE)
+        .expect("the default full-rotation task size must be nonzero")
+}
 
 /// Defines the types of tasks that can be offloaded to an `IrisWorker`.
 ///
@@ -67,10 +79,40 @@ enum IrisTask {
         vector_ids: Vec<VectorId>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
     },
+    /// Dot products against transient targets loaded from cold storage.
+    DotProductIrisesBatch {
+        query: ArcIris,
+        targets: Arc<[ArcIris]>,
+        range: std::ops::Range<usize>,
+        rsp: oneshot::Sender<Vec<RingElement<u16>>>,
+    },
     /// Computes the rotation-aware dot product between a query and a batch of database irises.
     RotationAwareDotProductBatch {
         query: ArcIris,
         vector_ids: Arc<[VectorId]>,
+        range: std::ops::Range<usize>,
+        rsp: oneshot::Sender<Vec<RingElement<u16>>>,
+    },
+    /// Rotation-aware dot products against transient cold-storage targets.
+    RotationAwareDotProductIrisesBatch {
+        query: ArcIris,
+        targets: Arc<[ArcIris]>,
+        range: std::ops::Range<usize>,
+        rsp: oneshot::Sender<Vec<RingElement<u16>>>,
+    },
+    /// Computes all 31 rotations in one pass over a target range. This is
+    /// reserved for exact linear scans; HNSW intentionally uses three
+    /// independent 11-rotation windows for candidate recall.
+    FullRotationDotProductBatch {
+        query: ArcIris,
+        vector_ids: Arc<[VectorId]>,
+        range: std::ops::Range<usize>,
+        rsp: oneshot::Sender<Vec<RingElement<u16>>>,
+    },
+    /// Full 31-rotation dot products against transient cold-storage targets.
+    FullRotationDotProductIrisesBatch {
+        query: ArcIris,
+        targets: Arc<[ArcIris]>,
         range: std::ops::Range<usize>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
     },
@@ -170,6 +212,33 @@ impl IrisPoolHandle {
         result
     }
 
+    async fn dot_product_irises_batch(
+        &self,
+        query: ArcIris,
+        targets: Vec<ArcIris>,
+    ) -> Result<Vec<RingElement<u16>>> {
+        let targets: Arc<[ArcIris]> = Arc::from(targets);
+        let mut responses = Vec::with_capacity(Self::n_batch_chunks(targets.len()));
+        for (i, _) in targets.chunks(Self::ROT_AWARE_BATCH_CHUNK_SIZE).enumerate() {
+            let start = i * Self::ROT_AWARE_BATCH_CHUNK_SIZE;
+            let end = (start + Self::ROT_AWARE_BATCH_CHUNK_SIZE).min(targets.len());
+            let (tx, rx) = oneshot::channel();
+            self.get_next_worker()
+                .send(IrisTask::DotProductIrisesBatch {
+                    query: query.clone(),
+                    targets: targets.clone(),
+                    range: start..end,
+                    rsp: tx,
+                })?;
+            responses.push(rx);
+        }
+        Ok(try_join_all(responses)
+            .await?
+            .into_iter()
+            .flatten()
+            .collect())
+    }
+
     /// Maximum size of batches for rotation aware dot product batch tasks.
     const ROT_AWARE_BATCH_CHUNK_SIZE: usize = 128;
 
@@ -243,6 +312,100 @@ impl IrisPoolHandle {
         self.metric_rotation_aware_dot_product_latency
             .record(start.elapsed().as_secs_f64());
         Ok(results)
+    }
+
+    async fn rotation_aware_dot_product_irises_batch(
+        &self,
+        query: ArcIris,
+        targets: Vec<ArcIris>,
+    ) -> Result<Vec<RingElement<u16>>> {
+        let targets: Arc<[ArcIris]> = Arc::from(targets);
+        let mut responses = Vec::with_capacity(Self::n_batch_chunks(targets.len()));
+        for (i, _) in targets.chunks(Self::ROT_AWARE_BATCH_CHUNK_SIZE).enumerate() {
+            let start = i * Self::ROT_AWARE_BATCH_CHUNK_SIZE;
+            let end = (start + Self::ROT_AWARE_BATCH_CHUNK_SIZE).min(targets.len());
+            let (tx, rx) = oneshot::channel();
+            self.get_next_worker()
+                .send(IrisTask::RotationAwareDotProductIrisesBatch {
+                    query: query.clone(),
+                    targets: targets.clone(),
+                    range: start..end,
+                    rsp: tx,
+                })?;
+            responses.push(rx);
+        }
+        Ok(try_join_all(responses)
+            .await?
+            .into_iter()
+            .flatten()
+            .collect())
+    }
+
+    /// Compute every iris rotation while traversing each target exactly once.
+    /// Production passes 128 records per task; benchmarks can explicitly vary
+    /// the task size without changing the dot-product computation.
+    pub async fn full_rotation_dot_product_batch(
+        &mut self,
+        query: ArcIris,
+        vector_ids: &[VectorId],
+        task_size: NonZeroUsize,
+    ) -> Result<Vec<RingElement<u16>>> {
+        let start = Instant::now();
+        let shared_ids: Arc<[VectorId]> = Arc::from(vector_ids);
+        let task_size = task_size.get();
+        let mut responses = Vec::with_capacity(shared_ids.len().div_ceil(task_size));
+
+        for (i, _) in shared_ids.chunks(task_size).enumerate() {
+            let range_start = i * task_size;
+            let range_end = (range_start + task_size).min(shared_ids.len());
+            let (tx, rx) = oneshot::channel();
+            self.get_next_worker()
+                .send(IrisTask::FullRotationDotProductBatch {
+                    query: query.clone(),
+                    vector_ids: shared_ids.clone(),
+                    range: range_start..range_end,
+                    rsp: tx,
+                })?;
+            responses.push(rx);
+        }
+
+        let results = futures::future::try_join_all(responses)
+            .await?
+            .into_iter()
+            .flatten()
+            .collect();
+        self.metric_rotation_aware_dot_product_latency
+            .record(start.elapsed().as_secs_f64());
+        Ok(results)
+    }
+
+    async fn full_rotation_dot_product_irises_batch(
+        &self,
+        query: ArcIris,
+        targets: Vec<ArcIris>,
+        task_size: NonZeroUsize,
+    ) -> Result<Vec<RingElement<u16>>> {
+        let targets: Arc<[ArcIris]> = Arc::from(targets);
+        let task_size = task_size.get();
+        let mut responses = Vec::with_capacity(targets.len().div_ceil(task_size));
+        for (i, _) in targets.chunks(task_size).enumerate() {
+            let range_start = i * task_size;
+            let range_end = (range_start + task_size).min(targets.len());
+            let (tx, rx) = oneshot::channel();
+            self.get_next_worker()
+                .send(IrisTask::FullRotationDotProductIrisesBatch {
+                    query: query.clone(),
+                    targets: targets.clone(),
+                    range: range_start..range_end,
+                    rsp: tx,
+                })?;
+            responses.push(rx);
+        }
+        Ok(try_join_all(responses)
+            .await?
+            .into_iter()
+            .flatten()
+            .collect())
     }
 
     /// Computes rotation-aware dot products for multiple (query, vectors) batches.
@@ -466,6 +629,16 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
                 let _ = rsp.send(r);
             }
 
+            IrisTask::DotProductIrisesBatch {
+                query,
+                targets,
+                range,
+                rsp,
+            } => {
+                let iris_pairs = targets[range].iter().map(|target| Some((&query, target)));
+                let _ = rsp.send(pairwise_distance(iris_pairs));
+            }
+
             IrisTask::RotationAwareDotProductBatch {
                 query,
                 vector_ids,
@@ -477,6 +650,44 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
                 let result = rotation_aware_pairwise_distance_rowmajor::<HAWK_MIN_DIST_ROTATIONS, _>(
                     &query, targets,
                 );
+                let _ = rsp.send(result);
+            }
+
+            IrisTask::RotationAwareDotProductIrisesBatch {
+                query,
+                targets,
+                range,
+                rsp,
+            } => {
+                let targets = targets[range].iter().map(Some);
+                let result = rotation_aware_pairwise_distance_rowmajor::<HAWK_MIN_DIST_ROTATIONS, _>(
+                    &query, targets,
+                );
+                let _ = rsp.send(result);
+            }
+
+            IrisTask::FullRotationDotProductBatch {
+                query,
+                vector_ids,
+                range,
+                rsp,
+            } => {
+                let store = iris_store.data.blocking_read();
+                let targets = vector_ids[range].iter().map(|v| store.get_vector(v));
+                let result =
+                    rotation_aware_pairwise_distance_rowmajor::<ROTATIONS, _>(&query, targets);
+                let _ = rsp.send(result);
+            }
+
+            IrisTask::FullRotationDotProductIrisesBatch {
+                query,
+                targets,
+                range,
+                rsp,
+            } => {
+                let targets = targets[range].iter().map(Some);
+                let result =
+                    rotation_aware_pairwise_distance_rowmajor::<ROTATIONS, _>(&query, targets);
                 let _ = rsp.send(result);
             }
 
@@ -599,6 +810,15 @@ pub trait IrisWorkerPool: Debug + Send + Sync {
         batches: Vec<(QuerySpec, Vec<VectorId>)>,
     ) -> BoxFuture<'a, Result<Vec<Vec<RingElement<u16>>>>>;
 
+    /// Compute the 31 rotation dot products for one query in a single target
+    /// traversal. Exact linear scan uses this instead of HNSW's 3 x 11
+    /// rotation-window task decomposition.
+    fn compute_dot_products_full_rotations<'a>(
+        &'a self,
+        query: QuerySpec,
+        vector_ids: Vec<VectorId>,
+    ) -> BoxFuture<'a, Result<Vec<RingElement<u16>>>>;
+
     /// Fetch iris data from the worker's store by vector ID.
     ///
     /// Returns one `ArcIris` per input ID in the same order.  Missing
@@ -650,6 +870,13 @@ impl<T: ?Sized + IrisWorkerPool> IrisWorkerPool for Arc<T> {
         batches: Vec<(QuerySpec, Vec<VectorId>)>,
     ) -> BoxFuture<'a, Result<Vec<Vec<RingElement<u16>>>>> {
         (**self).compute_dot_products(batches)
+    }
+    fn compute_dot_products_full_rotations<'a>(
+        &'a self,
+        query: QuerySpec,
+        vector_ids: Vec<VectorId>,
+    ) -> BoxFuture<'a, Result<Vec<RingElement<u16>>>> {
+        (**self).compute_dot_products_full_rotations(query, vector_ids)
     }
     fn fetch_irises<'a>(&'a self, ids: Vec<VectorId>) -> BoxFuture<'a, Result<Vec<ArcIris>>> {
         (**self).fetch_irises(ids)
@@ -721,6 +948,20 @@ pub struct LocalIrisWorkerPool {
     iris_store: SharedIrisesRef<ArcIris>,
     mode: DistanceMode,
     party_id: usize,
+    /// Number of records assigned to one full-rotation dot-product task.
+    /// Normal constructors retain the production default; benchmarks can opt
+    /// into another nonzero value through `with_full_rotation_task_size`.
+    full_rotation_task_size: NonZeroUsize,
+    /// When set, the in-memory store is only a small mutation overlay and
+    /// unchanged database irises are fetched sparsely for each candidate set.
+    cold_storage: Option<ColdStorage>,
+}
+
+#[derive(Clone)]
+struct ColdStorage {
+    store: Store,
+    side: usize,
+    mutation_overlay: Arc<AsyncRwLock<HashMap<VectorId, ArcIris>>>,
 }
 
 impl Debug for LocalIrisWorkerPool {
@@ -744,6 +985,35 @@ impl LocalIrisWorkerPool {
             iris_store,
             mode,
             party_id,
+            full_rotation_task_size: default_full_rotation_task_size(),
+            cold_storage: None,
+        }
+    }
+
+    /// Construct the non-resident eye of a linear-scan actor. Its complete
+    /// iris column remains in Postgres; only requested candidates are held for
+    /// the duration of a computation. The local store remains as a mutation
+    /// overlay so updates are visible before asynchronous persistence finishes.
+    pub fn new_cold(
+        inner: IrisPoolHandle,
+        iris_store: SharedIrisesRef<ArcIris>,
+        mode: DistanceMode,
+        party_id: usize,
+        store: Store,
+        side: usize,
+    ) -> Self {
+        Self {
+            inner,
+            query_cache: Arc::new(RwLock::new(HashMap::new())),
+            iris_store,
+            mode,
+            party_id,
+            full_rotation_task_size: default_full_rotation_task_size(),
+            cold_storage: Some(ColdStorage {
+                store,
+                side,
+                mutation_overlay: Arc::new(AsyncRwLock::new(HashMap::new())),
+            }),
         }
     }
 
@@ -756,6 +1026,62 @@ impl LocalIrisWorkerPool {
     ) -> Self {
         let pool = init_workers(0, iris_store.clone(), true);
         Self::new(pool, iris_store, mode, party_id)
+    }
+
+    /// Override full-rotation task granularity for an explicitly configured
+    /// benchmark or tool. Production constructors always default to 128.
+    pub fn with_full_rotation_task_size(mut self, task_size: NonZeroUsize) -> Self {
+        self.full_rotation_task_size = task_size;
+        self
+    }
+
+    async fn fetch_irises_resident_or_cold(&self, ids: &[VectorId]) -> Result<Vec<ArcIris>> {
+        let Some(cold) = &self.cold_storage else {
+            let store = self.iris_store.data.read().await;
+            return Ok(ids
+                .iter()
+                .map(|id| store.get_vector_or_empty(id).clone())
+                .collect());
+        };
+
+        // The cold eye retains only post-start mutations. Prefer that overlay
+        // to the database so a just-inserted or just-deleted iris is visible
+        // even while result persistence is still in flight.
+        let overlay = {
+            let overlay = cold.mutation_overlay.read().await;
+            ids.iter()
+                .map(|id| overlay.get(id).cloned())
+                .collect::<Vec<_>>()
+        };
+        let empty = Arc::new(GaloisRingSharedIris::default_for_party(self.party_id));
+        let missing_db_ids = ids
+            .iter()
+            .zip(&overlay)
+            .filter_map(|(id, cached)| cached.is_none().then_some(id.serial_id() as i64))
+            .unique()
+            .collect_vec();
+        let rows = cold.store.get_iris_data_by_ids(&missing_db_ids).await?;
+        let mut fetched = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let vector_id = row.vector_id();
+            let (code, mask) = if cold.side == 0 {
+                (row.left_code(), row.left_mask())
+            } else {
+                (row.right_code(), row.right_mask())
+            };
+            let iris = GaloisRingSharedIris::try_from_buffers(self.party_id, code, mask)?;
+            fetched.insert(vector_id, iris);
+        }
+
+        Ok(ids
+            .iter()
+            .zip(overlay)
+            .map(|(id, cached)| {
+                cached
+                    .or_else(|| fetched.get(id).cloned())
+                    .unwrap_or_else(|| empty.clone())
+            })
+            .collect())
     }
 }
 
@@ -867,6 +1193,8 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
         let query_cache = self.query_cache.clone();
         let mut inner = self.inner.clone();
         let mode = self.mode;
+        let pool = self.clone();
+        let is_cold = self.cold_storage.is_some();
         Box::pin(async move {
             // Look up the correct preprocessed rotation for each batch
             let iris_batches: Vec<(ArcIris, Vec<VectorId>)> = {
@@ -887,6 +1215,25 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
                     .collect::<Result<Vec<_>>>()?
             };
 
+            if is_cold {
+                let mut results = Vec::with_capacity(iris_batches.len());
+                for (iris_proc, target_ids) in iris_batches {
+                    let targets = pool.fetch_irises_resident_or_cold(&target_ids).await?;
+                    let result = match mode {
+                        DistanceMode::Simple => {
+                            inner.dot_product_irises_batch(iris_proc, targets).await?
+                        }
+                        DistanceMode::MinRotation => {
+                            inner
+                                .rotation_aware_dot_product_irises_batch(iris_proc, targets)
+                                .await?
+                        }
+                    };
+                    results.push(result);
+                }
+                return Ok(results);
+            }
+
             match mode {
                 DistanceMode::Simple => {
                     let mut results = Vec::with_capacity(iris_batches.len());
@@ -905,15 +1252,44 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
         })
     }
 
-    fn fetch_irises<'a>(&'a self, ids: Vec<VectorId>) -> BoxFuture<'a, Result<Vec<ArcIris>>> {
-        let iris_store = self.iris_store.clone();
+    fn compute_dot_products_full_rotations<'a>(
+        &'a self,
+        query: QuerySpec,
+        vector_ids: Vec<VectorId>,
+    ) -> BoxFuture<'a, Result<Vec<RingElement<u16>>>> {
+        let query_cache = self.query_cache.clone();
+        let mut inner = self.inner.clone();
+        let pool = self.clone();
+        let is_cold = self.cold_storage.is_some();
+        let task_size = self.full_rotation_task_size;
         Box::pin(async move {
-            let store = iris_store.data.read().await;
-            Ok(ids
-                .iter()
-                .map(|id| store.get_vector_or_empty(id).clone())
-                .collect())
+            let iris = {
+                let cache = query_cache.read().unwrap();
+                let cached = cache
+                    .get(&query.query_id)
+                    .ok_or_else(|| eyre::eyre!("Query {:?} not cached", query.query_id))?;
+                let rotations = if query.mirrored {
+                    &cached.mirrored_preprocessed_rotations
+                } else {
+                    &cached.preprocessed_rotations
+                };
+                rotations[query.rotation].clone()
+            };
+            if is_cold {
+                let targets = pool.fetch_irises_resident_or_cold(&vector_ids).await?;
+                inner
+                    .full_rotation_dot_product_irises_batch(iris, targets, task_size)
+                    .await
+            } else {
+                inner
+                    .full_rotation_dot_product_batch(iris, &vector_ids, task_size)
+                    .await
+            }
         })
+    }
+
+    fn fetch_irises<'a>(&'a self, ids: Vec<VectorId>) -> BoxFuture<'a, Result<Vec<ArcIris>>> {
+        Box::pin(async move { self.fetch_irises_resident_or_cold(&ids).await })
     }
 
     fn insert_irises<'a>(
@@ -922,6 +1298,7 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
     ) -> BoxFuture<'a, Result<u64>> {
         let query_cache = self.query_cache.clone();
         let iris_store = self.iris_store.clone();
+        let cold_storage = self.cold_storage.clone();
         Box::pin(async move {
             // Resolve query IDs to irises (release cache lock before await).
             let resolved: Vec<_> = {
@@ -938,6 +1315,12 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
                     })
                     .collect::<Result<Vec<_>>>()?
             };
+            if let Some(cold) = cold_storage {
+                let mut overlay = cold.mutation_overlay.write().await;
+                overlay.extend(resolved);
+                return Ok(0);
+            }
+
             // Write directly to the shared store (not via IrisPoolHandle::insert
             // which is fire-and-forget). HNSW insertion needs the iris to be
             // visible in the store immediately after this returns.
@@ -1012,8 +1395,17 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
     fn delete_irises<'a>(&'a self, ids: Vec<VectorId>) -> BoxFuture<'a, Result<()>> {
         let iris_store = self.iris_store.clone();
         let party_id = self.party_id;
+        let cold_storage = self.cold_storage.clone();
         Box::pin(async move {
             let dummy = Arc::new(GaloisRingSharedIris::dummy_for_party(party_id));
+            if let Some(cold) = cold_storage {
+                let mut overlay = cold.mutation_overlay.write().await;
+                for id in ids {
+                    overlay.remove(&id);
+                    overlay.insert(id.next_version(), dummy.clone());
+                }
+                return Ok(());
+            }
             let mut store = iris_store.data.write().await;
             for id in ids {
                 store.update(id, dummy.clone());
@@ -1038,4 +1430,51 @@ pub fn select_core_ids(shard_index: usize) -> Vec<CoreId> {
     );
 
     cpu_ids.into_iter().map(|id| CoreId { id }).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hawkers::shared_irises::SharedIrises;
+
+    const TEST_TARGETS: usize = 513;
+
+    #[test]
+    fn full_rotation_task_size_only_changes_decomposition() -> Result<()> {
+        std::thread::Builder::new()
+            .name("full_rotation_task_size".to_owned())
+            .stack_size(32 * 1024 * 1024)
+            .spawn(run_full_rotation_task_size_test)?
+            .join()
+            .expect("full-rotation task-size test thread panicked")
+    }
+
+    fn run_full_rotation_task_size_test() -> Result<()> {
+        let runtime = tokio::runtime::Runtime::new()?;
+        let iris = Arc::new(GaloisRingSharedIris::default_for_party(0));
+        let vector_ids = (0..TEST_TARGETS)
+            .map(|index| VectorId::from_0_index(index as u32))
+            .collect::<Vec<_>>();
+        let points = vector_ids
+            .iter()
+            .copied()
+            .map(|id| (id, iris.clone()))
+            .collect::<HashMap<_, _>>();
+        let storage = SharedIrises::new(points, iris.clone()).to_arc();
+        let workers = init_workers(0, storage, false);
+
+        let mut results = Vec::new();
+        for task_size in [64, 128, 256, 512] {
+            let mut workers = workers.clone();
+            results.push(runtime.block_on(workers.full_rotation_dot_product_batch(
+                iris.clone(),
+                &vector_ids,
+                NonZeroUsize::new(task_size).unwrap(),
+            ))?);
+        }
+
+        assert!(results.iter().all(|result| result == &results[0]));
+        assert_eq!(results[0].len(), TEST_TARGETS * ROTATIONS * 2);
+        Ok(())
+    }
 }

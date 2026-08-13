@@ -86,6 +86,7 @@ tempfile = "3"
 db_dependent = []
 networking_metrics = []
 chacha_prf = []
+aes_rng_prf = ["ampc-actor-utils/aes_rng_prf"]
 phase_trace = []
 
 [[bench]]
@@ -94,6 +95,22 @@ harness = false
 
 [[bench]]
 name = "networking"
+harness = false
+
+[[bench]]
+name = "linear_scan_network"
+harness = false
+
+[[bench]]
+name = "linear_scan_network_tcp"
+harness = false
+
+[[bench]]
+name = "linear_scan_dot_cpu"
+harness = false
+
+[[bench]]
+name = "linear_scan_candidates"
 harness = false
 
 [[bench]]

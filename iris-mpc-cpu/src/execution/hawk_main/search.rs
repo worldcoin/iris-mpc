@@ -1,8 +1,8 @@
 use super::{
     rot::VecRotationSupport,
     scheduler::{Batch, Schedule, TaskId},
-    BothEyes, ClassifiedMatches, HawkInsertPlan, HawkOps, HawkSession, SaturableMatches,
-    VecRequests, LEFT, RIGHT,
+    BothEyes, ClassifiedMatches, HawkInsertPlan, HawkOps, HawkSearchMode, HawkSession,
+    SaturableMatches, VecRequests, LEFT, RIGHT,
 };
 use crate::{
     execution::hawk_main::{
@@ -12,6 +12,7 @@ use crate::{
     hawkers::aby3::aby3_store::{Aby3DistanceRef, Aby3Query, Aby3Store, DistanceOps},
     hnsw::{graph::UpdateEntryPoint, GraphMem, HnswSearcher},
 };
+use ampc_anon_stats::types::Eye;
 use eyre::{OptionExt, Result};
 use iris_mpc_common::iris_db::iris::Threshold;
 use iris_mpc_common::VectorId;
@@ -19,6 +20,31 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use tracing::instrument;
+
+/// Keep enough records in each MPC call to amortize its fixed costs without
+/// making one session monopolize the scan. On the production r8g.24xlarge,
+/// 4K records per session keeps the dot-product workers, MPC circuit, and TCP
+/// streams overlapped throughout a large scan.
+#[cfg(not(test))]
+const LINEAR_SCAN_CHUNK_SIZE: usize = 1 << 12;
+// Exercise chunk sharding and result merging in the small in-process tests.
+#[cfg(test)]
+const LINEAR_SCAN_CHUNK_SIZE: usize = 2;
+
+/// Global safety ceiling for independent full-scan chunks in flight.
+///
+/// Operational concurrency is normally lower and is configured through the
+/// number of sessions in a search group. With the current three base rotations,
+/// that is `3 * hawk_request_parallelism`. Keep this ceiling hardware-neutral
+/// so deployments can tune through existing config.
+pub(super) const LINEAR_SCAN_MAX_IN_FLIGHT_CHUNKS: usize = 256;
+
+#[derive(Clone, Debug)]
+struct LinearScanChunk {
+    i_request: usize,
+    i_chunk: usize,
+    range: std::ops::Range<usize>,
+}
 
 pub type SearchQueries<const ROTMASK: u32> =
     Arc<BothEyes<VecRequests<VecRotationSupport<Aby3Query, ROTMASK>>>>;
@@ -31,9 +57,11 @@ pub type SearchIds = Arc<VecRequests<String>>;
 #[derive(Clone)]
 pub struct SearchParams {
     pub hnsw: Arc<HnswSearcher>,
+    pub mode: HawkSearchMode,
     /// Searcher with layer-0 ef params overridden to `ef_supermatch`, for supermatcher re-search.
     hnsw_supermatch: Option<Arc<HnswSearcher>>,
     pub do_match: bool,
+    pub return_partial_results: bool,
     /// How many non-matches to tolerate before considering results "not saturated".
     /// With margin=0 (default), all `ef` results must match to trigger extended search or to detect a supermatcher.
     /// A small margin (e.g. 1-30) accounts for imprecision in the HNSW neighbor tail.
@@ -46,9 +74,11 @@ pub struct SearchParams {
 impl SearchParams {
     pub fn new(
         hnsw: Arc<HnswSearcher>,
+        mode: HawkSearchMode,
         do_match: bool,
         ef_supermatch: Option<usize>,
         ef_saturation_margin: usize,
+        return_partial_results: bool,
         #[cfg(feature = "phase_trace")] orient: char,
     ) -> Self {
         let ef = hnsw.params.get_ef_search(0);
@@ -68,20 +98,24 @@ impl SearchParams {
         });
         Self {
             hnsw,
+            mode,
             hnsw_supermatch,
             do_match,
+            return_partial_results,
             saturation_margin: ef_saturation_margin,
             #[cfg(feature = "phase_trace")]
             orient,
         }
     }
 
-    pub fn new_no_match(hnsw: Arc<HnswSearcher>) -> Self {
+    pub fn new_no_match(hnsw: Arc<HnswSearcher>, mode: HawkSearchMode) -> Self {
         Self::new(
             hnsw,
+            mode,
             false,
             None,
             0,
+            false,
             #[cfg(feature = "phase_trace")]
             'U',
         )
@@ -131,6 +165,275 @@ pub async fn search<const ROTMASK: u32>(
     Ok(results)
 }
 
+/// Run the GPU-compatible two-eye linear-scan cascade.
+///
+/// The configured first eye is evaluated against every live vector. Only IDs
+/// passing the wider anonymous-statistics threshold (plus request-specific OR
+/// and reauthentication targets) are evaluated on the other eye. Both stages
+/// still use the same fused 31-rotation AMPC primitive.
+#[instrument(level = "trace", target = "searcher::network", skip_all)]
+pub async fn linear_scan_cascade<const ROTMASK: u32>(
+    sessions: &BothEyes<Vec<HawkSession>>,
+    search_queries: &SearchQueries<ROTMASK>,
+    search_params: SearchParams,
+    full_scan_side: Eye,
+    extra_candidate_ids: &VecRequests<Vec<VectorId>>,
+) -> Result<SearchResults<ROTMASK>> {
+    debug_assert_eq!(search_params.mode, HawkSearchMode::LinearScan);
+
+    let n_sessions = sessions[LEFT].len();
+    assert!(n_sessions > 0, "linear scan requires at least one session");
+    assert_eq!(n_sessions, sessions[RIGHT].len());
+    let n_requests = search_queries[LEFT].len();
+    assert_eq!(n_requests, search_queries[RIGHT].len());
+    assert_eq!(n_requests, extra_candidate_ids.len());
+
+    let first_eye = match full_scan_side {
+        Eye::Left => LEFT,
+        Eye::Right => RIGHT,
+    };
+    let second_eye = 1 - first_eye;
+
+    // Both eye registries contain the same live VectorIds. Build this list
+    // once, then share it across all requests and sessions in the full stage.
+    let live_ids = {
+        let vector_store = sessions[first_eye][0].aby3_store.read().await;
+        let registry = vector_store.registry.read().await;
+        Arc::<[VectorId]>::from(
+            registry
+                .get_points()
+                .iter()
+                .enumerate()
+                .filter_map(|(serial_id, entry)| {
+                    entry
+                        .as_ref()
+                        .map(|(version, ())| VectorId::new(serial_id as u32, *version))
+                })
+                .collect::<Vec<_>>(),
+        )
+    };
+    let full_scan_ids = Arc::new(vec![live_ids.clone(); n_requests]);
+
+    tracing::info!(
+        eye = %full_scan_side,
+        vectors = live_ids.len(),
+        "Running full linear-scan stage"
+    );
+    let first_results = linear_scan_eye(
+        sessions,
+        search_queries,
+        &search_params,
+        first_eye,
+        full_scan_ids,
+    )
+    .await?;
+
+    // The CUDA path uses the first eye's wider prefilter bitmap and explicitly
+    // unions OR-rule and reauth IDs. Retain only live IDs, matching its bounds
+    // check, and sort for deterministic MPC/database access order. `live_ids`
+    // is strictly ordered: it was collected above by enumerating the registry's
+    // serial-ID-indexed vector, which holds at most one current version per
+    // serial ID. Avoid materializing a full-database HashSet for this sparse
+    // candidate membership check.
+    debug_assert!(live_ids.windows(2).all(|pair| pair[0] < pair[1]));
+    let mut second_stage_ids = Vec::with_capacity(n_requests);
+    let mut candidate_count = 0usize;
+    for (plans, extras) in first_results.iter().zip(extra_candidate_ids) {
+        let ids = collect_live_second_stage_ids(
+            &live_ids,
+            plans
+                .iter()
+                .flat_map(|plan| &plan.classified.anon_stats_matches.results)
+                .map(|(id, _)| *id),
+            extras,
+        );
+        candidate_count += ids.len();
+        second_stage_ids.push(Arc::<[VectorId]>::from(ids));
+    }
+
+    tracing::info!(
+        eye = %full_scan_side.other(),
+        candidates = candidate_count,
+        "Running candidate-only linear-scan stage"
+    );
+    metrics::counter!("linear_scan_second_eye_candidates_total").increment(candidate_count as u64);
+    let second_results = linear_scan_eye(
+        sessions,
+        search_queries,
+        &search_params,
+        second_eye,
+        Arc::new(second_stage_ids),
+    )
+    .await?;
+
+    Ok(match full_scan_side {
+        Eye::Left => [first_results, second_results],
+        Eye::Right => [second_results, first_results],
+    })
+}
+
+fn collect_live_second_stage_ids(
+    live_ids: &[VectorId],
+    threshold_candidates: impl IntoIterator<Item = VectorId>,
+    extra_candidate_ids: &[VectorId],
+) -> Vec<VectorId> {
+    // `live_ids` is the serial-ID-ordered registry snapshot asserted by the
+    // caller; binary search also checks the exact current version.
+    let mut ids = threshold_candidates
+        .into_iter()
+        .chain(extra_candidate_ids.iter().copied())
+        .filter(|id| live_ids.binary_search(id).is_ok())
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+async fn linear_scan_eye<const ROTMASK: u32>(
+    sessions: &BothEyes<Vec<HawkSession>>,
+    search_queries: &SearchQueries<ROTMASK>,
+    search_params: &SearchParams,
+    eye: usize,
+    candidate_ids: Arc<VecRequests<Arc<[VectorId]>>>,
+) -> Result<VecRequests<VecRotationSupport<HawkInsertPlan, ROTMASK>>> {
+    let n_requests = search_queries[eye].len();
+    assert_eq!(n_requests, candidate_ids.len());
+    let n_rotations = ROTMASK.count_ones() as usize;
+    let central_rotation = n_rotations / 2;
+
+    // The HNSW scheduler distributes query rotations, but the exact scan has
+    // only one useful query rotation: its center query already evaluates all
+    // 31 database rotations. Instead, shard every request's candidate list so
+    // batch-size=1 can use the whole machine and pipeline dot/MPC/network work.
+    let mut chunks_per_request = Vec::with_capacity(n_requests);
+    let mut chunks = Vec::new();
+    for (i_request, ids) in candidate_ids.iter().enumerate() {
+        let n_chunks = ids.len().div_ceil(LINEAR_SCAN_CHUNK_SIZE).max(1);
+        chunks_per_request.push(n_chunks);
+        for i_chunk in 0..n_chunks {
+            let start = (i_chunk * LINEAR_SCAN_CHUNK_SIZE).min(ids.len());
+            let end = (start + LINEAR_SCAN_CHUNK_SIZE).min(ids.len());
+            chunks.push(LinearScanChunk {
+                i_request,
+                i_chunk,
+                range: start..end,
+            });
+        }
+    }
+
+    let n_workers = sessions[eye]
+        .len()
+        .min(LINEAR_SCAN_MAX_IN_FLIGHT_CHUNKS)
+        .min(chunks.len())
+        .max(1);
+    let mut batches = vec![Vec::new(); n_workers];
+    for (index, chunk) in chunks.into_iter().enumerate() {
+        batches[index % n_workers].push(chunk);
+    }
+
+    let jobs = batches
+        .into_iter()
+        .enumerate()
+        .filter(|(_, batch)| !batch.is_empty())
+        .map(|(i_session, batch)| {
+            let session = sessions[eye][i_session].clone();
+            let search_queries = search_queries.clone();
+            let search_params = search_params.clone();
+            let candidate_ids = candidate_ids.clone();
+            async move {
+                let mut vector_store = session.aby3_store.write().await;
+                let graph_store = session.graph_store.clone().read_owned().await;
+                let mut results = Vec::with_capacity(batch.len());
+                for chunk in batch {
+                    let query = search_queries[eye][chunk.i_request][central_rotation];
+                    let result = per_linear_scan_query(
+                        query,
+                        &search_params,
+                        &mut vector_store,
+                        &graph_store,
+                        &candidate_ids[chunk.i_request][chunk.range],
+                    )
+                    .await?;
+                    results.push((chunk.i_request, chunk.i_chunk, result));
+                }
+                Ok(results)
+            }
+        });
+
+    let mut chunk_results = chunks_per_request
+        .iter()
+        .map(|&len| vec![None; len])
+        .collect::<Vec<Vec<Option<HawkInsertPlan>>>>();
+    for (i_request, i_chunk, result) in parallelize(jobs).await?.into_iter().flatten() {
+        chunk_results[i_request][i_chunk] = Some(result);
+    }
+
+    let graph_store = sessions[eye][0].graph_store.read().await;
+    chunk_results
+        .into_iter()
+        .enumerate()
+        .map(|(i_request, results)| {
+            let mut results = results.into_iter();
+            let mut merged = results
+                .next()
+                .flatten()
+                .ok_or_eyre("missing first linear-scan chunk result")?;
+            for result in results {
+                merge_linear_scan_plan(
+                    &mut merged,
+                    result.ok_or_eyre("missing linear-scan chunk result")?,
+                );
+            }
+
+            let mut merged = Some(merged);
+            (0..n_rotations)
+                .map(|i_rotation| {
+                    if i_rotation == central_rotation {
+                        Ok(merged
+                            .take()
+                            .expect("central linear-scan result must be consumed once"))
+                    } else {
+                        Ok(empty_linear_scan_plan(
+                            search_queries[eye][i_request][i_rotation],
+                            &graph_store,
+                        ))
+                    }
+                })
+                .collect::<Result<Vec<_>>>()
+                .map(VecRotationSupport::from)
+        })
+        .collect()
+}
+
+fn merge_linear_scan_plan(target: &mut HawkInsertPlan, mut source: HawkInsertPlan) {
+    fn merge_matches(target: &mut SaturableMatches, mut source: SaturableMatches) {
+        target.results.append(&mut source.results);
+        target.saturated |= source.saturated;
+    }
+
+    merge_matches(&mut target.classified.matches, source.classified.matches);
+    merge_matches(
+        &mut target.classified.anon_stats_matches,
+        source.classified.anon_stats_matches,
+    );
+    match (
+        &mut target.classified.pre_extension,
+        source.classified.pre_extension,
+    ) {
+        (Some(target), Some(source)) => merge_matches(target, source),
+        (target @ None, source @ Some(_)) => *target = source,
+        _ => {}
+    }
+    target.classified.linear_scan_supermatch_threshold = target
+        .classified
+        .linear_scan_supermatch_threshold
+        .or(source.classified.linear_scan_supermatch_threshold);
+    target
+        .classified
+        .partial_match_rotations
+        .append(&mut source.classified.partial_match_rotations);
+}
+
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 async fn per_session<const ROTMASK: u32>(
     session: &HawkSession,
@@ -144,9 +447,44 @@ async fn per_session<const ROTMASK: u32>(
         let mut vector_store = session.aby3_store.write().await;
         let graph_store = session.graph_store.clone().read_owned().await;
 
+        // Searches in this session observe one immutable registry snapshot.
+        // Mutations are applied only after all normal and mirror searches have
+        // completed, so reusing this list is both correct and materially avoids
+        // rebuilding a multi-million-element ID vector for every query.
+        let linear_scan_ids = if search_params.mode == HawkSearchMode::LinearScan {
+            let registry = vector_store.registry.read().await;
+            Some(Arc::<[VectorId]>::from(
+                registry
+                    .get_points()
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(serial_id, entry)| {
+                        entry
+                            .as_ref()
+                            .map(|(version, ())| VectorId::new(serial_id as u32, *version))
+                    })
+                    .collect::<Vec<_>>(),
+            ))
+        } else {
+            None
+        };
+
         for task in batch.tasks {
             let query = search_queries[batch.i_eye][task.i_request][task.i_rotation];
-            let result = if task.is_central {
+            let result = if let Some(vector_ids) = &linear_scan_ids {
+                if task.is_central {
+                    per_linear_scan_query(
+                        query,
+                        search_params,
+                        &mut vector_store,
+                        &graph_store,
+                        vector_ids,
+                    )
+                    .await?
+                } else {
+                    empty_linear_scan_plan(query, &graph_store)
+                }
+            } else if task.is_central {
                 // search_to_insert for centers
                 let query_uuid = search_ids
                     .get(task.i_request)
@@ -189,6 +527,104 @@ async fn per_session<const ROTMASK: u32>(
     #[cfg(not(feature = "phase_trace"))]
     {
         inner.await
+    }
+}
+
+/// Evaluate the center query against every live vector using one fused
+/// 31-rotation pass and the same AMPC distance/threshold primitives as HNSW.
+/// Results are accumulated in deterministic serial-ID order so output ordering
+/// matches the CUDA actor.
+async fn per_linear_scan_query(
+    query: Aby3Query,
+    search_params: &SearchParams,
+    aby3_store: &mut Aby3Store<HawkOps>,
+    graph_store: &GraphMem,
+    vector_ids: &[VectorId],
+) -> Result<HawkInsertPlan> {
+    let start = Instant::now();
+    let mut classified = ClassifiedMatches::default();
+
+    if search_params.do_match {
+        classified
+            .matches
+            .results
+            .reserve(vector_ids.len().min(4096));
+        classified
+            .anon_stats_matches
+            .results
+            .reserve(vector_ids.len().min(4096));
+
+        for ids in vector_ids.chunks(LINEAR_SCAN_CHUNK_SIZE) {
+            let thresholds = aby3_store
+                .eval_distance_batch_full_rotation_thresholds(&query, ids)
+                .await?;
+            classified.matches.results.extend(
+                ids.iter()
+                    .copied()
+                    .zip(&thresholds.matches)
+                    .filter_map(|(id, &distance)| distance.map(|distance| (id, distance))),
+            );
+            classified.anon_stats_matches.results.extend(
+                thresholds
+                    .anon_stats_matches
+                    .into_iter()
+                    .map(|(vector, _rotation, distance)| (ids[vector], distance)),
+            );
+
+            if search_params.return_partial_results {
+                classified.partial_match_rotations.extend(
+                    ids.iter()
+                        .copied()
+                        .zip(thresholds.match_rotations)
+                        .filter_map(|(id, rotations)| {
+                            (!rotations.is_empty()).then(|| {
+                                let rotations = rotations
+                                    .into_iter()
+                                    .map(|rotation| rotation as i8 - 15)
+                                    .collect();
+                                (id, rotations)
+                            })
+                        }),
+                );
+            }
+        }
+
+        classified.linear_scan_supermatch_threshold = search_params
+            .hnsw_supermatch
+            .as_ref()
+            .map(|searcher| searcher.params.get_ef_search(0));
+    }
+
+    metrics::histogram!("linear_scan_query_duration").record(start.elapsed().as_secs_f64());
+    metrics::counter!("linear_scan_vectors_total").increment(vector_ids.len() as u64);
+
+    Ok(HawkInsertPlan {
+        // Linear scan does not consume graph edges. Keep a minimal plan so the
+        // common mutation pipeline can continue assigning stable VectorIds and
+        // persisting the same request-level mutations as the GPU actor.
+        plan: InsertPlanV {
+            query,
+            links: Vec::new(),
+            update_ep: UpdateEntryPoint::False,
+            as_of: graph_store.last_update_seq_no,
+        },
+        classified,
+    })
+}
+
+/// Preserve the three-slot HNSW-shaped result container without rescanning the
+/// database for the two non-central base rotations. Matching merges all slots,
+/// so placing the full 31-rotation result in the center is behaviorally
+/// equivalent to the old overlapping 3 x 11 representation.
+fn empty_linear_scan_plan(query: Aby3Query, graph_store: &GraphMem) -> HawkInsertPlan {
+    HawkInsertPlan {
+        plan: InsertPlanV {
+            query,
+            links: Vec::new(),
+            update_ep: UpdateEntryPoint::False,
+            as_of: graph_store.last_update_seq_no,
+        },
+        classified: ClassifiedMatches::default(),
     }
 }
 
@@ -311,6 +747,8 @@ async fn classify_edges(
             saturated: anon_stats_saturated,
         },
         pre_extension: None,
+        linear_scan_supermatch_threshold: None,
+        partial_match_rotations: Vec::new(),
     })
 }
 
@@ -453,7 +891,7 @@ pub async fn search_single_query_no_match_count<H: std::hash::Hash>(
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_utils::setup_hawk_actors;
+    use super::super::test_utils::{setup_hawk_actors, setup_linear_scan_actors};
     use super::super::VectorId;
     use super::*;
     use crate::execution::hawk_main::test_utils::{init_graph, init_iris_db, make_request};
@@ -468,6 +906,55 @@ mod tests {
         );
     }
 
+    #[test]
+    fn second_stage_ids_retain_only_current_live_versions() {
+        let live_v1 = VectorId::new(2, 1);
+        let live_ids = vec![
+            VectorId::new(1, 0),
+            live_v1,
+            // Serial ID 3 is tombstoned and therefore absent.
+            VectorId::new(4, 0),
+        ];
+        let threshold_candidates = [VectorId::new(4, 0), VectorId::new(3, 0), live_v1];
+        let extras = [
+            VectorId::new(1, 0),
+            live_v1,
+            VectorId::new(2, 0), // stale version of a live serial ID
+            VectorId::new(3, 0), // tombstoned
+            VectorId::new(5, 0), // outside the registry
+        ];
+
+        assert_eq!(
+            collect_live_second_stage_ids(&live_ids, threshold_candidates, &extras),
+            vec![VectorId::new(1, 0), live_v1, VectorId::new(4, 0)]
+        );
+    }
+
+    #[test]
+    fn second_stage_ids_merge_deduplicate_and_sort_thresholds_and_extras() {
+        let live_ids = (1..=5).map(VectorId::from_serial_id).collect::<Vec<_>>();
+        let threshold_candidates = [
+            VectorId::from_serial_id(5),
+            VectorId::from_serial_id(2),
+            VectorId::from_serial_id(2),
+        ];
+        let extras = [
+            VectorId::from_serial_id(4),
+            VectorId::from_serial_id(2),
+            VectorId::from_serial_id(1),
+        ];
+
+        assert_eq!(
+            collect_live_second_stage_ids(&live_ids, threshold_candidates, &extras),
+            vec![
+                VectorId::from_serial_id(1),
+                VectorId::from_serial_id(2),
+                VectorId::from_serial_id(4),
+                VectorId::from_serial_id(5),
+            ]
+        );
+    }
+
     #[tokio::test]
     async fn test_search() -> Result<()> {
         let actors = setup_hawk_actors().await?;
@@ -475,6 +962,65 @@ mod tests {
         parallelize(actors.into_iter().map(go_search)).await?;
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn linear_scan_finds_matches_without_a_graph() -> Result<()> {
+        let actors = setup_linear_scan_actors().await?;
+
+        parallelize(actors.into_iter().map(go_linear_scan)).await?;
+
+        Ok(())
+    }
+
+    async fn go_linear_scan(mut actor: HawkActor) -> Result<HawkActor> {
+        init_iris_db(&mut actor).await?;
+
+        // Deliberately leave GraphMem empty. Exact scan candidates come from
+        // the versioned registry, proving the result is independent of HNSW.
+        let sessions = actor.new_sessions().await?;
+        let batch_size = 3;
+        let request = make_request(batch_size, actor.party_id);
+        request.cache_into(&actor.worker_pools).await?;
+        let search_params = SearchParams::new(
+            actor.searcher(),
+            HawkSearchMode::LinearScan,
+            true,
+            None,
+            0,
+            false,
+            #[cfg(feature = "phase_trace")]
+            'L',
+        );
+
+        let extra_candidate_ids = vec![Vec::new(); batch_size];
+        let result = linear_scan_cascade(
+            &sessions,
+            &request.queries(Orientation::Normal),
+            search_params,
+            Eye::Left,
+            &extra_candidate_ids,
+        )
+        .await?;
+
+        for side in result {
+            for (query_index, rotations) in side.iter().enumerate() {
+                assert!(rotations.iter().any(|rotation| {
+                    rotation
+                        .classified
+                        .matches
+                        .results
+                        .iter()
+                        .any(|(id, _)| *id == VectorId::from_0_index(query_index as u32))
+                }));
+                assert!(rotations
+                    .iter()
+                    .all(|rotation| !rotation.classified.matches.saturated));
+            }
+        }
+
+        actor.sync_peers().await?;
+        Ok(actor)
     }
 
     async fn go_search(mut actor: HawkActor) -> Result<HawkActor> {
@@ -490,9 +1036,11 @@ mod tests {
         let search_queries = &request.queries(Orientation::Normal);
         let search_params = SearchParams::new(
             actor.searcher(),
+            HawkSearchMode::Hnsw,
             true,
             Some(4000),
             0,
+            false,
             #[cfg(feature = "phase_trace")]
             'T',
         );
