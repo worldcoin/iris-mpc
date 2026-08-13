@@ -415,6 +415,45 @@ pub async fn cleanup_checkpoints<V: VectorStore>(
     Ok(())
 }
 
+/// Deletes the WAL rows that precede the oldest live checkpoint, and returns the
+/// number of rows removed.
+pub async fn prune_wal_before_earliest_checkpoint<V: VectorStore>(
+    graph_store: &GraphPg<V>,
+) -> Result<u64> {
+    let checkpoints = graph_store.get_genesis_graph_checkpoints().await?;
+
+    // Ordered newest-first, so the oldest survivor is last.
+    let Some(earliest) = checkpoints.last() else {
+        // With no checkpoint at all the WAL is the only record of the graph.
+        tracing::info!("no live checkpoint; retaining the whole WAL");
+        return Ok(0);
+    };
+
+    // Pre-WAL checkpoints (genesis-era rows) carry no height, so there is no
+    // way to say which mutations they already contain.
+    let Some(cutoff) = earliest.graph_mutation_id else {
+        tracing::info!(
+            "oldest live checkpoint {} has no graph_mutation_id; retaining the whole WAL",
+            earliest.id
+        );
+        return Ok(0);
+    };
+
+    let mut tx = graph_store.begin_tx().await?;
+    let deleted = graph_store
+        .delete_hawk_graph_mutations(&mut tx, Some(cutoff - 1))
+        .await?;
+    tx.commit().await?;
+
+    tracing::info!(
+        "pruned {} WAL rows below modification_id {} (oldest live checkpoint {})",
+        deleted,
+        cutoff,
+        earliest.id,
+    );
+    Ok(deleted)
+}
+
 /// Selects which checkpoints to prune this run, given the full history
 /// (`all_checkpoints`) ordered newest-first and *including* soft-deleted
 /// tombstones.
@@ -613,6 +652,157 @@ async fn download_and_hash(
     }
     tracing::info!("BLAKE3 hash verified successfully: {}", computed_hash);
     Ok(binary_graph)
+}
+
+#[cfg(test)]
+#[cfg(feature = "db_dependent")]
+mod wal_prune_tests {
+    use super::*;
+    use crate::hawkers::plaintext_store::PlaintextStore;
+    use crate::hnsw::graph::graph_store::test_utils::TestGraphPg;
+
+    type Store = GraphPg<PlaintextStore>;
+
+    /// Writes one WAL row per `modification_id` in `1..=n`.
+    async fn seed_wal(store: &Store, n: i64) -> Result<()> {
+        let mut tx = store.begin_tx().await?;
+        for id in 1..=n {
+            store
+                .upsert_hawk_graph_mutations(&mut tx, id, b"payload")
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Records a checkpoint that covers the WAL through `graph_mutation_id`.
+    async fn seed_checkpoint(store: &Store, graph_mutation_id: Option<i64>) -> Result<()> {
+        let height = graph_mutation_id.unwrap_or_default();
+        let mut tx = store.begin_tx().await?;
+        Store::insert_genesis_graph_checkpoint(
+            &mut tx,
+            &format!("cp/{height}"),
+            height,
+            height,
+            graph_mutation_id,
+            &format!("hash-{height}"),
+            false,
+            GraphFormat::Current.version(),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Surviving `modification_id`s, ascending.
+    async fn surviving_wal(store: &Store) -> Result<Vec<i64>> {
+        Ok(store
+            .get_hawk_graph_mutations_after(None)
+            .await?
+            .into_iter()
+            .map(|r| r.modification_id)
+            .collect())
+    }
+
+    /// With no checkpoint the WAL is the only record of the graph, so none of it
+    /// may be dropped.
+    #[tokio::test]
+    async fn keeps_whole_wal_without_a_checkpoint() -> Result<()> {
+        let store = TestGraphPg::<PlaintextStore>::new().await?;
+        seed_wal(&store, 5).await?;
+
+        let deleted = prune_wal_before_earliest_checkpoint(&store.graph).await?;
+
+        assert_eq!(deleted, 0);
+        assert_eq!(surviving_wal(&store).await?, vec![1, 2, 3, 4, 5]);
+        store.cleanup().await
+    }
+
+    /// The cut is taken at the *oldest* live checkpoint, so every retained
+    /// checkpoint keeps the rows it needs to roll forward. The row at the
+    /// checkpoint's own height stays as the WAL anchor.
+    #[tokio::test]
+    async fn cuts_at_oldest_live_checkpoint() -> Result<()> {
+        let store = TestGraphPg::<PlaintextStore>::new().await?;
+        seed_wal(&store, 10).await?;
+        seed_checkpoint(&store, Some(3)).await?;
+        seed_checkpoint(&store, Some(7)).await?;
+
+        let deleted = prune_wal_before_earliest_checkpoint(&store.graph).await?;
+
+        assert_eq!(deleted, 2);
+        assert_eq!(surviving_wal(&store).await?, vec![3, 4, 5, 6, 7, 8, 9, 10]);
+        store.cleanup().await
+    }
+
+    /// A tombstoned checkpoint's S3 object is gone, so it can never be replayed
+    /// from and must not hold the WAL back.
+    #[tokio::test]
+    async fn ignores_tombstoned_checkpoints() -> Result<()> {
+        let store = TestGraphPg::<PlaintextStore>::new().await?;
+        seed_wal(&store, 10).await?;
+        seed_checkpoint(&store, Some(3)).await?;
+        seed_checkpoint(&store, Some(7)).await?;
+
+        let oldest = store
+            .get_genesis_graph_checkpoints()
+            .await?
+            .last()
+            .expect("two checkpoints were just inserted")
+            .id;
+        store.delete_genesis_checkpoint(oldest).await?;
+
+        let deleted = prune_wal_before_earliest_checkpoint(&store.graph).await?;
+
+        assert_eq!(deleted, 6);
+        assert_eq!(surviving_wal(&store).await?, vec![7, 8, 9, 10]);
+        store.cleanup().await
+    }
+
+    /// A checkpoint with no recorded height gives no way to tell which mutations
+    /// it already contains, so nothing is dropped.
+    #[tokio::test]
+    async fn keeps_whole_wal_when_oldest_checkpoint_has_no_height() -> Result<()> {
+        let store = TestGraphPg::<PlaintextStore>::new().await?;
+        seed_wal(&store, 5).await?;
+        seed_checkpoint(&store, None).await?;
+        seed_checkpoint(&store, Some(4)).await?;
+
+        let deleted = prune_wal_before_earliest_checkpoint(&store.graph).await?;
+
+        assert_eq!(deleted, 0);
+        assert_eq!(surviving_wal(&store).await?, vec![1, 2, 3, 4, 5]);
+        store.cleanup().await
+    }
+
+    /// Re-running against an unchanged checkpoint set deletes nothing more.
+    #[tokio::test]
+    async fn is_idempotent() -> Result<()> {
+        let store = TestGraphPg::<PlaintextStore>::new().await?;
+        seed_wal(&store, 10).await?;
+        seed_checkpoint(&store, Some(6)).await?;
+
+        assert_eq!(prune_wal_before_earliest_checkpoint(&store.graph).await?, 5);
+        assert_eq!(prune_wal_before_earliest_checkpoint(&store.graph).await?, 0);
+        assert_eq!(surviving_wal(&store).await?, vec![6, 7, 8, 9, 10]);
+        store.cleanup().await
+    }
+
+    /// A checkpoint that covers the entire WAL leaves the anchor row behind, so
+    /// `MAX(modification_id)` never falls below the checkpoint's height.
+    #[tokio::test]
+    async fn keeps_anchor_row_when_checkpoint_covers_whole_wal() -> Result<()> {
+        let store = TestGraphPg::<PlaintextStore>::new().await?;
+        seed_wal(&store, 4).await?;
+        seed_checkpoint(&store, Some(4)).await?;
+
+        let deleted = prune_wal_before_earliest_checkpoint(&store.graph).await?;
+
+        assert_eq!(deleted, 3);
+        assert_eq!(surviving_wal(&store).await?, vec![4]);
+        assert_eq!(store.get_max_hawk_graph_mutation_id().await?, Some(4));
+        store.cleanup().await
+    }
 }
 
 #[cfg(test)]

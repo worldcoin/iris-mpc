@@ -79,6 +79,14 @@ impl TestRun for Wal104 {
         run_cycle(ctx, PruningMode::None).await?;
         nodes.assert_checkpoint_count(4).await?;
 
+        // WAL pruning is independent of the checkpoint pruning mode: the oldest
+        // live checkpoint is still the archival one at MIN, so the rows below it
+        // go even though no checkpoint was deleted. The anchor row at MIN stays.
+        let after_cycle1 = WalAssertions::new()
+            .assert_wal_row_count(3 * MIN_MUTATIONS_PER_SIDECAR_CYCLE + 1)
+            .assert_min_modification_id(MIN_MUTATIONS_PER_SIDECAR_CYCLE as i64);
+        nodes.apply_uniform_assertions(&after_cycle1).await?;
+
         // Sidecar requires new mutations to trigger a cycle.
         builder.add_nodes(MIN_MUTATIONS_PER_SIDECAR_CYCLE);
         builder.build(nodes).await?;
@@ -101,8 +109,16 @@ impl TestRun for Wal104 {
     async fn exec_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
 
+        // `AllOlder` dropped every checkpoint below the cycle-3 base (mod 5*MIN),
+        // including the archival one, so the WAL floor jumps up with it: only that
+        // base's anchor row and the rows above it survive.
+        //
         // assert_checkpoint_count already verifies the S3 object count per party matches.
-        let post = WalAssertions::new().assert_checkpoint_count(2);
+        let post = WalAssertions::new()
+            .assert_checkpoint_count(2)
+            .assert_wal_row_count(MIN_MUTATIONS_PER_SIDECAR_CYCLE + 1)
+            .assert_min_modification_id(5 * MIN_MUTATIONS_PER_SIDECAR_CYCLE as i64)
+            .assert_max_modification_id(6 * MIN_MUTATIONS_PER_SIDECAR_CYCLE as i64);
         nodes.apply_uniform_assertions(&post).await?;
 
         nodes.assert_checkpoint_hashes_agree().await

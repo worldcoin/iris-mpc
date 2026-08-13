@@ -94,8 +94,15 @@ impl TestRun for Wal111 {
     async fn exec_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
 
+        // The sparse tier keeps the very oldest checkpoint (mod MIN), so the WAL
+        // floor only advances that far even though 5 checkpoints were pruned.
+        //
         // assert_checkpoint_count already verifies the S3 object count per party.
-        let post = WalAssertions::new().assert_checkpoint_count(6);
+        let post = WalAssertions::new()
+            .assert_checkpoint_count(6)
+            .assert_wal_row_count(10 * MIN + 1)
+            .assert_min_modification_id(MIN as i64)
+            .assert_max_modification_id(11 * MIN as i64);
         nodes.apply_uniform_assertions(&post).await?;
 
         let checkpoints = nodes.0[0]
