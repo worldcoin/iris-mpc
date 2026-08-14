@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-cpu:v0.32.6@sha256:8d65ce838edd0ec9ffaa956835174fa85aafbb5eaff2c75e578a95eb4bf4f46c"
+image: "ghcr.io/worldcoin/iris-mpc-cpu:v0.32.9@sha256:ab5c08b4ed3b0328a13341a3560ea70447be6b9229cbed34a37b42eb31ccac12"
 
 environment: prod
 schedule: "0 11 * * *"

@@ -10,7 +10,7 @@ use ampc_server_utils::batch_sync::{
 use ampc_server_utils::{
     delete_messages_until_sequence_num, get_next_sns_seq_num, get_others_sync_state,
     init_heartbeat_task, set_node_ready, shutdown_handler::ShutdownHandler,
-    start_coordination_server, wait_for_others_ready, wait_for_others_unready, TaskMonitor,
+    start_coordination_server, wait_for_others_ready, wait_for_startup_barriers, TaskMonitor,
 };
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
@@ -324,7 +324,7 @@ async fn server_main(config: Config) -> Result<()> {
     let download_shutdown_handler = Arc::clone(&shutdown_handler);
 
     background_tasks.check_tasks();
-    wait_for_others_unready(&server_coord_config, &verified_peers, &uuid).await?;
+    wait_for_startup_barriers(&server_coord_config, &verified_peers, &uuid).await?;
 
     // Start the actor in separate task.
     // A bit convoluted, but we need to create the actor on the thread already,
@@ -385,7 +385,7 @@ async fn server_main(config: Config) -> Result<()> {
 
     // Handle modifications sync
     if config.enable_modifications_sync {
-        sync_modifications(
+        let tx = sync_modifications(
             &config,
             &store,
             &aws_clients,
@@ -393,6 +393,7 @@ async fn server_main(config: Config) -> Result<()> {
             sync_result,
         )
         .await?;
+        tx.commit().await?;
     }
 
     if config.enable_modifications_replay {
@@ -1079,14 +1080,16 @@ async fn server_main(config: Config) -> Result<()> {
     // --------------------------------------------------------------------------
     tracing::info!("⚓️ ANCHOR: Enable readiness and check all nodes");
 
+    let verified_peers = verified_peers.lock().await.clone();
     init_heartbeat_task(
         &server_coord_config,
         &mut background_tasks,
         &shutdown_handler,
+        verified_peers.clone(),
     )
     .await?;
     set_node_ready(is_ready_flag);
-    wait_for_others_ready(&server_coord_config).await?;
+    wait_for_others_ready(&server_coord_config, verified_peers).await?;
     background_tasks.check_tasks();
 
     // --------------------------------------------------------------------------

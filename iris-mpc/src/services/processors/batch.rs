@@ -19,6 +19,7 @@ use iris_mpc_common::helpers::aws::{
     SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME,
 };
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
+use iris_mpc_common::helpers::smpc_request::RequestPayload;
 #[cfg(feature = "explicit-sns-batching")]
 use iris_mpc_common::helpers::smpc_request::{
     CompactBatchRequest, CompressedBatchPayload, BATCH_MESSAGE_TYPE,
@@ -47,6 +48,8 @@ use std::time::Duration;
 use tokio::sync::mpsc::Receiver;
 use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinHandle;
+
+use iris_mpc_common::helpers::smpc_request::{parse_request_payload, RequestPayloadError};
 
 /// Request types the batch processor knows how to handle; anything else in a
 /// DB-ingested row is quarantined as content poison.
@@ -277,12 +280,13 @@ async fn ingest_sqs_message(
 
     let body = sqs_message.body().expect("checked above").to_string();
     let sns_message: SQSMessage = serde_json::from_str(&body).expect("checked above");
+    let is_valid = is_request_payload_valid(&sns_message);
 
     // DB errors are transient: propagate WITHOUT deleting so the message is
     // redelivered (PK dedup makes the redelivery-after-successful-insert
     // case harmless).
     let inserted = iris_store
-        .insert_ingested_request(&sns_message.sequence_number, &body)
+        .insert_ingested_request(&sns_message.sequence_number, &body, is_valid)
         .await?;
 
     client
@@ -306,6 +310,65 @@ async fn ingest_sqs_message(
         );
     }
     Ok(())
+}
+
+/// Validates a parseable SNS envelope's request payload for DB-backed ingest.
+///
+/// Returns `false` (rather than an error) for content-determined poison — a
+/// missing/non-string `message_type` attribute or an unparseable payload. Both
+/// are deterministic across parties, so the caller records the row as
+/// `is_valid = false` instead of propagating a transient error that would retry
+/// the message forever at the FIFO group head.
+fn is_request_payload_valid(sns_message: &SQSMessage) -> bool {
+    let Some(request_type) = sns_message
+        .message_attributes
+        .get(SMPC_MESSAGE_TYPE_ATTRIBUTE)
+        .and_then(|attr| attr.string_value())
+    else {
+        tracing::error!("db-backed ingest: missing or non-string message type attribute");
+        metrics::counter!("invalid_request_payload", "request_type" => "missing").increment(1);
+        return false;
+    };
+
+    // A compressed batch envelope (explicit-sns-batching) carries message_type
+    // == BATCH_MESSAGE_TYPE with a CompressedBatchPayload. It has no
+    // parse_request_payload arm, so validate it end-to-end here: wrapper JSON ->
+    // base64/zstd decompress -> Vec<RequestPayload>. Success means every inner
+    // request parsed. A failure is content-determined (identical bytes on all
+    // parties), so record is_valid = false rather than retrying it forever.
+    #[cfg(feature = "explicit-sns-batching")]
+    if request_type == BATCH_MESSAGE_TYPE {
+        let payload = match serde_json::from_str::<CompressedBatchPayload>(&sns_message.message) {
+            Ok(payload) => payload,
+            Err(e) => {
+                tracing::error!("db-backed ingest: invalid compressed batch payload: {e}");
+                metrics::counter!("invalid_request_payload", "request_type" => "compressed_batch_payload")
+                    .increment(1);
+                return false;
+            }
+        };
+        if let Err(e) = CompactBatchRequest::decompress(&payload.data) {
+            tracing::error!("db-backed ingest: invalid compressed batch: {e}");
+            metrics::counter!("invalid_request_payload", "request_type" => "compressed_batch")
+                .increment(1);
+            return false;
+        }
+        return true;
+    }
+
+    match parse_request_payload(request_type, sns_message.message.as_str()) {
+        Ok(_) => true,
+        Err(e) => {
+            tracing::error!(
+                "db-backed ingest: invalid request payload {request_type} message: {}: {:?}",
+                sns_message.message,
+                e
+            );
+            metrics::counter!("invalid_request_payload", "request_type" => request_type.to_string())
+                .increment(1);
+            false
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -911,55 +974,76 @@ impl<'a> BatchProcessor<'a> {
         request_type: &str,
         batch_metadata: BatchMetadata,
     ) -> Result<(), ReceiveRequestError> {
-        match request_type {
-            IDENTITY_DELETION_MESSAGE_TYPE => {
-                self.process_identity_deletion(message, batch_metadata)
+        let request_payload = match parse_request_payload(request_type, message.message.as_str()) {
+            Ok(payload) => payload,
+            // Unknown message type: content-determined, identical on all parties.
+            // Legacy semantics: log and skip rather than fail the batch.
+            Err(RequestPayloadError::InvalidMessageType(message_type)) => {
+                tracing::error!("Skipping request with invalid message type: {message_type}");
+                return Ok(());
+            }
+            // Malformed payload for a known type: surface as a parse error.
+            Err(RequestPayloadError::Json(e)) => {
+                return Err(ReceiveRequestError::json_parse_error(request_type, e));
+            }
+        };
+        let sns_message_id = message.message_id.clone();
+        match request_payload {
+            RequestPayload::IdentityDeletion(identity_deletion_request) => {
+                self.process_identity_deletion(
+                    sns_message_id,
+                    identity_deletion_request,
+                    batch_metadata,
+                )
+                .await
+            }
+            RequestPayload::Uniqueness(uniqueness_request) => {
+                self.process_uniqueness_request(sns_message_id, uniqueness_request, batch_metadata)
                     .await
             }
-            UNIQUENESS_MESSAGE_TYPE => {
-                self.process_uniqueness_request(message, batch_metadata)
+            RequestPayload::Reauthorization(reauth_request) => {
+                self.process_reauth_request(sns_message_id, reauth_request, batch_metadata)
                     .await
             }
-            REAUTH_MESSAGE_TYPE => self.process_reauth_request(message, batch_metadata).await,
-            RECOVERY_CHECK_MESSAGE_TYPE => {
+            RequestPayload::RecoveryCheck(recovery_check_request) => {
                 self.process_identity_match_check_request(
-                    message,
+                    sns_message_id,
+                    recovery_check_request,
                     batch_metadata,
                     RECOVERY_CHECK_MESSAGE_TYPE,
                     self.config.enable_recovery,
                 )
                 .await
             }
-            RESET_CHECK_MESSAGE_TYPE => {
+            RequestPayload::ResetCheck(reset_check_request) => {
                 self.process_identity_match_check_request(
-                    message,
+                    sns_message_id,
+                    reset_check_request,
                     batch_metadata,
                     RESET_CHECK_MESSAGE_TYPE,
                     self.config.enable_reset,
                 )
                 .await
             }
-            RECOVERY_UPDATE_MESSAGE_TYPE => {
+            RequestPayload::RecoveryUpdate(recovery_update_request) => {
                 self.process_identity_update_request(
-                    message,
+                    sns_message_id,
+                    recovery_update_request,
                     batch_metadata,
                     RECOVERY_UPDATE_MESSAGE_TYPE,
                     self.config.enable_recovery,
                 )
                 .await
             }
-            RESET_UPDATE_MESSAGE_TYPE => {
+            RequestPayload::ResetUpdate(reset_update_request) => {
                 self.process_identity_update_request(
-                    message,
+                    sns_message_id,
+                    reset_update_request,
                     batch_metadata,
                     RESET_UPDATE_MESSAGE_TYPE,
                     self.config.enable_reset,
                 )
                 .await
-            }
-            _ => {
-                tracing::error!("Error: {}", ReceiveRequestError::InvalidMessageType);
-                Ok(())
             }
         }
     }
@@ -1022,16 +1106,11 @@ impl<'a> BatchProcessor<'a> {
 
     async fn process_identity_deletion(
         &mut self,
-        message: &SQSMessage,
+        sns_message_id: String,
+        identity_deletion_request: IdentityDeletionRequest,
         batch_metadata: BatchMetadata,
     ) -> Result<(), ReceiveRequestError> {
         metrics::counter!("request.received", "type" => "identity_deletion").increment(1);
-        let sns_message_id = message.message_id.clone();
-        let identity_deletion_request: IdentityDeletionRequest =
-            serde_json::from_str(&message.message).map_err(|e| {
-                ReceiveRequestError::json_parse_error("Identity deletion request", e)
-            })?;
-
         if self.config.enable_deletion {
             // Skip the request if serial ID already exists in current batch modifications
             if self
@@ -1106,14 +1185,11 @@ impl<'a> BatchProcessor<'a> {
 
     async fn process_uniqueness_request(
         &mut self,
-        message: &SQSMessage,
+        sns_message_id: String,
+        uniqueness_request: UniquenessRequest,
         batch_metadata: BatchMetadata,
     ) -> Result<(), ReceiveRequestError> {
         metrics::counter!("request.received", "type" => "uniqueness_verification").increment(1);
-        let sns_message_id = message.message_id.clone();
-        let uniqueness_request: UniquenessRequest = serde_json::from_str(&message.message)
-            .map_err(|e| ReceiveRequestError::json_parse_error("Uniqueness request", e))?;
-
         // Persist in progress modification
         let modification = persist_modification(
             self.config.disable_persistence,
@@ -1160,14 +1236,11 @@ impl<'a> BatchProcessor<'a> {
 
     async fn process_reauth_request(
         &mut self,
-        message: &SQSMessage,
+        sns_message_id: String,
+        reauth_request: ReAuthRequest,
         batch_metadata: BatchMetadata,
     ) -> Result<(), ReceiveRequestError> {
         metrics::counter!("request.received", "type" => "reauth").increment(1);
-        let sns_message_id = message.message_id.clone();
-        let reauth_request: ReAuthRequest = serde_json::from_str(&message.message)
-            .map_err(|e| ReceiveRequestError::json_parse_error("Reauth request", e))?;
-
         tracing::debug!("Received reauth request: {:?}", reauth_request);
 
         if !self.config.enable_reauth {
@@ -1292,17 +1365,13 @@ impl<'a> BatchProcessor<'a> {
 
     async fn process_identity_match_check_request(
         &mut self,
-        message: &SQSMessage,
+        sns_message_id: String,
+        identity_match_check_request: IdentityMatchCheckRequest,
         batch_metadata: BatchMetadata,
         request_type: &str,
         is_request_type_enabled: bool,
     ) -> Result<(), ReceiveRequestError> {
         metrics::counter!("request.received", "type" => request_type.to_string()).increment(1);
-        let sns_message_id = message.message_id.clone();
-        let identity_match_check_request: IdentityMatchCheckRequest =
-            serde_json::from_str(&message.message)
-                .map_err(|e| ReceiveRequestError::json_parse_error("Identity check request", e))?;
-
         tracing::debug!(
             "Received {} request: {:?}",
             request_type,
@@ -1366,16 +1435,13 @@ impl<'a> BatchProcessor<'a> {
 
     async fn process_identity_update_request(
         &mut self,
-        message: &SQSMessage,
+        sns_message_id: String,
+        identity_update_request: IdentityUpdateRequest,
         batch_metadata: BatchMetadata,
         request_type: &str,
         is_request_type_enabled: bool,
     ) -> Result<(), ReceiveRequestError> {
         metrics::counter!("request.received", "type" => request_type.to_string()).increment(1);
-        let sns_message_id = message.message_id.clone();
-        let identity_update_request: IdentityUpdateRequest = serde_json::from_str(&message.message)
-            .map_err(|e| ReceiveRequestError::json_parse_error("Identity update request", e))?;
-
         tracing::debug!(
             "Received {} request: {:?}",
             request_type,
@@ -1796,8 +1862,8 @@ pub async fn get_own_batch_sync_state(
 #[cfg(test)]
 mod tests {
     use super::{
-        is_content_poison, messages_to_poll_for_available, DbIngestBackoff, ReceiveRequestError,
-        SQSMessage, KNOWN_MESSAGE_TYPES,
+        is_content_poison, is_request_payload_valid, messages_to_poll_for_available,
+        DbIngestBackoff, ReceiveRequestError, SQSMessage, KNOWN_MESSAGE_TYPES,
     };
     use iris_mpc_common::helpers::smpc_request::{
         IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RECOVERY_CHECK_MESSAGE_TYPE,
@@ -1805,6 +1871,90 @@ mod tests {
         UNIQUENESS_MESSAGE_TYPE,
     };
     use iris_mpc_store::{normalize_sns_sequence_number, SNS_SEQUENCE_NUMBER_WIDTH};
+
+    #[test]
+    fn is_request_payload_valid_accepts_well_formed_request() {
+        let body = serde_json::json!({
+          "Type" : "Notification",
+          "MessageId" : "00000000-0000-0000-0000-000000000000",
+          "SequenceNumber" : "10000000000000000000",
+          "TopicArn" : "arn:aws:sns:us-east-1:000000000000:test-topic.fifo",
+          "Message" : "{\"request_id\":\"test-request-id\",\"batch_size\":1,\"s3_key\":\"test-request-id/test-object/request.json\"}",
+          "Timestamp" : "2024-01-01T00:00:00.000Z",
+          "UnsubscribeURL" : "https://sns.us-east-1.amazonaws.com/?Action=Unsubscribe&SubscriptionArn=arn:aws:sns:us-east-1:000000000000:test-topic.fifo:00000000-0000-0000-0000-000000000000",
+          "MessageAttributes" : {
+            "TraceID" : {"Type":"String","Value":"00000000000000000000000000000000"},
+            "message_type" : {"Type":"String","Value":"recovery_check"},
+            "SpanID" : {"Type":"String","Value":"0000000000000000000"}
+          }
+        });
+        let msg: SQSMessage = serde_json::from_value(body).expect("valid SQSMessage json");
+        assert!(is_request_payload_valid(&msg));
+    }
+
+    #[test]
+    fn is_request_payload_with_missing_s3_key_is_invalid() {
+        let body = serde_json::json!({
+          "Type" : "Notification",
+          "MessageId" : "00000000-0000-0000-0000-000000000000",
+          "SequenceNumber" : "10000000000000000000",
+          "TopicArn" : "arn:aws:sns:us-east-1:000000000000:test-topic.fifo",
+          "Message" : "{\"request_id\":\"test-request-id\",\"batch_size\":1}",
+          "Timestamp" : "2024-01-01T00:00:00.000Z",
+          "UnsubscribeURL" : "https://sns.us-east-1.amazonaws.com/?Action=Unsubscribe&SubscriptionArn=arn:aws:sns:us-east-1:000000000000:test-topic.fifo:00000000-0000-0000-0000-000000000000",
+          "MessageAttributes" : {
+            "TraceID" : {"Type":"String","Value":"00000000000000000000000000000000"},
+            "message_type" : {"Type":"String","Value":"recovery_check"},
+            "SpanID" : {"Type":"String","Value":"0000000000000000000"}
+          }
+        });
+        let msg: SQSMessage = serde_json::from_value(body).expect("valid SQSMessage json");
+        assert!(!is_request_payload_valid(&msg));
+    }
+
+    #[cfg(feature = "explicit-sns-batching")]
+    #[test]
+    fn is_request_payload_valid_accepts_batch_envelope() {
+        use iris_mpc_common::helpers::smpc_request::{
+            CompactBatchRequest, CompressedBatchPayload, IdentityDeletionRequest,
+            IdentityMatchCheckRequest, RequestPayload, BATCH_MESSAGE_TYPE,
+        };
+
+        // Build a proper compressed batch the same way the client's
+        // publish_requests does: RequestPayload items -> CompactBatchRequest ->
+        // base64/zstd compress -> CompressedBatchPayload -> JSON SNS message body.
+        let items = vec![
+            RequestPayload::IdentityDeletion(IdentityDeletionRequest { serial_id: 42 }),
+            RequestPayload::RecoveryCheck(IdentityMatchCheckRequest {
+                request_id: "test-request-id".to_string(),
+                s3_key: "test-request-id/test-object/request.json".to_string(),
+            }),
+        ];
+        let compressed_data = CompactBatchRequest { items }
+            .compress()
+            .expect("compress batch");
+        let message = serde_json::to_string(&CompressedBatchPayload {
+            data: compressed_data,
+        })
+        .expect("serialize CompressedBatchPayload");
+
+        let body = serde_json::json!({
+          "Type" : "Notification",
+          "MessageId" : "00000000-0000-0000-0000-000000000000",
+          "SequenceNumber" : "10000000000000000000",
+          "TopicArn" : "arn:aws:sns:us-east-1:000000000000:test-topic.fifo",
+          "Message" : message,
+          "Timestamp" : "2024-01-01T00:00:00.000Z",
+          "UnsubscribeURL" : "https://sns.us-east-1.amazonaws.com/?Action=Unsubscribe",
+          "MessageAttributes" : {
+            "TraceID" : {"Type":"String","Value":"00000000000000000000000000000000"},
+            "message_type" : {"Type":"String","Value": BATCH_MESSAGE_TYPE},
+            "SpanID" : {"Type":"String","Value":"0000000000000000000"}
+          }
+        });
+        let msg: SQSMessage = serde_json::from_value(body).expect("valid SQSMessage json");
+        assert!(is_request_payload_valid(&msg));
+    }
 
     #[test]
     fn messages_to_poll_for_available_caps_by_available_messages() {

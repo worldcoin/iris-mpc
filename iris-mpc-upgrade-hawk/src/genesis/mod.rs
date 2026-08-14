@@ -3,13 +3,13 @@ mod graph_checkpoint;
 mod indexation;
 mod retry;
 mod setup;
-mod snapshot;
 
 use eyre::{eyre, Result};
 use iris_mpc_common::{config::Config, helpers::sync::Modification, SerialId};
 pub use iris_mpc_cpu::genesis::BatchSizeConfig;
 use iris_mpc_cpu::{
-    genesis::state_accessor::set_last_indexed_modification_id, graph_checkpoint::PruningMode,
+    genesis::state_accessor::set_last_indexed_modification_id,
+    graph_checkpoint::{PruningMode, TieredPruningConfig},
 };
 
 pub use graph_checkpoint::{reset_to_checkpoint, upload_and_sync_genesis_checkpoint};
@@ -20,7 +20,6 @@ pub use iris_mpc_cpu::graph_checkpoint::{
 use delta::exec_delta;
 use indexation::exec_indexation;
 use setup::{exec_setup, SetupOutput};
-use snapshot::exec_snapshot;
 
 pub const PERSIST_DELAY: usize = 16;
 
@@ -33,14 +32,14 @@ pub struct ExecutionArgs {
     // Batch size configuration (static or dynamic with cap).
     pub batch_size_config: BatchSizeConfig,
 
-    // Flag indicating whether a snapshot is to be taken when inner process completes.
-    pub perform_snapshot: bool,
-
     // Number of irises to index between checkpoints.
     pub checkpoint_frequency: usize,
 
     // Controls which older checkpoints are pruned after loading a common checkpoint.
     pub pruning_mode: PruningMode,
+
+    // Numeric bounds for `PruningMode::Tiered`; ignored by other modes.
+    pub tiered_pruning: TieredPruningConfig,
 
     // Pinned base checkpoint blake3 hash; None selects the latest common checkpoint.
     pub base_checkpoint_hash: Option<String>,
@@ -48,16 +47,13 @@ pub struct ExecutionArgs {
 
 impl ExecutionArgs {
     // this is for integration tests
-    pub fn from_plaintext_args(
-        args: iris_mpc_cpu::genesis::plaintext::GenesisArgs,
-        perform_snapshot: bool,
-    ) -> Self {
+    pub fn from_plaintext_args(args: iris_mpc_cpu::genesis::plaintext::GenesisArgs) -> Self {
         Self {
             max_indexation_id: args.max_indexation_id,
             batch_size_config: args.batch_size_config,
-            perform_snapshot,
             checkpoint_frequency: args.checkpoint_frequency,
             pruning_mode: args.pruning_mode,
+            tiered_pruning: args.tiered_pruning,
             base_checkpoint_hash: None,
         }
     }
@@ -131,7 +127,6 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
         shutdown_handler,
         mut task_monitor_bg,
         checkpoint_s3_client,
-        aws_rds_client,
         registries,
         worker_pools,
         imem_graph_stores,
@@ -145,10 +140,9 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
 
     tracing::info!("Setup complete.");
     tracing::info!(
-        "Starting Genesis indexing process with the following parameters:\n  Max indexation ID: {}\n  Batch size config: {}\n  Perform snapshot: {}",
+        "Starting Genesis indexing process with the following parameters:\n  Max indexation ID: {}\n  Batch size config: {}",
         args.max_indexation_id,
         args.batch_size_config,
-        args.perform_snapshot,
     );
 
     // Phase 1: apply delta. A fresh start (no base checkpoint, empty state)
@@ -196,14 +190,6 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     )
     .await?;
     tracing::info!("Indexation complete.");
-
-    // Phase 3: snapshot.
-    if !args.perform_snapshot {
-        tracing::info!("Snapshot skipped.");
-    } else {
-        exec_snapshot(&ctx, &aws_rds_client).await?;
-        tracing::info!("Snapshot complete.");
-    };
 
     // Clear modifications from the HNSW iris store
     // This is because after a genesis run - there should be no modifications left in the HNSW iris store

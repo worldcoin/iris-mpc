@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - "dev"
-      - "elenagryaznova/pop-4114-introduce-feature-flag-for-ignoring-unknown-migrations-iris"
+      - "elenagryaznova/pop-4122-iris-mpc-poison-message-block-at-ingest-head-crashloops-both"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"

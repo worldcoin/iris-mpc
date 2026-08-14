@@ -9,10 +9,9 @@
 
 use ampc_server_utils::{
     get_others_sync_state, init_heartbeat_task, set_node_ready, shutdown_handler::ShutdownHandler,
-    start_coordination_server_with_extra_routes, wait_for_others_ready, wait_for_others_unready,
+    start_coordination_server_with_extra_routes, wait_for_others_ready, wait_for_startup_barriers,
     BatchSyncSharedState, TaskMonitor,
 };
-use aws_sdk_rds::Client as RDSClient;
 use aws_sdk_s3::{config::Region, Client as S3Client};
 use axum::{routing::get, Router};
 use eyre::{bail, eyre, Report, Result};
@@ -69,7 +68,6 @@ pub(super) struct SetupOutput {
     pub(super) shutdown_handler: Arc<ShutdownHandler>,
     pub(super) task_monitor_bg: TaskMonitor,
     pub(super) checkpoint_s3_client: S3Client,
-    pub(super) aws_rds_client: RDSClient,
     pub(super) registries: BothEyes<VectorIdRegistryRef>,
     pub(super) worker_pools: BothEyes<Arc<dyn IrisWorkerPool>>,
     pub(super) imem_graph_stores: Arc<BothEyes<GraphRef>>,
@@ -101,10 +99,8 @@ pub(super) async fn exec_setup(args: &ExecutionArgs, config: &Config) -> Result<
     let mut task_monitor_bg = TaskMonitor::new();
 
     // Set service clients.
-    let (
-        (aws_s3_client, checkpoint_s3_client, aws_rds_client),
-        (iris_store, (hnsw_iris_store, graph_store)),
-    ) = get_service_clients(config).await?;
+    let ((aws_s3_client, checkpoint_s3_client), (iris_store, (hnsw_iris_store, graph_store))) =
+        get_service_clients(config).await?;
     tracing::info!("Service clients instantiated");
 
     // Verify checkpoint S3 access before any mutations to fail fast on misconfiguration.
@@ -221,11 +217,18 @@ pub(super) async fn exec_setup(args: &ExecutionArgs, config: &Config) -> Result<
     .await;
     task_monitor_bg.check_tasks();
 
-    // Coordinator: await network state = UNREADY.
-    wait_for_others_unready(server_coord_config, &verified_peers, &my_uuid).await?;
+    // Coordinator: await network state = UNREADY + full mutual peer visibility.
+    wait_for_startup_barriers(server_coord_config, &verified_peers, &my_uuid).await?;
     tracing::info!("Network status = UNREADY");
     // Coordinator: await network state = HEALTHY.
-    init_heartbeat_task(server_coord_config, &mut task_monitor_bg, &shutdown_handler).await?;
+    let verified_peers = verified_peers.lock().await.clone();
+    init_heartbeat_task(
+        server_coord_config,
+        &mut task_monitor_bg,
+        &shutdown_handler,
+        verified_peers.clone(),
+    )
+    .await?;
     task_monitor_bg.check_tasks();
     tracing::info!("Network status = HEALTHY");
 
@@ -349,6 +352,7 @@ pub(super) async fn exec_setup(args: &ExecutionArgs, config: &Config) -> Result<
             None,
             &graph_store_arc,
             args.pruning_mode,
+            args.tiered_pruning,
         )
         .await
         {
@@ -361,7 +365,7 @@ pub(super) async fn exec_setup(args: &ExecutionArgs, config: &Config) -> Result<
     let ct = shutdown_handler.get_network_cancellation_token();
     tokio::select! {
         _ = ct.cancelled() => Err(eyre!("ready check failed")),
-        r = wait_for_others_ready(server_coord_config) => r
+        r = wait_for_others_ready(server_coord_config, verified_peers) => r
     }?;
     task_monitor_bg.check_tasks();
     tracing::info!("Network status = READY");
@@ -417,7 +421,6 @@ pub(super) async fn exec_setup(args: &ExecutionArgs, config: &Config) -> Result<
         shutdown_handler,
         task_monitor_bg,
         checkpoint_s3_client,
-        aws_rds_client,
         registries,
         worker_pools,
         imem_graph_stores,
@@ -492,16 +495,16 @@ async fn get_service_clients(
     config: &Config,
 ) -> Result<
     (
-        (S3Client, S3Client, RDSClient),
+        (S3Client, S3Client),
         (IrisStore, (IrisStore, GraphPg<Aby3Store<HawkOps>>)),
     ),
     Report,
 > {
-    /// Returns S3 clients and an RDS client.
+    /// Returns S3 clients.
     ///
     /// Two S3 clients are constructed so the graph-checkpoint bucket can
     /// live in a different AWS region than the iris-snapshot bucket.
-    async fn get_aws_clients(config: &Config) -> Result<(S3Client, S3Client, RDSClient)> {
+    async fn get_aws_clients(config: &Config) -> Result<(S3Client, S3Client)> {
         let force_path_style = config.environment != ENV_PROD && config.environment != ENV_STAGE;
 
         let config_region = config.aws.clone().and_then(|aws| aws.region);
@@ -530,14 +533,6 @@ async fn get_service_clients(
         // S3 client for general AWS operations (iris snapshots, deletions)
         let aws_s3_client = create_s3_client(&sdk_config, force_path_style, None);
 
-        // RDS client using general AWS configuration
-        tracing::info!(
-            "RDS client: region={}, endpoint={:?}",
-            region_name,
-            sdk_config.endpoint_url(),
-        );
-        let rds_client = RDSClient::new(&sdk_config);
-
         // S3 client for graph checkpoint operations (may be in a different region)
         let checkpoint_region_name = config.graph_checkpoint_bucket_region.clone();
         let checkpoint_region = Region::new(checkpoint_region_name.clone());
@@ -551,7 +546,7 @@ async fn get_service_clients(
         let checkpoint_s3_client =
             create_s3_client(&sdk_config, force_path_style, Some(checkpoint_region));
 
-        Ok((aws_s3_client, checkpoint_s3_client, rds_client))
+        Ok((aws_s3_client, checkpoint_s3_client))
     }
 
     /// Returns initialized PostgreSQL clients for both Iris share & HNSW graph stores.

@@ -16,12 +16,11 @@ use ampc_anon_stats::store::postgres::AccessMode as AnonStatsAccessMode;
 use ampc_anon_stats::store::postgres::PostgresClient as AnonStatsPgClient;
 use ampc_anon_stats::AnonStatsStore;
 use ampc_server_utils::batch_sync::{CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRIES};
-use ampc_server_utils::server_coordination::wait_until_startup_visibility_is_complete;
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use ampc_server_utils::{
     delete_messages_until_sequence_num, get_next_sns_seq_num, get_others_sync_state,
     init_heartbeat_task, set_node_ready, start_coordination_server_with_extra_routes,
-    wait_for_others_ready, wait_for_others_unready, BatchSyncSharedState, TaskMonitor,
+    wait_for_others_ready, wait_for_startup_barriers, BatchSyncSharedState, TaskMonitor,
 };
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result, WrapErr};
@@ -140,17 +139,15 @@ pub async fn server_main(config: Config) -> Result<()> {
     .await;
     tracing::info!("Coordination server started");
 
-    // Wait for other servers to be un-ready (syncing on startup)
-    wait_for_others_unready(&server_coord_config, &verified_peers, &my_uuid).await?;
-    wait_until_startup_visibility_is_complete(&server_coord_config, &verified_peers, &my_uuid)
-        .await?;
+    // Startup barriers: un-ready sync + full mutual peer visibility
+    wait_for_startup_barriers(&server_coord_config, &verified_peers, &my_uuid).await?;
 
     let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
 
     // Handle modifications sync
     if config.enable_modifications_sync {
-        sync_modifications(
+        let mut tx = sync_modifications(
             &config,
             &iris_store,
             &aws_clients,
@@ -159,8 +156,10 @@ pub async fn server_main(config: Config) -> Result<()> {
         )
         .await?;
         // insert the WAL entries so that init_hawk_actor rolls the graph forward to
-        // the correct height.
-        sync_graph_mutations(&sync_result, &graph_store).await?;
+        // the correct height. Shares the modifications-sync transaction so a crash
+        // cannot leave the iris store ahead of the WAL.
+        sync_graph_mutations(&sync_result, &graph_store, &mut tx).await?;
+        tx.commit().await?;
     }
 
     if config.enable_modifications_replay {
@@ -283,16 +282,18 @@ pub async fn server_main(config: Config) -> Result<()> {
     )
     .await?;
 
+    let verified_peers = verified_peers.lock().await.clone();
     init_heartbeat_task(
         &server_coord_config,
         &mut background_tasks,
         &shutdown_handler,
+        verified_peers.clone(),
     )
     .await?;
     background_tasks.check_tasks();
 
     set_node_ready(is_ready_flag);
-    wait_for_others_ready(&server_coord_config).await?;
+    wait_for_others_ready(&server_coord_config, verified_peers).await?;
 
     background_tasks.check_tasks();
 

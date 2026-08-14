@@ -78,7 +78,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 [[package]]
 name = "ampc-actor-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=bcc6addbaab6297db7699a8c739d9056b0bdcbe#bcc6addbaab6297db7699a8c739d9056b0bdcbed"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=3faee93c15676d0284497573bbff38629a21114c#3faee93c15676d0284497573bbff38629a21114c"
 dependencies = [
  "aes-prng",
  "ampc-secret-sharing",
@@ -111,7 +111,7 @@ dependencies = [
 [[package]]
 name = "ampc-anon-stats"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=bcc6addbaab6297db7699a8c739d9056b0bdcbe#bcc6addbaab6297db7699a8c739d9056b0bdcbed"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=3faee93c15676d0284497573bbff38629a21114c#3faee93c15676d0284497573bbff38629a21114c"
 dependencies = [
  "ampc-actor-utils",
  "ampc-secret-sharing",
@@ -137,7 +137,7 @@ dependencies = [
 [[package]]
 name = "ampc-secret-sharing"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=bcc6addbaab6297db7699a8c739d9056b0bdcbe#bcc6addbaab6297db7699a8c739d9056b0bdcbed"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=3faee93c15676d0284497573bbff38629a21114c#3faee93c15676d0284497573bbff38629a21114c"
 dependencies = [
  "aes-prng",
  "base64",
@@ -153,7 +153,7 @@ dependencies = [
 [[package]]
 name = "ampc-server-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=bcc6addbaab6297db7699a8c739d9056b0bdcbe#bcc6addbaab6297db7699a8c739d9056b0bdcbed"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=3faee93c15676d0284497573bbff38629a21114c#3faee93c15676d0284497573bbff38629a21114c"
 dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sqs",
@@ -2231,11 +2231,10 @@ dependencies = [
 
 [[package]]
 name = "event-listener"
-version = "5.4.1"
+version = "5.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e13b66accf52311f30a0db42147dadea9850cb48cd070028831ae5f5d4b856ab"
+checksum = "5a23add41df1562121a9393cb065eab5146a1242410f23a644851e90cfd669d2"
 dependencies = [
- "concurrent-queue",
  "parking",
  "pin-project-lite",
 ]
@@ -3294,6 +3293,7 @@ dependencies = [
  "bytemuck",
  "bytes",
  "cached",
+ "chrono",
  "clap",
  "config",
  "core_affinity",
@@ -3439,7 +3439,6 @@ version = "0.1.0"
 dependencies = [
  "ampc-server-utils",
  "aws-config",
- "aws-sdk-rds",
  "aws-sdk-s3",
  "axum 0.7.9",
  "bincode",
@@ -5783,6 +5782,7 @@ checksum = "ee6798b1838b6a0f69c007c133b8df5866302197e404e8b6ee8ed3e3a5e68dc6"
 dependencies = [
  "base64",
  "bytes",
+ "chrono",
  "crc",
  "crossbeam-queue",
  "either",
@@ -5861,6 +5861,7 @@ dependencies = [
  "bitflags 2.12.1",
  "byteorder",
  "bytes",
+ "chrono",
  "crc",
  "digest 0.10.7",
  "dotenvy",
@@ -5902,6 +5903,7 @@ dependencies = [
  "base64",
  "bitflags 2.12.1",
  "byteorder",
+ "chrono",
  "crc",
  "dotenvy",
  "etcetera",
@@ -5936,6 +5938,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2d12fe70b2c1b4401038055f90f151b78208de1f9f89a7dbfd41587a10c3eea"
 dependencies = [
  "atoi",
+ "chrono",
  "flume",
  "futures-channel",
  "futures-core",

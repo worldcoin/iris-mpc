@@ -17,7 +17,7 @@ use iris_mpc_common::tracing::initialize_tracing;
 use iris_mpc_cpu::{
     checkpoint_protocol::{sidecar_main, SidecarConfig},
     execution::hawk_main::{build_hawk_network_handle, HawkArgs},
-    graph_checkpoint::PruningMode,
+    graph_checkpoint::{PruningMode, TieredPruningConfig},
     hnsw::graph::graph_store::GraphPg,
 };
 use tokio::signal::unix::{signal, SignalKind};
@@ -115,8 +115,14 @@ pub struct SidecarArgs {
     ///   - none                 — do not prune any checkpoints
     ///   - older-non-archival   — prune older non-archival checkpoints (default)
     ///   - all-older            — prune all older checkpoints
+    ///   - tiered               — keep the last --pruning-tiered-keep-recent-count checkpoints, then keep every --pruning-tiered-keep-every-nth older checkpoint, and delete after --pruning-tiered-delete-older-than-days
     #[clap(long("pruning-mode"))]
     pruning_mode: Option<String>,
+
+    /// Numeric bounds for `--pruning-mode tiered` (each flag also reads its
+    /// PRUNING_TIERED_* env var; ignored for non-tiered modes).
+    #[clap(flatten)]
+    tiered_pruning: TieredPruningConfig,
 }
 
 impl SidecarArgs {
@@ -161,11 +167,14 @@ fn hawk_args_from(args: &SidecarArgs, tls: Option<TlsConfig>) -> HawkArgs {
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
 
-    // Logs go to stdout (captured by the k8s log pipeline); no StatsD recorder.
-    // Holds the handle for the process lifetime so the subscriber stays live.
-    let _tracing = initialize_tracing(None)?;
-
     let args = SidecarArgs::parse();
+
+    // SMPC__SERVICE__* selects Datadog JSON logs; absent it (local runs)
+    // tracing falls back to plain stdout. The Datadog branch has no built-in
+    // level default, so the deploy values must set RUST_LOG.
+    let config = Config::load_config("SMPC")?;
+    let tracing_shutdown = initialize_tracing(config.service.clone())?;
+
     let pruning_mode = if let Some(mode_str) = args.pruning_mode.as_ref() {
         mode_str.parse::<PruningMode>().map_err(|e| {
             eprintln!("Error: --pruning-mode argument invalid: {}", e);
@@ -175,9 +184,22 @@ async fn main() -> Result<()> {
         PruningMode::OlderNonArchival
     };
 
-    println!(
-        "Starting WAL sidecar daemon: party={}, bucket={}",
-        args.party_index, args.bucket
+    // Tiered bounds are parsed by clap (CLI flags with PRUNING_TIERED_* env
+    // fallbacks). They are always carried, but only validated when the tiered
+    // mode is selected (ignored by other modes).
+    let tiered_pruning = args.tiered_pruning;
+    if pruning_mode == PruningMode::Tiered {
+        tiered_pruning.validate().map_err(|e| {
+            eprintln!("Error: tiered pruning config invalid: {}", e);
+            e
+        })?;
+    }
+
+    tracing::info!(
+        party = args.party_index,
+        bucket = %args.bucket,
+        one_shot = args.one_shot,
+        "starting WAL sidecar daemon"
     );
 
     let shutdown_ct = CancellationToken::new();
@@ -204,9 +226,8 @@ async fn main() -> Result<()> {
     let s3_client = aws_sdk_s3::Client::new(&aws_cfg);
 
     // TLS is supplied via SMPC__TLS__* env vars (same path as Hawk Main), not
-    // CLI flags; load it from the SMPC-prefixed config and feed it through.
-    let tls = Config::load_config("SMPC")?.tls;
-    let hawk_args = hawk_args_from(&args, tls);
+    // CLI flags.
+    let hawk_args = hawk_args_from(&args, config.tls.clone());
     let mut networking = build_hawk_network_handle(&hawk_args, shutdown_ct.clone()).await?;
 
     let cfg = SidecarConfig {
@@ -220,6 +241,7 @@ async fn main() -> Result<()> {
         checkpoint_window: args.checkpoint_window,
         is_archival: args.is_archival,
         pruning_mode,
+        tiered_pruning,
         one_shot: args.one_shot,
     };
 
@@ -230,6 +252,8 @@ async fn main() -> Result<()> {
         }
         Err(e) => {
             tracing::error!("sidecar exited with fatal error: {e}");
+            // `exit` skips destructors, so flush the trace exporter by hand.
+            drop(tracing_shutdown);
             exit(1);
         }
     }

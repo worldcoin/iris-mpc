@@ -104,6 +104,7 @@ pub fn make_hawk_config(
             http_query_retry_delay_ms: 1000,
             http_query_timeout_ms: 10000,
             startup_sync_timeout_secs: 300,
+            startup_visibility_barrier_disabled: false,
         }),
         service_ports,
         service_outbound_ports,
@@ -154,10 +155,20 @@ pub fn make_hawk_config(
 
 fn make_config(party_id: usize, db_host: &str) -> CpuNodeConfig {
     CpuNodeConfig {
-        // All three parties share the same Postgres instance; schemas provide
-        // isolation.  The `postgres` database always exists in the hawk-db
-        // compose (`docker-compose.hawk-db.yaml`).
-        db_url: format!("postgres://postgres:postgres@{db_host}:5432/postgres"),
+        // Each party gets its OWN database (created up-front by
+        // `CpuTestContext::ensure_party_databases`), mirroring prod where the
+        // three parties run on three separate Aurora clusters.
+        //
+        // They must NOT share one database: `sqlx::migrate!().run()` holds a
+        // per-database advisory lock across the whole run, and any migration
+        // using `CREATE INDEX CONCURRENTLY` (e.g. the anon-stats
+        // `..._created_at_index`) waits for every other open snapshot in that
+        // database. With a shared DB, party 0 holds the lock and its CONCURRENTLY
+        // build waits on parties 1/2, which are blocked on the same lock — a
+        // circular wait Postgres resolves as `deadlock detected`, killing hawk
+        // startup. Separate databases give each party its own advisory lock and
+        // catalog, so concurrent migration is deadlock-free (and matches prod).
+        db_url: format!("postgres://postgres:postgres@{db_host}:5432/cpu_party_db_{party_id}"),
         // Must match prepare_stores() formula: schema_name + suffix + "_" + env + "_" + party_id
         // = "cpu_party" + "" + "_dev_" + N  →  "cpu_party_dev_N"
         db_schema: format!("cpu_party_dev_{party_id}"),

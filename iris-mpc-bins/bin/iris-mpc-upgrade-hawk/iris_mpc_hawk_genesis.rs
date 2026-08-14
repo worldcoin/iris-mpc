@@ -3,7 +3,10 @@
 use clap::Parser;
 use eyre::{bail, Result};
 use iris_mpc_common::{config::Config, helpers::numactl, tracing::initialize_tracing, SerialId};
-use iris_mpc_cpu::{genesis::BatchSizeConfig, graph_checkpoint::PruningMode};
+use iris_mpc_cpu::{
+    genesis::BatchSizeConfig,
+    graph_checkpoint::{PruningMode, TieredPruningConfig},
+};
 use iris_mpc_upgrade_hawk::genesis::{exec, ExecutionArgs};
 
 #[derive(Parser)]
@@ -20,10 +23,6 @@ struct Args {
     #[clap(long("batch-size"))]
     batch_size: Option<String>,
 
-    // Whether to perform a snapshot.
-    #[clap(long("perform-snapshot"))]
-    perform_snapshot: Option<String>,
-
     // CLI argument deprecated -- must specify "false" if provided.
     #[clap(long("use-backup-as-source"))]
     use_backup_as_source: Option<String>,
@@ -38,8 +37,14 @@ struct Args {
     ///   - none                 — do not prune any checkpoints
     ///   - older-non-archival   — prune older non-archival checkpoints (default)
     ///   - all-older            — prune all older checkpoints
+    ///   - tiered               — keep the last --pruning-tiered-keep-recent-count checkpoints, then keep every --pruning-tiered-keep-every-nth older checkpoint, and delete after --pruning-tiered-delete-older-than-days
     #[clap(long("pruning-mode"))]
     pruning_mode: Option<String>,
+
+    /// Numeric bounds for `--pruning-mode tiered` (each flag also reads its
+    /// PRUNING_TIERED_* env var; ignored for non-tiered modes).
+    #[clap(flatten)]
+    tiered_pruning: TieredPruningConfig,
 
     /// Base checkpoint blake3 hash to pin (hex). Optional; when omitted the
     /// latest common checkpoint is used.
@@ -47,8 +52,7 @@ struct Args {
     base_checkpoint_hash: Option<String>,
 }
 
-/// Process main entry point: performs initial indexation of HNSW graph and optionally
-/// creates a db snapshot within AWS RDS cluster.
+/// Process main entry point: performs initial indexation of HNSW graph.
 fn main() -> Result<()> {
     // Override ptmalloc2's mmap threshold if set. This pins the dynamic
     // threshold, preventing it from ratcheting up over time.
@@ -144,22 +148,6 @@ fn parse_args() -> Result<ExecutionArgs> {
         .ok_or_else(|| eyre::eyre!("--batch-size argument is required."))?;
     let batch_size_config = BatchSizeConfig::parse(batch_size_arg)?;
 
-    // Arg: perform snapshot.
-    let perform_snapshot = if let Some(perform_snapshot_arg) = args.perform_snapshot.as_ref() {
-        perform_snapshot_arg.parse().map_err(|_| {
-            eprintln!(
-                "Error: --perform-snapshot argument must be a valid boolean. Value: {}",
-                perform_snapshot_arg
-            );
-            eyre::eyre!(
-                "--perform-snapshot argument must be a valid boolean. Value: {}",
-                perform_snapshot_arg
-            )
-        })?
-    } else {
-        false
-    };
-
     // Arg: use_backup_as_source deprecated (if specified, must parse to boolean false).
     if let Some(arg_str) = args.use_backup_as_source.as_ref() {
         match arg_str.parse::<bool>() {
@@ -205,15 +193,26 @@ fn parse_args() -> Result<ExecutionArgs> {
         PruningMode::OlderNonArchival
     };
 
+    // Tiered bounds are parsed by clap (CLI flags with PRUNING_TIERED_* env
+    // fallbacks). They are always carried, but only validated when the tiered
+    // mode is selected (ignored by other modes).
+    let tiered_pruning = args.tiered_pruning;
+    if pruning_mode == PruningMode::Tiered {
+        tiered_pruning.validate().map_err(|e| {
+            eprintln!("Error: tiered pruning config invalid: {}", e);
+            e
+        })?;
+    }
+
     // Arg: base checkpoint hash (optional).
     let base_checkpoint_hash = args.base_checkpoint_hash.clone();
 
     Ok(ExecutionArgs {
         batch_size_config,
         max_indexation_id,
-        perform_snapshot,
         checkpoint_frequency,
         pruning_mode,
+        tiered_pruning,
         base_checkpoint_hash,
     })
 }

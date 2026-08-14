@@ -5,16 +5,16 @@
 # the window boundary.
 image: "ghcr.io/worldcoin/retention-reaper:v0.32.6@sha256:366cc7dcd9e9132bbfe2b5719332ff8d1f301ed5b487cbfc458fbc97cca92ace"
 
-# ENABLED IN DRY-RUN (POP-4134 prod enablement): un-suspended + ENABLED + DRY_RUN=true —
-# the reaper runs daily and PREVIEWS the guarded DELETE (read-only COUNT, no rows removed)
-# so prod counts + health gauges are observable before real deletion. anon-stats will
-# preview a LARGE first count (the 14d backlog never reaped). Flip DRY_RUN to "false" per
-# the POP-4134 ladder (one party at a time) once previews + the POP-4136 monitors look right.
+# LIVE (POP-4134 flip, 2026-08-03): DRY_RUN=false — the guarded batched DELETE runs for
+# real (10k-row ctid batches, 100ms pause, per-batch commit; concurrencyPolicy Forbid).
+# First run drains the never-reaped backlog validated in dry-run (counts stepped at 07-31
+# exactly when the 07-16 created_at backfill crossed the 14d horizon) — expect the
+# POP-4136 runaway-deletion monitor (>1M rows/day) to fire once on that drain.
 suspend: false
 
 env:
   RETENTION__ENABLED: "true"
-  RETENTION__DRY_RUN: "true"
+  RETENTION__DRY_RUN: "false"
 
 replicaCount: 1
 
