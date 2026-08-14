@@ -386,7 +386,7 @@ async fn server_main(config: Config) -> Result<()> {
 
     // Handle modifications sync
     if config.enable_modifications_sync {
-        sync_modifications(
+        let tx = sync_modifications(
             &config,
             &store,
             &aws_clients,
@@ -394,6 +394,7 @@ async fn server_main(config: Config) -> Result<()> {
             sync_result,
         )
         .await?;
+        tx.commit().await?;
     }
 
     if config.enable_modifications_replay {

@@ -8,8 +8,9 @@ use crate::checkpoint_protocol::{
 };
 use crate::execution::hawk_main::{BothEyes, LEFT, RIGHT};
 use crate::graph_checkpoint::{
-    cleanup_checkpoints, stream_serialize_and_upload_with, BlakeTeeWriter, GraphCheckpointState,
-    PruningMode, TieredPruningConfig, DEFAULT_STREAMING_PARALLELISM, DEFAULT_STREAMING_PART_SIZE,
+    cleanup_checkpoints, prune_wal_before_earliest_checkpoint, stream_serialize_and_upload_with,
+    BlakeTeeWriter, GraphCheckpointState, PruningMode, TieredPruningConfig,
+    DEFAULT_STREAMING_PARALLELISM, DEFAULT_STREAMING_PART_SIZE,
 };
 use crate::hnsw::{
     graph::{graph_store::GraphPg, layered_graph::GraphMem},
@@ -156,6 +157,10 @@ impl<V: VectorStore + Send + Sync> TerminalAction for UploadAndRecord<'_, V> {
         .await
         {
             tracing::warn!("failed to clean up old s3 checkpoints: {e}");
+        }
+
+        if let Err(e) = prune_wal_before_earliest_checkpoint(self.graph_store).await {
+            tracing::warn!("failed to prune the WAL below the oldest checkpoint: {e}");
         }
 
         Ok(())
