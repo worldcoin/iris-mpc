@@ -78,7 +78,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 [[package]]
 name = "ampc-actor-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=3faee93c15676d0284497573bbff38629a21114c#3faee93c15676d0284497573bbff38629a21114c"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=cec37f5b6e72d17b561928c390eec7891eb15db0#cec37f5b6e72d17b561928c390eec7891eb15db0"
 dependencies = [
  "aes-prng",
  "ampc-secret-sharing",
@@ -111,7 +111,7 @@ dependencies = [
 [[package]]
 name = "ampc-anon-stats"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=3faee93c15676d0284497573bbff38629a21114c#3faee93c15676d0284497573bbff38629a21114c"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=cec37f5b6e72d17b561928c390eec7891eb15db0#cec37f5b6e72d17b561928c390eec7891eb15db0"
 dependencies = [
  "ampc-actor-utils",
  "ampc-secret-sharing",
@@ -137,7 +137,7 @@ dependencies = [
 [[package]]
 name = "ampc-secret-sharing"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=3faee93c15676d0284497573bbff38629a21114c#3faee93c15676d0284497573bbff38629a21114c"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=cec37f5b6e72d17b561928c390eec7891eb15db0#cec37f5b6e72d17b561928c390eec7891eb15db0"
 dependencies = [
  "aes-prng",
  "base64",
@@ -153,7 +153,7 @@ dependencies = [
 [[package]]
 name = "ampc-server-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=3faee93c15676d0284497573bbff38629a21114c#3faee93c15676d0284497573bbff38629a21114c"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=cec37f5b6e72d17b561928c390eec7891eb15db0#cec37f5b6e72d17b561928c390eec7891eb15db0"
 dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sqs",
@@ -164,6 +164,7 @@ dependencies = [
  "futures",
  "hex",
  "itertools 0.13.0",
+ "metrics",
  "reqwest",
  "serde",
  "serde_json",
@@ -3438,7 +3439,6 @@ version = "0.1.0"
 dependencies = [
  "ampc-server-utils",
  "aws-config",
- "aws-sdk-rds",
  "aws-sdk-s3",
  "axum 0.7.9",
  "bincode",
