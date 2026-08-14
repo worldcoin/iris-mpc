@@ -3,7 +3,7 @@
 //! via `to_registry`, so it mirrors exactly what was loaded.
 
 use crate::execution::hawk_main::iris_worker::{
-    init_workers, IrisPoolHandle, IrisWorkerPool, LocalIrisWorkerPool,
+    init_workers, ColdStorageInit, IrisPoolHandle, IrisWorkerPool, LocalIrisWorkerPool,
 };
 use crate::execution::hawk_main::{BothEyes, HawkOps, LEFT, RIGHT};
 use crate::hawkers::aby3::aby3_store::{
@@ -44,8 +44,8 @@ pub struct DbLoadParams {
     pub parallelism: usize,
     pub s3_max_serial_id: Option<usize>,
     pub shutdown_handler: Arc<ShutdownHandler>,
-    /// If set, materialize only this eye. The other eye remains database-backed
-    /// and is fetched sparsely for linear-scan candidates.
+    /// If set, materialize only this eye. The other eye remains database-backed,
+    /// retaining its LUC lookback window while fetching older candidates sparsely.
     pub resident_side: Option<usize>,
 }
 
@@ -132,7 +132,7 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
             [LEFT, RIGHT].map(|side| init_workers(side, iris_stores[side].clone(), numa));
 
         let mut db_size: usize = 0;
-        let mut cold_storage: Option<(Store, usize)> = None;
+        let mut cold_storage: Option<(Store, usize, usize)> = None;
 
         // INVARIANT: each eye gets its own `Arc<RwLock>`. `Aby3Store::insert`
         // allocates `next_id` per eye, so sharing one Arc would advance
@@ -163,7 +163,13 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                     resident_side,
                 };
                 if let Some(side) = resident_side {
-                    cold_storage = Some((store.clone(), side));
+                    let luc_window_capacity =
+                        if config.luc_enabled && config.luc_lookback_records > 0 {
+                            config.luc_lookback_records + 1
+                        } else {
+                            0
+                        };
+                    cold_storage = Some((store.clone(), side, luc_window_capacity));
                 }
                 load_iris_db(
                     &mut adapter,
@@ -194,24 +200,47 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
             }
         };
 
-        let pools: BothEyes<Arc<dyn IrisWorkerPool>> = [LEFT, RIGHT].map(|side| {
-            let worker = match &cold_storage {
-                Some((store, resident_side)) if side != *resident_side => {
+        let mut cold_worker =
+            if let Some((store, resident_side, luc_window_capacity)) = cold_storage {
+                let cold_side = 1 - resident_side;
+                let registry = registries[cold_side].read().await;
+                let luc_window_ids = registry.last_vector_ids(luc_window_capacity);
+                let latest_serial_id = registry.next_id.saturating_sub(1);
+                drop(registry);
+                Some((
+                    cold_side,
                     LocalIrisWorkerPool::new_cold(
-                        workers_handle[side].clone(),
-                        iris_stores[side].clone(),
+                        workers_handle[cold_side].clone(),
+                        iris_stores[cold_side].clone(),
                         distance_mode,
                         party_id,
-                        store.clone(),
-                        side,
+                        ColdStorageInit {
+                            store,
+                            side: cold_side,
+                            luc_window_ids,
+                            latest_serial_id,
+                            luc_window_capacity,
+                        },
                     )
-                }
-                _ => LocalIrisWorkerPool::new(
+                    .await?,
+                ))
+            } else {
+                None
+            };
+
+        let pools: BothEyes<Arc<dyn IrisWorkerPool>> = [LEFT, RIGHT].map(|side| {
+            let worker = if cold_worker
+                .as_ref()
+                .is_some_and(|(cold_side, _)| *cold_side == side)
+            {
+                cold_worker.take().expect("cold worker exists").1
+            } else {
+                LocalIrisWorkerPool::new(
                     workers_handle[side].clone(),
                     iris_stores[side].clone(),
                     distance_mode,
                     party_id,
-                ),
+                )
             };
             Arc::new(worker) as Arc<dyn IrisWorkerPool>
         });

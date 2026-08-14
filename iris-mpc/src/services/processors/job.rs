@@ -15,8 +15,10 @@ use iris_mpc_common::helpers::smpc_response::{
 
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
 use iris_mpc_common::iris_db::get_dummy_shares_for_deletion;
-use iris_mpc_common::job::ServerJobResult;
-use iris_mpc_cpu::execution::hawk_main::{GraphStore, HawkMutation, HawkSearchMode};
+use iris_mpc_common::{job::ServerJobResult, SerialId};
+use iris_mpc_cpu::execution::hawk_main::{
+    iris_worker::IrisPersistenceAckHandle, GraphStore, HawkMutation, HawkSearchMode,
+};
 use iris_mpc_store::{ExplicitVersionToken, Store, StoredIrisRef};
 use itertools::{izip, Itertools};
 use std::{collections::HashMap, time::Instant};
@@ -77,6 +79,7 @@ pub async fn process_job_result(
     reset_update_result_attributes: &HashMap<String, MessageAttributeValue>,
     recovery_check_result_attributes: &HashMap<String, MessageAttributeValue>,
     recovery_update_result_attributes: &HashMap<String, MessageAttributeValue>,
+    persistence_ack_handle: &IrisPersistenceAckHandle,
     shutdown_handler: &ShutdownHandler,
 ) -> Result<()> {
     let ServerJobResult {
@@ -348,6 +351,26 @@ pub async fn process_job_result(
     let persist_total_start = Instant::now();
     let mut iris_tx = store.tx().await?;
 
+    // These are the in-memory mutations whose matching Postgres writes are in
+    // this transaction. Preserve occurrences and order: the cold-eye overlay
+    // is a FIFO per serial ID, so one commit acknowledges exactly one queued
+    // mutation even if a later batch has already updated the same identity.
+    let mut committed_mutation_serial_ids = memory_serial_ids
+        .iter()
+        .map(|serial_id| {
+            SerialId::try_from(*serial_id)
+                .wrap_err_with(|| format!("serial ID {serial_id} does not fit in u32"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for (i, success) in successful_reauths.iter().enumerate() {
+        if *success && !skip_persistence.get(i).copied().unwrap_or(false) {
+            let reauth_id = &request_ids[i];
+            committed_mutation_serial_ids.push(*reauth_target_indices.get(reauth_id).unwrap() + 1);
+        }
+    }
+    committed_mutation_serial_ids.extend(identity_update_indices.iter().map(|idx| idx + 1));
+    committed_mutation_serial_ids.extend(deleted_ids.iter().map(|idx| idx + 1));
+
     if !codes_and_masks.is_empty() && !config.disable_persistence {
         let step_start = Instant::now();
         let db_serial_ids = store.insert_irises(&mut iris_tx, &codes_and_masks).await?;
@@ -503,6 +526,9 @@ pub async fn process_job_result(
         let step_start = Instant::now();
         graph_tx.tx.commit().await?;
         metrics::histogram!("persist_commit_duration").record(step_start.elapsed().as_secs_f64());
+        persistence_ack_handle
+            .acknowledge_persisted(committed_mutation_serial_ids)
+            .await?;
         metrics::histogram!("persist_total_duration")
             .record(persist_total_start.elapsed().as_secs_f64());
     }

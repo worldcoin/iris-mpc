@@ -6,6 +6,7 @@ use super::{
 };
 use crate::{
     execution::hawk_main::{
+        iris_worker::IrisWorkerPool,
         scheduler::{collect_results, parallelize},
         InsertPlanV, StoreId,
     },
@@ -87,6 +88,11 @@ const fn orientation_label(orientation: Orientation) -> &'static str {
         Orientation::Normal => "normal",
         Orientation::Mirror => "mirror",
     }
+}
+
+#[derive(Clone)]
+struct LinearScanPrefetch {
+    worker: Arc<dyn IrisWorkerPool>,
 }
 
 pub type SearchQueries<const ROTMASK: u32> =
@@ -220,7 +226,9 @@ pub async fn search<const ROTMASK: u32>(
 /// The configured first eye is evaluated against every live vector. Only IDs
 /// passing the wider anonymous-statistics threshold (plus request-specific OR
 /// and reauthentication targets) are evaluated on the other eye. Both stages
-/// still use the same fused 31-rotation AMPC primitive.
+/// still use the same fused 31-rotation AMPC primitive. As each first-eye chunk
+/// completes, its public candidates are queued for bounded cold-eye database
+/// prefetch so stage-two I/O overlaps the remainder of stage one.
 #[instrument(level = "trace", target = "searcher::network", skip_all)]
 pub async fn linear_scan_cascade<const ROTMASK: u32>(
     sessions: &BothEyes<Vec<HawkSession>>,
@@ -244,6 +252,7 @@ pub async fn linear_scan_cascade<const ROTMASK: u32>(
 
     let first_eye = eye_index(full_scan_side);
     let second_eye_side = full_scan_side.other();
+    let second_eye = eye_index(second_eye_side);
 
     // Both eye registries contain the same live VectorIds. Build this list
     // once, then share it across all requests and sessions in the full stage.
@@ -273,6 +282,17 @@ pub async fn linear_scan_cascade<const ROTMASK: u32>(
         vectors = live_ids.len(),
         "Running full linear-scan stage"
     );
+    let prefetch_worker = {
+        let store = sessions[second_eye][0].aby3_store.read().await;
+        store.workers.clone()
+    };
+    // Known OR/reauth candidates are needed exactly once in stage two. Queue
+    // them once here; adding them to every full-scan chunk would inflate the
+    // prefetch reservation use count and retain stale entries after the scan.
+    for extras in extra_candidate_ids {
+        let prefetch_ids = collect_live_second_stage_ids(&live_ids, [], extras);
+        prefetch_worker.prefetch_irises(prefetch_ids).await?;
+    }
     let first_results = linear_scan_eye(
         sessions,
         search_queries,
@@ -284,8 +304,21 @@ pub async fn linear_scan_cascade<const ROTMASK: u32>(
         },
         full_scan_ids,
         Arc::new(forced_anon_stats_ids.clone()),
+        Some(LinearScanPrefetch {
+            worker: prefetch_worker.clone(),
+        }),
     )
     .await?;
+    let prefetch_wait_start = Instant::now();
+    prefetch_worker.wait_for_prefetch().await?;
+    let prefetch_wait_seconds = prefetch_wait_start.elapsed().as_secs_f64();
+    metrics::histogram!("linear_scan_cold_prefetch_wait_duration").record(prefetch_wait_seconds);
+    metrics::histogram!(
+        "linear_scan_cascade_prefetch_wait_duration",
+        "eye" => eye_label(second_eye_side),
+        "orientation" => orientation_label(orientation),
+    )
+    .record(prefetch_wait_seconds);
 
     // The CUDA path uses the first eye's wider prefilter bitmap and explicitly
     // unions OR-rule and reauth IDs. Retain only live IDs, matching its bounds
@@ -329,6 +362,7 @@ pub async fn linear_scan_cascade<const ROTMASK: u32>(
         },
         Arc::new(second_stage_ids),
         Arc::new(forced_anon_stats_ids.clone()),
+        None,
     )
     .await?;
 
@@ -372,6 +406,7 @@ pub async fn linear_scan_cascade<const ROTMASK: u32>(
         second_eye_comparisons = candidate_count,
         total_comparisons,
         second_eye_candidate_fraction,
+        prefetch_wait_seconds,
         elapsed_seconds,
         comparisons_per_second,
         "LINEAR_SCAN_CASCADE_SUMMARY"
@@ -407,6 +442,7 @@ async fn linear_scan_eye<const ROTMASK: u32>(
     context: LinearScanEyeContext,
     candidate_ids: Arc<VecRequests<Arc<[VectorId]>>>,
     forced_anon_stats_ids: Arc<VecRequests<Vec<VectorId>>>,
+    prefetch: Option<LinearScanPrefetch>,
 ) -> Result<VecRequests<VecRotationSupport<HawkInsertPlan, ROTMASK>>> {
     let stage_start = Instant::now();
     let eye_index = eye_index(context.eye);
@@ -463,6 +499,7 @@ async fn linear_scan_eye<const ROTMASK: u32>(
             let search_params = search_params.clone();
             let candidate_ids = candidate_ids.clone();
             let forced_anon_stats_ids = forced_anon_stats_ids.clone();
+            let prefetch = prefetch.clone();
             async move {
                 let mut vector_store = session.aby3_store.write().await;
                 let graph_store = session.graph_store.clone().read_owned().await;
@@ -474,10 +511,24 @@ async fn linear_scan_eye<const ROTMASK: u32>(
                         &search_params,
                         &mut vector_store,
                         &graph_store,
-                        &candidate_ids[chunk.i_request][chunk.range],
+                        &candidate_ids[chunk.i_request][chunk.range.clone()],
                         &forced_anon_stats_ids[chunk.i_request],
                     )
                     .await?;
+                    if let Some(prefetch) = &prefetch {
+                        let chunk_ids = &candidate_ids[chunk.i_request][chunk.range.clone()];
+                        let prefetch_ids = collect_live_second_stage_ids(
+                            chunk_ids,
+                            result
+                                .classified
+                                .anon_stats_matches
+                                .results
+                                .iter()
+                                .map(|(id, _)| *id),
+                            &[],
+                        );
+                        prefetch.worker.prefetch_irises(prefetch_ids).await?;
+                    }
                     results.push((chunk.i_request, chunk.i_chunk, result));
                 }
                 Ok(results)

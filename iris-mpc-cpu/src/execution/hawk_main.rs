@@ -61,7 +61,7 @@ use crate::{
     execution::{
         hawk_main::{
             insert::InsertPlanV,
-            iris_worker::IrisWorkerPool,
+            iris_worker::{IrisPersistenceAckHandle, IrisWorkerPool},
             rot::{VecRotationSupport, ALL_ROTATIONS_MASK, CENTER_AND_10_MASK, CENTER_ONLY_MASK},
             search::SearchIds,
         },
@@ -789,6 +789,12 @@ impl HawkActor {
 
     pub fn worker_pool(&self, store_id: StoreId) -> Arc<dyn IrisWorkerPool> {
         self.worker_pools[store_id as usize].clone()
+    }
+
+    /// Handle used by the result writer to release cold-eye mutations only
+    /// after the corresponding Postgres transaction commits.
+    pub fn persistence_ack_handle(&self) -> IrisPersistenceAckHandle {
+        IrisPersistenceAckHandle::new(self.worker_pools.clone())
     }
 
     pub fn graph_store(&self, store_id: StoreId) -> GraphRef {

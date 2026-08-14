@@ -42,8 +42,8 @@ use iris_mpc_cpu::execution::hawk_main::worker_pool_initializer::{
     DbLoadParams, LocalWorkerPoolInitializer, WorkerPoolInitializer,
 };
 use iris_mpc_cpu::execution::hawk_main::{
-    build_hawk_network_handle, GraphStore, HawkActor, HawkArgs, HawkHandle, HawkOps,
-    HawkSearchMode, ServerJobResult, HAWK_DISTANCE_MODE,
+    build_hawk_network_handle, iris_worker::IrisPersistenceAckHandle, GraphStore, HawkActor,
+    HawkArgs, HawkHandle, HawkOps, HawkSearchMode, ServerJobResult, HAWK_DISTANCE_MODE,
 };
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
@@ -298,6 +298,7 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
         iris_store: iris_store.clone(),
         graph_store,
         search_mode,
+        ack_handle: hawk_actor.persistence_ack_handle(),
     };
     let tx_results = start_results_thread(
         &config,
@@ -893,6 +894,7 @@ struct ResultsPersistence {
     iris_store: Store,
     graph_store: GraphPg<Aby3Store<HawkOps>>,
     search_mode: HawkSearchMode,
+    ack_handle: IrisPersistenceAckHandle,
 }
 
 async fn start_results_thread(
@@ -910,6 +912,7 @@ async fn start_results_thread(
         iris_store: store_bg,
         graph_store,
         search_mode,
+        ack_handle: persistence_ack_handle,
     } = persistence;
     let shutdown_handler_bg = Arc::clone(shutdown_handler);
     let party_id = config.party_id;
@@ -931,6 +934,7 @@ async fn start_results_thread(
                 &sns_attributes_maps.reset_update_result_attributes,
                 &sns_attributes_maps.recovery_check_result_attributes,
                 &sns_attributes_maps.recovery_update_result_attributes,
+                &persistence_ack_handle,
                 &shutdown_handler_bg,
             )
             .await

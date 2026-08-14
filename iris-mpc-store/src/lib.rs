@@ -152,6 +152,30 @@ impl DbStoredIris {
     }
 }
 
+/// One eye of an iris row. Used by the CPU linear scanner so sparse reads of
+/// the non-resident eye do not transfer the unused eye from Postgres.
+#[derive(sqlx::FromRow, Debug, Default, PartialEq, Eq)]
+pub struct DbStoredIrisEye {
+    id: i64,
+    version_id: i16,
+    code: Vec<u8>,
+    mask: Vec<u8>,
+}
+
+impl DbStoredIrisEye {
+    pub fn vector_id(&self) -> VectorId {
+        VectorId::new(self.id as u32, self.version_id)
+    }
+
+    pub fn code(&self) -> &[u16] {
+        cast_u8_to_u16(&self.code)
+    }
+
+    pub fn mask(&self) -> &[u16] {
+        cast_u8_to_u16(&self.mask)
+    }
+}
+
 #[derive(Clone)]
 pub struct StoredIrisRef<'a> {
     pub id: i64,
@@ -295,6 +319,51 @@ impl Store {
         .bind(ids)
         .fetch_all(&self.pool)
         .await?)
+    }
+
+    /// Fetch one eye for a sparse set of iris IDs in one round trip.
+    ///
+    /// `side` is 0 for left and 1 for right. Keeping the two queries static
+    /// avoids interpolating a column name while halving the iris payload for
+    /// the database-backed eye of the CPU linear scanner.
+    pub async fn get_iris_data_by_ids_for_side(
+        &self,
+        ids: &[i64],
+        side: usize,
+    ) -> Result<Vec<DbStoredIrisEye>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let rows = match side {
+            0 => {
+                sqlx::query_as::<_, DbStoredIrisEye>(
+                    r#"
+                    SELECT id, version_id, left_code AS code, left_mask AS mask
+                    FROM irises
+                    WHERE id = ANY($1)
+                    ORDER BY id ASC
+                    "#,
+                )
+                .bind(ids)
+                .fetch_all(&self.pool)
+                .await?
+            }
+            1 => {
+                sqlx::query_as::<_, DbStoredIrisEye>(
+                    r#"
+                    SELECT id, version_id, right_code AS code, right_mask AS mask
+                    FROM irises
+                    WHERE id = ANY($1)
+                    ORDER BY id ASC
+                    "#,
+                )
+                .bind(ids)
+                .fetch_all(&self.pool)
+                .await?
+            }
+            _ => return Err(eyre!("invalid iris side {side}; expected 0 or 1")),
+        };
+        Ok(rows)
     }
 
     /// Stream irises in parallel, without a particular order.
@@ -1218,6 +1287,22 @@ pub mod tests {
             sparse.iter().map(DbStoredIris::id).collect::<Vec<_>>(),
             vec![1, 3]
         );
+
+        let sparse_left = store.get_iris_data_by_ids_for_side(&[2, 1], 0).await?;
+        assert_eq!(
+            sparse_left
+                .iter()
+                .map(DbStoredIrisEye::vector_id)
+                .collect::<Vec<_>>(),
+            vec![VectorId::new(1, 0), VectorId::new(2, 0)]
+        );
+        assert_eq!(sparse_left[0].code(), codes_and_masks[0].left_code);
+        assert_eq!(sparse_left[0].mask(), codes_and_masks[0].left_mask);
+
+        let sparse_right = store.get_iris_data_by_ids_for_side(&[2, 1], 1).await?;
+        assert_eq!(sparse_right[0].code(), codes_and_masks[0].right_code);
+        assert_eq!(sparse_right[0].mask(), codes_and_masks[0].right_mask);
+        assert!(store.get_iris_data_by_ids_for_side(&[1], 2).await.is_err());
 
         for i in 0..3 {
             assert_eq!(got[i].serial_id(), i + 1);
