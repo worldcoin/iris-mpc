@@ -30,7 +30,7 @@ pub async fn get_common_checkpoint(
 /// Finds the first checkpoint whose hash appears in all parties'
 /// hash lists (mine + the X `others_hashes`).  Zero hashes are ignored
 /// because they represent empty slots in a [`GraphCheckpointHashes`] array.
-fn find_common_checkpoint(
+pub fn find_common_checkpoint(
     my_checkpoint_hashes: GraphCheckpointHashes,
     my_checkpoints: Vec<GraphCheckpointState>,
     others_hashes: Vec<GraphCheckpointHashes>,
