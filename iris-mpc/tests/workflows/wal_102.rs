@@ -12,6 +12,9 @@ use crate::utils::{
 #[derive(Default)]
 pub struct Wal102 {
     nodes: Option<CpuNodes>,
+    /// Expected graph digest, captured from the builder because the cycle prunes
+    /// the WAL it was derived from.
+    reference_hash: Option<[u8; 32]>,
 }
 
 impl Wal102 {
@@ -25,10 +28,11 @@ impl TestRun for Wal102 {
         let nodes = CpuNodes::new_clean(&ctx.configs, ctx.s3_client.clone()).await?;
 
         // No base checkpoint — sidecar starts from scratch.
-        WalMutationBuilder::new()
-            .add_nodes(MIN_MUTATIONS_PER_SIDECAR_CYCLE)
-            .build(&nodes)
-            .await?;
+        let mut builder = WalMutationBuilder::new();
+        builder.add_nodes(MIN_MUTATIONS_PER_SIDECAR_CYCLE);
+        builder.build(&nodes).await?;
+
+        self.reference_hash = Some(builder.reference_hash()?);
         self.nodes = Some(nodes);
         Ok(())
     }
@@ -51,12 +55,19 @@ impl TestRun for Wal102 {
     async fn exec_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
 
+        // The new checkpoint is the only one, so it is also the oldest: it covers
+        // the whole WAL, and the prune leaves just the anchor row at its height.
         let post = WalAssertions::new()
             .assert_checkpoint_count(1)
-            .assert_latest_checkpoint_mod_id(MIN_MUTATIONS_PER_SIDECAR_CYCLE as _);
+            .assert_latest_checkpoint_mod_id(MIN_MUTATIONS_PER_SIDECAR_CYCLE as _)
+            .assert_wal_row_count(1)
+            .assert_min_modification_id(MIN_MUTATIONS_PER_SIDECAR_CYCLE as i64);
         nodes.apply_uniform_assertions(&post).await?;
 
-        nodes.assert_consensus_and_reference().await?;
+        nodes.assert_checkpoint_hashes_agree().await?;
+        nodes
+            .assert_checkpoint_hashes_match_reference(self.reference_hash.as_ref().unwrap())
+            .await?;
 
         Ok(())
     }

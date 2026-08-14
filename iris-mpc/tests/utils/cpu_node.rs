@@ -114,22 +114,13 @@ impl DbStores {
         Ok(max)
     }
 
-    /// Materialise all WAL rows into a fresh `[GraphMem; 2]` and return the BLAKE3
-    /// digest of its bincode serialisation.
-    ///
-    /// This mirrors exactly what the sidecar does in `terminal.rs`:
-    /// `bincode::serialize_into(writer, &graph)` where `graph: BothEyes<GraphMem>`.
-    /// Use this to build a reference hash for `CpuNodes::assert_checkpoint_hashes_match_reference`.
-    pub async fn compute_reference_hash(&self) -> eyre::Result<[u8; 32]> {
-        let rows = self.graph.get_hawk_graph_mutations_after(None).await?;
-        let mut graph_pair: [GraphMem; 2] = [GraphMem::new(), GraphMem::new()];
-        for row in &rows {
-            let [left_muts, right_muts] = row.deserialize_mutations()?;
-            graph_pair[0].insert_apply_all(&left_muts)?;
-            graph_pair[1].insert_apply_all(&right_muts)?;
-        }
-        let bytes = bincode::serialize(&graph_pair)?;
-        Ok(*blake3::hash(&bytes).as_bytes())
+    /// Get MIN(modification_id) from `hawk_graph_mutations`, returns None if empty.
+    pub async fn min_modification_id(&self) -> eyre::Result<Option<i64>> {
+        let min: Option<i64> =
+            sqlx::query_scalar("SELECT MIN(modification_id) FROM hawk_graph_mutations")
+                .fetch_one(self.graph.pool())
+                .await?;
+        Ok(min)
     }
 }
 
@@ -275,6 +266,14 @@ impl CpuNode {
             eyre::ensure!(
                 actual == Some(expected),
                 "max modification_id: expected Some({expected}), got {actual:?}"
+            );
+        }
+
+        if let Some(expected) = assertions.min_modification_id {
+            let actual = store.min_modification_id().await?;
+            eyre::ensure!(
+                actual == Some(expected),
+                "min modification_id: expected Some({expected}), got {actual:?}"
             );
         }
 
@@ -553,8 +552,9 @@ impl CpuNodes {
     /// Assert that all 3 parties' latest checkpoint BLAKE3 hashes match a
     /// reference hash computed by the test itself.
     ///
-    /// Build the reference with `DbStores::compute_reference_hash()` on any
-    /// one party (all three have the same WAL content after seeding).
+    /// Build the reference with `WalMutationBuilder::reference_hash()`. It is
+    /// derived from the builder's entries rather than from `hawk_graph_mutations`,
+    /// which the sidecar prunes up to its oldest checkpoint once a cycle runs.
     pub async fn assert_checkpoint_hashes_match_reference(
         &self,
         reference_hash: &[u8; 32],
@@ -703,15 +703,6 @@ impl CpuNodes {
         Ok(())
     }
 
-    /// Assert all parties produced the same checkpoint hash and that it matches
-    /// the WAL-materialized reference graph from party 0.
-    pub async fn assert_consensus_and_reference(&self) -> eyre::Result<()> {
-        self.assert_checkpoint_hashes_agree().await?;
-        let reference_hash = self.0[0].store.compute_reference_hash().await?;
-        self.assert_checkpoint_hashes_match_reference(&reference_hash)
-            .await
-    }
-
     /// Apply the same assertions to all three parties.
     pub async fn apply_uniform_assertions(&self, assertions: &WalAssertions) -> eyre::Result<()> {
         self.apply_assertions(&[assertions.clone(), assertions.clone(), assertions.clone()])
@@ -747,6 +738,9 @@ pub struct WalAssertions {
     pub wal_row_count: Option<usize>,
     /// Expected value of `MAX(modification_id)` in `hawk_graph_mutations`.
     pub max_modification_id: Option<i64>,
+    /// Expected value of `MIN(modification_id)` in `hawk_graph_mutations` — the
+    /// WAL floor left behind by the sidecar's prune.
+    pub min_modification_id: Option<i64>,
     /// Expected number of rows in `genesis_graph_checkpoint`.
     pub checkpoint_count: Option<usize>,
     /// Expected `graph_mutation_id` of the latest checkpoint row.
@@ -765,6 +759,11 @@ impl WalAssertions {
 
     pub fn assert_max_modification_id(mut self, id: i64) -> Self {
         self.max_modification_id = Some(id);
+        self
+    }
+
+    pub fn assert_min_modification_id(mut self, id: i64) -> Self {
+        self.min_modification_id = Some(id);
         self
     }
 

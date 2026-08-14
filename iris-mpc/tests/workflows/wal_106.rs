@@ -115,19 +115,29 @@ impl TestRun for Wal106 {
     async fn exec_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
 
+        // Every party still holds the seeded checkpoint at mod 5 as its oldest, so
+        // all three cut the WAL at the same place despite the checkpoint desync
+        // (rows 5..=20: the anchor row at 5 plus everything above it).
         let p0_post = WalAssertions::new()
-            .assert_wal_row_count(20)
+            .assert_wal_row_count(16)
+            .assert_min_modification_id(5)
             .assert_max_modification_id(20)
             .assert_checkpoint_count(2)
             .assert_latest_checkpoint_mod_id(20);
         let p12_post = WalAssertions::new()
-            .assert_wal_row_count(20)
+            .assert_wal_row_count(16)
+            .assert_min_modification_id(5)
             .assert_max_modification_id(20)
             .assert_checkpoint_count(3)
             .assert_latest_checkpoint_mod_id(20);
         nodes.apply_split_assertions(&p0_post, &p12_post).await?;
 
-        nodes.assert_consensus_and_reference().await
+        nodes.assert_checkpoint_hashes_agree().await?;
+        // Builder-derived: the WAL alone no longer spans the full history.
+        let reference_hash = self.builder.as_ref().unwrap().reference_hash()?;
+        nodes
+            .assert_checkpoint_hashes_match_reference(&reference_hash)
+            .await
     }
 
     async fn teardown(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {

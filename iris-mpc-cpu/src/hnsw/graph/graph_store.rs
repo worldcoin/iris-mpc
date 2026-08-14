@@ -487,31 +487,30 @@ impl<V: VectorStore> GraphPg<V> {
             .map_err(|e| eyre!("Failed to begin graph transaction: {e}"))
     }
 
+    /// Returns the number of rows deleted.
     pub async fn delete_hawk_graph_mutations(
         &self,
         tx: &mut Transaction<'_, Postgres>,
         max_mutation_id: Option<i64>,
-    ) -> Result<()> {
-        match max_mutation_id {
-            Some(max_mutation_id) => {
-                sqlx::query(
-                    r#"
+    ) -> Result<u64> {
+        let deleted = match max_mutation_id {
+            Some(max_mutation_id) => sqlx::query(
+                r#"
                     DELETE FROM hawk_graph_mutations
                     WHERE modification_id <= $1
                     "#,
-                )
-                .bind(max_mutation_id)
+            )
+            .bind(max_mutation_id)
+            .execute(tx.deref_mut())
+            .await?
+            .rows_affected(),
+            None => sqlx::query("DELETE FROM hawk_graph_mutations")
                 .execute(tx.deref_mut())
-                .await?;
-            }
-            None => {
-                sqlx::query("DELETE FROM hawk_graph_mutations")
-                    .execute(tx.deref_mut())
-                    .await?;
-            }
-        }
+                .await?
+                .rows_affected(),
+        };
 
-        Ok(())
+        Ok(deleted)
     }
 
     /// Returns the maximum modification_id from hawk_graph_mutations table, or None if empty.
