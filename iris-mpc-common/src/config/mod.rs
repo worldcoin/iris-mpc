@@ -4,7 +4,7 @@ use ampc_actor_utils::network::tcp::TlsConfig;
 use ampc_anon_stats::types::Eye;
 use ampc_server_utils::{AwsConfig, ServerCoordinationConfig, ServiceConfig};
 use clap::Parser;
-use eyre::Result;
+use eyre::{ensure, Result};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 use std::sync::OnceLock;
@@ -731,13 +731,21 @@ pub const BINARY_HASH_UNAVAILABLE: &str = "unavailable";
 pub fn binary_hash() -> &'static str {
     static BINARY_HASH: OnceLock<String> = OnceLock::new();
     BINARY_HASH.get_or_init(|| {
-        hash_own_executable().unwrap_or_else(|error| {
-            tracing::warn!(
-                "Could not hash the running executable ({error}); the cross-party \
-                 binary check is disabled for this node."
-            );
-            BINARY_HASH_UNAVAILABLE.to_string()
-        })
+        match hash_own_executable() {
+            // Logged so an operator staring at a cross-party mismatch can map
+            // each digest back to a pod without re-deriving it by hand.
+            Ok(hash) => {
+                tracing::info!("Running binary blake3: {hash}");
+                hash
+            }
+            Err(error) => {
+                tracing::warn!(
+                    "Could not hash the running executable ({error}); the cross-party \
+                     binary check is disabled for this node."
+                );
+                BINARY_HASH_UNAVAILABLE.to_string()
+            }
+        }
     })
 }
 
@@ -823,6 +831,27 @@ impl CommonConfig {
 
     pub fn binary_hash(&self) -> &str {
         &self.binary_hash
+    }
+
+    /// Ensure `other` was produced by the same executable as this config.
+    ///
+    /// `binary_hash` is a field of this struct, so the whole-struct equality
+    /// the sync paths already perform catches a mismatch on its own. This
+    /// exists so the startup error names the one difference that matters
+    /// instead of burying it in two full config dumps.
+    ///
+    /// # Errors
+    ///
+    /// If the two configs report different binary hashes.
+    pub fn ensure_same_binary(&self, other: &Self) -> Result<()> {
+        let (mine, theirs) = (self.binary_hash(), other.binary_hash());
+        ensure!(
+            mine == theirs,
+            "Binary mismatch across MPC parties: this node is running blake3 \
+             {mine}, a peer is running blake3 {theirs}. All parties must run the \
+             same image."
+        );
+        Ok(())
     }
 }
 

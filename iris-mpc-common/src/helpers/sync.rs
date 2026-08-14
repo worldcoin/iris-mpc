@@ -195,16 +195,15 @@ impl SyncResult {
         Ok(())
     }
 
+    /// Check that every node is running the same executable.
+    ///
+    /// # Errors
+    ///
+    /// If any node reports a different binary hash.
     pub fn check_binary_hash(&self) -> Result<()> {
-        let mine = self.my_state.common_config.binary_hash();
+        let mine = &self.my_state.common_config;
         for state in self.all_states.iter() {
-            let theirs = state.common_config.binary_hash();
-            ensure!(
-                mine == theirs,
-                "Binary mismatch across MPC parties: this node is running blake3 \
-                 {mine}, a peer is running blake3 {theirs}. All parties must run the \
-                 same image."
-            );
+            mine.ensure_same_binary(&state.common_config)?;
         }
         Ok(())
     }
