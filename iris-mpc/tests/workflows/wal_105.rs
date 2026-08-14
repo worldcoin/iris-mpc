@@ -80,9 +80,12 @@ impl TestRun for Wal105 {
             expect_sidecar_success(shutdown, sidecar_set).await?;
         }
 
+        // The seeded checkpoint is still the oldest live one, so the prune cuts the
+        // WAL below its height, leaving its anchor row plus the delta above it.
         let total_phase1 = INITIAL_CHECKPOINT_NODES + FIRST_DELTA_NODES;
         let pre = WalAssertions::new()
-            .assert_wal_row_count(total_phase1)
+            .assert_wal_row_count(FIRST_DELTA_NODES + 1)
+            .assert_min_modification_id(INITIAL_CHECKPOINT_NODES as i64)
             .assert_max_modification_id(total_phase1 as i64)
             .assert_checkpoint_count(2)
             .assert_latest_checkpoint_mod_id(total_phase1 as i64);
@@ -104,15 +107,23 @@ impl TestRun for Wal105 {
     async fn exec_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
 
+        // Pruning mode is `None`, so the seeded checkpoint survives phase 2 and the
+        // WAL floor stays where phase 1 put it.
         let total_final = INITIAL_CHECKPOINT_NODES + FIRST_DELTA_NODES + SECOND_DELTA_NODES;
         let post = WalAssertions::new()
-            .assert_wal_row_count(total_final)
+            .assert_wal_row_count(FIRST_DELTA_NODES + SECOND_DELTA_NODES + 1)
+            .assert_min_modification_id(INITIAL_CHECKPOINT_NODES as i64)
             .assert_max_modification_id(total_final as i64)
             .assert_checkpoint_count(3) // seeded + phase-1 sidecar + phase-2 sidecar
             .assert_latest_checkpoint_mod_id(total_final as i64);
         nodes.apply_uniform_assertions(&post).await?;
 
-        nodes.assert_consensus_and_reference().await
+        nodes.assert_checkpoint_hashes_agree().await?;
+        // Builder-derived: the WAL alone no longer spans the full history.
+        let reference_hash = self.builder.as_ref().unwrap().reference_hash()?;
+        nodes
+            .assert_checkpoint_hashes_match_reference(&reference_hash)
+            .await
     }
 
     async fn teardown(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {
