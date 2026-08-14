@@ -25,7 +25,6 @@ echo "Starting genesis with max height: ${GENESIS_MAX_HEIGHT}, batch size: ${GEN
 /bin/iris-mpc-hawk-genesis \
     --max-height=${GENESIS_MAX_HEIGHT} \
     --batch-size=${GENESIS_BATCH_SIZE} \
-    --perform-snapshot=false \
     --checkpoint-frequency=${GENESIS_CHECKPOINT_FREQUENCY}
 genesis_exit_code=$?
 
