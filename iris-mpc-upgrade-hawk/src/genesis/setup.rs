@@ -52,13 +52,18 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{self, Sender};
 
 use super::delta::{
-    delta_slot_route, DeltaExchangeSlots, DELTA_REPAIR_ROUTE, DELTA_TOMBSTONES_ROUTE,
+    delta_slot_route, exchange_delta_state, DeltaExchangeSlots, DELTA_REPAIR_ROUTE,
+    DELTA_TOMBSTONES_ROUTE,
 };
 use super::graph_checkpoint::reset_to_checkpoint;
 use super::retry::{with_retry, DB_RETRY_ATTEMPTS};
 use super::{ExecutionArgs, ExecutionContextInfo, PERSIST_DELAY};
 
 const DEFAULT_REGION: &str = "eu-north-1";
+
+// Chosen-base consensus exchange, in the shape of the delta exchanges.
+const CHOSEN_BASE_ROUTE: &str = "/chosen-base";
+const CHOSEN_BASE_ENDPOINT: &str = "chosen-base";
 
 /// Everything [`exec_setup`] hands back to the parent `exec` orchestrator: the
 /// execution context plus the long-lived clients, handles and channels the
@@ -232,6 +237,10 @@ pub(super) async fn exec_setup(args: &ExecutionArgs, config: &Config) -> Result<
             get(move || async move { serde_json::to_string(&hashes).unwrap() }),
         )
         .route(
+            CHOSEN_BASE_ROUTE,
+            delta_slot_route(delta_exchange.chosen_base.clone()),
+        )
+        .route(
             DELTA_REPAIR_ROUTE,
             delta_slot_route(delta_exchange.repair.clone()),
         )
@@ -280,6 +289,28 @@ pub(super) async fn exec_setup(args: &ExecutionArgs, config: &Config) -> Result<
     let graph_checkpoint =
         get_common_checkpoint(server_coord_config, hashes, graph_checkpoints).await?;
     tracing::info!("common graph checkpoint: {:?}", graph_checkpoint);
+
+    // Selection is party-local: each node takes the first of its own
+    // recency-ordered hash list that both peers hold, so differing row orders
+    // can pick different bases. Exchange the choice and require equality
+    // before anything destructive runs.
+    let chosen_base: Option<String> = graph_checkpoint.as_ref().map(|cp| cp.blake3_hash.clone());
+    let peer_bases: Vec<Option<String>> = exchange_delta_state(
+        server_coord_config,
+        &delta_exchange.chosen_base,
+        CHOSEN_BASE_ENDPOINT,
+        &chosen_base,
+    )
+    .await
+    .map_err(|e| {
+        tracing::error!("GATE_FAIL:divergent_base_selection {e}");
+        e
+    })?;
+    if let Err(disagreement) = check_base_agreement(chosen_base.as_deref(), &peer_bases) {
+        tracing::error!("GATE_FAIL:divergent_base_selection {disagreement}");
+        bail!("{disagreement}");
+    }
+    tracing::info!("base checkpoint agreed across parties: {chosen_base:?}");
 
     // The delta reconciles against a base checkpoint. Without one, the only
     // valid state is a fresh start (nothing indexed yet); the delta phase is
@@ -474,6 +505,24 @@ pub(super) async fn exec_setup(args: &ExecutionArgs, config: &Config) -> Result<
         delta_exchange,
         prune_reports,
     })
+}
+
+/// Compare the locally chosen base checkpoint against the peers' choices.
+///
+/// `None` is "no base at all": all-`None` is a fresh start and agrees, while
+/// mixing `None` with a base is a disagreement like any other.
+///
+/// # Errors
+///
+/// A description of the disagreement naming every party's choice.
+fn check_base_agreement(mine: Option<&str>, peers: &[Option<String>]) -> Result<(), String> {
+    if peers.iter().all(|peer| peer.as_deref() == mine) {
+        return Ok(());
+    }
+    Err(format!(
+        "parties selected different base checkpoints: mine={mine:?}, peers={peers:?} \
+         (peer order: ascending party id, self excluded)"
+    ))
 }
 
 /// Build `HawkArgs` and the MPC network handle. `init_graph_from_stores`
@@ -1074,4 +1123,38 @@ async fn validate_consistency_of_stores(
         bail!(msg);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_base_agreement;
+
+    fn some(hash: &str) -> Option<String> {
+        Some(hash.to_string())
+    }
+
+    #[test]
+    fn all_parties_chose_the_same_base() {
+        assert!(check_base_agreement(Some("aa"), &[some("aa"), some("aa")]).is_ok());
+    }
+
+    #[test]
+    fn no_party_chose_a_base() {
+        assert!(check_base_agreement(None, &[None, None]).is_ok());
+    }
+
+    #[test]
+    fn one_peer_chose_another_base() {
+        assert!(check_base_agreement(Some("aa"), &[some("aa"), some("bb")]).is_err());
+    }
+
+    #[test]
+    fn peer_without_a_base_disagrees() {
+        assert!(check_base_agreement(Some("aa"), &[some("aa"), None]).is_err());
+    }
+
+    #[test]
+    fn own_missing_base_disagrees() {
+        assert!(check_base_agreement(None, &[some("aa"), some("aa")]).is_err());
+    }
 }

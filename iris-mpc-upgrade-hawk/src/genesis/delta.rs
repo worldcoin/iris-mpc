@@ -61,8 +61,10 @@ const DELTA_EXCHANGE_POLL: Duration = Duration::from_millis(500);
 
 pub(super) type DeltaExchangeSlot = Arc<tokio::sync::RwLock<Option<Vec<u8>>>>;
 
-/// Server-side slots backing the delta consensus routes.
+/// Server-side slots backing the genesis consensus routes: the setup-phase
+/// chosen-base exchange and the two delta exchanges.
 pub(super) struct DeltaExchangeSlots {
+    pub(super) chosen_base: DeltaExchangeSlot,
     pub(super) repair: DeltaExchangeSlot,
     pub(super) tombstones: DeltaExchangeSlot,
 }
@@ -70,6 +72,7 @@ pub(super) struct DeltaExchangeSlots {
 impl DeltaExchangeSlots {
     pub(super) fn new() -> Self {
         Self {
+            chosen_base: Arc::new(tokio::sync::RwLock::new(None)),
             repair: Arc::new(tokio::sync::RwLock::new(None)),
             tombstones: Arc::new(tokio::sync::RwLock::new(None)),
         }
@@ -97,7 +100,7 @@ pub(super) fn delta_slot_route(slot: DeltaExchangeSlot) -> axum::routing::Method
 /// Callers must rendezvous first ([`delta_exchange_barrier`]): the deadline
 /// starts at publish, and the work preceding an exchange runs at party-local
 /// speed.
-async fn exchange_delta_state<T: serde::Serialize + serde::de::DeserializeOwned>(
+pub(super) async fn exchange_delta_state<T: serde::Serialize + serde::de::DeserializeOwned>(
     server_coord_config: &ServerCoordinationConfig,
     slot: &DeltaExchangeSlot,
     endpoint: &str,
@@ -114,10 +117,26 @@ async fn exchange_delta_state<T: serde::Serialize + serde::de::DeserializeOwned>
                 .collect();
         }
         if Instant::now() > deadline {
-            bail!("timed out waiting for peers on {endpoint}");
+            bail!(
+                "timed out waiting for parties {:?} on {endpoint}",
+                unanswered_parties(server_coord_config, &responses)
+            );
         }
         tokio::time::sleep(DELTA_EXCHANGE_POLL).await;
     }
+}
+
+/// Party ids behind the responses that are not yet published. Responses come
+/// back in ascending party order, self excluded.
+fn unanswered_parties(
+    server_coord_config: &ServerCoordinationConfig,
+    responses: &[(axum::http::StatusCode, Vec<u8>)],
+) -> Vec<usize> {
+    (0..server_coord_config.node_hostnames.len())
+        .filter(|party| *party != server_coord_config.party_id)
+        .zip(responses)
+        .filter_map(|(party, (status, _))| (!status.is_success()).then_some(party))
+        .collect()
 }
 
 /// Rendezvous ahead of a timed delta exchange, carrying the shutdown flag; a
