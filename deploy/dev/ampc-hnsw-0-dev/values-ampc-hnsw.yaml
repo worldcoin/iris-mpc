@@ -3,13 +3,13 @@ env:
     value: "wf-smpcv2-dev-hnsw-performance-reports"
     
   - name: GENESIS_MAX_HEIGHT
-    value: "10600"
+    value: "10200"
 
   - name: GENESIS_BATCH_SIZE
     value: "static:8"
 
   - name: GENESIS_CHECKPOINT_FREQUENCY
-    value: "100000"
+    value: "100"
 
   - name: GENESIS_BASE_CHECKPOINT_HASH
     value: "008d1cc79afce21d5a0a79562b56feba5375bf7cbbbd7cd05b115f3b9094f105"
