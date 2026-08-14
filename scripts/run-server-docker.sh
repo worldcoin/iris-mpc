@@ -8,7 +8,7 @@ if [ -z "$NODE_ID" ]; then
   exit 1
 fi
 
-# Arg :: Binary :: Binary to run [standard | genesis].
+# Arg :: Binary :: Binary to run [standard | genesis | linear-scan].
 BINARY="$2"
 if [ -z "$BINARY" ]; then
   echo "Usage: run-server-docker.sh <node_id> <binary>"
@@ -41,6 +41,8 @@ export RUST_MIN_STACK=104857600
 # shutdown-drain behavior untestable.
 if [ "$BINARY" == "genesis" ]; then
     exec /bin/iris-mpc-hawk-genesis --max-height "${GENESIS_MAX_HEIGHT:-100}" --batch-size "${GENESIS_BATCH_SIZE:-dynamic:cap=96,error_rate=128}" --perform-snapshot=false
+elif [ "$BINARY" == "linear-scan" ]; then
+    exec /bin/iris-mpc-linear-scan
 else
     exec /bin/iris-mpc-hawk
 fi
