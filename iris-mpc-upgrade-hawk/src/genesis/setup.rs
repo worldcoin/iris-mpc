@@ -57,7 +57,10 @@ use super::delta::{
 };
 use super::graph_checkpoint::reset_to_checkpoint;
 use super::retry::{with_retry, DB_RETRY_ATTEMPTS};
-use super::{ExecutionArgs, ExecutionContextInfo, PERSIST_DELAY};
+use super::{
+    exit_stop_after, stop_after_from_env, ExecutionArgs, ExecutionContextInfo, StopAfter,
+    PERSIST_DELAY,
+};
 
 const DEFAULT_REGION: &str = "eu-north-1";
 
@@ -345,6 +348,10 @@ pub(super) async fn exec_setup(args: &ExecutionArgs, config: &Config) -> Result<
                 cp.s3_key
             );
         }
+    }
+
+    if stop_after_from_env()? == Some(StopAfter::Consensus) {
+        exit_stop_after("STOP_AFTER:consensus — exiting before networking/reset").await;
     }
 
     // Networking only: sync_peers + rollback must run before the iris

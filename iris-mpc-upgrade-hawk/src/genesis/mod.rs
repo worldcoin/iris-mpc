@@ -11,6 +11,7 @@ use iris_mpc_cpu::{
     genesis::state_accessor::set_last_indexed_modification_id,
     graph_checkpoint::{PruningMode, TieredPruningConfig},
 };
+use std::time::Duration;
 
 pub use graph_checkpoint::{reset_to_checkpoint, upload_and_sync_genesis_checkpoint};
 pub use iris_mpc_cpu::graph_checkpoint::{
@@ -22,6 +23,42 @@ use indexation::exec_indexation;
 use setup::{exec_setup, SetupOutput};
 
 pub const PERSIST_DELAY: usize = 16;
+
+/// Point at which a run exits early, from `GENESIS_STOP_AFTER`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StopAfter {
+    /// After the startup consensus gates, before networking and the reset.
+    Consensus,
+    /// After setup returns (graphs loaded and verified), before the delta.
+    Load,
+}
+
+/// Read the `GENESIS_STOP_AFTER` stop point; unset or empty runs to completion.
+///
+/// # Errors
+///
+/// The variable holds anything other than `consensus` or `load`.
+fn stop_after_from_env() -> Result<Option<StopAfter>> {
+    match std::env::var("GENESIS_STOP_AFTER")
+        .unwrap_or_default()
+        .trim()
+    {
+        "" => Ok(None),
+        "consensus" => Ok(Some(StopAfter::Consensus)),
+        "load" => Ok(Some(StopAfter::Load)),
+        other => Err(eyre!(
+            "GENESIS_STOP_AFTER={other:?} is not a stop point: use `consensus` or `load`"
+        )),
+    }
+}
+
+/// Log the stop marker and exit the process cleanly.
+async fn exit_stop_after(marker: &str) -> ! {
+    tracing::info!("{marker}");
+    // The tracing exporter drains asynchronously and `exit` skips its handle.
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    std::process::exit(0);
+}
 
 /// Process input arguments typically passed from command line.
 #[derive(Debug, Clone)]
@@ -121,6 +158,9 @@ impl ExecutionContextInfo {
 pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     tracing::info!("running genesis with \n {:?} \n {:?}", args, config);
 
+    // Parsed up front so a malformed stop point fails at startup, not hours in.
+    let stop_after = stop_after_from_env()?;
+
     // Phase 0: setup.
     let SetupOutput {
         ctx,
@@ -139,6 +179,11 @@ pub async fn exec(args: ExecutionArgs, config: Config) -> Result<()> {
     } = exec_setup(&args, &config).await?;
 
     tracing::info!("Setup complete.");
+
+    if stop_after == Some(StopAfter::Load) {
+        exit_stop_after("STOP_AFTER:load — exiting before delta").await;
+    }
+
     tracing::info!(
         "Starting Genesis indexing process with the following parameters:\n  Max indexation ID: {}\n  Batch size config: {}",
         args.max_indexation_id,
