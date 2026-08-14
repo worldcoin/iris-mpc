@@ -336,7 +336,7 @@ async fn run_migration(configs: &HawkConfigs, max_indexation_id: u32, base: Stri
         join_set.spawn(async move {
             let mut ga = DEFAULT_GENESIS_ARGS;
             ga.max_indexation_id = max_indexation_id;
-            let mut ea = ExecutionArgs::from_plaintext_args(ga, false);
+            let mut ea = ExecutionArgs::from_plaintext_args(ga);
             ea.base_checkpoint_hash = Some(base);
             let r = iris_mpc_upgrade_hawk::genesis::exec(ea, config)
                 .instrument(span)
