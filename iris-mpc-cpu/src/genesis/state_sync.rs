@@ -1,5 +1,5 @@
 use super::BatchSizeConfig;
-use eyre::{ensure, Result};
+use eyre::{bail, Result};
 use iris_mpc_common::{config::CommonConfig, SerialId};
 use serde::{Deserialize, Serialize};
 
@@ -86,12 +86,15 @@ impl SyncResult {
     /// Check if the common part of the config is the same across all nodes.
     pub fn check_synced_state(&self) -> Result<()> {
         for state in &self.all_states {
-            ensure!(
-                *state == self.my_state,
-                "Inconsistent genesis config: \nhave: {} \ngot: {}",
-                summarize_sync_state(&self.my_state),
-                summarize_sync_state(state)
-            );
+            if *state != self.my_state {
+                let mine = summarize_sync_state(&self.my_state);
+                let theirs = summarize_sync_state(state);
+                tracing::error!(
+                    "GATE_FAIL:sync_state_mismatch inconsistent genesis config: \
+                     \nhave: {mine} \ngot: {theirs}"
+                );
+                bail!("Inconsistent genesis config: \nhave: {mine} \ngot: {theirs}");
+            }
         }
         Ok(())
     }

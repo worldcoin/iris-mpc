@@ -69,6 +69,7 @@ pub fn find_common_checkpoint(
     } else {
         // if at least one party has a checkpoint but no checkpoint is found then
         // raise an error.
+        tracing::error!("GATE_FAIL:no_common_checkpoint no checkpoint hash is held by all parties");
         bail!("No common checkpoint was found")
     }
 }
@@ -80,12 +81,17 @@ pub async fn get_most_recent_checkpoints(
     let db_checkpoints = graph_store.get_genesis_graph_checkpoints().await?;
     let mut valid_tuples = vec![];
     for db_cp in db_checkpoints {
+        let row_id = db_cp.id;
         let genesis_cp_state: Result<GraphCheckpointState> = db_cp.try_into();
         if let Ok(genesis_cp_state) = genesis_cp_state {
             if let Ok(hash) = blake3::Hash::from_hex(genesis_cp_state.blake3_hash.as_bytes()) {
                 valid_tuples.push((genesis_cp_state, hash));
             } else {
-                tracing::warn!("checkpoint hash failed to parse");
+                let prefix: String = genesis_cp_state.blake3_hash.chars().take(16).collect();
+                tracing::warn!(
+                    "GATE_WARN:checkpoint_hash_parse row id {row_id} hash failed to parse, \
+                     prefix={prefix}"
+                );
             }
         } else {
             tracing::warn!("failed to convert GraphCheckpointRow to GraphCheckpointState");

@@ -159,12 +159,42 @@ pub(super) async fn exec_setup(args: &ExecutionArgs, config: &Config) -> Result<
     // `base_checkpoint_hash`.
     let mut pinned_row_id: Option<i64> = None;
     if let Some(pin) = args.base_checkpoint_hash.as_ref() {
-        let row = graph_store_arc
+        let row = match graph_store_arc
             .get_genesis_graph_checkpoint_by_hash(pin)
             .await?
-            .ok_or_else(|| {
-                eyre!("pinned base checkpoint hash {pin} not found in genesis_graph_checkpoint")
-            })?;
+        {
+            Some(row) => row,
+            None => {
+                // No live row, so any row carrying the hash is a tombstone; a
+                // retired checkpoint and a hash that never existed are
+                // different operator faults.
+                match graph_store_arc
+                    .get_genesis_graph_checkpoint_by_hash_any(pin)
+                    .await?
+                {
+                    Some(tombstoned) => {
+                        tracing::error!(
+                            "GATE_FAIL:pin_tombstoned pinned base checkpoint hash {pin} found but \
+                             tombstoned (is_deleted), row id {}",
+                            tombstoned.id
+                        );
+                        bail!(
+                            "pinned base checkpoint hash {pin} found but tombstoned (is_deleted)"
+                        );
+                    }
+                    None => {
+                        tracing::error!(
+                            "GATE_FAIL:pin_not_found pinned base checkpoint hash {pin} not found \
+                             in genesis_graph_checkpoint"
+                        );
+                        bail!(
+                            "pinned base checkpoint hash {pin} not found in \
+                             genesis_graph_checkpoint"
+                        );
+                    }
+                }
+            }
+        };
         pinned_row_id = Some(row.id);
         let pinned_cp: GraphCheckpointState = row.try_into()?;
         if let Some(newest) = graph_checkpoints.first() {
@@ -175,8 +205,12 @@ pub(super) async fn exec_setup(args: &ExecutionArgs, config: &Config) -> Result<
                 );
             }
         }
-        let pinned_hash = blake3::Hash::from_hex(pin.as_bytes())
-            .map_err(|e| eyre!("pinned base checkpoint hash {pin} is not valid hex: {e}"))?;
+        let pinned_hash = blake3::Hash::from_hex(pin.as_bytes()).map_err(|e| {
+            tracing::error!(
+                "GATE_FAIL:pin_invalid_hex pinned base checkpoint hash {pin} is not valid hex: {e}"
+            );
+            eyre!("pinned base checkpoint hash {pin} is not valid hex: {e}")
+        })?;
         graph_checkpoints = vec![pinned_cp];
         hashes = [[0u8; 32]; 10];
         hashes[0] = *pinned_hash.as_bytes();
@@ -251,6 +285,10 @@ pub(super) async fn exec_setup(args: &ExecutionArgs, config: &Config) -> Result<
     // valid state is a fresh start (nothing indexed yet); the delta phase is
     // skipped and indexation starts from zero.
     if graph_checkpoint.is_none() && last_indexed_id != 0 {
+        tracing::error!(
+            "GATE_FAIL:corrupt_state no common base checkpoint, but \
+             last_indexed_iris_id={last_indexed_id}"
+        );
         bail!(
             "no common base checkpoint, but last_indexed_iris_id={last_indexed_id} — corrupt state"
         );
@@ -265,6 +303,11 @@ pub(super) async fn exec_setup(args: &ExecutionArgs, config: &Config) -> Result<
         )
         .await?
         {
+            tracing::error!(
+                "GATE_FAIL:s3_object_missing s3://{}/{}",
+                config.graph_checkpoint_bucket_name,
+                cp.s3_key
+            );
             bail!(
                 "s3 checkpoint not found on AWS: s3://{}/{}",
                 config.graph_checkpoint_bucket_name,

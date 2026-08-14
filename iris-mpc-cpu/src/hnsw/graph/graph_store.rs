@@ -284,6 +284,38 @@ impl<V: VectorStore> GraphPg<V> {
         Ok(row)
     }
 
+    /// Returns the newest genesis graph checkpoint with the given blake3 hash,
+    /// including soft-deleted rows.
+    pub async fn get_genesis_graph_checkpoint_by_hash_any(
+        &self,
+        blake3_hash: &str,
+    ) -> Result<Option<GraphCheckpointRow>> {
+        let row = sqlx::query_as::<_, GraphCheckpointRow>(
+            r#"
+            SELECT
+                id,
+                s3_key,
+                last_indexed_iris_id,
+                last_indexed_modification_id,
+                graph_mutation_id,
+                blake3_hash,
+                is_archival,
+                graph_version,
+                created_at,
+                is_deleted
+            FROM genesis_graph_checkpoint
+            WHERE blake3_hash = $1
+            ORDER BY id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(blake3_hash)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row)
+    }
+
     /// Returns genesis graph checkpoints in descending order
     pub async fn get_genesis_graph_checkpoints(&self) -> Result<Vec<GraphCheckpointRow>> {
         let rows = sqlx::query_as::<_, GraphCheckpointRow>(

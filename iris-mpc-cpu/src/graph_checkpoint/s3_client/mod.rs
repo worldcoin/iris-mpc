@@ -276,6 +276,12 @@ pub async fn download_graph_checkpoint_pruned(
     // Verify BLAKE3 hash after download
     let computed_hash = blake3::Hash::from_bytes(hash_bytes).to_hex().to_string();
     if computed_hash != state.blake3_hash {
+        tracing::error!(
+            "GATE_FAIL:blake3_mismatch s3_key={} expected {}, got {}",
+            state.s3_key,
+            state.blake3_hash,
+            computed_hash
+        );
         return Err(eyre!(
             "BLAKE3 hash mismatch: expected {}, got {}",
             state.blake3_hash,
@@ -605,6 +611,12 @@ async fn download_and_hash(
     // Verify BLAKE3 hash after download
     let computed_hash = blake3::hash(&binary_graph).to_hex().to_string();
     if computed_hash != state.blake3_hash {
+        tracing::error!(
+            "GATE_FAIL:blake3_mismatch s3_key={} expected {}, got {}",
+            state.s3_key,
+            state.blake3_hash,
+            computed_hash
+        );
         return Err(eyre!(
             "BLAKE3 hash mismatch: expected {}, got {}",
             state.blake3_hash,
