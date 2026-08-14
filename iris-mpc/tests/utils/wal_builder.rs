@@ -4,6 +4,7 @@ use iris_mpc_cpu::{
     hawkers::plaintext_store::PlaintextStore,
     hnsw::graph::{
         graph_store::GraphPg,
+        layered_graph::GraphMem,
         mutation::{EdgeType, GraphMutation, MutationOp, UpdateEntryPoint},
     },
     utils::serialization::graph_mutation::serialize_mutations_current,
@@ -152,6 +153,28 @@ impl WalMutationBuilder {
         self.status
             .insert(modification_id, ModificationStatus::Completed);
         self
+    }
+
+    /// BLAKE3 digest of the graph these mutations describe, serialized in the
+    /// sidecar's wire format (`bincode` of `[GraphMem; 2]`).
+    ///
+    /// Equivalent to `DbStores::compute_reference_hash`, but derived from the
+    /// builder's own entries instead of `hawk_graph_mutations`. The sidecar
+    /// prunes the WAL prefix its oldest checkpoint already covers, so only this
+    /// form survives as an oracle across a sidecar cycle.
+    pub fn reference_hash(&self) -> eyre::Result<[u8; 32]> {
+        let mut mutations: Vec<GraphMutation> = self.entries.values().cloned().collect();
+        mutations.sort_by_key(|m| m.seq_no);
+
+        let mut graph_pair: [GraphMem; 2] = [GraphMem::new(), GraphMem::new()];
+        for mutation in mutations {
+            // One mutation per WAL row, both eyes identical — see `insert_mutations`.
+            let row = vec![mutation];
+            graph_pair[0].insert_apply_all(&row)?;
+            graph_pair[1].insert_apply_all(&row)?;
+        }
+        let bytes = bincode::serialize(&graph_pair)?;
+        Ok(*blake3::hash(&bytes).as_bytes())
     }
 
     pub async fn insert_mutations(&self, graph: &GraphPg<PlaintextStore>) -> eyre::Result<()> {
