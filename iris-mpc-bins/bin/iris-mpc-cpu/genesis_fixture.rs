@@ -14,6 +14,7 @@
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     path::PathBuf,
+    sync::Arc,
 };
 
 use aws_config::Region;
@@ -25,10 +26,12 @@ use iris_mpc_common::{
     postgres::{run_migrations, AccessMode, PostgresClient},
 };
 use iris_mpc_cpu::{
+    genesis::get_last_indexed_iris_id,
     graph_checkpoint::{
-        download_graph_checkpoint, download_graph_checkpoint_pruned, GraphCheckpointState,
+        download_graph_checkpoint, download_graph_checkpoint_pruned, find_common_checkpoint,
+        get_most_recent_checkpoints, s3_key_exists, GraphCheckpointHashes, GraphCheckpointState,
     },
-    hawkers::plaintext_store::PlaintextStore,
+    hawkers::{aby3::aby3_store::Aby3Store, plaintext_store::PlaintextStore},
     hnsw::graph::graph_store::{GraphCheckpointRow, GraphPg},
     utils::serialization::{
         graph::LegacyPruneContext,
@@ -182,6 +185,21 @@ enum Cmd {
 
     /// Print schema, row, cursor and checkpoint state per party.
     Status,
+
+    /// Predict, per party, what genesis's startup checkpoint gates would do.
+    ///
+    /// Read-only: no database or bucket write, no pod involved.
+    Doctor {
+        /// `SMPC__BASE_CHECKPOINT_HASH`: pin the base checkpoint by hash.
+        #[clap(long)]
+        pin: Option<String>,
+        /// Download the selected object and check its BLAKE3.
+        #[clap(long)]
+        verify_hash: bool,
+        /// Emit the report as JSON.
+        #[clap(long)]
+        json: bool,
+    },
 }
 
 /// Fixture description: everything a later command needs to know.
@@ -239,7 +257,9 @@ struct Party {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Logs on stderr: stdout carries the reports, `doctor --json` included.
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
@@ -281,6 +301,11 @@ async fn main() -> Result<()> {
             verify(&args, &manifest, *target, *graph_party).await?;
         }
         Cmd::Status => status(&args).await?,
+        Cmd::Doctor {
+            pin,
+            verify_hash,
+            json,
+        } => doctor(&args, pin.as_deref(), *verify_hash, *json).await?,
     }
     Ok(())
 }
@@ -1353,4 +1378,687 @@ async fn status(args: &Args) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/* -------------------------------- doctor ------------------------------ */
+
+/// Predicted outcomes. The tokens are the markers genesis logs at each gate.
+const OUTCOME_OK: &str = "OK";
+const OUTCOME_PIN_NOT_FOUND: &str = "GATE_FAIL:pin_not_found";
+const OUTCOME_PIN_TOMBSTONED: &str = "GATE_FAIL:pin_tombstoned";
+const OUTCOME_PIN_INVALID_HEX: &str = "GATE_FAIL:pin_invalid_hex";
+const OUTCOME_NO_COMMON: &str = "GATE_FAIL:no_common_checkpoint";
+const OUTCOME_CORRUPT_STATE: &str = "GATE_FAIL:corrupt_state";
+const OUTCOME_S3_MISSING: &str = "GATE_FAIL:s3_object_missing";
+const OUTCOME_BLAKE3_MISMATCH: &str = "GATE_FAIL:blake3_mismatch";
+const OUTCOME_DIVERGENT: &str = "GATE_FAIL:divergent_base_selection";
+
+/// Marker genesis logs for a row dropped by the hash parse.
+const WARN_HASH_PARSE: &str = "GATE_WARN:checkpoint_hash_parse";
+
+/// Gates the doctor cannot see: the sync-state comparison is a deploy-env
+/// property, not a database or bucket one.
+const SCOPE_NOTE: &str = "out of scope: the sync-state gate (GATE_FAIL:sync_state_mismatch) \
+     compares deploy-env values, which are not readable from here";
+
+#[derive(Serialize)]
+struct WindowEntry {
+    slot: usize,
+    row_id: Option<i64>,
+    hash: String,
+    height: u32,
+    graph_version: i32,
+    archival: bool,
+}
+
+#[derive(Serialize)]
+struct SkippedRow {
+    row_id: i64,
+    reason: &'static str,
+    marker: Option<&'static str>,
+}
+
+#[derive(Serialize)]
+struct Selected {
+    row_id: Option<i64>,
+    hash: String,
+    s3_key: String,
+    height: u32,
+    graph_version: i32,
+}
+
+#[derive(Serialize)]
+struct S3Check {
+    key: String,
+    present: bool,
+    bytes: Option<usize>,
+    blake3: Option<&'static str>,
+}
+
+#[derive(Serialize)]
+struct PartyReport {
+    party: usize,
+    schema: String,
+    is_deleted_column: bool,
+    last_indexed_iris_id: u32,
+    window: Vec<WindowEntry>,
+    skipped: Vec<SkippedRow>,
+    pin: Option<String>,
+    selected: Option<Selected>,
+    s3: Option<S3Check>,
+    outcome: String,
+    notes: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct PrefixDiff {
+    prefix: String,
+    objects: usize,
+    /// Live rows whose object is not in the bucket.
+    missing: Vec<(usize, i64, String)>,
+    /// Objects under the prefix with no live row on any party.
+    orphans: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct DoctorReport {
+    bucket: String,
+    pin: Option<String>,
+    parties: Vec<PartyReport>,
+    s3_diff: Vec<PrefixDiff>,
+    outcome: String,
+    scope_note: &'static str,
+}
+
+/// Read-only handles on one party's destination schema.
+struct DoctorParty {
+    schema: String,
+    graph: Arc<GraphPg<Aby3Store>>,
+}
+
+/// Per-party working state carried between the two doctor passes.
+struct PartyState {
+    report: PartyReport,
+    hashes: GraphCheckpointHashes,
+    candidates: Vec<GraphCheckpointState>,
+    /// `s3_key → row id` for every valid live row.
+    ids: HashMap<String, i64>,
+    live_rows: Vec<GraphCheckpointRow>,
+}
+
+/// Pin resolution, in genesis's order: by-hash lookup, conversion, hex parse.
+enum Pin {
+    Resolved(GraphCheckpointState, i64),
+    Absent,
+    Tombstoned(i64),
+    InvalidHex(String),
+    Unconvertible(i64, String),
+}
+
+async fn open_doctor_party(args: &Args, party: usize) -> Result<DoctorParty> {
+    let schema = schema_name(args, &args.dst_suffix, party);
+    check_ident(&schema)?;
+    let probe = PostgresClient::new(&args.db_urls[party], "public", AccessMode::ReadOnly).await?;
+    let exists: (bool,) =
+        sqlx::query_as("SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = $1)")
+            .bind(&schema)
+            .fetch_one(&probe.pool)
+            .await?;
+    ensure!(exists.0, "schema {schema} does not exist");
+
+    // Read-only: the doctor must not even create a schema by accident.
+    let pg = PostgresClient::new(&args.db_urls[party], &schema, AccessMode::ReadOnly).await?;
+    Ok(DoctorParty {
+        schema,
+        graph: Arc::new(GraphPg::<Aby3Store>::new(&pg).await?),
+    })
+}
+
+/// `genesis_graph_checkpoint` columns added after the original provisioning.
+/// Every store read path selects both, so either one missing forces the
+/// mirrored query.
+#[derive(Clone, Copy)]
+struct LateColumns {
+    is_deleted: bool,
+    created_at: bool,
+}
+
+impl LateColumns {
+    fn complete(&self) -> bool {
+        self.is_deleted && self.created_at
+    }
+}
+
+async fn late_columns(pool: &sqlx::PgPool, schema: &str) -> Result<LateColumns> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT column_name FROM information_schema.columns \
+         WHERE table_schema = $1 AND table_name = 'genesis_graph_checkpoint' \
+           AND column_name IN ('is_deleted', 'created_at')",
+    )
+    .bind(schema)
+    .fetch_all(pool)
+    .await?;
+    let present: HashSet<String> = rows.into_iter().map(|(c,)| c).collect();
+    Ok(LateColumns {
+        is_deleted: present.contains("is_deleted"),
+        created_at: present.contains("created_at"),
+    })
+}
+
+/// Checkpoint rows, newest first. Schemas predating the soft-delete migration
+/// have no `is_deleted` column: every row is live and no row can be a
+/// tombstone. `created_at` is never read — recency is the row id.
+async fn checkpoint_rows(
+    p: &DoctorParty,
+    columns: LateColumns,
+    include_deleted: bool,
+) -> Result<Vec<GraphCheckpointRow>> {
+    if columns.complete() {
+        return if include_deleted {
+            p.graph
+                .get_genesis_graph_checkpoints_including_deleted()
+                .await
+        } else {
+            p.graph.get_genesis_graph_checkpoints().await
+        };
+    }
+    let is_deleted = if columns.is_deleted {
+        "is_deleted"
+    } else {
+        "false AS is_deleted"
+    };
+    let created_at = if columns.created_at {
+        "created_at"
+    } else {
+        "now() AS created_at"
+    };
+    let filter = if columns.is_deleted && !include_deleted {
+        "WHERE NOT is_deleted"
+    } else {
+        ""
+    };
+    Ok(sqlx::query_as::<_, GraphCheckpointRow>(&format!(
+        "SELECT id, s3_key, last_indexed_iris_id, last_indexed_modification_id, \
+                graph_mutation_id, blake3_hash, is_archival, graph_version, \
+                {created_at}, {is_deleted} \
+         FROM genesis_graph_checkpoint {filter} ORDER BY id DESC"
+    ))
+    .fetch_all(p.graph.pool())
+    .await?)
+}
+
+/// Row-level replay of `get_most_recent_checkpoints`, keeping the skip reasons
+/// and row ids the real function only logs or drops.
+fn walk_checkpoints(
+    rows: &[GraphCheckpointRow],
+) -> (
+    Vec<GraphCheckpointState>,
+    GraphCheckpointHashes,
+    Vec<SkippedRow>,
+    HashMap<String, i64>,
+) {
+    let mut hashes: GraphCheckpointHashes = [[0; 32]; 10];
+    let mut states = Vec::new();
+    let mut skipped = Vec::new();
+    let mut ids: HashMap<String, i64> = HashMap::new();
+
+    for row in rows {
+        let id = row.id;
+        let key = row.s3_key.clone();
+        let state: Result<GraphCheckpointState> = row.clone().try_into();
+        let Ok(state) = state else {
+            skipped.push(SkippedRow {
+                row_id: id,
+                reason: "conversion",
+                marker: None,
+            });
+            continue;
+        };
+        let Ok(hash) = blake3::Hash::from_hex(state.blake3_hash.as_bytes()) else {
+            skipped.push(SkippedRow {
+                row_id: id,
+                reason: "hash-parse",
+                marker: Some(WARN_HASH_PARSE),
+            });
+            continue;
+        };
+        // Rows arrive newest first, so the first id for a key is the newest.
+        ids.entry(key).or_insert(id);
+        if let Some(slot) = hashes.get_mut(states.len()) {
+            slot.copy_from_slice(hash.as_bytes());
+        }
+        states.push(state);
+    }
+    (states, hashes, skipped, ids)
+}
+
+fn window_entries(
+    hashes: &GraphCheckpointHashes,
+    states: &[GraphCheckpointState],
+    ids: &HashMap<String, i64>,
+) -> Vec<WindowEntry> {
+    hashes
+        .iter()
+        .enumerate()
+        .filter(|(_, hash)| **hash != [0u8; 32])
+        .filter_map(|(slot, _)| {
+            let cp = states.get(slot)?;
+            Some(WindowEntry {
+                slot,
+                row_id: ids.get(&cp.s3_key).copied(),
+                hash: short_hash(&cp.blake3_hash),
+                height: cp.last_indexed_iris_id,
+                graph_version: cp.graph_version,
+                archival: cp.is_archival,
+            })
+        })
+        .collect()
+}
+
+fn short_hash(hash: &str) -> String {
+    hash[..12.min(hash.len())].to_string()
+}
+
+async fn pin_verdict(
+    p: &DoctorParty,
+    pin: &str,
+    columns: LateColumns,
+    live_rows: &[GraphCheckpointRow],
+) -> Result<Pin> {
+    let live = if columns.complete() {
+        p.graph.get_genesis_graph_checkpoint_by_hash(pin).await?
+    } else {
+        live_rows.iter().find(|r| r.blake3_hash == pin).cloned()
+    };
+    let Some(row) = live else {
+        if columns.is_deleted {
+            let all = checkpoint_rows(p, columns, true).await?;
+            if let Some(row) = all.iter().find(|r| r.blake3_hash == pin) {
+                return Ok(Pin::Tombstoned(row.id));
+            }
+        }
+        return Ok(Pin::Absent);
+    };
+
+    let row_id = row.id;
+    let state: GraphCheckpointState = match row.try_into() {
+        Ok(state) => state,
+        Err(e) => return Ok(Pin::Unconvertible(row_id, e.to_string())),
+    };
+    if let Err(e) = blake3::Hash::from_hex(pin.as_bytes()) {
+        return Ok(Pin::InvalidHex(e.to_string()));
+    }
+    Ok(Pin::Resolved(state, row_id))
+}
+
+async fn doctor(args: &Args, pin: Option<&str>, verify_hash: bool, json: bool) -> Result<()> {
+    let s3 = s3_client(args).await;
+
+    // Pass 1: per party, everything that needs no peer.
+    let mut parties: Vec<PartyState> = Vec::new();
+    for id in 0..3 {
+        let party = open_doctor_party(args, id).await?;
+        let columns = late_columns(party.graph.pool(), &party.schema).await?;
+        let live_rows = checkpoint_rows(&party, columns, false).await?;
+        let (walked, walked_hashes, skipped, ids) = walk_checkpoints(&live_rows);
+
+        // The function genesis itself calls is the authority; the walk supplies
+        // only the skip reasons and the row ids it discards.
+        let (mut candidates, mut hashes) = if columns.complete() {
+            get_most_recent_checkpoints(&party.graph).await?
+        } else {
+            (walked, walked_hashes)
+        };
+
+        let mut report = PartyReport {
+            party: id,
+            schema: party.schema.clone(),
+            is_deleted_column: columns.is_deleted,
+            last_indexed_iris_id: get_last_indexed_iris_id(party.graph.clone()).await?,
+            window: Vec::new(),
+            skipped,
+            pin: None,
+            selected: None,
+            s3: None,
+            outcome: OUTCOME_OK.to_string(),
+            notes: Vec::new(),
+        };
+        if !columns.is_deleted {
+            report
+                .notes
+                .push("schema pre-migration: is_deleted absent".to_string());
+        }
+        if !columns.created_at {
+            report
+                .notes
+                .push("schema pre-migration: created_at absent".to_string());
+        }
+
+        if let Some(pin) = pin {
+            match pin_verdict(&party, pin, columns, &live_rows).await? {
+                Pin::Resolved(state, row_id) => {
+                    report.pin = Some(format!("ok (row id {row_id})"));
+                    let hash = blake3::Hash::from_hex(pin.as_bytes())
+                        .map_err(|e| eyre!("pin {pin} is not valid hex: {e}"))?;
+                    candidates = vec![state];
+                    hashes = [[0u8; 32]; 10];
+                    hashes[0].copy_from_slice(hash.as_bytes());
+                }
+                Pin::Absent => {
+                    report.pin = Some("absent".to_string());
+                    report.outcome = OUTCOME_PIN_NOT_FOUND.to_string();
+                }
+                Pin::Tombstoned(row_id) => {
+                    report.pin = Some(format!("tombstoned (row id {row_id})"));
+                    report.notes.push(
+                        "the by-hash lookup filters NOT is_deleted, so genesis reports this as \
+                         not found"
+                            .to_string(),
+                    );
+                    report.outcome = OUTCOME_PIN_TOMBSTONED.to_string();
+                }
+                Pin::InvalidHex(e) => {
+                    report.pin = Some("invalid hex".to_string());
+                    report.notes.push(e);
+                    report.outcome = OUTCOME_PIN_INVALID_HEX.to_string();
+                }
+                Pin::Unconvertible(row_id, e) => {
+                    report.pin = Some(format!("row {row_id} fails conversion"));
+                    report.notes.push(e);
+                    report.outcome = OUTCOME_PIN_NOT_FOUND.to_string();
+                }
+            }
+        }
+        report.window = window_entries(&hashes, &candidates, &ids);
+
+        parties.push(PartyState {
+            report,
+            hashes,
+            candidates,
+            ids,
+            live_rows,
+        });
+    }
+
+    // Pass 2: the gates that need the other two parties' windows.
+    for i in 0..3 {
+        if parties[i].report.outcome != OUTCOME_OK {
+            continue;
+        }
+        let others: Vec<GraphCheckpointHashes> = (0..3)
+            .filter(|j| *j != i)
+            .map(|j| parties[j].hashes)
+            .collect();
+        let selection =
+            find_common_checkpoint(parties[i].hashes, parties[i].candidates.clone(), others);
+        let state = &mut parties[i];
+
+        let cp = match selection {
+            Err(e) => {
+                state.report.outcome = OUTCOME_NO_COMMON.to_string();
+                state.report.notes.push(e.to_string());
+                continue;
+            }
+            Ok(None) => {
+                if state.report.last_indexed_iris_id != 0 {
+                    state.report.outcome = OUTCOME_CORRUPT_STATE.to_string();
+                } else {
+                    state
+                        .report
+                        .notes
+                        .push("no checkpoint anywhere: legal fresh start".to_string());
+                }
+                continue;
+            }
+            Ok(Some(cp)) => cp,
+        };
+
+        state.report.selected = Some(Selected {
+            row_id: state.ids.get(&cp.s3_key).copied(),
+            hash: cp.blake3_hash.clone(),
+            s3_key: cp.s3_key.clone(),
+            height: cp.last_indexed_iris_id,
+            graph_version: cp.graph_version,
+        });
+
+        let present = s3_key_exists(&s3, &args.bucket, &cp.s3_key).await?;
+        let mut check = S3Check {
+            key: cp.s3_key.clone(),
+            present,
+            bytes: None,
+            blake3: None,
+        };
+        if !present {
+            state.report.outcome = OUTCOME_S3_MISSING.to_string();
+        } else if verify_hash {
+            let body = s3
+                .get_object()
+                .bucket(&args.bucket)
+                .key(&cp.s3_key)
+                .send()
+                .await
+                .map_err(|e| eyre!("cannot read s3://{}/{}: {e}", args.bucket, cp.s3_key))?
+                .body
+                .collect()
+                .await?
+                .into_bytes();
+            let got = blake3::hash(&body).to_hex().to_string();
+            check.bytes = Some(body.len());
+            if got == cp.blake3_hash {
+                check.blake3 = Some("ok");
+            } else {
+                check.blake3 = Some("mismatch");
+                state.report.outcome = OUTCOME_BLAKE3_MISMATCH.to_string();
+                state
+                    .report
+                    .notes
+                    .push(format!("object hashes to {}", short_hash(&got)));
+            }
+        }
+        state.report.s3 = Some(check);
+    }
+
+    // Each party picks the first of its *own* ordering, so agreeing windows are
+    // not enough: the picks themselves have to match.
+    let gated: Vec<usize> = (0..3)
+        .filter(|i| parties[*i].report.outcome == OUTCOME_OK)
+        .collect();
+    let picks: Vec<Option<&str>> = gated
+        .iter()
+        .map(|i| {
+            parties[*i]
+                .report
+                .selected
+                .as_ref()
+                .map(|s| s.hash.as_str())
+        })
+        .collect();
+    let divergent = picks.windows(2).any(|w| w[0] != w[1]);
+    if divergent {
+        for i in gated {
+            parties[i].report.outcome = OUTCOME_DIVERGENT.to_string();
+        }
+    }
+
+    let s3_diff = s3_diff(args, &s3, &parties).await?;
+
+    let outcome = if divergent {
+        OUTCOME_DIVERGENT.to_string()
+    } else {
+        parties
+            .iter()
+            .map(|p| p.report.outcome.clone())
+            .find(|o| o != OUTCOME_OK)
+            .unwrap_or_else(|| OUTCOME_OK.to_string())
+    };
+    let report = DoctorReport {
+        bucket: args.bucket.clone(),
+        pin: pin.map(str::to_string),
+        parties: parties.into_iter().map(|p| p.report).collect(),
+        s3_diff,
+        outcome,
+        scope_note: SCOPE_NOTE,
+    };
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        render(&report);
+    }
+    Ok(())
+}
+
+/// Reconcile the three checkpoint tables against the bucket, per key prefix.
+async fn s3_diff(args: &Args, s3: &S3Client, parties: &[PartyState]) -> Result<Vec<PrefixDiff>> {
+    // Parties share the bucket and can share a key (a hand-baked base is
+    // inserted on all three), so a row anywhere keeps an object off the
+    // orphan list.
+    let mut live: HashMap<String, Vec<(usize, i64)>> = HashMap::new();
+    for state in parties {
+        for row in &state.live_rows {
+            live.entry(row.s3_key.clone())
+                .or_default()
+                .push((state.report.party, row.id));
+        }
+    }
+    let prefixes: BTreeSet<String> = live
+        .keys()
+        .filter_map(|k| k.rsplit_once('/').map(|(dir, _)| format!("{dir}/")))
+        .collect();
+
+    let mut out = Vec::new();
+    for prefix in prefixes {
+        let objects = list_prefix(s3, &args.bucket, &prefix).await?;
+        let mut missing: Vec<(usize, i64, String)> = live
+            .iter()
+            .filter(|(key, _)| key.starts_with(&prefix) && !objects.contains(*key))
+            .flat_map(|(key, rows)| {
+                rows.iter()
+                    .map(move |(party, id)| (*party, *id, key.clone()))
+            })
+            .collect();
+        missing.sort_unstable();
+        let orphans: Vec<String> = objects
+            .iter()
+            .filter(|key| !live.contains_key(*key))
+            .cloned()
+            .collect();
+        out.push(PrefixDiff {
+            prefix,
+            objects: objects.len(),
+            missing,
+            orphans,
+        });
+    }
+    Ok(out)
+}
+
+async fn list_prefix(s3: &S3Client, bucket: &str, prefix: &str) -> Result<BTreeSet<String>> {
+    let mut keys = BTreeSet::new();
+    let mut token: Option<String> = None;
+    loop {
+        let mut req = s3.list_objects_v2().bucket(bucket).prefix(prefix);
+        if let Some(token) = token {
+            req = req.continuation_token(token);
+        }
+        let page = req
+            .send()
+            .await
+            .map_err(|e| eyre!("cannot list s3://{bucket}/{prefix}: {e}"))?;
+        for object in page.contents() {
+            if let Some(key) = object.key() {
+                keys.insert(key.to_string());
+            }
+        }
+        token = page.next_continuation_token().map(str::to_string);
+        if token.is_none() {
+            break;
+        }
+    }
+    Ok(keys)
+}
+
+fn render(report: &DoctorReport) {
+    for party in &report.parties {
+        println!("party {}  {}", party.party, party.schema);
+        println!(
+            "  cursor last_indexed_iris_id={}  is_deleted column={}",
+            party.last_indexed_iris_id, party.is_deleted_column
+        );
+        if party.window.is_empty() {
+            println!("  window: empty");
+        } else {
+            println!("  window ({} advertised):", party.window.len());
+            for entry in &party.window {
+                println!(
+                    "    [{}] id={} {} height={} v{} archival={}",
+                    entry.slot,
+                    entry
+                        .row_id
+                        .map(|id| id.to_string())
+                        .unwrap_or_else(|| "?".to_string()),
+                    entry.hash,
+                    entry.height,
+                    entry.graph_version,
+                    entry.archival
+                );
+            }
+        }
+        for skipped in &party.skipped {
+            println!(
+                "  skipped row id={} {}{}",
+                skipped.row_id,
+                skipped.reason,
+                skipped
+                    .marker
+                    .map(|m| format!(" ({m})"))
+                    .unwrap_or_default()
+            );
+        }
+        if let Some(pin) = &party.pin {
+            println!("  pin: {pin}");
+        }
+        match &party.selected {
+            Some(selected) => println!(
+                "  selected: id={} {} height={} v{} key={}",
+                selected
+                    .row_id
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "?".to_string()),
+                short_hash(&selected.hash),
+                selected.height,
+                selected.graph_version,
+                selected.s3_key
+            ),
+            None => println!("  selected: none"),
+        }
+        if let Some(s3) = &party.s3 {
+            println!(
+                "  s3: object {}{}{}",
+                if s3.present { "present" } else { "MISSING" },
+                s3.bytes.map(|b| format!(", {b} bytes")).unwrap_or_default(),
+                s3.blake3
+                    .map(|b| format!(", blake3 {b}"))
+                    .unwrap_or_default()
+            );
+        }
+        for note in &party.notes {
+            println!("  note: {note}");
+        }
+        println!("  outcome: {}", party.outcome);
+    }
+
+    println!("s3 diff (bucket {})", report.bucket);
+    for diff in &report.s3_diff {
+        println!("  {} ({} objects)", diff.prefix, diff.objects);
+        for (party, row_id, key) in &diff.missing {
+            println!("    no object for live row party={party} id={row_id} key={key}");
+        }
+        for key in &diff.orphans {
+            println!("    orphan object {key}");
+        }
+    }
+
+    println!("predicted outcome: {}", report.outcome);
+    println!("{}", report.scope_note);
 }
