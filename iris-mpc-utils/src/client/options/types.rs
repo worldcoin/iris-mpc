@@ -164,6 +164,20 @@ pub enum RequestBatchOptions {
 
         percent_reauth: usize,
     },
+    /// A deterministic, single-request-per-batch sequence intended for
+    /// backend equivalence testing. It covers insertions, duplicate and mirror
+    /// matches, reauthorization, reset/recovery checks and updates, and
+    /// identity deletion while preserving valid cross-request dependencies.
+    GroundTruth {
+        request_count: usize,
+        rng_seed: u64,
+        #[serde(default = "default_ground_truth_initial_uniqueness_count")]
+        initial_uniqueness_count: usize,
+    },
+}
+
+fn default_ground_truth_initial_uniqueness_count() -> usize {
+    16
 }
 
 impl RequestBatchOptions {
@@ -182,6 +196,15 @@ impl RequestBatchOptions {
             batch_kind: batch_kind.to_string(),
             batch_size,
             known_iris_serial_id,
+        }
+    }
+
+    /// Seed used for deterministic correlation IDs, when the request schedule
+    /// itself is deterministic.
+    pub(crate) fn deterministic_seed(&self) -> Option<u64> {
+        match self {
+            Self::GroundTruth { rng_seed, .. } => Some(*rng_seed),
+            _ => None,
         }
     }
 
@@ -368,8 +391,15 @@ impl RequestOptions {
         info: RequestInfo,
         parent_serial_id: Option<SerialId>,
     ) -> Result<Request, String> {
-        let corr_uuid = Uuid::new_v4();
+        self.make_request_with_uuid(info, parent_serial_id, Uuid::new_v4())
+    }
 
+    pub(crate) fn make_request_with_uuid(
+        &self,
+        info: RequestInfo,
+        parent_serial_id: Option<SerialId>,
+        corr_uuid: Uuid,
+    ) -> Result<Request, String> {
         let request = match self.payload() {
             RequestPayloadOptions::Uniqueness { iris_pair, .. }
             | RequestPayloadOptions::Mirrored { iris_pair, .. } => Request::Uniqueness {
@@ -392,6 +422,16 @@ impl RequestOptions {
                 iris_pair: *iris_pair,
                 request_id: corr_uuid,
             },
+            RequestPayloadOptions::RecoveryUpdate { iris_pair, .. } => {
+                let parent =
+                    parent_serial_id.ok_or("RecoveryUpdate requires a parent serial ID")?;
+                Request::RecoveryUpdate {
+                    info,
+                    iris_pair: *iris_pair,
+                    parent,
+                    recovery_id: corr_uuid,
+                }
+            }
             RequestPayloadOptions::ResetCheck { iris_pair } => Request::ResetCheck {
                 info,
                 iris_pair: *iris_pair,
@@ -424,7 +464,8 @@ impl RequestOptions {
         match self.payload() {
             RequestPayloadOptions::IdentityDeletion { parent }
             | RequestPayloadOptions::Reauthorisation { parent, .. }
-            | RequestPayloadOptions::ResetUpdate { parent, .. } => Some(parent.clone()),
+            | RequestPayloadOptions::ResetUpdate { parent, .. }
+            | RequestPayloadOptions::RecoveryUpdate { parent, .. } => Some(parent.clone()),
             _ => None,
         }
     }
@@ -447,6 +488,12 @@ pub enum RequestPayloadOptions {
     RecoveryCheck {
         #[serde(default)]
         iris_pair: Option<IrisPairDescriptor>,
+    },
+    // Options over a recovery update request payload.
+    RecoveryUpdate {
+        #[serde(default)]
+        iris_pair: Option<IrisPairDescriptor>,
+        parent: Parent,
     },
     // Options over a reset check request payload.
     ResetCheck {
@@ -480,6 +527,7 @@ impl RequestPayloadOptions {
             Self::IdentityDeletion { .. } => None,
             Self::Reauthorisation { iris_pair, .. }
             | Self::RecoveryCheck { iris_pair, .. }
+            | Self::RecoveryUpdate { iris_pair, .. }
             | Self::ResetCheck { iris_pair, .. }
             | Self::ResetUpdate { iris_pair, .. }
             | Self::Uniqueness { iris_pair, .. }
@@ -498,6 +546,10 @@ impl RequestPayloadOptions {
                 ..
             }
             | Self::ResetUpdate {
+                parent: Parent::Label(l),
+                ..
+            }
+            | Self::RecoveryUpdate {
                 parent: Parent::Label(l),
                 ..
             } => Some(l.clone()),
@@ -541,6 +593,11 @@ impl IntoIterator for RequestBatchOptions {
                 percent_uniqueness,
                 percent_reauth,
             } => random_into_iter(batch_count, batch_size, percent_uniqueness, percent_reauth),
+            RequestBatchOptions::GroundTruth {
+                request_count,
+                rng_seed,
+                initial_uniqueness_count,
+            } => ground_truth_into_iter(request_count, rng_seed, initial_uniqueness_count),
             RequestBatchOptions::Simple {
                 batch_count,
                 batch_kind,
@@ -549,6 +606,190 @@ impl IntoIterator for RequestBatchOptions {
             } => simple_into_iter(batch_count, batch_kind, batch_size),
         }
     }
+}
+
+#[derive(Clone)]
+struct GroundTruthIdentity {
+    label: String,
+    iris_pair: IrisPairDescriptor,
+}
+
+#[derive(Clone, Copy)]
+enum GroundTruthOperation {
+    NewUniqueness,
+    DuplicateUniqueness,
+    MirroredUniqueness,
+    ReauthMatch,
+    ReauthNonMatch,
+    ResetCheck,
+    RecoveryCheck,
+    ResetUpdate,
+    RecoveryUpdate,
+    IdentityDeletion,
+}
+
+fn ground_truth_into_iter(
+    request_count: usize,
+    rng_seed: u64,
+    initial_uniqueness_count: usize,
+) -> std::vec::IntoIter<Vec<RequestOptions>> {
+    use rand::{seq::SliceRandom, Rng, SeedableRng};
+    use serde_json::json;
+
+    let mut rng = rand::rngs::StdRng::seed_from_u64(rng_seed);
+    let mut batches = Vec::with_capacity(request_count);
+    let mut live = Vec::<GroundTruthIdentity>::new();
+    let mut next_iris_index = 0usize;
+    let mut sequence = 0usize;
+
+    let mut fresh_pair = || {
+        let pair = IrisPairDescriptor::new_from_indexes(next_iris_index, next_iris_index + 1);
+        next_iris_index += 2;
+        pair
+    };
+
+    for _ in 0..initial_uniqueness_count.min(request_count) {
+        let label = format!("ground-truth-{sequence:04}-enroll");
+        sequence += 1;
+        let iris_pair = fresh_pair();
+        let request = RequestOptions::new(
+            Some(&label),
+            RequestPayloadOptions::Uniqueness {
+                iris_pair: Some(iris_pair),
+                insertion_layers: None,
+            },
+        )
+        .with_expected(json!({ "is_match": false }));
+        live.push(GroundTruthIdentity { label, iris_pair });
+        batches.push(vec![request]);
+    }
+
+    let operation_template = [
+        GroundTruthOperation::NewUniqueness,
+        GroundTruthOperation::DuplicateUniqueness,
+        GroundTruthOperation::MirroredUniqueness,
+        GroundTruthOperation::ReauthMatch,
+        GroundTruthOperation::ReauthNonMatch,
+        GroundTruthOperation::ResetCheck,
+        GroundTruthOperation::RecoveryCheck,
+        GroundTruthOperation::ResetUpdate,
+        GroundTruthOperation::RecoveryUpdate,
+        GroundTruthOperation::IdentityDeletion,
+    ];
+    let mut operations = Vec::new();
+    while operations.len() < request_count.saturating_sub(batches.len()) {
+        let mut cycle = operation_template;
+        cycle.shuffle(&mut rng);
+        operations.extend(cycle);
+    }
+
+    for operation in operations
+        .into_iter()
+        .take(request_count.saturating_sub(batches.len()))
+    {
+        let label = format!("ground-truth-{sequence:04}");
+        sequence += 1;
+        let target_idx = rng.gen_range(0..live.len());
+        let target = live[target_idx].clone();
+
+        let request = match operation {
+            GroundTruthOperation::NewUniqueness => {
+                let identity_label = format!("{label}-enroll");
+                let iris_pair = fresh_pair();
+                let request = RequestOptions::new(
+                    Some(&identity_label),
+                    RequestPayloadOptions::Uniqueness {
+                        iris_pair: Some(iris_pair),
+                        insertion_layers: None,
+                    },
+                )
+                .with_expected(json!({ "is_match": false }));
+                live.push(GroundTruthIdentity {
+                    label: identity_label,
+                    iris_pair,
+                });
+                request
+            }
+            GroundTruthOperation::DuplicateUniqueness => RequestOptions::new(
+                Some(&format!("{label}-duplicate")),
+                RequestPayloadOptions::Uniqueness {
+                    iris_pair: Some(target.iris_pair),
+                    insertion_layers: None,
+                },
+            )
+            .with_expected(json!({ "is_match": true })),
+            GroundTruthOperation::MirroredUniqueness => RequestOptions::new(
+                Some(&format!("{label}-mirror")),
+                RequestPayloadOptions::Mirrored {
+                    iris_pair: Some(target.iris_pair),
+                    insertion_layers: None,
+                },
+            ),
+            GroundTruthOperation::ReauthMatch => RequestOptions::new(
+                Some(&format!("{label}-reauth-match")),
+                RequestPayloadOptions::Reauthorisation {
+                    iris_pair: Some(target.iris_pair),
+                    parent: Parent::Label(target.label),
+                },
+            )
+            .with_expected(json!({ "success": true })),
+            GroundTruthOperation::ReauthNonMatch => RequestOptions::new(
+                Some(&format!("{label}-reauth-non-match")),
+                RequestPayloadOptions::Reauthorisation {
+                    iris_pair: Some(fresh_pair()),
+                    parent: Parent::Label(target.label),
+                },
+            )
+            .with_expected(json!({ "success": false })),
+            GroundTruthOperation::ResetCheck => RequestOptions::new(
+                Some(&format!("{label}-reset-check")),
+                RequestPayloadOptions::ResetCheck {
+                    iris_pair: Some(target.iris_pair),
+                },
+            ),
+            GroundTruthOperation::RecoveryCheck => RequestOptions::new(
+                Some(&format!("{label}-recovery-check")),
+                RequestPayloadOptions::RecoveryCheck {
+                    iris_pair: Some(target.iris_pair),
+                },
+            ),
+            GroundTruthOperation::ResetUpdate => {
+                let iris_pair = fresh_pair();
+                live[target_idx].iris_pair = iris_pair;
+                RequestOptions::new(
+                    Some(&format!("{label}-reset-update")),
+                    RequestPayloadOptions::ResetUpdate {
+                        iris_pair: Some(iris_pair),
+                        parent: Parent::Label(target.label),
+                    },
+                )
+            }
+            GroundTruthOperation::RecoveryUpdate => {
+                let iris_pair = fresh_pair();
+                live[target_idx].iris_pair = iris_pair;
+                RequestOptions::new(
+                    Some(&format!("{label}-recovery-update")),
+                    RequestPayloadOptions::RecoveryUpdate {
+                        iris_pair: Some(iris_pair),
+                        parent: Parent::Label(target.label),
+                    },
+                )
+            }
+            GroundTruthOperation::IdentityDeletion => {
+                let deleted = live.swap_remove(target_idx);
+                RequestOptions::new(
+                    Some(&format!("{label}-delete")),
+                    RequestPayloadOptions::IdentityDeletion {
+                        parent: Parent::Label(deleted.label),
+                    },
+                )
+                .with_expected(json!({ "success": true }))
+            }
+        };
+        batches.push(vec![request]);
+    }
+
+    batches.into_iter()
 }
 
 fn random_into_iter(
@@ -682,13 +923,17 @@ fn simple_into_iter(
     batch_size: usize,
 ) -> std::vec::IntoIter<Vec<RequestOptions>> {
     use iris_mpc_common::helpers::smpc_request::{
-        IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE,
-        RESET_UPDATE_MESSAGE_TYPE, UNIQUENESS_MESSAGE_TYPE,
+        IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RECOVERY_CHECK_MESSAGE_TYPE,
+        RECOVERY_UPDATE_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
+        UNIQUENESS_MESSAGE_TYPE,
     };
 
     let requires_parent = matches!(
         batch_kind.as_str(),
-        IDENTITY_DELETION_MESSAGE_TYPE | REAUTH_MESSAGE_TYPE | RESET_UPDATE_MESSAGE_TYPE
+        IDENTITY_DELETION_MESSAGE_TYPE
+            | REAUTH_MESSAGE_TYPE
+            | RECOVERY_UPDATE_MESSAGE_TYPE
+            | RESET_UPDATE_MESSAGE_TYPE
     );
 
     let mut v: Vec<Vec<RequestOptions>> = vec![];
@@ -706,6 +951,10 @@ fn simple_into_iter(
                     RESET_CHECK_MESSAGE_TYPE => RequestOptions::new(
                         None,
                         RequestPayloadOptions::ResetCheck { iris_pair: None },
+                    ),
+                    RECOVERY_CHECK_MESSAGE_TYPE => RequestOptions::new(
+                        None,
+                        RequestPayloadOptions::RecoveryCheck { iris_pair: None },
                     ),
                     _ => unreachable!(
                         "Simple batch_kind '{}' should have been rejected by validation",
@@ -740,6 +989,10 @@ fn simple_into_iter(
                         iris_pair: None,
                         parent: Parent::Label(label),
                     },
+                    RECOVERY_UPDATE_MESSAGE_TYPE => RequestPayloadOptions::RecoveryUpdate {
+                        iris_pair: None,
+                        parent: Parent::Label(label),
+                    },
                     _ => unreachable!("already checked requires_parent"),
                 };
                 child_batch.push(RequestOptions::new(None, payload));
@@ -753,6 +1006,8 @@ fn simple_into_iter(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
 
     #[test]
@@ -877,5 +1132,55 @@ mod tests {
             } => assert!(path_to_ndjson_file.is_none()),
             _ => panic!("Expected FromFile variant"),
         }
+    }
+
+    #[test]
+    fn ground_truth_schedule_is_deterministic_single_request_and_covers_all_operations() {
+        let generate = || {
+            RequestBatchOptions::GroundTruth {
+                request_count: 100,
+                rng_seed: 42,
+                initial_uniqueness_count: 16,
+            }
+            .into_iter()
+            .collect::<Vec<_>>()
+        };
+
+        let first = generate();
+        let second = generate();
+        assert_eq!(first.len(), 100);
+        assert!(first.iter().all(|batch| batch.len() == 1));
+        assert_eq!(
+            serde_json::to_value(&first).unwrap(),
+            serde_json::to_value(&second).unwrap()
+        );
+
+        let kinds = first
+            .iter()
+            .flatten()
+            .map(|request| match request.payload() {
+                RequestPayloadOptions::IdentityDeletion { .. } => "deletion",
+                RequestPayloadOptions::Reauthorisation { .. } => "reauth",
+                RequestPayloadOptions::RecoveryCheck { .. } => "recovery-check",
+                RequestPayloadOptions::RecoveryUpdate { .. } => "recovery-update",
+                RequestPayloadOptions::ResetCheck { .. } => "reset-check",
+                RequestPayloadOptions::ResetUpdate { .. } => "reset-update",
+                RequestPayloadOptions::Uniqueness { .. } => "uniqueness",
+                RequestPayloadOptions::Mirrored { .. } => "mirrored",
+            })
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            kinds,
+            HashSet::from([
+                "deletion",
+                "reauth",
+                "recovery-check",
+                "recovery-update",
+                "reset-check",
+                "reset-update",
+                "uniqueness",
+                "mirrored",
+            ])
+        );
     }
 }

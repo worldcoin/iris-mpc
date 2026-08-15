@@ -88,7 +88,7 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
     );
     let shutdown_handler = init_shutdown_handler(&config).await;
 
-    process_config(&config, search_mode);
+    process_config(&config, search_mode)?;
 
     if config.db_backed_ingest && config.disable_persistence {
         bail!(
@@ -422,7 +422,7 @@ async fn init_shutdown_handler(config: &Config) -> Arc<ShutdownHandler> {
 }
 
 /// Validates server config and initializes associated static state.
-fn process_config(config: &Config, search_mode: HawkSearchMode) {
+fn process_config(config: &Config, search_mode: HawkSearchMode) -> Result<()> {
     match search_mode {
         HawkSearchMode::Hnsw if config.cpu_database.is_none() => {
             panic!("Missing CPU dB config settings")
@@ -432,8 +432,39 @@ fn process_config(config: &Config, search_mode: HawkSearchMode) {
         }
         _ => {}
     }
+    validate_max_batch_size(config.max_batch_size, search_mode)?;
     // Load batch_size config
     tracing::info!("Set max batch size to {}", config.max_batch_size);
+    Ok(())
+}
+
+fn validate_max_batch_size(max_batch_size: usize, search_mode: HawkSearchMode) -> Result<()> {
+    if search_mode == HawkSearchMode::LinearScan && max_batch_size != 1 {
+        bail!(
+            "exact CPU linear-scan mode requires max_batch_size=1; got {max_batch_size}. \
+             Requests must be serialized so intra-batch matching is unnecessary"
+        );
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    #[test]
+    fn linear_scan_requires_single_request_batches() {
+        assert!(validate_max_batch_size(1, HawkSearchMode::LinearScan).is_ok());
+
+        let error = validate_max_batch_size(2, HawkSearchMode::LinearScan)
+            .expect_err("linear scan must reject batches larger than one");
+        assert!(error.to_string().contains("requires max_batch_size=1"));
+    }
+
+    #[test]
+    fn hnsw_keeps_batched_requests() {
+        assert!(validate_max_batch_size(64, HawkSearchMode::Hnsw).is_ok());
+    }
 }
 
 /// Returns initialized PostgreSQL clients for interacting
