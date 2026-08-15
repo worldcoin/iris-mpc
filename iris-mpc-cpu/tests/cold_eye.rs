@@ -61,7 +61,7 @@ async fn cold_eye_dot_product_matches_resident_without_retaining_target() -> Res
         cold_store.clone(),
         DistanceMode::MinRotation,
         0,
-        db,
+        db.clone(),
         RIGHT,
     ));
 
@@ -77,6 +77,57 @@ async fn cold_eye_dot_product_matches_resident_without_retaining_target() -> Res
 
     assert_eq!(cold_result, resident_result);
     assert!(cold_store.get_vector(&vector_id).await.is_none());
+
+    cleanup(&postgres, &schema_name).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cold_eye_exact_version_miss_fails_closed() -> Result<()> {
+    let schema_name = temporary_name();
+    let postgres =
+        PostgresClient::new(&test_db_url()?, &schema_name, AccessMode::ReadWrite).await?;
+    run_migrations(&postgres.pool, false).await?;
+    let db = Store::new(&postgres).await?;
+
+    let target = GaloisRingSharedIris::default_for_party(0);
+    let mut tx = db.tx().await?;
+    db.insert_irises(
+        &mut tx,
+        &[StoredIrisRef {
+            id: 1,
+            left_code: &target.code.coefs,
+            left_mask: &target.mask.coefs,
+            right_code: &target.code.coefs,
+            right_mask: &target.mask.coefs,
+        }],
+    )
+    .await?;
+    tx.commit().await?;
+
+    let cold_store = SharedIrises::to_arc(Aby3Store::<FhdOps>::new_storage(None));
+    let cold: Arc<dyn IrisWorkerPool> = Arc::new(LocalIrisWorkerPool::new_cold(
+        init_workers(RIGHT, cold_store.clone(), false),
+        cold_store,
+        DistanceMode::MinRotation,
+        0,
+        db,
+        RIGHT,
+    ));
+
+    let query = cache_iris(
+        cold.as_ref(),
+        Arc::new(GaloisRingSharedIris::default_for_party(0)),
+    )
+    .await?;
+    let error = cold
+        .compute_dot_products_full_rotations(query, vec![VectorId::new(1, 1)])
+        .await
+        .expect_err("an exact-version miss must fail the cold-eye computation");
+    assert!(
+        error.to_string().contains("cold-eye database missing"),
+        "unexpected error: {error:?}"
+    );
 
     cleanup(&postgres, &schema_name).await?;
     Ok(())

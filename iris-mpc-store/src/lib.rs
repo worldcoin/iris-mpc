@@ -486,6 +486,51 @@ WHERE id = $1;
         Ok(())
     }
 
+    /// Update an iris's shares and advance `version_id` for the mutation even
+    /// when the new shares are byte-identical to the stored shares.
+    ///
+    /// CPU actor registries advance the version for every accepted mutation.
+    /// Using the content-sensitive trigger for an idempotent mutation (for
+    /// example, deleting an already-deleted identity) would leave Postgres one
+    /// version behind the registry.
+    pub async fn update_iris_and_increment_version(
+        &self,
+        tx: &mut ExplicitVersionToken<'_, '_>,
+        id: i64,
+        left_iris_share: &GaloisRingIrisCodeShare,
+        left_mask_share: &GaloisRingTrimmedMaskCodeShare,
+        right_iris_share: &GaloisRingIrisCodeShare,
+        right_mask_share: &GaloisRingTrimmedMaskCodeShare,
+    ) -> Result<()> {
+        let result = sqlx::query(
+            r#"
+UPDATE irises SET (
+    version_id,
+    left_code,
+    left_mask,
+    right_code,
+    right_mask
+) = (version_id + 1, $2, $3, $4, $5)
+WHERE id = $1;
+"#,
+        )
+        .bind(id)
+        .bind(cast_slice::<u16, u8>(&left_iris_share.coefs[..]))
+        .bind(cast_slice::<u16, u8>(&left_mask_share.coefs[..]))
+        .bind(cast_slice::<u16, u8>(&right_iris_share.coefs[..]))
+        .bind(cast_slice::<u16, u8>(&right_mask_share.coefs[..]))
+        .execute(tx.tx().deref_mut())
+        .await?;
+        ensure!(
+            result.rows_affected() == 1,
+            "update_iris_and_increment_version: expected to update 1 row for id={}, updated {}",
+            id,
+            result.rows_affected()
+        );
+
+        Ok(())
+    }
+
     /// Update an iris's shares, writing `version_id` verbatim (the [`ExplicitVersionToken`]
     /// handle bypasses the auto-increment trigger).
     ///
@@ -1676,6 +1721,61 @@ pub mod tests {
             updated_right_mask.coefs
         );
         assert_eq!(got_second_update[0].version_id(), 1);
+
+        cleanup(&postgres_client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_explicit_mutations_increment_version_for_identical_writes() -> Result<()> {
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        run_migrations(&postgres_client.pool, false).await?;
+        let store = Store::new(&postgres_client).await?;
+
+        let code = GaloisRingIrisCodeShare {
+            id: 1,
+            coefs: [123_u16; 12800],
+        };
+        let mask = GaloisRingTrimmedMaskCodeShare {
+            id: 1,
+            coefs: [456_u16; 6400],
+        };
+        let iris = StoredIrisRef {
+            id: 1,
+            left_code: &code.coefs,
+            left_mask: &mask.coefs,
+            right_code: &code.coefs,
+            right_mask: &mask.coefs,
+        };
+        let mut tx = store.tx().await?;
+        store.insert_irises(&mut tx, &[iris]).await?;
+        tx.commit().await?;
+
+        // This models two accepted deletions writing the same dummy shares.
+        // Both actor mutations advance the registry, so Postgres must advance
+        // twice even though neither write changes the stored bytes.
+        let mut tx = store.tx().await?;
+        {
+            let mut version_tx = ExplicitVersionToken::enable(&mut tx).await?;
+            for _ in 0..2 {
+                store
+                    .update_iris_and_increment_version(
+                        &mut version_tx,
+                        1,
+                        &code,
+                        &mask,
+                        &code,
+                        &mask,
+                    )
+                    .await?;
+            }
+        }
+        tx.commit().await?;
+
+        assert_eq!(store.get_iris_data_by_id(1).await?.version_id(), 2);
 
         cleanup(&postgres_client, &schema_name).await?;
         Ok(())

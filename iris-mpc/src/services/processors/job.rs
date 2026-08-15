@@ -16,8 +16,8 @@ use iris_mpc_common::helpers::smpc_response::{
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
 use iris_mpc_common::iris_db::get_dummy_shares_for_deletion;
 use iris_mpc_common::job::ServerJobResult;
-use iris_mpc_cpu::execution::hawk_main::{GraphStore, HawkMutation};
-use iris_mpc_store::{Store, StoredIrisRef};
+use iris_mpc_cpu::execution::hawk_main::{GraphStore, HawkMutation, HawkSearchMode};
+use iris_mpc_store::{ExplicitVersionToken, Store, StoredIrisRef};
 use itertools::{izip, Itertools};
 use std::{collections::HashMap, time::Instant};
 
@@ -28,6 +28,34 @@ pub struct BatchTimings {
     pub batch_hash: String,
     pub receive_ms: u128,
     pub compute_ms: u128,
+}
+
+fn one_indexed_ids_at(ids: &[Vec<u32>], index: usize) -> Option<Vec<u32>> {
+    ids.get(index)
+        .map(|ids| ids.iter().map(|id| id + 1).collect())
+}
+
+fn linear_scan_one_indexed_nonempty_ids_at(
+    search_mode: HawkSearchMode,
+    ids: &[Vec<u32>],
+    index: usize,
+) -> Option<Vec<u32>> {
+    if search_mode != HawkSearchMode::LinearScan {
+        return None;
+    }
+    ids.get(index)
+        .filter(|ids| !ids.is_empty())
+        .map(|ids| ids.iter().map(|id| id + 1).collect())
+}
+
+fn linear_scan_count_at(
+    search_mode: HawkSearchMode,
+    counts: &[usize],
+    index: usize,
+) -> Option<usize> {
+    (search_mode == HawkSearchMode::LinearScan)
+        .then(|| counts.get(index).copied())
+        .flatten()
 }
 
 /// Processes a ServerJobResult, storing data in the database and sending result messages
@@ -41,6 +69,7 @@ pub async fn process_job_result(
     graph_store: &GraphStore,
     sns_client: &SNSClient,
     config: &Config,
+    search_mode: HawkSearchMode,
     uniqueness_result_attributes: &HashMap<String, MessageAttributeValue>,
     reauth_result_attributes: &HashMap<String, MessageAttributeValue>,
     identity_deletion_result_attributes: &HashMap<String, MessageAttributeValue>,
@@ -135,22 +164,31 @@ pub async fn process_job_result(
                     .get(i)
                     .filter(|rotations| !rotations.is_empty())
                     .cloned(),
-                full_face_mirror_match_ids
-                    .get(i)
-                    .filter(|ids| !ids.is_empty())
-                    .map(|ids| ids.iter().map(|x| x + 1).collect::<Vec<_>>()),
-                full_face_mirror_partial_match_ids_left
-                    .get(i)
-                    .filter(|ids| !ids.is_empty())
-                    .map(|ids| ids.iter().map(|x| x + 1).collect::<Vec<_>>()),
-                full_face_mirror_partial_match_ids_right
-                    .get(i)
-                    .filter(|ids| !ids.is_empty())
-                    .map(|ids| ids.iter().map(|x| x + 1).collect::<Vec<_>>()),
-                (!full_face_mirror_partial_match_counters_left.is_empty())
-                    .then_some(full_face_mirror_partial_match_counters_left[i]),
-                (!full_face_mirror_partial_match_counters_right.is_empty())
-                    .then_some(full_face_mirror_partial_match_counters_right[i]),
+                linear_scan_one_indexed_nonempty_ids_at(
+                    search_mode,
+                    &full_face_mirror_match_ids,
+                    i,
+                ),
+                linear_scan_one_indexed_nonempty_ids_at(
+                    search_mode,
+                    &full_face_mirror_partial_match_ids_left,
+                    i,
+                ),
+                linear_scan_one_indexed_nonempty_ids_at(
+                    search_mode,
+                    &full_face_mirror_partial_match_ids_right,
+                    i,
+                ),
+                linear_scan_count_at(
+                    search_mode,
+                    &full_face_mirror_partial_match_counters_left,
+                    i,
+                ),
+                linear_scan_count_at(
+                    search_mode,
+                    &full_face_mirror_partial_match_counters_right,
+                    i,
+                ),
                 match full_face_mirror_attack_detected.is_empty() {
                     false => full_face_mirror_attack_detected[i],
                     true => false,
@@ -261,21 +299,11 @@ pub async fn process_job_result(
                 request_id.clone(),
                 party_id,
                 Some(match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>()),
-                Some(
-                    partial_match_ids_left[i]
-                        .iter()
-                        .map(|x| x + 1)
-                        .collect::<Vec<_>>(),
-                ),
-                Some(
-                    partial_match_ids_right[i]
-                        .iter()
-                        .map(|x| x + 1)
-                        .collect::<Vec<_>>(),
-                ),
+                one_indexed_ids_at(&partial_match_ids_left, i),
+                one_indexed_ids_at(&partial_match_ids_right, i),
                 Some(matched_batch_request_ids[i].clone()),
-                Some(partial_match_counters_right[i]),
-                Some(partial_match_counters_left[i]),
+                partial_match_counters_right.get(i).copied(),
+                partial_match_counters_left.get(i).copied(),
             );
             let result_string = serde_json::to_string(&result_event)
                 .wrap_err("failed to serialize identity match check result")?;
@@ -363,78 +391,90 @@ pub async fn process_job_result(
         metrics::histogram!("persist_update_modifications_duration")
             .record(step_start.elapsed().as_secs_f64());
 
-        // persist reauth results into db
-        for (i, success) in successful_reauths.iter().enumerate() {
-            if !success {
-                continue;
-            }
-            if skip_persistence.get(i).copied().unwrap_or(false) {
+        let has_persisted_reauth = successful_reauths
+            .iter()
+            .enumerate()
+            .any(|(i, success)| *success && !skip_persistence.get(i).copied().unwrap_or(false));
+        if has_persisted_reauth || !identity_update_indices.is_empty() || !deleted_ids.is_empty() {
+            // Hawk advances the registry version for every accepted mutation,
+            // including idempotent writes. Explicitly advance Postgres too;
+            // the ordinary trigger is content-sensitive and would otherwise
+            // leave repeated deletions (dummy -> dummy) one version behind.
+            let mut version_tx = ExplicitVersionToken::enable(&mut graph_tx.tx).await?;
+
+            // persist reauth results into db
+            for (i, success) in successful_reauths.iter().enumerate() {
+                if !success {
+                    continue;
+                }
+                if skip_persistence.get(i).copied().unwrap_or(false) {
+                    tracing::info!(
+                        "Skipping reauth persistence for request {} due to skip_persistence",
+                        request_ids[i]
+                    );
+                    continue;
+                }
+                let reauth_id = request_ids[i].clone();
+                // convert from memory index (0-based) to db index (1-based)
+                let serial_id = *reauth_target_indices.get(&reauth_id).unwrap() + 1;
                 tracing::info!(
-                    "Skipping reauth persistence for request {} due to skip_persistence",
-                    request_ids[i]
+                    "Persisting successful reauth update {} into postgres on serial id {} ",
+                    reauth_id,
+                    serial_id
                 );
-                continue;
+                store
+                    .update_iris_and_increment_version(
+                        &mut version_tx,
+                        serial_id as i64,
+                        &left_iris_requests.code[i],
+                        &left_iris_requests.mask[i],
+                        &right_iris_requests.code[i],
+                        &right_iris_requests.mask[i],
+                    )
+                    .await?;
             }
-            let reauth_id = request_ids[i].clone();
-            // convert from memory index (0-based) to db index (1-based)
-            let serial_id = *reauth_target_indices.get(&reauth_id).unwrap() + 1;
-            tracing::info!(
-                "Persisting successful reauth update {} into postgres on serial id {} ",
-                reauth_id,
-                serial_id
-            );
-            store
-                .update_iris(
-                    Some(&mut graph_tx.tx),
-                    serial_id as i64,
-                    &left_iris_requests.code[i],
-                    &left_iris_requests.mask[i],
-                    &right_iris_requests.code[i],
-                    &right_iris_requests.mask[i],
-                )
-                .await?;
-        }
 
-        // persist identity update (reset_update/recovery_update) results into db
-        for (idx, shares) in izip!(identity_update_indices, identity_update_shares) {
-            // overwrite postgres db with identity update shares.
-            // note that both serial_id and postgres db are 1-indexed.
-            let serial_id = idx + 1;
-            tracing::info!(
-                "Persisting identity update into postgres on serial id {}",
-                serial_id
-            );
-            store
-                .update_iris(
-                    Some(&mut graph_tx.tx),
-                    serial_id as i64,
-                    &shares.code_left,
-                    &shares.mask_left,
-                    &shares.code_right,
-                    &shares.mask_right,
-                )
-                .await?;
-        }
+            // persist identity update (reset_update/recovery_update) results into db
+            for (idx, shares) in izip!(identity_update_indices, identity_update_shares) {
+                // overwrite postgres db with identity update shares.
+                // note that both serial_id and postgres db are 1-indexed.
+                let serial_id = idx + 1;
+                tracing::info!(
+                    "Persisting identity update into postgres on serial id {}",
+                    serial_id
+                );
+                store
+                    .update_iris_and_increment_version(
+                        &mut version_tx,
+                        serial_id as i64,
+                        &shares.code_left,
+                        &shares.mask_left,
+                        &shares.code_right,
+                        &shares.mask_right,
+                    )
+                    .await?;
+            }
 
-        // persist deletion results into db
-        for idx in deleted_ids.iter() {
-            // overwrite postgres db with dummy shares.
-            // note that both serial_id and postgres db are 1-indexed.
-            let serial_id = *idx + 1;
-            tracing::info!(
-                "Persisting identity deletion into postgres on serial id {}",
-                serial_id
-            );
-            store
-                .update_iris(
-                    Some(&mut graph_tx.tx),
-                    serial_id as i64,
-                    &dummy_deletion_shares.0,
-                    &dummy_deletion_shares.1,
-                    &dummy_deletion_shares.0,
-                    &dummy_deletion_shares.1,
-                )
-                .await?;
+            // persist deletion results into db
+            for idx in deleted_ids.iter() {
+                // overwrite postgres db with dummy shares.
+                // note that both serial_id and postgres db are 1-indexed.
+                let serial_id = *idx + 1;
+                tracing::info!(
+                    "Persisting identity deletion into postgres on serial id {}",
+                    serial_id
+                );
+                store
+                    .update_iris_and_increment_version(
+                        &mut version_tx,
+                        serial_id as i64,
+                        &dummy_deletion_shares.0,
+                        &dummy_deletion_shares.1,
+                        &dummy_deletion_shares.0,
+                        &dummy_deletion_shares.1,
+                    )
+                    .await?;
+            }
         }
 
         if config.db_backed_ingest {
@@ -606,4 +646,38 @@ pub async fn process_job_result(
     shutdown_handler.decrement_batches_pending_completion();
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        linear_scan_count_at, linear_scan_one_indexed_nonempty_ids_at, one_indexed_ids_at,
+    };
+    use iris_mpc_cpu::execution::hawk_main::HawkSearchMode;
+
+    #[test]
+    fn hidden_partial_results_are_absent_instead_of_indexing_an_empty_outer_vector() {
+        assert_eq!(one_indexed_ids_at(&[], 0), None);
+        assert_eq!(one_indexed_ids_at(&[vec![0, 4]], 0), Some(vec![1, 5]));
+    }
+
+    #[test]
+    fn full_face_mirror_details_are_exposed_only_by_linear_scan() {
+        let ids = [vec![0, 4]];
+        let counts = [7];
+
+        assert_eq!(
+            linear_scan_one_indexed_nonempty_ids_at(HawkSearchMode::Hnsw, &ids, 0),
+            None
+        );
+        assert_eq!(linear_scan_count_at(HawkSearchMode::Hnsw, &counts, 0), None);
+        assert_eq!(
+            linear_scan_one_indexed_nonempty_ids_at(HawkSearchMode::LinearScan, &ids, 0),
+            Some(vec![1, 5])
+        );
+        assert_eq!(
+            linear_scan_count_at(HawkSearchMode::LinearScan, &counts, 0),
+            Some(7)
+        );
+    }
 }

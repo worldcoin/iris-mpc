@@ -821,9 +821,10 @@ pub trait IrisWorkerPool: Debug + Send + Sync {
 
     /// Fetch iris data from the worker's store by vector ID.
     ///
-    /// Returns one `ArcIris` per input ID in the same order.  Missing
-    /// entries produce the store's default empty iris (which yields
-    /// max-distance in dot products).
+    /// Returns one `ArcIris` per input ID in the same order. Database-backed
+    /// workers return an error when an exact `(serial_id, version_id)` row is
+    /// missing; substituting an empty sharing would reconstruct to zero
+    /// distance and fail open under the threshold convention.
     fn fetch_irises<'a>(&'a self, ids: Vec<VectorId>) -> BoxFuture<'a, Result<Vec<ArcIris>>>;
 
     /// Insert a cached iris into the worker's persistent store.
@@ -964,6 +965,23 @@ struct ColdStorage {
     mutation_overlay: Arc<AsyncRwLock<HashMap<VectorId, ArcIris>>>,
 }
 
+fn cold_db_miss_error(party_id: usize, side: usize, missing: &[VectorId]) -> eyre::Report {
+    let examples = missing.iter().take(8).copied().collect_vec();
+    metrics::counter!("linear_scan_cold_db_misses_total").increment(missing.len() as u64);
+    tracing::error!(
+        party_id,
+        side,
+        missing_count = missing.len(),
+        ?examples,
+        "Cold-eye database did not return the exact requested vector versions"
+    );
+    eyre::eyre!(
+        "cold-eye database missing {} exact vector ID(s) for party {party_id}, side {side}; \
+         examples: {examples:?}",
+        missing.len()
+    )
+}
+
 impl Debug for LocalIrisWorkerPool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LocalIrisWorkerPool")
@@ -1053,7 +1071,6 @@ impl LocalIrisWorkerPool {
                 .map(|id| overlay.get(id).cloned())
                 .collect::<Vec<_>>()
         };
-        let empty = Arc::new(GaloisRingSharedIris::default_for_party(self.party_id));
         let missing_db_ids = ids
             .iter()
             .zip(&overlay)
@@ -1073,15 +1090,21 @@ impl LocalIrisWorkerPool {
             fetched.insert(vector_id, iris);
         }
 
-        Ok(ids
-            .iter()
-            .zip(overlay)
-            .map(|(id, cached)| {
-                cached
-                    .or_else(|| fetched.get(id).cloned())
-                    .unwrap_or_else(|| empty.clone())
-            })
-            .collect())
+        let mut resolved = Vec::with_capacity(ids.len());
+        let mut missing = Vec::new();
+        for (id, cached) in ids.iter().zip(overlay) {
+            if let Some(iris) = cached.or_else(|| fetched.get(id).cloned()) {
+                resolved.push(iris);
+            } else {
+                missing.push(*id);
+            }
+        }
+        missing.sort_unstable();
+        missing.dedup();
+        if !missing.is_empty() {
+            return Err(cold_db_miss_error(self.party_id, cold.side, &missing));
+        }
+        Ok(resolved)
     }
 }
 
