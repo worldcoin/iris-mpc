@@ -2184,6 +2184,7 @@ impl HawkHandle {
                     sessions_search,
                     search_queries,
                     search_params,
+                    orient,
                     full_scan_side,
                     &extra_candidate_ids,
                     &forced_anon_stats_ids,

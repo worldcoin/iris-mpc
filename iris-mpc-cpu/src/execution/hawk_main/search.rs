@@ -1,7 +1,7 @@
 use super::{
     rot::VecRotationSupport,
     scheduler::{Batch, Schedule, TaskId},
-    BothEyes, ClassifiedMatches, HawkInsertPlan, HawkOps, HawkSearchMode, HawkSession,
+    BothEyes, ClassifiedMatches, HawkInsertPlan, HawkOps, HawkSearchMode, HawkSession, Orientation,
     SaturableMatches, VecRequests, LEFT, RIGHT,
 };
 use crate::{
@@ -15,7 +15,7 @@ use crate::{
 use ampc_anon_stats::types::Eye;
 use eyre::{OptionExt, Result};
 use iris_mpc_common::iris_db::iris::Threshold;
-use iris_mpc_common::VectorId;
+use iris_mpc_common::{VectorId, ROTATIONS};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
@@ -44,6 +44,49 @@ struct LinearScanChunk {
     i_request: usize,
     i_chunk: usize,
     range: std::ops::Range<usize>,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum LinearScanStage {
+    Full,
+    Candidate,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct LinearScanEyeContext {
+    eye: Eye,
+    stage: LinearScanStage,
+    orientation: Orientation,
+}
+
+impl LinearScanStage {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Candidate => "candidate",
+        }
+    }
+}
+
+const fn eye_index(eye: Eye) -> usize {
+    match eye {
+        Eye::Left => LEFT,
+        Eye::Right => RIGHT,
+    }
+}
+
+const fn eye_label(eye: Eye) -> &'static str {
+    match eye {
+        Eye::Left => "left",
+        Eye::Right => "right",
+    }
+}
+
+const fn orientation_label(orientation: Orientation) -> &'static str {
+    match orientation {
+        Orientation::Normal => "normal",
+        Orientation::Mirror => "mirror",
+    }
 }
 
 pub type SearchQueries<const ROTMASK: u32> =
@@ -176,10 +219,12 @@ pub async fn linear_scan_cascade<const ROTMASK: u32>(
     sessions: &BothEyes<Vec<HawkSession>>,
     search_queries: &SearchQueries<ROTMASK>,
     search_params: SearchParams,
+    orientation: Orientation,
     full_scan_side: Eye,
     extra_candidate_ids: &VecRequests<Vec<VectorId>>,
     forced_anon_stats_ids: &VecRequests<Vec<VectorId>>,
 ) -> Result<SearchResults<ROTMASK>> {
+    let cascade_start = Instant::now();
     debug_assert_eq!(search_params.mode, HawkSearchMode::LinearScan);
 
     let n_sessions = sessions[LEFT].len();
@@ -190,11 +235,9 @@ pub async fn linear_scan_cascade<const ROTMASK: u32>(
     assert_eq!(n_requests, extra_candidate_ids.len());
     assert_eq!(n_requests, forced_anon_stats_ids.len());
 
-    let first_eye = match full_scan_side {
-        Eye::Left => LEFT,
-        Eye::Right => RIGHT,
-    };
-    let second_eye = 1 - first_eye;
+    let first_eye = eye_index(full_scan_side);
+    let second_eye_side = full_scan_side.other();
+    let second_eye = eye_index(second_eye_side);
 
     // Both eye registries contain the same live VectorIds. Build this list
     // once, then share it across all requests and sessions in the full stage.
@@ -215,9 +258,12 @@ pub async fn linear_scan_cascade<const ROTMASK: u32>(
         )
     };
     let full_scan_ids = Arc::new(vec![live_ids.clone(); n_requests]);
+    let first_eye_comparisons = live_ids.len() * n_requests;
 
     tracing::info!(
         eye = %full_scan_side,
+        orientation = orientation_label(orientation),
+        requests = n_requests,
         vectors = live_ids.len(),
         "Running full linear-scan stage"
     );
@@ -225,7 +271,11 @@ pub async fn linear_scan_cascade<const ROTMASK: u32>(
         sessions,
         search_queries,
         &search_params,
-        first_eye,
+        LinearScanEyeContext {
+            eye: full_scan_side,
+            stage: LinearScanStage::Full,
+            orientation,
+        },
         full_scan_ids,
         Arc::new(forced_anon_stats_ids.clone()),
     )
@@ -255,7 +305,9 @@ pub async fn linear_scan_cascade<const ROTMASK: u32>(
     }
 
     tracing::info!(
-        eye = %full_scan_side.other(),
+        eye = %second_eye_side,
+        orientation = orientation_label(orientation),
+        requests = n_requests,
         candidates = candidate_count,
         "Running candidate-only linear-scan stage"
     );
@@ -264,11 +316,60 @@ pub async fn linear_scan_cascade<const ROTMASK: u32>(
         sessions,
         search_queries,
         &search_params,
-        second_eye,
+        LinearScanEyeContext {
+            eye: second_eye_side,
+            stage: LinearScanStage::Candidate,
+            orientation,
+        },
         Arc::new(second_stage_ids),
         Arc::new(forced_anon_stats_ids.clone()),
     )
     .await?;
+
+    let total_comparisons = first_eye_comparisons + candidate_count;
+    let elapsed_seconds = cascade_start.elapsed().as_secs_f64();
+    let comparisons_per_second = total_comparisons as f64 / elapsed_seconds.max(f64::EPSILON);
+    let second_eye_candidate_fraction = if first_eye_comparisons == 0 {
+        0.0
+    } else {
+        candidate_count as f64 / first_eye_comparisons as f64
+    };
+    metrics::counter!(
+        "linear_scan_cascade_comparisons_total",
+        "orientation" => orientation_label(orientation),
+    )
+    .increment(total_comparisons as u64);
+    metrics::histogram!(
+        "linear_scan_cascade_duration",
+        "orientation" => orientation_label(orientation),
+    )
+    .record(elapsed_seconds);
+    metrics::histogram!(
+        "linear_scan_cascade_comparisons_per_second",
+        "orientation" => orientation_label(orientation),
+    )
+    .record(comparisons_per_second);
+    metrics::histogram!(
+        "linear_scan_second_eye_candidate_fraction",
+        "eye" => eye_label(second_eye_side),
+        "orientation" => orientation_label(orientation),
+    )
+    .record(second_eye_candidate_fraction);
+    tracing::info!(
+        orientation = orientation_label(orientation),
+        full_scan_eye = eye_label(full_scan_side),
+        candidate_eye = eye_label(second_eye_side),
+        requests = n_requests,
+        database_records = live_ids.len(),
+        rotations_per_comparison = ROTATIONS,
+        first_eye_comparisons,
+        second_eye_comparisons = candidate_count,
+        total_comparisons,
+        second_eye_candidate_fraction,
+        elapsed_seconds,
+        comparisons_per_second,
+        "LINEAR_SCAN_CASCADE_SUMMARY"
+    );
 
     Ok(match full_scan_side {
         Eye::Left => [first_results, second_results],
@@ -297,13 +398,19 @@ async fn linear_scan_eye<const ROTMASK: u32>(
     sessions: &BothEyes<Vec<HawkSession>>,
     search_queries: &SearchQueries<ROTMASK>,
     search_params: &SearchParams,
-    eye: usize,
+    context: LinearScanEyeContext,
     candidate_ids: Arc<VecRequests<Arc<[VectorId]>>>,
     forced_anon_stats_ids: Arc<VecRequests<Vec<VectorId>>>,
 ) -> Result<VecRequests<VecRotationSupport<HawkInsertPlan, ROTMASK>>> {
-    let n_requests = search_queries[eye].len();
+    let stage_start = Instant::now();
+    let eye_index = eye_index(context.eye);
+    let n_requests = search_queries[eye_index].len();
     assert_eq!(n_requests, candidate_ids.len());
     assert_eq!(n_requests, forced_anon_stats_ids.len());
+    // One logical comparison means one query eye against one database iris,
+    // including all 31 rotations and both threshold checks. This is the same
+    // unit reported by the standalone full-protocol benchmark.
+    let comparisons = candidate_ids.iter().map(|ids| ids.len()).sum::<usize>();
     let n_rotations = ROTMASK.count_ones() as usize;
     let central_rotation = n_rotations / 2;
 
@@ -327,8 +434,9 @@ async fn linear_scan_eye<const ROTMASK: u32>(
         }
     }
 
-    let n_workers = sessions[eye]
-        .len()
+    let chunk_count = chunks.len();
+    let configured_sessions = sessions[eye_index].len();
+    let n_workers = configured_sessions
         .min(LINEAR_SCAN_MAX_IN_FLIGHT_CHUNKS)
         .min(chunks.len())
         .max(1);
@@ -336,13 +444,15 @@ async fn linear_scan_eye<const ROTMASK: u32>(
     for (index, chunk) in chunks.into_iter().enumerate() {
         batches[index % n_workers].push(chunk);
     }
+    let min_chunks_per_session = batches.iter().map(Vec::len).min().unwrap_or(0);
+    let max_chunks_per_session = batches.iter().map(Vec::len).max().unwrap_or(0);
 
     let jobs = batches
         .into_iter()
         .enumerate()
         .filter(|(_, batch)| !batch.is_empty())
         .map(|(i_session, batch)| {
-            let session = sessions[eye][i_session].clone();
+            let session = sessions[eye_index][i_session].clone();
             let search_queries = search_queries.clone();
             let search_params = search_params.clone();
             let candidate_ids = candidate_ids.clone();
@@ -352,7 +462,7 @@ async fn linear_scan_eye<const ROTMASK: u32>(
                 let graph_store = session.graph_store.clone().read_owned().await;
                 let mut results = Vec::with_capacity(batch.len());
                 for chunk in batch {
-                    let query = search_queries[eye][chunk.i_request][central_rotation];
+                    let query = search_queries[eye_index][chunk.i_request][central_rotation];
                     let result = per_linear_scan_query(
                         query,
                         &search_params,
@@ -376,8 +486,8 @@ async fn linear_scan_eye<const ROTMASK: u32>(
         chunk_results[i_request][i_chunk] = Some(result);
     }
 
-    let graph_store = sessions[eye][0].graph_store.read().await;
-    chunk_results
+    let graph_store = sessions[eye_index][0].graph_store.read().await;
+    let results = chunk_results
         .into_iter()
         .enumerate()
         .map(|(i_request, results)| {
@@ -402,7 +512,7 @@ async fn linear_scan_eye<const ROTMASK: u32>(
                             .expect("central linear-scan result must be consumed once"))
                     } else {
                         Ok(empty_linear_scan_plan(
-                            search_queries[eye][i_request][i_rotation],
+                            search_queries[eye_index][i_request][i_rotation],
                             &graph_store,
                         ))
                     }
@@ -410,7 +520,114 @@ async fn linear_scan_eye<const ROTMASK: u32>(
                 .collect::<Result<Vec<_>>>()
                 .map(VecRotationSupport::from)
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+
+    let strict_match_records = results
+        .iter()
+        .map(|rotations| rotations[central_rotation].classified.matches.results.len())
+        .sum::<usize>();
+    let anon_stats_rotation_matches = results
+        .iter()
+        .map(|rotations| {
+            rotations[central_rotation]
+                .classified
+                .anon_stats_matches
+                .results
+                .len()
+        })
+        .sum::<usize>();
+
+    let elapsed_seconds = stage_start.elapsed().as_secs_f64();
+    let comparisons_per_second = comparisons as f64 / elapsed_seconds.max(f64::EPSILON);
+    let session_utilization = n_workers as f64 / configured_sessions as f64;
+    let stage_label = context.stage.as_str();
+    let eye_label = eye_label(context.eye);
+    let orientation_label = orientation_label(context.orientation);
+    metrics::counter!(
+        "linear_scan_eye_comparisons_total",
+        "eye" => eye_label,
+        "stage" => stage_label,
+        "orientation" => orientation_label,
+    )
+    .increment(comparisons as u64);
+    metrics::histogram!(
+        "linear_scan_eye_duration",
+        "eye" => eye_label,
+        "stage" => stage_label,
+        "orientation" => orientation_label,
+    )
+    .record(elapsed_seconds);
+    metrics::histogram!(
+        "linear_scan_eye_comparisons",
+        "eye" => eye_label,
+        "stage" => stage_label,
+        "orientation" => orientation_label,
+    )
+    .record(comparisons as f64);
+    metrics::histogram!(
+        "linear_scan_eye_comparisons_per_second",
+        "eye" => eye_label,
+        "stage" => stage_label,
+        "orientation" => orientation_label,
+    )
+    .record(comparisons_per_second);
+    metrics::histogram!(
+        "linear_scan_eye_chunks",
+        "eye" => eye_label,
+        "stage" => stage_label,
+        "orientation" => orientation_label,
+    )
+    .record(chunk_count as f64);
+    metrics::histogram!(
+        "linear_scan_eye_session_utilization",
+        "eye" => eye_label,
+        "stage" => stage_label,
+        "orientation" => orientation_label,
+    )
+    .record(session_utilization);
+    metrics::histogram!(
+        "linear_scan_eye_active_sessions",
+        "eye" => eye_label,
+        "stage" => stage_label,
+        "orientation" => orientation_label,
+    )
+    .record(n_workers as f64);
+    metrics::counter!(
+        "linear_scan_eye_strict_match_records_total",
+        "eye" => eye_label,
+        "stage" => stage_label,
+        "orientation" => orientation_label,
+    )
+    .increment(strict_match_records as u64);
+    metrics::counter!(
+        "linear_scan_eye_anon_stats_rotation_matches_total",
+        "eye" => eye_label,
+        "stage" => stage_label,
+        "orientation" => orientation_label,
+    )
+    .increment(anon_stats_rotation_matches as u64);
+    tracing::info!(
+        eye = eye_label,
+        stage = stage_label,
+        orientation = orientation_label,
+        requests = n_requests,
+        comparisons,
+        rotations_per_comparison = ROTATIONS,
+        chunks = chunk_count,
+        chunk_size = LINEAR_SCAN_CHUNK_SIZE,
+        configured_sessions,
+        active_sessions = n_workers,
+        session_utilization,
+        min_chunks_per_session,
+        max_chunks_per_session,
+        strict_match_records,
+        anon_stats_rotation_matches,
+        elapsed_seconds,
+        comparisons_per_second,
+        "LINEAR_SCAN_EYE_SUMMARY"
+    );
+
+    Ok(results)
 }
 
 fn merge_linear_scan_plan(target: &mut HawkInsertPlan, mut source: HawkInsertPlan) {
@@ -1017,6 +1234,7 @@ mod tests {
             &sessions,
             &request.queries(Orientation::Normal),
             search_params,
+            Orientation::Normal,
             Eye::Left,
             &extra_candidate_ids,
             &forced_anon_stats_ids,
