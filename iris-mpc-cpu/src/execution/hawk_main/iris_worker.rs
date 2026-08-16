@@ -22,6 +22,7 @@ use iris_mpc_common::{
 };
 use iris_mpc_store::Store;
 use itertools::{izip, Itertools};
+use moka::sync::Cache;
 use std::{
     collections::{BTreeMap, HashMap, VecDeque},
     fmt::Debug,
@@ -998,9 +999,9 @@ pub struct LocalIrisWorkerPool {
     /// Normal constructors retain the production default; benchmarks can opt
     /// into another nonzero value through `with_full_rotation_task_size`.
     full_rotation_task_size: NonZeroUsize,
-    /// When set, the complete iris column stays in Postgres. RAM holds only
-    /// the rolling LUC window and mutations awaiting a database commit; older
-    /// explicit candidates are fetched sparsely.
+    /// When set, the complete iris column stays in Postgres. RAM holds the
+    /// rolling LUC window, a bounded frequency cache, and mutations awaiting a
+    /// database commit; older explicit candidates are fetched sparsely.
     cold_storage: Option<ColdStorage>,
 }
 
@@ -1012,9 +1013,13 @@ struct ColdStorage {
     prefetch_tx: mpsc::Sender<ColdPrefetchCommand>,
 }
 
-#[derive(Default)]
 struct ColdStorageState {
     luc_cache: RollingLucCache,
+    /// Frequency-aware cache for older exact-version records. Moka's default
+    /// TinyLFU admission protects hot supermatchers from one-off scan traffic.
+    lfu_cache: Cache<VectorId, ArcIris>,
+    lfu_cache_enabled: bool,
+    lfu_cache_eye: &'static str,
     pending_mutations: PendingMutations,
     prefetched: HashMap<VectorId, PrefetchEntry>,
 }
@@ -1050,10 +1055,93 @@ impl PrefetchEntry {
 }
 
 impl ColdStorageState {
-    fn cached_iris(&self, id: &VectorId) -> Option<ArcIris> {
+    fn new(luc_cache: RollingLucCache, lfu_cache_capacity: usize, side: usize) -> Self {
+        Self {
+            luc_cache,
+            lfu_cache: Cache::builder()
+                .max_capacity(lfu_cache_capacity as u64)
+                .build(),
+            lfu_cache_enabled: lfu_cache_capacity > 0,
+            lfu_cache_eye: match side {
+                0 => "left",
+                1 => "right",
+                _ => "unknown",
+            },
+            pending_mutations: PendingMutations::default(),
+            prefetched: HashMap::new(),
+        }
+    }
+
+    fn mutation_or_luc_iris(&self, id: &VectorId) -> Option<ArcIris> {
         self.pending_mutations
             .get(id)
             .or_else(|| self.luc_cache.get(id))
+    }
+
+    fn contains_cached_iris(&self, id: &VectorId) -> bool {
+        self.mutation_or_luc_iris(id).is_some()
+            || (self.lfu_cache_enabled && self.lfu_cache.contains_key(id))
+    }
+
+    fn get_lfu_iris(&self, id: &VectorId) -> Option<ArcIris> {
+        if !self.lfu_cache_enabled {
+            return None;
+        }
+        if let Some(iris) = self.lfu_cache.get(id) {
+            metrics::counter!(
+                "linear_scan_cold_lfu_cache_hits_total",
+                "eye" => self.lfu_cache_eye,
+            )
+            .increment(1);
+            Some(iris)
+        } else {
+            metrics::counter!(
+                "linear_scan_cold_lfu_cache_misses_total",
+                "eye" => self.lfu_cache_eye,
+            )
+            .increment(1);
+            None
+        }
+    }
+
+    fn insert_lfu_iris(&self, id: VectorId, iris: ArcIris) {
+        if self.lfu_cache_enabled {
+            self.lfu_cache.insert(id, iris);
+            metrics::counter!(
+                "linear_scan_cold_lfu_cache_inserts_total",
+                "eye" => self.lfu_cache_eye,
+            )
+            .increment(1);
+        }
+    }
+
+    fn invalidate_previous_lfu_version(&self, id: VectorId) {
+        if self.lfu_cache_enabled && id.version_id() > 0 {
+            self.lfu_cache
+                .invalidate(&VectorId::new(id.serial_id(), id.version_id() - 1));
+        }
+    }
+
+    /// Prefer the authoritative mutation/LUC overlays, then consume any
+    /// promised prefetch before consulting the LFU. Consuming in this order
+    /// preserves prefetch use counts while promoting successful DB reads into
+    /// the reusable cache.
+    fn take_cached_or_prefetched(&mut self, id: &VectorId) -> Option<ArcIris> {
+        if let Some(iris) = self.mutation_or_luc_iris(id) {
+            return Some(iris);
+        }
+        if let Some(iris) = self.take_prefetched(id) {
+            if self.lfu_cache_enabled {
+                metrics::counter!(
+                    "linear_scan_cold_lfu_cache_misses_total",
+                    "eye" => self.lfu_cache_eye,
+                )
+                .increment(1);
+            }
+            self.insert_lfu_iris(*id, iris.clone());
+            return Some(iris);
+        }
+        self.get_lfu_iris(id)
     }
 
     /// Take one promised use of a prefetched value. Loading entries are also
@@ -1163,6 +1251,9 @@ pub struct ColdStorageInit {
     /// Number of serial positions retained. This intentionally includes the
     /// extra position used by `HawkRequest::luc_ids`.
     pub luc_window_capacity: usize,
+    /// Maximum number of exact-version records outside the LUC window kept by
+    /// the frequency-aware cache. Zero disables this cache.
+    pub lfu_cache_capacity: usize,
 }
 
 impl PendingMutations {
@@ -1240,7 +1331,7 @@ async fn prefetch_cold_irises(
         let mut state = state.write().await;
         let mut to_fetch = Vec::new();
         for id in ids {
-            if state.cached_iris(&id).is_some() {
+            if state.contains_cached_iris(&id) {
                 continue;
             }
             if let Some(entry) = state.prefetched.get_mut(&id) {
@@ -1381,8 +1472,9 @@ impl LocalIrisWorkerPool {
 
     /// Construct the non-resident eye of a linear-scan actor. Its complete
     /// iris column remains in Postgres. The current LUC window is retained in
-    /// memory; older explicit candidates are fetched sparsely. A bounded FIFO
-    /// overlay keeps mutations visible until asynchronous persistence commits.
+    /// memory; frequently used older candidates enter a bounded TinyLFU cache.
+    /// A bounded FIFO overlay keeps mutations visible until asynchronous
+    /// persistence commits.
     pub async fn new_cold(
         inner: IrisPoolHandle,
         iris_store: SharedIrisesRef<ArcIris>,
@@ -1396,6 +1488,7 @@ impl LocalIrisWorkerPool {
             luc_window_ids,
             latest_serial_id,
             luc_window_capacity,
+            lfu_cache_capacity,
         } = init;
         let db_ids = luc_window_ids
             .iter()
@@ -1416,11 +1509,20 @@ impl LocalIrisWorkerPool {
         if !missing.is_empty() {
             return Err(cold_db_miss_error(party_id, side, &missing));
         }
-        let state = Arc::new(AsyncRwLock::new(ColdStorageState {
-            luc_cache: RollingLucCache::new(luc_window_capacity, latest_serial_id, cached),
-            pending_mutations: PendingMutations::default(),
-            prefetched: HashMap::new(),
-        }));
+        let state = Arc::new(AsyncRwLock::new(ColdStorageState::new(
+            RollingLucCache::new(luc_window_capacity, latest_serial_id, cached),
+            lfu_cache_capacity,
+            side,
+        )));
+        metrics::gauge!(
+            "linear_scan_cold_lfu_cache_capacity_records",
+            "eye" => match side {
+                0 => "left",
+                1 => "right",
+                _ => "unknown",
+            },
+        )
+        .set(lfu_cache_capacity as f64);
         let (prefetch_tx, prefetch_rx) = mpsc::channel(COLD_PREFETCH_QUEUE_DEPTH);
         tokio::spawn(run_cold_prefetch_worker(
             store.clone(),
@@ -1475,11 +1577,11 @@ impl LocalIrisWorkerPool {
 
         // Prefer uncommitted writes, then the resident LUC window. This makes
         // a just-inserted or just-deleted iris visible before result
-        // persistence finishes, without retaining committed cold history.
+        // persistence finishes; the exact-version LFU is subordinate to both.
         let cached = {
             let mut state = cold.state.write().await;
             ids.iter()
-                .map(|id| state.cached_iris(id).or_else(|| state.take_prefetched(id)))
+                .map(|id| state.take_cached_or_prefetched(id))
                 .collect::<Vec<_>>()
         };
         let missing_db_ids = ids
@@ -1513,6 +1615,14 @@ impl LocalIrisWorkerPool {
         missing.dedup();
         if !missing.is_empty() {
             return Err(cold_db_miss_error(self.party_id, cold.side, &missing));
+        }
+        if !fetched.is_empty() {
+            let state = cold.state.read().await;
+            for id in ids.iter().copied().unique() {
+                if let Some(iris) = fetched.remove(&id) {
+                    state.insert_lfu_iris(id, iris);
+                }
+            }
         }
         Ok(resolved)
     }
@@ -1790,6 +1900,7 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
             if let Some(cold) = cold_storage {
                 let mut state = cold.state.write().await;
                 for (vector_id, iris) in resolved {
+                    state.invalidate_previous_lfu_version(vector_id);
                     state.pending_mutations.push(vector_id, iris.clone());
                     state.luc_cache.apply_mutation(vector_id, iris);
                 }
@@ -1877,6 +1988,7 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
                 let mut state = cold.state.write().await;
                 for id in ids {
                     let next_id = id.next_version();
+                    state.lfu_cache.invalidate(&id);
                     state.pending_mutations.push(next_id, dummy.clone());
                     state.luc_cache.apply_mutation(next_id, dummy.clone());
                 }
@@ -1973,7 +2085,7 @@ mod tests {
     fn prefetched_iris_is_retained_for_each_promised_use_then_evicted() {
         let iris = Arc::new(GaloisRingSharedIris::default_for_party(0));
         let id = VectorId::from_serial_id(11);
-        let mut state = ColdStorageState::default();
+        let mut state = ColdStorageState::new(RollingLucCache::default(), 0, 0);
         state.prefetched.insert(
             id,
             PrefetchEntry::Ready {
@@ -1986,6 +2098,33 @@ mod tests {
         assert!(state.prefetched.contains_key(&id));
         assert_eq!(state.take_prefetched(&id), Some(iris));
         assert!(!state.prefetched.contains_key(&id));
+        assert!(state.lfu_cache.get(&id).is_none());
+    }
+
+    #[test]
+    fn cold_lfu_cache_retains_a_hot_record_during_unique_churn() {
+        let mut state = ColdStorageState::new(RollingLucCache::default(), 2, 0);
+        let iris = Arc::new(GaloisRingSharedIris::default_for_party(0));
+        let hot = VectorId::from_serial_id(1);
+        let initial_cold = VectorId::from_serial_id(2);
+        state.lfu_cache.insert(hot, iris.clone());
+        state.lfu_cache.insert(initial_cold, iris.clone());
+        state.lfu_cache.run_pending_tasks();
+
+        for _ in 0..128 {
+            assert!(state.take_cached_or_prefetched(&hot).is_some());
+        }
+        state.lfu_cache.run_pending_tasks();
+
+        for serial_id in 3..64 {
+            state
+                .lfu_cache
+                .insert(VectorId::from_serial_id(serial_id), iris.clone());
+            state.lfu_cache.run_pending_tasks();
+        }
+
+        assert!(state.lfu_cache.get(&hot).is_some());
+        assert!(state.lfu_cache.entry_count() <= 2);
     }
 
     #[test]

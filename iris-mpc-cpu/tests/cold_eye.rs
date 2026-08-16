@@ -25,7 +25,7 @@ use iris_mpc_store::{
 use std::{collections::HashMap, sync::Arc};
 
 #[tokio::test]
-async fn cold_eye_prefetched_dot_product_matches_resident_without_retaining_target() -> Result<()> {
+async fn cold_eye_prefetched_dot_product_matches_resident_and_populates_lfu() -> Result<()> {
     let schema_name = temporary_name();
     let postgres =
         PostgresClient::new(&test_db_url()?, &schema_name, AccessMode::ReadWrite).await?;
@@ -70,6 +70,7 @@ async fn cold_eye_prefetched_dot_product_matches_resident_without_retaining_targ
                 luc_window_ids: Vec::new(),
                 latest_serial_id: 1,
                 luc_window_capacity: 0,
+                lfu_cache_capacity: 8,
             },
         )
         .await?,
@@ -102,6 +103,30 @@ async fn cold_eye_prefetched_dot_product_matches_resident_without_retaining_targ
 
     assert_eq!(cold_result, resident_result);
     assert!(cold_store.get_vector(&vector_id).await.is_none());
+
+    // Consuming the prefetch promotes this immutable version into TinyLFU.
+    // Postgres now contains v1, so a second v0 read can only succeed from RAM.
+    assert_eq!(cold.fetch_irises(vec![vector_id]).await?[0], target);
+
+    // A cache hit for v0 must not mask v1. A foreground v1 read comes from the
+    // database and is promoted independently under its exact VectorId.
+    let next_id = vector_id.next_version();
+    let next = cold.fetch_irises(vec![next_id]).await?;
+    assert_eq!(*next[0], replacement);
+    db.update_iris(
+        None,
+        1,
+        &target.code,
+        &target.mask,
+        &target.code,
+        &target.mask,
+    )
+    .await?;
+    assert_eq!(*cold.fetch_irises(vec![next_id]).await?[0], replacement);
+    assert_eq!(
+        cold.fetch_irises(vec![next_id.next_version()]).await?[0],
+        target
+    );
 
     cleanup(&postgres, &schema_name).await?;
     Ok(())
@@ -144,6 +169,7 @@ async fn cold_eye_luc_window_rolls_forward_and_survives_persistence_ack() -> Res
                 luc_window_ids: vec![vector_id],
                 latest_serial_id: 1,
                 luc_window_capacity: 1,
+                lfu_cache_capacity: 8,
             },
         )
         .await?,
@@ -216,6 +242,7 @@ async fn cold_eye_version_miss_fails_prefetch_and_foreground_fetch() -> Result<(
                 luc_window_ids: Vec::new(),
                 latest_serial_id: 1,
                 luc_window_capacity: 0,
+                lfu_cache_capacity: 8,
             },
         )
         .await?,

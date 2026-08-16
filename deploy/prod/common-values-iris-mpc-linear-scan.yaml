@@ -81,6 +81,9 @@ env:
   SMPC__ENABLE_REAUTH: "true"
   SMPC__LUC_ENABLED: "true"
   SMPC__LUC_LOOKBACK_RECORDS: "500"
+  # Older cold-eye supermatchers are retained by TinyLFU. One entry is about
+  # 38.4 KiB per party, so 4096 entries consume roughly 150 MiB.
+  SMPC__COLD_EYE_LFU_CACHE_RECORDS: "4096"
   SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST: "true"
   SMPC__SERVICE__METRICS__HOST:
     valueFrom:

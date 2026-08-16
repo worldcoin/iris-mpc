@@ -132,7 +132,7 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
             [LEFT, RIGHT].map(|side| init_workers(side, iris_stores[side].clone(), numa));
 
         let mut db_size: usize = 0;
-        let mut cold_storage: Option<(Store, usize, usize)> = None;
+        let mut cold_storage: Option<(Store, usize, usize, usize)> = None;
 
         // INVARIANT: each eye gets its own `Arc<RwLock>`. `Aby3Store::insert`
         // allocates `next_id` per eye, so sharing one Arc would advance
@@ -169,7 +169,12 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                         } else {
                             0
                         };
-                    cold_storage = Some((store.clone(), side, luc_window_capacity));
+                    cold_storage = Some((
+                        store.clone(),
+                        side,
+                        luc_window_capacity,
+                        config.cold_eye_lfu_cache_records,
+                    ));
                 }
                 load_iris_db(
                     &mut adapter,
@@ -201,7 +206,9 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
         };
 
         let mut cold_worker =
-            if let Some((store, resident_side, luc_window_capacity)) = cold_storage {
+            if let Some((store, resident_side, luc_window_capacity, lfu_cache_capacity)) =
+                cold_storage
+            {
                 let cold_side = 1 - resident_side;
                 let registry = registries[cold_side].read().await;
                 let luc_window_ids = registry.last_vector_ids(luc_window_capacity);
@@ -220,6 +227,7 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                             luc_window_ids,
                             latest_serial_id,
                             luc_window_capacity,
+                            lfu_cache_capacity,
                         },
                     )
                     .await?,

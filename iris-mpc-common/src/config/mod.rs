@@ -171,6 +171,12 @@ pub struct Config {
     #[serde(default = "default_luc_lookback_records")]
     pub luc_lookback_records: usize,
 
+    /// Maximum number of older, non-resident-eye records retained using a
+    /// frequency-aware admission policy. This is separate from the always-hot
+    /// rolling LUC window.
+    #[serde(default = "default_cold_eye_lfu_cache_records")]
+    pub cold_eye_lfu_cache_records: usize,
+
     /// Alternatively, we can use the serial IDs from the SMPc request to mark
     /// which records are to be processed using the OR rule.
     #[serde(default)]
@@ -396,6 +402,10 @@ fn default_db_load_safety_overlap_seconds() -> i64 {
 
 fn default_luc_lookback_records() -> usize {
     0
+}
+
+fn default_cold_eye_lfu_cache_records() -> usize {
+    1 << 12
 }
 
 fn default_load_chunks_max_retries() -> usize {
@@ -834,6 +844,7 @@ impl From<Config> for CommonConfig {
             fixed_shared_secrets,
             luc_enabled,
             luc_lookback_records,
+            cold_eye_lfu_cache_records: _, // local performance tuning; may differ between parties
             luc_serial_ids_from_smpc_request,
             match_distances_buffer_size,
             match_distances_buffer_size_extra_percent,
