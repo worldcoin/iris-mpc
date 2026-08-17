@@ -95,10 +95,11 @@ const MAX_CONCURRENT_REQUESTS: usize = 32;
 fn decode_iris_message_shares(
     code_share: String,
     mask_share: String,
+    party_id: usize,
 ) -> Result<(GaloisRingIrisCodeShare, GaloisRingIrisCodeShare)> {
-    let iris_share = GaloisRingIrisCodeShare::from_base64(&code_share)
+    let iris_share = GaloisRingIrisCodeShare::from_base64_for_party(&code_share, party_id)
         .context("Failed to base64 parse iris code")?;
-    let mask_share = GaloisRingIrisCodeShare::from_base64(&mask_share)
+    let mask_share = GaloisRingIrisCodeShare::from_base64_for_party(&mask_share, party_id)
         .context("Failed to base64 parse iris mask")?;
 
     Ok((iris_share, mask_share))
