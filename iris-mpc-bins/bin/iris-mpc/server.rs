@@ -20,7 +20,7 @@ use clap::Parser;
 use eyre::{bail, eyre, Context, Report, Result};
 use futures::{stream::BoxStream, StreamExt};
 use iris_mpc::services::aws::clients::AwsClients;
-use iris_mpc::services::init::initialize_chacha_seeds;
+use iris_mpc::services::init::{initialize_chacha_seeds, seed_transcript_nonces};
 use iris_mpc::services::processors::batch::{receive_batch_stream, spawn_db_backed_ingest_task};
 use iris_mpc::services::processors::get_iris_shares_parse_task;
 use iris_mpc::services::processors::modifications_sync::{
@@ -220,8 +220,11 @@ async fn server_main(config: Config) -> Result<()> {
     };
 
     let party_id = config.party_id;
-    tracing::info!("Deriving shared secrets");
-    let chacha_seeds = initialize_chacha_seeds(config.clone()).await?;
+
+    // Per-startup contribution to the ChaCha seed derivation. Published in
+    // `SyncState` below and combined with the peers' contributions once the
+    // startup sync has run; see `initialize_chacha_seeds`.
+    let my_dh_nonce: [u8; 32] = rand::random();
 
     let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let reauth_result_attributes = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
@@ -305,6 +308,7 @@ async fn server_main(config: Config) -> Result<()> {
         } else {
             None
         },
+        dh_nonce: Some(my_dh_nonce),
     };
 
     tracing::info!("Sync state: {:?}", my_state);
@@ -348,12 +352,21 @@ async fn server_main(config: Config) -> Result<()> {
     // --------------------------------------------------------------------------
     tracing::info!("⚓️ ANCHOR: Syncing latest node state");
     tracing::info!("Database store length is: {}", store_len);
+    let other_states = get_others_sync_state::<SyncState>(&server_coord_config).await?;
     let mut states = vec![my_state.clone()];
-    states.extend(get_others_sync_state::<SyncState>(&server_coord_config).await?);
+    states.extend(other_states.iter().cloned());
     let sync_result = SyncResult::new(my_state.clone(), states);
 
     // check if common part of the config is the same across all nodes
     sync_result.check_common_config()?;
+
+    // Now that every party's startup contribution is in, derive the ChaCha
+    // seeds. These must be fresh per run: the keystream they produce is used as
+    // a one-time pad on the NCCL wire, so deriving them from the static KMS
+    // ECDH secrets alone would replay the same pad after every restart.
+    tracing::info!("Deriving shared secrets");
+    let dh_nonces = seed_transcript_nonces(party_id, my_dh_nonce, &other_states)?;
+    let chacha_seeds = initialize_chacha_seeds(&config, &dh_nonces).await?;
 
     // Fleet persisted frontier for boot recovery (computed here because
     // sync_modifications below consumes sync_result). See the hawk main for
