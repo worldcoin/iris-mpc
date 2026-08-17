@@ -178,6 +178,7 @@ impl SyncResult {
 
     /// Check if the common part of the config is the same across all nodes.
     pub fn check_common_config(&self) -> Result<()> {
+        self.check_binary_hash()?;
         let my_config = &self.my_state.common_config;
         for SyncState {
             common_config: other_config,
@@ -190,6 +191,19 @@ impl SyncResult {
                 my_config,
                 other_config
             );
+        }
+        Ok(())
+    }
+
+    /// Check that every node is running the same executable.
+    ///
+    /// # Errors
+    ///
+    /// If any node reports a different binary hash.
+    pub fn check_binary_hash(&self) -> Result<()> {
+        let mine = &self.my_state.common_config;
+        for state in self.all_states.iter() {
+            mine.ensure_same_binary(&state.common_config)?;
         }
         Ok(())
     }

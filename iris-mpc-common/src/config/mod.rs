@@ -4,9 +4,10 @@ use ampc_actor_utils::network::tcp::TlsConfig;
 use ampc_anon_stats::types::Eye;
 use ampc_server_utils::{AwsConfig, ServerCoordinationConfig, ServiceConfig};
 use clap::Parser;
-use eyre::Result;
+use eyre::{ensure, Result};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
+use std::sync::OnceLock;
 
 pub mod json_wrapper;
 
@@ -719,10 +720,54 @@ where
     }
 }
 
+/// Stand-in digest for when the running executable cannot be hashed at all
+/// (no `/proc`, or the exe path is unreadable). Every party in that situation
+/// reports the same string, so the cross-party check degrades to a no-op
+/// rather than falsely splitting a healthy fleet.
+pub const BINARY_HASH_UNAVAILABLE: &str = "unavailable";
+
+/// Blake3 digest of the running executable, hex-encoded, or
+/// [`BINARY_HASH_UNAVAILABLE`] if it could not be read.
+pub fn binary_hash() -> &'static str {
+    static BINARY_HASH: OnceLock<String> = OnceLock::new();
+    BINARY_HASH.get_or_init(|| {
+        match hash_own_executable() {
+            // Logged so an operator staring at a cross-party mismatch can map
+            // each digest back to a pod without re-deriving it by hand.
+            Ok(hash) => {
+                tracing::info!("Running binary blake3: {hash}");
+                hash
+            }
+            Err(error) => {
+                tracing::warn!(
+                    "Could not hash the running executable ({error}); the cross-party \
+                     binary check is disabled for this node."
+                );
+                BINARY_HASH_UNAVAILABLE.to_string()
+            }
+        }
+    })
+}
+
+fn hash_own_executable() -> std::io::Result<String> {
+    let exe = std::fs::File::open("/proc/self/exe")
+        .or_else(|_| std::fs::File::open(std::env::current_exe()?))?;
+    let mut hasher = blake3::Hasher::new();
+    hasher.update_reader(exe)?;
+    Ok(hasher.finalize().to_hex().to_string())
+}
+
 /// This struct is used to extract the common configuration for all servers from their respective configs.
 /// It is later used to to hash the config and check if it is the same across all servers as a basic sanity check during startup.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CommonConfig {
+    /// Blake3 digest of the executable that produced this config, from
+    /// [`binary_hash`].
+    ///
+    /// `serde(default)` so a peer on an older build (which does not send the
+    /// field) yields a clear mismatch rather than a deserialization error.
+    #[serde(default)]
+    binary_hash: String,
     environment: String,
     results_topic_arn: String,
     processing_timeout_secs: u64,
@@ -782,6 +827,31 @@ pub struct CommonConfig {
 impl CommonConfig {
     pub fn get_max_modifications_lookback(&self) -> usize {
         self.max_modifications_lookback
+    }
+
+    pub fn binary_hash(&self) -> &str {
+        &self.binary_hash
+    }
+
+    /// Ensure `other` was produced by the same executable as this config.
+    ///
+    /// `binary_hash` is a field of this struct, so the whole-struct equality
+    /// the sync paths already perform catches a mismatch on its own. This
+    /// exists so the startup error names the one difference that matters
+    /// instead of burying it in two full config dumps.
+    ///
+    /// # Errors
+    ///
+    /// If the two configs report different binary hashes.
+    pub fn ensure_same_binary(&self, other: &Self) -> Result<()> {
+        let (mine, theirs) = (self.binary_hash(), other.binary_hash());
+        ensure!(
+            mine == theirs,
+            "Binary mismatch across MPC parties: this node is running blake3 \
+             {mine}, a peer is running blake3 {theirs}. All parties must run the \
+             same image."
+        );
+        Ok(())
     }
 }
 
@@ -891,6 +961,7 @@ impl From<Config> for CommonConfig {
         );
 
         Self {
+            binary_hash: binary_hash().to_string(),
             environment,
             results_topic_arn,
             processing_timeout_secs,
@@ -965,5 +1036,45 @@ mod tests {
         // The ingest tuning knobs (db_ingest_sqs_wait_secs, backoff params)
         // deliberately live only on Config, not CommonConfig: they may skew
         // across parties during rolling deploys without splitting the fleet.
+    }
+
+    #[test]
+    fn binary_hash_is_part_of_common_config_equality() {
+        // This is the gate that stops a mixed-binary fleet from starting.
+        // If the field ever leaves CommonConfig, the check silently vanishes.
+        let base = CommonConfig::default();
+        let other_build = CommonConfig {
+            binary_hash: "deadbeef".to_string(),
+            ..Default::default()
+        };
+        assert_ne!(base, other_build);
+    }
+
+    #[test]
+    fn binary_hash_is_the_blake3_digest_of_the_test_binary() {
+        // Under `cargo test` the running executable is the test harness, which
+        // is a perfectly ordinary file — so the real hashing path is exercised
+        // here, not the degraded one.
+        let hash = binary_hash();
+        assert_ne!(
+            hash, BINARY_HASH_UNAVAILABLE,
+            "the running test binary should be hashable"
+        );
+        assert_eq!(
+            hash.len(),
+            blake3::OUT_LEN * 2,
+            "expected hex-encoded blake3"
+        );
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+        // Cached, so repeated reads cannot disagree mid-run.
+        assert_eq!(hash, binary_hash());
+    }
+
+    #[test]
+    fn common_config_from_config_stamps_the_binary_hash() {
+        // Every Config field has a serde default, so "{}" is the all-defaults
+        // config (Config itself does not derive Default).
+        let config: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(CommonConfig::from(config).binary_hash(), binary_hash());
     }
 }
