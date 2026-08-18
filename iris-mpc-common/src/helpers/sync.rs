@@ -30,26 +30,17 @@ pub struct SyncState {
     #[serde(default)]
     pub max_persisted_sequence_number: Option<String>,
 
-    /// This party's per-startup random contribution to the MPC seed derivation.
-    /// Freshly generated on every boot and broadcast in the clear; the three
-    /// contributions are concatenated in party order and fed to the HKDF that
-    /// turns the (static) KMS ECDH secrets into ChaCha seeds. Without it the
-    /// seeds are a constant function of the long-term KMS key pairs, so every
-    /// restart replays the same keystream — and that keystream is used as a
-    /// one-time pad on the wire.
+    /// This party's per-startup random contribution to the ChaCha seed
+    /// derivation, broadcast in the clear. Mixing all parties' contributions
+    /// into the HKDF makes the seeds fresh per run instead of a constant
+    /// function of the static KMS ECDH secrets (whose keystream is used as a
+    /// one-time pad on the wire). The value may be public: security rests on
+    /// the ECDH secret keying the HKDF, and a party's own contribution alone
+    /// guarantees its keystream is fresh; a tampered transcript makes seeds
+    /// mismatch and fail loudly.
     ///
-    /// The value is deliberately public: HKDF is keyed by the pairwise ECDH
-    /// secret, so the derived seed stays unpredictable to anyone who does not
-    /// hold that secret no matter what appears here. What matters is that a
-    /// party's *own* contribution is always part of the transcript — that alone
-    /// guarantees its keystream is fresh, even if a peer reuses a stale value or
-    /// someone injects on the (plaintext, unauthenticated) coordination channel.
-    /// A tampered transcript makes the parties derive different seeds and the
-    /// protocol fails loudly; it cannot silently resurrect an old keystream.
-    ///
-    /// `None` means the peer predates this field. Seeds must match across all
-    /// parties, so this cannot be rolled out gradually: the server refuses to
-    /// start rather than derive seeds a peer is unable to reproduce.
+    /// `None` means the peer predates this field; since seeds must match, the
+    /// server refuses to start rather than derive seeds a peer cannot reproduce.
     #[serde(default)]
     pub dh_nonce: Option<[u8; 32]>,
 }
@@ -436,16 +427,14 @@ mod tests {
 
     #[test]
     fn dh_nonce_round_trips_and_defaults_to_none() {
-        // A peer predating the field sends no key; it must parse to None so the
-        // GPU server can detect the skew and refuse to start, rather than
-        // deserialization failing with an opaque error.
+        // A missing key must parse to None (old peer) rather than fail
+        // deserialization.
         let state = create_sync_state(vec![]);
         let mut json = serde_json::to_value(&state).unwrap();
         json.as_object_mut().unwrap().remove("dh_nonce");
         let parsed: SyncState = serde_json::from_value(json).unwrap();
         assert_eq!(parsed.dh_nonce, None);
 
-        // And a real 32-byte nonce survives a JSON round trip intact.
         let mut with_nonce = state;
         with_nonce.dh_nonce = Some([7u8; 32]);
         let json = serde_json::to_string(&with_nonce).unwrap();

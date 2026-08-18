@@ -221,9 +221,8 @@ async fn server_main(config: Config) -> Result<()> {
 
     let party_id = config.party_id;
 
-    // Per-startup contribution to the ChaCha seed derivation. Published in
-    // `SyncState` below and combined with the peers' contributions once the
-    // startup sync has run; see `initialize_chacha_seeds`.
+    // Per-startup contribution to the ChaCha seed derivation, published in
+    // `SyncState` and combined with the peers' after the startup sync.
     let my_dh_nonce: [u8; 32] = rand::random();
 
     let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
@@ -360,10 +359,9 @@ async fn server_main(config: Config) -> Result<()> {
     // check if common part of the config is the same across all nodes
     sync_result.check_common_config()?;
 
-    // Now that every party's startup contribution is in, derive the ChaCha
-    // seeds. These must be fresh per run: the keystream they produce is used as
-    // a one-time pad on the NCCL wire, so deriving them from the static KMS
-    // ECDH secrets alone would replay the same pad after every restart.
+    // Derive the ChaCha seeds now that every party's nonce is in. Seeds must be
+    // fresh per run: their keystream is used as a one-time pad on the NCCL wire,
+    // and the static KMS ECDH secrets alone would replay it after a restart.
     tracing::info!("Deriving shared secrets");
     let dh_nonces = seed_transcript_nonces(party_id, my_dh_nonce, &other_states)?;
     let chacha_seeds = initialize_chacha_seeds(&config, &dh_nonces).await?;
