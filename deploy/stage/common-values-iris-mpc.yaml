@@ -1,7 +1,7 @@
 image: "ghcr.io/worldcoin/iris-mpc:244a4a5557aa1d18b34d795aa2aebc122aff42f3"
 
 environment: stage
-replicaCount: 1
+replicaCount: 0
 
 # Common environment variables shared across all iris-mpc nodes.
 # Defined as a map so Helm deep-merges with per-node env maps.
