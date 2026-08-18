@@ -48,7 +48,6 @@ env:
       secretKeyRef:
         key: KMS_KEYS
         name: application
-  SMPC__SERVER_COORDINATION__NODE_HOSTNAMES: '["iris-mpc-node.1.smpcv2.worldcoin.org","iris-mpc-node.2.smpcv2.worldcoin.org","iris-mpc-node.3.smpcv2.worldcoin.org"]'
   SMPC__SERVER_COORDINATION__IMAGE_NAME: $(IMAGE_NAME)
   SMPC__SERVER_COORDINATION__HEARTBEAT_INITIAL_RETRIES: "65"
   SMPC__SERVER_COORDINATION__HEARTBEAT_INTERVAL_SECS: "3"

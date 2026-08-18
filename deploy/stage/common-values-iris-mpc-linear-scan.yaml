@@ -1,6 +1,6 @@
 # Exact CPU linear scan deployment. This is an alternative to, not a
 # replacement for, common-values-iris-mpc.yaml (the CUDA deployment).
-image: "ghcr.io/worldcoin/iris-mpc-linear-scan:latest"
+image: "ghcr.io/worldcoin/iris-mpc-linear-scan:266c410cdc4cba55f179d442c393641a1998471e"
 
 environment: stage
 replicaCount: 1
@@ -45,13 +45,12 @@ env:
       secretKeyRef:
         key: KMS_KEYS
         name: application
-  SMPC__SERVER_COORDINATION__NODE_HOSTNAMES: '["iris-mpc-node.1.stage.smpcv2.worldcoin.dev","iris-mpc-node.2.stage.smpcv2.worldcoin.dev","iris-mpc-node.3.stage.smpcv2.worldcoin.dev"]'
   SMPC__SERVER_COORDINATION__IMAGE_NAME: $(IMAGE_NAME)
   SMPC__SERVER_COORDINATION__HEARTBEAT_INITIAL_RETRIES: "65"
   SMPC__SERVER_COORDINATION__HEARTBEAT_INTERVAL_SECS: "3"
   SMPC__PUBLIC_KEY_BASE_URL: "https://pki-smpcv2-stage.worldcoin.org"
   SMPC__SHARES_BUCKET_NAME: "wf-smpcv2-stage-sns-requests"
-  SMPC__ENABLE_S3_IMPORTER: "true"
+  SMPC__ENABLE_S3_IMPORTER: "false"
   SMPC__DB_CHUNKS_FOLDER_NAME: "even_odd_with_version_id_output_16k"
   SMPC__LOAD_CHUNKS_PARALLELISM: "64"
   SMPC__LOAD_CHUNKS_BUFFER_SIZE: "1024"
@@ -91,9 +90,9 @@ env:
   SMPC__ENABLE_MODIFICATIONS_REPLAY: "true"
   SMPC__ENABLE_DEBUG_TIMING: "true"
   SMPC__SERVICE_PORTS: '["4000","4001","4002"]'
-  SMPC__TLS__PRIVATE_KEY: "/etc/ssl/private/key.pem"
-  SMPC__TLS__LEAF_CERT: "/etc/ssl/private/certificate.crt"
-  SMPC__TLS__ROOT_CERTS: '["/usr/local/share/ca-certificates/ca_smpcv2_party_stage_0.crt", "/usr/local/share/ca-certificates/ca_smpcv2_party_stage_1.crt", "/usr/local/share/ca-certificates/ca_smpcv2_party_stage_2.crt"]'
+  #SMPC__TLS__PRIVATE_KEY: "/etc/ssl/private/key.pem"
+  #SMPC__TLS__LEAF_CERT: "/etc/ssl/private/certificate.crt"
+  #SMPC__TLS__ROOT_CERTS: '["/usr/local/share/ca-certificates/ca_smpcv2_party_stage_0.crt", "/usr/local/share/ca-certificates/ca_smpcv2_party_stage_1.crt", "/usr/local/share/ca-certificates/ca_smpcv2_party_stage_2.crt"]'
 
 strategy:
   type: Recreate
@@ -139,9 +138,10 @@ startupProbe:
 resources:
   limits:
     memory: 100Gi
+    # Have to provide CPU limit as default value is 100m
+    cpu: 15
   requests:
-    # No CPU limit: avoid CFS throttling on the dedicated 96-vCPU node.
-    cpu: 92
+    cpu: 15
     memory: 100Gi
 
 imagePullSecrets:
@@ -153,7 +153,7 @@ podAnnotations:
 nodeSelector:
   kubernetes.io/arch: arm64
   karpenter.sh/capacity-type: on-demand
-  node.kubernetes.io/instance-type: "r8g.24xlarge"
+  #node.kubernetes.io/instance-type: "r8g.24xlarge"
   workload: "iris-mpc-linear-scan"
 
 tolerations:
@@ -179,6 +179,6 @@ preStop:
 
 terminationGracePeriodSeconds: 240
 
-mountSSLCerts:
-  enabled: true
-  mountPath: /etc/ssl/private
+#mountSSLCerts:
+#  enabled: true
+#  mountPath: /etc/ssl/private

@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - build-linear-scan-image
   release:
     types:
       - published
