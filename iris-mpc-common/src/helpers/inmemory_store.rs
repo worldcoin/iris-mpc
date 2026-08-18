@@ -113,7 +113,10 @@ pub trait InMemoryStore {
     /// logs.
     fn current_db_sizes(&self) -> impl std::fmt::Debug;
 
-    /// Initialize the DB with fake data of a given size, data may be random and
-    /// unpredictable.
+    /// Initialize the in-memory DB with generated shares of a given size.
+    ///
+    /// Data is seeded/deterministic across parties when implementations use a
+    /// shared RNG seed, but is not persisted to durable storage. Intended for
+    /// load testing large DB sizes without Postgres init.
     fn fake_db(&mut self, size: usize);
 }
