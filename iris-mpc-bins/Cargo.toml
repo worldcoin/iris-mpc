@@ -94,6 +94,11 @@ clap_builder = "4.5.51"
 
 [[bin]]
 name = "iris-mpc-gpu"
+path = "bin/iris-mpc/server.rs"
+required-features = ["gpu-reference"]
+
+[[bin]]
+name = "iris-mpc-linear-scan"
 path = "bin/iris-mpc/server/iris_mpc_linear_scan.rs"
 
 [[bin]]
