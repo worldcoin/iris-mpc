@@ -59,6 +59,9 @@ struct LinearScanChunk {
 #[derive(Clone)]
 struct LinearScanPrefetch {
     worker: Arc<dyn IrisWorkerPool>,
+    /// Candidate IDs already consumed by the concurrent known-candidate
+    /// stage. They must not reserve prefetch slots that no later stage reads.
+    excluded_ids: Arc<VecRequests<Vec<VectorId>>>,
 }
 
 #[derive(Clone, Default)]
@@ -366,6 +369,12 @@ pub async fn linear_scan_cascade<const ROTMASK: u32>(
         LinearScanHooks {
             prefetch: Some(LinearScanPrefetch {
                 worker: prefetch_worker.clone(),
+                excluded_ids: Arc::new(
+                    known_second_stage_ids
+                        .iter()
+                        .map(|ids| ids.to_vec())
+                        .collect(),
+                ),
             }),
             progress: Some(first_eye_progress.clone()),
         },
@@ -526,6 +535,11 @@ fn collect_live_second_stage_ids(
     ids
 }
 
+fn exclude_known_second_stage_ids(ids: &mut Vec<VectorId>, known_ids: &[VectorId]) {
+    debug_assert!(known_ids.windows(2).all(|pair| pair[0] < pair[1]));
+    ids.retain(|id| known_ids.binary_search(id).is_err());
+}
+
 async fn linear_scan_eye<const ROTMASK: u32>(
     sessions: &BothEyes<Vec<HawkSession>>,
     search_queries: &SearchQueries<ROTMASK>,
@@ -608,7 +622,7 @@ async fn linear_scan_eye<const ROTMASK: u32>(
                     .await?;
                     if let Some(prefetch) = &hooks.prefetch {
                         let chunk_ids = &candidate_ids[chunk.i_request][chunk.range.clone()];
-                        let prefetch_ids = collect_live_second_stage_ids(
+                        let mut prefetch_ids = collect_live_second_stage_ids(
                             chunk_ids,
                             result
                                 .classified
@@ -617,6 +631,10 @@ async fn linear_scan_eye<const ROTMASK: u32>(
                                 .iter()
                                 .map(|(id, _)| *id),
                             &[],
+                        );
+                        exclude_known_second_stage_ids(
+                            &mut prefetch_ids,
+                            &prefetch.excluded_ids[chunk.i_request],
                         );
                         prefetch.worker.prefetch_irises(prefetch_ids).await?;
                     }
@@ -1057,7 +1075,7 @@ async fn linear_scan_full_stage_paired<const ROTMASK: u32>(
                     if let Some(prefetch) = &hooks.prefetch {
                         // One union prefetch warms the cold eye for both
                         // orientations' second-stage candidates.
-                        let prefetch_ids = collect_live_second_stage_ids(
+                        let mut prefetch_ids = collect_live_second_stage_ids(
                             chunk_ids,
                             plans.iter().flat_map(|plan| {
                                 plan.classified
@@ -1067,6 +1085,10 @@ async fn linear_scan_full_stage_paired<const ROTMASK: u32>(
                                     .map(|(id, _)| *id)
                             }),
                             &[],
+                        );
+                        exclude_known_second_stage_ids(
+                            &mut prefetch_ids,
+                            &prefetch.excluded_ids[chunk.i_request],
                         );
                         prefetch.worker.prefetch_irises(prefetch_ids).await?;
                     }
@@ -1204,6 +1226,17 @@ pub async fn linear_scan_cascade_paired<const ROTMASK: u32>(
                 .collect::<Vec<_>>(),
         )
     });
+    let prefetch_excluded_ids = Arc::new(
+        (0..n_requests)
+            .map(|i_request| {
+                let mut ids = known_second_stage_ids_both[0][i_request].to_vec();
+                ids.extend_from_slice(&known_second_stage_ids_both[1][i_request]);
+                ids.sort_unstable();
+                ids.dedup();
+                ids
+            })
+            .collect(),
+    );
 
     for orientation in orientations {
         tracing::info!(
@@ -1235,6 +1268,7 @@ pub async fn linear_scan_cascade_paired<const ROTMASK: u32>(
         LinearScanHooks {
             prefetch: Some(LinearScanPrefetch {
                 worker: prefetch_worker.clone(),
+                excluded_ids: prefetch_excluded_ids,
             }),
             progress: Some(first_eye_progress.clone()),
         },
@@ -1769,16 +1803,8 @@ async fn per_linear_scan_chunk_pair(
         classified,
     };
     Ok([
-        as_plan(
-            queries[0],
-            graph_stores.0.last_update_seq_no,
-            classified_a,
-        ),
-        as_plan(
-            queries[1],
-            graph_stores.1.last_update_seq_no,
-            classified_b,
-        ),
+        as_plan(queries[0], graph_stores.0.last_update_seq_no, classified_a),
+        as_plan(queries[1], graph_stores.1.last_update_seq_no, classified_b),
     ])
 }
 
@@ -2122,6 +2148,27 @@ mod tests {
                 VectorId::from_serial_id(4),
                 VectorId::from_serial_id(5),
             ]
+        );
+    }
+
+    #[test]
+    fn prefetch_excludes_candidates_already_consumed_by_known_stage() {
+        let mut discovered = vec![
+            VectorId::from_serial_id(1),
+            VectorId::from_serial_id(3),
+            VectorId::from_serial_id(5),
+        ];
+        let known = [
+            VectorId::from_serial_id(2),
+            VectorId::from_serial_id(3),
+            VectorId::from_serial_id(4),
+        ];
+
+        exclude_known_second_stage_ids(&mut discovered, &known);
+
+        assert_eq!(
+            discovered,
+            vec![VectorId::from_serial_id(1), VectorId::from_serial_id(5)]
         );
     }
 

@@ -1331,14 +1331,16 @@ mod mixed_scan {
         let acc_c = &block[2];
         let lane_scale = 1 + result_lane as u16;
         for (query, shares) in additive_shares.iter_mut().enumerate() {
-            let first = (acc_a[query].wrapping_add(acc_a[2 + query].wrapping_add(acc_c[query]) << 8)
-                as u16)
-                .wrapping_mul(lane_scale);
+            let first =
+                (acc_a[query].wrapping_add(acc_a[2 + query].wrapping_add(acc_c[query]) << 8)
+                    as u16)
+                    .wrapping_mul(lane_scale);
             let second = (acc_b[query]
                 .wrapping_add(acc_b[2 + query].wrapping_add(acc_c[2 + query]) << 8)
                 as u16)
                 .wrapping_mul(lane_scale);
-            let first_idx = (base_target_idx + pair * 2) * ROTATIONS * 2 + rotation * 2 + result_lane;
+            let first_idx =
+                (base_target_idx + pair * 2) * ROTATIONS * 2 + rotation * 2 + result_lane;
             let second_idx =
                 (base_target_idx + pair * 2 + 1) * ROTATIONS * 2 + rotation * 2 + result_lane;
             shares[first_idx].0 = shares[first_idx].0.wrapping_add(first);

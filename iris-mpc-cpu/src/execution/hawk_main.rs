@@ -2204,7 +2204,8 @@ impl HawkHandle {
         let do_search = async |orient,
                                precomputed_search: Option<
             SearchResults<HAWK_BASE_ROTATIONS_MASK>,
-        >| -> Result<_> {
+        >|
+               -> Result<_> {
             let search_queries = &request.queries(orient);
             let (luc_ids, request_types, forced_anon_stats_ids) = {
                 // Choice of LEFT registry is arbitrary — both sides are in sync
