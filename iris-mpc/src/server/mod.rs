@@ -294,11 +294,14 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
 
     background_tasks.check_tasks();
 
-    let tx_results = start_results_thread(
-        &config,
-        &iris_store,
+    let results_persistence = ResultsPersistence {
+        iris_store: iris_store.clone(),
         graph_store,
         search_mode,
+    };
+    let tx_results = start_results_thread(
+        &config,
+        results_persistence,
         &aws_clients,
         &mut background_tasks,
         &shutdown_handler,
@@ -905,11 +908,15 @@ async fn init_hawk_actor(
 }
 
 /// Spawns thread responsible for communicating back results from batch query processing.
-async fn start_results_thread(
-    config: &Config,
-    iris_store: &Store,
+struct ResultsPersistence {
+    iris_store: Store,
     graph_store: GraphPg<Aby3Store<HawkOps>>,
     search_mode: HawkSearchMode,
+}
+
+async fn start_results_thread(
+    config: &Config,
+    persistence: ResultsPersistence,
     aws_clients: &AwsClients,
     task_monitor: &mut TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
@@ -918,7 +925,11 @@ async fn start_results_thread(
     let (tx, mut rx) = mpsc::channel::<(BatchTimings, ServerJobResult)>(32); // TODO: pick some buffer value
     let sns_client_bg = aws_clients.sns_client.clone();
     let config_bg = config.clone();
-    let store_bg = iris_store.clone();
+    let ResultsPersistence {
+        iris_store: store_bg,
+        graph_store,
+        search_mode,
+    } = persistence;
     let shutdown_handler_bg = Arc::clone(shutdown_handler);
     let party_id = config.party_id;
     let _result_sender_abort = task_monitor.spawn(async move {
