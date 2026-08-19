@@ -3,7 +3,7 @@
 image: "ghcr.io/worldcoin/iris-mpc-linear-scan:266c410cdc4cba55f179d442c393641a1998471e"
 
 environment: stage
-replicaCount: 1
+replicaCount: 0
 
 env:
   RUST_LOG: "debug"
