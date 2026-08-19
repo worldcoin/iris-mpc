@@ -212,7 +212,6 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                 let cold_side = 1 - resident_side;
                 let registry = registries[cold_side].read().await;
                 let luc_window_ids = registry.last_vector_ids(luc_window_capacity);
-                let latest_serial_id = registry.next_id.saturating_sub(1);
                 drop(registry);
                 Some((
                     cold_side,
@@ -225,7 +224,6 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                             store,
                             side: cold_side,
                             luc_window_ids,
-                            latest_serial_id,
                             luc_window_capacity,
                             lfu_cache_capacity,
                         },

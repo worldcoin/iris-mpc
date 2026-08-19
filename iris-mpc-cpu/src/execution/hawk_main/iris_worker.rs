@@ -24,7 +24,7 @@ use iris_mpc_store::Store;
 use itertools::{izip, Itertools};
 use moka::sync::Cache;
 use std::{
-    collections::{BTreeMap, HashMap, VecDeque},
+    collections::{HashMap, VecDeque},
     fmt::Debug,
     iter,
     num::NonZeroUsize,
@@ -1169,50 +1169,37 @@ impl ColdStorageState {
     }
 }
 
-/// The current LUC lookback window for the non-resident eye. Entries are
-/// indexed by serial ID so an update replaces the previous vector version.
+/// The current LUC lookback window for the non-resident eye. Serial IDs are
+/// dense, so the front is the oldest retained ID and the back is the latest.
 #[derive(Default)]
 struct RollingLucCache {
     capacity: usize,
-    latest_serial_id: SerialId,
-    entries: BTreeMap<SerialId, (VectorId, ArcIris)>,
+    entries: VecDeque<(VectorId, ArcIris)>,
 }
 
 impl RollingLucCache {
-    fn new(
-        capacity: usize,
-        latest_serial_id: SerialId,
-        entries: impl IntoIterator<Item = (VectorId, ArcIris)>,
-    ) -> Self {
-        let mut cache = Self {
+    fn new(capacity: usize, entries: Vec<(VectorId, ArcIris)>) -> Self {
+        assert!(
+            entries.len() <= capacity,
+            "rolling LUC entries must fit within capacity"
+        );
+        assert!(
+            entries
+                .windows(2)
+                .all(|pair| pair[1].0.serial_id() == pair[0].0.serial_id() + 1),
+            "rolling LUC entries must be dense and ordered"
+        );
+        Self {
             capacity,
-            latest_serial_id,
-            entries: BTreeMap::new(),
-        };
-        for (id, iris) in entries {
-            if cache.contains_serial(id.serial_id()) {
-                cache.entries.insert(id.serial_id(), (id, iris));
-            }
+            entries: entries.into(),
         }
-        cache
-    }
-
-    fn first_serial_id(&self) -> SerialId {
-        let width = u32::try_from(self.capacity)
-            .unwrap_or(u32::MAX)
-            .saturating_sub(1);
-        self.latest_serial_id.saturating_sub(width).max(1)
-    }
-
-    fn contains_serial(&self, serial_id: SerialId) -> bool {
-        self.capacity > 0
-            && serial_id >= self.first_serial_id()
-            && serial_id <= self.latest_serial_id
     }
 
     fn get(&self, id: &VectorId) -> Option<ArcIris> {
+        let first_serial_id = self.entries.front()?.0.serial_id();
+        let offset = usize::try_from(id.serial_id().checked_sub(first_serial_id)?).ok()?;
         self.entries
-            .get(&id.serial_id())
+            .get(offset)
             .filter(|(cached_id, _)| cached_id == id)
             .map(|(_, iris)| iris.clone())
     }
@@ -1221,13 +1208,39 @@ impl RollingLucCache {
         if self.capacity == 0 {
             return;
         }
-        if id.serial_id() > self.latest_serial_id {
-            self.latest_serial_id = id.serial_id();
-            let first = self.first_serial_id();
-            self.entries.retain(|serial_id, _| *serial_id >= first);
-        }
-        if self.contains_serial(id.serial_id()) {
-            self.entries.insert(id.serial_id(), (id, iris));
+
+        let Some((latest_id, _)) = self.entries.back() else {
+            assert_eq!(
+                id.serial_id(),
+                1,
+                "the first rolling LUC insertion must use serial ID 1"
+            );
+            self.entries.push_back((id, iris));
+            return;
+        };
+
+        let latest_serial_id = latest_id.serial_id();
+        if id.serial_id() <= latest_serial_id {
+            let first_serial_id = self.entries.front().unwrap().0.serial_id();
+            let Some(offset) = id.serial_id().checked_sub(first_serial_id) else {
+                return;
+            };
+            let Some(entry) = self.entries.get_mut(offset as usize) else {
+                return;
+            };
+            *entry = (id, iris);
+        } else {
+            assert_eq!(
+                id.serial_id(),
+                latest_serial_id
+                    .checked_add(1)
+                    .expect("serial ID space exhausted"),
+                "rolling LUC insertions must advance serial IDs sequentially"
+            );
+            if self.entries.len() == self.capacity {
+                self.entries.pop_front();
+            }
+            self.entries.push_back((id, iris));
         }
     }
 }
@@ -1246,8 +1259,6 @@ pub struct ColdStorageInit {
     pub side: usize,
     /// Exact current vector IDs in the configured LUC lookback window.
     pub luc_window_ids: Vec<VectorId>,
-    /// Highest allocated serial ID, including an empty database (`0`).
-    pub latest_serial_id: SerialId,
     /// Number of serial positions retained. This intentionally includes the
     /// extra position used by `HawkRequest::luc_ids`.
     pub luc_window_capacity: usize,
@@ -1486,7 +1497,6 @@ impl LocalIrisWorkerPool {
             store,
             side,
             luc_window_ids,
-            latest_serial_id,
             luc_window_capacity,
             lfu_cache_capacity,
         } = init;
@@ -1510,7 +1520,7 @@ impl LocalIrisWorkerPool {
             return Err(cold_db_miss_error(party_id, side, &missing));
         }
         let state = Arc::new(AsyncRwLock::new(ColdStorageState::new(
-            RollingLucCache::new(luc_window_capacity, latest_serial_id, cached),
+            RollingLucCache::new(luc_window_capacity, cached),
             lfu_cache_capacity,
             side,
         )));
@@ -2045,8 +2055,9 @@ mod tests {
         let iris = Arc::new(GaloisRingSharedIris::default_for_party(0));
         let mut cache = RollingLucCache::new(
             3,
-            5,
-            (3..=5).map(|serial_id| (VectorId::from_serial_id(serial_id), iris.clone())),
+            (3..=5)
+                .map(|serial_id| (VectorId::from_serial_id(serial_id), iris.clone()))
+                .collect(),
         );
 
         let updated_four = VectorId::from_serial_id(4).next_version();
@@ -2056,12 +2067,35 @@ mod tests {
 
         cache.apply_mutation(VectorId::from_serial_id(6), iris.clone());
         assert_eq!(
-            cache.entries.keys().copied().collect::<Vec<_>>(),
+            cache
+                .entries
+                .iter()
+                .map(|(id, _)| id.serial_id())
+                .collect::<Vec<_>>(),
             vec![4, 5, 6]
         );
 
         cache.apply_mutation(VectorId::from_serial_id(2), iris);
-        assert!(!cache.entries.contains_key(&2));
+        assert!(cache.entries.iter().all(|(id, _)| id.serial_id() != 2));
+    }
+
+    #[test]
+    fn rolling_luc_cache_fills_from_an_empty_database() {
+        let iris = Arc::new(GaloisRingSharedIris::default_for_party(0));
+        let mut cache = RollingLucCache::new(2, Vec::new());
+
+        for serial_id in 1..=3 {
+            cache.apply_mutation(VectorId::from_serial_id(serial_id), iris.clone());
+        }
+
+        assert_eq!(
+            cache
+                .entries
+                .iter()
+                .map(|(id, _)| id.serial_id())
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
     }
 
     #[test]
