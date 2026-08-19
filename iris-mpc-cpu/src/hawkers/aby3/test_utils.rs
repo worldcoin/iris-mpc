@@ -76,8 +76,19 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
         .zip(storages)
         .map(|(session, storage)| {
             let party_id = session.network_session.own_role.index();
+            let layout = crate::protocol::shared_iris::preferred_scan_layout();
+            let resident_storage = storage
+                .data
+                .try_read()
+                .unwrap()
+                .clone()
+                .map_values(|iris| {
+                    crate::protocol::shared_iris::ResidentIris::from_arc(iris, layout)
+                })
+                .to_arc();
             let workers: Arc<dyn IrisWorkerPool> = Arc::new(LocalIrisWorkerPool::new_local(
-                storage.clone(),
+                resident_storage,
+                layout,
                 plain_store.distance_mode,
                 party_id,
             ));
@@ -99,9 +110,15 @@ pub async fn setup_local_store_aby3_players(network_t: NetworkType) -> Result<Ve
         .into_iter()
         .map(|session| {
             let party_id = session.network_session.own_role.index();
-            let storage = Aby3Store::<FhdOps>::new_storage(None).to_arc();
+            let layout = crate::protocol::shared_iris::preferred_scan_layout();
+            let storage = Aby3Store::<FhdOps>::new_storage(None)
+                .map_values(|iris| {
+                    crate::protocol::shared_iris::ResidentIris::from_arc(iris, layout)
+                })
+                .to_arc();
             let workers: Arc<dyn IrisWorkerPool> = Arc::new(LocalIrisWorkerPool::new_local(
                 storage.clone(),
+                layout,
                 TEST_DISTANCE_MODE,
                 party_id,
             ));

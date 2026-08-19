@@ -122,7 +122,7 @@ use matching::{
 use rand::{thread_rng, Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use scheduler::parallelize;
-use search::{SearchParams, SearchQueries};
+use search::{SearchParams, SearchQueries, SearchResults};
 use serde::{Deserialize, Serialize};
 use session_groups::SessionGroups;
 use siphasher::sip::SipHasher13;
@@ -667,7 +667,8 @@ impl HawkActor {
                 args.party_index,
                 HAWK_DISTANCE_MODE,
                 args.numa,
-            ),
+            )
+            .with_resident_layout(crate::protocol::shared_iris::preferred_scan_layout()),
         );
         let networking = build_hawk_network_handle(args, shutdown_ct).await?;
         let initialized = initializer.initialize().await?;
@@ -717,7 +718,8 @@ impl HawkActor {
                 HAWK_DISTANCE_MODE,
                 args.numa,
                 iris_store,
-            ),
+            )
+            .with_resident_layout(crate::protocol::shared_iris::preferred_scan_layout()),
         );
         let networking = build_hawk_network_handle(args, shutdown_ct).await?;
         let initialized = initializer.initialize().await?;
@@ -2004,6 +2006,95 @@ pub struct HawkHandle {
     job_queue: mpsc::Sender<HawkJob>,
 }
 
+/// Run the exact linear scan for both orientations with a fused first-eye
+/// pass. Gathers each orientation's public candidate inputs (LUC, reauth
+/// targets) exactly as the per-orientation search does, then evaluates both
+/// orientations while streaming the resident eye once. Results per
+/// orientation are identical to independent [`search::linear_scan_cascade`]
+/// calls.
+async fn linear_scan_search_both_orientations(
+    hawk_actor: &HawkActor,
+    sessions: &SessionGroups,
+    request: &HawkRequest,
+) -> Result<[SearchResults<HAWK_BASE_ROTATIONS_MASK>; 2]> {
+    use Orientation::{Mirror, Normal};
+
+    let (forced_anon_stats_ids, extra_candidate_ids_both) = {
+        // Choice of LEFT registry is arbitrary — both sides are in sync
+        // w.r.t. stored vector ids.
+        let reg = hawk_actor.registry[LEFT].read().await;
+        let forced_anon_stats_ids = request
+            .batch
+            .request_types
+            .iter()
+            .enumerate()
+            .map(|(index, request_type)| {
+                if request_type.as_str() != REAUTH_MESSAGE_TYPE {
+                    return Vec::new();
+                }
+                let request_id = &request.batch.request_ids[index];
+                request
+                    .batch
+                    .reauth_target_indices
+                    .get(request_id)
+                    .map(|&target| reg.from_0_indices(&[target])[0])
+                    .into_iter()
+                    .collect()
+            })
+            .collect::<Vec<_>>();
+        let luc_ids = request.luc_ids(&reg);
+        let extra_candidate_ids_both = [Normal, Mirror].map(|orient| {
+            let request_types = request.request_types(&reg, orient);
+            izip!(&luc_ids, &request_types)
+                .map(|(luc, request_type)| {
+                    let mut ids = luc.clone();
+                    if let RequestType::Reauth {
+                        target: Some((target, _)),
+                    } = request_type
+                    {
+                        ids.push(*target);
+                    }
+                    ids.sort_unstable();
+                    ids.dedup();
+                    ids
+                })
+                .collect_vec()
+        });
+        (forced_anon_stats_ids, extra_candidate_ids_both)
+    };
+
+    let search_params = [Normal, Mirror].map(|orient| {
+        #[cfg(not(feature = "phase_trace"))]
+        let _ = orient;
+        SearchParams::new(
+            hawk_actor.searcher(),
+            hawk_actor.search_mode(),
+            true,
+            Some(hawk_actor.args.hnsw_param_ef_supermatch),
+            hawk_actor.args.hnsw_param_ef_saturation_margin,
+            hawk_actor.args.return_partial_results,
+            #[cfg(feature = "phase_trace")]
+            match orient {
+                Normal => 'N',
+                Mirror => 'M',
+            },
+        )
+    });
+    let queries_normal = request.queries(Normal);
+    let queries_mirror = request.queries(Mirror);
+
+    search::linear_scan_cascade_paired::<HAWK_BASE_ROTATIONS_MASK>(
+        [sessions.for_search(Normal), sessions.for_search(Mirror)],
+        [&queries_normal, &queries_mirror],
+        search_params,
+        [Normal, Mirror],
+        hawk_actor.full_scan_side,
+        [&extra_candidate_ids_both[0], &extra_candidate_ids_both[1]],
+        &forced_anon_stats_ids,
+    )
+    .await
+}
+
 impl JobSubmissionHandle for HawkHandle {
     type A = HawkMutation;
 
@@ -2106,8 +2197,14 @@ impl HawkHandle {
         // the other side through the startup configuration.
         let full_scan_side = hawk_actor.full_scan_side;
 
-        // Compute search results for a given orientation and compute matching information
-        let do_search = async |orient| -> Result<_> {
+        // Compute search results for a given orientation and compute matching
+        // information. `precomputed_search` carries this orientation's results
+        // when both orientations were already evaluated by the fused
+        // one-pass linear scan.
+        let do_search = async |orient,
+                               precomputed_search: Option<
+            SearchResults<HAWK_BASE_ROTATIONS_MASK>,
+        >| -> Result<_> {
             let search_queries = &request.queries(orient);
             let (luc_ids, request_types, forced_anon_stats_ids) = {
                 // Choice of LEFT registry is arbitrary — both sides are in sync
@@ -2169,7 +2266,9 @@ impl HawkHandle {
                 },
             );
 
-            let search_results = if hawk_actor.search_mode() == HawkSearchMode::LinearScan {
+            let search_results = if let Some(search_results) = precomputed_search {
+                search_results
+            } else if hawk_actor.search_mode() == HawkSearchMode::LinearScan {
                 // CUDA unions OR-rule and reauth targets into the first-eye
                 // prefilter result before checking both eyes on the subset.
                 let extra_candidate_ids = izip!(&luc_ids, &request_types)
@@ -2230,9 +2329,24 @@ impl HawkHandle {
                 == HawkSearchMode::Hnsw
                 || request.batch.full_face_mirror_attacks_detection_enabled
             {
+                // The exact scan evaluates both orientations in one pass over
+                // the resident eye: every streamed target feeds the normal and
+                // mirror dot products, while each orientation's threshold
+                // protocol keeps its own sessions and transcript. HNSW mode
+                // retains the independent per-orientation searches.
+                let [precomputed_normal, precomputed_mirror] =
+                    if hawk_actor.search_mode() == HawkSearchMode::LinearScan {
+                        let [normal, mirror] =
+                            linear_scan_search_both_orientations(hawk_actor, sessions, &request)
+                                .instrument(span.clone())
+                                .await?;
+                        [Some(normal), Some(mirror)]
+                    } else {
+                        [None, None]
+                    };
                 let ((search_normal, matches_normal), (search_mirror, matches_mirror)) = try_join!(
-                    do_search(Orientation::Normal).instrument(span.clone()),
-                    do_search(Orientation::Mirror).instrument(span.clone()),
+                    do_search(Orientation::Normal, precomputed_normal).instrument(span.clone()),
+                    do_search(Orientation::Mirror, precomputed_mirror).instrument(span.clone()),
                 )?;
                 (
                     search_normal,
@@ -2240,7 +2354,7 @@ impl HawkHandle {
                     matching::ResolvedBatch::decide(matches_normal, matches_mirror),
                 )
             } else {
-                let (search_normal, matches_normal) = do_search(Orientation::Normal)
+                let (search_normal, matches_normal) = do_search(Orientation::Normal, None)
                     .instrument(span.clone())
                     .await?;
                 let mirror_request_types = {

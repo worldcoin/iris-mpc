@@ -297,7 +297,6 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
     let results_persistence = ResultsPersistence {
         iris_store: iris_store.clone(),
         graph_store,
-        search_mode,
         ack_handle: hawk_actor.persistence_ack_handle(),
     };
     let tx_results = start_results_thread(
@@ -451,6 +450,25 @@ fn validate_max_batch_size(max_batch_size: usize, search_mode: HawkSearchMode) -
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    #[test]
+    fn linear_scan_requires_single_request_batches() {
+        assert!(validate_max_batch_size(1, HawkSearchMode::LinearScan).is_ok());
+
+        let error = validate_max_batch_size(2, HawkSearchMode::LinearScan)
+            .expect_err("linear scan must reject batches larger than one");
+        assert!(error.to_string().contains("requires max_batch_size=1"));
+    }
+
+    #[test]
+    fn hnsw_keeps_batched_requests() {
+        assert!(validate_max_batch_size(64, HawkSearchMode::Hnsw).is_ok());
+    }
 }
 
 /// Returns initialized PostgreSQL clients for interacting
@@ -786,8 +804,14 @@ async fn init_hawk_actor(
         "Initialize iris db: Loading from DB (parallelism: {})",
         parallelism,
     );
-    let initializer: Box<dyn WorkerPoolInitializer> =
-        Box::new(LocalWorkerPoolInitializer::new_load_from_db(
+    // Exact-scan pools store irises in the mixed-plane layout on CPUs with
+    // the UMMLA kernel; HNSW pools keep plain ArcIris values.
+    let resident_layout = match search_mode {
+        HawkSearchMode::LinearScan => iris_mpc_cpu::protocol::shared_iris::preferred_scan_layout(),
+        HawkSearchMode::Hnsw => iris_mpc_cpu::protocol::shared_iris::ResidentLayout::U16,
+    };
+    let initializer: Box<dyn WorkerPoolInitializer> = Box::new(
+        LocalWorkerPoolInitializer::new_load_from_db(
             hawk_args.party_index,
             HAWK_DISTANCE_MODE,
             hawk_args.numa,
@@ -805,7 +829,9 @@ async fn init_hawk_actor(
                     ampc_anon_stats::types::Eye::Right => 1,
                 }),
             },
-        ));
+        )
+        .with_resident_layout(resident_layout),
+    );
 
     let now = Instant::now();
     let ct = shutdown_handler.get_network_cancellation_token();
@@ -893,7 +919,6 @@ async fn init_hawk_actor(
 struct ResultsPersistence {
     iris_store: Store,
     graph_store: GraphPg<Aby3Store<HawkOps>>,
-    search_mode: HawkSearchMode,
     ack_handle: IrisPersistenceAckHandle,
 }
 
@@ -911,7 +936,6 @@ async fn start_results_thread(
     let ResultsPersistence {
         iris_store: store_bg,
         graph_store,
-        search_mode,
         ack_handle: persistence_ack_handle,
     } = persistence;
     let shutdown_handler_bg = Arc::clone(shutdown_handler);
@@ -926,7 +950,6 @@ async fn start_results_thread(
                 &graph_store,
                 &sns_client_bg,
                 &config_bg,
-                search_mode,
                 &sns_attributes_maps.uniqueness_result_attributes,
                 &sns_attributes_maps.reauth_result_attributes,
                 &sns_attributes_maps.identity_deletion_result_attributes,
@@ -1237,23 +1260,4 @@ async fn run_main_server_loop(
         }
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod config_tests {
-    use super::*;
-
-    #[test]
-    fn linear_scan_requires_single_request_batches() {
-        assert!(validate_max_batch_size(1, HawkSearchMode::LinearScan).is_ok());
-
-        let error = validate_max_batch_size(2, HawkSearchMode::LinearScan)
-            .expect_err("linear scan must reject batches larger than one");
-        assert!(error.to_string().contains("requires max_batch_size=1"));
-    }
-
-    #[test]
-    fn hnsw_keeps_batched_requests() {
-        assert!(validate_max_batch_size(64, HawkSearchMode::Hnsw).is_ok());
-    }
 }

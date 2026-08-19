@@ -17,7 +17,7 @@ use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId
 use iris_mpc_common::iris_db::get_dummy_shares_for_deletion;
 use iris_mpc_common::{job::ServerJobResult, SerialId};
 use iris_mpc_cpu::execution::hawk_main::{
-    iris_worker::IrisPersistenceAckHandle, GraphStore, HawkMutation, HawkSearchMode,
+    iris_worker::IrisPersistenceAckHandle, GraphStore, HawkMutation,
 };
 use iris_mpc_store::{ExplicitVersionToken, Store, StoredIrisRef};
 use itertools::{izip, Itertools};
@@ -37,29 +37,6 @@ fn one_indexed_ids_at(ids: &[Vec<u32>], index: usize) -> Option<Vec<u32>> {
         .map(|ids| ids.iter().map(|id| id + 1).collect())
 }
 
-fn linear_scan_one_indexed_nonempty_ids_at(
-    search_mode: HawkSearchMode,
-    ids: &[Vec<u32>],
-    index: usize,
-) -> Option<Vec<u32>> {
-    if search_mode != HawkSearchMode::LinearScan {
-        return None;
-    }
-    ids.get(index)
-        .filter(|ids| !ids.is_empty())
-        .map(|ids| ids.iter().map(|id| id + 1).collect())
-}
-
-fn linear_scan_count_at(
-    search_mode: HawkSearchMode,
-    counts: &[usize],
-    index: usize,
-) -> Option<usize> {
-    (search_mode == HawkSearchMode::LinearScan)
-        .then(|| counts.get(index).copied())
-        .flatten()
-}
-
 /// Processes a ServerJobResult, storing data in the database and sending result messages
 /// through SNS.
 #[allow(clippy::too_many_arguments)]
@@ -71,7 +48,6 @@ pub async fn process_job_result(
     graph_store: &GraphStore,
     sns_client: &SNSClient,
     config: &Config,
-    search_mode: HawkSearchMode,
     uniqueness_result_attributes: &HashMap<String, MessageAttributeValue>,
     reauth_result_attributes: &HashMap<String, MessageAttributeValue>,
     identity_deletion_result_attributes: &HashMap<String, MessageAttributeValue>,
@@ -167,31 +143,22 @@ pub async fn process_job_result(
                     .get(i)
                     .filter(|rotations| !rotations.is_empty())
                     .cloned(),
-                linear_scan_one_indexed_nonempty_ids_at(
-                    search_mode,
-                    &full_face_mirror_match_ids,
-                    i,
-                ),
-                linear_scan_one_indexed_nonempty_ids_at(
-                    search_mode,
-                    &full_face_mirror_partial_match_ids_left,
-                    i,
-                ),
-                linear_scan_one_indexed_nonempty_ids_at(
-                    search_mode,
-                    &full_face_mirror_partial_match_ids_right,
-                    i,
-                ),
-                linear_scan_count_at(
-                    search_mode,
-                    &full_face_mirror_partial_match_counters_left,
-                    i,
-                ),
-                linear_scan_count_at(
-                    search_mode,
-                    &full_face_mirror_partial_match_counters_right,
-                    i,
-                ),
+                full_face_mirror_match_ids
+                    .get(i)
+                    .filter(|ids| !ids.is_empty())
+                    .map(|ids| ids.iter().map(|x| x + 1).collect::<Vec<_>>()),
+                full_face_mirror_partial_match_ids_left
+                    .get(i)
+                    .filter(|ids| !ids.is_empty())
+                    .map(|ids| ids.iter().map(|x| x + 1).collect::<Vec<_>>()),
+                full_face_mirror_partial_match_ids_right
+                    .get(i)
+                    .filter(|ids| !ids.is_empty())
+                    .map(|ids| ids.iter().map(|x| x + 1).collect::<Vec<_>>()),
+                (!full_face_mirror_partial_match_counters_left.is_empty())
+                    .then_some(full_face_mirror_partial_match_counters_left[i]),
+                (!full_face_mirror_partial_match_counters_right.is_empty())
+                    .then_some(full_face_mirror_partial_match_counters_right[i]),
                 match full_face_mirror_attack_detected.is_empty() {
                     false => full_face_mirror_attack_detected[i],
                     true => false,
@@ -676,34 +643,11 @@ pub async fn process_job_result(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        linear_scan_count_at, linear_scan_one_indexed_nonempty_ids_at, one_indexed_ids_at,
-    };
-    use iris_mpc_cpu::execution::hawk_main::HawkSearchMode;
+    use super::one_indexed_ids_at;
 
     #[test]
     fn hidden_partial_results_are_absent_instead_of_indexing_an_empty_outer_vector() {
         assert_eq!(one_indexed_ids_at(&[], 0), None);
         assert_eq!(one_indexed_ids_at(&[vec![0, 4]], 0), Some(vec![1, 5]));
-    }
-
-    #[test]
-    fn full_face_mirror_details_are_exposed_only_by_linear_scan() {
-        let ids = [vec![0, 4]];
-        let counts = [7];
-
-        assert_eq!(
-            linear_scan_one_indexed_nonempty_ids_at(HawkSearchMode::Hnsw, &ids, 0),
-            None
-        );
-        assert_eq!(linear_scan_count_at(HawkSearchMode::Hnsw, &counts, 0), None);
-        assert_eq!(
-            linear_scan_one_indexed_nonempty_ids_at(HawkSearchMode::LinearScan, &ids, 0),
-            Some(vec![1, 5])
-        );
-        assert_eq!(
-            linear_scan_count_at(HawkSearchMode::LinearScan, &counts, 0),
-            Some(7)
-        );
     }
 }

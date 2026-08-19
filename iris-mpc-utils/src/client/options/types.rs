@@ -683,120 +683,107 @@ fn ground_truth_into_iter(
         operations.extend(cycle);
     }
 
-    for scheduled_operation in operations
+    for operation in operations
         .into_iter()
         .take(request_count.saturating_sub(batches.len()))
     {
         let label = format!("ground-truth-{sequence:04}");
         sequence += 1;
-        // A deletion may empty the identity set. Replace any operation that
-        // needs a target with an enrollment until there is a live identity
-        // again. New enrollments deliberately do not consume target-selection
-        // randomness, keeping target draws tied to operations that use them.
-        let operation = if live.is_empty() {
-            GroundTruthOperation::NewUniqueness
-        } else {
-            scheduled_operation
-        };
+        let target_idx = rng.gen_range(0..live.len());
+        let target = live[target_idx].clone();
 
-        let request = if matches!(operation, GroundTruthOperation::NewUniqueness) {
-            let identity_label = format!("{label}-enroll");
-            let iris_pair = fresh_pair();
-            let request = RequestOptions::new(
-                Some(&identity_label),
+        let request = match operation {
+            GroundTruthOperation::NewUniqueness => {
+                let identity_label = format!("{label}-enroll");
+                let iris_pair = fresh_pair();
+                let request = RequestOptions::new(
+                    Some(&identity_label),
+                    RequestPayloadOptions::Uniqueness {
+                        iris_pair: Some(iris_pair),
+                        insertion_layers: None,
+                    },
+                )
+                .with_expected(json!({ "is_match": false }));
+                live.push(GroundTruthIdentity {
+                    label: identity_label,
+                    iris_pair,
+                });
+                request
+            }
+            GroundTruthOperation::DuplicateUniqueness => RequestOptions::new(
+                Some(&format!("{label}-duplicate")),
                 RequestPayloadOptions::Uniqueness {
-                    iris_pair: Some(iris_pair),
+                    iris_pair: Some(target.iris_pair),
                     insertion_layers: None,
                 },
             )
-            .with_expected(json!({ "is_match": false }));
-            live.push(GroundTruthIdentity {
-                label: identity_label,
-                iris_pair,
-            });
-            request
-        } else {
-            let target_idx = rng.gen_range(0..live.len());
-            let target = live[target_idx].clone();
-            match operation {
-                GroundTruthOperation::NewUniqueness => {
-                    unreachable!("new uniqueness is handled before target selection")
-                }
-                GroundTruthOperation::DuplicateUniqueness => RequestOptions::new(
-                    Some(&format!("{label}-duplicate")),
-                    RequestPayloadOptions::Uniqueness {
-                        iris_pair: Some(target.iris_pair),
-                        insertion_layers: None,
-                    },
-                )
-                .with_expected(json!({ "is_match": true })),
-                GroundTruthOperation::MirroredUniqueness => RequestOptions::new(
-                    Some(&format!("{label}-mirror")),
-                    RequestPayloadOptions::Mirrored {
-                        iris_pair: Some(target.iris_pair),
-                        insertion_layers: None,
-                    },
-                ),
-                GroundTruthOperation::ReauthMatch => RequestOptions::new(
-                    Some(&format!("{label}-reauth-match")),
-                    RequestPayloadOptions::Reauthorisation {
-                        iris_pair: Some(target.iris_pair),
+            .with_expected(json!({ "is_match": true })),
+            GroundTruthOperation::MirroredUniqueness => RequestOptions::new(
+                Some(&format!("{label}-mirror")),
+                RequestPayloadOptions::Mirrored {
+                    iris_pair: Some(target.iris_pair),
+                    insertion_layers: None,
+                },
+            ),
+            GroundTruthOperation::ReauthMatch => RequestOptions::new(
+                Some(&format!("{label}-reauth-match")),
+                RequestPayloadOptions::Reauthorisation {
+                    iris_pair: Some(target.iris_pair),
+                    parent: Parent::Label(target.label),
+                },
+            )
+            .with_expected(json!({ "success": true })),
+            GroundTruthOperation::ReauthNonMatch => RequestOptions::new(
+                Some(&format!("{label}-reauth-non-match")),
+                RequestPayloadOptions::Reauthorisation {
+                    iris_pair: Some(fresh_pair()),
+                    parent: Parent::Label(target.label),
+                },
+            )
+            .with_expected(json!({ "success": false })),
+            GroundTruthOperation::ResetCheck => RequestOptions::new(
+                Some(&format!("{label}-reset-check")),
+                RequestPayloadOptions::ResetCheck {
+                    iris_pair: Some(target.iris_pair),
+                },
+            ),
+            GroundTruthOperation::RecoveryCheck => RequestOptions::new(
+                Some(&format!("{label}-recovery-check")),
+                RequestPayloadOptions::RecoveryCheck {
+                    iris_pair: Some(target.iris_pair),
+                },
+            ),
+            GroundTruthOperation::ResetUpdate => {
+                let iris_pair = fresh_pair();
+                live[target_idx].iris_pair = iris_pair;
+                RequestOptions::new(
+                    Some(&format!("{label}-reset-update")),
+                    RequestPayloadOptions::ResetUpdate {
+                        iris_pair: Some(iris_pair),
                         parent: Parent::Label(target.label),
                     },
                 )
-                .with_expected(json!({ "success": true })),
-                GroundTruthOperation::ReauthNonMatch => RequestOptions::new(
-                    Some(&format!("{label}-reauth-non-match")),
-                    RequestPayloadOptions::Reauthorisation {
-                        iris_pair: Some(fresh_pair()),
+            }
+            GroundTruthOperation::RecoveryUpdate => {
+                let iris_pair = fresh_pair();
+                live[target_idx].iris_pair = iris_pair;
+                RequestOptions::new(
+                    Some(&format!("{label}-recovery-update")),
+                    RequestPayloadOptions::RecoveryUpdate {
+                        iris_pair: Some(iris_pair),
                         parent: Parent::Label(target.label),
                     },
                 )
-                .with_expected(json!({ "success": false })),
-                GroundTruthOperation::ResetCheck => RequestOptions::new(
-                    Some(&format!("{label}-reset-check")),
-                    RequestPayloadOptions::ResetCheck {
-                        iris_pair: Some(target.iris_pair),
+            }
+            GroundTruthOperation::IdentityDeletion => {
+                let deleted = live.swap_remove(target_idx);
+                RequestOptions::new(
+                    Some(&format!("{label}-delete")),
+                    RequestPayloadOptions::IdentityDeletion {
+                        parent: Parent::Label(deleted.label),
                     },
-                ),
-                GroundTruthOperation::RecoveryCheck => RequestOptions::new(
-                    Some(&format!("{label}-recovery-check")),
-                    RequestPayloadOptions::RecoveryCheck {
-                        iris_pair: Some(target.iris_pair),
-                    },
-                ),
-                GroundTruthOperation::ResetUpdate => {
-                    let iris_pair = fresh_pair();
-                    live[target_idx].iris_pair = iris_pair;
-                    RequestOptions::new(
-                        Some(&format!("{label}-reset-update")),
-                        RequestPayloadOptions::ResetUpdate {
-                            iris_pair: Some(iris_pair),
-                            parent: Parent::Label(target.label),
-                        },
-                    )
-                }
-                GroundTruthOperation::RecoveryUpdate => {
-                    let iris_pair = fresh_pair();
-                    live[target_idx].iris_pair = iris_pair;
-                    RequestOptions::new(
-                        Some(&format!("{label}-recovery-update")),
-                        RequestPayloadOptions::RecoveryUpdate {
-                            iris_pair: Some(iris_pair),
-                            parent: Parent::Label(target.label),
-                        },
-                    )
-                }
-                GroundTruthOperation::IdentityDeletion => {
-                    let deleted = live.swap_remove(target_idx);
-                    RequestOptions::new(
-                        Some(&format!("{label}-delete")),
-                        RequestPayloadOptions::IdentityDeletion {
-                            parent: Parent::Label(deleted.label),
-                        },
-                    )
-                    .with_expected(json!({ "success": true }))
-                }
+                )
+                .with_expected(json!({ "success": true }))
             }
         };
         batches.push(vec![request]);
@@ -1195,21 +1182,5 @@ mod tests {
                 "mirrored",
             ])
         );
-    }
-
-    #[test]
-    fn ground_truth_schedule_recovers_when_deletion_empties_live_identities() {
-        for rng_seed in 0..64 {
-            let batches = RequestBatchOptions::GroundTruth {
-                request_count: 100,
-                rng_seed,
-                initial_uniqueness_count: 1,
-            }
-            .into_iter()
-            .collect::<Vec<_>>();
-
-            assert_eq!(batches.len(), 100, "rng seed {rng_seed}");
-            assert!(batches.iter().all(|batch| batch.len() == 1));
-        }
     }
 }

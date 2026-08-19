@@ -7,7 +7,7 @@ use crate::{
             galois_ring_pairwise_distance, non_existent_distance, pairwise_distance,
             rotation_aware_pairwise_distance, rotation_aware_pairwise_distance_rowmajor,
         },
-        shared_iris::{ArcIris, GaloisRingSharedIris},
+        shared_iris::{ArcIris, GaloisRingSharedIris, ResidentIris, ResidentLayout},
     },
     shares::RingElement,
 };
@@ -43,8 +43,19 @@ use tracing::info;
 pub const DEFAULT_FULL_ROTATION_TASK_SIZE: usize = 256;
 
 fn default_full_rotation_task_size() -> NonZeroUsize {
-    NonZeroUsize::new(DEFAULT_FULL_ROTATION_TASK_SIZE)
-        .expect("the default full-rotation task size must be nonzero")
+    // Overridable for scheduling experiments; the default is the tuned
+    // production value.
+    static TASK_SIZE: std::sync::OnceLock<NonZeroUsize> = std::sync::OnceLock::new();
+    *TASK_SIZE.get_or_init(|| {
+        std::env::var("IRIS_MPC_FULL_ROTATION_TASK_SIZE")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .and_then(NonZeroUsize::new)
+            .unwrap_or_else(|| {
+                NonZeroUsize::new(DEFAULT_FULL_ROTATION_TASK_SIZE)
+                    .expect("the default full-rotation task size must be nonzero")
+            })
+    })
 }
 
 /// Defines the types of tasks that can be offloaded to an `IrisWorker`.
@@ -116,6 +127,15 @@ enum IrisTask {
         targets: Arc<[ArcIris]>,
         range: std::ops::Range<usize>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
+    },
+    /// Both orientations' 31-rotation dot products in one pass over a resident
+    /// target range. Targets are looked up and streamed once; each loaded
+    /// target row feeds both queries' rotation tiles.
+    FullRotationDotProductPairBatch {
+        queries: [ArcIris; 2],
+        vector_ids: Arc<[VectorId]>,
+        range: std::ops::Range<usize>,
+        rsp: oneshot::Sender<[Vec<RingElement<u16>>; 2]>,
     },
     /// Computes the pairwise distance for pairs of irises in the Galois Ring.
     RingPairwiseDistance {
@@ -380,6 +400,47 @@ impl IrisPoolHandle {
         Ok(results)
     }
 
+    /// Paired-query variant of [`Self::full_rotation_dot_product_batch`]: one
+    /// target traversal per task computes both queries' full rotation sets.
+    pub async fn full_rotation_dot_product_pair_batch(
+        &mut self,
+        queries: [ArcIris; 2],
+        vector_ids: &[VectorId],
+        task_size: NonZeroUsize,
+    ) -> Result<[Vec<RingElement<u16>>; 2]> {
+        let start = Instant::now();
+        let shared_ids: Arc<[VectorId]> = Arc::from(vector_ids);
+        let task_size = task_size.get();
+        let mut responses = Vec::with_capacity(shared_ids.len().div_ceil(task_size));
+
+        for (i, _) in shared_ids.chunks(task_size).enumerate() {
+            let range_start = i * task_size;
+            let range_end = (range_start + task_size).min(shared_ids.len());
+            let (tx, rx) = oneshot::channel();
+            self.get_next_worker()
+                .send(IrisTask::FullRotationDotProductPairBatch {
+                    queries: queries.clone(),
+                    vector_ids: shared_ids.clone(),
+                    range: range_start..range_end,
+                    rsp: tx,
+                })?;
+            responses.push(rx);
+        }
+
+        let mut results = [
+            Vec::with_capacity(2 * ROTATIONS * shared_ids.len()),
+            Vec::with_capacity(2 * ROTATIONS * shared_ids.len()),
+        ];
+        for task_results in futures::future::try_join_all(responses).await? {
+            let [first, second] = task_results;
+            results[0].extend(first);
+            results[1].extend(second);
+        }
+        self.metric_rotation_aware_dot_product_latency
+            .record(start.elapsed().as_secs_f64());
+        Ok(results)
+    }
+
     async fn full_rotation_dot_product_irises_batch(
         &self,
         query: ArcIris,
@@ -536,15 +597,17 @@ impl IrisPoolHandle {
 
 pub fn init_workers(
     shard_index: usize,
-    iris_store: SharedIrisesRef<ArcIris>,
+    iris_store: SharedIrisesRef<ResidentIris>,
     numa: bool,
+    layout: ResidentLayout,
 ) -> IrisPoolHandle {
     let core_ids = select_core_ids(shard_index);
     info!(
-        "Dot product shard {} running on {} cores ({:?})",
+        "Dot product shard {} running on {} cores ({:?}), resident layout {:?}",
         shard_index,
         core_ids.len(),
-        core_ids
+        core_ids,
+        layout,
     );
 
     let mut channels = vec![];
@@ -554,7 +617,7 @@ pub fn init_workers(
         let iris_store = iris_store.clone();
         std::thread::spawn(move || {
             let _ = core_affinity::set_for_current(core_id);
-            worker_thread(rx, iris_store, numa);
+            worker_thread(rx, iris_store, numa, layout);
         });
     }
 
@@ -570,7 +633,12 @@ pub fn init_workers(
     }
 }
 
-fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, numa: bool) {
+fn worker_thread(
+    ch: Receiver<IrisTask>,
+    iris_store: SharedIrisesRef<ResidentIris>,
+    numa: bool,
+    layout: ResidentLayout,
+) {
     while let Ok(task) = ch.recv() {
         match task {
             IrisTask::Realloc { iris, rsp } => {
@@ -589,14 +657,17 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
             }
 
             IrisTask::Insert { vector_id, iris } => {
-                let iris = if numa {
-                    Arc::new((*iris).clone())
-                } else {
-                    iris
+                // `from_arc` writes the resident representation from this
+                // thread, so first-touch places it NUMA-locally. The extra
+                // u16 clone is only needed when the resident layout keeps
+                // the incoming allocation.
+                let resident = match layout {
+                    ResidentLayout::U16 if numa => ResidentIris::U16(Arc::new((*iris).clone())),
+                    _ => ResidentIris::from_arc(iris, layout),
                 };
 
                 let mut store = iris_store.data.blocking_write();
-                store.insert(vector_id, iris);
+                store.insert(vector_id, resident);
             }
 
             IrisTask::Reserve { additional } => {
@@ -607,9 +678,14 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
             IrisTask::DotProductPairs { pairs, rsp } => {
                 let store = iris_store.data.blocking_read();
 
+                let targets: Vec<Option<ArcIris>> = pairs
+                    .iter()
+                    .map(|(_, vid)| store.get_vector(vid).map(ResidentIris::to_arc))
+                    .collect();
                 let iris_pairs = pairs
                     .iter()
-                    .map(|(q, vid)| store.get_vector(vid).map(|iris| (q, iris)));
+                    .zip(&targets)
+                    .map(|((q, _), target)| target.as_ref().map(|iris| (q, iris)));
 
                 let r = pairwise_distance(iris_pairs);
                 let _ = rsp.send(r);
@@ -622,9 +698,13 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
             } => {
                 let store = iris_store.data.blocking_read();
 
-                let iris_pairs = vector_ids
+                let targets: Vec<Option<ArcIris>> = vector_ids
                     .iter()
-                    .map(|v| store.get_vector(v).map(|iris| (&query, iris)));
+                    .map(|v| store.get_vector(v).map(ResidentIris::to_arc))
+                    .collect();
+                let iris_pairs = targets
+                    .iter()
+                    .map(|target| target.as_ref().map(|iris| (&query, iris)));
 
                 let r = pairwise_distance(iris_pairs);
                 let _ = rsp.send(r);
@@ -647,9 +727,13 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
                 rsp,
             } => {
                 let store = iris_store.data.blocking_read();
-                let targets = vector_ids[range].iter().map(|v| store.get_vector(v));
+                let targets: Vec<Option<ArcIris>> = vector_ids[range]
+                    .iter()
+                    .map(|v| store.get_vector(v).map(ResidentIris::to_arc))
+                    .collect();
                 let result = rotation_aware_pairwise_distance_rowmajor::<HAWK_MIN_DIST_ROTATIONS, _>(
-                    &query, targets,
+                    &query,
+                    targets.iter().map(Option::as_ref),
                 );
                 let _ = rsp.send(result);
             }
@@ -674,9 +758,10 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
                 rsp,
             } => {
                 let store = iris_store.data.blocking_read();
-                let targets = vector_ids[range].iter().map(|v| store.get_vector(v));
-                let result =
-                    rotation_aware_pairwise_distance_rowmajor::<ROTATIONS, _>(&query, targets);
+                let result = full_rotation_distance_resident(
+                    &query,
+                    vector_ids[range].iter().map(|v| store.get_vector(v)),
+                );
                 let _ = rsp.send(result);
             }
 
@@ -689,6 +774,20 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
                 let targets = targets[range].iter().map(Some);
                 let result =
                     rotation_aware_pairwise_distance_rowmajor::<ROTATIONS, _>(&query, targets);
+                let _ = rsp.send(result);
+            }
+
+            IrisTask::FullRotationDotProductPairBatch {
+                queries,
+                vector_ids,
+                range,
+                rsp,
+            } => {
+                let store = iris_store.data.blocking_read();
+                let result = full_rotation_distance_resident_pair(
+                    &queries,
+                    vector_ids[range].iter().map(|v| store.get_vector(v)),
+                );
                 let _ = rsp.send(result);
             }
 
@@ -706,6 +805,87 @@ fn worker_thread(ch: Receiver<IrisTask>, iris_store: SharedIrisesRef<ArcIris>, n
             }
         }
     }
+}
+
+/// Full 31-rotation distances against resident targets, dispatching on the
+/// resident representation: mixed-plane targets use the UMMLA kernel,
+/// u16 targets the MLA kernel. Results are bit-identical between the two.
+fn full_rotation_distance_resident<'a, I>(query: &ArcIris, targets: I) -> Vec<RingElement<u16>>
+where
+    I: Iterator<Item = Option<&'a ResidentIris>> + ExactSizeIterator,
+{
+    let residents: Vec<Option<&ResidentIris>> = targets.collect();
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        use crate::protocol::ops::rotation_aware_pairwise_distance_mixed;
+        use crate::protocol::shared_iris::MixedPlaneIris;
+
+        let all_mixed = residents
+            .iter()
+            .all(|target| target.is_none_or(|resident| resident.as_mixed().is_some()));
+        if all_mixed && residents.iter().any(Option::is_some) {
+            let mixed: Vec<Option<&MixedPlaneIris>> = residents
+                .iter()
+                .map(|target| target.and_then(ResidentIris::as_mixed))
+                .collect();
+            return rotation_aware_pairwise_distance_mixed::<ROTATIONS>(query, &mixed);
+        }
+    }
+
+    let owned: Vec<Option<ArcIris>> = residents
+        .iter()
+        .map(|target| target.map(ResidentIris::to_arc))
+        .collect();
+    rotation_aware_pairwise_distance_rowmajor::<ROTATIONS, _>(
+        query,
+        owned.iter().map(Option::as_ref),
+    )
+}
+
+/// Paired-query variant of [`full_rotation_distance_resident`]: mixed-plane
+/// residents use the fused UMMLA pair kernel (targets streamed once for both
+/// queries); the u16 fallback evaluates the queries sequentially, which is
+/// bit-identical and still benefits from the two-slot prerotation cache.
+fn full_rotation_distance_resident_pair<'a, I>(
+    queries: &[ArcIris; 2],
+    targets: I,
+) -> [Vec<RingElement<u16>>; 2]
+where
+    I: Iterator<Item = Option<&'a ResidentIris>> + ExactSizeIterator,
+{
+    let residents: Vec<Option<&ResidentIris>> = targets.collect();
+
+    #[cfg(target_arch = "aarch64")]
+    {
+        use crate::protocol::ops::rotation_aware_pairwise_distance_mixed_pair;
+        use crate::protocol::shared_iris::MixedPlaneIris;
+
+        let all_mixed = residents
+            .iter()
+            .all(|target| target.is_none_or(|resident| resident.as_mixed().is_some()));
+        if all_mixed && residents.iter().any(Option::is_some) {
+            let mixed: Vec<Option<&MixedPlaneIris>> = residents
+                .iter()
+                .map(|target| target.and_then(ResidentIris::as_mixed))
+                .collect();
+            return rotation_aware_pairwise_distance_mixed_pair::<ROTATIONS>(
+                [&queries[0], &queries[1]],
+                &mixed,
+            );
+        }
+    }
+
+    let owned: Vec<Option<ArcIris>> = residents
+        .iter()
+        .map(|target| target.map(ResidentIris::to_arc))
+        .collect();
+    [&queries[0], &queries[1]].map(|query| {
+        rotation_aware_pairwise_distance_rowmajor::<ROTATIONS, _>(
+            query,
+            owned.iter().map(Option::as_ref),
+        )
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -820,6 +1000,30 @@ pub trait IrisWorkerPool: Debug + Send + Sync {
         vector_ids: Vec<VectorId>,
     ) -> BoxFuture<'a, Result<Vec<RingElement<u16>>>>;
 
+    /// Compute two queries' full 31-rotation dot products over one shared
+    /// target traversal. The exact scan uses this to evaluate the normal and
+    /// mirror orientations while streaming the resident database once.
+    ///
+    /// Each returned side is identical to a separate
+    /// [`IrisWorkerPool::compute_dot_products_full_rotations`] call. The
+    /// default implementation evaluates the queries sequentially; pools with
+    /// fused kernels override it.
+    fn compute_dot_products_full_rotations_pair<'a>(
+        &'a self,
+        queries: [QuerySpec; 2],
+        vector_ids: Vec<VectorId>,
+    ) -> BoxFuture<'a, Result<[Vec<RingElement<u16>>; 2]>> {
+        Box::pin(async move {
+            let first = self
+                .compute_dot_products_full_rotations(queries[0], vector_ids.clone())
+                .await?;
+            let second = self
+                .compute_dot_products_full_rotations(queries[1], vector_ids)
+                .await?;
+            Ok([first, second])
+        })
+    }
+
     /// Fetch iris data from the worker's store by vector ID.
     ///
     /// Returns one `ArcIris` per input ID in the same order. Database-backed
@@ -894,6 +1098,13 @@ impl<T: ?Sized + IrisWorkerPool> IrisWorkerPool for Arc<T> {
         vector_ids: Vec<VectorId>,
     ) -> BoxFuture<'a, Result<Vec<RingElement<u16>>>> {
         (**self).compute_dot_products_full_rotations(query, vector_ids)
+    }
+    fn compute_dot_products_full_rotations_pair<'a>(
+        &'a self,
+        queries: [QuerySpec; 2],
+        vector_ids: Vec<VectorId>,
+    ) -> BoxFuture<'a, Result<[Vec<RingElement<u16>>; 2]>> {
+        (**self).compute_dot_products_full_rotations_pair(queries, vector_ids)
     }
     fn fetch_irises<'a>(&'a self, ids: Vec<VectorId>) -> BoxFuture<'a, Result<Vec<ArcIris>>> {
         (**self).fetch_irises(ids)
@@ -992,13 +1203,10 @@ struct CachedQuery {
 pub struct LocalIrisWorkerPool {
     inner: IrisPoolHandle,
     query_cache: Arc<RwLock<HashMap<QueryId, CachedQuery>>>,
-    iris_store: SharedIrisesRef<ArcIris>,
+    iris_store: SharedIrisesRef<ResidentIris>,
+    layout: ResidentLayout,
     mode: DistanceMode,
     party_id: usize,
-    /// Number of records assigned to one full-rotation dot-product task.
-    /// Normal constructors retain the production default; benchmarks can opt
-    /// into another nonzero value through `with_full_rotation_task_size`.
-    full_rotation_task_size: NonZeroUsize,
     /// When set, the complete iris column stays in Postgres. RAM holds the
     /// rolling LUC window, a bounded frequency cache, and mutations awaiting a
     /// database commit; older explicit candidates are fetched sparsely.
@@ -1315,6 +1523,23 @@ async fn run_cold_prefetch_worker(
     }
 }
 
+fn cold_db_miss_error(party_id: usize, side: usize, missing: &[VectorId]) -> eyre::Report {
+    let examples = missing.iter().take(8).copied().collect_vec();
+    metrics::counter!("linear_scan_cold_db_misses_total").increment(missing.len() as u64);
+    tracing::error!(
+        party_id,
+        side,
+        missing_count = missing.len(),
+        ?examples,
+        "Cold-eye database did not return the exact requested vector versions"
+    );
+    eyre::eyre!(
+        "cold-eye database missing {} exact vector ID(s) for party {party_id}, side {side}; \
+         examples: {examples:?}",
+        missing.len()
+    )
+}
+
 async fn prefetch_cold_irises(
     store: &Store,
     side: usize,
@@ -1427,23 +1652,6 @@ async fn prefetch_cold_irises(
     }
 }
 
-fn cold_db_miss_error(party_id: usize, side: usize, missing: &[VectorId]) -> eyre::Report {
-    let examples = missing.iter().take(8).copied().collect_vec();
-    metrics::counter!("linear_scan_cold_db_misses_total").increment(missing.len() as u64);
-    tracing::error!(
-        party_id,
-        side,
-        missing_count = missing.len(),
-        ?examples,
-        "Cold-eye database did not return the exact requested vector versions"
-    );
-    eyre::eyre!(
-        "cold-eye database missing {} exact vector ID(s) for party {party_id}, side {side}; \
-         examples: {examples:?}",
-        missing.len()
-    )
-}
-
 impl Debug for LocalIrisWorkerPool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LocalIrisWorkerPool")
@@ -1455,7 +1663,8 @@ impl Debug for LocalIrisWorkerPool {
 impl LocalIrisWorkerPool {
     pub fn new(
         inner: IrisPoolHandle,
-        iris_store: SharedIrisesRef<ArcIris>,
+        iris_store: SharedIrisesRef<ResidentIris>,
+        layout: ResidentLayout,
         mode: DistanceMode,
         party_id: usize,
     ) -> Self {
@@ -1463,9 +1672,9 @@ impl LocalIrisWorkerPool {
             inner,
             query_cache: Arc::new(RwLock::new(HashMap::new())),
             iris_store,
+            layout,
             mode,
             party_id,
-            full_rotation_task_size: default_full_rotation_task_size(),
             cold_storage: None,
         }
     }
@@ -1477,7 +1686,8 @@ impl LocalIrisWorkerPool {
     /// persistence commits.
     pub async fn new_cold(
         inner: IrisPoolHandle,
-        iris_store: SharedIrisesRef<ArcIris>,
+        iris_store: SharedIrisesRef<ResidentIris>,
+        layout: ResidentLayout,
         mode: DistanceMode,
         party_id: usize,
         init: ColdStorageInit,
@@ -1536,9 +1746,9 @@ impl LocalIrisWorkerPool {
             inner,
             query_cache: Arc::new(RwLock::new(HashMap::new())),
             iris_store,
+            layout,
             mode,
             party_id,
-            full_rotation_task_size: default_full_rotation_task_size(),
             cold_storage: Some(ColdStorage {
                 store,
                 side,
@@ -1551,19 +1761,13 @@ impl LocalIrisWorkerPool {
     /// Create a local worker pool for shard 0 with NUMA pinning.
     /// Standard construction for tests, benchmarks, and single-node tools.
     pub fn new_local(
-        iris_store: SharedIrisesRef<ArcIris>,
+        iris_store: SharedIrisesRef<ResidentIris>,
+        layout: ResidentLayout,
         mode: DistanceMode,
         party_id: usize,
     ) -> Self {
-        let pool = init_workers(0, iris_store.clone(), true);
-        Self::new(pool, iris_store, mode, party_id)
-    }
-
-    /// Override full-rotation task granularity for an explicitly configured
-    /// benchmark or tool. Production constructors always default to 128.
-    pub fn with_full_rotation_task_size(mut self, task_size: NonZeroUsize) -> Self {
-        self.full_rotation_task_size = task_size;
-        self
+        let pool = init_workers(0, iris_store.clone(), true, layout);
+        Self::new(pool, iris_store, layout, mode, party_id)
     }
 
     async fn fetch_irises_resident_or_cold(&self, ids: &[VectorId]) -> Result<Vec<ArcIris>> {
@@ -1571,7 +1775,7 @@ impl LocalIrisWorkerPool {
             let store = self.iris_store.data.read().await;
             return Ok(ids
                 .iter()
-                .map(|id| store.get_vector_or_empty(id).clone())
+                .map(|id| store.get_vector_or_empty(id).to_arc())
                 .collect());
         };
 
@@ -1804,7 +2008,7 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
         let mut inner = self.inner.clone();
         let pool = self.clone();
         let is_cold = self.cold_storage.is_some();
-        let task_size = self.full_rotation_task_size;
+        let task_size = default_full_rotation_task_size();
         Box::pin(async move {
             let iris = {
                 let cache = query_cache.read().unwrap();
@@ -1826,6 +2030,55 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
             } else {
                 inner
                     .full_rotation_dot_product_batch(iris, &vector_ids, task_size)
+                    .await
+            }
+        })
+    }
+
+    fn compute_dot_products_full_rotations_pair<'a>(
+        &'a self,
+        queries: [QuerySpec; 2],
+        vector_ids: Vec<VectorId>,
+    ) -> BoxFuture<'a, Result<[Vec<RingElement<u16>>; 2]>> {
+        let query_cache = self.query_cache.clone();
+        let mut inner = self.inner.clone();
+        let pool = self.clone();
+        let is_cold = self.cold_storage.is_some();
+        let task_size = default_full_rotation_task_size();
+        Box::pin(async move {
+            let irises = {
+                let cache = query_cache.read().unwrap();
+                let mut resolved = Vec::with_capacity(2);
+                for query in queries {
+                    let cached = cache
+                        .get(&query.query_id)
+                        .ok_or_else(|| eyre::eyre!("Query {:?} not cached", query.query_id))?;
+                    let rotations = if query.mirrored {
+                        &cached.mirrored_preprocessed_rotations
+                    } else {
+                        &cached.preprocessed_rotations
+                    };
+                    resolved.push(rotations[query.rotation].clone());
+                }
+                let second = resolved.pop().expect("two resolved queries");
+                let first = resolved.pop().expect("two resolved queries");
+                [first, second]
+            };
+            if is_cold {
+                // Cold targets are fetched once and reused by both queries;
+                // the dot passes themselves stay sequential on this rare path.
+                let targets = pool.fetch_irises_resident_or_cold(&vector_ids).await?;
+                let [query_a, query_b] = irises;
+                let first = inner
+                    .full_rotation_dot_product_irises_batch(query_a, targets.clone(), task_size)
+                    .await?;
+                let second = inner
+                    .full_rotation_dot_product_irises_batch(query_b, targets, task_size)
+                    .await?;
+                Ok([first, second])
+            } else {
+                inner
+                    .full_rotation_dot_product_pair_batch(irises, &vector_ids, task_size)
                     .await
             }
         })
@@ -1881,6 +2134,7 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
         let query_cache = self.query_cache.clone();
         let iris_store = self.iris_store.clone();
         let cold_storage = self.cold_storage.clone();
+        let layout = self.layout;
         Box::pin(async move {
             // Resolve query IDs to irises (release cache lock before await).
             let resolved: Vec<_> = {
@@ -1912,7 +2166,7 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
             // visible in the store immediately after this returns.
             let mut store = iris_store.data.write().await;
             for (vector_id, iris) in resolved {
-                store.insert(vector_id, iris);
+                store.insert(vector_id, ResidentIris::from_arc(iris, layout));
             }
             Ok(store.set_hash.checksum())
         })
@@ -1982,6 +2236,7 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
         let iris_store = self.iris_store.clone();
         let party_id = self.party_id;
         let cold_storage = self.cold_storage.clone();
+        let layout = self.layout;
         Box::pin(async move {
             let dummy = Arc::new(GaloisRingSharedIris::dummy_for_party(party_id));
             if let Some(cold) = cold_storage {
@@ -1994,9 +2249,10 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
                 }
                 return Ok(());
             }
+            let resident_dummy = ResidentIris::from_arc(dummy, layout);
             let mut store = iris_store.data.write().await;
             for id in ids {
-                store.update(id, dummy.clone());
+                store.update(id, resident_dummy.clone());
             }
             Ok(())
         })
@@ -2143,26 +2399,40 @@ mod tests {
         let vector_ids = (0..TEST_TARGETS)
             .map(|index| VectorId::from_0_index(index as u32))
             .collect::<Vec<_>>();
-        let points = vector_ids
-            .iter()
-            .copied()
-            .map(|id| (id, iris.clone()))
-            .collect::<HashMap<_, _>>();
-        let storage = SharedIrises::new(points, iris.clone()).to_arc();
-        let workers = init_workers(0, storage, false);
 
-        let mut results = Vec::new();
-        for task_size in [64, 128, 256, 512] {
-            let mut workers = workers.clone();
-            results.push(runtime.block_on(workers.full_rotation_dot_product_batch(
-                iris.clone(),
-                &vector_ids,
-                NonZeroUsize::new(task_size).unwrap(),
-            ))?);
+        // Cover every supported resident layout; results must be identical.
+        let mut per_layout = Vec::new();
+        for layout in [
+            ResidentLayout::U16,
+            crate::protocol::shared_iris::preferred_scan_layout(),
+        ] {
+            let points = vector_ids
+                .iter()
+                .copied()
+                .map(|id| (id, ResidentIris::from_arc(iris.clone(), layout)))
+                .collect::<HashMap<_, _>>();
+            let storage =
+                SharedIrises::new(points, ResidentIris::from_arc(iris.clone(), layout)).to_arc();
+            let workers = init_workers(0, storage, false, layout);
+
+            let mut results = Vec::new();
+            for task_size in [64, 128, 256, 512] {
+                let mut workers = workers.clone();
+                results.push(runtime.block_on(workers.full_rotation_dot_product_batch(
+                    iris.clone(),
+                    &vector_ids,
+                    NonZeroUsize::new(task_size).unwrap(),
+                ))?);
+            }
+
+            assert!(results.iter().all(|result| result == &results[0]));
+            assert_eq!(results[0].len(), TEST_TARGETS * ROTATIONS * 2);
+            per_layout.push(results.remove(0));
         }
-
-        assert!(results.iter().all(|result| result == &results[0]));
-        assert_eq!(results[0].len(), TEST_TARGETS * ROTATIONS * 2);
+        assert!(
+            per_layout.iter().all(|result| result == &per_layout[0]),
+            "resident layouts must produce identical distances"
+        );
         Ok(())
     }
 }

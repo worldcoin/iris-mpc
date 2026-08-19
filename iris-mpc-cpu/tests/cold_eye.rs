@@ -16,7 +16,7 @@ use iris_mpc_cpu::{
         aby3::aby3_store::{Aby3Store, DistanceMode, FhdOps},
         shared_irises::SharedIrises,
     },
-    protocol::shared_iris::GaloisRingSharedIris,
+    protocol::shared_iris::{GaloisRingSharedIris, ResidentIris, ResidentLayout},
 };
 use iris_mpc_store::{
     test_utils::{cleanup, temporary_name, test_db_url},
@@ -50,18 +50,28 @@ async fn cold_eye_prefetched_dot_product_matches_resident_and_populates_lfu() ->
 
     let resident_store =
         Aby3Store::<FhdOps>::new_storage(Some(HashMap::from([(vector_id, target.clone())])))
+            .map_values(|iris| ResidentIris::from_arc(iris, ResidentLayout::U16))
             .to_arc();
     let resident: Arc<dyn IrisWorkerPool> = Arc::new(LocalIrisWorkerPool::new_local(
         resident_store,
+        ResidentLayout::U16,
         DistanceMode::MinRotation,
         0,
     ));
 
-    let cold_store = SharedIrises::to_arc(Aby3Store::<FhdOps>::new_storage(None));
+    let cold_store = SharedIrises::new(
+        HashMap::new(),
+        ResidentIris::from_arc(
+            Arc::new(GaloisRingSharedIris::default_for_party(0)),
+            ResidentLayout::U16,
+        ),
+    )
+    .to_arc();
     let cold: Arc<dyn IrisWorkerPool> = Arc::new(
         LocalIrisWorkerPool::new_cold(
-            init_workers(RIGHT, cold_store.clone(), false),
+            init_workers(RIGHT, cold_store.clone(), false, ResidentLayout::U16),
             cold_store.clone(),
+            ResidentLayout::U16,
             DistanceMode::MinRotation,
             0,
             ColdStorageInit {
@@ -133,6 +143,78 @@ async fn cold_eye_prefetched_dot_product_matches_resident_and_populates_lfu() ->
 }
 
 #[tokio::test]
+async fn cold_eye_version_miss_fails_prefetch_and_foreground_fetch() -> Result<()> {
+    let schema_name = temporary_name();
+    let postgres =
+        PostgresClient::new(&test_db_url()?, &schema_name, AccessMode::ReadWrite).await?;
+    run_migrations(&postgres.pool, false).await?;
+    let db = Store::new(&postgres).await?;
+
+    let stored = Arc::new(GaloisRingSharedIris::dummy_for_party(0));
+    let current_id = VectorId::new(1, 0);
+    let mut tx = db.tx().await?;
+    db.insert_irises(
+        &mut tx,
+        &[StoredIrisRef {
+            id: 1,
+            left_code: &stored.code.coefs,
+            left_mask: &stored.mask.coefs,
+            right_code: &stored.code.coefs,
+            right_mask: &stored.mask.coefs,
+        }],
+    )
+    .await?;
+    tx.commit().await?;
+
+    let cold_store = SharedIrises::new(
+        HashMap::new(),
+        ResidentIris::from_arc(
+            Arc::new(GaloisRingSharedIris::default_for_party(0)),
+            ResidentLayout::U16,
+        ),
+    )
+    .to_arc();
+    let cold: Arc<dyn IrisWorkerPool> = Arc::new(
+        LocalIrisWorkerPool::new_cold(
+            init_workers(RIGHT, cold_store.clone(), false, ResidentLayout::U16),
+            cold_store,
+            ResidentLayout::U16,
+            DistanceMode::MinRotation,
+            0,
+            ColdStorageInit {
+                store: db.clone(),
+                side: RIGHT,
+                luc_window_ids: Vec::new(),
+                latest_serial_id: 1,
+                luc_window_capacity: 0,
+                lfu_cache_capacity: 8,
+            },
+        )
+        .await?,
+    );
+
+    // Model the registry being one version ahead of Postgres. Neither the
+    // asynchronous prefetch nor its foreground fallback may fabricate an
+    // all-zero iris for this exact-version miss.
+    let registry_id = current_id.next_version();
+    cold.prefetch_irises(vec![registry_id]).await?;
+    let prefetch_error = cold.wait_for_prefetch().await.unwrap_err();
+    assert!(
+        format!("{prefetch_error:#}").contains("cold-eye database missing"),
+        "unexpected prefetch error: {prefetch_error:#}"
+    );
+
+    let foreground_error = cold.fetch_irises(vec![registry_id]).await.unwrap_err();
+    assert!(
+        format!("{foreground_error:#}").contains("cold-eye database missing"),
+        "unexpected foreground error: {foreground_error:#}"
+    );
+
+    cleanup(&postgres, &schema_name).await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn cold_eye_luc_window_rolls_forward_and_survives_persistence_ack() -> Result<()> {
     let schema_name = temporary_name();
     let postgres =
@@ -156,11 +238,19 @@ async fn cold_eye_luc_window_rolls_forward_and_survives_persistence_ack() -> Res
     .await?;
     tx.commit().await?;
 
-    let cold_store = SharedIrises::to_arc(Aby3Store::<FhdOps>::new_storage(None));
+    let cold_store = SharedIrises::new(
+        HashMap::new(),
+        ResidentIris::from_arc(
+            Arc::new(GaloisRingSharedIris::default_for_party(0)),
+            ResidentLayout::U16,
+        ),
+    )
+    .to_arc();
     let cold: Arc<dyn IrisWorkerPool> = Arc::new(
         LocalIrisWorkerPool::new_cold(
-            init_workers(RIGHT, cold_store.clone(), false),
+            init_workers(RIGHT, cold_store.clone(), false, ResidentLayout::U16),
             cold_store,
+            ResidentLayout::U16,
             DistanceMode::MinRotation,
             0,
             ColdStorageInit {
@@ -200,70 +290,6 @@ async fn cold_eye_luc_window_rolls_forward_and_survives_persistence_ack() -> Res
     cold.acknowledge_persisted(vec![next_id.serial_id()])
         .await?;
     assert_eq!(cold.fetch_irises(vec![next_id]).await?[0], replacement);
-
-    cleanup(&postgres, &schema_name).await?;
-    Ok(())
-}
-
-#[tokio::test]
-async fn cold_eye_version_miss_fails_prefetch_and_foreground_fetch() -> Result<()> {
-    let schema_name = temporary_name();
-    let postgres =
-        PostgresClient::new(&test_db_url()?, &schema_name, AccessMode::ReadWrite).await?;
-    run_migrations(&postgres.pool, false).await?;
-    let db = Store::new(&postgres).await?;
-
-    let stored = GaloisRingSharedIris::dummy_for_party(0);
-    let current_id = VectorId::new(1, 0);
-    let mut tx = db.tx().await?;
-    db.insert_irises(
-        &mut tx,
-        &[StoredIrisRef {
-            id: 1,
-            left_code: &stored.code.coefs,
-            left_mask: &stored.mask.coefs,
-            right_code: &stored.code.coefs,
-            right_mask: &stored.mask.coefs,
-        }],
-    )
-    .await?;
-    tx.commit().await?;
-
-    let cold_store = SharedIrises::to_arc(Aby3Store::<FhdOps>::new_storage(None));
-    let cold: Arc<dyn IrisWorkerPool> = Arc::new(
-        LocalIrisWorkerPool::new_cold(
-            init_workers(RIGHT, cold_store.clone(), false),
-            cold_store,
-            DistanceMode::MinRotation,
-            0,
-            ColdStorageInit {
-                store: db,
-                side: RIGHT,
-                luc_window_ids: Vec::new(),
-                latest_serial_id: 1,
-                luc_window_capacity: 0,
-                lfu_cache_capacity: 8,
-            },
-        )
-        .await?,
-    );
-
-    // Model the registry being one version ahead of Postgres. Neither the
-    // asynchronous prefetch nor its foreground fallback may fabricate an
-    // all-zero iris for this exact-version miss.
-    let registry_id = current_id.next_version();
-    cold.prefetch_irises(vec![registry_id]).await?;
-    let prefetch_error = cold.wait_for_prefetch().await.unwrap_err();
-    assert!(
-        format!("{prefetch_error:#}").contains("cold-eye database missing"),
-        "unexpected prefetch error: {prefetch_error:#}"
-    );
-
-    let foreground_error = cold.fetch_irises(vec![registry_id]).await.unwrap_err();
-    assert!(
-        format!("{foreground_error:#}").contains("cold-eye database missing"),
-        "unexpected foreground error: {foreground_error:#}"
-    );
 
     cleanup(&postgres, &schema_name).await?;
     Ok(())
