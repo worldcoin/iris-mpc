@@ -99,22 +99,6 @@ name = "networking"
 harness = false
 
 [[bench]]
-name = "linear_scan_network"
-harness = false
-
-[[bench]]
-name = "linear_scan_network_tcp"
-harness = false
-
-[[bench]]
-name = "linear_scan_dot_cpu"
-harness = false
-
-[[bench]]
-name = "linear_scan_candidates"
-harness = false
-
-[[bench]]
 name = "set_hash"
 harness = false
 
