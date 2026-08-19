@@ -244,7 +244,6 @@ pub async fn linear_scan_cascade<const ROTMASK: u32>(
 
     let first_eye = eye_index(full_scan_side);
     let second_eye_side = full_scan_side.other();
-    let second_eye = eye_index(second_eye_side);
 
     // Both eye registries contain the same live VectorIds. Build this list
     // once, then share it across all requests and sessions in the full stage.
