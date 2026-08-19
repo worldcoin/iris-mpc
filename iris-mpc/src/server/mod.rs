@@ -611,6 +611,9 @@ async fn build_sync_state(
         common_config,
         graph_mutation_bytes,
         max_persisted_sequence_number,
+        // Not applicable to the CPU path: Hawk derives fresh PRF seeds per
+        // session (`setup_replicated_prf`), so there is nothing to refresh.
+        dh_nonce: None,
     })
 }
 

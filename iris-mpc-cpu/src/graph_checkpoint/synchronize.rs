@@ -365,6 +365,7 @@ mod sync_graph_mutations_tests {
             common_config: CommonConfig::default(),
             graph_mutation_bytes,
             max_persisted_sequence_number: None,
+            dh_nonce: None,
         }
     }
 
@@ -471,6 +472,7 @@ mod sync_graph_mutations_tests {
             common_config: CommonConfig::default(),
             graph_mutation_bytes: vec![], // one modification, zero byte entries
             max_persisted_sequence_number: None,
+            dh_nonce: None,
         };
         let err = build_mutation_bytes(&[state]).unwrap_err();
         assert!(
