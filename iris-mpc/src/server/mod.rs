@@ -446,7 +446,7 @@ fn validate_max_batch_size(max_batch_size: usize, search_mode: HawkSearchMode) -
     if search_mode == HawkSearchMode::LinearScan && max_batch_size != 1 {
         bail!(
             "exact CPU linear-scan mode requires max_batch_size=1; got {max_batch_size}. \
-             Requests must be serialized so intra-batch matching is unnecessary"
+             Batched execution is not yet covered by end-to-end GPU-parity validation"
         );
     }
     Ok(())

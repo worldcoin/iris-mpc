@@ -82,7 +82,7 @@ enum IrisTask {
     /// Dot products against transient targets loaded from cold storage.
     DotProductIrisesBatch {
         query: ArcIris,
-        targets: Arc<[ArcIris]>,
+        targets: Arc<Vec<ArcIris>>,
         range: std::ops::Range<usize>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
     },
@@ -96,7 +96,7 @@ enum IrisTask {
     /// Rotation-aware dot products against transient cold-storage targets.
     RotationAwareDotProductIrisesBatch {
         query: ArcIris,
-        targets: Arc<[ArcIris]>,
+        targets: Arc<Vec<ArcIris>>,
         range: std::ops::Range<usize>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
     },
@@ -112,7 +112,7 @@ enum IrisTask {
     /// Full 31-rotation dot products against transient cold-storage targets.
     FullRotationDotProductIrisesBatch {
         query: ArcIris,
-        targets: Arc<[ArcIris]>,
+        targets: Arc<Vec<ArcIris>>,
         range: std::ops::Range<usize>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
     },
@@ -217,7 +217,7 @@ impl IrisPoolHandle {
         query: ArcIris,
         targets: Vec<ArcIris>,
     ) -> Result<Vec<RingElement<u16>>> {
-        let targets: Arc<[ArcIris]> = Arc::from(targets);
+        let targets = Arc::new(targets);
         let mut responses = Vec::with_capacity(Self::n_batch_chunks(targets.len()));
         for (i, _) in targets.chunks(Self::ROT_AWARE_BATCH_CHUNK_SIZE).enumerate() {
             let start = i * Self::ROT_AWARE_BATCH_CHUNK_SIZE;
@@ -319,7 +319,7 @@ impl IrisPoolHandle {
         query: ArcIris,
         targets: Vec<ArcIris>,
     ) -> Result<Vec<RingElement<u16>>> {
-        let targets: Arc<[ArcIris]> = Arc::from(targets);
+        let targets = Arc::new(targets);
         let mut responses = Vec::with_capacity(Self::n_batch_chunks(targets.len()));
         for (i, _) in targets.chunks(Self::ROT_AWARE_BATCH_CHUNK_SIZE).enumerate() {
             let start = i * Self::ROT_AWARE_BATCH_CHUNK_SIZE;
@@ -385,7 +385,7 @@ impl IrisPoolHandle {
         targets: Vec<ArcIris>,
         task_size: NonZeroUsize,
     ) -> Result<Vec<RingElement<u16>>> {
-        let targets: Arc<[ArcIris]> = Arc::from(targets);
+        let targets = Arc::new(targets);
         let task_size = task_size.get();
         let mut responses = Vec::with_capacity(targets.len().div_ceil(task_size));
         for (i, _) in targets.chunks(task_size).enumerate() {
