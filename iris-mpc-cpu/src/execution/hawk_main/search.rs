@@ -177,6 +177,13 @@ pub async fn search<const ROTMASK: u32>(
     let n_requests = search_queries[LEFT].len();
     assert_eq!(n_requests, search_queries[RIGHT].len());
 
+    // `search_to_identity_update` invokes this function for every batch, even
+    // when the batch has no reset/recovery updates. Avoid spawning one empty
+    // session per eye in that common case.
+    if n_requests == 0 {
+        return Ok([Vec::new(), Vec::new()]);
+    }
+
     let (tx, rx) = unbounded_channel::<(TaskId, HawkInsertPlan)>();
 
     let per_session = |batch: Batch| {
@@ -669,6 +676,18 @@ async fn per_session<const ROTMASK: u32>(
     batch: Batch,
 ) -> Result<()> {
     let inner = async {
+        // Linear scan does not build graph links for identity updates. The
+        // shared HNSW path expresses that operation as a no-match search, but
+        // materializing every live VectorId would be pure overhead here.
+        if search_params.mode == HawkSearchMode::LinearScan && !search_params.do_match {
+            let graph_store = session.graph_store.clone().read_owned().await;
+            for task in batch.tasks {
+                let query = search_queries[batch.i_eye][task.i_request][task.i_rotation];
+                tx.send((task.id(), empty_linear_scan_plan(query, &graph_store)))?;
+            }
+            return Ok(());
+        }
+
         let mut vector_store = session.aby3_store.write().await;
         let graph_store = session.graph_store.clone().read_owned().await;
 
@@ -772,15 +791,6 @@ async fn per_linear_scan_query(
     let mut classified = ClassifiedMatches::default();
 
     if search_params.do_match {
-        classified
-            .matches
-            .results
-            .reserve(vector_ids.len().min(4096));
-        classified
-            .anon_stats_matches
-            .results
-            .reserve(vector_ids.len().min(4096));
-
         for ids in vector_ids.chunks(LINEAR_SCAN_CHUNK_SIZE) {
             let forced_anon_stats_vectors = forced_anon_stats_ids
                 .iter()
@@ -1139,6 +1149,22 @@ mod tests {
             Threshold::Match.ratio() <= Threshold::AnonStats.ratio(),
             "Match threshold must be stricter (lower) than anon stats threshold"
         );
+    }
+
+    #[tokio::test]
+    async fn empty_search_does_not_require_sessions() -> Result<()> {
+        let sessions: BothEyes<Vec<HawkSession>> = [Vec::new(), Vec::new()];
+        let queries: SearchQueries<0> = Arc::new([Vec::new(), Vec::new()]);
+        let request_ids: SearchIds = Arc::new(Vec::new());
+        let params = SearchParams::new_no_match(
+            Arc::new(HnswSearcher::new_with_test_parameters()),
+            HawkSearchMode::LinearScan,
+        );
+
+        let results = search(&sessions, &queries, &request_ids, params).await?;
+
+        assert!(results.iter().all(Vec::is_empty));
+        Ok(())
     }
 
     #[test]
