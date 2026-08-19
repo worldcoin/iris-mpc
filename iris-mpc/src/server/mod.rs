@@ -452,25 +452,6 @@ fn validate_max_batch_size(max_batch_size: usize, search_mode: HawkSearchMode) -
     Ok(())
 }
 
-#[cfg(test)]
-mod config_tests {
-    use super::*;
-
-    #[test]
-    fn linear_scan_requires_single_request_batches() {
-        assert!(validate_max_batch_size(1, HawkSearchMode::LinearScan).is_ok());
-
-        let error = validate_max_batch_size(2, HawkSearchMode::LinearScan)
-            .expect_err("linear scan must reject batches larger than one");
-        assert!(error.to_string().contains("requires max_batch_size=1"));
-    }
-
-    #[test]
-    fn hnsw_keeps_batched_requests() {
-        assert!(validate_max_batch_size(64, HawkSearchMode::Hnsw).is_ok());
-    }
-}
-
 /// Returns initialized PostgreSQL clients for interacting
 /// with iris share and HNSW graph stores.
 async fn prepare_stores(
@@ -1252,4 +1233,23 @@ async fn run_main_server_loop(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod config_tests {
+    use super::*;
+
+    #[test]
+    fn linear_scan_requires_single_request_batches() {
+        assert!(validate_max_batch_size(1, HawkSearchMode::LinearScan).is_ok());
+
+        let error = validate_max_batch_size(2, HawkSearchMode::LinearScan)
+            .expect_err("linear scan must reject batches larger than one");
+        assert!(error.to_string().contains("requires max_batch_size=1"));
+    }
+
+    #[test]
+    fn hnsw_keeps_batched_requests() {
+        assert!(validate_max_batch_size(64, HawkSearchMode::Hnsw).is_ok());
+    }
 }
