@@ -483,7 +483,8 @@ impl Circuits {
         for i in 0..n_devices {
             let dev = device_manager.device(i);
             let kernel = Kernels::new(dev.clone(), ptx.clone());
-            let rng = ChaChaCudaCorrRng::init(dev.clone(), chacha_seeds.0, chacha_seeds.1);
+            let rng =
+                ChaChaCudaCorrRng::init(dev.clone(), chacha_seeds.0, chacha_seeds.1, i as u64);
 
             devs.push(dev);
             kernels.push(kernel);

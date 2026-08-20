@@ -494,7 +494,27 @@ pub mod degree4 {
 
         pub fn from_base64(s: &str) -> Result<Self> {
             let decoded_bytes = BASE64_STANDARD.decode(s)?;
-            Ok(bincode::deserialize(&decoded_bytes)?)
+            let share: Self = bincode::deserialize(&decoded_bytes)?;
+            // 3-party Shamir sharing: valid Lagrange point ids are 1..=3.
+            eyre::ensure!(
+                (1..=3).contains(&share.id),
+                "invalid iris code share id: {}",
+                share.id
+            );
+            Ok(share)
+        }
+
+        /// Like [`Self::from_base64`], but additionally checks that the share id
+        /// matches the node's own (0-based) party id.
+        pub fn from_base64_for_party(s: &str, party_id: usize) -> Result<Self> {
+            let share = Self::from_base64(s)?;
+            eyre::ensure!(
+                share.id == party_id + 1,
+                "iris code share id {} does not match own party id {}",
+                share.id,
+                party_id
+            );
+            Ok(share)
         }
 
         pub fn mirrored_code(&self) -> Self {
@@ -898,6 +918,21 @@ pub mod degree4 {
                 let decoded = GaloisRingIrisCodeShare::from_base64(&s).unwrap();
                 assert_eq!(shares[i].coefs, decoded.coefs);
             }
+        }
+
+        #[test]
+        fn base64_share_id_validation() {
+            let mut rng = thread_rng();
+            let code = IrisCodeArray::random_rng(&mut rng);
+            let shares = GaloisRingIrisCodeShare::encode_mask_code(&code, &mut rng);
+            for (i, share) in shares.iter().enumerate() {
+                let s = share.to_base64();
+                assert!(GaloisRingIrisCodeShare::from_base64_for_party(&s, i).is_ok());
+                assert!(GaloisRingIrisCodeShare::from_base64_for_party(&s, (i + 1) % 3).is_err());
+            }
+            let mut bad = shares[0].clone();
+            bad.id = 4;
+            assert!(GaloisRingIrisCodeShare::from_base64(&bad.to_base64()).is_err());
         }
 
         #[test]

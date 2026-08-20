@@ -21,6 +21,9 @@ use crate::utils::{
 #[derive(Default)]
 pub struct Wal109 {
     nodes: Option<CpuNodes>,
+    /// Expected graph digest, captured from the builder because the cycle prunes
+    /// the WAL it was derived from.
+    reference_hash: Option<[u8; 32]>,
 }
 
 impl Wal109 {
@@ -75,6 +78,10 @@ impl TestRun for Wal109 {
             .init_iris_shares(3 * MIN_MUTATIONS_PER_SIDECAR_CYCLE, &aws_client)
             .await?;
 
+        // All three builders hold the same 3*MIN entries — they differ only in how
+        // much of that set each party has persisted — so any of them describes the
+        // graph the parties converge on.
+        self.reference_hash = Some(builder0.reference_hash()?);
         self.nodes = Some(nodes);
         Ok(())
     }
@@ -126,14 +133,19 @@ impl TestRun for Wal109 {
     async fn exec_assert(&mut self, _ctx: &CpuTestContext) -> eyre::Result<()> {
         let nodes = self.nodes.as_ref().unwrap();
 
+        // The base checkpoint (mod MIN) is the oldest live one, so the rows below
+        // it are pruned; its anchor row and the synced delta above it survive.
         let post = WalAssertions::new()
-            .assert_wal_row_count(3 * MIN_MUTATIONS_PER_SIDECAR_CYCLE)
+            .assert_wal_row_count(2 * MIN_MUTATIONS_PER_SIDECAR_CYCLE + 1)
+            .assert_min_modification_id(MIN_MUTATIONS_PER_SIDECAR_CYCLE as i64)
             .assert_checkpoint_count(2)
             .assert_latest_checkpoint_mod_id(3 * MIN_MUTATIONS_PER_SIDECAR_CYCLE as i64);
         nodes.apply_uniform_assertions(&post).await?;
 
         nodes.assert_checkpoint_hashes_agree().await?;
-        nodes.assert_consensus_and_reference().await
+        nodes
+            .assert_checkpoint_hashes_match_reference(self.reference_hash.as_ref().unwrap())
+            .await
     }
 
     async fn teardown(&mut self, ctx: &CpuTestContext) -> eyre::Result<()> {

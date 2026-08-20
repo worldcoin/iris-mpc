@@ -225,7 +225,9 @@ extern "C" __global__ void partialDbResults(unsigned long long *matchResults, un
             if (queryIdx >= queryLength || dbIdx >= dbLength)
                 continue;
 
-            // Check for partial results (only used for debugging)
+            // Record matching db indices; these are the candidate set for the
+            // second-eye comparison. Matches beyond maxMatches are dropped
+            // (detected host-side via the counter exceeding maxMatches).
             if (match)
             {
                 unsigned int queryMatchCounter = atomicAdd(matchCounter, 1);

@@ -40,7 +40,7 @@ export RUST_MIN_STACK=104857600
 # "graceful" stop is really a SIGKILL after the grace period, making local
 # shutdown-drain behavior untestable.
 if [ "$BINARY" == "genesis" ]; then
-    exec /bin/iris-mpc-hawk-genesis --max-height "${GENESIS_MAX_HEIGHT:-100}" --batch-size "${GENESIS_BATCH_SIZE:-dynamic:cap=96,error_rate=128}" --perform-snapshot=false
+    exec /bin/iris-mpc-hawk-genesis --max-height "${GENESIS_MAX_HEIGHT:-100}" --batch-size "${GENESIS_BATCH_SIZE:-dynamic:cap=96,error_rate=128}"
 elif [ "$BINARY" == "linear-scan" ]; then
     exec /bin/iris-mpc-linear-scan
 else

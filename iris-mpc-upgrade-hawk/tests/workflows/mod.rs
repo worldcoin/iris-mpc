@@ -42,9 +42,7 @@ macro_rules! run_genesis {
             let args = _args.clone();
             join_set.spawn(async move {
                 let r = ::iris_mpc_upgrade_hawk::genesis::exec(
-                    ::iris_mpc_upgrade_hawk::genesis::ExecutionArgs::from_plaintext_args(
-                        args, false,
-                    ),
+                    ::iris_mpc_upgrade_hawk::genesis::ExecutionArgs::from_plaintext_args(args),
                     config,
                 )
                 .instrument(span.clone())

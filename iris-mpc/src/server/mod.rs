@@ -170,7 +170,7 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
 
     // Handle modifications sync
     if config.enable_modifications_sync {
-        sync_modifications(
+        let mut tx = sync_modifications(
             &config,
             &iris_store,
             &aws_clients,
@@ -178,11 +178,13 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
             sync_result.clone(),
         )
         .await?;
-        // insert the WAL entries so that init_hawk_actor rolls the graph forward to
-        // the correct height.
+        // Insert the WAL entries so that init_hawk_actor rolls the graph forward to
+        // the correct height. Share the modifications-sync transaction so a crash
+        // cannot leave the iris store ahead of the WAL. Linear scan has no graph WAL.
         if search_mode == HawkSearchMode::Hnsw {
-            sync_graph_mutations(&sync_result, &graph_store).await?;
+            sync_graph_mutations(&sync_result, &graph_store, &mut tx).await?;
         }
+        tx.commit().await?;
     }
 
     if config.enable_modifications_replay {
@@ -674,6 +676,9 @@ async fn build_sync_state(
         common_config,
         graph_mutation_bytes,
         max_persisted_sequence_number,
+        // Not applicable to the CPU path: Hawk derives fresh PRF seeds per
+        // session (`setup_replicated_prf`), so there is nothing to refresh.
+        dh_nonce: None,
     })
 }
 
