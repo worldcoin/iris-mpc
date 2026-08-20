@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-linear-scan:2310cf142cb8e512acb07c16cf592865b55591fa"
+image: "ghcr.io/worldcoin/iris-mpc-linear-scan:8697ac2f0dae96af85aa33e1e5b74f1858c67b6a"
 
 environment: stage
 replicaCount: 1
@@ -13,7 +13,7 @@ env:
   SMPC__DATABASE__URL:
     valueFrom:
       secretKeyRef:
-        key: DATABASE_AURORA_HNWS_URL
+        key: DATABASE_AURORA_HNSW_URL
         name: application
   SMPC__DATABASE__MIGRATE: "true"
   SMPC__DATABASE__CREATE: "true"
@@ -23,7 +23,7 @@ env:
   SMPC__ANON_STATS_DATABASE__URL:
     valueFrom:
       secretKeyRef:
-        key: DATABASE_AURORA_HNWS_URL
+        key: DATABASE_AURORA_HNSW_URL
         name: application
   SMPC__ANON_STATS_DATABASE__MIGRATE: "false"
   SMPC__ANON_STATS_DATABASE__CREATE: "false"
@@ -138,10 +138,10 @@ startupProbe:
 
 resources:
   limits:
-    cpu: "1"
+    cpu: "12"
     memory: 16Gi
   requests:
-    cpu: "1"
+    cpu: "12"
     memory: 16Gi
 
 imagePullSecrets:
@@ -162,7 +162,7 @@ affinity:
         - matchExpressions:
             - key: karpenter.k8s.aws/instance-family
               operator: In
-              values: ["r8g", "c8g", "m8g"]
+              values: ["r8g"]
 
 podSecurityContext:
   runAsUser: 65534
