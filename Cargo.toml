@@ -30,13 +30,14 @@ repository = "https://github.com/worldcoin/iris-mpc"
 
 [workspace.dependencies]
 async-stream = "0.3"
-aws-config = { version = "1.5.10", features = ["behavior-version-latest"] }
-aws-sdk-kms = { version = "1.44.0" }
-aws-sdk-rds = { version = "1.44.0" }
-aws-sdk-sns = { version = "1.44.0" }
-aws-sdk-sqs = { version = "1.89.0" }
-aws-sdk-s3 = { version = "1.65.0" }
-aws-sdk-secretsmanager = { version = "1.47.0" }
+aws-config = { version = "1.10.1", features = ["behavior-version-latest"] }
+# default-features = false drops the legacy "rustls" feature, which pulls in hyper 0.14 / h2 0.3
+aws-sdk-kms = { version = "1.115.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-rds = { version = "1.144.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-sns = { version = "1.108.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-sqs = { version = "1.106.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-s3 = { version = "1.142.0", default-features = false, features = ["sigv4a", "http-1x", "default-https-client", "rt-tokio"] }
+aws-sdk-secretsmanager = { version = "1.112.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 async-trait = "0.1.83"
 axum = "0.7"
 blake3 = "1.8.2"
@@ -86,10 +87,10 @@ tokio-util = "0.7.15"
 toml = { version = "0.8.23", features = ["preserve_order"] }
 uuid = { version = "1", features = ["v4"] }
 iris-mpc-cpu = { path = "./iris-mpc-cpu" }
-ampc-anon-stats = { git = "https://github.com/worldcoin/ampc-common.git", rev = "fa95ff78a91ef3cfb3c8020afab0e50eae0dc88a" }
-ampc-actor-utils = { git = "https://github.com/worldcoin/ampc-common.git", rev = "fa95ff78a91ef3cfb3c8020afab0e50eae0dc88a" }
-ampc-secret-sharing = { git = "https://github.com/worldcoin/ampc-common.git", rev = "fa95ff78a91ef3cfb3c8020afab0e50eae0dc88a" }
-ampc-server-utils = { git = "https://github.com/worldcoin/ampc-common.git", rev = "fa95ff78a91ef3cfb3c8020afab0e50eae0dc88a" }
+ampc-anon-stats = { git = "https://github.com/worldcoin/ampc-common.git", rev = "a0b968c4304c3cc15f8ac68b48dd56f503ac6e73" }
+ampc-actor-utils = { git = "https://github.com/worldcoin/ampc-common.git", rev = "a0b968c4304c3cc15f8ac68b48dd56f503ac6e73" }
+ampc-secret-sharing = { git = "https://github.com/worldcoin/ampc-common.git", rev = "a0b968c4304c3cc15f8ac68b48dd56f503ac6e73" }
+ampc-server-utils = { git = "https://github.com/worldcoin/ampc-common.git", rev = "a0b968c4304c3cc15f8ac68b48dd56f503ac6e73" }
 
 # Abort on panics rather than unwinding.
 # This improves performance and makes panic propagation more reliable.

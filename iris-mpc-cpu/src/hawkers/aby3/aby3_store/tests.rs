@@ -50,50 +50,6 @@ fn gpu_prefilter_expands_candidate_records_to_all_rotations() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn full_rotation_threshold_scan_matches_min_distance_reference() -> Result<()> {
-    let mut rng = AesRng::seed_from_u64(0x7468_7265_7368_6f6c);
-    let vectors_and_graphs = shared_random_setup(&mut rng, 2, NetworkType::Local).await?;
-
-    let tasks = vectors_and_graphs
-        .into_iter()
-        .map(|(store, _graph)| async move {
-            let mut store = store.lock_owned().await;
-            let ids = [VectorId::from_0_index(0), VectorId::from_0_index(1)];
-            let query = store.cache_query_from_store(&ids[0]).await?;
-
-            let direct = store
-                .eval_distance_batch_full_rotation_thresholds(&query, &ids)
-                .await?;
-            let (minimums, reference_rotations) = store
-                .eval_distance_batch_full_rotations_with_rotation_matches(&query, &ids)
-                .await?;
-            let reference_anon = store.is_match_at(&minimums, Threshold::AnonStats).await?;
-            let reference_match = store.is_match_at(&minimums, Threshold::Match).await?;
-
-            let direct_anon = (0..ids.len())
-                .map(|vector| {
-                    direct
-                        .anon_stats_matches
-                        .iter()
-                        .any(|(matched_vector, _, _)| *matched_vector == vector)
-                })
-                .collect::<Vec<_>>();
-            let direct_match = direct
-                .matches
-                .iter()
-                .map(Option::is_some)
-                .collect::<Vec<_>>();
-            assert_eq!(direct_anon, reference_anon);
-            assert_eq!(direct_match, reference_match);
-            assert_eq!(direct.match_rotations, reference_rotations);
-            Ok(())
-        });
-
-    parallelize(tasks).await?;
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn test_gr_hnsw() -> Result<()> {
     let mut rng = AesRng::seed_from_u64(0_u64);
     let database_size = 10;

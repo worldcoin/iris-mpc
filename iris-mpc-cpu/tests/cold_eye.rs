@@ -195,8 +195,7 @@ async fn cold_eye_luc_window_rolls_forward_and_survives_persistence_ack() -> Res
     let next_id = vector_id.next_version();
     cold.insert_irises(vec![(query_id, next_id)]).await?;
     assert_eq!(cold.fetch_irises(vec![next_id]).await?[0], replacement);
-    cold.acknowledge_persisted(vec![next_id.serial_id()])
-        .await?;
+    assert_eq!(cold.acknowledge_persisted_irises(vec![next_id]).await, 1);
     assert_eq!(cold.fetch_irises(vec![next_id]).await?[0], replacement);
 
     cleanup(&postgres, &schema_name).await?;

@@ -38,12 +38,13 @@ use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::job::JobSubmissionHandle;
 use iris_mpc_common::postgres::{run_migrations, AccessMode, PostgresClient};
 use iris_mpc_cpu::checkpoint_protocol::runner::SidecarConfigWrapper;
+use iris_mpc_cpu::execution::hawk_main::iris_worker::IrisWorkerPool;
 use iris_mpc_cpu::execution::hawk_main::worker_pool_initializer::{
     DbLoadParams, LocalWorkerPoolInitializer, WorkerPoolInitializer,
 };
 use iris_mpc_cpu::execution::hawk_main::{
-    build_hawk_network_handle, iris_worker::IrisPersistenceAckHandle, GraphStore, HawkActor,
-    HawkArgs, HawkHandle, HawkOps, HawkSearchMode, ServerJobResult, HAWK_DISTANCE_MODE,
+    build_hawk_network_handle, BothEyes, GraphStore, HawkActor, HawkArgs, HawkHandle, HawkOps,
+    HawkSearchMode, ServerJobResult, StoreId, HAWK_DISTANCE_MODE,
 };
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
@@ -169,7 +170,7 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
 
     // Handle modifications sync
     if config.enable_modifications_sync {
-        sync_modifications(
+        let mut tx = sync_modifications(
             &config,
             &iris_store,
             &aws_clients,
@@ -177,11 +178,13 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
             sync_result.clone(),
         )
         .await?;
-        // insert the WAL entries so that init_hawk_actor rolls the graph forward to
-        // the correct height.
+        // Insert the WAL entries so that init_hawk_actor rolls the graph forward to
+        // the correct height. Share the modifications-sync transaction so a crash
+        // cannot leave the iris store ahead of the WAL. Linear scan has no graph WAL.
         if search_mode == HawkSearchMode::Hnsw {
-            sync_graph_mutations(&sync_result, &graph_store).await?;
+            sync_graph_mutations(&sync_result, &graph_store, &mut tx).await?;
         }
+        tx.commit().await?;
     }
 
     if config.enable_modifications_replay {
@@ -298,7 +301,10 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
         iris_store: iris_store.clone(),
         graph_store,
         search_mode,
-        ack_handle: hawk_actor.persistence_ack_handle(),
+        worker_pools: [
+            hawk_actor.worker_pool(StoreId::Left),
+            hawk_actor.worker_pool(StoreId::Right),
+        ],
     };
     let tx_results = start_results_thread(
         &config,
@@ -447,7 +453,7 @@ fn validate_max_batch_size(max_batch_size: usize, search_mode: HawkSearchMode) -
     if search_mode == HawkSearchMode::LinearScan && max_batch_size != 1 {
         bail!(
             "exact CPU linear-scan mode requires max_batch_size=1; got {max_batch_size}. \
-             Requests must be serialized so intra-batch matching is unnecessary"
+             Batched execution is not yet covered by end-to-end GPU-parity validation"
         );
     }
     Ok(())
@@ -670,6 +676,9 @@ async fn build_sync_state(
         common_config,
         graph_mutation_bytes,
         max_persisted_sequence_number,
+        // Not applicable to the CPU path: Hawk derives fresh PRF seeds per
+        // session (`setup_replicated_prf`), so there is nothing to refresh.
+        dh_nonce: None,
     })
 }
 
@@ -894,7 +903,7 @@ struct ResultsPersistence {
     iris_store: Store,
     graph_store: GraphPg<Aby3Store<HawkOps>>,
     search_mode: HawkSearchMode,
-    ack_handle: IrisPersistenceAckHandle,
+    worker_pools: BothEyes<Arc<dyn IrisWorkerPool>>,
 }
 
 async fn start_results_thread(
@@ -912,7 +921,7 @@ async fn start_results_thread(
         iris_store: store_bg,
         graph_store,
         search_mode,
-        ack_handle: persistence_ack_handle,
+        worker_pools,
     } = persistence;
     let shutdown_handler_bg = Arc::clone(shutdown_handler);
     let party_id = config.party_id;
@@ -924,6 +933,7 @@ async fn start_results_thread(
                 party_id,
                 &store_bg,
                 &graph_store,
+                &worker_pools,
                 &sns_client_bg,
                 &config_bg,
                 search_mode,
@@ -934,7 +944,6 @@ async fn start_results_thread(
                 &sns_attributes_maps.reset_update_result_attributes,
                 &sns_attributes_maps.recovery_check_result_attributes,
                 &sns_attributes_maps.recovery_update_result_attributes,
-                &persistence_ack_handle,
                 &shutdown_handler_bg,
             )
             .await

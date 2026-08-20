@@ -1,5 +1,5 @@
 use crate::{
-    execution::hawk_main::{BothEyes, HAWK_MIN_DIST_ROTATIONS},
+    execution::hawk_main::HAWK_MIN_DIST_ROTATIONS,
     hawkers::aby3::aby3_store::DistanceMode,
     hawkers::shared_irises::SharedIrisesRef,
     protocol::{
@@ -83,7 +83,7 @@ enum IrisTask {
     /// Dot products against transient targets loaded from cold storage.
     DotProductIrisesBatch {
         query: ArcIris,
-        targets: Arc<[ArcIris]>,
+        targets: Arc<Vec<ArcIris>>,
         range: std::ops::Range<usize>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
     },
@@ -97,7 +97,7 @@ enum IrisTask {
     /// Rotation-aware dot products against transient cold-storage targets.
     RotationAwareDotProductIrisesBatch {
         query: ArcIris,
-        targets: Arc<[ArcIris]>,
+        targets: Arc<Vec<ArcIris>>,
         range: std::ops::Range<usize>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
     },
@@ -113,7 +113,7 @@ enum IrisTask {
     /// Full 31-rotation dot products against transient cold-storage targets.
     FullRotationDotProductIrisesBatch {
         query: ArcIris,
-        targets: Arc<[ArcIris]>,
+        targets: Arc<Vec<ArcIris>>,
         range: std::ops::Range<usize>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
     },
@@ -218,7 +218,7 @@ impl IrisPoolHandle {
         query: ArcIris,
         targets: Vec<ArcIris>,
     ) -> Result<Vec<RingElement<u16>>> {
-        let targets: Arc<[ArcIris]> = Arc::from(targets);
+        let targets = Arc::new(targets);
         let mut responses = Vec::with_capacity(Self::n_batch_chunks(targets.len()));
         for (i, _) in targets.chunks(Self::ROT_AWARE_BATCH_CHUNK_SIZE).enumerate() {
             let start = i * Self::ROT_AWARE_BATCH_CHUNK_SIZE;
@@ -320,7 +320,7 @@ impl IrisPoolHandle {
         query: ArcIris,
         targets: Vec<ArcIris>,
     ) -> Result<Vec<RingElement<u16>>> {
-        let targets: Arc<[ArcIris]> = Arc::from(targets);
+        let targets = Arc::new(targets);
         let mut responses = Vec::with_capacity(Self::n_batch_chunks(targets.len()));
         for (i, _) in targets.chunks(Self::ROT_AWARE_BATCH_CHUNK_SIZE).enumerate() {
             let start = i * Self::ROT_AWARE_BATCH_CHUNK_SIZE;
@@ -386,7 +386,7 @@ impl IrisPoolHandle {
         targets: Vec<ArcIris>,
         task_size: NonZeroUsize,
     ) -> Result<Vec<RingElement<u16>>> {
-        let targets: Arc<[ArcIris]> = Arc::from(targets);
+        let targets = Arc::new(targets);
         let task_size = task_size.get();
         let mut responses = Vec::with_capacity(targets.len().div_ceil(task_size));
         for (i, _) in targets.chunks(task_size).enumerate() {
@@ -847,6 +847,17 @@ pub trait IrisWorkerPool: Debug + Send + Sync {
     fn insert_irises<'a>(&'a self, inserts: Vec<(QueryId, VectorId)>)
         -> BoxFuture<'a, Result<u64>>;
 
+    /// Drop exact vector versions from a cold mutation overlay after their
+    /// database transaction commits. Resident workers have nothing to drop.
+    ///
+    /// Exact-version removal is intentional: a later mutation of the same
+    /// serial ID may already be queued, and acknowledging the older version
+    /// must not make that newer mutation invisible before it is persisted.
+    fn acknowledge_persisted_irises<'a>(
+        &'a self,
+        vector_ids: Vec<VectorId>,
+    ) -> BoxFuture<'a, usize>;
+
     /// Compute pairwise distances between pairs of cached queries.
     ///
     /// Used for intra-batch matching where both irises are cached queries
@@ -868,11 +879,6 @@ pub trait IrisWorkerPool: Debug + Send + Sync {
     /// that produce max-distance in dot products. The party_id is a config
     /// field on the implementer.
     fn delete_irises<'a>(&'a self, ids: Vec<VectorId>) -> BoxFuture<'a, Result<()>>;
-
-    /// Acknowledge database commits for mutations previously applied to the
-    /// worker. Resident pools need no acknowledgement; a database-backed cold
-    /// pool uses it to discard its write-behind overlay safely.
-    fn acknowledge_persisted<'a>(&'a self, serial_ids: Vec<SerialId>) -> BoxFuture<'a, Result<()>>;
 }
 
 /// Blanket impl so any `Arc<T: IrisWorkerPool>` (including
@@ -910,6 +916,12 @@ impl<T: ?Sized + IrisWorkerPool> IrisWorkerPool for Arc<T> {
     ) -> BoxFuture<'a, Result<u64>> {
         (**self).insert_irises(inserts)
     }
+    fn acknowledge_persisted_irises<'a>(
+        &'a self,
+        vector_ids: Vec<VectorId>,
+    ) -> BoxFuture<'a, usize> {
+        (**self).acknowledge_persisted_irises(vector_ids)
+    }
     fn compute_pairwise_distances<'a>(
         &'a self,
         pairs: Vec<Option<(QuerySpec, QueryId)>>,
@@ -921,30 +933,6 @@ impl<T: ?Sized + IrisWorkerPool> IrisWorkerPool for Arc<T> {
     }
     fn delete_irises<'a>(&'a self, ids: Vec<VectorId>) -> BoxFuture<'a, Result<()>> {
         (**self).delete_irises(ids)
-    }
-    fn acknowledge_persisted<'a>(&'a self, serial_ids: Vec<SerialId>) -> BoxFuture<'a, Result<()>> {
-        (**self).acknowledge_persisted(serial_ids)
-    }
-}
-
-/// Cloneable bridge from the asynchronous result-persistence task back to the
-/// worker pools. Each committed mutation releases one queued cold-eye value.
-#[derive(Clone)]
-pub struct IrisPersistenceAckHandle {
-    pools: BothEyes<Arc<dyn IrisWorkerPool>>,
-}
-
-impl IrisPersistenceAckHandle {
-    pub(crate) fn new(pools: BothEyes<Arc<dyn IrisWorkerPool>>) -> Self {
-        Self { pools }
-    }
-
-    pub async fn acknowledge_persisted(&self, serial_ids: Vec<SerialId>) -> Result<()> {
-        futures::try_join!(
-            self.pools[0].acknowledge_persisted(serial_ids.clone()),
-            self.pools[1].acknowledge_persisted(serial_ids),
-        )?;
-        Ok(())
     }
 }
 
@@ -1245,9 +1233,8 @@ impl RollingLucCache {
     }
 }
 
-/// FIFO per serial ID: persistence runs in batch order, while a later batch
-/// may already have updated the same identity before the older commit is
-/// acknowledged. Popping only the oldest value preserves that newer write.
+/// Pending writes grouped by serial ID. Acknowledgements remove only the exact
+/// committed vector version, preserving any later update of the same identity.
 #[derive(Default)]
 struct PendingMutations {
     entries: HashMap<SerialId, VecDeque<(VectorId, ArcIris)>>,
@@ -1281,18 +1268,33 @@ impl PendingMutations {
             .entry(id.serial_id())
             .or_default()
             .push_back((id, iris));
+        self.record_size();
     }
 
-    fn acknowledge(&mut self, serial_id: SerialId) {
-        let remove = if let Some(values) = self.entries.get_mut(&serial_id) {
-            values.pop_front();
+    fn acknowledge(&mut self, vector_id: VectorId) -> bool {
+        let serial_id = vector_id.serial_id();
+        let mut removed = false;
+        let remove_serial = if let Some(values) = self.entries.get_mut(&serial_id) {
+            if let Some(index) = values.iter().position(|(id, _)| *id == vector_id) {
+                removed = values.remove(index).is_some();
+            }
             values.is_empty()
         } else {
             false
         };
-        if remove {
+        if remove_serial {
             self.entries.remove(&serial_id);
         }
+        self.record_size();
+        if removed {
+            metrics::counter!("linear_scan_cold_mutation_overlay_evictions_total").increment(1);
+        }
+        removed
+    }
+
+    fn record_size(&self) {
+        let len = self.entries.values().map(VecDeque::len).sum::<usize>();
+        metrics::gauge!("linear_scan_cold_mutation_overlay_entries").set(len as f64);
     }
 }
 
@@ -1928,6 +1930,23 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
         })
     }
 
+    fn acknowledge_persisted_irises<'a>(
+        &'a self,
+        vector_ids: Vec<VectorId>,
+    ) -> BoxFuture<'a, usize> {
+        let cold_storage = self.cold_storage.clone();
+        Box::pin(async move {
+            let Some(cold) = cold_storage else {
+                return 0;
+            };
+            let mut state = cold.state.write().await;
+            vector_ids
+                .into_iter()
+                .filter(|vector_id| state.pending_mutations.acknowledge(*vector_id))
+                .count()
+        })
+    }
+
     fn compute_pairwise_distances<'a>(
         &'a self,
         pairs: Vec<Option<(QuerySpec, QueryId)>>,
@@ -2011,19 +2030,6 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
             Ok(())
         })
     }
-
-    fn acknowledge_persisted<'a>(&'a self, serial_ids: Vec<SerialId>) -> BoxFuture<'a, Result<()>> {
-        let cold_storage = self.cold_storage.clone();
-        Box::pin(async move {
-            if let Some(cold) = cold_storage {
-                let mut state = cold.state.write().await;
-                for serial_id in serial_ids {
-                    state.pending_mutations.acknowledge(serial_id);
-                }
-            }
-            Ok(())
-        })
-    }
 }
 
 pub fn select_core_ids(shard_index: usize) -> Vec<CoreId> {
@@ -2099,7 +2105,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_mutation_ack_is_fifo_for_repeated_identity_updates() {
+    fn pending_mutation_acknowledges_only_exact_persisted_versions() {
         let iris = Arc::new(GaloisRingSharedIris::default_for_party(0));
         let first = VectorId::from_serial_id(7).next_version();
         let second = first.next_version();
@@ -2108,10 +2114,11 @@ mod tests {
         pending.push(second, iris);
 
         assert!(pending.get(&second).is_some());
-        pending.acknowledge(7);
+        assert!(pending.acknowledge(first));
         assert!(pending.get(&second).is_some());
         assert!(pending.get(&first).is_none());
-        pending.acknowledge(7);
+        assert!(!pending.acknowledge(first));
+        assert!(pending.acknowledge(second));
         assert!(!pending.entries.contains_key(&7));
     }
 

@@ -29,6 +29,20 @@ pub struct SyncState {
     /// unknown = None, which conservatively disables the skip-ahead).
     #[serde(default)]
     pub max_persisted_sequence_number: Option<String>,
+
+    /// This party's per-startup random contribution to the ChaCha seed
+    /// derivation, broadcast in the clear. Mixing all parties' contributions
+    /// into the HKDF makes the seeds fresh per run instead of a constant
+    /// function of the static KMS ECDH secrets (whose keystream is used as a
+    /// one-time pad on the wire). The value may be public: security rests on
+    /// the ECDH secret keying the HKDF, and a party's own contribution alone
+    /// guarantees its keystream is fresh; a tampered transcript makes seeds
+    /// mismatch and fail loudly.
+    ///
+    /// `None` means the peer predates this field; since seeds must match, the
+    /// server refuses to start rather than derive seeds a peer cannot reproduce.
+    #[serde(default)]
+    pub dh_nonce: Option<[u8; 32]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -412,6 +426,23 @@ mod tests {
     }
 
     #[test]
+    fn dh_nonce_round_trips_and_defaults_to_none() {
+        // A missing key must parse to None (old peer) rather than fail
+        // deserialization.
+        let state = create_sync_state(vec![]);
+        let mut json = serde_json::to_value(&state).unwrap();
+        json.as_object_mut().unwrap().remove("dh_nonce");
+        let parsed: SyncState = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.dh_nonce, None);
+
+        let mut with_nonce = state;
+        with_nonce.dh_nonce = Some([7u8; 32]);
+        let json = serde_json::to_string(&with_nonce).unwrap();
+        let parsed: SyncState = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.dh_nonce, Some([7u8; 32]));
+    }
+
+    #[test]
     fn max_persisted_sequence_number_ignores_none_and_takes_max() {
         let mut a = create_sync_state(vec![]);
         let mut b = create_sync_state(vec![]);
@@ -446,6 +477,7 @@ mod tests {
             common_config: CommonConfig::from(config),
             graph_mutation_bytes: vec![],
             max_persisted_sequence_number: None,
+            dh_nonce: None,
         }
     }
 
@@ -854,6 +886,7 @@ mod tests {
                 common_config: CommonConfig::default(),
                 graph_mutation_bytes: vec![],
                 max_persisted_sequence_number: None,
+                dh_nonce: None,
             },
             SyncState {
                 db_len: 20,
@@ -862,6 +895,7 @@ mod tests {
                 common_config: CommonConfig::default(),
                 graph_mutation_bytes: vec![],
                 max_persisted_sequence_number: None,
+                dh_nonce: None,
             },
             SyncState {
                 db_len: 30,
@@ -870,6 +904,7 @@ mod tests {
                 common_config: CommonConfig::default(),
                 graph_mutation_bytes: vec![],
                 max_persisted_sequence_number: None,
+                dh_nonce: None,
             },
         ];
 
@@ -884,6 +919,7 @@ mod tests {
             common_config: CommonConfig::default(),
             graph_mutation_bytes: vec![],
             max_persisted_sequence_number: None,
+            dh_nonce: None,
         };
         let all_states = vec![
             state_with_none_sequence_num.clone(),
@@ -908,6 +944,7 @@ mod tests {
                 common_config: CommonConfig::default(),
                 graph_mutation_bytes: vec![],
                 max_persisted_sequence_number: None,
+                dh_nonce: None,
             },
             SyncState {
                 db_len: 20,
@@ -916,6 +953,7 @@ mod tests {
                 common_config: CommonConfig::default(),
                 graph_mutation_bytes: vec![],
                 max_persisted_sequence_number: None,
+                dh_nonce: None,
             },
             SyncState {
                 db_len: 30,
@@ -924,6 +962,7 @@ mod tests {
                 common_config: CommonConfig::default(),
                 graph_mutation_bytes: vec![],
                 max_persisted_sequence_number: None,
+                dh_nonce: None,
             },
         ];
 
@@ -1045,6 +1084,7 @@ mod tests {
                 common_config: CommonConfig::from(config1),
                 graph_mutation_bytes: vec![],
                 max_persisted_sequence_number: None,
+                dh_nonce: None,
             },
             SyncState {
                 db_len: 20,
@@ -1053,6 +1093,7 @@ mod tests {
                 common_config: CommonConfig::from(config2),
                 graph_mutation_bytes: vec![],
                 max_persisted_sequence_number: None,
+                dh_nonce: None,
             },
             SyncState {
                 db_len: 20,
@@ -1061,6 +1102,7 @@ mod tests {
                 common_config: CommonConfig::from(config3),
                 graph_mutation_bytes: vec![],
                 max_persisted_sequence_number: None,
+                dh_nonce: None,
             },
         ];
 

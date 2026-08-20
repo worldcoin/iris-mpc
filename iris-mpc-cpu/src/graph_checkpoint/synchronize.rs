@@ -4,6 +4,7 @@ use aws_sdk_s3::Client;
 use eyre::{bail, eyre, Result};
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use itertools::izip;
+use sqlx::{Postgres, Transaction};
 
 use super::{download_graph_checkpoint, GraphCheckpointState};
 use crate::{
@@ -27,10 +28,12 @@ use crate::{
 /// in to_update, the peer will search SyncResult.all_states for a Some(graph_mutation)
 /// to roll forward.
 ///
-/// The graph mutations are applied all together in a transaction.
+/// The graph mutations are written through the caller's transaction, so they
+/// commit atomically with the modifications rollforward.
 pub async fn sync_graph_mutations(
     sync_result: &SyncResult,
     graph_pg: &GraphPg<Aby3Store<HawkOps>>,
+    tx: &mut Transaction<'_, Postgres>,
 ) -> Result<()> {
     // assuming that compare_modifications() does not return duplicate ids in to_update
     let (to_update, _) = sync_result.compare_modifications();
@@ -40,7 +43,6 @@ pub async fn sync_graph_mutations(
 
     let mutation_bytes = build_mutation_bytes(&sync_result.all_states)?;
 
-    let mut tx = graph_pg.begin_tx().await?;
     for modification in &to_update {
         let Some(mutation) = mutation_bytes.get(&modification.id) else {
             bail!(
@@ -53,7 +55,7 @@ pub async fn sync_graph_mutations(
         // mutation would be None
         if let Some(mutation) = mutation {
             graph_pg
-                .upsert_hawk_graph_mutations(&mut tx, modification.id, mutation)
+                .upsert_hawk_graph_mutations(tx, modification.id, mutation)
                 .await
                 .map_err(|e| {
                     eyre!(
@@ -63,7 +65,6 @@ pub async fn sync_graph_mutations(
                 })?;
         }
     }
-    tx.commit().await?;
     tracing::info!("synced graph mutations per party");
 
     Ok(())
@@ -364,6 +365,7 @@ mod sync_graph_mutations_tests {
             common_config: CommonConfig::default(),
             graph_mutation_bytes,
             max_persisted_sequence_number: None,
+            dh_nonce: None,
         }
     }
 
@@ -470,6 +472,7 @@ mod sync_graph_mutations_tests {
             common_config: CommonConfig::default(),
             graph_mutation_bytes: vec![], // one modification, zero byte entries
             max_persisted_sequence_number: None,
+            dh_nonce: None,
         };
         let err = build_mutation_bytes(&[state]).unwrap_err();
         assert!(
