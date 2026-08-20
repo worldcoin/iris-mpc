@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - build-linear-scan-image-hnsw
   release:
     types:
       - published
