@@ -1,6 +1,6 @@
 # Exact CPU linear scan deployment. This is an alternative to, not a
 # replacement for, common-values-iris-mpc.yaml (the CUDA deployment).
-image: "ghcr.io/worldcoin/iris-mpc-linear-scan:latest"
+image: "ghcr.io/worldcoin/iris-mpc-linear-scan:2310cf142cb8e512acb07c16cf592865b55591fa"
 
 environment: stage
 replicaCount: 1
@@ -45,7 +45,6 @@ env:
       secretKeyRef:
         key: KMS_KEYS
         name: application
-  SMPC__SERVER_COORDINATION__NODE_HOSTNAMES: '["iris-mpc-node.1.stage.smpcv2.worldcoin.dev","iris-mpc-node.2.stage.smpcv2.worldcoin.dev","iris-mpc-node.3.stage.smpcv2.worldcoin.dev"]'
   SMPC__SERVER_COORDINATION__IMAGE_NAME: $(IMAGE_NAME)
   SMPC__SERVER_COORDINATION__HEARTBEAT_INITIAL_RETRIES: "65"
   SMPC__SERVER_COORDINATION__HEARTBEAT_INTERVAL_SECS: "3"
@@ -139,9 +138,10 @@ startupProbe:
 resources:
   limits:
     memory: 100Gi
+    # Have to provide CPU limit as default value is 100m
+    cpu: 15
   requests:
-    # No CPU limit: avoid CFS throttling on the dedicated 96-vCPU node.
-    cpu: 92
+    cpu: 15
     memory: 100Gi
 
 imagePullSecrets:
@@ -153,7 +153,7 @@ podAnnotations:
 nodeSelector:
   kubernetes.io/arch: arm64
   karpenter.sh/capacity-type: on-demand
-  node.kubernetes.io/instance-type: "r8g.24xlarge"
+  #node.kubernetes.io/instance-type: "r8g.24xlarge"
   workload: "iris-mpc-linear-scan"
 
 tolerations:

@@ -2,6 +2,7 @@
 env:
   SMPC__SERVICE__SERVICE_NAME: "iris-mpc-linear-scan-1"
   SMPC__SERVER_COORDINATION__PARTY_ID: "1"
+  SMPC__SERVER_COORDINATION__NODE_HOSTNAMES: '["iris-mpc-node.1.stage.smpcv2.worldcoin.dev","0.0.0.0","iris-mpc-node.3.stage.smpcv2.worldcoin.dev"]'
   SMPC__DB_CHUNKS_BUCKET_NAME: "iris-mpc-db-exporter-store-node-1-stage--eun1-az3--x-s3"
   SMPC__SERVICE__METRICS__PREFIX: "smpcv2-linear-scan-1"
 
