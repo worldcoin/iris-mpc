@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-cpu:6429fa5c3cd96ca5e1839da651588d6807c0c6ff"
+image: "ghcr.io/worldcoin/iris-mpc-linear-scan:2310cf142cb8e512acb07c16cf592865b55591fa"
 
 environment: stage
 replicaCount: 1
@@ -7,53 +7,28 @@ replicaCount: 1
 # Defined as a map (keyed by variable name) so Helm deep-merges these with the
 # per-node `env` maps in each ampc-hnsw-N-stage/values-ampc-hnsw.yaml.
 env:
-  RUST_LOG: "info"
+  RUST_LOG: "debug"
   RUST_BACKTRACE: "full"
-  SMPC__PPROF_FLAME_ONLY: "true"
-  SMPC__ENABLE_PPROF_PER_BATCH: "true"
-  # Optional overrides (uncomment/customize as needed)
-  SMPC__PPROF_S3_BUCKET: "wf-smpcv2-stage-hnsw-performance-reports"
-  SMPC__PPROF_PREFIX: "stage/hnsw"
-  SMPC__PPROF_SECONDS: "180"
-  SMPC__PPROF_FREQUENCY: "49"
-  # Use Pod annotation as run-id (set via `podAnnotations` above)
-  SMPC__PPROF_RUN_ID:
-    valueFrom:
-      fieldRef:
-        fieldPath: metadata.annotations['loadtest/run-id']
   SMPC__ENVIRONMENT: "stage"
-  SMPC__CPU_DATABASE__URL:
+  SMPC__DATABASE__URL:
     valueFrom:
       secretKeyRef:
-        key: DATABASE_AURORA_HNSW_URL
+        key: DATABASE_AURORA_HNWS_URL
         name: application
-  SMPC__DB_BACKED_INGEST: "true" # POP-4051 DB-backed ingest (stage rollout 2026-07)
-  SMPC__MAX_DB_SIZE: "2000000"
-  SMPC__MAX_BATCH_SIZE: "1"
-  SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS: "30"
-  SMPC__PROCESSING_TIMEOUT_SECS: "1240"  # 2 minutes per batch in stage, bump to 4 in prod
-  SMPC__HAWK_REQUEST_PARALLELISM: "1024"
-  SMPC__HAWK_CONNECTION_PARALLELISM: "48"
-  SMPC__HAWK_STREAM_PARALLELISM: "32"
-  SMPC__OVERRIDE_MAX_BATCH_SIZE: "false"
+  SMPC__DATABASE__MIGRATE: "true"
+  SMPC__DATABASE__CREATE: "true"
+  SMPC__DATABASE__LOAD_PARALLELISM: "8"
   SMPC__DISABLE_PERSISTENCE: "false"
-  SMPC__ENABLE_REAUTH: "true"
-  SMPC__ENABLE_RESET: "true"
-  SMPC__ENABLE_RECOVERY: "true"
-  SMPC__ENABLE_DELETION: "true"
-  SMPC__LUC_ENABLED: "true"
-  SMPC__LUC_LOOKBACK_RECORDS: "500"
-  SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST: "true"
+  SMPC__DB_BACKED_INGEST: "true"
+  SMPC__ANON_STATS_DATABASE__URL:
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_HNWS_URL
+        name: application
+  SMPC__ANON_STATS_DATABASE__MIGRATE: "false"
+  SMPC__ANON_STATS_DATABASE__CREATE: "false"
+  SMPC__ANON_STATS_DATABASE__LOAD_PARALLELISM: "8"
   SMPC__AWS__REGION: "eu-north-1"
-  SMPC__SERVICE_PORTS: '["4000","4001","4002"]'
-  SMPC__SERVER_COORDINATION__IMAGE_NAME: $(IMAGE_NAME)
-  SMPC__SERVER_COORDINATION__HEARTBEAT_INITIAL_RETRIES: "65"
-  SMPC__SERVER_COORDINATION__HEARTBEAT_INTERVAL_SECS: "3"
-  SMPC__SHARES_BUCKET_NAME: "wf-smpcv2-stage-sns-requests"
-  SMPC__ENABLE_S3_IMPORTER: "false"
-  SMPC__DB_CHUNKS_FOLDER_NAME: "hnsw_even_odd_with_version_id_output_16k"
-  SMPC__LOAD_CHUNKS_PARALLELISM: "64"
-  SMPC__LOAD_CHUNKS_BUFFER_SIZE: "1024"
   SMPC__REQUESTS_QUEUE_URL:
     valueFrom:
       secretKeyRef:
@@ -64,11 +39,46 @@ env:
       secretKeyRef:
         key: SNS_RESULTS_ARN
         name: application
+  SMPC__PROCESSING_TIMEOUT_SECS: "120"
+  SMPC__PATH: "/data/"
   SMPC__KMS_KEY_ARNS:
     valueFrom:
       secretKeyRef:
         key: KMS_KEYS
         name: application
+  SMPC__SERVER_COORDINATION__IMAGE_NAME: $(IMAGE_NAME)
+  SMPC__SERVER_COORDINATION__HEARTBEAT_INITIAL_RETRIES: "65"
+  SMPC__SERVER_COORDINATION__HEARTBEAT_INTERVAL_SECS: "3"
+  SMPC__PUBLIC_KEY_BASE_URL: "https://pki-smpcv2-stage.worldcoin.org"
+  SMPC__SHARES_BUCKET_NAME: "wf-smpcv2-stage-sns-requests"
+  SMPC__ENABLE_S3_IMPORTER: "true"
+  SMPC__DB_CHUNKS_FOLDER_NAME: "hnsw_even_odd_with_version_id_output_16k"
+  SMPC__LOAD_CHUNKS_PARALLELISM: "64"
+  SMPC__LOAD_CHUNKS_BUFFER_SIZE: "1024"
+  SMPC__CLEAR_DB_BEFORE_INIT: "true"
+  SMPC__INIT_DB_SIZE: "0"
+  SMPC__MAX_DB_SIZE: "100000"
+  SMPC__FAKE_DB_SIZE: "0"
+  # Linear scan serializes requests. This makes the preceding mutation visible
+  # before the next scan and removes the need for intra-batch matching.
+  SMPC__MAX_BATCH_SIZE: "1"
+  # Match the r8g.24xlarge production tuning: 3 * 48 search sessions for each
+  # concurrently running normal/mirror orientation.
+  SMPC__HAWK_REQUEST_PARALLELISM: "48"
+  SMPC__HAWK_CONNECTION_PARALLELISM: "16"
+  SMPC__SEPARATE_TOKIO_CORES_PER_NODE: "11"
+  SMPC__FULL_SCAN_SIDE: "Left"
+  SMPC__FULL_SCAN_SIDE_SWITCHING_ENABLED: "false"
+  SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT: "500"
+  SMPC__MATCH_DISTANCES_BUFFER_SIZE: "64"
+  SMPC__MATCH_DISTANCES_2D_BUFFER_SIZE: "64"
+  SMPC__ENABLE_REAUTH: "true"
+  SMPC__ENABLE_RESET: "true"
+  SMPC__ENABLE_RECOVERY: "true"
+  SMPC__LUC_ENABLED: "false"
+  SMPC__LUC_LOOKBACK_RECORDS: "50"
+  SMPC__COLD_EYE_LFU_CACHE_RECORDS: "4096"
+  SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST: "true"
   SMPC__SERVICE__METRICS__HOST:
     valueFrom:
       fieldRef:
@@ -76,8 +86,11 @@ env:
   SMPC__SERVICE__METRICS__PORT: "8125"
   SMPC__SERVICE__METRICS__QUEUE_SIZE: "5000"
   SMPC__SERVICE__METRICS__BUFFER_SIZE: "256"
+  SMPC__RETURN_PARTIAL_RESULTS: "true"
   SMPC__ENABLE_MODIFICATIONS_SYNC: "true"
   SMPC__ENABLE_MODIFICATIONS_REPLAY: "true"
+  SMPC__ENABLE_DEBUG_TIMING: "true"
+  SMPC__SERVICE_PORTS: '["4000","4001","4002"]'
   SMPC__TLS__PRIVATE_KEY: "/etc/ssl/private/key.pem"
   SMPC__TLS__LEAF_CERT: "/etc/ssl/private/certificate.crt"
   SMPC__TLS__ROOT_CERTS: '["/usr/local/share/ca-certificates/ca_party_stage_0.crt", "/usr/local/share/ca-certificates/ca_party_stage_1.crt", "/usr/local/share/ca-certificates/ca_party_stage_2.crt"]'
