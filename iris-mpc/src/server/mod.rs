@@ -444,6 +444,7 @@ fn process_config(config: &Config, search_mode: HawkSearchMode) -> Result<()> {
         _ => {}
     }
     validate_max_batch_size(config.max_batch_size, search_mode)?;
+    validate_full_scan_side_switching(config.full_scan_side_switching_enabled, search_mode)?;
     // Load batch_size config
     tracing::info!("Set max batch size to {}", config.max_batch_size);
     Ok(())
@@ -454,6 +455,25 @@ fn validate_max_batch_size(max_batch_size: usize, search_mode: HawkSearchMode) -
         bail!(
             "exact CPU linear-scan mode requires max_batch_size=1; got {max_batch_size}. \
              Batched execution is not yet covered by end-to-end GPU-parity validation"
+        );
+    }
+    Ok(())
+}
+
+/// The CUDA actor can alternate the full-scan eye between batches. The CPU
+/// backend keeps one eye resident for the process lifetime and only changes
+/// it through `SMPC__FULL_SCAN_SIDE` on a coordinated restart, so accepting
+/// the (default-on) switching flag would silently diverge from the configured
+/// GPU behavior instead of failing at startup.
+fn validate_full_scan_side_switching(
+    switching_enabled: bool,
+    search_mode: HawkSearchMode,
+) -> Result<()> {
+    if search_mode == HawkSearchMode::LinearScan && switching_enabled {
+        bail!(
+            "exact CPU linear-scan mode does not support full-scan side switching; \
+             set SMPC__FULL_SCAN_SIDE_SWITCHING_ENABLED=false and select the resident \
+             eye with SMPC__FULL_SCAN_SIDE on all parties"
         );
     }
     Ok(())
@@ -1264,5 +1284,17 @@ mod config_tests {
     #[test]
     fn hnsw_keeps_batched_requests() {
         assert!(validate_max_batch_size(64, HawkSearchMode::Hnsw).is_ok());
+    }
+
+    #[test]
+    fn linear_scan_rejects_full_scan_side_switching() {
+        assert!(validate_full_scan_side_switching(false, HawkSearchMode::LinearScan).is_ok());
+        assert!(validate_full_scan_side_switching(true, HawkSearchMode::Hnsw).is_ok());
+
+        let error = validate_full_scan_side_switching(true, HawkSearchMode::LinearScan)
+            .expect_err("linear scan must reject side switching");
+        assert!(error
+            .to_string()
+            .contains("SMPC__FULL_SCAN_SIDE_SWITCHING_ENABLED=false"));
     }
 }

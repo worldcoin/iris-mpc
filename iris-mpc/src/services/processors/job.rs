@@ -61,6 +61,22 @@ fn linear_scan_count_at(
         .flatten()
 }
 
+/// Record an iris mutation whose Postgres row does not exist.
+///
+/// The in-memory registry may already carry a serial ID that was never
+/// inserted into `irises` (for example an out-of-range deletion or reset
+/// request). Before explicit versioning this was a silent zero-row update;
+/// keep the batch alive and make the discrepancy visible instead of exiting
+/// all parties on one malformed request.
+fn warn_missing_iris_row(kind: &'static str, serial_id: i64) {
+    tracing::warn!(
+        kind,
+        serial_id,
+        "{kind} persistence targeted serial id {serial_id}, which has no row in Postgres"
+    );
+    metrics::counter!("persist_missing_iris_row_total", "kind" => kind).increment(1);
+}
+
 /// Processes a ServerJobResult, storing data in the database and sending result messages
 /// through SNS.
 #[allow(clippy::too_many_arguments)]
@@ -438,7 +454,7 @@ pub async fn process_job_result(
                     reauth_id,
                     serial_id
                 );
-                store
+                let updated = store
                     .update_iris_and_increment_version(
                         &mut version_tx,
                         serial_id as i64,
@@ -448,6 +464,9 @@ pub async fn process_job_result(
                         &right_iris_requests.mask[i],
                     )
                     .await?;
+                if !updated {
+                    warn_missing_iris_row("reauth", serial_id as i64);
+                }
             }
 
             // persist identity update (reset_update/recovery_update) results into db
@@ -459,7 +478,7 @@ pub async fn process_job_result(
                     "Persisting identity update into postgres on serial id {}",
                     serial_id
                 );
-                store
+                let updated = store
                     .update_iris_and_increment_version(
                         &mut version_tx,
                         serial_id as i64,
@@ -469,6 +488,9 @@ pub async fn process_job_result(
                         &shares.mask_right,
                     )
                     .await?;
+                if !updated {
+                    warn_missing_iris_row("identity_update", serial_id as i64);
+                }
             }
 
             // persist deletion results into db
@@ -480,7 +502,7 @@ pub async fn process_job_result(
                     "Persisting identity deletion into postgres on serial id {}",
                     serial_id
                 );
-                store
+                let updated = store
                     .update_iris_and_increment_version(
                         &mut version_tx,
                         serial_id as i64,
@@ -490,6 +512,9 @@ pub async fn process_job_result(
                         &dummy_deletion_shares.1,
                     )
                     .await?;
+                if !updated {
+                    warn_missing_iris_row("deletion", serial_id as i64);
+                }
             }
         }
 
