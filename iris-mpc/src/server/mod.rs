@@ -38,12 +38,13 @@ use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::job::JobSubmissionHandle;
 use iris_mpc_common::postgres::{run_migrations, AccessMode, PostgresClient};
 use iris_mpc_cpu::checkpoint_protocol::runner::SidecarConfigWrapper;
+use iris_mpc_cpu::execution::hawk_main::iris_worker::IrisWorkerPool;
 use iris_mpc_cpu::execution::hawk_main::worker_pool_initializer::{
     DbLoadParams, LocalWorkerPoolInitializer, WorkerPoolInitializer,
 };
 use iris_mpc_cpu::execution::hawk_main::{
-    build_hawk_network_handle, GraphStore, HawkActor, HawkArgs, HawkHandle, HawkOps,
-    HawkSearchMode, ServerJobResult, HAWK_DISTANCE_MODE,
+    build_hawk_network_handle, BothEyes, GraphStore, HawkActor, HawkArgs, HawkHandle, HawkOps,
+    HawkSearchMode, ServerJobResult, StoreId, HAWK_DISTANCE_MODE,
 };
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
@@ -298,6 +299,10 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
         iris_store: iris_store.clone(),
         graph_store,
         search_mode,
+        worker_pools: [
+            hawk_actor.worker_pool(StoreId::Left),
+            hawk_actor.worker_pool(StoreId::Right),
+        ],
     };
     let tx_results = start_results_thread(
         &config,
@@ -893,6 +898,7 @@ struct ResultsPersistence {
     iris_store: Store,
     graph_store: GraphPg<Aby3Store<HawkOps>>,
     search_mode: HawkSearchMode,
+    worker_pools: BothEyes<Arc<dyn IrisWorkerPool>>,
 }
 
 async fn start_results_thread(
@@ -910,6 +916,7 @@ async fn start_results_thread(
         iris_store: store_bg,
         graph_store,
         search_mode,
+        worker_pools,
     } = persistence;
     let shutdown_handler_bg = Arc::clone(shutdown_handler);
     let party_id = config.party_id;
@@ -921,6 +928,7 @@ async fn start_results_thread(
                 party_id,
                 &store_bg,
                 &graph_store,
+                &worker_pools,
                 &sns_client_bg,
                 &config_bg,
                 search_mode,

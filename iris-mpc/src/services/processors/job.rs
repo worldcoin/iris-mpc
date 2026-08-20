@@ -16,10 +16,13 @@ use iris_mpc_common::helpers::smpc_response::{
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
 use iris_mpc_common::iris_db::get_dummy_shares_for_deletion;
 use iris_mpc_common::job::ServerJobResult;
-use iris_mpc_cpu::execution::hawk_main::{GraphStore, HawkMutation, HawkSearchMode};
+use iris_mpc_cpu::execution::hawk_main::iris_worker::IrisWorkerPool;
+use iris_mpc_cpu::execution::hawk_main::{
+    BothEyes, GraphStore, HawkMutation, HawkSearchMode, LEFT, RIGHT,
+};
 use iris_mpc_store::{ExplicitVersionToken, Store, StoredIrisRef};
 use itertools::{izip, Itertools};
-use std::{collections::HashMap, time::Instant};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 /// Batch identity and stage timings carried to the result summaries.
 pub struct BatchTimings {
@@ -67,6 +70,7 @@ pub async fn process_job_result(
     party_id: usize,
     store: &Store,
     graph_store: &GraphStore,
+    worker_pools: &BothEyes<Arc<dyn IrisWorkerPool>>,
     sns_client: &SNSClient,
     config: &Config,
     search_mode: HawkSearchMode,
@@ -118,6 +122,12 @@ pub async fn process_job_result(
         sqs_sequence_numbers,
         ..
     } = job_result;
+    let persisted_vector_ids =
+        if search_mode == HawkSearchMode::LinearScan && !config.disable_persistence {
+            hawk_mutation.persisted_vector_ids()
+        } else {
+            Vec::new()
+        };
     let now = Instant::now();
     let dummy_deletion_shares = get_dummy_shares_for_deletion(party_id);
 
@@ -373,9 +383,15 @@ pub async fn process_job_result(
         // Wrap transaction for graph operations
         let mut graph_tx = graph_store.tx_wrap(iris_tx);
 
-        // Persist graph mutations to hawk_graph_mutations table
+        // Linear scan carries mutation metadata only to acknowledge its cold
+        // overlay. Persist an empty graph mutation set to retain the existing
+        // modification-frontier update without writing graph/WAL rows.
+        let graph_mutation = match search_mode {
+            HawkSearchMode::Hnsw => hawk_mutation,
+            HawkSearchMode::LinearScan => HawkMutation(Vec::new()),
+        };
         let step_start = Instant::now();
-        hawk_mutation
+        graph_mutation
             .persist(&mut graph_tx, &mut modifications)
             .await?;
         metrics::histogram!("persist_graph_mutations_duration")
@@ -505,6 +521,19 @@ pub async fn process_job_result(
         metrics::histogram!("persist_commit_duration").record(step_start.elapsed().as_secs_f64());
         metrics::histogram!("persist_total_duration")
             .record(persist_total_start.elapsed().as_secs_f64());
+
+        if !persisted_vector_ids.is_empty() {
+            let left_ids = persisted_vector_ids.clone();
+            let (left_removed, right_removed) = tokio::join!(
+                worker_pools[LEFT].acknowledge_persisted_irises(left_ids),
+                worker_pools[RIGHT].acknowledge_persisted_irises(persisted_vector_ids),
+            );
+            tracing::debug!(
+                left_removed,
+                right_removed,
+                "Acknowledged committed cold-eye mutation overlay entries"
+            );
+        }
     }
     let persist_ms = persist_total_start.elapsed().as_millis();
 

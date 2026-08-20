@@ -1889,12 +1889,10 @@ impl HawkResult {
 
             modifications: batch.modifications,
 
-            actor_data: match self.search_mode {
-                HawkSearchMode::Hnsw => self.connect_plans,
-                // The linear service persists the iris and modification rows
-                // through the common processor but has no graph/WAL state.
-                HawkSearchMode::LinearScan => HawkMutation(Vec::new()),
-            },
+            // Linear scan does not persist the graph plans, but the mutation
+            // metadata carries exact vector versions to the asynchronous
+            // result-persistence worker so it can trim the cold-eye overlay.
+            actor_data: self.connect_plans,
         }
     }
 }
@@ -1917,6 +1915,11 @@ pub struct SingleHawkMutation {
     /// The `VectorId` newly inserted by this request, if any.
     #[serde(skip)]
     pub inserted_id: Option<VectorId>,
+
+    /// Exact vector version made durable by result persistence, if any.
+    /// This includes the dummy version written for a deletion.
+    #[serde(skip)]
+    pub persisted_vector_id: Option<VectorId>,
 }
 
 impl SingleHawkMutation {
@@ -1925,7 +1928,31 @@ impl SingleHawkMutation {
     }
 }
 
+fn persisted_vector_id_for_request(
+    request_index: RequestIndex,
+    inserted_id: Option<VectorId>,
+    deleted_ids: &[VectorId],
+) -> Option<VectorId> {
+    inserted_id.or_else(|| match request_index {
+        // Deletions are applied before the searches, so the registry already
+        // points at the newly written dummy version by mutation handling.
+        RequestIndex::Deletion(i) => Some(deleted_ids[i]),
+        _ => None,
+    })
+}
+
 impl HawkMutation {
+    /// Exact vector versions whose iris rows become authoritative after the
+    /// result-persistence transaction commits.
+    pub fn persisted_vector_ids(&self) -> Vec<VectorId> {
+        self.0
+            .iter()
+            .filter_map(|mutation| mutation.persisted_vector_id)
+            .sorted_unstable()
+            .dedup()
+            .collect()
+    }
+
     /// Get a serialized `SingleHawkMutation` by `ModificationKey`.
     ///
     /// Returns None if no mutation exists for the given key.
@@ -2523,12 +2550,15 @@ impl HawkHandle {
                 .get(slot_i)
                 .copied()
                 .unwrap_or(None);
+            let persisted_vector_id =
+                persisted_vector_id_for_request(*req_index, inserted_id, &deleted_ids);
 
             mutations.push(SingleHawkMutation {
                 plans: modif_plan,
                 modification_key,
                 request_index: Some(*req_index),
                 inserted_id,
+                persisted_vector_id,
             });
         }
 
@@ -2607,6 +2637,7 @@ mod hawk_mutation_tests {
             modification_key: Some(modification_key.clone()),
             request_index: Some(RequestIndex::UniqueReauthResetCheck(0)),
             inserted_id: Some(VectorId::from_serial_id(1)),
+            persisted_vector_id: Some(VectorId::from_serial_id(1)),
         };
 
         let hawk_mutation = HawkMutation(vec![mutation.clone()]);
@@ -2627,6 +2658,17 @@ mod hawk_mutation_tests {
         let wrong_key = ModificationKey::RequestId("wrong-request".to_string());
         let result = hawk_mutation.get_serialized_mutation_by_key(&wrong_key);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn persisted_deletion_id_is_the_registrys_current_dummy_version() {
+        let original_id = VectorId::from_serial_id(7);
+        let dummy_id = original_id.next_version();
+
+        assert_eq!(
+            persisted_vector_id_for_request(RequestIndex::Deletion(0), None, &[dummy_id]),
+            Some(dummy_id)
+        );
     }
 
     #[test]
@@ -2652,6 +2694,7 @@ mod hawk_mutation_tests {
             modification_key: Some(key1.clone()),
             request_index: Some(index1),
             inserted_id: Some(VectorId::from_serial_id(1)),
+            persisted_vector_id: Some(VectorId::from_serial_id(1)),
         };
 
         let mutation2 = SingleHawkMutation {
@@ -2662,6 +2705,7 @@ mod hawk_mutation_tests {
             modification_key: Some(key2.clone()),
             request_index: Some(index2),
             inserted_id: Some(VectorId::from_serial_id(2)),
+            persisted_vector_id: Some(VectorId::from_serial_id(2)),
         };
 
         let mutation3 = SingleHawkMutation {
@@ -2672,6 +2716,7 @@ mod hawk_mutation_tests {
             modification_key: Some(key3.clone()),
             request_index: Some(index3),
             inserted_id: Some(VectorId::from_serial_id(3)),
+            persisted_vector_id: Some(VectorId::from_serial_id(3)),
         };
 
         let hawk_mutation = HawkMutation(vec![
@@ -2694,6 +2739,14 @@ mod hawk_mutation_tests {
         assert_eq!(hawk_mutation.get_by_request_index(index1), Some(&mutation1));
         assert_eq!(hawk_mutation.get_by_request_index(index2), Some(&mutation2));
         assert_eq!(hawk_mutation.get_by_request_index(index3), Some(&mutation3));
+        assert_eq!(
+            hawk_mutation.persisted_vector_ids(),
+            vec![
+                VectorId::from_serial_id(1),
+                VectorId::from_serial_id(2),
+                VectorId::from_serial_id(3),
+            ]
+        );
 
         // Test non-existent key
         let wrong_key = ModificationKey::RequestId("non-existent".to_string());
@@ -2714,6 +2767,7 @@ mod hawk_mutation_tests {
             modification_key: Some(ModificationKey::RequestId("test".to_string())),
             request_index: Some(RequestIndex::UniqueReauthResetCheck(0)),
             inserted_id: Some(VectorId::from_serial_id(1)),
+            persisted_vector_id: Some(VectorId::from_serial_id(1)),
         };
 
         let mutation_without_key = SingleHawkMutation {
@@ -2724,6 +2778,7 @@ mod hawk_mutation_tests {
             modification_key: None,
             request_index: None,
             inserted_id: None,
+            persisted_vector_id: None,
         };
 
         let hawk_mutation = HawkMutation(vec![mutation_with_key.clone(), mutation_without_key]);
@@ -2749,6 +2804,7 @@ mod hawk_mutation_tests {
             modification_key: Some(ModificationKey::RequestId("test".to_string())),
             request_index: Some(RequestIndex::UniqueReauthResetCheck(0)),
             inserted_id: Some(VectorId::from_serial_id(1)),
+            persisted_vector_id: Some(VectorId::from_serial_id(1)),
         };
 
         // Test serialization
@@ -2761,6 +2817,7 @@ mod hawk_mutation_tests {
         // modification_key is skipped during serialization, so it should be None
         assert_eq!(deserialized.plans, mutation.plans);
         assert_eq!(deserialized.modification_key, None);
+        assert_eq!(deserialized.persisted_vector_id, None);
     }
 
     #[test]
@@ -2786,6 +2843,7 @@ mod hawk_mutation_tests {
             modification_key: None,
             request_index: None,
             inserted_id: Some(VectorId::from_serial_id(1)),
+            persisted_vector_id: Some(VectorId::from_serial_id(1)),
         };
         let bytes = mutation.serialize().expect("serialize");
         let back: SingleHawkMutation = bincode::deserialize(&bytes).expect("deserialize");
@@ -2795,5 +2853,6 @@ mod hawk_mutation_tests {
         assert_eq!(back.plans[1][0].seq_no, 6);
         // inserted_id is #[serde(skip)] — round-tripped value is None.
         assert_eq!(back.inserted_id, None);
+        assert_eq!(back.persisted_vector_id, None);
     }
 }

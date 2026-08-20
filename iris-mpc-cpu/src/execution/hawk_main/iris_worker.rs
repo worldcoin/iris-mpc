@@ -836,6 +836,17 @@ pub trait IrisWorkerPool: Debug + Send + Sync {
     fn insert_irises<'a>(&'a self, inserts: Vec<(QueryId, VectorId)>)
         -> BoxFuture<'a, Result<u64>>;
 
+    /// Drop exact vector versions from a cold mutation overlay after their
+    /// database transaction commits. Resident workers have nothing to drop.
+    ///
+    /// Exact-version removal is intentional: a later mutation of the same
+    /// serial ID may already be queued, and acknowledging the older version
+    /// must not make that newer mutation invisible before it is persisted.
+    fn acknowledge_persisted_irises<'a>(
+        &'a self,
+        vector_ids: Vec<VectorId>,
+    ) -> BoxFuture<'a, usize>;
+
     /// Compute pairwise distances between pairs of cached queries.
     ///
     /// Used for intra-batch matching where both irises are cached queries
@@ -887,6 +898,12 @@ impl<T: ?Sized + IrisWorkerPool> IrisWorkerPool for Arc<T> {
         inserts: Vec<(QueryId, VectorId)>,
     ) -> BoxFuture<'a, Result<u64>> {
         (**self).insert_irises(inserts)
+    }
+    fn acknowledge_persisted_irises<'a>(
+        &'a self,
+        vector_ids: Vec<VectorId>,
+    ) -> BoxFuture<'a, usize> {
+        (**self).acknowledge_persisted_irises(vector_ids)
     }
     fn compute_pairwise_distances<'a>(
         &'a self,
@@ -962,7 +979,50 @@ pub struct LocalIrisWorkerPool {
 struct ColdStorage {
     store: Store,
     side: usize,
-    mutation_overlay: Arc<AsyncRwLock<HashMap<VectorId, ArcIris>>>,
+    mutation_overlay: ColdMutationOverlay,
+}
+
+#[derive(Clone, Default)]
+struct ColdMutationOverlay {
+    entries: Arc<AsyncRwLock<HashMap<VectorId, ArcIris>>>,
+}
+
+impl ColdMutationOverlay {
+    fn record_size(len: usize) {
+        metrics::gauge!("linear_scan_cold_mutation_overlay_entries").set(len as f64);
+    }
+
+    async fn get(&self, ids: &[VectorId]) -> Vec<Option<ArcIris>> {
+        let entries = self.entries.read().await;
+        ids.iter().map(|id| entries.get(id).cloned()).collect()
+    }
+
+    async fn insert_all(&self, irises: Vec<(VectorId, ArcIris)>) {
+        let mut entries = self.entries.write().await;
+        entries.extend(irises);
+        Self::record_size(entries.len());
+    }
+
+    async fn replace_with_dummy(&self, ids: Vec<VectorId>, dummy: ArcIris) {
+        let mut entries = self.entries.write().await;
+        for id in ids {
+            entries.remove(&id);
+            entries.insert(id.next_version(), dummy.clone());
+        }
+        Self::record_size(entries.len());
+    }
+
+    async fn acknowledge(&self, vector_ids: &[VectorId]) -> usize {
+        let mut entries = self.entries.write().await;
+        let removed = vector_ids
+            .iter()
+            .filter(|vector_id| entries.remove(vector_id).is_some())
+            .count();
+        Self::record_size(entries.len());
+        metrics::counter!("linear_scan_cold_mutation_overlay_evictions_total")
+            .increment(removed as u64);
+        removed
+    }
 }
 
 fn cold_db_miss_error(party_id: usize, side: usize, missing: &[VectorId]) -> eyre::Report {
@@ -1030,7 +1090,7 @@ impl LocalIrisWorkerPool {
             cold_storage: Some(ColdStorage {
                 store,
                 side,
-                mutation_overlay: Arc::new(AsyncRwLock::new(HashMap::new())),
+                mutation_overlay: ColdMutationOverlay::default(),
             }),
         }
     }
@@ -1065,12 +1125,7 @@ impl LocalIrisWorkerPool {
         // The cold eye retains only post-start mutations. Prefer that overlay
         // to the database so a just-inserted or just-deleted iris is visible
         // even while result persistence is still in flight.
-        let overlay = {
-            let overlay = cold.mutation_overlay.read().await;
-            ids.iter()
-                .map(|id| overlay.get(id).cloned())
-                .collect::<Vec<_>>()
-        };
+        let overlay = cold.mutation_overlay.get(ids).await;
         let missing_db_ids = ids
             .iter()
             .zip(&overlay)
@@ -1339,8 +1394,7 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
                     .collect::<Result<Vec<_>>>()?
             };
             if let Some(cold) = cold_storage {
-                let mut overlay = cold.mutation_overlay.write().await;
-                overlay.extend(resolved);
+                cold.mutation_overlay.insert_all(resolved).await;
                 return Ok(0);
             }
 
@@ -1352,6 +1406,19 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
                 store.insert(vector_id, iris);
             }
             Ok(store.set_hash.checksum())
+        })
+    }
+
+    fn acknowledge_persisted_irises<'a>(
+        &'a self,
+        vector_ids: Vec<VectorId>,
+    ) -> BoxFuture<'a, usize> {
+        let cold_storage = self.cold_storage.clone();
+        Box::pin(async move {
+            let Some(cold) = cold_storage else {
+                return 0;
+            };
+            cold.mutation_overlay.acknowledge(&vector_ids).await
         })
     }
 
@@ -1422,11 +1489,7 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
         Box::pin(async move {
             let dummy = Arc::new(GaloisRingSharedIris::dummy_for_party(party_id));
             if let Some(cold) = cold_storage {
-                let mut overlay = cold.mutation_overlay.write().await;
-                for id in ids {
-                    overlay.remove(&id);
-                    overlay.insert(id.next_version(), dummy.clone());
-                }
+                cold.mutation_overlay.replace_with_dummy(ids, dummy).await;
                 return Ok(());
             }
             let mut store = iris_store.data.write().await;
@@ -1461,6 +1524,31 @@ mod tests {
     use crate::hawkers::shared_irises::SharedIrises;
 
     const TEST_TARGETS: usize = 513;
+
+    #[tokio::test]
+    async fn cold_overlay_acknowledges_only_exact_persisted_versions() {
+        let overlay = ColdMutationOverlay::default();
+        let v0 = VectorId::from_serial_id(7);
+        let v1 = v0.next_version();
+        let v2 = v1.next_version();
+        let iris = Arc::new(GaloisRingSharedIris::default_for_party(0));
+
+        overlay
+            .insert_all(vec![(v0, iris.clone()), (v1, iris.clone())])
+            .await;
+
+        assert_eq!(overlay.acknowledge(&[v0]).await, 1);
+        let versions = overlay.get(&[v0, v1]).await;
+        assert!(versions[0].is_none());
+        assert!(versions[1].is_some());
+
+        overlay.replace_with_dummy(vec![v1], iris).await;
+        assert_eq!(overlay.acknowledge(&[v1]).await, 0);
+        assert!(overlay.get(&[v2]).await[0].is_some());
+
+        assert_eq!(overlay.acknowledge(&[v2]).await, 1);
+        assert!(overlay.get(&[v2]).await[0].is_none());
+    }
 
     #[test]
     fn full_rotation_task_size_only_changes_decomposition() -> Result<()> {
