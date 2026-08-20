@@ -1,6 +1,6 @@
 # Exact CPU linear scan deployment. This is an alternative to, not a
 # replacement for, common-values-iris-mpc.yaml (the CUDA deployment).
-image: "ghcr.io/worldcoin/iris-mpc-linear-scan:2310cf142cb8e512acb07c16cf592865b55591fa"
+image: "ghcr.io/worldcoin/iris-mpc-linear-scan:8697ac2f0dae96af85aa33e1e5b74f1858c67b6a"
 
 environment: stage
 replicaCount: 1
