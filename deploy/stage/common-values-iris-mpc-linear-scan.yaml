@@ -50,7 +50,7 @@ env:
   SMPC__SERVER_COORDINATION__HEARTBEAT_INTERVAL_SECS: "3"
   SMPC__PUBLIC_KEY_BASE_URL: "https://pki-smpcv2-stage.worldcoin.org"
   SMPC__SHARES_BUCKET_NAME: "wf-smpcv2-stage-sns-requests"
-  SMPC__ENABLE_S3_IMPORTER: "false"
+  SMPC__ENABLE_S3_IMPORTER: "true"
   SMPC__DB_CHUNKS_FOLDER_NAME: "even_odd_with_version_id_output_16k"
   SMPC__LOAD_CHUNKS_PARALLELISM: "64"
   SMPC__LOAD_CHUNKS_BUFFER_SIZE: "1024"
@@ -90,9 +90,9 @@ env:
   SMPC__ENABLE_MODIFICATIONS_REPLAY: "true"
   SMPC__ENABLE_DEBUG_TIMING: "true"
   SMPC__SERVICE_PORTS: '["4000","4001","4002"]'
-  #SMPC__TLS__PRIVATE_KEY: "/etc/ssl/private/key.pem"
-  #SMPC__TLS__LEAF_CERT: "/etc/ssl/private/certificate.crt"
-  #SMPC__TLS__ROOT_CERTS: '["/usr/local/share/ca-certificates/ca_smpcv2_party_stage_0.crt", "/usr/local/share/ca-certificates/ca_smpcv2_party_stage_1.crt", "/usr/local/share/ca-certificates/ca_smpcv2_party_stage_2.crt"]'
+  SMPC__TLS__PRIVATE_KEY: "/etc/ssl/private/key.pem"
+  SMPC__TLS__LEAF_CERT: "/etc/ssl/private/certificate.crt"
+  SMPC__TLS__ROOT_CERTS: '["/usr/local/share/ca-certificates/ca_smpcv2_party_stage_0.crt", "/usr/local/share/ca-certificates/ca_smpcv2_party_stage_1.crt", "/usr/local/share/ca-certificates/ca_smpcv2_party_stage_2.crt"]'
 
 strategy:
   type: Recreate
@@ -179,6 +179,6 @@ preStop:
 
 terminationGracePeriodSeconds: 240
 
-#mountSSLCerts:
-#  enabled: true
-#  mountPath: /etc/ssl/private
+mountSSLCerts:
+  enabled: true
+  mountPath: /etc/ssl/private
