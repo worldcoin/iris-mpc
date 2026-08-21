@@ -423,7 +423,10 @@ impl TestCaseGenerator {
         self.enabled_test_cases.retain(|x| x != &test_case);
     }
 
-    fn generate_query_batch(
+    /// Generate one deterministic three-party batch. Exposed for backend
+    /// parity harnesses that must submit the exact same shares to two actor
+    /// implementations.
+    pub fn generate_query_batch(
         &mut self,
         max_batch_size: usize,
         max_deletions_per_batch: usize,
