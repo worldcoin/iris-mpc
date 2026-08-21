@@ -14,7 +14,7 @@ use iris_mpc_common::helpers::smpc_request::{
 use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
 use iris_mpc_common::helpers::sync::{Modification, SyncResult};
 use iris_mpc_common::iris_db::get_dummy_shares_for_deletion;
-use iris_mpc_store::{Store, StoredIrisRef};
+use iris_mpc_store::{ExplicitVersionToken, Store, StoredIrisRef};
 use sqlx::{Postgres, Transaction};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
@@ -62,6 +62,16 @@ pub async fn sync_modifications<'a>(
     store.delete_modifications(&mut iris_tx, &to_delete).await?;
 
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
+
+    // Live result persistence (`process_job_result`) advances `version_id`
+    // explicitly for every accepted reauth, identity update, and deletion, so
+    // that idempotent writes (dummy -> dummy deletions, identical reset shares)
+    // keep Postgres in step with the actor registry. Replay must advance the
+    // version the same way; otherwise a node that rolls a modification forward
+    // at startup ends up one version behind the nodes that applied it live.
+    // `SET LOCAL` scopes the mode to this transaction; the only other `irises`
+    // write below is the uniqueness insert, which the trigger never sees.
+    let mut version_tx = ExplicitVersionToken::enable(&mut iris_tx).await?;
 
     // Persist changes into iris and graph tables
     for modification in &to_update {
@@ -121,10 +131,31 @@ pub async fn sync_modifications<'a>(
             right_mask: &rm.coefs,
         };
 
-        store
-            .insert_irises_overriding(&mut iris_tx, &[iris_ref])
-            .await?;
+        if modification.request_type == UNIQUENESS_MESSAGE_TYPE {
+            // A new identity: insert the row (version 0), or overwrite an
+            // identical partial insert.
+            store
+                .insert_irises_overriding(version_tx.tx(), &[iris_ref])
+                .await?;
+        } else {
+            // A mutation of an existing identity: advance the version exactly
+            // like the live path did on the other nodes.
+            let updated = store
+                .update_iris_ref_and_increment_version(&mut version_tx, &iris_ref)
+                .await?;
+            if !updated {
+                tracing::warn!(
+                    "Modification {:?} targets serial id {} without a Postgres row; inserting it",
+                    modification,
+                    iris_ref.id
+                );
+                store
+                    .insert_irises_overriding(version_tx.tx(), &[iris_ref])
+                    .await?;
+            }
+        }
     }
+    drop(version_tx);
 
     Ok(iris_tx)
 }

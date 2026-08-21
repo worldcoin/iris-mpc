@@ -645,14 +645,7 @@ impl HawkActor {
 
     /// Empty-store, empty-graph constructor. Test convenience.
     pub async fn from_cli(args: &HawkArgs, shutdown_ct: CancellationToken) -> Result<Self> {
-        let initializer = Box::new(
-            worker_pool_initializer::LocalWorkerPoolInitializer::new_empty(
-                args.party_index,
-                HAWK_DISTANCE_MODE,
-                args.numa,
-            ),
-        );
-        Self::from_cli_with_initializer(args, shutdown_ct, initializer).await
+        Self::from_cli_with_search_mode(args, shutdown_ct, HawkSearchMode::Hnsw).await
     }
 
     /// Empty-store, empty-graph constructor for exact CPU linear-scan tests
@@ -661,7 +654,14 @@ impl HawkActor {
         args: &HawkArgs,
         shutdown_ct: CancellationToken,
     ) -> Result<Self> {
-        use worker_pool_initializer::WorkerPoolInitializer;
+        Self::from_cli_with_search_mode(args, shutdown_ct, HawkSearchMode::LinearScan).await
+    }
+
+    async fn from_cli_with_search_mode(
+        args: &HawkArgs,
+        shutdown_ct: CancellationToken,
+        search_mode: HawkSearchMode,
+    ) -> Result<Self> {
         let initializer = Box::new(
             worker_pool_initializer::LocalWorkerPoolInitializer::new_empty(
                 args.party_index,
@@ -669,15 +669,15 @@ impl HawkActor {
                 args.numa,
             ),
         );
-        let networking = build_hawk_network_handle(args, shutdown_ct).await?;
-        let initialized = initializer.initialize().await?;
         let graph = [(); 2].map(|_| GraphMem::new());
-        Ok(HawkActor::new_linear_scan(
-            args.clone(),
-            networking,
-            initialized,
+        Self::from_cli_with_initializer_and_graph(
+            args,
+            shutdown_ct,
+            initializer,
             graph,
-        ))
+            search_mode,
+        )
+        .await
     }
 
     /// Test convenience: build the actor from caller-provided iris
@@ -688,18 +688,14 @@ impl HawkActor {
         graph: BothEyes<GraphMem>,
         iris_store: BothEyes<Aby3SharedIrises>,
     ) -> Result<Self> {
-        use worker_pool_initializer::WorkerPoolInitializer;
-        let initializer = Box::new(
-            worker_pool_initializer::LocalWorkerPoolInitializer::new_seeded(
-                args.party_index,
-                HAWK_DISTANCE_MODE,
-                args.numa,
-                iris_store,
-            ),
-        );
-        let networking = build_hawk_network_handle(args, shutdown_ct).await?;
-        let initialized = initializer.initialize().await?;
-        Ok(HawkActor::new(args.clone(), networking, initialized, graph))
+        Self::from_cli_with_graph_store_and_search_mode(
+            args,
+            shutdown_ct,
+            graph,
+            iris_store,
+            HawkSearchMode::Hnsw,
+        )
+        .await
     }
 
     /// Test convenience equivalent of `from_cli_with_graph_and_store`, using
@@ -710,7 +706,23 @@ impl HawkActor {
         graph: BothEyes<GraphMem>,
         iris_store: BothEyes<Aby3SharedIrises>,
     ) -> Result<Self> {
-        use worker_pool_initializer::WorkerPoolInitializer;
+        Self::from_cli_with_graph_store_and_search_mode(
+            args,
+            shutdown_ct,
+            graph,
+            iris_store,
+            HawkSearchMode::LinearScan,
+        )
+        .await
+    }
+
+    async fn from_cli_with_graph_store_and_search_mode(
+        args: &HawkArgs,
+        shutdown_ct: CancellationToken,
+        graph: BothEyes<GraphMem>,
+        iris_store: BothEyes<Aby3SharedIrises>,
+        search_mode: HawkSearchMode,
+    ) -> Result<Self> {
         let initializer = Box::new(
             worker_pool_initializer::LocalWorkerPoolInitializer::new_seeded(
                 args.party_index,
@@ -719,14 +731,14 @@ impl HawkActor {
                 iris_store,
             ),
         );
-        let networking = build_hawk_network_handle(args, shutdown_ct).await?;
-        let initialized = initializer.initialize().await?;
-        Ok(HawkActor::new_linear_scan(
-            args.clone(),
-            networking,
-            initialized,
+        Self::from_cli_with_initializer_and_graph(
+            args,
+            shutdown_ct,
+            initializer,
             graph,
-        ))
+            search_mode,
+        )
+        .await
     }
 
     /// Run an initializer, then build the actor with an empty graph.
@@ -737,10 +749,33 @@ impl HawkActor {
         shutdown_ct: CancellationToken,
         initializer: Box<dyn worker_pool_initializer::WorkerPoolInitializer>,
     ) -> Result<Self> {
+        let graph = [(); 2].map(|_| GraphMem::new());
+        Self::from_cli_with_initializer_and_graph(
+            args,
+            shutdown_ct,
+            initializer,
+            graph,
+            HawkSearchMode::Hnsw,
+        )
+        .await
+    }
+
+    async fn from_cli_with_initializer_and_graph(
+        args: &HawkArgs,
+        shutdown_ct: CancellationToken,
+        initializer: Box<dyn worker_pool_initializer::WorkerPoolInitializer>,
+        graph: BothEyes<GraphMem>,
+        search_mode: HawkSearchMode,
+    ) -> Result<Self> {
         let networking = build_hawk_network_handle(args, shutdown_ct).await?;
         let initialized = initializer.initialize().await?;
-        let graph = [(); 2].map(|_| GraphMem::new());
-        Ok(HawkActor::new(args.clone(), networking, initialized, graph))
+        Ok(HawkActor::new_with_search_mode(
+            args.clone(),
+            networking,
+            initialized,
+            graph,
+            search_mode,
+        ))
     }
 
     pub fn set_anon_stats_store(&mut self, store: Option<AnonStatsStore>) {
@@ -1062,10 +1097,14 @@ impl HawkActor {
         request_types: &[String],
         skip_persistence: &[bool],
     ) -> PartialDistancesMap {
+        // The CUDA actor records no anonymized distances for skip_persistence
+        // requests. Mirror that only in linear-scan mode; the HNSW deployment
+        // keeps recording them until that behavior change is made deliberately.
+        let skip_non_persisted = self.search_mode() == HawkSearchMode::LinearScan;
         // maps query_id and db_id to an operation and a vector of distances.
         let mut distances_with_ids: PartialDistancesMap = BTreeMap::new();
         for (query_idx, vec_rots) in search_results.iter().enumerate() {
-            if skip_persistence.get(query_idx).copied().unwrap_or(false) {
+            if skip_non_persisted && skip_persistence.get(query_idx).copied().unwrap_or(false) {
                 continue;
             }
             let operation = request_types
@@ -1632,17 +1671,27 @@ impl HawkResult {
             .and_then(|mutation| mutation.inserted_id)
     }
 
-    fn select(&self, filter: Filter) -> (VecRequests<Vec<u32>>, VecRequests<usize>) {
-        const PARTIAL_MATCH_ID_LIMIT: usize = 2048;
+    /// The CUDA actor reports at most `ALL_MATCHES_LEN` (256) IDs per device
+    /// for every match list; with eight devices that is 2048. An exact scan
+    /// can otherwise return an unbounded list for a degenerate template, which
+    /// has no size guard downstream (SNS message limits).
+    const LINEAR_SCAN_MATCH_ID_LIMIT: usize = 2048;
 
+    fn select(&self, filter: Filter) -> (VecRequests<Vec<u32>>, VecRequests<usize>) {
         let mut indices = self.select_indices(filter);
         let counts = indices.iter().map(|ids| ids.len()).collect_vec();
+        self.cap_linear_scan_ids(&mut indices);
+        (indices, counts)
+    }
+
+    /// Apply [`Self::LINEAR_SCAN_MATCH_ID_LIMIT`] in linear-scan mode; HNSW
+    /// lists are already bounded by `ef`.
+    fn cap_linear_scan_ids(&self, indices: &mut VecRequests<Vec<u32>>) {
         if self.search_mode == HawkSearchMode::LinearScan {
-            for ids in &mut indices {
-                ids.truncate(PARTIAL_MATCH_ID_LIMIT);
+            for ids in indices {
+                ids.truncate(Self::LINEAR_SCAN_MATCH_ID_LIMIT);
             }
         }
-        (indices, counts)
     }
 
     fn select_indices(&self, filter: Filter) -> VecRequests<Vec<u32>> {
@@ -1708,7 +1757,8 @@ impl HawkResult {
             .map(|&d| matches!(d, UniqueInsert | UniqueInsertSkipped))
             .collect_vec();
 
-        let match_ids = self.select_indices(Self::MATCH_IDS_FILTER);
+        let mut match_ids = self.select_indices(Self::MATCH_IDS_FILTER);
+        self.cap_linear_scan_ids(&mut match_ids);
 
         let (partial_match_ids_left, partial_match_counters_left) = self.select(Filter {
             eyes: Only(Left),
@@ -1722,11 +1772,12 @@ impl HawkResult {
             intra_batch: false,
         });
 
-        let full_face_mirror_match_ids = self.select_indices(Filter {
+        let mut full_face_mirror_match_ids = self.select_indices(Filter {
             eyes: Both,
             orient: Only(Mirror),
             intra_batch: false,
         });
+        self.cap_linear_scan_ids(&mut full_face_mirror_match_ids);
 
         let (full_face_mirror_partial_match_ids_left, full_face_mirror_partial_match_counters_left) =
             self.select(Filter {
@@ -2232,9 +2283,18 @@ impl HawkHandle {
                 let pending = matching::PendingBatch::new(&search_results, &luc_ids, request_types);
 
                 // Compare the other eye for vectors that matched on only one side.
-                let comparison_results =
+                let comparison_results = if hawk_actor.search_mode() == HawkSearchMode::LinearScan {
+                    // The cascade already evaluated both eyes for every
+                    // one-eyed match and known candidate; reuse its strict
+                    // threshold results instead of a second MPC pass.
+                    search::linear_scan_comparison_results(
+                        &search_results,
+                        pending.ids_to_compare(),
+                    )
+                } else {
                     is_match_batch(search_queries, pending.ids_to_compare(), sessions_search)
-                        .await?;
+                        .await?
+                };
 
                 pending.resolve(&comparison_results, intra_results.await???)
             };
