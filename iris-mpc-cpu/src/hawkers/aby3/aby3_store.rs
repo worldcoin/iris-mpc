@@ -591,10 +591,11 @@ where
         query: &Aby3Query,
         vectors: &[VectorId],
     ) -> Result<Vec<Share<u16>>> {
-        eyre::ensure!(
-            self.distance_fn.mode == DistanceMode::MinRotation,
-            "full-rotation scan requires min-rotation distance mode"
-        );
+        // This scan is neither the simple nor the min-rotation distance: it
+        // opens a threshold for each of the 31 rotations separately. What it
+        // does rely on is the Hawk query layout, where the cached query
+        // rotations are addressed relative to `CENTER_ROTATION`; the worker
+        // derives all database rotations from that single center query.
         eyre::ensure!(
             query.rotation == crate::execution::hawk_main::iris_worker::CENTER_ROTATION,
             "full-rotation scan must start from the center query rotation"

@@ -246,23 +246,13 @@ pub async fn linear_scan_cascade<const ROTMASK: u32>(
     let first_eye = eye_index(full_scan_side);
     let second_eye_side = full_scan_side.other();
 
-    // Both eye registries contain the same live VectorIds. Build this list
-    // once, then share it across all requests and sessions in the full stage.
+    // Both eye registries contain the same live VectorIds. The registry
+    // caches this list between mutations, so all requests, sessions, and
+    // orientations of a batch share one allocation.
     let live_ids = {
         let vector_store = sessions[first_eye][0].aby3_store.read().await;
         let registry = vector_store.registry.read().await;
-        Arc::<[VectorId]>::from(
-            registry
-                .get_points()
-                .iter()
-                .enumerate()
-                .filter_map(|(serial_id, entry)| {
-                    entry
-                        .as_ref()
-                        .map(|(version, ())| VectorId::new(serial_id as u32, *version))
-                })
-                .collect::<Vec<_>>(),
-        )
+        registry.live_vector_ids()
     };
     let full_scan_ids = Arc::new(vec![live_ids.clone(); n_requests]);
     let first_eye_comparisons = live_ids.len() * n_requests;
