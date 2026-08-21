@@ -65,7 +65,10 @@ fn run_test() -> Result<()> {
             ))
         })
         .collect::<Vec<_>>();
-    let pool = LocalIrisWorkerPool::new_local(store.to_arc(), layout, DistanceMode::MinRotation, 0);
+    // The windowed comparison below is the cross-kernel oracle; production
+    // pools refuse it on mixed-plane residents, so opt in explicitly.
+    let pool = LocalIrisWorkerPool::new_local(store.to_arc(), layout, DistanceMode::MinRotation, 0)
+        .with_windowed_ops_on_mixed_residents();
     let query_id = QueryId::new();
     runtime.block_on(pool.cache_queries(vec![(query_id, Arc::new(deterministic_iris(0x5a5a)))]))?;
 

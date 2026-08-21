@@ -836,10 +836,7 @@ async fn init_hawk_actor(
     );
     // Exact-scan pools store irises in the mixed-plane layout on CPUs with
     // the UMMLA kernel; HNSW pools keep plain ArcIris values.
-    let resident_layout = match search_mode {
-        HawkSearchMode::LinearScan => iris_mpc_cpu::protocol::shared_iris::preferred_scan_layout(),
-        HawkSearchMode::Hnsw => iris_mpc_cpu::protocol::shared_iris::ResidentLayout::U16,
-    };
+    let resident_layout = HawkActor::resident_layout_for(search_mode);
     let initializer: Box<dyn WorkerPoolInitializer> = Box::new(
         LocalWorkerPoolInitializer::new_load_from_db(
             hawk_args.party_index,

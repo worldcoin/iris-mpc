@@ -1211,6 +1211,12 @@ pub struct LocalIrisWorkerPool {
     /// rolling LUC window, a bounded frequency cache, and mutations awaiting a
     /// database commit; older explicit candidates are fetched sparsely.
     cold_storage: Option<ColdStorage>,
+    /// The HNSW-style windowed dot products read resident records through
+    /// `ResidentIris::to_arc`, which rebuilds a u16 iris per target when the
+    /// resident layout is the mixed-plane scan layout. The exact scan never
+    /// takes that path (it streams planes directly), so production pools
+    /// refuse it; the cross-kernel parity tests opt in explicitly.
+    windowed_ops_on_mixed_residents: bool,
 }
 
 #[derive(Clone)]
@@ -1701,6 +1707,7 @@ impl LocalIrisWorkerPool {
             mode,
             party_id,
             cold_storage: None,
+            windowed_ops_on_mixed_residents: false,
         }
     }
 
@@ -1783,7 +1790,16 @@ impl LocalIrisWorkerPool {
                 state,
                 prefetch_tx,
             }),
+            windowed_ops_on_mixed_residents: false,
         })
+    }
+
+    /// Allow windowed (HNSW-style) dot products against mixed-plane
+    /// residents. Each target is rebuilt as a u16 iris, so this is only for
+    /// tests and tools that compare the two kernels on the same data.
+    pub fn with_windowed_ops_on_mixed_residents(mut self) -> Self {
+        self.windowed_ops_on_mixed_residents = true;
+        self
     }
 
     /// Create a local worker pool for shard 0 with NUMA pinning.
@@ -1968,6 +1984,8 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
         let query_cache = self.query_cache.clone();
         let mut inner = self.inner.clone();
         let mode = self.mode;
+        let layout = self.layout;
+        let windowed_ops_on_mixed_residents = self.windowed_ops_on_mixed_residents;
         let pool = self.clone();
         let is_cold = self.cold_storage.is_some();
         Box::pin(async move {
@@ -2009,6 +2027,11 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
                 return Ok(results);
             }
 
+            eyre::ensure!(
+                layout == ResidentLayout::U16 || windowed_ops_on_mixed_residents,
+                "windowed dot products are not served from mixed-plane residents: this path \
+                 rebuilds a u16 iris per target, and the exact scan does not use it"
+            );
             match mode {
                 DistanceMode::Simple => {
                     let mut results = Vec::with_capacity(iris_batches.len());

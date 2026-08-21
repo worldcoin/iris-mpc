@@ -668,7 +668,7 @@ impl HawkActor {
                 HAWK_DISTANCE_MODE,
                 args.numa,
             )
-            .with_resident_layout(crate::protocol::shared_iris::preferred_scan_layout()),
+            .with_resident_layout(Self::resident_layout_for(search_mode)),
         );
         let graph = [(); 2].map(|_| GraphMem::new());
         Self::from_cli_with_initializer_and_graph(
@@ -731,7 +731,7 @@ impl HawkActor {
                 args.numa,
                 iris_store,
             )
-            .with_resident_layout(crate::protocol::shared_iris::preferred_scan_layout()),
+            .with_resident_layout(Self::resident_layout_for(search_mode)),
         );
         Self::from_cli_with_initializer_and_graph(
             args,
@@ -760,6 +760,19 @@ impl HawkActor {
             HawkSearchMode::Hnsw,
         )
         .await
+    }
+
+    /// The resident iris layout the production server selects for a search
+    /// mode: the exact scan streams mixed planes where the UMMLA kernel is
+    /// available, while HNSW pools keep plain u16 irises for their windowed
+    /// dot products.
+    pub fn resident_layout_for(
+        search_mode: HawkSearchMode,
+    ) -> crate::protocol::shared_iris::ResidentLayout {
+        match search_mode {
+            HawkSearchMode::LinearScan => crate::protocol::shared_iris::preferred_scan_layout(),
+            HawkSearchMode::Hnsw => crate::protocol::shared_iris::ResidentLayout::U16,
+        }
     }
 
     async fn from_cli_with_initializer_and_graph(

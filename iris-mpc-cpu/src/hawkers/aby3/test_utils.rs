@@ -86,12 +86,18 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
                     crate::protocol::shared_iris::ResidentIris::from_arc(iris, layout)
                 })
                 .to_arc();
-            let workers: Arc<dyn IrisWorkerPool> = Arc::new(LocalIrisWorkerPool::new_local(
-                resident_storage,
-                layout,
-                plain_store.distance_mode,
-                party_id,
-            ));
+            // Test stores use the scan layout of this CPU so the HNSW-style
+            // windowed ops double as a cross-kernel check; production pools
+            // refuse that combination.
+            let workers: Arc<dyn IrisWorkerPool> = Arc::new(
+                LocalIrisWorkerPool::new_local(
+                    resident_storage,
+                    layout,
+                    plain_store.distance_mode,
+                    party_id,
+                )
+                .with_windowed_ops_on_mixed_residents(),
+            );
             let registry = storage.data.try_read().unwrap().to_registry().to_arc();
             Ok(Arc::new(Mutex::new(Aby3Store::new(
                 registry,
@@ -116,12 +122,15 @@ pub async fn setup_local_store_aby3_players(network_t: NetworkType) -> Result<Ve
                     crate::protocol::shared_iris::ResidentIris::from_arc(iris, layout)
                 })
                 .to_arc();
-            let workers: Arc<dyn IrisWorkerPool> = Arc::new(LocalIrisWorkerPool::new_local(
-                storage.clone(),
-                layout,
-                TEST_DISTANCE_MODE,
-                party_id,
-            ));
+            let workers: Arc<dyn IrisWorkerPool> = Arc::new(
+                LocalIrisWorkerPool::new_local(
+                    storage.clone(),
+                    layout,
+                    TEST_DISTANCE_MODE,
+                    party_id,
+                )
+                .with_windowed_ops_on_mixed_residents(),
+            );
             let registry = storage.data.try_read().unwrap().to_registry().to_arc();
             Ok(Arc::new(Mutex::new(Aby3Store::new(
                 registry,

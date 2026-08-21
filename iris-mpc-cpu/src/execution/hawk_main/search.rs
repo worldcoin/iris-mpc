@@ -1241,22 +1241,12 @@ pub async fn linear_scan_cascade_paired<const ROTMASK: u32>(
     assert_eq!(n_requests, forced_anon_stats_ids.len());
 
     // Both eye registries and both orientation groups observe the same live
-    // VectorIds. Build the list once and share it across the fused stage.
+    // VectorIds. The registry caches this list between mutations, so the
+    // fused stage shares one allocation with every other user in the batch.
     let live_ids = {
         let vector_store = sessions_both[0][first_eye][0].aby3_store.read().await;
         let registry = vector_store.registry.read().await;
-        Arc::<[VectorId]>::from(
-            registry
-                .get_points()
-                .iter()
-                .enumerate()
-                .filter_map(|(serial_id, entry)| {
-                    entry
-                        .as_ref()
-                        .map(|(version, ())| VectorId::new(serial_id as u32, *version))
-                })
-                .collect::<Vec<_>>(),
-        )
+        registry.live_vector_ids()
     };
     let full_scan_ids = Arc::new(vec![live_ids.clone(); n_requests]);
     let first_eye_comparisons = live_ids.len() * n_requests;
