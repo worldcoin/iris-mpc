@@ -203,7 +203,7 @@ async fn cold_eye_luc_window_rolls_forward_and_survives_persistence_ack() -> Res
 }
 
 #[tokio::test]
-async fn cold_eye_version_miss_fails_prefetch_and_foreground_fetch() -> Result<()> {
+async fn cold_eye_version_miss_fails_foreground_fetch_after_prefetch() -> Result<()> {
     let schema_name = temporary_name();
     let postgres =
         PostgresClient::new(&test_db_url()?, &schema_name, AccessMode::ReadWrite).await?;
@@ -244,16 +244,14 @@ async fn cold_eye_version_miss_fails_prefetch_and_foreground_fetch() -> Result<(
         .await?,
     );
 
-    // Model the registry being one version ahead of Postgres. Neither the
-    // asynchronous prefetch nor its foreground fallback may fabricate an
-    // all-zero iris for this exact-version miss.
+    // Model the registry being one version ahead of Postgres. The prefetch is
+    // only a hint: its failed read releases the reservation and the barrier
+    // completes, while the foreground fetch that the scan relies on must fail
+    // closed rather than fabricate an all-zero iris for this exact-version
+    // miss.
     let registry_id = current_id.next_version();
     cold.prefetch_irises(vec![registry_id]).await?;
-    let prefetch_error = cold.wait_for_prefetch().await.unwrap_err();
-    assert!(
-        format!("{prefetch_error:#}").contains("cold-eye database missing"),
-        "unexpected prefetch error: {prefetch_error:#}"
-    );
+    cold.wait_for_prefetch().await?;
 
     let foreground_error = cold.fetch_irises(vec![registry_id]).await.unwrap_err();
     assert!(

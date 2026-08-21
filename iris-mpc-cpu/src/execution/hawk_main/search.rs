@@ -287,9 +287,11 @@ pub async fn linear_scan_cascade<const ROTMASK: u32>(
         let store = sessions[second_eye][0].aby3_store.read().await;
         store.workers.clone()
     };
-    // Known OR/reauth candidates are needed exactly once in stage two. Queue
-    // them once here; adding them to every full-scan chunk would inflate the
-    // prefetch reservation use count and retain stale entries after the scan.
+    // Known OR/reauth candidates are second-stage candidates regardless of
+    // the first-eye result, so their database reads can start before the
+    // resident-eye scan. Reservations are single-use and idempotent: a record
+    // hinted again by a first-eye chunk or by the other orientation is not
+    // reserved twice, and leftovers are released when the batch completes.
     for extras in extra_candidate_ids {
         let prefetch_ids = collect_live_second_stage_ids(&live_ids, [], extras);
         prefetch_worker.prefetch_irises(prefetch_ids).await?;
