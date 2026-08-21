@@ -1062,6 +1062,16 @@ async fn linear_scan_full_stage_paired<const ROTMASK: u32>(
             async move {
                 let mut store_a = session_a.aby3_store.write().await;
                 let mut store_b = session_b.aby3_store.write().await;
+                // The fused dot pass below is dispatched through `store_a`
+                // for both orientations' queries. That resolves the mirror
+                // query only because every session of one eye shares that
+                // eye's worker pool, into which `HawkRequest::cache_into`
+                // caches the normal and mirror queries alike. Make the
+                // assumption explicit rather than relying on it silently.
+                eyre::ensure!(
+                    Arc::ptr_eq(&store_a.workers, &store_b.workers),
+                    "paired linear scan requires both orientations' sessions to share one worker pool"
+                );
                 let graph_a = session_a.graph_store.clone().read_owned().await;
                 let graph_b = session_b.graph_store.clone().read_owned().await;
                 let mut results = Vec::with_capacity(batch.len());
