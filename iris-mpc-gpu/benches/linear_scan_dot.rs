@@ -6,7 +6,7 @@ use iris_mpc_common::{
 use iris_mpc_cpu::{
     execution::hawk_main::iris_worker::{IrisWorkerPool, LocalIrisWorkerPool, QueryId, QuerySpec},
     hawkers::{aby3::aby3_store::DistanceMode, shared_irises::SharedIrises},
-    protocol::shared_iris::{ArcIris, GaloisRingSharedIris},
+    protocol::shared_iris::{preferred_scan_layout, ArcIris, GaloisRingSharedIris, ResidentIris},
 };
 use iris_mpc_gpu::{
     dot::share_db::{preprocess_query, ProcessedDatabase, ShareDB, SlicedProcessedDatabase},
@@ -415,20 +415,23 @@ fn build_gpu_scan(db_size: usize, query: &GaloisRingSharedIris) -> Result<GpuSca
 
 fn build_cpu_pool(db_size: usize, query: &ArcIris) -> (LocalIrisWorkerPool, Vec<VectorId>) {
     println!("loading CPU database ({db_size} records)");
+    // Same resident layout the production linear-scan pool selects on this
+    // CPU (mixed planes where the UMMLA kernel is available).
+    let layout = preferred_scan_layout();
     let mut store = SharedIrises::new(
         HashMap::new(),
-        Arc::new(GaloisRingSharedIris::default_for_party(0)),
+        ResidentIris::from_arc(Arc::new(GaloisRingSharedIris::default_for_party(0)), layout),
     );
     store.reserve(db_size);
     let mut vector_ids = Vec::with_capacity(db_size);
     for _ in 0..db_size {
         // A deep clone gives every logical record its own backing memory, so
         // the scan cannot turn into an unrealistically cache-resident test.
-        vector_ids.push(store.append(Arc::new((**query).clone())));
+        vector_ids.push(store.append(ResidentIris::from_arc(Arc::new((**query).clone()), layout)));
     }
     let store = store.to_arc();
     (
-        LocalIrisWorkerPool::new_local(store, DistanceMode::MinRotation, 0),
+        LocalIrisWorkerPool::new_local(store, layout, DistanceMode::MinRotation, 0),
         vector_ids,
     )
 }

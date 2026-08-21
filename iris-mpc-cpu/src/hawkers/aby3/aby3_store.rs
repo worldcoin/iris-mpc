@@ -70,6 +70,38 @@ pub type Aby3Query = QuerySpec;
 pub type Aby3DistanceRef<T = u32> = DistanceShare<T>;
 pub type RotationMatchIndices = Vec<Vec<usize>>;
 
+/// Both orientations' additive dot-product shares for one chunk.
+pub type PairDotContributions = [Vec<RingElement<u16>>; 2];
+
+/// A spawned task handle that aborts the task when dropped, so a lookahead
+/// chunk cannot keep running detached after the lane that requested it has
+/// failed or been cancelled.
+pub struct AbortOnDropHandle<T>(tokio::task::JoinHandle<T>);
+
+impl<T> AbortOnDropHandle<T> {
+    fn new(handle: tokio::task::JoinHandle<T>) -> Self {
+        Self(handle)
+    }
+}
+
+impl<T> Drop for AbortOnDropHandle<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+impl<T> std::future::Future for AbortOnDropHandle<T> {
+    type Output = std::result::Result<T, tokio::task::JoinError>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        // `JoinHandle` is `Unpin`, so projecting through the wrapper is sound.
+        std::pin::Pin::new(&mut self.get_mut().0).poll(cx)
+    }
+}
+
 /// GPU-equivalent exact-scan classification for one chunk. Thresholds are
 /// evaluated directly for all 31 rotations; no secret minimum is computed.
 #[derive(Debug)]
@@ -686,32 +718,36 @@ where
     /// worker-level target streaming is shared. This performs no network
     /// communication, so fusing and pipelining the dot passes is invisible to
     /// the MPC transcript.
+    ///
+    /// Configuration errors are reported before anything is spawned. The
+    /// returned handle aborts the task when dropped, so a lane that fails
+    /// while a lookahead chunk is in flight does not leave that chunk running
+    /// detached on the dot-product workers.
     pub fn spawn_full_rotation_dot_contributions_pair(
         &self,
         queries: [&Aby3Query; 2],
         vectors: &[VectorId],
-    ) -> tokio::task::JoinHandle<Result<[Vec<RingElement<u16>>; 2]>> {
-        let mode = self.distance_fn.mode;
+    ) -> Result<AbortOnDropHandle<Result<PairDotContributions>>> {
+        eyre::ensure!(
+            self.distance_fn.mode == DistanceMode::MinRotation,
+            "full-rotation scan requires min-rotation distance mode"
+        );
+        for query in queries {
+            eyre::ensure!(
+                query.rotation == crate::execution::hawk_main::iris_worker::CENTER_ROTATION,
+                "full-rotation scan must start from the center query rotation"
+            );
+        }
         let specs = [*queries[0], *queries[1]];
         let workers = self.workers.clone();
         let vectors = vectors.to_vec();
-        tokio::spawn(async move {
-            eyre::ensure!(
-                mode == DistanceMode::MinRotation,
-                "full-rotation scan requires min-rotation distance mode"
-            );
-            for query in specs {
-                eyre::ensure!(
-                    query.rotation == crate::execution::hawk_main::iris_worker::CENTER_ROTATION,
-                    "full-rotation scan must start from the center query rotation"
-                );
-            }
+        Ok(AbortOnDropHandle::new(tokio::spawn(async move {
             metrics::counter!("distance_evaluations_total").increment(2 * vectors.len() as u64);
             metrics::histogram!("distance_evaluations_batch_size").record(vectors.len() as f64);
             workers
                 .compute_dot_products_full_rotations_pair(specs, vectors)
                 .await
-        })
+        })))
     }
 
     /// Check whether a batch of distances are matches at the given threshold.

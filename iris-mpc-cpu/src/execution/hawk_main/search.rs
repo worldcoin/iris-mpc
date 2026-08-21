@@ -1089,10 +1089,13 @@ async fn linear_scan_full_stage_paired<const ROTMASK: u32>(
                 // dot work then completes early and the stage drains on
                 // thresholds alone with idle dot workers.
                 const DOT_PIPELINE_DEPTH: usize = 1;
+                // Handles abort their task when dropped, so an error anywhere
+                // in this lane (or a sibling lane failing `try_join!`) also
+                // cancels the lookahead chunk instead of leaving it running.
                 let mut pending_dots = std::collections::VecDeque::new();
                 if do_match {
                     for chunk in batch.iter().take(DOT_PIPELINE_DEPTH) {
-                        pending_dots.push_back(dispatch(&store_a, chunk));
+                        pending_dots.push_back(dispatch(&store_a, chunk)?);
                     }
                 }
                 for (index, chunk) in batch.iter().enumerate() {
@@ -1104,7 +1107,7 @@ async fn linear_scan_full_stage_paired<const ROTMASK: u32>(
                     };
                     if do_match {
                         if let Some(next) = batch.get(index + DOT_PIPELINE_DEPTH) {
-                            pending_dots.push_back(dispatch(&store_a, next));
+                            pending_dots.push_back(dispatch(&store_a, next)?);
                         }
                     }
                     let (query_a, query_b) = queries_for(chunk);
