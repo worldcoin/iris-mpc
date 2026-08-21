@@ -16,7 +16,7 @@ use iris_mpc_cpu::{
         aby3::aby3_store::{Aby3Store, DistanceMode, FhdOps},
         shared_irises::SharedIrises,
     },
-    protocol::shared_iris::GaloisRingSharedIris,
+    protocol::shared_iris::{GaloisRingSharedIris, ResidentIris, ResidentLayout},
 };
 use iris_mpc_store::{
     test_utils::{cleanup, temporary_name, test_db_url},
@@ -50,18 +50,28 @@ async fn cold_eye_prefetched_dot_product_matches_resident_and_populates_lfu() ->
 
     let resident_store =
         Aby3Store::<FhdOps>::new_storage(Some(HashMap::from([(vector_id, target.clone())])))
+            .map_values(|iris| ResidentIris::from_arc(iris, ResidentLayout::U16))
             .to_arc();
     let resident: Arc<dyn IrisWorkerPool> = Arc::new(LocalIrisWorkerPool::new_local(
         resident_store,
+        ResidentLayout::U16,
         DistanceMode::MinRotation,
         0,
     ));
 
-    let cold_store = SharedIrises::to_arc(Aby3Store::<FhdOps>::new_storage(None));
+    let cold_store = SharedIrises::new(
+        HashMap::new(),
+        ResidentIris::from_arc(
+            Arc::new(GaloisRingSharedIris::default_for_party(0)),
+            ResidentLayout::U16,
+        ),
+    )
+    .to_arc();
     let cold: Arc<dyn IrisWorkerPool> = Arc::new(
         LocalIrisWorkerPool::new_cold(
-            init_workers(RIGHT, cold_store.clone(), false),
+            init_workers(RIGHT, cold_store.clone(), false, ResidentLayout::U16),
             cold_store.clone(),
+            ResidentLayout::U16,
             DistanceMode::MinRotation,
             0,
             ColdStorageInit {
@@ -155,11 +165,19 @@ async fn cold_eye_luc_window_rolls_forward_and_survives_persistence_ack() -> Res
     .await?;
     tx.commit().await?;
 
-    let cold_store = SharedIrises::to_arc(Aby3Store::<FhdOps>::new_storage(None));
+    let cold_store = SharedIrises::new(
+        HashMap::new(),
+        ResidentIris::from_arc(
+            Arc::new(GaloisRingSharedIris::default_for_party(0)),
+            ResidentLayout::U16,
+        ),
+    )
+    .to_arc();
     let cold: Arc<dyn IrisWorkerPool> = Arc::new(
         LocalIrisWorkerPool::new_cold(
-            init_workers(RIGHT, cold_store.clone(), false),
+            init_workers(RIGHT, cold_store.clone(), false, ResidentLayout::U16),
             cold_store,
+            ResidentLayout::U16,
             DistanceMode::MinRotation,
             0,
             ColdStorageInit {
@@ -226,11 +244,19 @@ async fn cold_eye_version_miss_fails_foreground_fetch_after_prefetch() -> Result
     .await?;
     tx.commit().await?;
 
-    let cold_store = SharedIrises::to_arc(Aby3Store::<FhdOps>::new_storage(None));
+    let cold_store = SharedIrises::new(
+        HashMap::new(),
+        ResidentIris::from_arc(
+            Arc::new(GaloisRingSharedIris::default_for_party(0)),
+            ResidentLayout::U16,
+        ),
+    )
+    .to_arc();
     let cold: Arc<dyn IrisWorkerPool> = Arc::new(
         LocalIrisWorkerPool::new_cold(
-            init_workers(RIGHT, cold_store.clone(), false),
+            init_workers(RIGHT, cold_store.clone(), false, ResidentLayout::U16),
             cold_store,
+            ResidentLayout::U16,
             DistanceMode::MinRotation,
             0,
             ColdStorageInit {

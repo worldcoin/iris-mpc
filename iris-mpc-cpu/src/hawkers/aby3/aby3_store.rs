@@ -27,10 +27,12 @@ use crate::{
         RingElement,
     },
 };
+#[cfg(test)]
+use ampc_actor_utils::protocol::fhd_ops::fhd_greater_than_anon_stats_threshold;
 use ampc_actor_utils::protocol::{
     binary::open_bin,
     fhd_ops::{
-        fhd_greater_than_anon_stats_threshold, fhd_greater_than_threshold_pre_lifted_masks,
+        fhd_greater_than_anon_stats_from_galois, fhd_greater_than_threshold_pre_lifted_masks,
         lift_fhd_mask_dots,
     },
     ops::batch_signed_lift_vec,
@@ -67,6 +69,38 @@ pub type Aby3Query = QuerySpec;
 
 pub type Aby3DistanceRef<T = u32> = DistanceShare<T>;
 pub type RotationMatchIndices = Vec<Vec<usize>>;
+
+/// Both orientations' additive dot-product shares for one chunk.
+pub type PairDotContributions = [Vec<RingElement<u16>>; 2];
+
+/// A spawned task handle that aborts the task when dropped, so a lookahead
+/// chunk cannot keep running detached after the lane that requested it has
+/// failed or been cancelled.
+pub struct AbortOnDropHandle<T>(tokio::task::JoinHandle<T>);
+
+impl<T> AbortOnDropHandle<T> {
+    fn new(handle: tokio::task::JoinHandle<T>) -> Self {
+        Self(handle)
+    }
+}
+
+impl<T> Drop for AbortOnDropHandle<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+impl<T> std::future::Future for AbortOnDropHandle<T> {
+    type Output = std::result::Result<T, tokio::task::JoinError>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        // `JoinHandle` is `Unpin`, so projecting through the wrapper is sound.
+        std::pin::Pin::new(&mut self.get_mut().0).poll(cx)
+    }
+}
 
 /// GPU-equivalent exact-scan classification for one chunk. Thresholds are
 /// evaluated directly for all 31 rotations; no secret minimum is computed.
@@ -585,12 +619,73 @@ where
             .await
     }
 
+    /// Full-rotation exact scan with the opened per-rotation match metadata
+    /// retained as a correctness oracle for the fused production path.
+    #[cfg(test)]
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
+    pub async fn eval_distance_batch_full_rotations_with_rotation_matches(
+        &mut self,
+        query: &Aby3Query,
+        vectors: &[VectorId],
+    ) -> Result<(Vec<DistanceShare<D::Ring>>, RotationMatchIndices)> {
+        if vectors.is_empty() {
+            return Ok((Vec::new(), Vec::new()));
+        }
+        let rotation_distances = self.full_rotation_distances(query, vectors).await?;
+        let distances = self
+            .oblivious_min_distance_batch(distance_fn::transpose_from_flat_with_rotations(
+                &rotation_distances,
+                ROTATIONS,
+            ))
+            .await?;
+        let rotation_match_bits =
+            D::lte_and_open(&mut self.session, &rotation_distances, Threshold::Match).await?;
+        let rotation_matches = rotation_match_bits
+            .chunks(ROTATIONS)
+            .map(|bits| {
+                bits.iter()
+                    .enumerate()
+                    .filter_map(|(rotation, &is_match)| is_match.then_some(rotation))
+                    .collect()
+            })
+            .collect();
+        Ok((distances, rotation_matches))
+    }
+
+    #[cfg(test)]
+    async fn full_rotation_distances(
+        &mut self,
+        query: &Aby3Query,
+        vectors: &[VectorId],
+    ) -> Result<Vec<DistanceShare<D::Ring>>> {
+        if vectors.is_empty() {
+            return Ok(Vec::new());
+        }
+        let dot_shares = self.full_rotation_dot_shares(query, vectors).await?;
+        self.lift_distances(dot_shares).await
+    }
+
+    #[cfg(test)]
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     async fn full_rotation_dot_shares(
         &mut self,
         query: &Aby3Query,
         vectors: &[VectorId],
     ) -> Result<Vec<Share<u16>>> {
+        let ds_and_ts = self.full_rotation_dot_contributions(query, vectors).await?;
+        galois_ring_to_rep3(&mut self.session, ds_and_ts).await
+    }
+
+    /// Compute the local additive dot-product contributions before refreshing
+    /// them into replicated shares. The fused exact-scan path consumes this
+    /// representation directly and materializes scalar shares only for public
+    /// candidates.
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
+    async fn full_rotation_dot_contributions(
+        &mut self,
+        query: &Aby3Query,
+        vectors: &[VectorId],
+    ) -> Result<Vec<RingElement<u16>>> {
         // This scan is neither the simple nor the min-rotation distance: it
         // opens a threshold for each of the 31 rotations separately. What it
         // does rely on is the Hawk query layout, where the cached query
@@ -602,11 +697,47 @@ where
         );
         metrics::counter!("distance_evaluations_total").increment(vectors.len() as u64);
         metrics::histogram!("distance_evaluations_batch_size").record(vectors.len() as f64);
-        let ds_and_ts = self
-            .workers
+        self.workers
             .compute_dot_products_full_rotations(*query, vectors.to_vec())
-            .await?;
-        galois_ring_to_rep3(&mut self.session, ds_and_ts).await
+            .await
+    }
+
+    /// Dispatch both orientations' local dot contributions for one chunk as a
+    /// spawned task on the worker pool. The caller can drive the previous
+    /// chunk's threshold rounds while this chunk's dot products compute,
+    /// keeping the dot workers fed. Each returned side is identical to a
+    /// separate [`Self::full_rotation_dot_contributions`] call; only the
+    /// worker-level target streaming is shared. This performs no network
+    /// communication, so fusing and pipelining the dot passes is invisible to
+    /// the MPC transcript.
+    ///
+    /// Configuration errors are reported before anything is spawned. The
+    /// returned handle aborts the task when dropped, so a lane that fails
+    /// while a lookahead chunk is in flight does not leave that chunk running
+    /// detached on the dot-product workers.
+    pub fn spawn_full_rotation_dot_contributions_pair(
+        &self,
+        queries: [&Aby3Query; 2],
+        vectors: &[VectorId],
+    ) -> Result<AbortOnDropHandle<Result<PairDotContributions>>> {
+        // See `full_rotation_dot_contributions`: only the center-rotation
+        // query layout matters, not the configured distance mode.
+        for query in queries {
+            eyre::ensure!(
+                query.rotation == crate::execution::hawk_main::iris_worker::CENTER_ROTATION,
+                "full-rotation scan must start from the center query rotation"
+            );
+        }
+        let specs = [*queries[0], *queries[1]];
+        let workers = self.workers.clone();
+        let vectors = vectors.to_vec();
+        Ok(AbortOnDropHandle::new(tokio::spawn(async move {
+            metrics::counter!("distance_evaluations_total").increment(2 * vectors.len() as u64);
+            metrics::histogram!("distance_evaluations_batch_size").record(vectors.len() as f64);
+            workers
+                .compute_dot_products_full_rotations_pair(specs, vectors)
+                .await
+        })))
     }
 
     /// Check whether a batch of distances are matches at the given threshold.
@@ -624,15 +755,14 @@ where
 }
 
 impl Aby3Store<FhdOps> {
-    /// GPU-compatible exact scan with selected records retained for anonymous
-    /// statistics regardless of the anonymous-statistics threshold. The CUDA
-    /// actor uses this for reauthentication targets.
+    /// Unfused exact-scan threshold implementation retained as a correctness
+    /// oracle for the production path.
+    #[cfg(test)]
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
-    pub async fn eval_distance_batch_full_rotation_thresholds_with_forced_anon_stats(
+    pub async fn eval_distance_batch_full_rotation_thresholds(
         &mut self,
         query: &Aby3Query,
         vectors: &[VectorId],
-        forced_anon_stats_vectors: &[usize],
     ) -> Result<FullRotationThresholdResult> {
         if vectors.is_empty() {
             return Ok(FullRotationThresholdResult {
@@ -662,7 +792,7 @@ impl Aby3Store<FhdOps> {
         let anon_gt =
             fhd_greater_than_anon_stats_threshold(&mut self.session, &code_dots, &mask_dots)
                 .await?;
-        let mut anon_rotation_bits = open_bin(&mut self.session, &anon_gt)
+        let anon_rotation_bits = open_bin(&mut self.session, &anon_gt)
             .await?
             .into_iter()
             .map(|bit| !bool::from(bit))
@@ -672,17 +802,6 @@ impl Aby3Store<FhdOps> {
             anon_rotation_bits.len() == code_dots.len(),
             "anonymous threshold result has unexpected length"
         );
-
-        // CUDA unions the reauthentication target into the public candidate
-        // bitmap and stores all of its rotations, even those outside the
-        // anonymous-statistics threshold.
-        for &vector in forced_anon_stats_vectors {
-            eyre::ensure!(
-                vector < vectors.len(),
-                "forced anonymous-statistics vector index is out of bounds"
-            );
-            anon_rotation_bits[vector * ROTATIONS..(vector + 1) * ROTATIONS].fill(true);
-        }
 
         // Exactly like the GPU actor, collapse the wider public prefilter to a
         // record bitmap, then run the strict threshold over all 31 rotations
@@ -748,6 +867,209 @@ impl Aby3Store<FhdOps> {
         };
 
         let mut matches = vec![None; vectors.len()];
+        let mut anon_stats_matches = Vec::with_capacity(anon_rotation_indices.len());
+        for (&index, code_dot) in anon_rotation_indices.iter().zip(lifted_anon_codes) {
+            let vector = index / ROTATIONS;
+            let rotation = index % ROTATIONS;
+            let candidate_index = candidate_rotation_indices
+                .binary_search(&index)
+                .expect("anonymous rotation must belong to a candidate record");
+            let distance = DistanceShare::new(code_dot, candidate_lifted_masks[candidate_index]);
+            anon_stats_matches.push((vector, rotation, distance));
+            if match_rotation_bits[index] && matches[vector].is_none() {
+                matches[vector] = Some(distance);
+            }
+        }
+
+        let match_rotations = match_rotation_bits
+            .chunks_exact(ROTATIONS)
+            .map(|bits| {
+                bits.iter()
+                    .enumerate()
+                    .filter_map(|(rotation, &is_match)| is_match.then_some(rotation))
+                    .collect()
+            })
+            .collect();
+
+        Ok(FullRotationThresholdResult {
+            matches,
+            anon_stats_matches,
+            match_rotations,
+        })
+    }
+
+    /// Allocation-fused threshold implementation used by the production CPU
+    /// exact scan.
+    ///
+    /// It preserves the Galois-to-Rep3 refresh and the threshold circuit's
+    /// network transcript, but bit-transposes the two refreshed components
+    /// directly instead of first allocating a dense scalar `Share<u16>` batch
+    /// and three mostly-zero packed component vectors.
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
+    pub async fn eval_distance_batch_full_rotation_thresholds_fused(
+        &mut self,
+        query: &Aby3Query,
+        vectors: &[VectorId],
+    ) -> Result<FullRotationThresholdResult> {
+        self.eval_distance_batch_full_rotation_thresholds_fused_with_forced_anon_stats(
+            query,
+            vectors,
+            &[],
+        )
+        .await
+    }
+
+    /// GPU-compatible fused scan with selected records retained for anonymous
+    /// statistics regardless of the anonymous-statistics threshold. The CUDA
+    /// actor uses this for reauthentication targets.
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
+    pub async fn eval_distance_batch_full_rotation_thresholds_fused_with_forced_anon_stats(
+        &mut self,
+        query: &Aby3Query,
+        vectors: &[VectorId],
+        forced_anon_stats_vectors: &[usize],
+    ) -> Result<FullRotationThresholdResult> {
+        if vectors.is_empty() {
+            return Ok(FullRotationThresholdResult {
+                matches: Vec::new(),
+                anon_stats_matches: Vec::new(),
+                match_rotations: Vec::new(),
+            });
+        }
+
+        let dot_contributions = self.full_rotation_dot_contributions(query, vectors).await?;
+        self.eval_full_rotation_thresholds_fused_from_contributions_with_forced_anon_stats(
+            dot_contributions,
+            vectors.len(),
+            forced_anon_stats_vectors,
+        )
+        .await
+    }
+
+    /// Threshold half of [`Self::eval_distance_batch_full_rotation_thresholds_fused`],
+    /// taking precomputed full-rotation dot contributions for `n_vectors`
+    /// records. The dot phase is pure local worker compute, so callers can
+    /// overlap the next chunk's dot products with this chunk's threshold
+    /// network rounds without changing the per-session wire transcript.
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
+    pub async fn eval_full_rotation_thresholds_fused_from_contributions(
+        &mut self,
+        dot_contributions: Vec<RingElement<u16>>,
+        n_vectors: usize,
+    ) -> Result<FullRotationThresholdResult> {
+        self.eval_full_rotation_thresholds_fused_from_contributions_with_forced_anon_stats(
+            dot_contributions,
+            n_vectors,
+            &[],
+        )
+        .await
+    }
+
+    #[instrument(level = "trace", target = "searcher::network", skip_all)]
+    pub async fn eval_full_rotation_thresholds_fused_from_contributions_with_forced_anon_stats(
+        &mut self,
+        dot_contributions: Vec<RingElement<u16>>,
+        n_vectors: usize,
+        forced_anon_stats_vectors: &[usize],
+    ) -> Result<FullRotationThresholdResult> {
+        if n_vectors == 0 {
+            return Ok(FullRotationThresholdResult {
+                matches: Vec::new(),
+                anon_stats_matches: Vec::new(),
+                match_rotations: Vec::new(),
+            });
+        }
+        let vectors_len = n_vectors;
+        let expected_dots = vectors_len * ROTATIONS * 2;
+        eyre::ensure!(
+            dot_contributions.len() == expected_dots,
+            "full-rotation dot result has unexpected length"
+        );
+        let (anon_gt, dot_shares) =
+            fhd_greater_than_anon_stats_from_galois(&mut self.session, dot_contributions).await?;
+        eyre::ensure!(
+            dot_shares.len() == vectors_len * ROTATIONS,
+            "fused full-rotation dot result has unexpected length"
+        );
+        let mut anon_rotation_bits = open_bin(&mut self.session, &anon_gt)
+            .await?
+            .into_iter()
+            .map(|bit| !bool::from(bit))
+            .collect::<Vec<_>>();
+
+        eyre::ensure!(
+            anon_rotation_bits.len() == dot_shares.len(),
+            "anonymous threshold result has unexpected length"
+        );
+
+        // CUDA unions the reauthentication target into the public candidate
+        // bitmap and stores all of its rotations, even those outside the
+        // anonymous-statistics threshold.
+        for &vector in forced_anon_stats_vectors {
+            eyre::ensure!(
+                vector < vectors_len,
+                "forced anonymous-statistics vector index is out of bounds"
+            );
+            anon_rotation_bits[vector * ROTATIONS..(vector + 1) * ROTATIONS].fill(true);
+        }
+
+        let dot_count = dot_shares.len();
+        let candidate_rotation_indices = gpu_candidate_rotation_indices(&anon_rotation_bits);
+        let (candidate_codes, candidate_raw_masks) =
+            dot_shares.select(&candidate_rotation_indices)?;
+        drop(dot_shares);
+        let candidate_lifted_masks = if candidate_raw_masks.is_empty() {
+            Vec::new()
+        } else {
+            lift_fhd_mask_dots(&mut self.session, &candidate_raw_masks).await?
+        };
+        let mut match_rotation_bits = vec![false; dot_count];
+        if !candidate_rotation_indices.is_empty() {
+            let match_gt = fhd_greater_than_threshold_pre_lifted_masks(
+                &mut self.session,
+                &candidate_codes,
+                &candidate_lifted_masks,
+                Threshold::Match.ratio(),
+            )
+            .await?;
+            let candidate_match_bits = open_bin(&mut self.session, &match_gt)
+                .await?
+                .into_iter()
+                .map(|bit| !bool::from(bit));
+            for (&index, is_match) in candidate_rotation_indices.iter().zip(candidate_match_bits) {
+                match_rotation_bits[index] = is_match;
+            }
+        }
+
+        eyre::ensure!(
+            match_rotation_bits
+                .iter()
+                .zip(&anon_rotation_bits)
+                .all(|(&is_match, &is_anon_match)| !is_match || is_anon_match),
+            "strict match threshold produced a result outside the anonymous prefilter"
+        );
+
+        let anon_rotation_indices = anon_rotation_bits
+            .iter()
+            .enumerate()
+            .filter_map(|(index, &is_match)| is_match.then_some(index))
+            .collect::<Vec<_>>();
+        let anon_codes = anon_rotation_indices
+            .iter()
+            .map(|index| {
+                let candidate_index = candidate_rotation_indices
+                    .binary_search(index)
+                    .expect("anonymous rotation must belong to a candidate record");
+                candidate_codes[candidate_index]
+            })
+            .collect::<Vec<_>>();
+        let lifted_anon_codes = if anon_codes.is_empty() {
+            Vec::new()
+        } else {
+            batch_signed_lift_vec(&mut self.session, anon_codes).await?
+        };
+
+        let mut matches = vec![None; vectors_len];
         let mut anon_stats_matches = Vec::with_capacity(anon_rotation_indices.len());
         for (&index, code_dot) in anon_rotation_indices.iter().zip(lifted_anon_codes) {
             let vector = index / ROTATIONS;

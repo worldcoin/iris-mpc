@@ -834,8 +834,11 @@ async fn init_hawk_actor(
         "Initialize iris db: Loading from DB (parallelism: {})",
         parallelism,
     );
-    let initializer: Box<dyn WorkerPoolInitializer> =
-        Box::new(LocalWorkerPoolInitializer::new_load_from_db(
+    // Exact-scan pools store irises in the mixed-plane layout on CPUs with
+    // the UMMLA kernel; HNSW pools keep plain ArcIris values.
+    let resident_layout = HawkActor::resident_layout_for(search_mode);
+    let initializer: Box<dyn WorkerPoolInitializer> = Box::new(
+        LocalWorkerPoolInitializer::new_load_from_db(
             hawk_args.party_index,
             HAWK_DISTANCE_MODE,
             hawk_args.numa,
@@ -853,7 +856,9 @@ async fn init_hawk_actor(
                     ampc_anon_stats::types::Eye::Right => 1,
                 }),
             },
-        ));
+        )
+        .with_resident_layout(resident_layout),
+    );
 
     let now = Instant::now();
     let ct = shutdown_handler.get_network_cancellation_token();

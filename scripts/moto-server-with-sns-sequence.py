@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run Moto with the FIFO SNS SequenceNumber field emitted by AWS.
 
-Moto 5.2.2 omits ``SequenceNumber`` from the SNS notification envelope sent
+Moto 5.1.22 omits ``SequenceNumber`` from the SNS notification envelope sent
 to subscribed SQS queues. Production AWS includes it for FIFO topics and the
 iris-mpc server deliberately requires it. Keep the compatibility adjustment
 at the emulator boundary instead of weakening production message parsing.
