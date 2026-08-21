@@ -540,12 +540,18 @@ impl ShareDB {
         let mut rngs = vec![];
         for idx in 0..n_devices {
             let (seed0, seed1) = chacha_seeds;
-            let mut chacha1 =
-                ChaChaCudaRng::init(rng_buf_size, device_manager.device(idx).clone(), seed0);
-            chacha1.get_mut_chacha().set_nonce(idx as u64);
-            let mut chacha2 =
-                ChaChaCudaRng::init(rng_buf_size, device_manager.device(idx).clone(), seed1);
-            chacha2.get_mut_chacha().set_nonce(idx as u64);
+            let chacha1 = ChaChaCudaRng::init(
+                rng_buf_size,
+                device_manager.device(idx).clone(),
+                seed0,
+                idx as u64,
+            );
+            let chacha2 = ChaChaCudaRng::init(
+                rng_buf_size,
+                device_manager.device(idx).clone(),
+                seed1,
+                idx as u64,
+            );
             rngs.push((chacha1, chacha2));
         }
 
@@ -807,7 +813,9 @@ impl ShareDB {
 
             // Prepare randomness to mask results
             if self.is_remote {
-                let len: usize = (chunk_sizes[idx] * self.query_length).div_ceil(64) * 64;
+                let len: usize = (chunk_sizes[idx] * self.query_length * mem::size_of::<u16>())
+                    .div_ceil(64)
+                    * 64;
                 self.rngs[idx].0.fill_rng_no_host_copy(len, &streams[idx]);
                 self.rngs[idx].1.fill_rng_no_host_copy(len, &streams[idx]);
             }

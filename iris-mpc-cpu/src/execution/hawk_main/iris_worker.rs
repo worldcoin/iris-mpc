@@ -1,5 +1,5 @@
 use crate::{
-    execution::hawk_main::{BothEyes, HAWK_MIN_DIST_ROTATIONS},
+    execution::hawk_main::HAWK_MIN_DIST_ROTATIONS,
     hawkers::aby3::aby3_store::DistanceMode,
     hawkers::shared_irises::SharedIrisesRef,
     protocol::{
@@ -24,7 +24,7 @@ use iris_mpc_store::Store;
 use itertools::{izip, Itertools};
 use moka::sync::Cache;
 use std::{
-    collections::{BTreeMap, HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     fmt::Debug,
     iter,
     num::NonZeroUsize,
@@ -94,7 +94,7 @@ enum IrisTask {
     /// Dot products against transient targets loaded from cold storage.
     DotProductIrisesBatch {
         query: ArcIris,
-        targets: Arc<[ArcIris]>,
+        targets: Arc<Vec<ArcIris>>,
         range: std::ops::Range<usize>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
     },
@@ -108,7 +108,7 @@ enum IrisTask {
     /// Rotation-aware dot products against transient cold-storage targets.
     RotationAwareDotProductIrisesBatch {
         query: ArcIris,
-        targets: Arc<[ArcIris]>,
+        targets: Arc<Vec<ArcIris>>,
         range: std::ops::Range<usize>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
     },
@@ -124,7 +124,7 @@ enum IrisTask {
     /// Full 31-rotation dot products against transient cold-storage targets.
     FullRotationDotProductIrisesBatch {
         query: ArcIris,
-        targets: Arc<[ArcIris]>,
+        targets: Arc<Vec<ArcIris>>,
         range: std::ops::Range<usize>,
         rsp: oneshot::Sender<Vec<RingElement<u16>>>,
     },
@@ -238,7 +238,7 @@ impl IrisPoolHandle {
         query: ArcIris,
         targets: Vec<ArcIris>,
     ) -> Result<Vec<RingElement<u16>>> {
-        let targets: Arc<[ArcIris]> = Arc::from(targets);
+        let targets = Arc::new(targets);
         let mut responses = Vec::with_capacity(Self::n_batch_chunks(targets.len()));
         for (i, _) in targets.chunks(Self::ROT_AWARE_BATCH_CHUNK_SIZE).enumerate() {
             let start = i * Self::ROT_AWARE_BATCH_CHUNK_SIZE;
@@ -340,7 +340,7 @@ impl IrisPoolHandle {
         query: ArcIris,
         targets: Vec<ArcIris>,
     ) -> Result<Vec<RingElement<u16>>> {
-        let targets: Arc<[ArcIris]> = Arc::from(targets);
+        let targets = Arc::new(targets);
         let mut responses = Vec::with_capacity(Self::n_batch_chunks(targets.len()));
         for (i, _) in targets.chunks(Self::ROT_AWARE_BATCH_CHUNK_SIZE).enumerate() {
             let start = i * Self::ROT_AWARE_BATCH_CHUNK_SIZE;
@@ -447,7 +447,7 @@ impl IrisPoolHandle {
         targets: Vec<ArcIris>,
         task_size: NonZeroUsize,
     ) -> Result<Vec<RingElement<u16>>> {
-        let targets: Arc<[ArcIris]> = Arc::from(targets);
+        let targets = Arc::new(targets);
         let task_size = task_size.get();
         let mut responses = Vec::with_capacity(targets.len().div_ceil(task_size));
         for (i, _) in targets.chunks(task_size).enumerate() {
@@ -1034,13 +1034,22 @@ pub trait IrisWorkerPool: Debug + Send + Sync {
 
     /// Hint that these records will soon be fetched. Database-backed workers
     /// enqueue the read without blocking the caller; resident workers do
-    /// nothing. Any asynchronous fetch failure is reported by
-    /// [`IrisWorkerPool::wait_for_prefetch`].
+    /// nothing. Each record is reserved once and handed to the first
+    /// [`IrisWorkerPool::fetch_irises`] that asks for it; repeated hints for a
+    /// record already reserved or cached are no-ops. A failed asynchronous
+    /// read is logged and counted only: the foreground fetch repeats the read
+    /// and is the path that fails closed on a missing exact version.
     fn prefetch_irises<'a>(&'a self, ids: Vec<VectorId>) -> BoxFuture<'a, Result<()>>;
 
-    /// Wait until all prefetch hints accepted before this call have completed,
-    /// returning an error if any of those reads failed.
+    /// Wait until all prefetch hints accepted before this call have completed.
     fn wait_for_prefetch<'a>(&'a self) -> BoxFuture<'a, Result<()>>;
+
+    /// Drop every outstanding prefetch reservation, moving records that did
+    /// arrive into the reusable cache. Called once a batch has finished all
+    /// of its scans so that reservations never outlive the batch that made
+    /// them. Resident workers do nothing. Returns the number of reservations
+    /// dropped.
+    fn release_prefetched<'a>(&'a self) -> BoxFuture<'a, usize>;
 
     /// Insert a cached iris into the worker's persistent store.
     ///
@@ -1050,6 +1059,17 @@ pub trait IrisWorkerPool: Debug + Send + Sync {
     /// Returns the store checksum after all inserts are applied.
     fn insert_irises<'a>(&'a self, inserts: Vec<(QueryId, VectorId)>)
         -> BoxFuture<'a, Result<u64>>;
+
+    /// Drop exact vector versions from a cold mutation overlay after their
+    /// database transaction commits. Resident workers have nothing to drop.
+    ///
+    /// Exact-version removal is intentional: a later mutation of the same
+    /// serial ID may already be queued, and acknowledging the older version
+    /// must not make that newer mutation invisible before it is persisted.
+    fn acknowledge_persisted_irises<'a>(
+        &'a self,
+        vector_ids: Vec<VectorId>,
+    ) -> BoxFuture<'a, usize>;
 
     /// Compute pairwise distances between pairs of cached queries.
     ///
@@ -1072,11 +1092,6 @@ pub trait IrisWorkerPool: Debug + Send + Sync {
     /// that produce max-distance in dot products. The party_id is a config
     /// field on the implementer.
     fn delete_irises<'a>(&'a self, ids: Vec<VectorId>) -> BoxFuture<'a, Result<()>>;
-
-    /// Acknowledge database commits for mutations previously applied to the
-    /// worker. Resident pools need no acknowledgement; a database-backed cold
-    /// pool uses it to discard its write-behind overlay safely.
-    fn acknowledge_persisted<'a>(&'a self, serial_ids: Vec<SerialId>) -> BoxFuture<'a, Result<()>>;
 }
 
 /// Blanket impl so any `Arc<T: IrisWorkerPool>` (including
@@ -1115,11 +1130,20 @@ impl<T: ?Sized + IrisWorkerPool> IrisWorkerPool for Arc<T> {
     fn wait_for_prefetch<'a>(&'a self) -> BoxFuture<'a, Result<()>> {
         (**self).wait_for_prefetch()
     }
+    fn release_prefetched<'a>(&'a self) -> BoxFuture<'a, usize> {
+        (**self).release_prefetched()
+    }
     fn insert_irises<'a>(
         &'a self,
         inserts: Vec<(QueryId, VectorId)>,
     ) -> BoxFuture<'a, Result<u64>> {
         (**self).insert_irises(inserts)
+    }
+    fn acknowledge_persisted_irises<'a>(
+        &'a self,
+        vector_ids: Vec<VectorId>,
+    ) -> BoxFuture<'a, usize> {
+        (**self).acknowledge_persisted_irises(vector_ids)
     }
     fn compute_pairwise_distances<'a>(
         &'a self,
@@ -1132,30 +1156,6 @@ impl<T: ?Sized + IrisWorkerPool> IrisWorkerPool for Arc<T> {
     }
     fn delete_irises<'a>(&'a self, ids: Vec<VectorId>) -> BoxFuture<'a, Result<()>> {
         (**self).delete_irises(ids)
-    }
-    fn acknowledge_persisted<'a>(&'a self, serial_ids: Vec<SerialId>) -> BoxFuture<'a, Result<()>> {
-        (**self).acknowledge_persisted(serial_ids)
-    }
-}
-
-/// Cloneable bridge from the asynchronous result-persistence task back to the
-/// worker pools. Each committed mutation releases one queued cold-eye value.
-#[derive(Clone)]
-pub struct IrisPersistenceAckHandle {
-    pools: BothEyes<Arc<dyn IrisWorkerPool>>,
-}
-
-impl IrisPersistenceAckHandle {
-    pub(crate) fn new(pools: BothEyes<Arc<dyn IrisWorkerPool>>) -> Self {
-        Self { pools }
-    }
-
-    pub async fn acknowledge_persisted(&self, serial_ids: Vec<SerialId>) -> Result<()> {
-        futures::try_join!(
-            self.pools[0].acknowledge_persisted(serial_ids.clone()),
-            self.pools[1].acknowledge_persisted(serial_ids),
-        )?;
-        Ok(())
     }
 }
 
@@ -1240,26 +1240,20 @@ const COLD_PREFETCH_QUEUE_DEPTH: usize = 64;
 
 enum ColdPrefetchCommand {
     Fetch(Vec<VectorId>),
-    Barrier(oneshot::Sender<Result<()>>),
+    Barrier(oneshot::Sender<()>),
 }
 
+/// A single-use reservation: the first foreground fetch of the record
+/// consumes it (promoting the value into the LFU cache), and any reservation
+/// still present when the batch ends is released by
+/// [`IrisWorkerPool::release_prefetched`]. Reservations are deliberately not
+/// use-counted: the same record is hinted by several independent paths (known
+/// candidates, every first-eye chunk that matches it, both orientations), and
+/// reconciling those counts against the deduplicated second-stage fetch is
+/// exactly what leaked entries before.
 enum PrefetchEntry {
-    Loading {
-        remaining_uses: usize,
-    },
-    Ready {
-        iris: ArcIris,
-        remaining_uses: usize,
-    },
-}
-
-impl PrefetchEntry {
-    fn add_use(&mut self) {
-        let remaining_uses = match self {
-            Self::Loading { remaining_uses } | Self::Ready { remaining_uses, .. } => remaining_uses,
-        };
-        *remaining_uses = remaining_uses.saturating_add(1);
-    }
+    Loading,
+    Ready(ArcIris),
 }
 
 impl ColdStorageState {
@@ -1339,88 +1333,92 @@ impl ColdStorageState {
             return Some(iris);
         }
         if let Some(iris) = self.take_prefetched(id) {
-            if self.lfu_cache_enabled {
-                metrics::counter!(
-                    "linear_scan_cold_lfu_cache_misses_total",
-                    "eye" => self.lfu_cache_eye,
-                )
-                .increment(1);
-            }
+            metrics::counter!(
+                "linear_scan_cold_prefetch_hits_total",
+                "eye" => self.lfu_cache_eye,
+            )
+            .increment(1);
             self.insert_lfu_iris(*id, iris.clone());
             return Some(iris);
         }
         self.get_lfu_iris(id)
     }
 
-    /// Take one promised use of a prefetched value. Loading entries are also
-    /// decremented so an on-demand fallback cannot leak a reservation.
+    /// Consume a prefetch reservation. A still-loading reservation is dropped
+    /// as well: the caller reads the record itself, and the worker skips
+    /// reservations that disappeared while its database read was in flight.
     fn take_prefetched(&mut self, id: &VectorId) -> Option<ArcIris> {
-        let (iris, remove) = match self.prefetched.get_mut(id) {
-            Some(PrefetchEntry::Ready {
-                iris,
-                remaining_uses,
-            }) => {
-                let iris = iris.clone();
-                *remaining_uses = remaining_uses.saturating_sub(1);
-                (Some(iris), *remaining_uses == 0)
-            }
-            Some(PrefetchEntry::Loading { remaining_uses }) => {
-                *remaining_uses = remaining_uses.saturating_sub(1);
-                (None, *remaining_uses == 0)
-            }
-            None => (None, false),
-        };
-        if remove {
-            self.prefetched.remove(id);
+        match self.prefetched.remove(id)? {
+            PrefetchEntry::Ready(iris) => Some(iris),
+            PrefetchEntry::Loading => None,
         }
-        iris
+    }
+
+    /// Drop all reservations, keeping arrived records in the LFU cache.
+    fn release_prefetched(&mut self) -> usize {
+        let released = self.prefetched.len();
+        // Local bookkeeping only, but keep the crate-wide rule of never
+        // iterating a hash map in an unspecified order.
+        let mut drained = self.prefetched.drain().collect::<Vec<_>>();
+        drained.sort_unstable_by_key(|(id, _)| *id);
+        for (id, entry) in drained {
+            if let PrefetchEntry::Ready(iris) = entry {
+                // `insert_lfu_iris` borrows `self` immutably; the cache is
+                // internally synchronized, so go through it directly.
+                if self.lfu_cache_enabled {
+                    self.lfu_cache.insert(id, iris);
+                }
+            }
+        }
+        if released > 0 {
+            metrics::counter!("linear_scan_cold_prefetch_released_total")
+                .increment(released as u64);
+        }
+        released
     }
 }
 
-/// The current LUC lookback window for the non-resident eye. Entries are
-/// indexed by serial ID so an update replaces the previous vector version.
+/// The current LUC lookback window for the non-resident eye. Serial IDs are
+/// dense, so the front is the oldest retained ID and the back is the latest.
 #[derive(Default)]
 struct RollingLucCache {
     capacity: usize,
-    latest_serial_id: SerialId,
-    entries: BTreeMap<SerialId, (VectorId, ArcIris)>,
+    entries: VecDeque<(VectorId, ArcIris)>,
 }
 
 impl RollingLucCache {
-    fn new(
-        capacity: usize,
-        latest_serial_id: SerialId,
-        entries: impl IntoIterator<Item = (VectorId, ArcIris)>,
-    ) -> Self {
-        let mut cache = Self {
-            capacity,
-            latest_serial_id,
-            entries: BTreeMap::new(),
-        };
-        for (id, iris) in entries {
-            if cache.contains_serial(id.serial_id()) {
-                cache.entries.insert(id.serial_id(), (id, iris));
-            }
+    /// Build the window from serial-ordered entries. The window is a pure
+    /// cache in front of the exact-version overlay, LFU, and database, so a
+    /// gap in the loaded serial IDs (a registry hole, a partial load) only
+    /// shrinks the window to its dense tail instead of refusing to start.
+    fn new(capacity: usize, mut entries: Vec<(VectorId, ArcIris)>) -> Self {
+        let dense_tail_start = entries
+            .windows(2)
+            .rposition(|pair| pair[1].0.serial_id() != pair[0].0.serial_id() + 1)
+            .map_or(0, |gap| gap + 1);
+        if dense_tail_start > 0 {
+            tracing::warn!(
+                dropped = dense_tail_start,
+                retained = entries.len() - dense_tail_start,
+                "rolling LUC window is not dense; keeping only its newest contiguous run"
+            );
+            entries.drain(..dense_tail_start);
         }
-        cache
-    }
-
-    fn first_serial_id(&self) -> SerialId {
-        let width = u32::try_from(self.capacity)
-            .unwrap_or(u32::MAX)
-            .saturating_sub(1);
-        self.latest_serial_id.saturating_sub(width).max(1)
-    }
-
-    fn contains_serial(&self, serial_id: SerialId) -> bool {
-        self.capacity > 0
-            && serial_id >= self.first_serial_id()
-            && serial_id <= self.latest_serial_id
+        if entries.len() > capacity {
+            let excess = entries.len() - capacity;
+            entries.drain(..excess);
+        }
+        Self {
+            capacity,
+            entries: entries.into(),
+        }
     }
 
     fn get(&self, id: &VectorId) -> Option<ArcIris> {
+        let first_serial_id = self.entries.front()?.0.serial_id();
+        let offset = usize::try_from(id.serial_id().checked_sub(first_serial_id)?).ok()?;
         self.entries
-            .get(&id.serial_id())
+            .get(offset)
             .filter(|(cached_id, _)| cached_id == id)
             .map(|(_, iris)| iris.clone())
     }
@@ -1429,20 +1427,47 @@ impl RollingLucCache {
         if self.capacity == 0 {
             return;
         }
-        if id.serial_id() > self.latest_serial_id {
-            self.latest_serial_id = id.serial_id();
-            let first = self.first_serial_id();
-            self.entries.retain(|serial_id, _| *serial_id >= first);
-        }
-        if self.contains_serial(id.serial_id()) {
-            self.entries.insert(id.serial_id(), (id, iris));
+
+        let Some((latest_id, _)) = self.entries.back() else {
+            // An empty window (empty database, or reset below) starts at
+            // whatever serial ID arrives first.
+            self.entries.push_back((id, iris));
+            return;
+        };
+
+        let latest_serial_id = latest_id.serial_id();
+        if id.serial_id() <= latest_serial_id {
+            let first_serial_id = self.entries.front().unwrap().0.serial_id();
+            let Some(offset) = id.serial_id().checked_sub(first_serial_id) else {
+                return;
+            };
+            let Some(entry) = self.entries.get_mut(offset as usize) else {
+                return;
+            };
+            *entry = (id, iris);
+        } else {
+            if id.serial_id() != latest_serial_id.wrapping_add(1) {
+                // Serial IDs normally advance by one. Rather than trusting an
+                // offset-addressed window across a hole, restart it at the new
+                // record; older records are still served exactly by the
+                // overlay, LFU, or database.
+                tracing::warn!(
+                    latest_serial_id,
+                    serial_id = id.serial_id(),
+                    "rolling LUC insertion skipped serial IDs; restarting the window"
+                );
+                metrics::counter!("linear_scan_cold_luc_window_resets_total").increment(1);
+                self.entries.clear();
+            } else if self.entries.len() == self.capacity {
+                self.entries.pop_front();
+            }
+            self.entries.push_back((id, iris));
         }
     }
 }
 
-/// FIFO per serial ID: persistence runs in batch order, while a later batch
-/// may already have updated the same identity before the older commit is
-/// acknowledged. Popping only the oldest value preserves that newer write.
+/// Pending writes grouped by serial ID. Acknowledgements remove only the exact
+/// committed vector version, preserving any later update of the same identity.
 #[derive(Default)]
 struct PendingMutations {
     entries: HashMap<SerialId, VecDeque<(VectorId, ArcIris)>>,
@@ -1454,8 +1479,6 @@ pub struct ColdStorageInit {
     pub side: usize,
     /// Exact current vector IDs in the configured LUC lookback window.
     pub luc_window_ids: Vec<VectorId>,
-    /// Highest allocated serial ID, including an empty database (`0`).
-    pub latest_serial_id: SerialId,
     /// Number of serial positions retained. This intentionally includes the
     /// extra position used by `HawkRequest::luc_ids`.
     pub luc_window_capacity: usize,
@@ -1478,18 +1501,33 @@ impl PendingMutations {
             .entry(id.serial_id())
             .or_default()
             .push_back((id, iris));
+        self.record_size();
     }
 
-    fn acknowledge(&mut self, serial_id: SerialId) {
-        let remove = if let Some(values) = self.entries.get_mut(&serial_id) {
-            values.pop_front();
+    fn acknowledge(&mut self, vector_id: VectorId) -> bool {
+        let serial_id = vector_id.serial_id();
+        let mut removed = false;
+        let remove_serial = if let Some(values) = self.entries.get_mut(&serial_id) {
+            if let Some(index) = values.iter().position(|(id, _)| *id == vector_id) {
+                removed = values.remove(index).is_some();
+            }
             values.is_empty()
         } else {
             false
         };
-        if remove {
+        if remove_serial {
             self.entries.remove(&serial_id);
         }
+        self.record_size();
+        if removed {
+            metrics::counter!("linear_scan_cold_mutation_overlay_evictions_total").increment(1);
+        }
+        removed
+    }
+
+    fn record_size(&self) {
+        let len = self.entries.values().map(VecDeque::len).sum::<usize>();
+        metrics::gauge!("linear_scan_cold_mutation_overlay_entries").set(len as f64);
     }
 }
 
@@ -1500,24 +1538,26 @@ async fn run_cold_prefetch_worker(
     state: Arc<AsyncRwLock<ColdStorageState>>,
     mut rx: mpsc::Receiver<ColdPrefetchCommand>,
 ) {
-    let mut pending_error = None;
     while let Some(command) = rx.recv().await {
         match command {
             ColdPrefetchCommand::Fetch(ids) => {
+                // A prefetch is only a hint. Its reservations are released on
+                // failure, so the foreground fetch repeats the read and is the
+                // path that fails closed; surfacing the error here as well
+                // would fail a batch for a transient read that the foreground
+                // would have served, and could attribute a failure from an
+                // earlier, already-abandoned scan to the next barrier.
                 if let Err(error) = prefetch_cold_irises(&store, side, party_id, &state, ids).await
                 {
-                    tracing::error!(
+                    tracing::warn!(
                         ?error,
-                        "Cold-eye database prefetch failed; failing the current scan"
+                        "Cold-eye database prefetch failed; the scan will read these records directly"
                     );
                     metrics::counter!("linear_scan_cold_prefetch_errors_total").increment(1);
-                    if pending_error.is_none() {
-                        pending_error = Some(error);
-                    }
                 }
             }
             ColdPrefetchCommand::Barrier(done) => {
-                let _ = done.send(pending_error.take().map_or(Ok(()), Err));
+                let _ = done.send(());
             }
         }
     }
@@ -1556,15 +1596,11 @@ async fn prefetch_cold_irises(
         let mut state = state.write().await;
         let mut to_fetch = Vec::new();
         for id in ids {
-            if state.contains_cached_iris(&id) {
+            if state.contains_cached_iris(&id) || state.prefetched.contains_key(&id) {
                 continue;
             }
-            if let Some(entry) = state.prefetched.get_mut(&id) {
-                entry.add_use();
-            } else if state.prefetched.len() < COLD_PREFETCH_MAX_RECORDS {
-                state
-                    .prefetched
-                    .insert(id, PrefetchEntry::Loading { remaining_uses: 1 });
+            if state.prefetched.len() < COLD_PREFETCH_MAX_RECORDS {
+                state.prefetched.insert(id, PrefetchEntry::Loading);
                 to_fetch.push(id);
             } else {
                 metrics::counter!("linear_scan_cold_prefetch_capacity_skips_total").increment(1);
@@ -1597,53 +1633,42 @@ async fn prefetch_cold_irises(
         .record(db_start.elapsed().as_secs_f64());
     metrics::histogram!("linear_scan_cold_prefetch_batch_size").record(db_ids.len() as f64);
 
+    let fetched = fetched.and_then(|fetched| {
+        let missing = to_fetch
+            .iter()
+            .filter(|id| !fetched.contains_key(id))
+            .copied()
+            .collect_vec();
+        if missing.is_empty() {
+            Ok(fetched)
+        } else {
+            Err(cold_db_miss_error(party_id, side, &missing))
+        }
+    });
+
     let mut state = state.write().await;
     match fetched {
         Ok(mut fetched) => {
-            let missing = to_fetch
-                .iter()
-                .filter(|id| !fetched.contains_key(id))
-                .copied()
-                .collect_vec();
-            if !missing.is_empty() {
-                for id in &to_fetch {
-                    if matches!(
-                        state.prefetched.get(id),
-                        Some(PrefetchEntry::Loading { .. })
-                    ) {
-                        state.prefetched.remove(id);
-                    }
-                }
-                return Err(cold_db_miss_error(party_id, side, &missing));
-            }
             for id in to_fetch {
-                let Some(entry) = state.prefetched.remove(&id) else {
-                    // A foreground read already consumed this reservation.
-                    continue;
-                };
-                let PrefetchEntry::Loading { remaining_uses } = entry else {
-                    unreachable!("new cold prefetch reservation must still be loading");
-                };
-                state.prefetched.insert(
-                    id,
-                    PrefetchEntry::Ready {
-                        iris: fetched
+                // A reservation that disappeared while the read was in flight
+                // was consumed by a foreground read or released at batch end.
+                if let Some(entry) = state.prefetched.get_mut(&id) {
+                    *entry = PrefetchEntry::Ready(
+                        fetched
                             .remove(&id)
                             .expect("cold-eye missing rows were checked above"),
-                        remaining_uses,
-                    },
-                );
+                    );
+                }
             }
             metrics::counter!("linear_scan_cold_prefetched_records_total")
                 .increment(db_ids.len() as u64);
             Ok(())
         }
         Err(error) => {
+            // Release the still-loading reservations so the foreground fetch
+            // reads (and, for a genuine miss, fails closed on) these records.
             for id in to_fetch {
-                if matches!(
-                    state.prefetched.get(&id),
-                    Some(PrefetchEntry::Loading { .. })
-                ) {
+                if matches!(state.prefetched.get(&id), Some(PrefetchEntry::Loading)) {
                     state.prefetched.remove(&id);
                 }
             }
@@ -1696,7 +1721,6 @@ impl LocalIrisWorkerPool {
             store,
             side,
             luc_window_ids,
-            latest_serial_id,
             luc_window_capacity,
             lfu_cache_capacity,
         } = init;
@@ -1711,16 +1735,20 @@ impl LocalIrisWorkerPool {
             let iris = GaloisRingSharedIris::try_from_buffers(party_id, row.code(), row.mask())?;
             cached.push((vector_id, iris));
         }
+        let cached_ids = cached
+            .iter()
+            .map(|(cached_id, _)| *cached_id)
+            .collect::<HashSet<_>>();
         let missing = luc_window_ids
             .iter()
-            .filter(|id| !cached.iter().any(|(cached_id, _)| cached_id == *id))
+            .filter(|id| !cached_ids.contains(id))
             .copied()
             .collect_vec();
         if !missing.is_empty() {
             return Err(cold_db_miss_error(party_id, side, &missing));
         }
         let state = Arc::new(AsyncRwLock::new(ColdStorageState::new(
-            RollingLucCache::new(luc_window_capacity, latest_serial_id, cached),
+            RollingLucCache::new(luc_window_capacity, cached),
             lfu_cache_capacity,
             side,
         )));
@@ -2123,7 +2151,18 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
                 .map_err(|_| eyre::eyre!("cold-eye prefetch worker stopped"))?;
             done_rx
                 .await
-                .map_err(|_| eyre::eyre!("cold-eye prefetch barrier was dropped"))?
+                .map_err(|_| eyre::eyre!("cold-eye prefetch barrier was dropped"))
+        })
+    }
+
+    fn release_prefetched<'a>(&'a self) -> BoxFuture<'a, usize> {
+        let cold_storage = self.cold_storage.clone();
+        Box::pin(async move {
+            let Some(cold) = cold_storage else {
+                return 0;
+            };
+            let released = cold.state.write().await.release_prefetched();
+            released
         })
     }
 
@@ -2169,6 +2208,23 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
                 store.insert(vector_id, ResidentIris::from_arc(iris, layout));
             }
             Ok(store.set_hash.checksum())
+        })
+    }
+
+    fn acknowledge_persisted_irises<'a>(
+        &'a self,
+        vector_ids: Vec<VectorId>,
+    ) -> BoxFuture<'a, usize> {
+        let cold_storage = self.cold_storage.clone();
+        Box::pin(async move {
+            let Some(cold) = cold_storage else {
+                return 0;
+            };
+            let mut state = cold.state.write().await;
+            vector_ids
+                .into_iter()
+                .filter(|vector_id| state.pending_mutations.acknowledge(*vector_id))
+                .count()
         })
     }
 
@@ -2257,19 +2313,6 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
             Ok(())
         })
     }
-
-    fn acknowledge_persisted<'a>(&'a self, serial_ids: Vec<SerialId>) -> BoxFuture<'a, Result<()>> {
-        let cold_storage = self.cold_storage.clone();
-        Box::pin(async move {
-            if let Some(cold) = cold_storage {
-                let mut state = cold.state.write().await;
-                for serial_id in serial_ids {
-                    state.pending_mutations.acknowledge(serial_id);
-                }
-            }
-            Ok(())
-        })
-    }
 }
 
 pub fn select_core_ids(shard_index: usize) -> Vec<CoreId> {
@@ -2301,8 +2344,9 @@ mod tests {
         let iris = Arc::new(GaloisRingSharedIris::default_for_party(0));
         let mut cache = RollingLucCache::new(
             3,
-            5,
-            (3..=5).map(|serial_id| (VectorId::from_serial_id(serial_id), iris.clone())),
+            (3..=5)
+                .map(|serial_id| (VectorId::from_serial_id(serial_id), iris.clone()))
+                .collect(),
         );
 
         let updated_four = VectorId::from_serial_id(4).next_version();
@@ -2312,16 +2356,39 @@ mod tests {
 
         cache.apply_mutation(VectorId::from_serial_id(6), iris.clone());
         assert_eq!(
-            cache.entries.keys().copied().collect::<Vec<_>>(),
+            cache
+                .entries
+                .iter()
+                .map(|(id, _)| id.serial_id())
+                .collect::<Vec<_>>(),
             vec![4, 5, 6]
         );
 
         cache.apply_mutation(VectorId::from_serial_id(2), iris);
-        assert!(!cache.entries.contains_key(&2));
+        assert!(cache.entries.iter().all(|(id, _)| id.serial_id() != 2));
     }
 
     #[test]
-    fn pending_mutation_ack_is_fifo_for_repeated_identity_updates() {
+    fn rolling_luc_cache_fills_from_an_empty_database() {
+        let iris = Arc::new(GaloisRingSharedIris::default_for_party(0));
+        let mut cache = RollingLucCache::new(2, Vec::new());
+
+        for serial_id in 1..=3 {
+            cache.apply_mutation(VectorId::from_serial_id(serial_id), iris.clone());
+        }
+
+        assert_eq!(
+            cache
+                .entries
+                .iter()
+                .map(|(id, _)| id.serial_id())
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+    }
+
+    #[test]
+    fn pending_mutation_acknowledges_only_exact_persisted_versions() {
         let iris = Arc::new(GaloisRingSharedIris::default_for_party(0));
         let first = VectorId::from_serial_id(7).next_version();
         let second = first.next_version();
@@ -2330,31 +2397,82 @@ mod tests {
         pending.push(second, iris);
 
         assert!(pending.get(&second).is_some());
-        pending.acknowledge(7);
+        assert!(pending.acknowledge(first));
         assert!(pending.get(&second).is_some());
         assert!(pending.get(&first).is_none());
-        pending.acknowledge(7);
+        assert!(!pending.acknowledge(first));
+        assert!(pending.acknowledge(second));
         assert!(!pending.entries.contains_key(&7));
     }
 
     #[test]
-    fn prefetched_iris_is_retained_for_each_promised_use_then_evicted() {
+    fn prefetched_iris_is_consumed_once_and_promoted_to_the_lfu() {
         let iris = Arc::new(GaloisRingSharedIris::default_for_party(0));
         let id = VectorId::from_serial_id(11);
-        let mut state = ColdStorageState::new(RollingLucCache::default(), 0, 0);
-        state.prefetched.insert(
-            id,
-            PrefetchEntry::Ready {
-                iris: iris.clone(),
-                remaining_uses: 2,
-            },
-        );
+        let loading = VectorId::from_serial_id(12);
+        let mut state = ColdStorageState::new(RollingLucCache::default(), 8, 0);
+        state
+            .prefetched
+            .insert(id, PrefetchEntry::Ready(iris.clone()));
+        state.prefetched.insert(loading, PrefetchEntry::Loading);
 
-        assert_eq!(state.take_prefetched(&id), Some(iris.clone()));
-        assert!(state.prefetched.contains_key(&id));
-        assert_eq!(state.take_prefetched(&id), Some(iris));
+        // The first consumer takes the reservation and the value moves to the
+        // LFU, where a second consumer (the other orientation) finds it.
+        assert_eq!(state.take_cached_or_prefetched(&id), Some(iris.clone()));
         assert!(!state.prefetched.contains_key(&id));
-        assert!(state.lfu_cache.get(&id).is_none());
+        assert_eq!(state.take_cached_or_prefetched(&id), Some(iris));
+
+        // A foreground read of a still-loading record drops the reservation
+        // so the worker's late completion is ignored.
+        assert!(state.take_cached_or_prefetched(&loading).is_none());
+        assert!(!state.prefetched.contains_key(&loading));
+    }
+
+    #[test]
+    fn releasing_prefetched_drops_reservations_and_keeps_arrived_values() {
+        let iris = Arc::new(GaloisRingSharedIris::default_for_party(0));
+        let ready = VectorId::from_serial_id(21);
+        let loading = VectorId::from_serial_id(22);
+        let mut state = ColdStorageState::new(RollingLucCache::default(), 8, 0);
+        state
+            .prefetched
+            .insert(ready, PrefetchEntry::Ready(iris.clone()));
+        state.prefetched.insert(loading, PrefetchEntry::Loading);
+
+        assert_eq!(state.release_prefetched(), 2);
+        assert!(state.prefetched.is_empty());
+        assert_eq!(state.lfu_cache.get(&ready), Some(iris));
+        assert!(state.lfu_cache.get(&loading).is_none());
+        assert_eq!(state.release_prefetched(), 0);
+    }
+
+    #[test]
+    fn rolling_luc_window_tolerates_gaps() {
+        let iris = Arc::new(GaloisRingSharedIris::default_for_party(0));
+        let entry = |serial_id: u32| (VectorId::from_serial_id(serial_id), iris.clone());
+
+        // A hole in the loaded window keeps only the newest contiguous run.
+        let cache = RollingLucCache::new(8, vec![entry(3), entry(4), entry(6), entry(7)]);
+        assert!(cache.get(&VectorId::from_serial_id(4)).is_none());
+        assert!(cache.get(&VectorId::from_serial_id(6)).is_some());
+        assert!(cache.get(&VectorId::from_serial_id(7)).is_some());
+
+        // An empty window starts at whatever serial ID arrives first.
+        let mut cache = RollingLucCache::new(3, Vec::new());
+        cache.apply_mutation(VectorId::from_serial_id(40), iris.clone());
+        cache.apply_mutation(VectorId::from_serial_id(41), iris.clone());
+        assert!(cache.get(&VectorId::from_serial_id(40)).is_some());
+
+        // A skipped serial ID restarts the window instead of panicking.
+        cache.apply_mutation(VectorId::from_serial_id(50), iris.clone());
+        assert!(cache.get(&VectorId::from_serial_id(40)).is_none());
+        assert!(cache.get(&VectorId::from_serial_id(41)).is_none());
+        assert!(cache.get(&VectorId::from_serial_id(50)).is_some());
+        cache.apply_mutation(VectorId::from_serial_id(51), iris.clone());
+        cache.apply_mutation(VectorId::from_serial_id(52), iris.clone());
+        cache.apply_mutation(VectorId::from_serial_id(53), iris);
+        assert!(cache.get(&VectorId::from_serial_id(50)).is_none());
+        assert!(cache.get(&VectorId::from_serial_id(53)).is_some());
     }
 
     #[test]

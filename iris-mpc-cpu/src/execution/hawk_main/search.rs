@@ -1,8 +1,8 @@
 use super::{
     rot::VecRotationSupport,
     scheduler::{Batch, Schedule, TaskId},
-    BothEyes, ClassifiedMatches, HawkInsertPlan, HawkOps, HawkSearchMode, HawkSession, Orientation,
-    SaturableMatches, VecRequests, LEFT, RIGHT,
+    BothEyes, ClassifiedMatches, HawkInsertPlan, HawkOps, HawkSearchMode, HawkSession, MapEdges,
+    Orientation, SaturableMatches, VecEdges, VecRequests, LEFT, RIGHT,
 };
 use crate::{
     execution::hawk_main::{
@@ -20,6 +20,7 @@ use ampc_anon_stats::types::Eye;
 use eyre::{OptionExt, Result};
 use iris_mpc_common::iris_db::iris::Threshold;
 use iris_mpc_common::{VectorId, ROTATIONS};
+use std::collections::HashSet;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
@@ -240,6 +241,13 @@ pub async fn search<const ROTMASK: u32>(
     assert_eq!(n_sessions, sessions[RIGHT].len());
     let n_requests = search_queries[LEFT].len();
     assert_eq!(n_requests, search_queries[RIGHT].len());
+
+    // `search_to_identity_update` invokes this function for every batch, even
+    // when the batch has no reset/recovery updates. Avoid spawning one empty
+    // session per eye in that common case.
+    if n_requests == 0 {
+        return Ok([Vec::new(), Vec::new()]);
+    }
 
     let (tx, rx) = unbounded_channel::<(TaskId, HawkInsertPlan)>();
 
@@ -515,6 +523,45 @@ pub async fn linear_scan_cascade<const ROTMASK: u32>(
     Ok(match full_scan_side {
         Eye::Left => [first_results, second_results],
         Eye::Right => [second_results, first_results],
+    })
+}
+
+/// Resolve the matching module's "compare the other eye" requests from the
+/// cascade results instead of a second MPC pass.
+///
+/// Every ID the matching module asks about was already evaluated on both eyes
+/// by [`linear_scan_cascade`]: one-eyed strict matches are a subset of the
+/// first eye's anonymous-statistics prefilter, and LUC / OR-rule / reauth IDs
+/// are unioned into the candidate stage exactly like the CUDA actor. An ID
+/// absent from an eye's strict matches therefore did not match on that eye.
+/// Re-running `is_match_batch` would consult a different circuit (the 11
+/// rotation min-rotation path) and, for the cold eye, fetch every ID from the
+/// database again per query rotation inside the MPC critical path.
+pub fn linear_scan_comparison_results<const ROTMASK: u32>(
+    search_results: &SearchResults<ROTMASK>,
+    ids_to_compare: BothEyes<VecRequests<VecEdges<VectorId>>>,
+) -> BothEyes<VecRequests<MapEdges<bool>>> {
+    let [ids_left, ids_right] = ids_to_compare;
+    [(LEFT, ids_left), (RIGHT, ids_right)].map(|(eye, ids_per_request)| {
+        assert_eq!(
+            ids_per_request.len(),
+            search_results[eye].len(),
+            "comparison requests must align with search results"
+        );
+        search_results[eye]
+            .iter()
+            .zip(ids_per_request)
+            .map(|(plans, ids)| {
+                let matched = plans
+                    .iter()
+                    .flat_map(|plan| plan.classified.matches.results.iter())
+                    .map(|(id, _)| *id)
+                    .collect::<HashSet<_>>();
+                ids.into_iter()
+                    .map(|id| (id, matched.contains(&id)))
+                    .collect::<MapEdges<bool>>()
+            })
+            .collect()
     })
 }
 
@@ -1534,48 +1581,32 @@ async fn per_session<const ROTMASK: u32>(
     batch: Batch,
 ) -> Result<()> {
     let inner = async {
+        // Linear scan does not build graph links for identity updates. The
+        // shared HNSW path expresses that operation as a no-match search, but
+        // materializing every live VectorId would be pure overhead here.
+        if search_params.mode == HawkSearchMode::LinearScan && !search_params.do_match {
+            let graph_store = session.graph_store.clone().read_owned().await;
+            for task in batch.tasks {
+                let query = search_queries[batch.i_eye][task.i_request][task.i_rotation];
+                tx.send((task.id(), empty_linear_scan_plan(query, &graph_store)))?;
+            }
+            return Ok(());
+        }
+
+        // Matching linear scans go through `linear_scan_cascade`, which owns
+        // the two-eye candidate logic; the HNSW scheduler below would run the
+        // wrong algorithm for them.
+        eyre::ensure!(
+            search_params.mode == HawkSearchMode::Hnsw,
+            "linear-scan matching must use linear_scan_cascade, not search()"
+        );
+
         let mut vector_store = session.aby3_store.write().await;
         let graph_store = session.graph_store.clone().read_owned().await;
 
-        // Searches in this session observe one immutable registry snapshot.
-        // Mutations are applied only after all normal and mirror searches have
-        // completed, so reusing this list is both correct and materially avoids
-        // rebuilding a multi-million-element ID vector for every query.
-        let linear_scan_ids = if search_params.mode == HawkSearchMode::LinearScan {
-            let registry = vector_store.registry.read().await;
-            Some(Arc::<[VectorId]>::from(
-                registry
-                    .get_points()
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(serial_id, entry)| {
-                        entry
-                            .as_ref()
-                            .map(|(version, ())| VectorId::new(serial_id as u32, *version))
-                    })
-                    .collect::<Vec<_>>(),
-            ))
-        } else {
-            None
-        };
-
         for task in batch.tasks {
             let query = search_queries[batch.i_eye][task.i_request][task.i_rotation];
-            let result = if let Some(vector_ids) = &linear_scan_ids {
-                if task.is_central {
-                    per_linear_scan_query(
-                        query,
-                        search_params,
-                        &mut vector_store,
-                        &graph_store,
-                        vector_ids,
-                        &[],
-                    )
-                    .await?
-                } else {
-                    empty_linear_scan_plan(query, &graph_store)
-                }
-            } else if task.is_central {
+            let result = if task.is_central {
                 // search_to_insert for centers
                 let query_uuid = search_ids
                     .get(task.i_request)
@@ -1666,9 +1697,14 @@ async fn per_linear_scan_query(
             );
         }
 
+        // The CUDA actor compares its per-eye match counters against
+        // SUPERMATCH_THRESHOLD, but those counters are only fetched when
+        // return_partial_results is set; otherwise they stay at zero and no
+        // query is ever treated as a supermatcher. Apply the same gate.
         classified.linear_scan_supermatch_threshold = search_params
             .hnsw_supermatch
             .as_ref()
+            .filter(|_| search_params.return_partial_results)
             .map(|searcher| searcher.params.get_ef_search(0));
     }
 
@@ -2173,6 +2209,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn empty_search_does_not_require_sessions() -> Result<()> {
+        let sessions: BothEyes<Vec<HawkSession>> = [Vec::new(), Vec::new()];
+        let queries: SearchQueries<0> = Arc::new([Vec::new(), Vec::new()]);
+        let request_ids: SearchIds = Arc::new(Vec::new());
+        let params = SearchParams::new_no_match(
+            Arc::new(HnswSearcher::new_with_test_parameters()),
+            HawkSearchMode::LinearScan,
+        );
+
+        let results = search(&sessions, &queries, &request_ids, params).await?;
+
+        assert!(results.iter().all(Vec::is_empty));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_search() -> Result<()> {
         let actors = setup_hawk_actors().await?;
 
@@ -2236,7 +2288,7 @@ mod tests {
         )
         .await?;
 
-        for side in result {
+        for side in &result {
             for (query_index, rotations) in side.iter().enumerate() {
                 for rotation in rotations.iter() {
                     assert!(rotation
@@ -2263,6 +2315,35 @@ mod tests {
                 assert!(rotations
                     .iter()
                     .all(|rotation| !rotation.classified.matches.saturated));
+            }
+        }
+
+        // The matching module's other-eye comparisons are answered from the
+        // cascade: each query matches its own record on both eyes, while a
+        // different record and a stale version are reported as non-matches
+        // without another MPC round.
+        let ids_to_compare = [LEFT, RIGHT].map(|_| {
+            (0..batch_size)
+                .map(|query_index| {
+                    vec![
+                        VectorId::from_0_index(query_index as u32),
+                        VectorId::from_0_index(((query_index + 1) % batch_size) as u32),
+                        VectorId::from_0_index(query_index as u32).next_version(),
+                    ]
+                })
+                .collect::<Vec<_>>()
+        });
+        let comparisons = linear_scan_comparison_results(&result, ids_to_compare);
+        for side in &comparisons {
+            assert_eq!(side.len(), batch_size);
+            for (query_index, is_match) in side.iter().enumerate() {
+                let own_id = VectorId::from_0_index(query_index as u32);
+                assert_eq!(is_match.len(), 3);
+                assert!(is_match[&own_id]);
+                assert!(
+                    !is_match[&VectorId::from_0_index(((query_index + 1) % batch_size) as u32)]
+                );
+                assert!(!is_match[&own_id.next_version()]);
             }
         }
 

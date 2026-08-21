@@ -1509,9 +1509,13 @@ impl HnswSearcher {
         let as_of = graph.last_update_seq_no;
 
         // Read the current neighborhood for each candidate; keep only those
-        // exceeding M_limit on their layer.
+        // exceeding M_limit on their layer. Raw degree bounds active degree,
+        // so a header read filters most candidates without decoding.
         let mut oversized: Vec<(VectorId, usize, Vec<VectorId>)> = Vec::new();
         for (serial, layer) in candidates {
+            if graph.raw_degree(serial, *layer) <= self.params.get_M_limit(*layer) {
+                continue;
+            }
             let nbhd: Vec<VectorId> = graph.get_active_links(serial, *layer);
             if nbhd.len() > self.params.get_M_limit(*layer) {
                 // A node in a layer always has a content-clock entry; resolve

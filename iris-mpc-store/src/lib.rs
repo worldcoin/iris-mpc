@@ -562,6 +562,11 @@ WHERE id = $1;
     /// Using the content-sensitive trigger for an idempotent mutation (for
     /// example, deleting an already-deleted identity) would leave Postgres one
     /// version behind the registry.
+    ///
+    /// Returns `Ok(false)` when no row with `id` exists. The previous
+    /// `update_iris` path silently affected zero rows in that case; callers
+    /// decide whether a missing row is a warning (live result persistence) or
+    /// an error (startup replay), instead of this function aborting the batch.
     pub async fn update_iris_and_increment_version(
         &self,
         tx: &mut ExplicitVersionToken<'_, '_>,
@@ -570,7 +575,26 @@ WHERE id = $1;
         left_mask_share: &GaloisRingTrimmedMaskCodeShare,
         right_iris_share: &GaloisRingIrisCodeShare,
         right_mask_share: &GaloisRingTrimmedMaskCodeShare,
-    ) -> Result<()> {
+    ) -> Result<bool> {
+        self.update_iris_ref_and_increment_version(
+            tx,
+            &StoredIrisRef {
+                id,
+                left_code: &left_iris_share.coefs,
+                left_mask: &left_mask_share.coefs,
+                right_code: &right_iris_share.coefs,
+                right_mask: &right_mask_share.coefs,
+            },
+        )
+        .await
+    }
+
+    /// [`Self::update_iris_and_increment_version`] for a [`StoredIrisRef`].
+    pub async fn update_iris_ref_and_increment_version(
+        &self,
+        tx: &mut ExplicitVersionToken<'_, '_>,
+        iris: &StoredIrisRef<'_>,
+    ) -> Result<bool> {
         let result = sqlx::query(
             r#"
 UPDATE irises SET (
@@ -583,21 +607,21 @@ UPDATE irises SET (
 WHERE id = $1;
 "#,
         )
-        .bind(id)
-        .bind(cast_slice::<u16, u8>(&left_iris_share.coefs[..]))
-        .bind(cast_slice::<u16, u8>(&left_mask_share.coefs[..]))
-        .bind(cast_slice::<u16, u8>(&right_iris_share.coefs[..]))
-        .bind(cast_slice::<u16, u8>(&right_mask_share.coefs[..]))
+        .bind(iris.id)
+        .bind(cast_slice::<u16, u8>(iris.left_code))
+        .bind(cast_slice::<u16, u8>(iris.left_mask))
+        .bind(cast_slice::<u16, u8>(iris.right_code))
+        .bind(cast_slice::<u16, u8>(iris.right_mask))
         .execute(tx.tx().deref_mut())
         .await?;
         ensure!(
-            result.rows_affected() == 1,
-            "update_iris_and_increment_version: expected to update 1 row for id={}, updated {}",
-            id,
+            result.rows_affected() <= 1,
+            "update_iris_and_increment_version: expected to update at most 1 row for id={}, updated {}",
+            iris.id,
             result.rows_affected()
         );
 
-        Ok(())
+        Ok(result.rows_affected() == 1)
     }
 
     /// Update an iris's shares, writing `version_id` verbatim (the [`ExplicitVersionToken`]
@@ -1846,7 +1870,7 @@ pub mod tests {
         {
             let mut version_tx = ExplicitVersionToken::enable(&mut tx).await?;
             for _ in 0..2 {
-                store
+                let updated = store
                     .update_iris_and_increment_version(
                         &mut version_tx,
                         1,
@@ -1856,7 +1880,13 @@ pub mod tests {
                         &mask,
                     )
                     .await?;
+                assert!(updated);
             }
+            // A missing row is reported, not treated as an error.
+            let updated = store
+                .update_iris_and_increment_version(&mut version_tx, 999, &code, &mask, &code, &mask)
+                .await?;
+            assert!(!updated);
         }
         tx.commit().await?;
 

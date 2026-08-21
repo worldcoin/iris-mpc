@@ -21,19 +21,19 @@ use crate::{
 };
 
 use super::{
-    iris_worker::QueryId, scheduler::parallelize, HawkActor, HawkArgs, HawkRequest, VectorId, LEFT,
-    RIGHT,
+    iris_worker::QueryId, scheduler::parallelize, HawkActor, HawkArgs, HawkRequest, HawkSearchMode,
+    VectorId, LEFT, RIGHT,
 };
 
 pub async fn setup_hawk_actors() -> Result<Vec<HawkActor>> {
-    setup_hawk_actors_with_mode(false).await
+    setup_hawk_actors_with_mode(HawkSearchMode::Hnsw).await
 }
 
 pub async fn setup_linear_scan_actors() -> Result<Vec<HawkActor>> {
-    setup_hawk_actors_with_mode(true).await
+    setup_hawk_actors_with_mode(HawkSearchMode::LinearScan).await
 }
 
-async fn setup_hawk_actors_with_mode(linear_scan: bool) -> Result<Vec<HawkActor>> {
+async fn setup_hawk_actors_with_mode(search_mode: HawkSearchMode) -> Result<Vec<HawkActor>> {
     let go = |addresses: Vec<String>, index: usize| {
         async move {
             let args = HawkArgs::parse_from([
@@ -49,10 +49,11 @@ async fn setup_hawk_actors_with_mode(linear_scan: bool) -> Result<Vec<HawkActor>
             // Make the test async.
             sleep(Duration::from_millis(index as u64)).await;
 
-            if linear_scan {
-                HawkActor::from_cli_linear_scan(&args, CancellationToken::new()).await
-            } else {
-                HawkActor::from_cli(&args, CancellationToken::new()).await
+            match search_mode {
+                HawkSearchMode::Hnsw => HawkActor::from_cli(&args, CancellationToken::new()).await,
+                HawkSearchMode::LinearScan => {
+                    HawkActor::from_cli_linear_scan(&args, CancellationToken::new()).await
+                }
             }
         }
     };

@@ -15,13 +15,14 @@ use iris_mpc_common::helpers::smpc_response::{
 
 use iris_mpc_common::helpers::sync::ModificationKey::{RequestId, RequestSerialId};
 use iris_mpc_common::iris_db::get_dummy_shares_for_deletion;
-use iris_mpc_common::{job::ServerJobResult, SerialId};
+use iris_mpc_common::job::ServerJobResult;
+use iris_mpc_cpu::execution::hawk_main::iris_worker::IrisWorkerPool;
 use iris_mpc_cpu::execution::hawk_main::{
-    iris_worker::IrisPersistenceAckHandle, GraphStore, HawkMutation,
+    BothEyes, GraphStore, HawkMutation, HawkSearchMode, LEFT, RIGHT,
 };
 use iris_mpc_store::{ExplicitVersionToken, Store, StoredIrisRef};
 use itertools::{izip, Itertools};
-use std::{collections::HashMap, time::Instant};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 /// Batch identity and stage timings carried to the result summaries.
 pub struct BatchTimings {
@@ -37,6 +38,45 @@ fn one_indexed_ids_at(ids: &[Vec<u32>], index: usize) -> Option<Vec<u32>> {
         .map(|ids| ids.iter().map(|id| id + 1).collect())
 }
 
+fn linear_scan_one_indexed_nonempty_ids_at(
+    search_mode: HawkSearchMode,
+    ids: &[Vec<u32>],
+    index: usize,
+) -> Option<Vec<u32>> {
+    if search_mode != HawkSearchMode::LinearScan {
+        return None;
+    }
+    ids.get(index)
+        .filter(|ids| !ids.is_empty())
+        .map(|ids| ids.iter().map(|id| id + 1).collect())
+}
+
+fn linear_scan_count_at(
+    search_mode: HawkSearchMode,
+    counts: &[usize],
+    index: usize,
+) -> Option<usize> {
+    (search_mode == HawkSearchMode::LinearScan)
+        .then(|| counts.get(index).copied())
+        .flatten()
+}
+
+/// Record an iris mutation whose Postgres row does not exist.
+///
+/// The in-memory registry may already carry a serial ID that was never
+/// inserted into `irises` (for example an out-of-range deletion or reset
+/// request). Before explicit versioning this was a silent zero-row update;
+/// keep the batch alive and make the discrepancy visible instead of exiting
+/// all parties on one malformed request.
+fn warn_missing_iris_row(kind: &'static str, serial_id: i64) {
+    tracing::warn!(
+        kind,
+        serial_id,
+        "{kind} persistence targeted serial id {serial_id}, which has no row in Postgres"
+    );
+    metrics::counter!("persist_missing_iris_row_total", "kind" => kind).increment(1);
+}
+
 /// Processes a ServerJobResult, storing data in the database and sending result messages
 /// through SNS.
 #[allow(clippy::too_many_arguments)]
@@ -46,8 +86,10 @@ pub async fn process_job_result(
     party_id: usize,
     store: &Store,
     graph_store: &GraphStore,
+    worker_pools: &BothEyes<Arc<dyn IrisWorkerPool>>,
     sns_client: &SNSClient,
     config: &Config,
+    search_mode: HawkSearchMode,
     uniqueness_result_attributes: &HashMap<String, MessageAttributeValue>,
     reauth_result_attributes: &HashMap<String, MessageAttributeValue>,
     identity_deletion_result_attributes: &HashMap<String, MessageAttributeValue>,
@@ -55,7 +97,6 @@ pub async fn process_job_result(
     reset_update_result_attributes: &HashMap<String, MessageAttributeValue>,
     recovery_check_result_attributes: &HashMap<String, MessageAttributeValue>,
     recovery_update_result_attributes: &HashMap<String, MessageAttributeValue>,
-    persistence_ack_handle: &IrisPersistenceAckHandle,
     shutdown_handler: &ShutdownHandler,
 ) -> Result<()> {
     let ServerJobResult {
@@ -97,6 +138,12 @@ pub async fn process_job_result(
         sqs_sequence_numbers,
         ..
     } = job_result;
+    let persisted_vector_ids =
+        if search_mode == HawkSearchMode::LinearScan && !config.disable_persistence {
+            hawk_mutation.persisted_vector_ids()
+        } else {
+            Vec::new()
+        };
     let now = Instant::now();
     let dummy_deletion_shares = get_dummy_shares_for_deletion(party_id);
 
@@ -143,22 +190,31 @@ pub async fn process_job_result(
                     .get(i)
                     .filter(|rotations| !rotations.is_empty())
                     .cloned(),
-                full_face_mirror_match_ids
-                    .get(i)
-                    .filter(|ids| !ids.is_empty())
-                    .map(|ids| ids.iter().map(|x| x + 1).collect::<Vec<_>>()),
-                full_face_mirror_partial_match_ids_left
-                    .get(i)
-                    .filter(|ids| !ids.is_empty())
-                    .map(|ids| ids.iter().map(|x| x + 1).collect::<Vec<_>>()),
-                full_face_mirror_partial_match_ids_right
-                    .get(i)
-                    .filter(|ids| !ids.is_empty())
-                    .map(|ids| ids.iter().map(|x| x + 1).collect::<Vec<_>>()),
-                (!full_face_mirror_partial_match_counters_left.is_empty())
-                    .then_some(full_face_mirror_partial_match_counters_left[i]),
-                (!full_face_mirror_partial_match_counters_right.is_empty())
-                    .then_some(full_face_mirror_partial_match_counters_right[i]),
+                linear_scan_one_indexed_nonempty_ids_at(
+                    search_mode,
+                    &full_face_mirror_match_ids,
+                    i,
+                ),
+                linear_scan_one_indexed_nonempty_ids_at(
+                    search_mode,
+                    &full_face_mirror_partial_match_ids_left,
+                    i,
+                ),
+                linear_scan_one_indexed_nonempty_ids_at(
+                    search_mode,
+                    &full_face_mirror_partial_match_ids_right,
+                    i,
+                ),
+                linear_scan_count_at(
+                    search_mode,
+                    &full_face_mirror_partial_match_counters_left,
+                    i,
+                ),
+                linear_scan_count_at(
+                    search_mode,
+                    &full_face_mirror_partial_match_counters_right,
+                    i,
+                ),
                 match full_face_mirror_attack_detected.is_empty() {
                     false => full_face_mirror_attack_detected[i],
                     true => false,
@@ -318,26 +374,6 @@ pub async fn process_job_result(
     let persist_total_start = Instant::now();
     let mut iris_tx = store.tx().await?;
 
-    // These are the in-memory mutations whose matching Postgres writes are in
-    // this transaction. Preserve occurrences and order: the cold-eye overlay
-    // is a FIFO per serial ID, so one commit acknowledges exactly one queued
-    // mutation even if a later batch has already updated the same identity.
-    let mut committed_mutation_serial_ids = memory_serial_ids
-        .iter()
-        .map(|serial_id| {
-            SerialId::try_from(*serial_id)
-                .wrap_err_with(|| format!("serial ID {serial_id} does not fit in u32"))
-        })
-        .collect::<Result<Vec<_>>>()?;
-    for (i, success) in successful_reauths.iter().enumerate() {
-        if *success && !skip_persistence.get(i).copied().unwrap_or(false) {
-            let reauth_id = &request_ids[i];
-            committed_mutation_serial_ids.push(*reauth_target_indices.get(reauth_id).unwrap() + 1);
-        }
-    }
-    committed_mutation_serial_ids.extend(identity_update_indices.iter().map(|idx| idx + 1));
-    committed_mutation_serial_ids.extend(deleted_ids.iter().map(|idx| idx + 1));
-
     if !codes_and_masks.is_empty() && !config.disable_persistence {
         let step_start = Instant::now();
         let db_serial_ids = store.insert_irises(&mut iris_tx, &codes_and_masks).await?;
@@ -363,9 +399,15 @@ pub async fn process_job_result(
         // Wrap transaction for graph operations
         let mut graph_tx = graph_store.tx_wrap(iris_tx);
 
-        // Persist graph mutations to hawk_graph_mutations table
+        // Linear scan carries mutation metadata only to acknowledge its cold
+        // overlay. Persist an empty graph mutation set to retain the existing
+        // modification-frontier update without writing graph/WAL rows.
+        let graph_mutation = match search_mode {
+            HawkSearchMode::Hnsw => hawk_mutation,
+            HawkSearchMode::LinearScan => HawkMutation(Vec::new()),
+        };
         let step_start = Instant::now();
-        hawk_mutation
+        graph_mutation
             .persist(&mut graph_tx, &mut modifications)
             .await?;
         metrics::histogram!("persist_graph_mutations_duration")
@@ -412,7 +454,7 @@ pub async fn process_job_result(
                     reauth_id,
                     serial_id
                 );
-                store
+                let updated = store
                     .update_iris_and_increment_version(
                         &mut version_tx,
                         serial_id as i64,
@@ -422,6 +464,9 @@ pub async fn process_job_result(
                         &right_iris_requests.mask[i],
                     )
                     .await?;
+                if !updated {
+                    warn_missing_iris_row("reauth", serial_id as i64);
+                }
             }
 
             // persist identity update (reset_update/recovery_update) results into db
@@ -433,7 +478,7 @@ pub async fn process_job_result(
                     "Persisting identity update into postgres on serial id {}",
                     serial_id
                 );
-                store
+                let updated = store
                     .update_iris_and_increment_version(
                         &mut version_tx,
                         serial_id as i64,
@@ -443,6 +488,9 @@ pub async fn process_job_result(
                         &shares.mask_right,
                     )
                     .await?;
+                if !updated {
+                    warn_missing_iris_row("identity_update", serial_id as i64);
+                }
             }
 
             // persist deletion results into db
@@ -454,7 +502,7 @@ pub async fn process_job_result(
                     "Persisting identity deletion into postgres on serial id {}",
                     serial_id
                 );
-                store
+                let updated = store
                     .update_iris_and_increment_version(
                         &mut version_tx,
                         serial_id as i64,
@@ -464,6 +512,9 @@ pub async fn process_job_result(
                         &dummy_deletion_shares.1,
                     )
                     .await?;
+                if !updated {
+                    warn_missing_iris_row("deletion", serial_id as i64);
+                }
             }
         }
 
@@ -493,11 +544,21 @@ pub async fn process_job_result(
         let step_start = Instant::now();
         graph_tx.tx.commit().await?;
         metrics::histogram!("persist_commit_duration").record(step_start.elapsed().as_secs_f64());
-        persistence_ack_handle
-            .acknowledge_persisted(committed_mutation_serial_ids)
-            .await?;
         metrics::histogram!("persist_total_duration")
             .record(persist_total_start.elapsed().as_secs_f64());
+
+        if !persisted_vector_ids.is_empty() {
+            let left_ids = persisted_vector_ids.clone();
+            let (left_removed, right_removed) = tokio::join!(
+                worker_pools[LEFT].acknowledge_persisted_irises(left_ids),
+                worker_pools[RIGHT].acknowledge_persisted_irises(persisted_vector_ids),
+            );
+            tracing::debug!(
+                left_removed,
+                right_removed,
+                "Acknowledged committed cold-eye mutation overlay entries"
+            );
+        }
     }
     let persist_ms = persist_total_start.elapsed().as_millis();
 
@@ -643,11 +704,34 @@ pub async fn process_job_result(
 
 #[cfg(test)]
 mod tests {
-    use super::one_indexed_ids_at;
+    use super::{
+        linear_scan_count_at, linear_scan_one_indexed_nonempty_ids_at, one_indexed_ids_at,
+    };
+    use iris_mpc_cpu::execution::hawk_main::HawkSearchMode;
 
     #[test]
     fn hidden_partial_results_are_absent_instead_of_indexing_an_empty_outer_vector() {
         assert_eq!(one_indexed_ids_at(&[], 0), None);
         assert_eq!(one_indexed_ids_at(&[vec![0, 4]], 0), Some(vec![1, 5]));
+    }
+
+    #[test]
+    fn full_face_mirror_details_are_exposed_only_by_linear_scan() {
+        let ids = [vec![0, 4]];
+        let counts = [7];
+
+        assert_eq!(
+            linear_scan_one_indexed_nonempty_ids_at(HawkSearchMode::Hnsw, &ids, 0),
+            None
+        );
+        assert_eq!(linear_scan_count_at(HawkSearchMode::Hnsw, &counts, 0), None);
+        assert_eq!(
+            linear_scan_one_indexed_nonempty_ids_at(HawkSearchMode::LinearScan, &ids, 0),
+            Some(vec![1, 5])
+        );
+        assert_eq!(
+            linear_scan_count_at(HawkSearchMode::LinearScan, &counts, 0),
+            Some(7)
+        );
     }
 }

@@ -38,12 +38,13 @@ use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::job::JobSubmissionHandle;
 use iris_mpc_common::postgres::{run_migrations, AccessMode, PostgresClient};
 use iris_mpc_cpu::checkpoint_protocol::runner::SidecarConfigWrapper;
+use iris_mpc_cpu::execution::hawk_main::iris_worker::IrisWorkerPool;
 use iris_mpc_cpu::execution::hawk_main::worker_pool_initializer::{
     DbLoadParams, LocalWorkerPoolInitializer, WorkerPoolInitializer,
 };
 use iris_mpc_cpu::execution::hawk_main::{
-    build_hawk_network_handle, iris_worker::IrisPersistenceAckHandle, GraphStore, HawkActor,
-    HawkArgs, HawkHandle, HawkOps, HawkSearchMode, ServerJobResult, HAWK_DISTANCE_MODE,
+    build_hawk_network_handle, BothEyes, GraphStore, HawkActor, HawkArgs, HawkHandle, HawkOps,
+    HawkSearchMode, ServerJobResult, StoreId, HAWK_DISTANCE_MODE,
 };
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
@@ -169,7 +170,7 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
 
     // Handle modifications sync
     if config.enable_modifications_sync {
-        sync_modifications(
+        let mut tx = sync_modifications(
             &config,
             &iris_store,
             &aws_clients,
@@ -177,11 +178,13 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
             sync_result.clone(),
         )
         .await?;
-        // insert the WAL entries so that init_hawk_actor rolls the graph forward to
-        // the correct height.
+        // Insert the WAL entries so that init_hawk_actor rolls the graph forward to
+        // the correct height. Share the modifications-sync transaction so a crash
+        // cannot leave the iris store ahead of the WAL. Linear scan has no graph WAL.
         if search_mode == HawkSearchMode::Hnsw {
-            sync_graph_mutations(&sync_result, &graph_store).await?;
+            sync_graph_mutations(&sync_result, &graph_store, &mut tx).await?;
         }
+        tx.commit().await?;
     }
 
     if config.enable_modifications_replay {
@@ -297,7 +300,11 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
     let results_persistence = ResultsPersistence {
         iris_store: iris_store.clone(),
         graph_store,
-        ack_handle: hawk_actor.persistence_ack_handle(),
+        search_mode,
+        worker_pools: [
+            hawk_actor.worker_pool(StoreId::Left),
+            hawk_actor.worker_pool(StoreId::Right),
+        ],
     };
     let tx_results = start_results_thread(
         &config,
@@ -437,6 +444,8 @@ fn process_config(config: &Config, search_mode: HawkSearchMode) -> Result<()> {
         _ => {}
     }
     validate_max_batch_size(config.max_batch_size, search_mode)?;
+    validate_full_scan_side_switching(config.full_scan_side_switching_enabled, search_mode)?;
+    validate_persistence_enabled(config.disable_persistence, search_mode)?;
     // Load batch_size config
     tracing::info!("Set max batch size to {}", config.max_batch_size);
     Ok(())
@@ -446,7 +455,44 @@ fn validate_max_batch_size(max_batch_size: usize, search_mode: HawkSearchMode) -
     if search_mode == HawkSearchMode::LinearScan && max_batch_size != 1 {
         bail!(
             "exact CPU linear-scan mode requires max_batch_size=1; got {max_batch_size}. \
-             Requests must be serialized so intra-batch matching is unnecessary"
+             Batched execution is not yet covered by end-to-end GPU-parity validation"
+        );
+    }
+    Ok(())
+}
+
+/// The non-resident eye is served from Postgres plus an overlay of mutations
+/// whose transactions have not committed yet; that overlay is only released
+/// by result persistence. Without persistence nothing ever releases it and it
+/// would grow by one iris per mutation for the process lifetime.
+fn validate_persistence_enabled(
+    disable_persistence: bool,
+    search_mode: HawkSearchMode,
+) -> Result<()> {
+    if search_mode == HawkSearchMode::LinearScan && disable_persistence {
+        bail!(
+            "exact CPU linear-scan mode requires persistence: the database-backed eye's \
+             mutation overlay is released only when results are persisted \
+             (SMPC__DISABLE_PERSISTENCE=false)"
+        );
+    }
+    Ok(())
+}
+
+/// The CUDA actor can alternate the full-scan eye between batches. The CPU
+/// backend keeps one eye resident for the process lifetime and only changes
+/// it through `SMPC__FULL_SCAN_SIDE` on a coordinated restart, so accepting
+/// the (default-on) switching flag would silently diverge from the configured
+/// GPU behavior instead of failing at startup.
+fn validate_full_scan_side_switching(
+    switching_enabled: bool,
+    search_mode: HawkSearchMode,
+) -> Result<()> {
+    if search_mode == HawkSearchMode::LinearScan && switching_enabled {
+        bail!(
+            "exact CPU linear-scan mode does not support full-scan side switching; \
+             set SMPC__FULL_SCAN_SIDE_SWITCHING_ENABLED=false and select the resident \
+             eye with SMPC__FULL_SCAN_SIDE on all parties"
         );
     }
     Ok(())
@@ -669,6 +715,9 @@ async fn build_sync_state(
         common_config,
         graph_mutation_bytes,
         max_persisted_sequence_number,
+        // Not applicable to the CPU path: Hawk derives fresh PRF seeds per
+        // session (`setup_replicated_prf`), so there is nothing to refresh.
+        dh_nonce: None,
     })
 }
 
@@ -900,7 +949,8 @@ async fn init_hawk_actor(
 struct ResultsPersistence {
     iris_store: Store,
     graph_store: GraphPg<Aby3Store<HawkOps>>,
-    ack_handle: IrisPersistenceAckHandle,
+    search_mode: HawkSearchMode,
+    worker_pools: BothEyes<Arc<dyn IrisWorkerPool>>,
 }
 
 async fn start_results_thread(
@@ -917,7 +967,8 @@ async fn start_results_thread(
     let ResultsPersistence {
         iris_store: store_bg,
         graph_store,
-        ack_handle: persistence_ack_handle,
+        search_mode,
+        worker_pools,
     } = persistence;
     let shutdown_handler_bg = Arc::clone(shutdown_handler);
     let party_id = config.party_id;
@@ -929,8 +980,10 @@ async fn start_results_thread(
                 party_id,
                 &store_bg,
                 &graph_store,
+                &worker_pools,
                 &sns_client_bg,
                 &config_bg,
+                search_mode,
                 &sns_attributes_maps.uniqueness_result_attributes,
                 &sns_attributes_maps.reauth_result_attributes,
                 &sns_attributes_maps.identity_deletion_result_attributes,
@@ -938,7 +991,6 @@ async fn start_results_thread(
                 &sns_attributes_maps.reset_update_result_attributes,
                 &sns_attributes_maps.recovery_check_result_attributes,
                 &sns_attributes_maps.recovery_update_result_attributes,
-                &persistence_ack_handle,
                 &shutdown_handler_bg,
             )
             .await
@@ -1259,5 +1311,24 @@ mod config_tests {
     #[test]
     fn hnsw_keeps_batched_requests() {
         assert!(validate_max_batch_size(64, HawkSearchMode::Hnsw).is_ok());
+    }
+
+    #[test]
+    fn linear_scan_requires_persistence() {
+        assert!(validate_persistence_enabled(false, HawkSearchMode::LinearScan).is_ok());
+        assert!(validate_persistence_enabled(true, HawkSearchMode::Hnsw).is_ok());
+        assert!(validate_persistence_enabled(true, HawkSearchMode::LinearScan).is_err());
+    }
+
+    #[test]
+    fn linear_scan_rejects_full_scan_side_switching() {
+        assert!(validate_full_scan_side_switching(false, HawkSearchMode::LinearScan).is_ok());
+        assert!(validate_full_scan_side_switching(true, HawkSearchMode::Hnsw).is_ok());
+
+        let error = validate_full_scan_side_switching(true, HawkSearchMode::LinearScan)
+            .expect_err("linear scan must reject side switching");
+        assert!(error
+            .to_string()
+            .contains("SMPC__FULL_SCAN_SIDE_SWITCHING_ENABLED=false"));
     }
 }

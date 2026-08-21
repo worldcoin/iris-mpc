@@ -61,7 +61,7 @@ use crate::{
     execution::{
         hawk_main::{
             insert::InsertPlanV,
-            iris_worker::{IrisPersistenceAckHandle, IrisWorkerPool},
+            iris_worker::IrisWorkerPool,
             rot::{VecRotationSupport, ALL_ROTATIONS_MASK, CENTER_AND_10_MASK, CENTER_ONLY_MASK},
             search::SearchIds,
         },
@@ -645,14 +645,7 @@ impl HawkActor {
 
     /// Empty-store, empty-graph constructor. Test convenience.
     pub async fn from_cli(args: &HawkArgs, shutdown_ct: CancellationToken) -> Result<Self> {
-        let initializer = Box::new(
-            worker_pool_initializer::LocalWorkerPoolInitializer::new_empty(
-                args.party_index,
-                HAWK_DISTANCE_MODE,
-                args.numa,
-            ),
-        );
-        Self::from_cli_with_initializer(args, shutdown_ct, initializer).await
+        Self::from_cli_with_search_mode(args, shutdown_ct, HawkSearchMode::Hnsw).await
     }
 
     /// Empty-store, empty-graph constructor for exact CPU linear-scan tests
@@ -661,7 +654,14 @@ impl HawkActor {
         args: &HawkArgs,
         shutdown_ct: CancellationToken,
     ) -> Result<Self> {
-        use worker_pool_initializer::WorkerPoolInitializer;
+        Self::from_cli_with_search_mode(args, shutdown_ct, HawkSearchMode::LinearScan).await
+    }
+
+    async fn from_cli_with_search_mode(
+        args: &HawkArgs,
+        shutdown_ct: CancellationToken,
+        search_mode: HawkSearchMode,
+    ) -> Result<Self> {
         let initializer = Box::new(
             worker_pool_initializer::LocalWorkerPoolInitializer::new_empty(
                 args.party_index,
@@ -670,15 +670,15 @@ impl HawkActor {
             )
             .with_resident_layout(crate::protocol::shared_iris::preferred_scan_layout()),
         );
-        let networking = build_hawk_network_handle(args, shutdown_ct).await?;
-        let initialized = initializer.initialize().await?;
         let graph = [(); 2].map(|_| GraphMem::new());
-        Ok(HawkActor::new_linear_scan(
-            args.clone(),
-            networking,
-            initialized,
+        Self::from_cli_with_initializer_and_graph(
+            args,
+            shutdown_ct,
+            initializer,
             graph,
-        ))
+            search_mode,
+        )
+        .await
     }
 
     /// Test convenience: build the actor from caller-provided iris
@@ -689,18 +689,14 @@ impl HawkActor {
         graph: BothEyes<GraphMem>,
         iris_store: BothEyes<Aby3SharedIrises>,
     ) -> Result<Self> {
-        use worker_pool_initializer::WorkerPoolInitializer;
-        let initializer = Box::new(
-            worker_pool_initializer::LocalWorkerPoolInitializer::new_seeded(
-                args.party_index,
-                HAWK_DISTANCE_MODE,
-                args.numa,
-                iris_store,
-            ),
-        );
-        let networking = build_hawk_network_handle(args, shutdown_ct).await?;
-        let initialized = initializer.initialize().await?;
-        Ok(HawkActor::new(args.clone(), networking, initialized, graph))
+        Self::from_cli_with_graph_store_and_search_mode(
+            args,
+            shutdown_ct,
+            graph,
+            iris_store,
+            HawkSearchMode::Hnsw,
+        )
+        .await
     }
 
     /// Test convenience equivalent of `from_cli_with_graph_and_store`, using
@@ -711,7 +707,23 @@ impl HawkActor {
         graph: BothEyes<GraphMem>,
         iris_store: BothEyes<Aby3SharedIrises>,
     ) -> Result<Self> {
-        use worker_pool_initializer::WorkerPoolInitializer;
+        Self::from_cli_with_graph_store_and_search_mode(
+            args,
+            shutdown_ct,
+            graph,
+            iris_store,
+            HawkSearchMode::LinearScan,
+        )
+        .await
+    }
+
+    async fn from_cli_with_graph_store_and_search_mode(
+        args: &HawkArgs,
+        shutdown_ct: CancellationToken,
+        graph: BothEyes<GraphMem>,
+        iris_store: BothEyes<Aby3SharedIrises>,
+        search_mode: HawkSearchMode,
+    ) -> Result<Self> {
         let initializer = Box::new(
             worker_pool_initializer::LocalWorkerPoolInitializer::new_seeded(
                 args.party_index,
@@ -721,14 +733,14 @@ impl HawkActor {
             )
             .with_resident_layout(crate::protocol::shared_iris::preferred_scan_layout()),
         );
-        let networking = build_hawk_network_handle(args, shutdown_ct).await?;
-        let initialized = initializer.initialize().await?;
-        Ok(HawkActor::new_linear_scan(
-            args.clone(),
-            networking,
-            initialized,
+        Self::from_cli_with_initializer_and_graph(
+            args,
+            shutdown_ct,
+            initializer,
             graph,
-        ))
+            search_mode,
+        )
+        .await
     }
 
     /// Run an initializer, then build the actor with an empty graph.
@@ -739,10 +751,33 @@ impl HawkActor {
         shutdown_ct: CancellationToken,
         initializer: Box<dyn worker_pool_initializer::WorkerPoolInitializer>,
     ) -> Result<Self> {
+        let graph = [(); 2].map(|_| GraphMem::new());
+        Self::from_cli_with_initializer_and_graph(
+            args,
+            shutdown_ct,
+            initializer,
+            graph,
+            HawkSearchMode::Hnsw,
+        )
+        .await
+    }
+
+    async fn from_cli_with_initializer_and_graph(
+        args: &HawkArgs,
+        shutdown_ct: CancellationToken,
+        initializer: Box<dyn worker_pool_initializer::WorkerPoolInitializer>,
+        graph: BothEyes<GraphMem>,
+        search_mode: HawkSearchMode,
+    ) -> Result<Self> {
         let networking = build_hawk_network_handle(args, shutdown_ct).await?;
         let initialized = initializer.initialize().await?;
-        let graph = [(); 2].map(|_| GraphMem::new());
-        Ok(HawkActor::new(args.clone(), networking, initialized, graph))
+        Ok(HawkActor::new_with_search_mode(
+            args.clone(),
+            networking,
+            initialized,
+            graph,
+            search_mode,
+        ))
     }
 
     pub fn set_anon_stats_store(&mut self, store: Option<AnonStatsStore>) {
@@ -791,12 +826,6 @@ impl HawkActor {
 
     pub fn worker_pool(&self, store_id: StoreId) -> Arc<dyn IrisWorkerPool> {
         self.worker_pools[store_id as usize].clone()
-    }
-
-    /// Handle used by the result writer to release cold-eye mutations only
-    /// after the corresponding Postgres transaction commits.
-    pub fn persistence_ack_handle(&self) -> IrisPersistenceAckHandle {
-        IrisPersistenceAckHandle::new(self.worker_pools.clone())
     }
 
     pub fn graph_store(&self, store_id: StoreId) -> GraphRef {
@@ -1070,10 +1099,14 @@ impl HawkActor {
         request_types: &[String],
         skip_persistence: &[bool],
     ) -> PartialDistancesMap {
+        // The CUDA actor records no anonymized distances for skip_persistence
+        // requests. Mirror that only in linear-scan mode; the HNSW deployment
+        // keeps recording them until that behavior change is made deliberately.
+        let skip_non_persisted = self.search_mode() == HawkSearchMode::LinearScan;
         // maps query_id and db_id to an operation and a vector of distances.
         let mut distances_with_ids: PartialDistancesMap = BTreeMap::new();
         for (query_idx, vec_rots) in search_results.iter().enumerate() {
-            if skip_persistence.get(query_idx).copied().unwrap_or(false) {
+            if skip_non_persisted && skip_persistence.get(query_idx).copied().unwrap_or(false) {
                 continue;
             }
             let operation = request_types
@@ -1640,17 +1673,27 @@ impl HawkResult {
             .and_then(|mutation| mutation.inserted_id)
     }
 
-    fn select(&self, filter: Filter) -> (VecRequests<Vec<u32>>, VecRequests<usize>) {
-        const PARTIAL_MATCH_ID_LIMIT: usize = 2048;
+    /// The CUDA actor reports at most `ALL_MATCHES_LEN` (256) IDs per device
+    /// for every match list; with eight devices that is 2048. An exact scan
+    /// can otherwise return an unbounded list for a degenerate template, which
+    /// has no size guard downstream (SNS message limits).
+    const LINEAR_SCAN_MATCH_ID_LIMIT: usize = 2048;
 
+    fn select(&self, filter: Filter) -> (VecRequests<Vec<u32>>, VecRequests<usize>) {
         let mut indices = self.select_indices(filter);
         let counts = indices.iter().map(|ids| ids.len()).collect_vec();
+        self.cap_linear_scan_ids(&mut indices);
+        (indices, counts)
+    }
+
+    /// Apply [`Self::LINEAR_SCAN_MATCH_ID_LIMIT`] in linear-scan mode; HNSW
+    /// lists are already bounded by `ef`.
+    fn cap_linear_scan_ids(&self, indices: &mut VecRequests<Vec<u32>>) {
         if self.search_mode == HawkSearchMode::LinearScan {
-            for ids in &mut indices {
-                ids.truncate(PARTIAL_MATCH_ID_LIMIT);
+            for ids in indices {
+                ids.truncate(Self::LINEAR_SCAN_MATCH_ID_LIMIT);
             }
         }
-        (indices, counts)
     }
 
     fn select_indices(&self, filter: Filter) -> VecRequests<Vec<u32>> {
@@ -1716,7 +1759,8 @@ impl HawkResult {
             .map(|&d| matches!(d, UniqueInsert | UniqueInsertSkipped))
             .collect_vec();
 
-        let match_ids = self.select_indices(Self::MATCH_IDS_FILTER);
+        let mut match_ids = self.select_indices(Self::MATCH_IDS_FILTER);
+        self.cap_linear_scan_ids(&mut match_ids);
 
         let (partial_match_ids_left, partial_match_counters_left) = self.select(Filter {
             eyes: Only(Left),
@@ -1730,11 +1774,12 @@ impl HawkResult {
             intra_batch: false,
         });
 
-        let full_face_mirror_match_ids = self.select_indices(Filter {
+        let mut full_face_mirror_match_ids = self.select_indices(Filter {
             eyes: Both,
             orient: Only(Mirror),
             intra_batch: false,
         });
+        self.cap_linear_scan_ids(&mut full_face_mirror_match_ids);
 
         let (full_face_mirror_partial_match_ids_left, full_face_mirror_partial_match_counters_left) =
             self.select(Filter {
@@ -1897,12 +1942,10 @@ impl HawkResult {
 
             modifications: batch.modifications,
 
-            actor_data: match self.search_mode {
-                HawkSearchMode::Hnsw => self.connect_plans,
-                // The linear service persists the iris and modification rows
-                // through the common processor but has no graph/WAL state.
-                HawkSearchMode::LinearScan => HawkMutation(Vec::new()),
-            },
+            // Linear scan does not persist the graph plans, but the mutation
+            // metadata carries exact vector versions to the asynchronous
+            // result-persistence worker so it can trim the cold-eye overlay.
+            actor_data: self.connect_plans,
         }
     }
 }
@@ -1925,6 +1968,11 @@ pub struct SingleHawkMutation {
     /// The `VectorId` newly inserted by this request, if any.
     #[serde(skip)]
     pub inserted_id: Option<VectorId>,
+
+    /// Exact vector version made durable by result persistence, if any.
+    /// This includes the dummy version written for a deletion.
+    #[serde(skip)]
+    pub persisted_vector_id: Option<VectorId>,
 }
 
 impl SingleHawkMutation {
@@ -1933,7 +1981,31 @@ impl SingleHawkMutation {
     }
 }
 
+fn persisted_vector_id_for_request(
+    request_index: RequestIndex,
+    inserted_id: Option<VectorId>,
+    deleted_ids: &[VectorId],
+) -> Option<VectorId> {
+    inserted_id.or_else(|| match request_index {
+        // Deletions are applied before the searches, so the registry already
+        // points at the newly written dummy version by mutation handling.
+        RequestIndex::Deletion(i) => Some(deleted_ids[i]),
+        _ => None,
+    })
+}
+
 impl HawkMutation {
+    /// Exact vector versions whose iris rows become authoritative after the
+    /// result-persistence transaction commits.
+    pub fn persisted_vector_ids(&self) -> Vec<VectorId> {
+        self.0
+            .iter()
+            .filter_map(|mutation| mutation.persisted_vector_id)
+            .sorted_unstable()
+            .dedup()
+            .collect()
+    }
+
     /// Get a serialized `SingleHawkMutation` by `ModificationKey`.
     ///
     /// Returns None if no mutation exists for the given key.
@@ -2311,9 +2383,18 @@ impl HawkHandle {
                 let pending = matching::PendingBatch::new(&search_results, &luc_ids, request_types);
 
                 // Compare the other eye for vectors that matched on only one side.
-                let comparison_results =
+                let comparison_results = if hawk_actor.search_mode() == HawkSearchMode::LinearScan {
+                    // The cascade already evaluated both eyes for every
+                    // one-eyed match and known candidate; reuse its strict
+                    // threshold results instead of a second MPC pass.
+                    search::linear_scan_comparison_results(
+                        &search_results,
+                        pending.ids_to_compare(),
+                    )
+                } else {
                     is_match_batch(search_queries, pending.ids_to_compare(), sessions_search)
-                        .await?;
+                        .await?
+                };
 
                 pending.resolve(&comparison_results, intra_results.await???)
             };
@@ -2372,6 +2453,25 @@ impl HawkHandle {
             metrics::histogram!("all_search_duration").record(start.elapsed().as_secs_f64());
             (search_normal, search_mirror, match_result)
         };
+
+        if hawk_actor.search_mode() == HawkSearchMode::LinearScan {
+            // Every scan of this batch has consumed the cold-eye records it
+            // asked for. Drop whatever prefetch reservations are left (a
+            // record hinted by one orientation but read from the LFU by the
+            // other, or hints from a stage that did not run) so reservations
+            // never accumulate across batches.
+            let (left_released, right_released) = tokio::join!(
+                hawk_actor.worker_pools[LEFT].release_prefetched(),
+                hawk_actor.worker_pools[RIGHT].release_prefetched(),
+            );
+            if left_released + right_released > 0 {
+                tracing::debug!(
+                    left_released,
+                    right_released,
+                    "Released leftover cold-eye prefetch reservations"
+                );
+            }
+        }
         let sessions_mutations = &sessions.for_mutations(Orientation::Normal);
 
         hawk_actor
@@ -2644,12 +2744,15 @@ impl HawkHandle {
                 .get(slot_i)
                 .copied()
                 .unwrap_or(None);
+            let persisted_vector_id =
+                persisted_vector_id_for_request(*req_index, inserted_id, &deleted_ids);
 
             mutations.push(SingleHawkMutation {
                 plans: modif_plan,
                 modification_key,
                 request_index: Some(*req_index),
                 inserted_id,
+                persisted_vector_id,
             });
         }
 
@@ -2728,6 +2831,7 @@ mod hawk_mutation_tests {
             modification_key: Some(modification_key.clone()),
             request_index: Some(RequestIndex::UniqueReauthResetCheck(0)),
             inserted_id: Some(VectorId::from_serial_id(1)),
+            persisted_vector_id: Some(VectorId::from_serial_id(1)),
         };
 
         let hawk_mutation = HawkMutation(vec![mutation.clone()]);
@@ -2748,6 +2852,17 @@ mod hawk_mutation_tests {
         let wrong_key = ModificationKey::RequestId("wrong-request".to_string());
         let result = hawk_mutation.get_serialized_mutation_by_key(&wrong_key);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn persisted_deletion_id_is_the_registrys_current_dummy_version() {
+        let original_id = VectorId::from_serial_id(7);
+        let dummy_id = original_id.next_version();
+
+        assert_eq!(
+            persisted_vector_id_for_request(RequestIndex::Deletion(0), None, &[dummy_id]),
+            Some(dummy_id)
+        );
     }
 
     #[test]
@@ -2773,6 +2888,7 @@ mod hawk_mutation_tests {
             modification_key: Some(key1.clone()),
             request_index: Some(index1),
             inserted_id: Some(VectorId::from_serial_id(1)),
+            persisted_vector_id: Some(VectorId::from_serial_id(1)),
         };
 
         let mutation2 = SingleHawkMutation {
@@ -2783,6 +2899,7 @@ mod hawk_mutation_tests {
             modification_key: Some(key2.clone()),
             request_index: Some(index2),
             inserted_id: Some(VectorId::from_serial_id(2)),
+            persisted_vector_id: Some(VectorId::from_serial_id(2)),
         };
 
         let mutation3 = SingleHawkMutation {
@@ -2793,6 +2910,7 @@ mod hawk_mutation_tests {
             modification_key: Some(key3.clone()),
             request_index: Some(index3),
             inserted_id: Some(VectorId::from_serial_id(3)),
+            persisted_vector_id: Some(VectorId::from_serial_id(3)),
         };
 
         let hawk_mutation = HawkMutation(vec![
@@ -2815,6 +2933,14 @@ mod hawk_mutation_tests {
         assert_eq!(hawk_mutation.get_by_request_index(index1), Some(&mutation1));
         assert_eq!(hawk_mutation.get_by_request_index(index2), Some(&mutation2));
         assert_eq!(hawk_mutation.get_by_request_index(index3), Some(&mutation3));
+        assert_eq!(
+            hawk_mutation.persisted_vector_ids(),
+            vec![
+                VectorId::from_serial_id(1),
+                VectorId::from_serial_id(2),
+                VectorId::from_serial_id(3),
+            ]
+        );
 
         // Test non-existent key
         let wrong_key = ModificationKey::RequestId("non-existent".to_string());
@@ -2835,6 +2961,7 @@ mod hawk_mutation_tests {
             modification_key: Some(ModificationKey::RequestId("test".to_string())),
             request_index: Some(RequestIndex::UniqueReauthResetCheck(0)),
             inserted_id: Some(VectorId::from_serial_id(1)),
+            persisted_vector_id: Some(VectorId::from_serial_id(1)),
         };
 
         let mutation_without_key = SingleHawkMutation {
@@ -2845,6 +2972,7 @@ mod hawk_mutation_tests {
             modification_key: None,
             request_index: None,
             inserted_id: None,
+            persisted_vector_id: None,
         };
 
         let hawk_mutation = HawkMutation(vec![mutation_with_key.clone(), mutation_without_key]);
@@ -2870,6 +2998,7 @@ mod hawk_mutation_tests {
             modification_key: Some(ModificationKey::RequestId("test".to_string())),
             request_index: Some(RequestIndex::UniqueReauthResetCheck(0)),
             inserted_id: Some(VectorId::from_serial_id(1)),
+            persisted_vector_id: Some(VectorId::from_serial_id(1)),
         };
 
         // Test serialization
@@ -2882,6 +3011,7 @@ mod hawk_mutation_tests {
         // modification_key is skipped during serialization, so it should be None
         assert_eq!(deserialized.plans, mutation.plans);
         assert_eq!(deserialized.modification_key, None);
+        assert_eq!(deserialized.persisted_vector_id, None);
     }
 
     #[test]
@@ -2907,6 +3037,7 @@ mod hawk_mutation_tests {
             modification_key: None,
             request_index: None,
             inserted_id: Some(VectorId::from_serial_id(1)),
+            persisted_vector_id: Some(VectorId::from_serial_id(1)),
         };
         let bytes = mutation.serialize().expect("serialize");
         let back: SingleHawkMutation = bincode::deserialize(&bytes).expect("deserialize");
@@ -2916,5 +3047,6 @@ mod hawk_mutation_tests {
         assert_eq!(back.plans[1][0].seq_no, 6);
         // inserted_id is #[serde(skip)] — round-tripped value is None.
         assert_eq!(back.inserted_id, None);
+        assert_eq!(back.persisted_vector_id, None);
     }
 }

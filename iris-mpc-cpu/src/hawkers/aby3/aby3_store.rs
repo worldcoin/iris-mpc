@@ -587,60 +587,6 @@ where
             .await
     }
 
-    /// Evaluate a distance batch while also opening which individual query
-    /// rotations pass the match threshold. The minimum distances follow the
-    /// normal HAWK path; the extra rotation metadata is needed only for the
-    /// GPU-compatible partial-result response.
-    #[instrument(level = "trace", target = "searcher::network", skip_all)]
-    pub async fn eval_distance_batch_with_rotation_matches(
-        &mut self,
-        query: &Aby3Query,
-        vectors: &[VectorId],
-    ) -> Result<(Vec<DistanceShare<D::Ring>>, RotationMatchIndices)> {
-        use crate::execution::hawk_main::HAWK_MIN_DIST_ROTATIONS;
-
-        if vectors.is_empty() {
-            return Ok((Vec::new(), Vec::new()));
-        }
-
-        let ds_and_ts = self
-            .workers
-            .compute_dot_products(vec![(*query, vectors.to_vec())])
-            .await?
-            .into_iter()
-            .next()
-            .unwrap_or_default();
-        let rotation_distances = self.gr_to_lifted_distances(ds_and_ts).await?;
-
-        let distances = match self.distance_fn.mode {
-            DistanceMode::Simple => rotation_distances.clone(),
-            DistanceMode::MinRotation => {
-                self.oblivious_min_distance_batch(distance_fn::transpose_from_flat(
-                    &rotation_distances,
-                ))
-                .await?
-            }
-        };
-
-        let rotation_match_bits =
-            D::lte_and_open(&mut self.session, &rotation_distances, Threshold::Match).await?;
-        let rotations_per_vector = match self.distance_fn.mode {
-            DistanceMode::Simple => 1,
-            DistanceMode::MinRotation => HAWK_MIN_DIST_ROTATIONS,
-        };
-        let rotation_matches = rotation_match_bits
-            .chunks(rotations_per_vector)
-            .map(|bits| {
-                bits.iter()
-                    .enumerate()
-                    .filter_map(|(rotation, &is_match)| is_match.then_some(rotation))
-                    .collect()
-            })
-            .collect();
-
-        Ok((distances, rotation_matches))
-    }
-
     /// Full-rotation exact scan with the opened per-rotation match metadata
     /// retained as a correctness oracle for the fused production path.
     #[cfg(test)]

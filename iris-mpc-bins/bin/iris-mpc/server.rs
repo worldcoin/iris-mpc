@@ -20,7 +20,7 @@ use clap::Parser;
 use eyre::{bail, eyre, Context, Report, Result};
 use futures::{stream::BoxStream, StreamExt};
 use iris_mpc::services::aws::clients::AwsClients;
-use iris_mpc::services::init::initialize_chacha_seeds;
+use iris_mpc::services::init::{initialize_chacha_seeds, seed_transcript_nonces};
 use iris_mpc::services::processors::batch::{receive_batch_stream, spawn_db_backed_ingest_task};
 use iris_mpc::services::processors::get_iris_shares_parse_task;
 use iris_mpc::services::processors::modifications_sync::{
@@ -95,10 +95,11 @@ const MAX_CONCURRENT_REQUESTS: usize = 32;
 fn decode_iris_message_shares(
     code_share: String,
     mask_share: String,
+    party_id: usize,
 ) -> Result<(GaloisRingIrisCodeShare, GaloisRingIrisCodeShare)> {
-    let iris_share = GaloisRingIrisCodeShare::from_base64(&code_share)
+    let iris_share = GaloisRingIrisCodeShare::from_base64_for_party(&code_share, party_id)
         .context("Failed to base64 parse iris code")?;
-    let mask_share = GaloisRingIrisCodeShare::from_base64(&mask_share)
+    let mask_share = GaloisRingIrisCodeShare::from_base64_for_party(&mask_share, party_id)
         .context("Failed to base64 parse iris mask")?;
 
     Ok((iris_share, mask_share))
@@ -219,8 +220,10 @@ async fn server_main(config: Config) -> Result<()> {
     };
 
     let party_id = config.party_id;
-    tracing::info!("Deriving shared secrets");
-    let chacha_seeds = initialize_chacha_seeds(config.clone()).await?;
+
+    // Per-startup contribution to the ChaCha seed derivation, published in
+    // `SyncState` and combined with the peers' after the startup sync.
+    let my_dh_nonce: [u8; 32] = rand::random();
 
     let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
     let reauth_result_attributes = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
@@ -304,6 +307,7 @@ async fn server_main(config: Config) -> Result<()> {
         } else {
             None
         },
+        dh_nonce: Some(my_dh_nonce),
     };
 
     tracing::info!("Sync state: {:?}", my_state);
@@ -347,12 +351,20 @@ async fn server_main(config: Config) -> Result<()> {
     // --------------------------------------------------------------------------
     tracing::info!("⚓️ ANCHOR: Syncing latest node state");
     tracing::info!("Database store length is: {}", store_len);
+    let other_states = get_others_sync_state::<SyncState>(&server_coord_config).await?;
     let mut states = vec![my_state.clone()];
-    states.extend(get_others_sync_state::<SyncState>(&server_coord_config).await?);
+    states.extend(other_states.iter().cloned());
     let sync_result = SyncResult::new(my_state.clone(), states);
 
     // check if common part of the config is the same across all nodes
     sync_result.check_common_config()?;
+
+    // Derive the ChaCha seeds now that every party's nonce is in. Seeds must be
+    // fresh per run: their keystream is used as a one-time pad on the NCCL wire,
+    // and the static KMS ECDH secrets alone would replay it after a restart.
+    tracing::info!("Deriving shared secrets");
+    let dh_nonces = seed_transcript_nonces(party_id, my_dh_nonce, &other_states)?;
+    let chacha_seeds = initialize_chacha_seeds(&config, &dh_nonces).await?;
 
     // Fleet persisted frontier for boot recovery (computed here because
     // sync_modifications below consumes sync_result). See the hawk main for
@@ -385,7 +397,7 @@ async fn server_main(config: Config) -> Result<()> {
 
     // Handle modifications sync
     if config.enable_modifications_sync {
-        sync_modifications(
+        let tx = sync_modifications(
             &config,
             &store,
             &aws_clients,
@@ -393,6 +405,7 @@ async fn server_main(config: Config) -> Result<()> {
             sync_result,
         )
         .await?;
+        tx.commit().await?;
     }
 
     if config.enable_modifications_replay {
