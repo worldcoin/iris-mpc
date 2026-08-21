@@ -205,6 +205,7 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
             }
         };
 
+        let resident_side = cold_storage.as_ref().map(|(_, side, _, _)| *side);
         let mut cold_worker =
             if let Some((store, resident_side, luc_window_capacity, lfu_cache_capacity)) =
                 cold_storage
@@ -256,12 +257,26 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
             registries[RIGHT].read().await.set_hash.checksum(),
         ];
 
-        tracing::info!(
-            "Workers initialized. Checksums: L={:#x} R={:#x}, db_size={}",
-            post_load_checksums[LEFT],
-            post_load_checksums[RIGHT],
-            db_size,
-        );
+        match resident_side {
+            Some(resident_side) => {
+                // Only the resident eye was loaded; the other registry is a
+                // copy of it, so a second checksum would not be an independent
+                // check of anything.
+                let resident = if resident_side == LEFT { "L" } else { "R" };
+                tracing::info!(
+                    "Workers initialized. Resident {resident} checksum={:#x} (the other eye is \
+                     database-backed and shares this registry), db_size={}",
+                    post_load_checksums[resident_side],
+                    db_size,
+                );
+            }
+            None => tracing::info!(
+                "Workers initialized. Checksums: L={:#x} R={:#x}, db_size={}",
+                post_load_checksums[LEFT],
+                post_load_checksums[RIGHT],
+                db_size,
+            ),
+        }
 
         Ok(InitializedWorkers { pools, registries })
     }
