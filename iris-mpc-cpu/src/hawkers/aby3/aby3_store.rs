@@ -661,15 +661,6 @@ where
         if vectors.is_empty() {
             return Ok(Vec::new());
         }
-        eyre::ensure!(
-            self.distance_fn.mode == DistanceMode::MinRotation,
-            "full-rotation scan requires min-rotation distance mode"
-        );
-        eyre::ensure!(
-            query.rotation == crate::execution::hawk_main::iris_worker::CENTER_ROTATION,
-            "full-rotation scan must start from the center query rotation"
-        );
-
         let dot_shares = self.full_rotation_dot_shares(query, vectors).await?;
         self.lift_distances(dot_shares).await
     }
@@ -695,10 +686,11 @@ where
         query: &Aby3Query,
         vectors: &[VectorId],
     ) -> Result<Vec<RingElement<u16>>> {
-        eyre::ensure!(
-            self.distance_fn.mode == DistanceMode::MinRotation,
-            "full-rotation scan requires min-rotation distance mode"
-        );
+        // This scan is neither the simple nor the min-rotation distance: it
+        // opens a threshold for each of the 31 rotations separately. What it
+        // does rely on is the Hawk query layout, where the cached query
+        // rotations are addressed relative to `CENTER_ROTATION`; the worker
+        // derives all database rotations from that single center query.
         eyre::ensure!(
             query.rotation == crate::execution::hawk_main::iris_worker::CENTER_ROTATION,
             "full-rotation scan must start from the center query rotation"
@@ -728,10 +720,8 @@ where
         queries: [&Aby3Query; 2],
         vectors: &[VectorId],
     ) -> Result<AbortOnDropHandle<Result<PairDotContributions>>> {
-        eyre::ensure!(
-            self.distance_fn.mode == DistanceMode::MinRotation,
-            "full-rotation scan requires min-rotation distance mode"
-        );
+        // See `full_rotation_dot_contributions`: only the center-rotation
+        // query layout matters, not the configured distance mode.
         for query in queries {
             eyre::ensure!(
                 query.rotation == crate::execution::hawk_main::iris_worker::CENTER_ROTATION,
