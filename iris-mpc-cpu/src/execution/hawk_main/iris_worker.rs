@@ -807,6 +807,32 @@ fn worker_thread(
     }
 }
 
+/// A full-rotation scan target that is absent from the resident store means
+/// the caller's exact `(serial, version)` is not resident. The kernels
+/// substitute the max-distance sentinel, so such a record silently cannot
+/// match. The linear scan builds its candidate lists from the registry that
+/// the resident store is updated in lockstep with, so a nonzero count here is
+/// a registry/store desync, not an expected state: count every occurrence and
+/// log the first loudly.
+fn record_missing_resident_targets(missing: usize, total: usize) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    if missing == 0 {
+        return;
+    }
+    metrics::counter!("linear_scan_missing_resident_targets_total").increment(missing as u64);
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    if !WARNED.swap(true, Ordering::Relaxed) {
+        tracing::warn!(
+            missing,
+            total,
+            "full-rotation scan targets are missing from the resident store; these records \
+             receive the max-distance sentinel and cannot match (further occurrences are \
+             counted in linear_scan_missing_resident_targets_total)"
+        );
+    }
+}
+
 /// Full 31-rotation distances against resident targets, dispatching on the
 /// resident representation: mixed-plane targets use the UMMLA kernel,
 /// u16 targets the MLA kernel. Results are bit-identical between the two.
@@ -815,6 +841,10 @@ where
     I: Iterator<Item = Option<&'a ResidentIris>> + ExactSizeIterator,
 {
     let residents: Vec<Option<&ResidentIris>> = targets.collect();
+    record_missing_resident_targets(
+        residents.iter().filter(|target| target.is_none()).count(),
+        residents.len(),
+    );
 
     #[cfg(target_arch = "aarch64")]
     {
@@ -855,6 +885,10 @@ where
     I: Iterator<Item = Option<&'a ResidentIris>> + ExactSizeIterator,
 {
     let residents: Vec<Option<&ResidentIris>> = targets.collect();
+    record_missing_resident_targets(
+        residents.iter().filter(|target| target.is_none()).count(),
+        residents.len(),
+    );
 
     #[cfg(target_arch = "aarch64")]
     {
