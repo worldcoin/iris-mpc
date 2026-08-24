@@ -12,7 +12,9 @@ env:
 
 jobs:
   cpu-integration-tests:
-    timeout-minutes: 30
+    # Headroom for a cold cache: the release build alone can consume most of
+    # the old 30-minute budget when the Cargo.lock hash is fresh.
+    timeout-minutes: 40
     runs-on:
       group: arc-public-4xlarge-amd64-runner
     permissions:
