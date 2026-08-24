@@ -13,7 +13,10 @@ concurrency:
 
 jobs:
   unit-tests:
-    timeout-minutes: 20
+    # A cold cache (fresh Cargo.lock hash) spends ~19 minutes on the release
+    # build and tests alone; the post-job cache upload then needs headroom,
+    # otherwise it is cancelled and every later run stays cold.
+    timeout-minutes: 30
     runs-on:
       group: arc-public-8xlarge-amd64-runner
     permissions:
