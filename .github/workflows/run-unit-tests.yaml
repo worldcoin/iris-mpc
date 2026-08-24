@@ -143,9 +143,15 @@ jobs:
           restore-keys: |
             rust-build-${{ runner.os }}-${{ runner.arch }}-
 
-      # The arm64 runner image ships without rustup. Install a pinned
-      # rustup-init and verify its checksum before executing it (no
-      # pipe-to-shell), then install the workspace toolchain.
+      # The arm64 runner image is minimal: no C toolchain and no rustup.
+      - name: Install build dependencies
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential pkg-config libssl-dev protobuf-compiler
+
+      # Install a pinned rustup-init and verify its checksum before executing
+      # it (no pipe-to-shell), then install the workspace toolchain.
       - name: Install Rust
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         env:
