@@ -192,6 +192,9 @@ impl<const ROTATIONS: usize> PrerotatedQueryRowMajorView<'_, ROTATIONS> {
     /// The doubled-row mixed-plane kernel addresses each rotation as an
     /// 8-byte-aligned window plus a 4-element phase
     /// (`mixed_scan::query_window`), which is only sound under this property.
+    /// Its sole consumer is that aarch64-only kernel, so gate it to keep
+    /// non-aarch64 builds free of dead code.
+    #[cfg(target_arch = "aarch64")]
     const ROTATION_AMOUNTS_ARE_MULTIPLES_OF_FOUR: () = {
         let mut i = 0;
         while i < ROTATIONS {
