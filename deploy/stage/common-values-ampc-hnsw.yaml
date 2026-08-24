@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-linear-scan:8697ac2f0dae96af85aa33e1e5b74f1858c67b6a"
+image: "ghcr.io/worldcoin/iris-mpc-linear-scan:f5b38fe3439e7ebd3b05f03adba8b44e5c4bda16"
 
 environment: stage
 replicaCount: 1
@@ -7,7 +7,7 @@ replicaCount: 1
 # Defined as a map (keyed by variable name) so Helm deep-merges these with the
 # per-node `env` maps in each ampc-hnsw-N-stage/values-ampc-hnsw.yaml.
 env:
-  RUST_LOG: "debug"
+  RUST_LOG: "info"
   RUST_BACKTRACE: "full"
   SMPC__ENVIRONMENT: "stage"
   SMPC__DATABASE__URL:
