@@ -546,7 +546,7 @@ fn accumulate_group_rows<const ROTATIONS: usize>(
                         &query_rows[(rotation_idx + 4) * ROW_SIZE..(rotation_idx + 5) * ROW_SIZE];
                     let query5 =
                         &query_rows[(rotation_idx + 5) * ROW_SIZE..(rotation_idx + 6) * ROW_SIZE];
-                    let partials = dot_product_6x4_u16(
+                    let partials = dot_product_nx4_u16(
                         [query0, query1, query2, query3, query4, query5],
                         [target0, target1, target2, target3],
                     );
@@ -575,7 +575,7 @@ fn accumulate_group_rows<const ROTATIONS: usize>(
                         &query_rows[(rotation_idx + 2) * ROW_SIZE..(rotation_idx + 3) * ROW_SIZE];
                     let query3 =
                         &query_rows[(rotation_idx + 3) * ROW_SIZE..(rotation_idx + 4) * ROW_SIZE];
-                    let partials = dot_product_4x4_u16(
+                    let partials = dot_product_nx4_u16(
                         [query0, query1, query2, query3],
                         [target0, target1, target2, target3],
                     );
@@ -597,8 +597,8 @@ fn accumulate_group_rows<const ROTATIONS: usize>(
                 while rotation_idx < ROTATIONS {
                     let query_row =
                         &query_rows[rotation_idx * ROW_SIZE..(rotation_idx + 1) * ROW_SIZE];
-                    let partials =
-                        dot_product_1x4_u16(query_row, [target0, target1, target2, target3]);
+                    let [partials] =
+                        dot_product_nx4_u16([query_row], [target0, target1, target2, target3]);
                     for (target_offset, partial) in partials.into_iter().enumerate() {
                         let result_idx = (target_idx + target_offset) * ROTATIONS * 2
                             + rotation_idx * 2
@@ -674,55 +674,27 @@ fn accumulate_scalar_target<const ROTATIONS: usize>(
     }
 }
 
-/// One rotation against four targets: the remainder tile after the 6-wide
-/// (and optional 4-wide) passes. Keeping the four targets in one pass reuses
-/// each query vector load for four MLAs instead of evaluating four
-/// independent dot products.
+/// `N` query rotations against four targets in one pass.
+///
+/// One 8-lane block streams each target vector past all `N` query vectors, so
+/// every target load is reused for `N` MLAs and the `N * 4` accumulators stay
+/// in registers. The 6-wide instantiation is the main scan tile; 4 and 1 cover
+/// the remainders of the 11/13/31-rotation schedules (6+4+1, 6+6+1, 6x5+1).
+///
+/// The compiler fully unrolls the `N`-loops: on rustc 1.94/1.95 with
+/// `target-cpu=neoverse-v2`, `N = 6` compiles to the same 37-instruction hot
+/// loop (24 mla, 10 loads, no spills) as the previously hand-unrolled kernel,
+/// and measures identically on r8g.24xlarge in kernel and full-server
+/// benchmarks. The scalar-parity test below guards the correctness of every
+/// width; keeping all widths in one function keeps their schedules identical
+/// by construction.
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
-fn dot_product_1x4_u16(query: &[u16], targets: [&[u16]; 4]) -> [u16; 4] {
-    use std::arch::aarch64::{uint16x8_t, vaddvq_u16, vdupq_n_u16, vld1q_u16, vmlaq_u16};
-
-    debug_assert_eq!(query.len(), 800);
-    debug_assert!(targets.iter().all(|target| target.len() == 800));
-
-    // SAFETY: AArch64 guarantees Advanced SIMD. Each pointer is derived from
-    // an 800-element slice and the loop only issues unaligned-safe 8-lane
-    // loads at offsets 0..792. All arithmetic deliberately wraps in u16.
-    unsafe {
-        let zero = vdupq_n_u16(0);
-        let mut acc0: uint16x8_t = zero;
-        let mut acc1: uint16x8_t = zero;
-        let mut acc2: uint16x8_t = zero;
-        let mut acc3: uint16x8_t = zero;
-
-        let mut idx = 0;
-        while idx < 800 {
-            let query0 = vld1q_u16(query.as_ptr().add(idx));
-            let target0 = vld1q_u16(targets[0].as_ptr().add(idx));
-            let target1 = vld1q_u16(targets[1].as_ptr().add(idx));
-            let target2 = vld1q_u16(targets[2].as_ptr().add(idx));
-            let target3 = vld1q_u16(targets[3].as_ptr().add(idx));
-            acc0 = vmlaq_u16(acc0, query0, target0);
-            acc1 = vmlaq_u16(acc1, query0, target1);
-            acc2 = vmlaq_u16(acc2, query0, target2);
-            acc3 = vmlaq_u16(acc3, query0, target3);
-            idx += 8;
-        }
-
-        [
-            vaddvq_u16(acc0),
-            vaddvq_u16(acc1),
-            vaddvq_u16(acc2),
-            vaddvq_u16(acc3),
-        ]
-    }
-}
-
-#[cfg(target_arch = "aarch64")]
-#[inline(always)]
-fn dot_product_4x4_u16(queries: [&[u16]; 4], targets: [&[u16]; 4]) -> [[u16; 4]; 4] {
-    use std::arch::aarch64::{uint16x8_t, vaddvq_u16, vdupq_n_u16, vld1q_u16, vmlaq_u16};
+fn dot_product_nx4_u16<const N: usize>(
+    queries: [&[u16]; N],
+    targets: [&[u16]; 4],
+) -> [[u16; 4]; N] {
+    use std::arch::aarch64::{vaddvq_u16, vdupq_n_u16, vld1q_u16, vmlaq_u16};
 
     debug_assert!(queries.iter().all(|query| query.len() == 800));
     debug_assert!(targets.iter().all(|target| target.len() == 800));
@@ -732,204 +704,34 @@ fn dot_product_4x4_u16(queries: [&[u16]; 4], targets: [&[u16]; 4]) -> [[u16; 4];
     // loads at offsets 0..792. All arithmetic deliberately wraps in u16.
     unsafe {
         let zero = vdupq_n_u16(0);
-        let mut acc00: uint16x8_t = zero;
-        let mut acc01: uint16x8_t = zero;
-        let mut acc02: uint16x8_t = zero;
-        let mut acc03: uint16x8_t = zero;
-        let mut acc10: uint16x8_t = zero;
-        let mut acc11: uint16x8_t = zero;
-        let mut acc12: uint16x8_t = zero;
-        let mut acc13: uint16x8_t = zero;
-        let mut acc20: uint16x8_t = zero;
-        let mut acc21: uint16x8_t = zero;
-        let mut acc22: uint16x8_t = zero;
-        let mut acc23: uint16x8_t = zero;
-        let mut acc30: uint16x8_t = zero;
-        let mut acc31: uint16x8_t = zero;
-        let mut acc32: uint16x8_t = zero;
-        let mut acc33: uint16x8_t = zero;
+        let mut acc = [[zero; 4]; N];
 
         let mut idx = 0;
         while idx < 800 {
-            let query0 = vld1q_u16(queries[0].as_ptr().add(idx));
-            let query1 = vld1q_u16(queries[1].as_ptr().add(idx));
-            let query2 = vld1q_u16(queries[2].as_ptr().add(idx));
-            let query3 = vld1q_u16(queries[3].as_ptr().add(idx));
-            let target0 = vld1q_u16(targets[0].as_ptr().add(idx));
-            let target1 = vld1q_u16(targets[1].as_ptr().add(idx));
-            let target2 = vld1q_u16(targets[2].as_ptr().add(idx));
-            let target3 = vld1q_u16(targets[3].as_ptr().add(idx));
-
-            acc00 = vmlaq_u16(acc00, query0, target0);
-            acc01 = vmlaq_u16(acc01, query0, target1);
-            acc02 = vmlaq_u16(acc02, query0, target2);
-            acc03 = vmlaq_u16(acc03, query0, target3);
-            acc10 = vmlaq_u16(acc10, query1, target0);
-            acc11 = vmlaq_u16(acc11, query1, target1);
-            acc12 = vmlaq_u16(acc12, query1, target2);
-            acc13 = vmlaq_u16(acc13, query1, target3);
-            acc20 = vmlaq_u16(acc20, query2, target0);
-            acc21 = vmlaq_u16(acc21, query2, target1);
-            acc22 = vmlaq_u16(acc22, query2, target2);
-            acc23 = vmlaq_u16(acc23, query2, target3);
-            acc30 = vmlaq_u16(acc30, query3, target0);
-            acc31 = vmlaq_u16(acc31, query3, target1);
-            acc32 = vmlaq_u16(acc32, query3, target2);
-            acc33 = vmlaq_u16(acc33, query3, target3);
-            idx += 8;
-        }
-
-        [
-            [
-                vaddvq_u16(acc00),
-                vaddvq_u16(acc01),
-                vaddvq_u16(acc02),
-                vaddvq_u16(acc03),
-            ],
-            [
-                vaddvq_u16(acc10),
-                vaddvq_u16(acc11),
-                vaddvq_u16(acc12),
-                vaddvq_u16(acc13),
-            ],
-            [
-                vaddvq_u16(acc20),
-                vaddvq_u16(acc21),
-                vaddvq_u16(acc22),
-                vaddvq_u16(acc23),
-            ],
-            [
-                vaddvq_u16(acc30),
-                vaddvq_u16(acc31),
-                vaddvq_u16(acc32),
-                vaddvq_u16(acc33),
-            ],
-        ]
-    }
-}
-
-#[cfg(target_arch = "aarch64")]
-#[inline(always)]
-fn dot_product_6x4_u16(queries: [&[u16]; 6], targets: [&[u16]; 4]) -> [[u16; 4]; 6] {
-    use std::arch::aarch64::{uint16x8_t, vaddvq_u16, vdupq_n_u16, vld1q_u16, vmlaq_u16};
-
-    debug_assert!(queries.iter().all(|query| query.len() == 800));
-    debug_assert!(targets.iter().all(|target| target.len() == 800));
-
-    // SAFETY: AArch64 guarantees Advanced SIMD. Each pointer is derived from
-    // an 800-element slice and the loop only issues unaligned-safe 8-lane
-    // loads at offsets 0..792. All arithmetic deliberately wraps in u16.
-    unsafe {
-        let zero = vdupq_n_u16(0);
-        let mut acc00: uint16x8_t = zero;
-        let mut acc01: uint16x8_t = zero;
-        let mut acc02: uint16x8_t = zero;
-        let mut acc03: uint16x8_t = zero;
-        let mut acc10: uint16x8_t = zero;
-        let mut acc11: uint16x8_t = zero;
-        let mut acc12: uint16x8_t = zero;
-        let mut acc13: uint16x8_t = zero;
-        let mut acc20: uint16x8_t = zero;
-        let mut acc21: uint16x8_t = zero;
-        let mut acc22: uint16x8_t = zero;
-        let mut acc23: uint16x8_t = zero;
-        let mut acc30: uint16x8_t = zero;
-        let mut acc31: uint16x8_t = zero;
-        let mut acc32: uint16x8_t = zero;
-        let mut acc33: uint16x8_t = zero;
-        let mut acc40: uint16x8_t = zero;
-        let mut acc41: uint16x8_t = zero;
-        let mut acc42: uint16x8_t = zero;
-        let mut acc43: uint16x8_t = zero;
-        let mut acc50: uint16x8_t = zero;
-        let mut acc51: uint16x8_t = zero;
-        let mut acc52: uint16x8_t = zero;
-        let mut acc53: uint16x8_t = zero;
-
-        let mut idx = 0;
-        while idx < 800 {
-            let query0 = vld1q_u16(queries[0].as_ptr().add(idx));
-            let query1 = vld1q_u16(queries[1].as_ptr().add(idx));
-            let query2 = vld1q_u16(queries[2].as_ptr().add(idx));
-            let query3 = vld1q_u16(queries[3].as_ptr().add(idx));
-            let query4 = vld1q_u16(queries[4].as_ptr().add(idx));
-            let query5 = vld1q_u16(queries[5].as_ptr().add(idx));
-
+            let mut query = [zero; N];
+            for (vector, source) in query.iter_mut().zip(&queries) {
+                *vector = vld1q_u16(source.as_ptr().add(idx));
+            }
             // Stream one target at a time. Keeping all four target vectors
-            // live alongside 24 accumulators and 6 query vectors would exceed
-            // the architectural SIMD register file and force stack spills.
-            let target0 = vld1q_u16(targets[0].as_ptr().add(idx));
-            acc00 = vmlaq_u16(acc00, query0, target0);
-            acc10 = vmlaq_u16(acc10, query1, target0);
-            acc20 = vmlaq_u16(acc20, query2, target0);
-            acc30 = vmlaq_u16(acc30, query3, target0);
-            acc40 = vmlaq_u16(acc40, query4, target0);
-            acc50 = vmlaq_u16(acc50, query5, target0);
-
-            let target1 = vld1q_u16(targets[1].as_ptr().add(idx));
-            acc01 = vmlaq_u16(acc01, query0, target1);
-            acc11 = vmlaq_u16(acc11, query1, target1);
-            acc21 = vmlaq_u16(acc21, query2, target1);
-            acc31 = vmlaq_u16(acc31, query3, target1);
-            acc41 = vmlaq_u16(acc41, query4, target1);
-            acc51 = vmlaq_u16(acc51, query5, target1);
-
-            let target2 = vld1q_u16(targets[2].as_ptr().add(idx));
-            acc02 = vmlaq_u16(acc02, query0, target2);
-            acc12 = vmlaq_u16(acc12, query1, target2);
-            acc22 = vmlaq_u16(acc22, query2, target2);
-            acc32 = vmlaq_u16(acc32, query3, target2);
-            acc42 = vmlaq_u16(acc42, query4, target2);
-            acc52 = vmlaq_u16(acc52, query5, target2);
-
-            let target3 = vld1q_u16(targets[3].as_ptr().add(idx));
-            acc03 = vmlaq_u16(acc03, query0, target3);
-            acc13 = vmlaq_u16(acc13, query1, target3);
-            acc23 = vmlaq_u16(acc23, query2, target3);
-            acc33 = vmlaq_u16(acc33, query3, target3);
-            acc43 = vmlaq_u16(acc43, query4, target3);
-            acc53 = vmlaq_u16(acc53, query5, target3);
+            // live alongside the accumulators and query vectors would exceed
+            // the architectural SIMD register file for the 6-wide tile and
+            // force stack spills.
+            for (lane, source) in targets.iter().enumerate() {
+                let target = vld1q_u16(source.as_ptr().add(idx));
+                for (row, query) in acc.iter_mut().zip(&query) {
+                    row[lane] = vmlaq_u16(row[lane], *query, target);
+                }
+            }
             idx += 8;
         }
 
-        [
-            [
-                vaddvq_u16(acc00),
-                vaddvq_u16(acc01),
-                vaddvq_u16(acc02),
-                vaddvq_u16(acc03),
-            ],
-            [
-                vaddvq_u16(acc10),
-                vaddvq_u16(acc11),
-                vaddvq_u16(acc12),
-                vaddvq_u16(acc13),
-            ],
-            [
-                vaddvq_u16(acc20),
-                vaddvq_u16(acc21),
-                vaddvq_u16(acc22),
-                vaddvq_u16(acc23),
-            ],
-            [
-                vaddvq_u16(acc30),
-                vaddvq_u16(acc31),
-                vaddvq_u16(acc32),
-                vaddvq_u16(acc33),
-            ],
-            [
-                vaddvq_u16(acc40),
-                vaddvq_u16(acc41),
-                vaddvq_u16(acc42),
-                vaddvq_u16(acc43),
-            ],
-            [
-                vaddvq_u16(acc50),
-                vaddvq_u16(acc51),
-                vaddvq_u16(acc52),
-                vaddvq_u16(acc53),
-            ],
-        ]
+        let mut out = [[0u16; 4]; N];
+        for (row, accs) in out.iter_mut().zip(&acc) {
+            for (value, acc) in row.iter_mut().zip(accs) {
+                *value = vaddvq_u16(*acc);
+            }
+        }
+        out
     }
 }
 
@@ -2179,26 +1981,32 @@ mod tests {
 
     #[cfg(target_arch = "aarch64")]
     #[test]
-    fn dot_product_6x4_u16_matches_scalar_wrapping_reference() {
+    fn dot_product_nx4_u16_matches_scalar_wrapping_reference() {
         const ROW_SIZE: usize = PrerotatedQueryRowMajor::ROW_SIZE;
 
-        for seed in [0, 1, 42, u64::MAX] {
+        fn check_width<const N: usize>(seed: u64) {
             let mut rng = AesRng::seed_from_u64(seed);
-            let queries: [Vec<u16>; 6] =
+            let queries: [Vec<u16>; N] =
                 std::array::from_fn(|_| (0..ROW_SIZE).map(|_| rng.next_u32() as u16).collect());
             let targets: [Vec<u16>; 4] =
                 std::array::from_fn(|_| (0..ROW_SIZE).map(|_| rng.next_u32() as u16).collect());
-            let query_refs: [&[u16]; 6] = std::array::from_fn(|idx| queries[idx].as_slice());
+            let query_refs: [&[u16]; N] = std::array::from_fn(|idx| queries[idx].as_slice());
             let target_refs: [&[u16]; 4] = std::array::from_fn(|idx| targets[idx].as_slice());
 
-            let tiled = dot_product_6x4_u16(query_refs, target_refs);
-            let reference = std::array::from_fn(|query_idx| {
+            let tiled = dot_product_nx4_u16(query_refs, target_refs);
+            let reference: [[u16; 4]; N] = std::array::from_fn(|query_idx| {
                 std::array::from_fn(|target_idx| {
                     simple_dot_product(&queries[query_idx], &targets[target_idx])
                 })
             });
 
-            assert_eq!(tiled, reference, "6x4 tile mismatch for seed {seed}");
+            assert_eq!(tiled, reference, "{N}x4 tile mismatch for seed {seed}");
+        }
+
+        for seed in [0, 1, 42, u64::MAX] {
+            check_width::<6>(seed);
+            check_width::<4>(seed);
+            check_width::<1>(seed);
         }
     }
 
