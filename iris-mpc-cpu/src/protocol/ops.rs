@@ -188,6 +188,21 @@ impl<const ROTATIONS: usize> PrerotatedQueryRowMajorView<'_, ROTATIONS> {
         amounts
     };
 
+    /// Compile-time proof that every rotation amount is a multiple of 4.
+    /// The doubled-row mixed-plane kernel addresses each rotation as an
+    /// 8-byte-aligned window plus a 4-element phase
+    /// (`mixed_scan::query_window`), which is only sound under this property.
+    const ROTATION_AMOUNTS_ARE_MULTIPLES_OF_FOUR: () = {
+        let mut i = 0;
+        while i < ROTATIONS {
+            assert!(
+                Self::ROTATION_AMOUNTS[i] % 4 == 0,
+                "rotation amounts must be multiples of 4"
+            );
+            i += 1;
+        }
+    };
+
     /// Rotate row directly into destination buffer (zero allocations).
     #[inline]
     fn rotate_row_into(src: &[u16], dst: &mut [u16], left_amount: usize) {
@@ -1463,6 +1478,9 @@ mod mixed_scan {
         row: usize,
         rotation: usize,
     ) -> *const u8 {
+        // Referencing the const forces its compile-time evaluation for this
+        // ROTATIONS instantiation.
+        const { PrerotatedQueryRowMajorView::<ROTATIONS>::ROTATION_AMOUNTS_ARE_MULTIPLES_OF_FOUR }
         let amount = PrerotatedQueryRowMajorView::<ROTATIONS>::ROTATION_AMOUNTS[rotation];
         let phase = (amount / 4) & 1;
         let aligned_amount = amount - phase * 4;

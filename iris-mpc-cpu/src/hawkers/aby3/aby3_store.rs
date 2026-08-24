@@ -49,6 +49,7 @@ use std::{
     sync::Arc,
     vec,
 };
+pub use tokio_util::task::AbortOnDropHandle;
 use tracing::instrument;
 
 mod distance_fn;
@@ -72,35 +73,6 @@ pub type RotationMatchIndices = Vec<Vec<usize>>;
 
 /// Both orientations' additive dot-product shares for one chunk.
 pub type PairDotContributions = [Vec<RingElement<u16>>; 2];
-
-/// A spawned task handle that aborts the task when dropped, so a lookahead
-/// chunk cannot keep running detached after the lane that requested it has
-/// failed or been cancelled.
-pub struct AbortOnDropHandle<T>(tokio::task::JoinHandle<T>);
-
-impl<T> AbortOnDropHandle<T> {
-    fn new(handle: tokio::task::JoinHandle<T>) -> Self {
-        Self(handle)
-    }
-}
-
-impl<T> Drop for AbortOnDropHandle<T> {
-    fn drop(&mut self) {
-        self.0.abort();
-    }
-}
-
-impl<T> std::future::Future for AbortOnDropHandle<T> {
-    type Output = std::result::Result<T, tokio::task::JoinError>;
-
-    fn poll(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Self::Output> {
-        // `JoinHandle` is `Unpin`, so projecting through the wrapper is sound.
-        std::pin::Pin::new(&mut self.get_mut().0).poll(cx)
-    }
-}
 
 /// GPU-equivalent exact-scan classification for one chunk. Thresholds are
 /// evaluated directly for all 31 rotations; no secret minimum is computed.

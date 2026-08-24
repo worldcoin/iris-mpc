@@ -2223,12 +2223,19 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
                 return Ok(0);
             }
 
+            // Build the resident representation before taking the lock; the
+            // mixed-plane interleave has no reason to run under it.
+            let resident = resolved
+                .into_iter()
+                .map(|(vector_id, iris)| (vector_id, ResidentIris::from_arc(iris, layout)))
+                .collect::<Vec<_>>();
+
             // Write directly to the shared store (not via IrisPoolHandle::insert
             // which is fire-and-forget). HNSW insertion needs the iris to be
             // visible in the store immediately after this returns.
             let mut store = iris_store.data.write().await;
-            for (vector_id, iris) in resolved {
-                store.insert(vector_id, ResidentIris::from_arc(iris, layout));
+            for (vector_id, iris) in resident {
+                store.insert(vector_id, iris);
             }
             Ok(store.set_hash.checksum())
         })

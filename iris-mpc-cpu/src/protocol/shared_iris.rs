@@ -133,10 +133,10 @@ impl GaloisRingSharedIris {
 /// original share is reconstructed exactly by [`MixedPlaneIris::to_iris`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MixedPlaneIris {
-    /// `id` of the code share (party_id + 1), preserved for reconstruction.
-    code_id: usize,
-    /// `id` of the mask share (party_id + 1), preserved for reconstruction.
-    mask_id: usize,
+    /// Share `id` (party_id + 1) of the code and mask shares, preserved for
+    /// reconstruction. Both shares of one iris always carry the same id, so
+    /// one copy is enough.
+    share_id: usize,
     /// 16 rows x 1600 bytes.
     code: Box<[u8]>,
     /// 8 rows x 1600 bytes.
@@ -164,13 +164,16 @@ fn unmix_planes(src: &[u8], dst: &mut [u16]) {
 
 impl MixedPlaneIris {
     pub fn from_iris(iris: &GaloisRingSharedIris) -> Self {
+        debug_assert_eq!(
+            iris.code.id, iris.mask.id,
+            "code and mask shares of one iris must carry the same share id"
+        );
         let mut code = vec![0u8; iris.code.coefs.len() * 2].into_boxed_slice();
         let mut mask = vec![0u8; iris.mask.coefs.len() * 2].into_boxed_slice();
         mix_planes(&iris.code.coefs, &mut code);
         mix_planes(&iris.mask.coefs, &mut mask);
         Self {
-            code_id: iris.code.id,
-            mask_id: iris.mask.id,
+            share_id: iris.code.id,
             code,
             mask,
         }
@@ -178,8 +181,8 @@ impl MixedPlaneIris {
 
     pub fn to_iris(&self) -> GaloisRingSharedIris {
         let mut iris = GaloisRingSharedIris::default_for_party(0);
-        iris.code.id = self.code_id;
-        iris.mask.id = self.mask_id;
+        iris.code.id = self.share_id;
+        iris.mask.id = self.share_id;
         unmix_planes(&self.code, &mut iris.code.coefs);
         unmix_planes(&self.mask, &mut iris.mask.coefs);
         iris
