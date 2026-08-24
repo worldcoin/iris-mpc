@@ -680,14 +680,6 @@ fn accumulate_scalar_target<const ROTATIONS: usize>(
 /// every target load is reused for `N` MLAs and the `N * 4` accumulators stay
 /// in registers. The 6-wide instantiation is the main scan tile; 4 and 1 cover
 /// the remainders of the 11/13/31-rotation schedules (6+4+1, 6+6+1, 6x5+1).
-///
-/// The compiler fully unrolls the `N`-loops: on rustc 1.94/1.95 with
-/// `target-cpu=neoverse-v2`, `N = 6` compiles to the same 37-instruction hot
-/// loop (24 mla, 10 loads, no spills) as the previously hand-unrolled kernel,
-/// and measures identically on r8g.24xlarge in kernel and full-server
-/// benchmarks. The scalar-parity test below guards the correctness of every
-/// width; keeping all widths in one function keeps their schedules identical
-/// by construction.
 #[cfg(target_arch = "aarch64")]
 #[inline(always)]
 fn dot_product_nx4_u16<const N: usize>(
