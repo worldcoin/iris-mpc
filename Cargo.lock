@@ -78,7 +78,7 @@ checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 [[package]]
 name = "ampc-actor-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=a0b968c4304c3cc15f8ac68b48dd56f503ac6e73#a0b968c4304c3cc15f8ac68b48dd56f503ac6e73"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=11bcd059f27383fc9114cd1993280b2d4ed4c040#11bcd059f27383fc9114cd1993280b2d4ed4c040"
 dependencies = [
  "aes-prng",
  "ampc-secret-sharing",
@@ -111,7 +111,7 @@ dependencies = [
 [[package]]
 name = "ampc-anon-stats"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=a0b968c4304c3cc15f8ac68b48dd56f503ac6e73#a0b968c4304c3cc15f8ac68b48dd56f503ac6e73"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=11bcd059f27383fc9114cd1993280b2d4ed4c040#11bcd059f27383fc9114cd1993280b2d4ed4c040"
 dependencies = [
  "ampc-actor-utils",
  "ampc-secret-sharing",
@@ -137,7 +137,7 @@ dependencies = [
 [[package]]
 name = "ampc-secret-sharing"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=a0b968c4304c3cc15f8ac68b48dd56f503ac6e73#a0b968c4304c3cc15f8ac68b48dd56f503ac6e73"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=11bcd059f27383fc9114cd1993280b2d4ed4c040#11bcd059f27383fc9114cd1993280b2d4ed4c040"
 dependencies = [
  "aes-prng",
  "base64",
@@ -153,7 +153,7 @@ dependencies = [
 [[package]]
 name = "ampc-server-utils"
 version = "0.1.0"
-source = "git+https://github.com/worldcoin/ampc-common.git?rev=a0b968c4304c3cc15f8ac68b48dd56f503ac6e73#a0b968c4304c3cc15f8ac68b48dd56f503ac6e73"
+source = "git+https://github.com/worldcoin/ampc-common.git?rev=11bcd059f27383fc9114cd1993280b2d4ed4c040#11bcd059f27383fc9114cd1993280b2d4ed4c040"
 dependencies = [
  "aws-sdk-secretsmanager",
  "aws-sdk-sqs",
@@ -164,6 +164,7 @@ dependencies = [
  "futures",
  "hex",
  "itertools 0.13.0",
+ "metrics",
  "reqwest",
  "serde",
  "serde_json",
@@ -2854,7 +2855,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -4585,7 +4586,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be769465445e8c1474e9c5dac2018218498557af32d9ed057325ec9a41ae81bf"
 dependencies = [
  "heck",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "log",
  "multimap",
  "once_cell",
@@ -4618,7 +4619,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn",
@@ -4736,7 +4737,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -4773,7 +4774,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.4",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.60.2",
 ]
