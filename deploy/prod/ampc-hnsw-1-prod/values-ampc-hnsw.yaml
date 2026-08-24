@@ -7,6 +7,7 @@ env:
   SMPC__DB_CHUNKS_BUCKET_NAME: "ampc-hnsw-db-exporter-store-node-1-prod--eun1-az3--x-s3"
   SMPC__GRAPH_CHECKPOINT_BUCKET_NAME: "ampc-hnsw-graph-store-node-1-prod-eu-central-1"
   SMPC__SERVICE__METRICS__PREFIX: "hnsw-1"
+  SMPC__GPU_DATABASE__SCHEMA: "SMPC_rerand_genesis_restored_v2_prod_1"
 
 initContainer:
   enabled: true
