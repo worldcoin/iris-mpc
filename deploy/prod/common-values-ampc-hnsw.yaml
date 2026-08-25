@@ -140,10 +140,10 @@ startupProbe:
 
 resources:
   limits:
-    cpu: 96
+    cpu: 92
     memory: 760Gi
   requests:
-    cpu: 96
+    cpu: 92
     memory: 760Gi
 
 imagePullSecrets:
