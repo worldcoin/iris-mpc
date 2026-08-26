@@ -59,7 +59,7 @@ env:
   SMPC__LOAD_CHUNKS_BUFFER_SIZE: "1024"
   SMPC__CLEAR_DB_BEFORE_INIT: "true"
   SMPC__INIT_DB_SIZE: "0"
-  SMPC__MAX_DB_SIZE: "20000000"
+  SMPC__MAX_DB_SIZE: "18000000"
   SMPC__FAKE_DB_SIZE: "0"
   # Linear scan serializes requests. This makes the preceding mutation visible
   # before the next scan and removes the need for intra-batch matching.
