@@ -131,6 +131,10 @@ impl ReaperConfig {
     }
 }
 
+fn format_error_chain(error: &eyre::Report) -> String {
+    format!("{error:#}")
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenvy::dotenv().ok();
@@ -186,6 +190,9 @@ async fn main() -> Result<()> {
                 }
             }
             Err(error) => {
+                // Alternate Display includes the full eyre error chain. Datadog surfaces this
+                // field, so keep the originating database/timeout error with the job context.
+                let error = format_error_chain(&error);
                 error!(table = %job.table, error = %error, "retention job failed");
                 failed = true; // keep going: one bad table shouldn't skip the others
             }
