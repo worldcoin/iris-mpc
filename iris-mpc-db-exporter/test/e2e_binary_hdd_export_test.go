@@ -214,7 +214,7 @@ func TestDBExporting(t *testing.T) {
 	reader = &persistence.FilesystemReader{}
 	writer = &persistence.FilesystemWriter{}
 
-	commands.ExportCommand(ctx, "COMPLETE_EXPORT", "test_output", *store, converter.NewBinaryConverter(cfg.SingleCodeSize, cfg.SingleMaskSize, 4, 2), writer, reader, 503, 2, 0, 200)
+	commands.ExportCommand(ctx, "COMPLETE_EXPORT", "test_output", *store, converter.NewBinaryConverter(cfg.SingleCodeSize, cfg.SingleMaskSize, 4, 2, converter.FormatLegacyLimbs), writer, reader, 503, 2, 0, 200)
 
 	files, err := getFilesWithExtension("test_output", ".bin")
 	if err != nil {

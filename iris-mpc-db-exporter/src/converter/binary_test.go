@@ -16,7 +16,7 @@ import (
 //  2. ID is placed in the first 4 bytes in BigEndian format.
 //  3. Even-odd rearrangement is correct for code and mask data.
 func TestBinaryConverter_ConvertSingle(t *testing.T) {
-	c := NewBinaryConverter(8, 4, 4, 2)
+	c := NewBinaryConverter(8, 4, 4, 2, FormatLegacyLimbs)
 
 	// Build small test data for code/mask
 	leftCode := []byte{128, 129, 130, 131, 132, 133, 134, 135} // length=8, must be even
@@ -247,4 +247,51 @@ func TestStoreAsEvenOddPairs(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Errorf("storeAsEvenOddPairs mismatch.\nGot:  % X\nWant: % X", got, want)
 	}
+}
+
+// TestBinaryConverter_ConvertSingle_PlainU16 verifies that format 2 copies the
+// database bytes (little-endian u16 shares) verbatim, framed by the BE id and
+// version id, and that the record size is identical to format 1.
+func TestBinaryConverter_ConvertSingle_PlainU16(t *testing.T) {
+	c := NewBinaryConverter(8, 4, 4, 2, FormatPlainU16)
+
+	item := iris.StoredIris{
+		ID:        42,
+		LeftCode:  []byte{128, 129, 130, 131, 132, 133, 134, 135},
+		LeftMask:  []byte{140, 141, 142, 143},
+		RightCode: []byte{150, 151, 152, 153, 154, 155, 156, 157},
+		RightMask: []byte{160, 161, 162, 163},
+		VersionID: 55,
+	}
+
+	output, err := c.ConvertSingle(item)
+	assert.NoError(t, err)
+	assert.Equal(t, c.SingleRowTotalSize, len(output))
+
+	legacy := NewBinaryConverter(8, 4, 4, 2, FormatLegacyLimbs)
+	legacyOutput, err := legacy.ConvertSingle(item)
+	assert.NoError(t, err)
+	assert.Equal(t, len(legacyOutput), len(output), "formats must have identical record sizes")
+
+	assert.Equal(t, uint32(42), binary.BigEndian.Uint32(output[0:4]))
+
+	offset := 4
+	for _, share := range [][]byte{item.LeftCode, item.LeftMask, item.RightCode, item.RightMask} {
+		assert.Equal(t, share, output[offset:offset+len(share)], "plain u16 shares must be copied verbatim")
+		offset += len(share)
+	}
+
+	assert.Equal(t, uint16(55), binary.BigEndian.Uint16(output[offset:offset+2]))
+}
+
+// TestNewBinaryConverter_RejectsUnknownFormat ensures unknown format versions
+// cannot be constructed (a wrong format would silently write undecodable
+// snapshots, since record sizes match across formats).
+func TestNewBinaryConverter_RejectsUnknownFormat(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Errorf("expected panic for unknown format version, got no panic")
+		}
+	}()
+	NewBinaryConverter(8, 4, 4, 2, 3)
 }
