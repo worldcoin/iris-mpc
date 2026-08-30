@@ -747,8 +747,8 @@ async fn init_hawk_actor(
 
     let graph_load_future = async move {
         // Install the graph via the WAL-based consensus checkpoint protocol.
-        // Falls back to an empty graph when no checkpoint row exists yet
-        // (fresh deployment or pre-checkpoint migration path).
+        // Falls back to an empty graph only on a genuine bootstrap: no
+        // checkpoint row *and* an empty iris table. Any other outcome is fatal.
         let graph_target = [
             Arc::new(RwLock::new(GraphMem::new())),
             Arc::new(RwLock::new(GraphMem::new())),
@@ -780,10 +780,25 @@ async fn init_hawk_actor(
                 })
             }
             RestartOutcome::NoCheckpoint => {
+                // No checkpoint row at all, i.e. the bootstrap path. That is
+                // only legitimate when nothing has been indexed yet: an empty
+                // graph over a populated iris table is not a degraded state we
+                // can serve from, it is an index that silently matches nothing.
+                // Refuse to start rather than come up healthy and answer every
+                // query with "no match".
+                //
+                // Recovering means giving the node a checkpoint to restart from
+                // (restore the `genesis_graph_checkpoint` row and its S3
+                // object, e.g. via `graph-mem-cli load-checkpoint`), or — if
+                // the intent really is a fresh start — clearing the iris table.
                 let db_count = iris_store.count_irises().await?;
                 if db_count != 0 {
-                    tracing::warn!(
-                        "Graph checkpoint was not found but iris store contains {db_count} entries"
+                    bail!(
+                        "No graph checkpoint was found, but the iris store contains \
+                         {db_count} entries. Starting from an empty graph would leave \
+                         those irises unindexed and every search unmatched. Restore a \
+                         checkpoint for this party, or clear the iris table if a fresh \
+                         start is intended."
                     );
                 }
                 tracing::info!("no checkpoint found, starting with empty graph");
