@@ -20,6 +20,7 @@ tracing.workspace = true
 serde_json.workspace = true
 eyre.workspace = true
 clap.workspace = true
+derive_more.workspace = true
 bytemuck.workspace = true
 hkdf.workspace = true
 sha2.workspace = true
@@ -33,6 +34,7 @@ iris-mpc-store = { path = "../iris-mpc-store" }
 itertools.workspace = true
 metrics.workspace = true
 serde = { version = "1.0.214", features = ["derive"] }
+serde_with.workspace = true
 iris-mpc-cpu.workspace = true
 chrono.workspace = true
 sqlx.workspace = true

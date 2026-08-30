@@ -1,3 +1,9 @@
+pub mod startup_phase;
+
+use crate::server::startup_phase::{
+    hash_fleet_sync_states, hash_sync_state, spawn_desync_watch,
+    wait_for_fleet_sync_state_digest_commit, Phase, StartupStateHandle,
+};
 use crate::services::aws::clients::AwsClients;
 use crate::services::processors::batch::{receive_batch_stream, spawn_db_backed_ingest_task};
 use crate::services::processors::job::{process_job_result, BatchTimings};
@@ -128,22 +134,61 @@ pub async fn server_main(config: Config) -> Result<()> {
         server_coord_config.healthcheck_ports
     );
 
+    let startup_state = StartupStateHandle::new(
+        server_coord_config.party_id,
+        hash_sync_state(&my_state),
+        config
+            .startup_hold_at_phase
+            .as_deref()
+            .map(str::parse::<Phase>)
+            .transpose()?,
+    );
+
     let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server_with_extra_routes(
         &server_coord_config,
         &mut background_tasks,
         &shutdown_handler,
         &my_state,
         Some(batch_sync_shared_state.clone()),
-        None,
+        Some(startup_state.router()),
     )
     .await;
+    startup_state.set_uuid(my_uuid.clone()).await;
     tracing::info!("Coordination server started");
 
     // Startup barriers: un-ready sync + full mutual peer visibility
     wait_for_startup_barriers(&server_coord_config, &verified_peers, &my_uuid).await?;
+    startup_state.enter(Phase::Propose).await;
 
     let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
+
+    let fleet_sync_state_digest = hash_fleet_sync_states(&sync_result.all_states)?;
+    tracing::info!(
+        "Derived startup fleet sync-state digest {} over {} parties",
+        fleet_sync_state_digest,
+        sync_result.all_states.len()
+    );
+    startup_state
+        .set_fleet_sync_state_digest(fleet_sync_state_digest)
+        .await;
+    startup_state.enter(Phase::Commit).await;
+
+    wait_for_fleet_sync_state_digest_commit(
+        &server_coord_config,
+        &verified_peers,
+        fleet_sync_state_digest,
+    )
+    .await?;
+
+    let desync_watch = spawn_desync_watch(
+        server_coord_config.clone(),
+        Arc::clone(&verified_peers),
+        Arc::clone(&shutdown_handler),
+        fleet_sync_state_digest,
+    );
+
+    startup_state.enter(Phase::Converge).await;
 
     // Handle modifications sync
     if config.enable_modifications_sync {
@@ -191,12 +236,21 @@ pub async fn server_main(config: Config) -> Result<()> {
         // apart.
         //
         // SAFETY DEPENDENCY: peers serve their SyncState from a snapshot taken
-        // at THEIR boot, so an exchanged frontier can under-report persists
-        // made after that peer booted. This is sound today only because the
-        // startup unready-gate + heartbeat teardown force full-fleet restarts
-        // (every frontier is rebuilt after its party's last commit). If
-        // coordination is ever relaxed to allow solo restarts, this exchange
-        // must move to a live DB read in the sync endpoint.
+        // at THEIR boot, so an exchanged frontier can under-report persists made
+        // after that peer booted, releasing rows the peers moved past for this
+        // party to re-form — a permanent batch divergence.
+        //
+        // This is sound not because restarts are fleet-wide (`spawn_desync_watch`
+        // deliberately lets a peer rejoin a startup in progress) but because a
+        // party only persists rows once it is serving, and the startup unready-gate
+        // (`wait_for_others_unready`) refuses to proceed alongside a peer that is
+        // already serving. Every snapshot we read therefore belongs to a party that
+        // has not persisted anything since taking it. A rejoining peer re-reads the
+        // same snapshots and requires its own SyncState to be unchanged, so it computes
+        // the frontier it would have on a cold fleet boot.
+        //
+        // If that gate is ever relaxed, this exchange must move to a live DB read
+        // in the sync endpoint.
         let fleet_frontier = sync_result.max_persisted_sequence_number();
         if let Some(frontier) = &fleet_frontier {
             let marked = iris_store
@@ -247,6 +301,9 @@ pub async fn server_main(config: Config) -> Result<()> {
         return Ok(());
     }
 
+    startup_state.enter(Phase::Load).await;
+    desync_watch.check()?;
+
     let mut hawk_actor = init_hawk_actor(
         &config,
         &aws_clients.checkpoint_s3_client,
@@ -282,6 +339,20 @@ pub async fn server_main(config: Config) -> Result<()> {
     )
     .await?;
 
+    desync_watch.check()?;
+
+    // Re-run the commit barrier before freezing the peer set. The watch records a
+    // rejoined peer's new UUID only on its next poll, so a peer that came back late
+    // in the load could still be missing from `verified_peers` — and everything
+    // downstream (the heartbeat's first-contact check, `wait_for_others_ready`)
+    // reads the frozen snapshot and kills the node on an unknown UUID.
+    wait_for_fleet_sync_state_digest_commit(
+        &server_coord_config,
+        &verified_peers,
+        fleet_sync_state_digest,
+    )
+    .await?;
+
     let verified_peers = verified_peers.lock().await.clone();
     init_heartbeat_task(
         &server_coord_config,
@@ -294,6 +365,8 @@ pub async fn server_main(config: Config) -> Result<()> {
 
     set_node_ready(is_ready_flag);
     wait_for_others_ready(&server_coord_config, verified_peers).await?;
+    startup_state.enter(Phase::Serving).await;
+    desync_watch.stop();
 
     background_tasks.check_tasks();
 
@@ -1076,7 +1149,14 @@ async fn run_main_server_loop(
                     .unwrap_or_else(|| Utc::now().format("run-%Y%m%dT%H%M%SZ").to_string());
                 let hash_prefix = hex::encode(&batch_hash[0..4]);
 
-                match guard.report().build() {
+                // Bound to a local before the `match`, not inlined into the
+                // scrutinee. `guard.report()` yields a `ReportBuilder`, which is
+                // `!Send` (it holds a `Box<dyn Fn(&mut Frames)>`), and temporaries in
+                // a match scrutinee stay alive for the whole `match` — including the
+                // `upload_file_to_s3` awaits in the arms below. That would make all
+                // of `server_main` `!Send` and unspawnable. The `;` here drops it.
+                let built = guard.report().build();
+                match built {
                     Ok(report) => {
                         if !config.pprof_profile_only {
                             let mut svg = Vec::new();

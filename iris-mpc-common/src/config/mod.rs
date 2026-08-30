@@ -341,6 +341,11 @@ pub struct Config {
     /// run can produce (hours for a full migration).
     #[serde(default = "default_genesis_sync_timeout_secs")]
     pub genesis_sync_timeout_secs: u64,
+
+    /// Test hook: park the startup sequence indefinitely on *entering* this phase,
+    /// named as in `Phase::to_string()` (`"propose"`, `"commit"`, ...).
+    #[serde(default)]
+    pub startup_hold_at_phase: Option<String>,
 }
 
 fn default_full_scan_side() -> Eye {
@@ -883,6 +888,7 @@ impl From<Config> for CommonConfig {
             graph_checkpoint_bucket_name: _,
             graph_checkpoint_bucket_region: _,
             genesis_sync_timeout_secs: _, // genesis-only operational knob, not part of the common hash
+            startup_hold_at_phase: _,     // test hook, must not enter the common hash
         } = value;
 
         assert!(
