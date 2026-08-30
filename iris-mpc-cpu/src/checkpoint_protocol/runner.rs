@@ -166,6 +166,13 @@ pub async fn sidecar_main<V: VectorStore + Send + Sync>(
                     );
                     Ok(())
                 }
+                // A one-shot fire has nowhere to retry: report the failure and
+                // let the next scheduled fire re-base off the surviving
+                // checkpoints.
+                Err(CycleError::BaseRejected(msg)) => {
+                    tracing::error!(outcome = "base_rejected", duration_secs, error = %msg, "sidecar one-shot complete");
+                    Err(eyre!("sidecar one-shot rejected its base: {msg}"))
+                }
                 Err(CycleError::Transient(msg)) => {
                     tracing::warn!(outcome = "transient", duration_secs, error = %msg, "sidecar one-shot complete");
                     Err(eyre!("sidecar one-shot transient error: {msg}"))
@@ -185,6 +192,14 @@ pub async fn sidecar_main<V: VectorStore + Send + Sync>(
             Ok(Outcome::Skipped(reason)) => {
                 tracing::debug!(?reason, "sidecar cycle skipped");
                 cfg.cycle_interval
+            }
+            // Retryable, but louder than a transient: the base it agreed on was
+            // tombstoned, so the next cycle re-bases on its own. The daemon
+            // stays up; `checkpoint_base_hash_mismatch_total` is what says a
+            // human needs to look at the rejected checkpoint.
+            Err(CycleError::BaseRejected(msg)) => {
+                tracing::error!(error = %msg, "sidecar cycle rejected its base; retrying on an older one");
+                cfg.retry_interval
             }
             Err(CycleError::Transient(msg)) => {
                 tracing::warn!(error = %msg, "sidecar cycle transient error");
@@ -345,22 +360,26 @@ pub async fn restart_from_checkpoint<V: VectorStore + Send + Sync>(
             .await
             {
                 Ok(outcome) => break outcome,
-                Err(CycleError::Transient(msg)) if attempt < RESTART_MAX_ATTEMPTS => {
+                // Retry on the same cadence for both retryable kinds: peers are
+                // meanwhile timing out their own round, so staying on one
+                // schedule keeps the ring in step. A rejected base converges
+                // because the tombstoned row is gone from the next proposal.
+                Err(err) if err.is_retryable() && attempt < RESTART_MAX_ATTEMPTS => {
                     tracing::warn!(
                         attempt,
                         max = RESTART_MAX_ATTEMPTS,
-                        error = %msg,
-                        "restart run_cycle transient; retrying"
+                        error = %err,
+                        "restart run_cycle failed retryably; retrying"
                     );
                     tokio::time::sleep(RESTART_RETRY_DELAY).await;
                 }
-                Err(CycleError::Transient(msg)) => {
+                Err(err) if err.is_retryable() => {
                     return Err(eyre!(
-                        "restart run_cycle: transient after {attempt} attempts: {msg}"
+                        "restart run_cycle: still failing after {attempt} attempts: {err}"
                     ));
                 }
-                Err(CycleError::Fatal(msg)) => {
-                    return Err(eyre!("restart run_cycle: {msg}"));
+                Err(err) => {
+                    return Err(eyre!("restart run_cycle: {err}"));
                 }
             }
         }
