@@ -3,6 +3,8 @@ image: "ghcr.io/worldcoin/iris-mpc-cpu:20d1c45bbee20672312a45101cec3b765df6f95b@
 environment: prod
 schedule: "0 11 * * *"
 
+suspend: true
+
 env:
   ENV: "prod"
   AWS_REGION: "eu-central-1"
