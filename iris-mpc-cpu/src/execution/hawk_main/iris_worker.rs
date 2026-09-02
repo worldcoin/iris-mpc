@@ -1276,7 +1276,14 @@ struct ColdStorageState {
 /// lookahead. At 38,400 bytes per eye this caps the optimization near 150 MiB,
 /// while ordinary sparse matches occupy far less.
 const COLD_PREFETCH_MAX_RECORDS: usize = 1 << 12;
-const COLD_PREFETCH_QUEUE_DEPTH: usize = 64;
+/// Sized for one command per discovering full-scan chunk; the worker merges
+/// the backlog per database read, so depth only bounds what accumulates while
+/// one read is in flight.
+const COLD_PREFETCH_QUEUE_DEPTH: usize = 4096;
+/// Rows are ~38 KiB TOASTed; split large fetches into concurrent sub-batches
+/// rather than serializing thousands of cold page reads in one statement.
+const COLD_DB_FETCH_BATCH_SIZE: usize = 512;
+const COLD_DB_FETCH_PARALLELISM: usize = 4;
 
 enum ColdPrefetchCommand {
     Fetch(Vec<VectorId>),
@@ -1571,6 +1578,33 @@ impl PendingMutations {
     }
 }
 
+/// Fetch cold-eye rows in bounded concurrent sub-batches; row order is
+/// unspecified and callers key by `vector_id`.
+async fn fetch_cold_rows(
+    store: &Store,
+    side: usize,
+    db_ids: &[i64],
+) -> Result<Vec<iris_mpc_store::DbStoredIrisEye>> {
+    if db_ids.len() <= COLD_DB_FETCH_BATCH_SIZE {
+        return store.get_iris_data_by_ids_for_side(db_ids, side).await;
+    }
+    use futures::StreamExt;
+    let sub_batches = db_ids
+        .chunks(COLD_DB_FETCH_BATCH_SIZE)
+        .map(<[i64]>::to_vec)
+        .collect_vec();
+    let mut rows = Vec::with_capacity(db_ids.len());
+    let mut batches = futures::stream::iter(sub_batches.into_iter().map(|batch| {
+        let store = store.clone();
+        async move { store.get_iris_data_by_ids_for_side(&batch, side).await }
+    }))
+    .buffer_unordered(COLD_DB_FETCH_PARALLELISM);
+    while let Some(batch) = batches.next().await {
+        rows.extend(batch?);
+    }
+    Ok(rows)
+}
+
 async fn run_cold_prefetch_worker(
     store: Store,
     side: usize,
@@ -1579,26 +1613,39 @@ async fn run_cold_prefetch_worker(
     mut rx: mpsc::Receiver<ColdPrefetchCommand>,
 ) {
     while let Some(command) = rx.recv().await {
+        let mut ids = Vec::new();
+        let mut barriers = Vec::new();
         match command {
-            ColdPrefetchCommand::Fetch(ids) => {
-                // A prefetch is only a hint. Its reservations are released on
-                // failure, so the foreground fetch repeats the read and is the
-                // path that fails closed; surfacing the error here as well
-                // would fail a batch for a transient read that the foreground
-                // would have served, and could attribute a failure from an
-                // earlier, already-abandoned scan to the next barrier.
-                if let Err(error) = prefetch_cold_irises(&store, side, party_id, &state, ids).await
-                {
-                    tracing::warn!(
-                        ?error,
-                        "Cold-eye database prefetch failed; the scan will read these records directly"
-                    );
-                    metrics::counter!("linear_scan_cold_prefetch_errors_total").increment(1);
-                }
+            ColdPrefetchCommand::Fetch(first) => ids = first,
+            ColdPrefetchCommand::Barrier(done) => barriers.push(done),
+        }
+        // Merge everything queued while the previous read was in flight into
+        // one reservation pass and one read; without this, chunk-by-chunk
+        // discovery degrades into thousands of single-row round trips.
+        // Drained barriers complete after the read, which covers every fetch
+        // enqueued before them.
+        while let Ok(command) = rx.try_recv() {
+            match command {
+                ColdPrefetchCommand::Fetch(more) => ids.extend(more),
+                ColdPrefetchCommand::Barrier(done) => barriers.push(done),
             }
-            ColdPrefetchCommand::Barrier(done) => {
-                let _ = done.send(());
+        }
+        if !ids.is_empty() {
+            metrics::histogram!("linear_scan_cold_prefetch_coalesced_records")
+                .record(ids.len() as f64);
+            // A prefetch is only a hint: on failure its reservations are
+            // released and the foreground fetch, which fails closed, repeats
+            // the read.
+            if let Err(error) = prefetch_cold_irises(&store, side, party_id, &state, ids).await {
+                tracing::warn!(
+                    ?error,
+                    "Cold-eye database prefetch failed; the scan will read these records directly"
+                );
+                metrics::counter!("linear_scan_cold_prefetch_errors_total").increment(1);
             }
+        }
+        for done in barriers {
+            let _ = done.send(());
         }
     }
 }
@@ -1658,7 +1705,7 @@ async fn prefetch_cold_irises(
         .collect_vec();
     let db_start = Instant::now();
     let fetched = async {
-        let rows = store.get_iris_data_by_ids_for_side(&db_ids, side).await?;
+        let rows = fetch_cold_rows(store, side, &db_ids).await?;
         let mut fetched = HashMap::with_capacity(rows.len());
         for row in rows {
             fetched.insert(
@@ -1872,10 +1919,18 @@ impl LocalIrisWorkerPool {
             .filter_map(|(id, value)| value.is_none().then_some(id.serial_id() as i64))
             .unique()
             .collect_vec();
-        let rows = cold
-            .store
-            .get_iris_data_by_ids_for_side(&missing_db_ids, cold.side)
-            .await?;
+        // Cache-missed records stall the scan on this read: sub-batch it and
+        // measure it (prefetch reads have their own metrics).
+        let db_start = Instant::now();
+        let rows = fetch_cold_rows(&cold.store, cold.side, &missing_db_ids).await?;
+        if !missing_db_ids.is_empty() {
+            metrics::histogram!("linear_scan_cold_foreground_db_duration")
+                .record(db_start.elapsed().as_secs_f64());
+            metrics::histogram!("linear_scan_cold_foreground_db_batch_size")
+                .record(missing_db_ids.len() as f64);
+            metrics::counter!("linear_scan_cold_foreground_db_records_total")
+                .increment(missing_db_ids.len() as u64);
+        }
         let mut fetched = HashMap::with_capacity(rows.len());
         for row in rows {
             let vector_id = row.vector_id();
