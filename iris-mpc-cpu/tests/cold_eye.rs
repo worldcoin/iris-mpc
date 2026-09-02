@@ -324,11 +324,19 @@ async fn cold_eye_coalesces_prefetch_commands_and_batches_large_fetches() -> Res
     }
     tx.commit().await?;
 
-    let cold_store = SharedIrises::to_arc(Aby3Store::<FhdOps>::new_storage(None));
+    let cold_store = SharedIrises::new(
+        HashMap::new(),
+        ResidentIris::from_arc(
+            Arc::new(GaloisRingSharedIris::default_for_party(0)),
+            ResidentLayout::U16,
+        ),
+    )
+    .to_arc();
     let cold: Arc<dyn IrisWorkerPool> = Arc::new(
         LocalIrisWorkerPool::new_cold(
-            init_workers(RIGHT, cold_store.clone(), false),
+            init_workers(RIGHT, cold_store.clone(), false, ResidentLayout::U16),
             cold_store,
+            ResidentLayout::U16,
             DistanceMode::MinRotation,
             0,
             ColdStorageInit {
