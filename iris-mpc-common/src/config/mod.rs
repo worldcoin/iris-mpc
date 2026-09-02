@@ -405,7 +405,9 @@ fn default_luc_lookback_records() -> usize {
 }
 
 fn default_cold_eye_lfu_cache_records() -> usize {
-    1 << 12
+    // ~38.4 KiB per record; 12288 costs ~460 MiB and keeps recurring
+    // broad-matcher candidates resident across requests.
+    3 << 12
 }
 
 fn default_load_chunks_max_retries() -> usize {

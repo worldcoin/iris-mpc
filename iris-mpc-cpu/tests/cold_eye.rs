@@ -288,3 +288,83 @@ async fn cold_eye_version_miss_fails_foreground_fetch_after_prefetch() -> Result
     cleanup(&postgres, &schema_name).await?;
     Ok(())
 }
+
+/// Many small prefetch commands (chunk-by-chunk discovery) plus one large
+/// mixed fetch: covers worker coalescing and both sides of the sub-batch
+/// split.
+#[tokio::test]
+async fn cold_eye_coalesces_prefetch_commands_and_batches_large_fetches() -> Result<()> {
+    const TOTAL: usize = 1200;
+    const PREFETCHED: usize = 700;
+
+    let schema_name = temporary_name();
+    let postgres =
+        PostgresClient::new(&test_db_url()?, &schema_name, AccessMode::ReadWrite).await?;
+    run_migrations(&postgres.pool, false).await?;
+    let db = Store::new(&postgres).await?;
+
+    let mut irises = Vec::with_capacity(TOTAL);
+    let mut tx = db.tx().await?;
+    for index in 0..TOTAL {
+        let mut iris = GaloisRingSharedIris::default_for_party(0);
+        iris.code.coefs[0] = index as u16;
+        iris.mask.coefs[0] = 1 + index as u16;
+        db.insert_irises(
+            &mut tx,
+            &[StoredIrisRef {
+                id: (index + 1) as i64,
+                left_code: &iris.code.coefs,
+                left_mask: &iris.mask.coefs,
+                right_code: &iris.code.coefs,
+                right_mask: &iris.mask.coefs,
+            }],
+        )
+        .await?;
+        irises.push(Arc::new(iris));
+    }
+    tx.commit().await?;
+
+    let cold_store = SharedIrises::to_arc(Aby3Store::<FhdOps>::new_storage(None));
+    let cold: Arc<dyn IrisWorkerPool> = Arc::new(
+        LocalIrisWorkerPool::new_cold(
+            init_workers(RIGHT, cold_store.clone(), false),
+            cold_store,
+            DistanceMode::MinRotation,
+            0,
+            ColdStorageInit {
+                store: db,
+                side: RIGHT,
+                luc_window_ids: Vec::new(),
+                luc_window_capacity: 0,
+                lfu_cache_capacity: 2 * TOTAL,
+            },
+        )
+        .await?,
+    );
+
+    // Many small commands, exactly as chunk-by-chunk discovery enqueues them.
+    for chunk in (0..PREFETCHED).collect::<Vec<_>>().chunks(3) {
+        cold.prefetch_irises(
+            chunk
+                .iter()
+                .map(|&index| VectorId::new((index + 1) as u32, 0))
+                .collect(),
+        )
+        .await?;
+    }
+    cold.wait_for_prefetch().await?;
+
+    // One fetch across prefetched and cold records; larger than one database
+    // sub-batch in both populations.
+    let ids = (0..TOTAL)
+        .map(|index| VectorId::new((index + 1) as u32, 0))
+        .collect::<Vec<_>>();
+    let fetched = cold.fetch_irises(ids).await?;
+    assert_eq!(fetched.len(), TOTAL);
+    for (index, (got, expected)) in fetched.iter().zip(&irises).enumerate() {
+        assert_eq!(got, expected, "record {index} must round-trip exactly");
+    }
+
+    cleanup(&postgres, &schema_name).await?;
+    Ok(())
+}
