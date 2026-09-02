@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-linear-scan:da96de54d04f7d5e214064bb582ecab9f1ca4581"
+image: "ghcr.io/worldcoin/iris-mpc-linear-scan:bead695a9a1b1d0eaa24d99da07c579ae9a1b776"
 
 environment: prod
 replicaCount: 1
@@ -79,7 +79,7 @@ env:
   SMPC__ENABLE_RECOVERY: "true"
   SMPC__LUC_ENABLED: "false"
   SMPC__LUC_LOOKBACK_RECORDS: "50"
-  SMPC__COLD_EYE_LFU_CACHE_RECORDS: "4096"
+  SMPC__COLD_EYE_LFU_CACHE_RECORDS: "12288"
   SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST: "true"
   SMPC__SERVICE__METRICS__HOST:
     valueFrom:
