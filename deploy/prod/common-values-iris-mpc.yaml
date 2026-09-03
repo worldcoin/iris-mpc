@@ -1,7 +1,7 @@
 image: "ghcr.io/worldcoin/iris-mpc:v0.32.6@sha256:99b3487eaf6e41f24770f54d60dd6e66dc249c4a4523c3c783215c28719a9970"
 
 environment: prod
-replicaCount: 0
+replicaCount: 1
 
 # Common environment variables shared across all iris-mpc nodes.
 # Defined as a map so Helm deep-merges with per-node env maps.
@@ -59,6 +59,7 @@ env:
   SMPC__ENABLE_S3_IMPORTER: "true"
   SMPC__DB_CHUNKS_FOLDER_NAME: "even_odd_with_version_id_output_16k_rerandomized"
   SMPC__LOAD_CHUNKS_PARALLELISM: "64"
+  SMPC__DB_LOAD_SAFETY_OVERLAP_SECONDS: "518000"
   SMPC__LOAD_CHUNKS_BUFFER_SIZE: "1024"
   SMPC__CLEAR_DB_BEFORE_INIT: "true"
   SMPC__INIT_DB_SIZE: "0"
