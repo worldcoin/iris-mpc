@@ -4,7 +4,7 @@ replicaCount: 1
 
 environment: prod
 
-schedule: "0 7,19 * * *"
+schedule: "40 * * * *"
 
 backoffLimit: 0
 
