@@ -1,7 +1,7 @@
 image: "ghcr.io/worldcoin/iris-mpc:v0.32.6@sha256:99b3487eaf6e41f24770f54d60dd6e66dc249c4a4523c3c783215c28719a9970"
 
 environment: prod
-replicaCount: 1
+replicaCount: 0
 
 # Common environment variables shared across all iris-mpc nodes.
 # Defined as a map so Helm deep-merges with per-node env maps.
@@ -83,6 +83,8 @@ env:
   SMPC__MATCH_DISTANCES_2D_BUFFER_SIZE: "1024"
   SMPC__ENABLE_MODIFICATIONS_SYNC: "true"
   SMPC__ENABLE_MODIFICATIONS_REPLAY: "true"
+  SMPC__FULL_SCAN_SIDE: "Left"
+  SMPC__FULL_SCAN_SIDE_SWITCHING_ENABLED: "false"
 
 strategy:
   type: Recreate
