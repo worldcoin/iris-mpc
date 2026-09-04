@@ -10,6 +10,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -41,6 +43,24 @@ func getFilesWithExtension(dir, extension string) ([]string, error) {
 	})
 
 	return files, err
+}
+
+// sortChunkFilesByStartID orders concurrently exported chunks by their numeric starting ID.
+func sortChunkFilesByStartID(files []string) error {
+	startIDs := make(map[string]int64, len(files))
+	for _, file := range files {
+		filename := filepath.Base(file)
+		startID, err := strconv.ParseInt(strings.TrimSuffix(filename, filepath.Ext(filename)), 10, 64)
+		if err != nil {
+			return fmt.Errorf("parse chunk start ID from %q: %w", filename, err)
+		}
+		startIDs[file] = startID
+	}
+
+	sort.Slice(files, func(i, j int) bool {
+		return startIDs[files[i]] < startIDs[files[j]]
+	})
+	return nil
 }
 
 type BinaryReader struct {
@@ -220,15 +240,23 @@ func TestDBExporting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to get files in test_output with extension .bin: %v", err)
 	}
+	if err := sortChunkFilesByStartID(files); err != nil {
+		t.Fatalf("failed to sort exported chunks: %v", err)
+	}
 	binaryReader := NewBinaryReader(cfg.SingleCodeSize, cfg.SingleMaskSize, 4, 2)
 
 	var exportIrises []iris.StoredIris
+	expectedID := int64(1)
 	for _, file := range files {
 		storedIrisList, err := binaryReader.Read(file)
 		if err != nil {
 			t.Fatalf("failed to read file: %v", err)
 		}
 
+		for _, storedIris := range storedIrisList {
+			assert.Equal(t, expectedID, storedIris.ID, "records in exported chunks must be ordered by ID")
+			expectedID++
+		}
 		exportIrises = append(exportIrises, storedIrisList...)
 	}
 

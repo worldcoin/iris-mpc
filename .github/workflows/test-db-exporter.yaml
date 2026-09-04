@@ -89,6 +89,11 @@ jobs:
         working-directory: iris-mpc-db-exporter
         run: godotenv -f .env.ci go test -v ./src/...
 
+      - name: Run PostgreSQL store tests
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        working-directory: iris-mpc-db-exporter
+        run: godotenv -f .env.ci go test -v test/e2e_postgres_store_test.go
+
       - name: Run e2e populate test
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         working-directory: iris-mpc-db-exporter
