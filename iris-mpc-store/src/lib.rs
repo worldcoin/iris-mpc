@@ -276,6 +276,24 @@ impl Store {
         Ok(iris)
     }
 
+    /// Stream irises by explicit serial id, without a particular order.
+    ///
+    /// Primary-key driven, so unlike [`Store::stream_irises_par`] this depends on
+    /// neither `count_irises()` nor `last_modified_at`. Ids with no row are simply
+    /// not yielded; the caller decides whether that is fatal.
+    pub fn stream_irises_by_ids<'a>(
+        &'a self,
+        ids: &'a [i64],
+    ) -> impl Stream<Item = Result<DbStoredIris>> + 'a {
+        sqlx::query_as::<_, DbStoredIris>(
+            "SELECT id, version_id, left_code, left_mask, right_code, right_mask FROM irises \
+             WHERE id = ANY($1)",
+        )
+        .bind(ids)
+        .fetch(&self.pool)
+        .map_err(Into::into)
+    }
+
     /// Stream irises in parallel, without a particular order.
     pub async fn stream_irises_par(
         &self,
@@ -1417,6 +1435,53 @@ pub mod tests {
             got_par.sort_by_key(|iris| iris.id);
             assert_eq!(got, got_par);
         }
+
+        cleanup(&postgres_client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_stream_irises_by_ids() -> Result<()> {
+        let schema_name = temporary_name();
+        let postgres_client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        run_migrations(&postgres_client.pool, false).await?;
+        let store = Store::new(&postgres_client).await?;
+
+        // Distinct left_code per row so a mixed-up id would show up as wrong content.
+        let codes: Vec<Vec<u16>> = (1..=5).map(|id| vec![id as u16, 2, 3, 4]).collect();
+        let irises = codes
+            .iter()
+            .enumerate()
+            .map(|(i, left_code)| StoredIrisRef {
+                id: i as i64 + 1,
+                left_code,
+                left_mask: &[5, 6, 7, 8],
+                right_code: &[9, 10, 11, 12],
+                right_mask: &[13, 14, 15, 16],
+            })
+            .collect::<Vec<_>>();
+        let mut tx = store.tx().await?;
+        store.insert_irises(&mut tx, &irises).await?;
+        tx.commit().await?;
+
+        // Requested ids are returned; an id with no row is skipped rather than erroring.
+        let mut got: Vec<DbStoredIris> = store
+            .stream_irises_by_ids(&[2, 4, 99])
+            .try_collect()
+            .await?;
+        got.sort_by_key(|iris| iris.id);
+        assert_eq!(got.iter().map(|i| i.id).collect::<Vec<_>>(), vec![2, 4]);
+
+        // Rows match the single-row accessor byte for byte, version_id included.
+        for iris in &got {
+            assert_eq!(*iris, store.get_iris_data_by_id(iris.id).await?);
+        }
+
+        // Empty input yields nothing.
+        let empty: Vec<DbStoredIris> = store.stream_irises_by_ids(&[]).try_collect().await?;
+        assert!(empty.is_empty());
 
         cleanup(&postgres_client, &schema_name).await?;
         Ok(())

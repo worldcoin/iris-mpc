@@ -5,7 +5,7 @@ use crate::{
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use aws_config::Region;
 use eyre::{bail, Result};
-use futures::stream::BoxStream;
+use futures::stream::{self, BoxStream};
 use futures::StreamExt;
 use iris_mpc_common::config::Config;
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
@@ -13,6 +13,10 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+
+/// Serial ids per `WHERE id = ANY($1)` round trip in the last-chance fetch below.
+/// A row is ~75 KB of code and mask blobs, so this bounds one query at ~38 MB.
+const MISSING_SERIAL_IDS_CHUNK_SIZE: usize = 512;
 
 /// Helper function to load Aurora db records from the stream into memory
 #[allow(clippy::needless_lifetimes)]
@@ -106,6 +110,7 @@ async fn load_iris_db_internal(
     let now = Instant::now();
 
     let mut record_counter = 0;
+    let mut max_missing_serial_ids_to_fetch = 16_000; // Default chunk size in iris-mpc-db-exporter
     let mut all_serial_ids: HashSet<i64> = HashSet::from_iter(1..=(max_serial_id_to_load as i64));
     actor.reserve(max_serial_id_to_load);
 
@@ -131,6 +136,9 @@ async fn load_iris_db_internal(
         // First fetch last snapshot from S3
         let last_snapshot_details =
             last_snapshot_timestamp(s3_arc.as_ref(), s3_chunks_folder_name.clone()).await?;
+
+        // When loading from S3, setting the recovery max to the chunk_size
+        max_missing_serial_ids_to_fetch = last_snapshot_details.chunk_size as usize;
 
         let min_last_modified_at = last_snapshot_details.timestamp - s3_load_safety_overlap_seconds;
         tracing::info!(
@@ -287,6 +295,29 @@ async fn load_iris_db_internal(
             .boxed();
         load_db_records_from_aurora(actor, &mut record_counter, &mut all_serial_ids, stream_db)
             .await?;
+    }
+
+    // Fetch missing IDs once before the final completeness check.
+    if !all_serial_ids.is_empty() {
+        if all_serial_ids.len() > max_missing_serial_ids_to_fetch {
+            tracing::error!(
+                "Not fetching {} missing serial_ids by id: above the {} recovery cap",
+                all_serial_ids.len(),
+                max_missing_serial_ids_to_fetch,
+            );
+        } else {
+            let missing: Vec<i64> = all_serial_ids.iter().copied().collect();
+            tracing::warn!(
+                "Initial load left {} serial_ids unloaded; fetching them by id",
+                missing.len(),
+            );
+
+            let stream_db = stream::iter(missing.chunks(MISSING_SERIAL_IDS_CHUNK_SIZE))
+                .flat_map(|ids| store.stream_irises_by_ids(ids))
+                .boxed();
+            load_db_records_from_aurora(actor, &mut record_counter, &mut all_serial_ids, stream_db)
+                .await?;
+        }
     }
 
     if !all_serial_ids.is_empty() {
