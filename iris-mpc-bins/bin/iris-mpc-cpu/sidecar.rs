@@ -157,6 +157,8 @@ fn hawk_args_from(args: &SidecarArgs, tls: Option<TlsConfig>) -> HawkArgs {
         hnsw_min_layer_search_batch_size: None,
         hnsw_prf_key: None,
         disable_persistence: true,
+        return_partial_results: false,
+        full_scan_side: ampc_anon_stats::types::Eye::Left,
         hnsw_disable_memory_persistence: true,
         tls,
         numa: false,

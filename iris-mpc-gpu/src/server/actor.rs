@@ -125,6 +125,17 @@ pub enum Orientation {
     Mirror,
 }
 
+/// Test-only snapshot of the one-sided distance caches retained for
+/// anonymized statistics.
+#[cfg(feature = "gpu_dependent")]
+#[derive(Debug, Clone)]
+pub struct AnonStatsParityBatch {
+    pub orientation: Orientation,
+    pub eyes: [Vec<OneSidedDistanceCache>; 2],
+    pub max_query_length: u64,
+    pub max_db_size: u64,
+}
+
 impl fmt::Display for Orientation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -187,6 +198,8 @@ pub struct ServerActor {
     full_scan_side_switching_enabled: bool,
     // Per-batch flag propagated from SQS to disable anonymized statistics collection and computation
     anon_stats_writer: Option<AnonStatsWriter>,
+    #[cfg(feature = "gpu_dependent")]
+    anon_stats_parity_tx: Option<mpsc::UnboundedSender<AnonStatsParityBatch>>,
 }
 
 const NON_MATCH_ID: u32 = u32::MAX;
@@ -578,7 +591,17 @@ impl ServerActor {
             full_scan_side_switching_enabled,
             both_side_match_distances_buffer,
             anon_stats_writer,
+            #[cfg(feature = "gpu_dependent")]
+            anon_stats_parity_tx: None,
         })
+    }
+
+    #[cfg(feature = "gpu_dependent")]
+    pub fn set_anon_stats_parity_capture(
+        &mut self,
+        tx: mpsc::UnboundedSender<AnonStatsParityBatch>,
+    ) {
+        self.anon_stats_parity_tx = Some(tx);
     }
 
     pub fn run(mut self) {
@@ -1643,6 +1666,20 @@ impl ServerActor {
                     one_sided_distance_cache_side1,
                 )
             };
+
+        #[cfg(feature = "gpu_dependent")]
+        if let Some(tx) = &self.anon_stats_parity_tx {
+            let _ = tx.send(AnonStatsParityBatch {
+                orientation,
+                eyes: [
+                    one_sided_distance_cache_left.clone(),
+                    one_sided_distance_cache_right.clone(),
+                ],
+                max_query_length: self.distance_comparator.query_length as u64,
+                max_db_size: self.distance_comparator.max_db_size as u64,
+            });
+        }
+
         let two_sided_match_distances = one_sided_distance_cache_left
             .into_iter()
             .zip(one_sided_distance_cache_right)

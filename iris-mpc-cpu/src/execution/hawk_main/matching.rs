@@ -376,6 +376,8 @@ struct UnresolvedJoin {
     matched_one_eye: BothEyes<VecEdges<VectorId>>,
     /// True per eye if any rotation's match results were saturated (supermatcher).
     saturated: BothEyes<bool>,
+    /// Signed matching rotations for each partial match, by eye.
+    partial_match_rotations: MapEdges<BothEyes<Vec<i8>>>,
 }
 
 impl UnresolvedJoin {
@@ -388,6 +390,8 @@ impl UnresolvedJoin {
         let mut hits_by_id: MapEdges<BothEyes<bool>> = HashMap::new();
 
         let mut saturated = [false, false];
+        let mut linear_scan_supermatch_threshold = [None, None];
+        let mut partial_match_rotations: MapEdges<BothEyes<Vec<i8>>> = HashMap::new();
         for (side, rotations) in izip!([LEFT, RIGHT], search_results) {
             // Merge matches from all rotations.
             for rotation in rotations.iter() {
@@ -402,9 +406,40 @@ impl UnresolvedJoin {
                 if matches.saturated {
                     saturated[side] = true;
                 }
+                linear_scan_supermatch_threshold[side] = linear_scan_supermatch_threshold[side]
+                    .or(rotation.classified.linear_scan_supermatch_threshold);
                 for (vector_id, _) in matches.results.iter() {
                     hits_by_id.entry(*vector_id).or_default()[side] = true;
                 }
+                for (vector_id, matching_rotations) in &rotation.classified.partial_match_rotations
+                {
+                    partial_match_rotations.entry(*vector_id).or_default()[side]
+                        .extend(matching_rotations);
+                }
+            }
+        }
+
+        let sorted_rotation_ids = partial_match_rotations
+            .keys()
+            .copied()
+            .sorted()
+            .collect_vec();
+        for id in sorted_rotation_ids {
+            let eyes = partial_match_rotations
+                .get_mut(&id)
+                .expect("rotation id was collected from the same map");
+            for rotations in eyes {
+                rotations.sort_unstable();
+                rotations.dedup();
+            }
+        }
+
+        for side in [LEFT, RIGHT] {
+            if let Some(threshold) = linear_scan_supermatch_threshold[side] {
+                let match_count = hits_by_id.values().filter(|eyes| eyes[side]).count();
+                // The CUDA actor permits exactly SUPERMATCH_THRESHOLD matches
+                // and rejects insertion only above it.
+                saturated[side] |= match_count > threshold;
             }
         }
 
@@ -429,6 +464,7 @@ impl UnresolvedJoin {
             matched_both_eyes,
             matched_one_eye,
             saturated,
+            partial_match_rotations,
         }
     }
 
@@ -453,6 +489,7 @@ impl UnresolvedJoin {
         ResolvedJoin {
             matches,
             saturated: self.saturated,
+            partial_match_rotations: self.partial_match_rotations.clone(),
         }
     }
 }
@@ -522,6 +559,7 @@ struct ResolvedJoin {
     matches: VecEdges<(VectorId, BothEyes<bool>)>,
     /// True per eye if any rotation's match results were saturated (supermatcher).
     saturated: BothEyes<bool>,
+    partial_match_rotations: MapEdges<BothEyes<Vec<i8>>>,
 }
 
 // ===========================================================================
@@ -555,6 +593,31 @@ impl RequestMatches {
 }
 
 impl ResolvedBatch {
+    /// Build the orientation placeholder used when mirror-attack detection is
+    /// disabled. It preserves request types while contributing no matches,
+    /// saturation, LUC, reauth, or intra-batch results.
+    pub fn without_matches(request_types: VecRequests<RequestType>) -> Self {
+        Self(
+            request_types
+                .into_iter()
+                .map(|request_type| ResolvedRequest {
+                    search: WithBaseline {
+                        effective: ResolvedJoin {
+                            matches: Vec::new(),
+                            saturated: [false, false],
+                            partial_match_rotations: HashMap::new(),
+                        },
+                        baseline: None,
+                    },
+                    luc_results: Vec::new(),
+                    reauth_result: None,
+                    intra_matches: Vec::new(),
+                    request_type,
+                })
+                .collect(),
+        )
+    }
+
     /// Combine both orientations and make the final decision for every request.
     ///
     /// Emulates inserting entries one by one: intra-batch matches only count if the
@@ -658,6 +721,34 @@ impl MatchResults {
             .map(|request| {
                 request
                     .select(filter, SearchVariant::Effective)
+                    .collect_vec()
+            })
+            .collect_vec()
+    }
+
+    /// Return rotation lists aligned with the supplied per-request serial IDs,
+    /// matching the legacy GPU response layout.
+    pub fn partial_match_rotation_indices(
+        &self,
+        orient: Orientation,
+        eye: usize,
+        serial_ids: &[Vec<u32>],
+    ) -> Vec<Vec<Vec<i8>>> {
+        izip!(&self.requests, serial_ids)
+            .map(|(request, serial_ids)| {
+                let resolved = match orient {
+                    Normal => &request.normal,
+                    Mirror => &request.mirror,
+                };
+                let rotations = &resolved.search.effective.partial_match_rotations;
+                serial_ids
+                    .iter()
+                    .filter_map(|serial_id| {
+                        rotations
+                            .iter()
+                            .find(|(id, _)| id.index() == *serial_id)
+                            .map(|(_, eyes)| eyes[eye].clone())
+                    })
                     .collect_vec()
             })
             .collect_vec()

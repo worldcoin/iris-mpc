@@ -43,6 +43,12 @@ const HNSW_LAYER_DENSITY: usize = 20;
 const UNIQUENESS_REQUEST_PARALLELISM: usize = 4;
 const UNIQUENESS_TEST_RNG_SEED: u64 = 0x5ca1ab1e;
 
+#[derive(Clone, Copy, Debug)]
+enum E2eBackend {
+    Hnsw,
+    LinearScan,
+}
+
 fn install_tracing() {
     // try_init: both tests live in the same binary and each call this.
     let _ = tracing_subscriber::registry()
@@ -58,6 +64,7 @@ async fn create_graph_from_plain_dbs(
     left_db: &IrisDB,
     right_db: &IrisDB,
     searcher: &HnswSearcher,
+    backend: E2eBackend,
 ) -> Result<([GraphMem; 2], [Aby3SharedIrises; 2])> {
     let mut rng = StdRng::seed_from_u64(DB_RNG_SEED);
     let left_points: HashMap<VectorId, Arc<IrisCode>> = left_db
@@ -79,30 +86,33 @@ async fn create_graph_from_plain_dbs(
     let mut left_store = PlaintextStore::<FhdOps>::with_storage(left_storage);
     let mut right_store = PlaintextStore::<FhdOps>::with_storage(right_storage);
 
-    let left_graph = left_store
-        .generate_graph(&mut rng, DB_SIZE, searcher)
-        .await?;
-    let right_graph = right_store
-        .generate_graph(&mut rng, DB_SIZE, searcher)
-        .await?;
+    let [left_mpc_graph, right_mpc_graph] = match backend {
+        E2eBackend::Hnsw => {
+            let left_graph = left_store
+                .generate_graph(&mut rng, DB_SIZE, searcher)
+                .await?;
+            let right_graph = right_store
+                .generate_graph(&mut rng, DB_SIZE, searcher)
+                .await?;
 
-    let left_graph_max_id = left_graph
-        .layers
-        .iter()
-        .filter_map(|x| x.links.keys().max())
-        .max()
-        .map(|x| *x as usize);
-    let right_graph_max_id = right_graph
-        .layers
-        .iter()
-        .filter_map(|x| x.links.keys().max())
-        .max()
-        .map(|x| *x as usize);
-    assert_eq!(Some(DB_SIZE), left_graph_max_id);
-    assert_eq!(Some(DB_SIZE), right_graph_max_id);
-
-    let left_mpc_graph: GraphMem = left_graph;
-    let right_mpc_graph: GraphMem = right_graph;
+            let left_graph_max_id = left_graph
+                .layers
+                .iter()
+                .filter_map(|x| x.links.keys().max())
+                .max()
+                .map(|x| *x as usize);
+            let right_graph_max_id = right_graph
+                .layers
+                .iter()
+                .filter_map(|x| x.links.keys().max())
+                .max()
+                .map(|x| *x as usize);
+            assert_eq!(Some(DB_SIZE), left_graph_max_id);
+            assert_eq!(Some(DB_SIZE), right_graph_max_id);
+            [left_graph, right_graph]
+        }
+        E2eBackend::LinearScan => [GraphMem::new(), GraphMem::new()],
+    };
 
     let mut left_shared_irises = HashMap::new();
     let mut right_shared_irises = HashMap::new();
@@ -160,6 +170,7 @@ async fn start_hawk_node(
     args: &HawkArgs,
     left_db: &IrisDB,
     right_db: &IrisDB,
+    backend: E2eBackend,
 ) -> Result<HawkHandle> {
     let span = info_span!("mpc_node", idx = args.party_index);
     tracing::info!("🦅 Starting Hawk node {}", args.party_index);
@@ -175,7 +186,7 @@ async fn start_hawk_node(
     searcher.layer_distribution = LayerDistribution::new_geometric_from_M(HNSW_LAYER_DENSITY);
 
     let (graph, iris_store) =
-        create_graph_from_plain_dbs(args.party_index, left_db, right_db, &searcher)
+        create_graph_from_plain_dbs(args.party_index, left_db, right_db, &searcher, backend)
             .instrument(span.clone())
             .await?;
 
@@ -195,10 +206,28 @@ async fn start_hawk_node(
         iris_store[1].db_size()
     );
 
-    let hawk_actor =
-        HawkActor::from_cli_with_graph_and_store(args, CancellationToken::new(), graph, iris_store)
+    let hawk_actor = match backend {
+        E2eBackend::Hnsw => {
+            HawkActor::from_cli_with_graph_and_store(
+                args,
+                CancellationToken::new(),
+                graph,
+                iris_store,
+            )
             .instrument(span.clone())
-            .await?;
+            .await?
+        }
+        E2eBackend::LinearScan => {
+            HawkActor::from_cli_with_graph_and_store_linear_scan(
+                args,
+                CancellationToken::new(),
+                graph,
+                iris_store,
+            )
+            .instrument(span.clone())
+            .await?
+        }
+    };
 
     let handle = HawkHandle::new(hawk_actor).instrument(span).await?;
 
@@ -222,6 +251,8 @@ fn make_args(party_index: usize, addresses: Vec<String>, request_parallelism: us
         hnsw_min_layer_search_batch_size: None,
         hnsw_prf_key: None,
         disable_persistence: false,
+        return_partial_results: true,
+        full_scan_side: ampc_anon_stats::types::Eye::Left,
         hnsw_disable_memory_persistence: false,
         tls: None,
         numa: true,
@@ -233,14 +264,15 @@ async fn spawn_three_hawk_nodes(
     db_right: &IrisDB,
     addresses: Vec<String>,
     request_parallelism: usize,
+    backend: E2eBackend,
 ) -> Result<(HawkHandle, HawkHandle, HawkHandle)> {
     let args0 = make_args(0, addresses.clone(), request_parallelism);
     let args1 = make_args(1, addresses.clone(), request_parallelism);
     let args2 = make_args(2, addresses.clone(), request_parallelism);
     let (h0, h1, h2) = tokio::join!(
-        start_hawk_node(&args0, db_left, db_right),
-        start_hawk_node(&args1, db_left, db_right),
-        start_hawk_node(&args2, db_left, db_right),
+        start_hawk_node(&args0, db_left, db_right, backend),
+        start_hawk_node(&args1, db_left, db_right, backend),
+        start_hawk_node(&args2, db_left, db_right, backend),
     );
     Ok((h0?, h1?, h2?))
 }
@@ -270,10 +302,18 @@ where
 #[ignore = "Takes long time to run, in CI this is selected in a separate step"]
 #[test]
 fn e2e_test() -> Result<()> {
-    run_async_on_big_stack("e2e_test", e2e_test_async)
+    run_async_on_big_stack("e2e_test", || e2e_test_async(E2eBackend::Hnsw, 16000))
 }
 
-async fn e2e_test_async() -> Result<()> {
+#[ignore = "Takes long time to run, in CI this is selected in a separate step"]
+#[test]
+fn e2e_linear_scan_test() -> Result<()> {
+    run_async_on_big_stack("e2e_linear_scan_test", || {
+        e2e_test_async(E2eBackend::LinearScan, 16600)
+    })
+}
+
+async fn e2e_test_async(backend: E2eBackend, base_port: u16) -> Result<()> {
     install_tracing();
 
     let test_db = generate_full_test_db(DB_SIZE, DB_RNG_SEED, false);
@@ -283,13 +323,18 @@ async fn e2e_test_async() -> Result<()> {
     assert_eq!(DB_SIZE, db_left.len());
     assert_eq!(DB_SIZE, db_right.len());
 
-    let addresses = ["127.0.0.1:16000", "127.0.0.1:16100", "127.0.0.1:16200"]
-        .into_iter()
-        .map(|s| s.to_string())
+    let addresses = (0..3)
+        .map(|party| format!("127.0.0.1:{}", base_port + party * 100))
         .collect::<Vec<_>>();
 
-    let (mut handle0, mut handle1, mut handle2) =
-        spawn_three_hawk_nodes(db_left, db_right, addresses, HAWK_REQUEST_PARALLELISM).await?;
+    let (mut handle0, mut handle1, mut handle2) = spawn_three_hawk_nodes(
+        db_left,
+        db_right,
+        addresses,
+        HAWK_REQUEST_PARALLELISM,
+        backend,
+    )
+    .await?;
 
     let mut test_case_generator = TestCaseGenerator::new_with_db(test_db, INTERNAL_RNG_SEED, true);
 
@@ -943,25 +988,39 @@ fn format_observation_row(obs: &Observation) -> String {
 #[ignore = "Takes long time to run, in CI this is selected in a separate step"]
 #[test]
 fn e2e_uniqueness_test() -> Result<()> {
-    run_async_on_big_stack("e2e_uniqueness_test", e2e_uniqueness_test_async)
+    run_async_on_big_stack("e2e_uniqueness_test", || {
+        e2e_uniqueness_test_async(E2eBackend::Hnsw, 16300)
+    })
 }
 
-async fn e2e_uniqueness_test_async() -> Result<()> {
+#[ignore = "Takes long time to run, in CI this is selected in a separate step"]
+#[test]
+fn e2e_linear_scan_uniqueness_test() -> Result<()> {
+    run_async_on_big_stack("e2e_linear_scan_uniqueness_test", || {
+        e2e_uniqueness_test_async(E2eBackend::LinearScan, 16900)
+    })
+}
+
+async fn e2e_uniqueness_test_async(backend: E2eBackend, base_port: u16) -> Result<()> {
     install_tracing();
 
     let test_db = generate_full_test_db(DB_SIZE, DB_RNG_SEED, false);
     let db_left = test_db.plain_dbs(0);
     let db_right = test_db.plain_dbs(1);
 
-    // Distinct ports from e2e_test to avoid TIME_WAIT conflicts when both run.
-    let addresses = ["127.0.0.1:16300", "127.0.0.1:16400", "127.0.0.1:16500"]
-        .into_iter()
-        .map(|s| s.to_string())
+    // Distinct ports from the randomized E2E to avoid TIME_WAIT conflicts.
+    let addresses = (0..3)
+        .map(|party| format!("127.0.0.1:{}", base_port + party * 100))
         .collect::<Vec<_>>();
 
-    let (mut h0, mut h1, mut h2) =
-        spawn_three_hawk_nodes(db_left, db_right, addresses, UNIQUENESS_REQUEST_PARALLELISM)
-            .await?;
+    let (mut h0, mut h1, mut h2) = spawn_three_hawk_nodes(
+        db_left,
+        db_right,
+        addresses,
+        UNIQUENESS_REQUEST_PARALLELISM,
+        backend,
+    )
+    .await?;
 
     let mut rng = StdRng::seed_from_u64(UNIQUENESS_TEST_RNG_SEED);
 
