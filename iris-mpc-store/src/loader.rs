@@ -5,7 +5,7 @@ use crate::{
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use aws_config::Region;
 use eyre::{bail, Result};
-use futures::stream::BoxStream;
+use futures::stream::{self, BoxStream};
 use futures::StreamExt;
 use iris_mpc_common::config::Config;
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
@@ -13,6 +13,15 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+
+/// Serial ids per `WHERE id = ANY($1)` round trip in the last-chance fetch below.
+/// A row is ~75 KB of code and mask blobs, so this bounds one query at ~38 MB.
+const MISSING_SERIAL_IDS_CHUNK_SIZE: usize = 512;
+
+/// Above this many missing serial ids, don't attempt the last-chance fetch. A gap
+/// this size means the snapshot is broken, and pulling gigabytes off the writer on
+/// every restart would not change the outcome.
+const MAX_MISSING_SERIAL_IDS_TO_FETCH: usize = 10_000;
 
 /// Helper function to load Aurora db records from the stream into memory
 #[allow(clippy::needless_lifetimes)]
@@ -287,6 +296,51 @@ async fn load_iris_db_internal(
             .boxed();
         load_db_records_from_aurora(actor, &mut record_counter, &mut all_serial_ids, stream_db)
             .await?;
+    }
+
+    // Last-chance fetch before the integrity check: whatever the S3 snapshot and the
+    // `last_modified_at` tail window both missed is requested here by serial id, which
+    // depends on neither watermark. Reached only when the alternative is a hard bail, so
+    // a failure here is logged and falls through to that bail rather than replacing it.
+    if !all_serial_ids.is_empty() {
+        if all_serial_ids.len() > MAX_MISSING_SERIAL_IDS_TO_FETCH {
+            tracing::error!(
+                "Not fetching {} missing serial_ids by id: above the {} cap, the snapshot is \
+                 likely incomplete rather than stale",
+                all_serial_ids.len(),
+                MAX_MISSING_SERIAL_IDS_TO_FETCH,
+            );
+        } else {
+            let mut missing: Vec<i64> = all_serial_ids.iter().copied().collect();
+            missing.sort_unstable();
+            tracing::warn!(
+                "S3 and tail load left {} serial_ids unloaded; fetching them by id",
+                missing.len(),
+            );
+
+            let chunks: Vec<&[i64]> = missing.chunks(MISSING_SERIAL_IDS_CHUNK_SIZE).collect();
+            // `flat_map` polls one chunk at a time, which is what we want here: the
+            // repair is bounded by the cap above, not racing for throughput.
+            let stream_db = stream::iter(chunks)
+                .flat_map(|ids| store.stream_irises_by_ids(ids))
+                .boxed();
+
+            match load_db_records_from_aurora(
+                actor,
+                &mut record_counter,
+                &mut all_serial_ids,
+                stream_db,
+            )
+            .await
+            {
+                Ok(()) => tracing::warn!(
+                    "Fetched {} missing serial_ids by id, {} still unloaded",
+                    missing.len() - all_serial_ids.len(),
+                    all_serial_ids.len(),
+                ),
+                Err(e) => tracing::error!("Failed to fetch missing serial_ids by id: {:?}", e),
+            }
+        }
     }
 
     if !all_serial_ids.is_empty() {
