@@ -37,6 +37,10 @@ type Store struct {
 	schema string
 }
 
+func storedIrisesByRangeQuery(schema string) string {
+	return fmt.Sprintf(`SELECT id, last_modified_at, left_code, left_mask, right_code, right_mask, version_id FROM "%s".irises WHERE id >= $1 AND id <= $2 ORDER BY id ASC;`, schema)
+}
+
 func NewStore(ctx context.Context, db *sql.DB, config config.Config) *Store {
 	var schema string
 	if config.ForceOverrideSchemaName {
@@ -89,7 +93,7 @@ func (s *Store) GetStoredIrisesByRange(ctx context.Context, startIndex, endIndex
 	span.SetTag("startIndex", startIndex)
 	span.SetTag("endIndex", endIndex)
 
-	query := fmt.Sprintf(`SELECT id, last_modified_at, left_code, left_mask, right_code, right_mask, version_id FROM "%s".irises WHERE id >= $1 AND id <= $2;`, s.schema)
+	query := storedIrisesByRangeQuery(s.schema)
 	rows, err := s.db.Query(query, startIndex, endIndex)
 	if err != nil {
 		o11y.S(ctx).With(zap.Error(err)).Errorf("Failed to fetch irises in range %d, %d. Error: %v", startIndex, endIndex, err)
@@ -122,7 +126,7 @@ func (s *Store) StreamStoredIrisesByRange(ctx context.Context, startIndex, endIn
 	span.SetTag("endIndex", endIndex)
 	outputChannel := make(chan StoredIris, chanBufferLen)
 
-	query := fmt.Sprintf(`SELECT id, last_modified_at, left_code, left_mask, right_code, right_mask, version_id FROM "%s".irises WHERE id >= $1 AND id <= $2;`, s.schema)
+	query := storedIrisesByRangeQuery(s.schema)
 	rows, err := s.db.Query(query, startIndex, endIndex)
 	if err != nil {
 		o11y.S(ctx).With(zap.Error(err)).Errorf("Failed to fetch irises in range %d, %d. Error: %v", startIndex, endIndex, err)
