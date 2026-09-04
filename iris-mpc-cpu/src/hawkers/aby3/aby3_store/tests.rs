@@ -50,6 +50,188 @@ fn gpu_prefilter_expands_candidate_records_to_all_rotations() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn full_rotation_threshold_scan_matches_min_distance_reference() -> Result<()> {
+    let mut rng = AesRng::seed_from_u64(0x7468_7265_7368_6f6c);
+    let vectors_and_graphs = shared_random_setup(&mut rng, 2, NetworkType::Local).await?;
+
+    let tasks = vectors_and_graphs
+        .into_iter()
+        .map(|(store, _graph)| async move {
+            let mut store = store.lock_owned().await;
+            let ids = [VectorId::from_0_index(0), VectorId::from_0_index(1)];
+            let query = store.cache_query_from_store(&ids[0]).await?;
+
+            let direct = store
+                .eval_distance_batch_full_rotation_thresholds(&query, &ids)
+                .await?;
+            let (minimums, reference_rotations) = store
+                .eval_distance_batch_full_rotations_with_rotation_matches(&query, &ids)
+                .await?;
+            let reference_anon = store.is_match_at(&minimums, Threshold::AnonStats).await?;
+            let reference_match = store.is_match_at(&minimums, Threshold::Match).await?;
+
+            let direct_anon = (0..ids.len())
+                .map(|vector| {
+                    direct
+                        .anon_stats_matches
+                        .iter()
+                        .any(|(matched_vector, _, _)| *matched_vector == vector)
+                })
+                .collect::<Vec<_>>();
+            let direct_match = direct
+                .matches
+                .iter()
+                .map(Option::is_some)
+                .collect::<Vec<_>>();
+            assert_eq!(direct_anon, reference_anon);
+            assert_eq!(direct_match, reference_match);
+            assert_eq!(direct.match_rotations, reference_rotations);
+            Ok(())
+        });
+
+    parallelize(tasks).await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fused_full_rotation_threshold_scan_matches_legacy() -> Result<()> {
+    let mut rng = AesRng::seed_from_u64(0x6675_7365_645f_6668);
+    let vectors_and_graphs = shared_random_setup(&mut rng, 3, NetworkType::Local).await?;
+
+    let tasks = vectors_and_graphs
+        .into_iter()
+        .map(|(store, _graph)| async move {
+            let mut store = store.lock_owned().await;
+            let ids = [
+                VectorId::from_0_index(0),
+                VectorId::from_0_index(1),
+                VectorId::from_0_index(2),
+            ];
+            // The self-comparison exercises candidate reconstruction, strict
+            // matching, and anonymous-statistics distance persistence; the
+            // random records exercise the dense no-match path.
+            let query = store.cache_query_from_store(&ids[0]).await?;
+            let legacy = store
+                .eval_distance_batch_full_rotation_thresholds(&query, &ids)
+                .await?;
+            let fused = store
+                .eval_distance_batch_full_rotation_thresholds_fused(&query, &ids)
+                .await?;
+            Ok((legacy, fused))
+        });
+    let results = parallelize(tasks).await?;
+
+    let open = |shares: Vec<Share<u32>>| {
+        shares
+            .into_iter()
+            .reduce(|sum, share| sum + share)
+            .expect("one share per party")
+            .get_a()
+            .convert()
+    };
+
+    for (legacy, fused) in &results {
+        assert_eq!(legacy.match_rotations, fused.match_rotations);
+        assert_eq!(legacy.matches.len(), fused.matches.len());
+        assert_eq!(
+            legacy
+                .matches
+                .iter()
+                .map(Option::is_some)
+                .collect::<Vec<_>>(),
+            fused
+                .matches
+                .iter()
+                .map(Option::is_some)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            legacy
+                .anon_stats_matches
+                .iter()
+                .map(|(vector, rotation, _)| (*vector, *rotation))
+                .collect::<Vec<_>>(),
+            fused
+                .anon_stats_matches
+                .iter()
+                .map(|(vector, rotation, _)| (*vector, *rotation))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    for vector in 0..3 {
+        let legacy_present = results[0].0.matches[vector].is_some();
+        assert!(results
+            .iter()
+            .all(|(legacy, _)| legacy.matches[vector].is_some() == legacy_present));
+        assert!(results
+            .iter()
+            .all(|(_, fused)| fused.matches[vector].is_some() == legacy_present));
+        if legacy_present {
+            let legacy_code = open(
+                results
+                    .iter()
+                    .map(|(legacy, _)| legacy.matches[vector].unwrap().code_dot)
+                    .collect(),
+            );
+            let fused_code = open(
+                results
+                    .iter()
+                    .map(|(_, fused)| fused.matches[vector].unwrap().code_dot)
+                    .collect(),
+            );
+            let legacy_mask = open(
+                results
+                    .iter()
+                    .map(|(legacy, _)| legacy.matches[vector].unwrap().mask_dot)
+                    .collect(),
+            );
+            let fused_mask = open(
+                results
+                    .iter()
+                    .map(|(_, fused)| fused.matches[vector].unwrap().mask_dot)
+                    .collect(),
+            );
+            assert_eq!((legacy_code, legacy_mask), (fused_code, fused_mask));
+        }
+    }
+
+    let anon_len = results[0].0.anon_stats_matches.len();
+    assert!(results.iter().all(|(legacy, fused)| {
+        legacy.anon_stats_matches.len() == anon_len && fused.anon_stats_matches.len() == anon_len
+    }));
+    for index in 0..anon_len {
+        let legacy_code = open(
+            results
+                .iter()
+                .map(|(legacy, _)| legacy.anon_stats_matches[index].2.code_dot)
+                .collect(),
+        );
+        let fused_code = open(
+            results
+                .iter()
+                .map(|(_, fused)| fused.anon_stats_matches[index].2.code_dot)
+                .collect(),
+        );
+        let legacy_mask = open(
+            results
+                .iter()
+                .map(|(legacy, _)| legacy.anon_stats_matches[index].2.mask_dot)
+                .collect(),
+        );
+        let fused_mask = open(
+            results
+                .iter()
+                .map(|(_, fused)| fused.anon_stats_matches[index].2.mask_dot)
+                .collect(),
+        );
+        assert_eq!((legacy_code, legacy_mask), (fused_code, fused_mask));
+    }
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_gr_hnsw() -> Result<()> {
     let mut rng = AesRng::seed_from_u64(0_u64);
     let database_size = 10;

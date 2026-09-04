@@ -632,13 +632,18 @@ pub fn bench_worker_pool(c: &mut Criterion) {
     let num_iris_codes = iris_codes.len();
     let dist = Uniform::new(0, num_iris_codes);
 
-    let points_map: HashMap<VectorId, Arc<GaloisRingSharedIris>> = HashMap::new();
+    let layout = iris_mpc_cpu::protocol::shared_iris::ResidentLayout::U16;
+    let points_map: HashMap<VectorId, iris_mpc_cpu::protocol::shared_iris::ResidentIris> =
+        HashMap::new();
     let shared_irises = SharedIrises::new(
         points_map,
-        Arc::new(GaloisRingSharedIris::default_for_party(0)),
+        iris_mpc_cpu::protocol::shared_iris::ResidentIris::from_arc(
+            Arc::new(GaloisRingSharedIris::default_for_party(0)),
+            layout,
+        ),
     )
     .to_arc();
-    let pool = init_workers(0, shared_irises, true);
+    let pool = init_workers(0, shared_irises, true, layout);
 
     // similar to numa_realloc
     for (idx, iris) in iris_codes.iter().enumerate() {
