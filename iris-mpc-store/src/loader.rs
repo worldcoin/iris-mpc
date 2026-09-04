@@ -4,7 +4,7 @@ use crate::{
 };
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use aws_config::Region;
-use eyre::{bail, Result, WrapErr};
+use eyre::{bail, Result};
 use futures::stream::{self, BoxStream};
 use futures::StreamExt;
 use iris_mpc_common::config::Config;
@@ -110,7 +110,7 @@ async fn load_iris_db_internal(
     let now = Instant::now();
 
     let mut record_counter = 0;
-    let mut max_missing_serial_ids_to_fetch = 10_000; // Aurora-only fallback.
+    let mut max_missing_serial_ids_to_fetch = 16_000; // Default chunk size in iris-mpc-db-exporter
     let mut all_serial_ids: HashSet<i64> = HashSet::from_iter(1..=(max_serial_id_to_load as i64));
     actor.reserve(max_serial_id_to_load);
 
@@ -315,18 +315,8 @@ async fn load_iris_db_internal(
             let stream_db = stream::iter(missing.chunks(MISSING_SERIAL_IDS_CHUNK_SIZE))
                 .flat_map(|ids| store.stream_irises_by_ids(ids))
                 .boxed();
-            tokio::time::timeout(
-                Duration::from_secs(120),
-                load_db_records_from_aurora(
-                    actor,
-                    &mut record_counter,
-                    &mut all_serial_ids,
-                    stream_db,
-                ),
-            )
-            .await
-            .wrap_err("Missing-ID fetch timed out after 120s")?
-            .wrap_err("Failed to fetch missing serial_ids by id")?;
+            load_db_records_from_aurora(actor, &mut record_counter, &mut all_serial_ids, stream_db)
+                .await?;
         }
     }
 
