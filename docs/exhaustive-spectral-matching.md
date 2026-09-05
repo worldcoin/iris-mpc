@@ -7,11 +7,12 @@ The original measurements used the older stack baseline
 `94e4a13a8c8a35d946989b603369da27c1dc8c87`.
 
 **Latest CPU measurements on the updated stack:** On the target AWS r8g.24xlarge,
-the packed SMMLA NTT score stage takes **90.2 ms** versus **277.7 ms** for
+the packed SMMLA NTT score stage takes **90.1 ms** versus **277.7 ms** for
 PR #2348's fused UMMLA kernel (**3.08x faster**), scanning 1,048,576 records,
-both orientations, with 85 workers pinned to CPUs 11–95. Packing and batching
-cut **22.6%** from the previous paired NTT's 116.5 ms in the same run.
-Direct NTT takes 118.1 ms and precomputed f64 FFT takes 660.3 ms. See the
+both orientations, with 85 workers pinned to CPUs 11–95. The initial packing
+and batching experiment cut **22.6%** from the previous paired NTT's 116.5 ms
+to 90.2 ms in the same run. That run measured direct NTT at 118.1 ms and
+precomputed f64 FFT at 660.3 ms. See the
 [PR description](https://github.com/worldcoin/iris-mpc/pull/2386) for the full
 performance table and methodology, and the
 [benchmark README](../iris-mpc-cpu/benches/spectral-scan/README.md) for reproduction.
@@ -281,12 +282,24 @@ instructions. It also shares target loads across orientations and query loads
 across eight records. These changes are benchmarked together, so the measured
 gain cannot be attributed solely to the instruction count.
 
-The target-machine run gives 90.17 ms versus 116.46 ms for the previous paired
+The initial target-machine run gave 90.17 ms versus 116.46 ms for the previous paired
 SIMD implementation. On 65,536 records, the new kernel takes 266.73 ms versus
 491.69 ms on one worker, and 7.76 ms versus 10.10 ms on 85 workers. The smaller
 gain at high parallelism motivates testing memory layout as well as arithmetic.
 The byte representation roundtrips every field value; 15,998 additional scalar
 oracle outputs validate the matrix kernel, full scores, and partial target tiles.
+
+A controlled follow-up compared the handwritten SMMLA loop against Rust loops
+with a single-instruction assembly wrapper. On 1,048,576 records and 85 workers,
+the pooled medians over three rounds of 31 samples were 90.229 ms handwritten
+and 90.088 ms Rust, effectively equal. On 65,536 records and one worker, three
+rounds of 15 samples gave 265.915 ms handwritten and 249.874 ms Rust (6.0% lower
+latency). Both versions used identical packing, query preparation, inverse code,
+and input allocations. The compiler unrolled the eight-record loop, kept all
+16 accumulators in registers, and introduced no matrix-loop spills. The current
+implementation therefore removes handwritten scheduling and retains only the
+SMMLA wrapper required by the supported stable Rust toolchain. These results
+do not establish that scalar Rust would automatically select matrix instructions.
 
 Two further experiments remain unmeasured: use matrix products across records
 for the inverse's public weights, and store spectral tiles contiguously with

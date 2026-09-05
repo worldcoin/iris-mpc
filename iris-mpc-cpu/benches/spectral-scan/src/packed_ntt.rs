@@ -67,7 +67,7 @@ impl Query {
 
 pub fn chunk(ntt: &Ntt, query: &Query, targets: &[Vec<i8>]) -> Vec<u16> {
     let mut out = vec![0u16; targets.len() * query.orientations * ROTATIONS * 2];
-    // Frequency products for an eight-record/two-orientation tile fit in 6.4 KiB.
+    // Frequency products for an eight-record/two-orientation tile fit in 6,400 bytes.
     let mut spectra = [[[0u16; COLS]; 2]; TILE];
     for (tile_index, tile) in targets.chunks(TILE).enumerate() {
         for (lane, offset, channels) in [(0, 0, 64), (1, CODE_LEN, 32)] {
@@ -115,6 +115,25 @@ pub fn chunk(ntt: &Ntt, query: &Query, targets: &[Vec<i8>]) -> Vec<u16> {
 // low bytes and the carry into hi. |lo|<=128 and |hi|<=50, so each i32 SMMLA
 // partial over 64 terms is at most 64*128^2 = 1,048,576 in magnitude. All four
 // byte products are required in this prime field. Recombine in i64 then mod p.
+// The SMMLA intrinsic is unstable on the supported Rust toolchain. Keep only
+// this instruction in assembly; Rust manages the loop, loads, and registers.
+#[cfg(target_arch = "aarch64")]
+#[inline(always)]
+unsafe fn smmla(
+    mut acc: std::arch::aarch64::int32x4_t,
+    a: std::arch::aarch64::int8x16_t,
+    b: std::arch::aarch64::int8x16_t,
+) -> std::arch::aarch64::int32x4_t {
+    std::arch::asm!(
+        "smmla {acc:v}.4s, {a:v}.16b, {b:v}.16b",
+        acc = inout(vreg) acc,
+        a = in(vreg) a,
+        b = in(vreg) b,
+        options(pure, nomem, nostack, preserves_flags),
+    );
+    acc
+}
+
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "i8mm")]
 unsafe fn dot_8x2(
@@ -123,102 +142,23 @@ unsafe fn dot_8x2(
     targets: [*const i8; TILE],
     blocks: usize,
 ) -> [[u16; 2]; TILE] {
-    use std::arch::asm;
-    let mut raw = [[0i32; 4]; 2 * TILE];
-    let t0 = targets[0];
-    let t1 = targets[1];
-    let t2 = targets[2];
-    let t3 = targets[3];
-    let t4 = targets[4];
-    let t5 = targets[5];
-    let t6 = targets[6];
-    let t7 = targets[7];
-    asm!(
-        "movi v0.4s, #0",
-        "movi v1.4s, #0",
-        "movi v2.4s, #0",
-        "movi v3.4s, #0",
-        "movi v4.4s, #0",
-        "movi v5.4s, #0",
-        "movi v6.4s, #0",
-        "movi v7.4s, #0",
-        "movi v8.4s, #0",
-        "movi v9.4s, #0",
-        "movi v10.4s, #0",
-        "movi v11.4s, #0",
-        "movi v12.4s, #0",
-        "movi v13.4s, #0",
-        "movi v14.4s, #0",
-        "movi v15.4s, #0",
-        "2:",
-        "ldr q16, [{low}], #16", "ldr q17, [{high}], #16",
-        "ldr q18, [{t0}], #16",
-        "ldr q19, [{t1}], #16",
-        "ldr q20, [{t2}], #16",
-        "ldr q21, [{t3}], #16",
-        "ldr q22, [{t4}], #16",
-        "ldr q23, [{t5}], #16",
-        "ldr q24, [{t6}], #16",
-        "ldr q25, [{t7}], #16",
-        "smmla v0.4s, v18.16b, v16.16b", "smmla v1.4s, v18.16b, v17.16b",
-        "smmla v2.4s, v19.16b, v16.16b", "smmla v3.4s, v19.16b, v17.16b",
-        "smmla v4.4s, v20.16b, v16.16b", "smmla v5.4s, v20.16b, v17.16b",
-        "smmla v6.4s, v21.16b, v16.16b", "smmla v7.4s, v21.16b, v17.16b",
-        "smmla v8.4s, v22.16b, v16.16b", "smmla v9.4s, v22.16b, v17.16b",
-        "smmla v10.4s, v23.16b, v16.16b", "smmla v11.4s, v23.16b, v17.16b",
-        "smmla v12.4s, v24.16b, v16.16b", "smmla v13.4s, v24.16b, v17.16b",
-        "smmla v14.4s, v25.16b, v16.16b", "smmla v15.4s, v25.16b, v17.16b",
-        "subs {blocks}, {blocks}, #1", "b.ne 2b",
-        "stp q0, q1, [{out}, #0]",
-        "stp q2, q3, [{out}, #32]",
-        "stp q4, q5, [{out}, #64]",
-        "stp q6, q7, [{out}, #96]",
-        "stp q8, q9, [{out}, #128]",
-        "stp q10, q11, [{out}, #160]",
-        "stp q12, q13, [{out}, #192]",
-        "stp q14, q15, [{out}, #224]",
-        low = inout(reg) low => _, high = inout(reg) high => _,
-        t0 = inout(reg) t0 => _,
-        t1 = inout(reg) t1 => _,
-        t2 = inout(reg) t2 => _,
-        t3 = inout(reg) t3 => _,
-        t4 = inout(reg) t4 => _,
-        t5 = inout(reg) t5 => _,
-        t6 = inout(reg) t6 => _,
-        t7 = inout(reg) t7 => _,
-        blocks = inout(reg) blocks => _, out = in(reg) raw.as_mut_ptr(),
-        out("v0") _,
-        out("v1") _,
-        out("v2") _,
-        out("v3") _,
-        out("v4") _,
-        out("v5") _,
-        out("v6") _,
-        out("v7") _,
-        out("v8") _,
-        out("v9") _,
-        out("v10") _,
-        out("v11") _,
-        out("v12") _,
-        out("v13") _,
-        out("v14") _,
-        out("v15") _,
-        out("v16") _,
-        out("v17") _,
-        out("v18") _,
-        out("v19") _,
-        out("v20") _,
-        out("v21") _,
-        out("v22") _,
-        out("v23") _,
-        out("v24") _,
-        out("v25") _,
-        options(nostack),
-    );
+    use std::arch::aarch64::{vdupq_n_s32, vld1q_s8, vst1q_s32};
+    let mut acc = [[vdupq_n_s32(0); 2]; TILE];
+    for block in 0..blocks {
+        let query_low = vld1q_s8(low.add(block * 16));
+        let query_high = vld1q_s8(high.add(block * 16));
+        for (lanes, target) in acc.iter_mut().zip(targets) {
+            let value = vld1q_s8(target.add(block * 16));
+            lanes[0] = smmla(lanes[0], value, query_low);
+            lanes[1] = smmla(lanes[1], value, query_high);
+        }
+    }
     std::array::from_fn(|t| {
+        let mut lo = [0i32; 4];
+        let mut hi = [0i32; 4];
+        vst1q_s32(lo.as_mut_ptr(), acc[t][0]);
+        vst1q_s32(hi.as_mut_ptr(), acc[t][1]);
         std::array::from_fn(|q| {
-            let lo = &raw[2 * t];
-            let hi = &raw[2 * t + 1];
             let value =
                 lo[q] as i64 + 256 * (lo[2 + q] as i64 + hi[q] as i64) + 65536 * hi[2 + q] as i64;
             value.rem_euclid(P as i64) as u16

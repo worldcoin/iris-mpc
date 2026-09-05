@@ -7,7 +7,7 @@ with precomputed f64 FFT and exact NTT representations. It also evaluates the
 proposed paired positive/negative rotation inverse, including deferred modular
 reductions and SIMD tail handling, and a packed signed-byte SMMLA spectral kernel.
 
-On the target r8g.24xlarge, the packed SMMLA NTT score stage takes **90.2 ms**
+On the target r8g.24xlarge, the initial packed SMMLA NTT score stage took **90.2 ms**
 versus **277.7 ms** for the PR kernel (**3.08x faster**) at 1,048,576
 records and both orientations. It cuts another **22.6%** from the previous
 paired NTT's 116.5 ms, with the same database payload size and exact field scores.
@@ -16,6 +16,38 @@ See the [PR description](https://github.com/worldcoin/iris-mpc/pull/2386) for
 the performance measurements, including comparisons per second and methodology.
 The paired-inverse experiment found only 1.5% improvement over direct inversion
 despite its lower multiplication count. Reproduction commands are below.
+
+## Compiler-managed SMMLA loop
+
+The current packed kernel uses Rust loops and NEON load/store intrinsics. Only
+the SMMLA instruction uses a small inline-assembly wrapper, because Rust 1.95's
+`vmmlaq_s32` intrinsic is unstable. The compiler controls register allocation,
+loads, loop unrolling, and scheduling. The handwritten kernel loop was removed
+after a controlled comparison on the same r8g.24xlarge.
+
+Both candidates used identical packing, eight-record/two-orientation tiles,
+query preparation, inverse code, worker tasks, and database allocations in one
+test binary. Three rounds rotated method order and varied four query inputs,
+with two warmups per round. The million-record run used 31 measured samples per
+round; the smaller runs used 15. The table pools the measured samples across
+rounds. Each comparison includes all 31 rotations and both code/mask scores
+for one database record and one query orientation.
+
+| Records | Workers | Handwritten (ms) | Rust (ms) | Handwritten (comp/s) | Rust (comp/s) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1,048,576 | 85 | 90.229 | 90.088 | 23,242,467 | 23,278,855 |
+| 65,536 | 1 | 265.915 | 249.874 | 492,909 | 524,552 |
+| 65,536 | 85 | 7.679 | 7.616 | 17,068,440 | 17,210,755 |
+
+The million-record result is effectively tied (0.16% lower latency with Rust);
+the one-worker result is 6.0% faster by latency. The PR #2348 baseline in the
+same million-record run took 277.707 ms, or 7,551,677 comp/s. The compiler
+unrolled the eight-target loop and kept all 16 accumulators in registers without
+spills in the matrix loop. Both candidates passed the same 15,998 additional
+scalar-oracle outputs and produced equal checksums for every timed sample.
+This supports removing handwritten scheduling while retaining the packed
+representation and matrix instructions. The experiment did not test whether
+scalar Rust alone would automatically select SMMLA.
 
 ## Workload and timing boundary
 
