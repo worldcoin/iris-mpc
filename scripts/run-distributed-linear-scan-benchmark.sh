@@ -20,6 +20,7 @@ set -euo pipefail
 #   LINEAR_SCAN_BENCH_REUSE_DB=1             # reuse the expensive seeded DB
 #   LINEAR_SCAN_BENCH_SKIP_BUILD=1           # reuse binaries already copied
 #   LINEAR_SCAN_BENCH_KEEP_RUNNING=1          # leave servers and Moto running
+#   LINEAR_SCAN_BENCH_NTT=1                 # secure migration + production NTT scan
 #   LINEAR_SCAN_BENCH_NODE_ADDRESSES=a,b,c    # override detected private IPs
 
 [[ $# -ge 3 && $# -le 4 ]] || {
@@ -39,6 +40,7 @@ CONNECTION_PARALLELISM=${LINEAR_SCAN_BENCH_CONNECTION_PARALLELISM:-16}
 TOKIO_CORES=${LINEAR_SCAN_BENCH_TOKIO_CORES:-11}
 CLIENT_RNG_SEED=${LINEAR_SCAN_BENCH_CLIENT_RNG_SEED:-8675309}
 PIPELINED_REQUESTS=${LINEAR_SCAN_BENCH_PIPELINED_REQUESTS:-0}
+NTT_SCAN=${LINEAR_SCAN_BENCH_NTT:-0}
 REMOTE_RUN_DIR=${LINEAR_SCAN_BENCH_REMOTE_RUN_DIR:-/var/tmp/iris-mpc-real-server-bench}
 COMMIT=$(git -C "$PROJECT_ROOT" rev-parse HEAD)
 REMOTE_SOURCE=${LINEAR_SCAN_BENCH_REMOTE_SOURCE:-/var/tmp/iris-mpc-source-${COMMIT}}
@@ -67,6 +69,10 @@ REMOTE_SOURCE=${LINEAR_SCAN_BENCH_REMOTE_SOURCE:-/var/tmp/iris-mpc-source-${COMM
     echo "LINEAR_SCAN_BENCH_PIPELINED_REQUESTS must be 0 or 1" >&2
     exit 2
 }
+[[ ${NTT_SCAN} =~ ^[01]$ ]] || {
+    echo "LINEAR_SCAN_BENCH_NTT must be 0 or 1" >&2
+    exit 2
+}
 [[ ${WARMUP_REQUESTS} =~ ^[0-9]+$ && ${WARMUP_REQUESTS} -lt ${REQUEST_COUNT} ]] || {
     echo "warm-up count must be non-negative and smaller than request count" >&2
     exit 2
@@ -79,6 +85,10 @@ fi
 
 SSH_OPTIONS=(-o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=30)
 SCP_OPTIONS=(-o BatchMode=yes -o ConnectTimeout=10)
+if [[ -n ${LINEAR_SCAN_BENCH_SSH_CONTROL_PATH:-} ]]; then
+    SSH_OPTIONS+=(-o "ControlPath=${LINEAR_SCAN_BENCH_SSH_CONTROL_PATH}")
+    SCP_OPTIONS+=(-o "ControlPath=${LINEAR_SCAN_BENCH_SSH_CONTROL_PATH}")
+fi
 if [[ -n ${LINEAR_SCAN_BENCH_SSH_KEY:-} ]]; then
     SSH_OPTIONS+=(-i "$LINEAR_SCAN_BENCH_SSH_KEY" -o IdentitiesOnly=yes)
     SCP_OPTIONS+=(-i "$LINEAR_SCAN_BENCH_SSH_KEY" -o IdentitiesOnly=yes)
@@ -97,12 +107,14 @@ remote_env() {
     remote "$host" env \
         "LINEAR_SCAN_BENCH_RUN_DIR=${REMOTE_RUN_DIR}" \
         "LINEAR_SCAN_BENCH_DATABASE_SIZE=${DATABASE_SIZE}" \
+        "LINEAR_SCAN_BENCH_POSTGRES_PORT=${LINEAR_SCAN_BENCH_POSTGRES_PORT:-55432}" \
         "LINEAR_SCAN_BENCH_REQUEST_COUNT=${REQUEST_COUNT}" \
         "LINEAR_SCAN_BENCH_REQUEST_PARALLELISM=${REQUEST_PARALLELISM}" \
         "LINEAR_SCAN_BENCH_CONNECTION_PARALLELISM=${CONNECTION_PARALLELISM}" \
         "LINEAR_SCAN_BENCH_TOKIO_CORES=${TOKIO_CORES}" \
         "LINEAR_SCAN_BENCH_CLIENT_RNG_SEED=${CLIENT_RNG_SEED}" \
         "LINEAR_SCAN_BENCH_PIPELINED_REQUESTS=${PIPELINED_REQUESTS}" \
+        "LINEAR_SCAN_BENCH_NTT=${NTT_SCAN}" \
         "LINEAR_SCAN_BENCH_NODE_HOSTNAMES=${NODE_HOSTNAMES_JSON}" \
         "LINEAR_SCAN_BENCH_AWS_ENDPOINT=${AWS_ENDPOINT}" \
         "LINEAR_SCAN_BENCH_SERVER_BINARY=${REMOTE_SOURCE}/target/release/iris-mpc-linear-scan" \
@@ -232,19 +244,26 @@ for party in 0 1 2; do
 done
 wait
 
+SERVERS_STARTED=true
 for party in 0 1 2; do
     remote_env "${HOSTS[$party]}" \
         "${REMOTE_SOURCE}/scripts/run-distributed-linear-scan-node.sh" start-server "$party" &
 done
 wait
-SERVERS_STARTED=true
 
 for _ in $(seq 1 7200); do
     all_ready=true
     for party in 0 1 2; do
+        ready_status=0
         remote_env "${HOSTS[$party]}" \
             "${REMOTE_SOURCE}/scripts/run-distributed-linear-scan-node.sh" status "$party" \
-            >/dev/null 2>&1 || all_ready=false
+            >/dev/null 2>&1 || ready_status=$?
+        if [[ ${ready_status} == 2 ]]; then
+            echo "party ${party} exited before becoming ready" >&2
+            remote "${HOSTS[$party]}" tail -100 "${REMOTE_RUN_DIR}/server-${party}.log" >&2
+            exit 1
+        fi
+        [[ ${ready_status} == 0 ]] || all_ready=false
     done
     [[ ${all_ready} == true ]] && break
     sleep 1
@@ -265,10 +284,13 @@ for party in 0 1 2; do
 done
 scp "${SCP_OPTIONS[@]}" "${HOSTS[0]}:${REMOTE_RUN_DIR}/client.log" \
     "${OUTPUT_DIR}/client.log"
+scp "${SCP_OPTIONS[@]}" "${HOSTS[0]}:${REMOTE_RUN_DIR}/results.json" \
+    "${OUTPUT_DIR}/client-results.json"
 
 ANALYZER_ARGS=(
     "${SCRIPT_DIR}/analyze-linear-scan-server-benchmark.py"
     --warmup-requests "$WARMUP_REQUESTS"
+    --client-results "${OUTPUT_DIR}/client-results.json"
     --json "${OUTPUT_DIR}/summary.json"
 )
 if [[ -n ${LINEAR_SCAN_BENCH_MINIMUM_CPS:-} ]]; then

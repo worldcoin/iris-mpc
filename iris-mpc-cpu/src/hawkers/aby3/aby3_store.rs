@@ -33,7 +33,7 @@ use ampc_actor_utils::protocol::{
     binary::open_bin,
     fhd_ops::{
         fhd_greater_than_anon_stats_from_galois, fhd_greater_than_threshold_pre_lifted_masks,
-        lift_fhd_mask_dots,
+        lift_fhd_mask_dots, FhdDotSharePair, FusedFhdDotShares,
     },
     ops::batch_signed_lift_vec,
 };
@@ -72,7 +72,48 @@ pub type Aby3DistanceRef<T = u32> = DistanceShare<T>;
 pub type RotationMatchIndices = Vec<Vec<usize>>;
 
 /// Both orientations' additive dot-product shares for one chunk.
-pub type PairDotContributions = [Vec<RingElement<u16>>; 2];
+pub type PairDotContributions = [FullRotationDotContributions; 2];
+
+/// Prime contributions encode only the anonymous threshold. Query and record
+/// handles allow the existing ring path to recover scores for public candidates.
+#[derive(Debug)]
+pub enum FullRotationDotContributions {
+    Ring(Vec<RingElement<u16>>),
+    Field {
+        scores: Vec<u16>,
+        query: Aby3Query,
+        vectors: Vec<VectorId>,
+    },
+}
+
+impl From<Vec<RingElement<u16>>> for FullRotationDotContributions {
+    fn from(value: Vec<RingElement<u16>>) -> Self {
+        Self::Ring(value)
+    }
+}
+
+enum RetainedDotShares {
+    Fused(FusedFhdDotShares),
+    Recover {
+        query: Aby3Query,
+        vectors: Vec<VectorId>,
+    },
+}
+
+impl RetainedDotShares {
+    fn len(&self) -> usize {
+        match self {
+            Self::Fused(dots) => dots.len(),
+            Self::Recover { vectors, .. } => vectors.len() * ROTATIONS,
+        }
+    }
+    fn select(&self, indices: &[usize]) -> Result<FhdDotSharePair> {
+        match self {
+            Self::Fused(dots) => dots.select(indices),
+            Self::Recover { .. } => eyre::bail!("prime candidates require ring score recovery"),
+        }
+    }
+}
 
 /// GPU-equivalent exact-scan classification for one chunk. Thresholds are
 /// evaluated directly for all 31 rotations; no secret minimum is computed.
@@ -644,8 +685,11 @@ where
         query: &Aby3Query,
         vectors: &[VectorId],
     ) -> Result<Vec<Share<u16>>> {
-        let ds_and_ts = self.full_rotation_dot_contributions(query, vectors).await?;
-        galois_ring_to_rep3(&mut self.session, ds_and_ts).await
+        let dots = self
+            .workers
+            .compute_dot_products_full_rotations(*query, vectors.to_vec())
+            .await?;
+        galois_ring_to_rep3(&mut self.session, dots).await
     }
 
     /// Compute the local additive dot-product contributions before refreshing
@@ -657,7 +701,7 @@ where
         &mut self,
         query: &Aby3Query,
         vectors: &[VectorId],
-    ) -> Result<Vec<RingElement<u16>>> {
+    ) -> Result<FullRotationDotContributions> {
         // This scan is neither the simple nor the min-rotation distance: it
         // opens a threshold for each of the 31 rotations separately. What it
         // does rely on is the Hawk query layout, where the cached query
@@ -669,16 +713,26 @@ where
         );
         metrics::counter!("distance_evaluations_total").increment(vectors.len() as u64);
         metrics::histogram!("distance_evaluations_batch_size").record(vectors.len() as f64);
-        self.workers
-            .compute_dot_products_full_rotations(*query, vectors.to_vec())
-            .await
+        if let Some(spectral) = self.workers.spectral() {
+            Ok(FullRotationDotContributions::Field {
+                scores: spectral.score(&[*query], vectors).await?,
+                query: *query,
+                vectors: vectors.to_vec(),
+            })
+        } else {
+            Ok(self
+                .workers
+                .compute_dot_products_full_rotations(*query, vectors.to_vec())
+                .await?
+                .into())
+        }
     }
 
     /// Dispatch both orientations' local dot contributions for one chunk as a
     /// spawned task on the worker pool. The caller can drive the previous
     /// chunk's threshold rounds while this chunk's dot products compute,
     /// keeping the dot workers fed. Each returned side is identical to a
-    /// separate [`Self::full_rotation_dot_contributions`] call; only the
+    /// separate `full_rotation_dot_contributions` call; only the
     /// worker-level target streaming is shared. This performs no network
     /// communication, so fusing and pipelining the dot passes is invisible to
     /// the MPC transcript.
@@ -706,9 +760,30 @@ where
         Ok(AbortOnDropHandle::new(tokio::spawn(async move {
             metrics::counter!("distance_evaluations_total").increment(2 * vectors.len() as u64);
             metrics::histogram!("distance_evaluations_batch_size").record(vectors.len() as f64);
-            workers
-                .compute_dot_products_full_rotations_pair(specs, vectors)
-                .await
+            if let Some(spectral) = workers.spectral() {
+                let interleaved = spectral.score(&specs, &vectors).await?;
+                let mut sides = [
+                    Vec::with_capacity(vectors.len() * ROTATIONS),
+                    Vec::with_capacity(vectors.len() * ROTATIONS),
+                ];
+                for record in interleaved.chunks_exact(ROTATIONS * 2) {
+                    sides[0].extend_from_slice(&record[..ROTATIONS]);
+                    sides[1].extend_from_slice(&record[ROTATIONS..]);
+                }
+                let mut sides = sides.into_iter();
+                Ok(std::array::from_fn(|i| {
+                    FullRotationDotContributions::Field {
+                        scores: sides.next().unwrap(),
+                        query: specs[i],
+                        vectors: vectors.clone(),
+                    }
+                }))
+            } else {
+                Ok(workers
+                    .compute_dot_products_full_rotations_pair(specs, vectors)
+                    .await?
+                    .map(Into::into))
+            }
         })))
     }
 
@@ -926,7 +1001,7 @@ impl Aby3Store<FhdOps> {
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     pub async fn eval_full_rotation_thresholds_fused_from_contributions(
         &mut self,
-        dot_contributions: Vec<RingElement<u16>>,
+        dot_contributions: impl Into<FullRotationDotContributions>,
         n_vectors: usize,
     ) -> Result<FullRotationThresholdResult> {
         self.eval_full_rotation_thresholds_fused_from_contributions_with_forced_anon_stats(
@@ -940,7 +1015,7 @@ impl Aby3Store<FhdOps> {
     #[instrument(level = "trace", target = "searcher::network", skip_all)]
     pub async fn eval_full_rotation_thresholds_fused_from_contributions_with_forced_anon_stats(
         &mut self,
-        dot_contributions: Vec<RingElement<u16>>,
+        dot_contributions: impl Into<FullRotationDotContributions>,
         n_vectors: usize,
         forced_anon_stats_vectors: &[usize],
     ) -> Result<FullRotationThresholdResult> {
@@ -953,21 +1028,40 @@ impl Aby3Store<FhdOps> {
         }
         let vectors_len = n_vectors;
         let expected_dots = vectors_len * ROTATIONS * 2;
-        eyre::ensure!(
-            dot_contributions.len() == expected_dots,
-            "full-rotation dot result has unexpected length"
-        );
-        let (anon_gt, dot_shares) =
-            fhd_greater_than_anon_stats_from_galois(&mut self.session, dot_contributions).await?;
+        let (mut anon_rotation_bits, dot_shares) = match dot_contributions.into() {
+            FullRotationDotContributions::Ring(dots) => {
+                eyre::ensure!(
+                    dots.len() == expected_dots,
+                    "full-rotation dot result has unexpected length"
+                );
+                let (bits, shares) =
+                    fhd_greater_than_anon_stats_from_galois(&mut self.session, dots).await?;
+                let accepted = open_bin(&mut self.session, &bits)
+                    .await?
+                    .into_iter()
+                    .map(|bit| !bool::from(bit))
+                    .collect::<Vec<_>>();
+                (accepted, RetainedDotShares::Fused(shares))
+            }
+            FullRotationDotContributions::Field {
+                scores,
+                query,
+                vectors,
+            } => {
+                eyre::ensure!(
+                    scores.len() == vectors_len * ROTATIONS && vectors.len() == vectors_len,
+                    "full-rotation field result has unexpected length"
+                );
+                let bits =
+                    crate::protocol::ntt::open_anon_stats_matches(&mut self.session, &scores)
+                        .await?;
+                (bits, RetainedDotShares::Recover { query, vectors })
+            }
+        };
         eyre::ensure!(
             dot_shares.len() == vectors_len * ROTATIONS,
             "fused full-rotation dot result has unexpected length"
         );
-        let mut anon_rotation_bits = open_bin(&mut self.session, &anon_gt)
-            .await?
-            .into_iter()
-            .map(|bit| !bool::from(bit))
-            .collect::<Vec<_>>();
 
         eyre::ensure!(
             anon_rotation_bits.len() == dot_shares.len(),
@@ -987,8 +1081,31 @@ impl Aby3Store<FhdOps> {
 
         let dot_count = dot_shares.len();
         let candidate_rotation_indices = gpu_candidate_rotation_indices(&anon_rotation_bits);
-        let (candidate_codes, candidate_raw_masks) =
-            dot_shares.select(&candidate_rotation_indices)?;
+        let (candidate_codes, candidate_raw_masks) = match &dot_shares {
+            RetainedDotShares::Recover { query, vectors }
+                if !candidate_rotation_indices.is_empty() =>
+            {
+                let selected = candidate_rotation_indices
+                    .chunks_exact(ROTATIONS)
+                    .map(|rotations| vectors[rotations[0] / ROTATIONS])
+                    .collect();
+                let dots = self
+                    .workers
+                    .compute_dot_products_full_rotations(*query, selected)
+                    .await?;
+                let shares = galois_ring_to_rep3(&mut self.session, dots).await?;
+                eyre::ensure!(
+                    shares.len() == 2 * candidate_rotation_indices.len(),
+                    "candidate recovery length mismatch"
+                );
+                shares
+                    .chunks_exact(2)
+                    .map(|pair| (pair[0], pair[1]))
+                    .unzip()
+            }
+            RetainedDotShares::Recover { .. } => (Vec::new(), Vec::new()),
+            _ => dot_shares.select(&candidate_rotation_indices)?,
+        };
         drop(dot_shares);
         let candidate_lifted_masks = if candidate_raw_masks.is_empty() {
             Vec::new()

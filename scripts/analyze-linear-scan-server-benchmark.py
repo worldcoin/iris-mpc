@@ -5,12 +5,9 @@ The normal and mirror searches run concurrently.  For one logical request the
 cluster therefore performs the sum of both orientations' comparisons, without
 summing the work performed redundantly by the three MPC parties.
 
-The service starts a party's cascade when that party receives its SQS message.
-When timestamps are present, report the fan-out skew separately and measure the
-synchronized MPC interval from the last party's ingress until the last party
-finishes.  This prevents a slow SNS/SQS emulator fan-out from being mistaken for
-linear-scan compute/network time while retaining an end-to-end rate that includes
-that skew.
+Cascade timestamps describe the search interval only; they cannot establish
+client ingress or result-delivery times. Client results provide independent
+monotonic SNS-publish-to-all-three-responses timings for true end-to-end rates.
 """
 
 from __future__ import annotations
@@ -44,6 +41,7 @@ def parse_args() -> argparse.Namespace:
         type=float,
         help="exit unsuccessfully when median cluster comparisons/s is lower",
     )
+    parser.add_argument("--client-results", type=Path, help="service-client results with monotonic end-to-end timings")
     parser.add_argument("--json", type=Path, help="also write the summary as JSON")
     return parser.parse_args()
 
@@ -125,7 +123,7 @@ def summarize(
     synchronized_durations = []
     end_to_end_rates = []
     end_to_end_durations = []
-    ingress_skews = []
+    cascade_start_skews = []
     comparisons_per_request = []
     for sample in range(samples):
         total_comparisons = 0
@@ -165,23 +163,23 @@ def summarize(
             if not timestamps_available:
                 break
             # Both orientations are spawned for the same request.  The first
-            # cascade to enter is the best observable party-ingress timestamp.
+            # cascade to enter is the best observable party cascade-start timestamp.
             party_starts.append(min(starts))
 
         if timestamps_available:
-            earliest_ingress = min(party_starts)
-            latest_ingress = max(party_starts)
+            earliest_cascade_start = min(party_starts)
+            latest_cascade_start = max(party_starts)
             completion = max(completion_times)
-            ingress_skew = latest_ingress - earliest_ingress
-            end_to_end_duration = completion - earliest_ingress
-            synchronized_duration = completion - latest_ingress
+            cascade_start_skew = latest_cascade_start - earliest_cascade_start
+            end_to_end_duration = completion - earliest_cascade_start
+            synchronized_duration = completion - latest_cascade_start
         else:
-            ingress_skew = 0.0
+            cascade_start_skew = 0.0
             end_to_end_duration = slowest_duration
             synchronized_duration = slowest_duration
 
         comparisons_per_request.append(total_comparisons)
-        ingress_skews.append(ingress_skew)
+        cascade_start_skews.append(cascade_start_skew)
         end_to_end_durations.append(end_to_end_duration)
         synchronized_durations.append(synchronized_duration)
         end_to_end_rates.append(total_comparisons / end_to_end_duration)
@@ -192,12 +190,12 @@ def summarize(
         "warmup_requests": warmups,
         "orientations": sorted(orientations),
         "comparisons_per_request": comparisons_per_request,
-        "ingress_skew_seconds": ingress_skews,
-        "median_ingress_skew_seconds": statistics.median(ingress_skews),
-        "max_ingress_skew_seconds": max(ingress_skews),
-        "end_to_end_elapsed_seconds": end_to_end_durations,
-        "end_to_end_comparisons_per_second": end_to_end_rates,
-        "median_end_to_end_comparisons_per_second": statistics.median(end_to_end_rates),
+        "cascade_start_skew_seconds": cascade_start_skews,
+        "median_cascade_start_skew_seconds": statistics.median(cascade_start_skews),
+        "max_cascade_start_skew_seconds": max(cascade_start_skews),
+        "cascade_elapsed_seconds": end_to_end_durations,
+        "cascade_comparisons_per_second": end_to_end_rates,
+        "median_cascade_comparisons_per_second": statistics.median(end_to_end_rates),
         "synchronized_elapsed_seconds": synchronized_durations,
         "synchronized_comparisons_per_second": synchronized_rates,
         "median_comparisons_per_second": statistics.median(synchronized_rates),
@@ -211,7 +209,8 @@ def main() -> int:
     args = parse_args()
     if args.warmup_requests < 0:
         raise ValueError("--warmup-requests must be non-negative")
-    result = summarize(load_cascades(args.logs), args.warmup_requests)
+    cascades = load_cascades(args.logs)
+    result = summarize(cascades, args.warmup_requests)
     print(
         "REAL_SERVER_BENCH_RESULT "
         f"samples={result['samples']} "
@@ -222,11 +221,68 @@ def main() -> int:
         f"{result['min_comparisons_per_second']:.3f} "
         f"max_synchronized_comparisons_per_second="
         f"{result['max_comparisons_per_second']:.3f} "
-        f"median_end_to_end_comparisons_per_second="
-        f"{result['median_end_to_end_comparisons_per_second']:.3f} "
-        f"median_ingress_skew_seconds={result['median_ingress_skew_seconds']:.6f} "
-        f"max_ingress_skew_seconds={result['max_ingress_skew_seconds']:.6f}"
+        f"median_cascade_comparisons_per_second="
+        f"{result['median_cascade_comparisons_per_second']:.3f} "
+        f"median_cascade_start_skew_seconds={result['median_cascade_start_skew_seconds']:.6f} "
+        f"max_cascade_start_skew_seconds={result['max_cascade_start_skew_seconds']:.6f}"
     )
+    if args.client_results is not None:
+        all_records = json.loads(args.client_results.read_text(encoding="utf-8"))["records"]
+        all_records.sort(key=lambda row: (row["batch_index"], row["batch_item_index"]))
+        records = all_records[args.warmup_requests:]
+        if len(records) != result["samples"]:
+            raise ValueError("client and cascade sample counts differ")
+        durations = [float(row["publish_to_all_responses_seconds"]) for row in records]
+        if any(value <= 0 for value in durations):
+            raise ValueError("client durations must be positive")
+        rates = [count / duration for count, duration in zip(result["comparisons_per_request"], durations)]
+        result.update(
+            client_end_to_end_elapsed_seconds=durations,
+            client_end_to_end_comparisons_per_second=rates,
+            median_client_end_to_end_comparisons_per_second=statistics.median(rates),
+            median_client_end_to_end_seconds=statistics.median(durations),
+            client_prepare_to_all_responses_seconds=[row["prepare_to_all_responses_seconds"] for row in records],
+            client_timing_scope="SNS publish start to all three result responses; includes queueing and persistence",
+        )
+        print("REAL_SERVER_CLIENT_E2E_RESULT "
+              f"samples={len(durations)} median_seconds={statistics.median(durations):.6f} "
+              f"median_comparisons_per_second={statistics.median(rates):.3f}")
+        if len(all_records) > 1 and len({row["batch_index"] for row in all_records}) == 1:
+            # A pipelined batch shares one monotonic publish-start timestamp.
+            # Work/individual response latency is not throughput under queueing:
+            # measure the completed work between the warm-up and final response.
+            warmup_end = max(
+                (float(row["publish_to_all_responses_seconds"])
+                 for row in all_records[:args.warmup_requests]), default=0.0
+            )
+            if any(duration <= warmup_end for duration in durations):
+                raise ValueError("retained responses overlap the warm-up completion boundary")
+            window = max(durations) - warmup_end
+            throughput = sum(result["comparisons_per_request"]) / window
+            all_comparisons = sum(summarize(cascades, 0)["comparisons_per_request"])
+            publish_duration = max(float(row["publish_to_all_responses_seconds"]) for row in all_records)
+            prepare_duration = max(float(row["prepare_to_all_responses_seconds"]) for row in all_records)
+            result.update(
+                client_queued_completion_window_seconds=window,
+                client_queued_comparisons_per_second=throughput,
+                client_queued_timing_scope=(
+                    "all-party completion of the warm-up through all-party completion "
+                    "of the final queued request; includes persistence and delivery"
+                ),
+                client_entire_burst_comparisons=all_comparisons,
+                client_entire_burst_publish_seconds=publish_duration,
+                client_entire_burst_publish_comparisons_per_second=all_comparisons / publish_duration,
+                client_entire_burst_prepare_seconds=prepare_duration,
+                client_entire_burst_prepare_comparisons_per_second=all_comparisons / prepare_duration,
+            )
+            print("REAL_SERVER_CLIENT_QUEUED_RESULT "
+                  f"samples={len(durations)} seconds={window:.6f} "
+                  f"comparisons_per_second={throughput:.3f}")
+            print("REAL_SERVER_CLIENT_ENTIRE_BURST_RESULT "
+                  f"requests={len(all_records)} publish_seconds={publish_duration:.6f} "
+                  f"publish_comparisons_per_second={all_comparisons / publish_duration:.3f} "
+                  f"prepare_seconds={prepare_duration:.6f} "
+                  f"prepare_comparisons_per_second={all_comparisons / prepare_duration:.3f}")
     if args.json is not None:
         args.json.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
     if (

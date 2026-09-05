@@ -12,9 +12,9 @@ use crate::{
     },
     hawkers::aby3::aby3_store::{
         Aby3DistanceRef, Aby3Query, Aby3Store, DistanceOps, FullRotationThresholdResult,
+        PairDotContributions,
     },
     hnsw::{graph::UpdateEntryPoint, GraphMem, HnswSearcher},
-    shares::RingElement,
 };
 use ampc_anon_stats::types::Eye;
 use eyre::{OptionExt, Result};
@@ -1103,7 +1103,7 @@ async fn linear_scan_full_stage_paired<const ROTMASK: u32>(
                         Some(handle) => handle
                             .await
                             .map_err(|error| eyre::eyre!("fused dot task failed: {error}"))??,
-                        None => [Vec::new(), Vec::new()],
+                        None => [Vec::new().into(), Vec::new().into()],
                     };
                     if do_match {
                         if let Some(next) = batch.get(index + DOT_PIPELINE_DEPTH) {
@@ -1768,7 +1768,7 @@ async fn per_linear_scan_chunk_pair(
     search_params: [&SearchParams; 2],
     stores: (&mut Aby3Store<HawkOps>, &mut Aby3Store<HawkOps>),
     graph_stores: (&GraphMem, &GraphMem),
-    contributions: [Vec<RingElement<u16>>; 2],
+    contributions: PairDotContributions,
     vector_ids: &[VectorId],
     forced_anon_stats_ids: &[VectorId],
 ) -> Result<[HawkInsertPlan; 2]> {

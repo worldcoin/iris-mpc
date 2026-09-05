@@ -837,8 +837,25 @@ async fn init_hawk_actor(
     // Exact-scan pools store irises in the mixed-plane layout on CPUs with
     // the UMMLA kernel; HNSW pools keep plain ArcIris values.
     let resident_layout = HawkActor::resident_layout_for(search_mode);
+    // Explicit rollout switch so the integrated implementation and its baseline
+    // can be compared with the same server binary and production configuration.
+    let use_ntt = match std::env::var("IRIS_MPC_CPU_NTT") {
+        Err(std::env::VarError::NotPresent) => false,
+        Ok(value) if value == "0" => false,
+        Ok(value) if value == "1" => true,
+        _ => bail!("IRIS_MPC_CPU_NTT must be 0 or 1"),
+    };
+    eyre::ensure!(
+        !use_ntt || search_mode == HawkSearchMode::LinearScan,
+        "NTT is supported only for exact CPU linear scan"
+    );
+    let make_initializer = if use_ntt {
+        LocalWorkerPoolInitializer::new_spectral_from_db
+    } else {
+        LocalWorkerPoolInitializer::new_load_from_db
+    };
     let initializer: Box<dyn WorkerPoolInitializer> = Box::new(
-        LocalWorkerPoolInitializer::new_load_from_db(
+        make_initializer(
             hawk_args.party_index,
             HAWK_DISTANCE_MODE,
             hawk_args.numa,
@@ -927,8 +944,28 @@ async fn init_hawk_actor(
         Ok((r, networking))
     };
 
-    let (initialized, (graph, networking)) =
+    let (initialized, (graph, mut networking)) =
         tokio::try_join!(initializer.initialize(), graph_load_future)?;
+    if use_ntt {
+        let side = match config.full_scan_side {
+            ampc_anon_stats::types::Eye::Left => 0,
+            ampc_anon_stats::types::Eye::Right => 1,
+        };
+        let spectral = initialized.pools[side]
+            .spectral()
+            .ok_or_else(|| eyre!("missing spectral resident pool"))?;
+        let ids = initialized.registries[side].read().await.live_vector_ids();
+        let (mut sessions, _migration_errors) = networking.make_sessions().await?;
+        // Bound conversion buffers and DB transactions independently of the
+        // much larger number of per-request search sessions.
+        let count = sessions.len().min(48);
+        let migration_sessions = sessions.drain(..count).collect();
+        spectral.initialize(migration_sessions, ids).await?;
+        // All peers finish their writes before changing network generations or
+        // accepting a query. Keep idle sessions alive until the phase barrier.
+        networking.control_channel().await?.sync().await?;
+        drop(sessions);
+    }
     tracing::info!(
         "Loaded both iris and graph DBs into memory in {:?}",
         now.elapsed()

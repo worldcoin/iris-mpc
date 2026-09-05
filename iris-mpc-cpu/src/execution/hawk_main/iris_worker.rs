@@ -1,3 +1,4 @@
+use crate::protocol::ntt::{score_chunk, SpectralIris, SpectralQuery};
 use crate::{
     execution::hawk_main::HAWK_MIN_DIST_ROTATIONS,
     hawkers::aby3::aby3_store::DistanceMode,
@@ -65,6 +66,12 @@ fn default_full_rotation_task_size() -> NonZeroUsize {
 /// to return the result to the caller.
 #[derive(Debug)]
 enum IrisTask {
+    SpectralDotProductBatch {
+        query: Arc<SpectralQuery>,
+        targets: Arc<Vec<Arc<SpectralIris>>>,
+        range: std::ops::Range<usize>,
+        rsp: oneshot::Sender<Vec<u16>>,
+    },
     /// A synchronization barrier to ensure all preceding tasks in the channel are completed.
     Sync { rsp: oneshot::Sender<()> },
     /// Reallocates an `ArcIris` to NUMA-local memory.
@@ -177,6 +184,32 @@ pub struct IrisPoolHandle {
 }
 
 impl IrisPoolHandle {
+    /// Use the same pinned CPUs and 256-record task scheduling as the baseline.
+    pub(super) async fn spectral_dot_products(
+        &self,
+        query: Arc<SpectralQuery>,
+        targets: Vec<Arc<SpectralIris>>,
+    ) -> Result<Vec<u16>> {
+        let targets = Arc::new(targets);
+        let size = default_full_rotation_task_size().get();
+        let mut responses = Vec::with_capacity(targets.len().div_ceil(size));
+        for start in (0..targets.len()).step_by(size) {
+            let (rsp, rx) = oneshot::channel();
+            self.get_next_worker()
+                .send(IrisTask::SpectralDotProductBatch {
+                    query: query.clone(),
+                    targets: targets.clone(),
+                    range: start..(start + size).min(targets.len()),
+                    rsp,
+                })?;
+            responses.push(rx);
+        }
+        Ok(try_join_all(responses)
+            .await?
+            .into_iter()
+            .flatten()
+            .collect())
+    }
     pub fn numa_realloc(&self, iris: ArcIris) -> Result<oneshot::Receiver<ArcIris>> {
         let (tx, rx) = oneshot::channel();
         let task = IrisTask::Realloc { iris, rsp: tx };
@@ -641,6 +674,15 @@ fn worker_thread(
 ) {
     while let Ok(task) = ch.recv() {
         match task {
+            IrisTask::SpectralDotProductBatch {
+                query,
+                targets,
+                range,
+                rsp,
+            } => {
+                let targets: Vec<_> = targets[range].iter().map(Arc::as_ref).collect();
+                let _ = rsp.send(score_chunk(&query, &targets));
+            }
             IrisTask::Realloc { iris, rsp } => {
                 // Re-allocate from this thread.
                 // This attempts to use the NUMA-aware first-touch policy of the OS.
@@ -996,6 +1038,10 @@ pub const CENTER_ROTATION: usize = 15;
 /// - **insert_irises**: persist cached iris into the worker's store
 /// - **evict_queries**: free cached query data
 pub trait IrisWorkerPool: Debug + Send + Sync {
+    /// Present only for a securely migrated resident spectral eye.
+    fn spectral(&self) -> Option<&Arc<super::spectral::SpectralState>> {
+        None
+    }
     /// Cache query irises for subsequent computation.
     ///
     /// The worker performs the full preprocessing pipeline on each iris:
@@ -1132,6 +1178,9 @@ pub trait IrisWorkerPool: Debug + Send + Sync {
 /// `Arc<dyn IrisWorkerPool>`) can be passed wherever an `impl IrisWorkerPool`
 /// or `&dyn IrisWorkerPool` is expected.
 impl<T: ?Sized + IrisWorkerPool> IrisWorkerPool for Arc<T> {
+    fn spectral(&self) -> Option<&Arc<super::spectral::SpectralState>> {
+        (**self).spectral()
+    }
     fn cache_queries<'a>(&'a self, queries: Vec<(QueryId, ArcIris)>) -> BoxFuture<'a, Result<()>> {
         (**self).cache_queries(queries)
     }
@@ -1235,6 +1284,7 @@ struct CachedQuery {
 /// both normal and mirrored preprocessed variants).
 #[derive(Clone)]
 pub struct LocalIrisWorkerPool {
+    spectral: Option<Arc<super::spectral::SpectralState>>,
     inner: IrisPoolHandle,
     query_cache: Arc<RwLock<HashMap<QueryId, CachedQuery>>>,
     iris_store: SharedIrisesRef<ResidentIris>,
@@ -1773,6 +1823,15 @@ impl Debug for LocalIrisWorkerPool {
 }
 
 impl LocalIrisWorkerPool {
+    /// The raw backing must remain bounded when the full eye is spectral.
+    pub fn with_spectral(mut self, state: Arc<super::spectral::SpectralState>) -> Result<Self> {
+        eyre::ensure!(
+            self.cold_storage.is_some(),
+            "spectral eye requires database-backed raw shares"
+        );
+        self.spectral = Some(state);
+        Ok(self)
+    }
     pub fn new(
         inner: IrisPoolHandle,
         iris_store: SharedIrisesRef<ResidentIris>,
@@ -1782,6 +1841,7 @@ impl LocalIrisWorkerPool {
     ) -> Self {
         Self {
             inner,
+            spectral: None,
             query_cache: Arc::new(RwLock::new(HashMap::new())),
             iris_store,
             layout,
@@ -1860,6 +1920,7 @@ impl LocalIrisWorkerPool {
 
         Ok(Self {
             inner,
+            spectral: None,
             query_cache: Arc::new(RwLock::new(HashMap::new())),
             iris_store,
             layout,
@@ -1978,6 +2039,9 @@ fn zip_rotations(
 }
 
 impl IrisWorkerPool for LocalIrisWorkerPool {
+    fn spectral(&self) -> Option<&Arc<super::spectral::SpectralState>> {
+        self.spectral.as_ref()
+    }
     fn cache_queries<'a>(&'a self, queries: Vec<(QueryId, ArcIris)>) -> BoxFuture<'a, Result<()>> {
         let query_cache = self.query_cache.clone();
         let inner = self.inner.clone();
@@ -2286,7 +2350,11 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
         let iris_store = self.iris_store.clone();
         let cold_storage = self.cold_storage.clone();
         let layout = self.layout;
+        let spectral = self.spectral.clone();
         Box::pin(async move {
+            if let Some(spectral) = spectral {
+                spectral.insert(&inserts).await?;
+            }
             // Resolve query IDs to irises (release cache lock before await).
             let resolved: Vec<_> = {
                 let cache = query_cache.read().unwrap();
@@ -2398,6 +2466,9 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
 
     fn evict_queries<'a>(&'a self, query_ids: Vec<QueryId>) -> BoxFuture<'a, Result<()>> {
         let query_cache = self.query_cache.clone();
+        if let Some(spectral) = &self.spectral {
+            spectral.evict(&query_ids);
+        }
         Box::pin(async move {
             let mut cache = query_cache.write().unwrap();
             for qid in query_ids {
@@ -2412,7 +2483,11 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
         let party_id = self.party_id;
         let cold_storage = self.cold_storage.clone();
         let layout = self.layout;
+        let spectral = self.spectral.clone();
         Box::pin(async move {
+            if let Some(spectral) = spectral {
+                spectral.delete(&ids).await?;
+            }
             let dummy = Arc::new(GaloisRingSharedIris::dummy_for_party(party_id));
             if let Some(cold) = cold_storage {
                 let mut state = cold.state.write().await;

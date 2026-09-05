@@ -14,6 +14,7 @@ use crate::protocol::shared_iris::{GaloisRingSharedIris, ResidentIris, ResidentL
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use async_trait::async_trait;
 use eyre::Result;
+use futures::TryStreamExt;
 use iris_mpc_common::config::Config;
 use iris_mpc_common::helpers::inmemory_store::InMemoryStore;
 use iris_mpc_common::VectorId;
@@ -57,6 +58,9 @@ pub enum LocalInitMode {
     Seeded(BothEyes<Aby3SharedIrises>),
     /// Run `load_iris_db` against empty stores.
     LoadFromDb(DbLoadParams),
+    /// Metadata and bounded raw caches only; the spectral eye is populated by
+    /// the coordinated migration after networking is initialized.
+    LoadSpectralFromDb(DbLoadParams),
 }
 
 pub struct LocalWorkerPoolInitializer {
@@ -71,6 +75,20 @@ pub struct LocalWorkerPoolInitializer {
 }
 
 impl LocalWorkerPoolInitializer {
+    pub fn new_spectral_from_db(
+        party_id: usize,
+        distance_mode: DistanceMode,
+        numa: bool,
+        params: DbLoadParams,
+    ) -> Self {
+        Self {
+            party_id,
+            distance_mode,
+            numa,
+            mode: LocalInitMode::LoadSpectralFromDb(params),
+            layout: ResidentLayout::U16,
+        }
+    }
     pub fn new_empty(party_id: usize, distance_mode: DistanceMode, numa: bool) -> Self {
         Self {
             party_id,
@@ -129,6 +147,13 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
             layout,
         } = *self;
 
+        let mode = match mode {
+            LocalInitMode::LoadSpectralFromDb(params) => {
+                return initialize_spectral_backing(party_id, distance_mode, numa, params).await;
+            }
+            other => other,
+        };
+
         // Materialize the iris stores. `Seeded` installs caller-provided
         // stores; the rest start blank.
         let iris_stores: BothEyes<SharedIrisesRef<ResidentIris>> = match &mode {
@@ -153,6 +178,7 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
         // allocates `next_id` per eye, so sharing one Arc would advance
         // both eyes' ids on every insert.
         let registries: BothEyes<VectorIdRegistryRef> = match mode {
+            LocalInitMode::LoadSpectralFromDb(_) => unreachable!("handled before materialization"),
             LocalInitMode::Empty => [
                 SharedIrises::<()>::default().to_arc(),
                 SharedIrises::<()>::default().to_arc(),
@@ -358,6 +384,69 @@ impl InMemoryStore for FanoutLoader {
             "FanoutLoader is only used for LoadFromDb; load_iris_db never invokes fake_db"
         );
     }
+}
+
+/// Read only IDs at startup. Both raw eyes use the same bounded cache machinery;
+/// the selected eye additionally receives a resident spectral store.
+async fn initialize_spectral_backing(
+    party_id: usize,
+    distance_mode: DistanceMode,
+    numa: bool,
+    params: DbLoadParams,
+) -> Result<InitializedWorkers> {
+    use super::spectral::SpectralState;
+    let side = params
+        .resident_side
+        .ok_or_else(|| eyre::eyre!("NTT mode requires a fixed full-scan eye"))?;
+    eyre::ensure!(side < 2, "invalid spectral full-scan side");
+    let mut registry = SharedIrises::<()>::default();
+    let mut rows = sqlx::query_as::<_, (i64, i16)>("SELECT id, version_id FROM irises ORDER BY id")
+        .fetch(&params.store.pool);
+    while let Some((id, version)) = rows.try_next().await? {
+        registry.insert(VectorId::new(u32::try_from(id)?, version), ());
+    }
+    let luc_capacity = if params.config.luc_enabled && params.config.luc_lookback_records > 0 {
+        params.config.luc_lookback_records + 1
+    } else {
+        0
+    };
+    let luc_ids = registry.last_vector_ids(luc_capacity);
+    let registries = [registry.clone().to_arc(), registry.to_arc()];
+    let mut pools = Vec::with_capacity(2);
+    for eye in [LEFT, RIGHT] {
+        let raw = Aby3Store::<HawkOps>::new_storage(None)
+            .map_values(|iris| ResidentIris::from_arc(iris, ResidentLayout::U16))
+            .to_arc();
+        let workers = init_workers(eye, raw.clone(), numa, ResidentLayout::U16);
+        let mut pool = LocalIrisWorkerPool::new_cold(
+            workers.clone(),
+            raw,
+            ResidentLayout::U16,
+            distance_mode,
+            party_id,
+            ColdStorageInit {
+                store: params.store.clone(),
+                side: eye,
+                luc_window_ids: luc_ids.clone(),
+                luc_window_capacity: luc_capacity,
+                lfu_cache_capacity: params.config.cold_eye_lfu_cache_records,
+            },
+        )
+        .await?;
+        if eye == side {
+            pool = pool.with_spectral(Arc::new(SpectralState::new(
+                params.store.clone(),
+                eye,
+                party_id,
+                workers,
+            )))?;
+        }
+        pools.push(Arc::new(pool) as Arc<dyn IrisWorkerPool>);
+    }
+    let pools = pools
+        .try_into()
+        .map_err(|_| eyre::eyre!("expected two iris worker pools"))?;
+    Ok(InitializedWorkers { pools, registries })
 }
 
 #[cfg(test)]

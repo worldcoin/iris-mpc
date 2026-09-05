@@ -104,6 +104,10 @@ name = "linear_scan_dot_cpu"
 harness = false
 
 [[bench]]
+name = "linear_scan_ntt_cpu"
+harness = false
+
+[[bench]]
 name = "linear_scan_candidates"
 harness = false
 

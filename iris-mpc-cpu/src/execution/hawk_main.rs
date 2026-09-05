@@ -184,6 +184,7 @@ mod rot;
 pub(crate) mod scheduler;
 pub(crate) mod search;
 mod session_groups;
+pub mod spectral;
 pub mod state_check;
 pub mod worker_pool_initializer;
 use is_match_batch::is_match_batch;
@@ -2272,6 +2273,16 @@ impl HawkHandle {
         // Cache all queries in both worker pools. cache_queries handles the full
         // pipeline: NUMA realloc → mirror → preprocess → all_rotations.
         request.cache_into(&hawk_actor.worker_pools).await?;
+        // Reuse one idle search session for the request's one-time private
+        // conversion, before concurrent chunk work starts on those sessions.
+        for side in [LEFT, RIGHT] {
+            if let Some(spectral) = hawk_actor.worker_pools[side].spectral() {
+                let mut store = sessions.for_search[0][side][0].aby3_store.write().await;
+                spectral
+                    .cache_queries(&mut store.session, &request.all_queries_for_cache())
+                    .await?;
+            }
+        }
 
         // All deletions in a batch are applied at the beginning of batch processing
         // This is consistent with the GPU code's handling of deletions
