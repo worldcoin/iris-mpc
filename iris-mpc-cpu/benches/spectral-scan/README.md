@@ -1,5 +1,12 @@
 # Exhaustive spectral matching on CPU
 
+This directory measures local kernels. The [integrated CPU server](../../../docs/cpu-ntt-scan.md)
+uses F_52201 with a direct anonymous-threshold MPC circuit, private database
+migration, persistence, and production matching. This directory retains the
+original F_25601 local-kernel experiments; `linear_scan_ntt_cpu` benchmarks the
+current production kernel. Its
+end-to-end performance must be measured separately.
+
 This standalone benchmark is based on [PR #2348](https://github.com/worldcoin/iris-mpc/pull/2348),
 commit `42cdb2ad0e41fea8c0e35d933ac02f54b065619b`, on branch
 `codex/cpu-spectral-ntt-smmla`. It compares the PR's actual fused UMMLA score kernel

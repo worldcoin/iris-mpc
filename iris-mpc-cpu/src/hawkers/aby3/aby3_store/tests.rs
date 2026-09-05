@@ -94,6 +94,100 @@ async fn full_rotation_threshold_scan_matches_min_distance_reference() -> Result
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn spectral_thresholds_and_retained_distances_match_production_ring() -> Result<()> {
+    use crate::protocol::ntt::{convert_irises, score_chunk, SpectralIris, SpectralQuery};
+    let mut rng = AesRng::seed_from_u64(0x4e54_545f_454e_4432);
+    let parties = shared_random_setup(&mut rng, 3, NetworkType::Local).await?;
+    let results = parallelize(parties.into_iter().map(|(store, _)| async move {
+        let mut store = store.lock_owned().await;
+        let ids: Vec<_> = (0..3).map(VectorId::from_0_index).collect();
+        let raw = store.workers.fetch_irises(ids.clone()).await?;
+        let field = convert_irises(
+            &mut store.session,
+            &raw.iter().map(Arc::as_ref).collect::<Vec<_>>(),
+        )
+        .await?;
+        let db: Vec<_> = field.iter().map(SpectralIris::prepare).collect();
+        let mut outputs = Vec::new();
+        for mirrored in [false, true] {
+            let mut query = store.cache_query_from_store(&ids[0]).await?;
+            query.mirrored = mirrored;
+            let original = store.full_rotation_dot_contributions(&query, &ids).await?;
+            let reference = store
+                .eval_full_rotation_thresholds_fused_from_contributions_with_forced_anon_stats(
+                    original,
+                    ids.len(),
+                    &[2],
+                )
+                .await?;
+            let field_query = if mirrored {
+                field[0].mirrored()
+            } else {
+                field[0].clone()
+            };
+            let prepared =
+                SpectralQuery::prepare(&[&field_query], store.session.own_role().index());
+            let scores = score_chunk(&prepared, &db.iter().collect::<Vec<_>>());
+            let actual = store
+                .eval_full_rotation_thresholds_fused_from_contributions_with_forced_anon_stats(
+                    FullRotationDotContributions::Field {
+                        scores,
+                        query,
+                        vectors: ids.clone(),
+                    },
+                    ids.len(),
+                    &[2],
+                )
+                .await?;
+            assert_eq!(reference.match_rotations, actual.match_rotations);
+            assert_eq!(
+                reference
+                    .matches
+                    .iter()
+                    .map(Option::is_some)
+                    .collect::<Vec<_>>(),
+                actual
+                    .matches
+                    .iter()
+                    .map(Option::is_some)
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                reference
+                    .anon_stats_matches
+                    .iter()
+                    .map(|(id, r, _)| (*id, *r))
+                    .collect::<Vec<_>>(),
+                actual
+                    .anon_stats_matches
+                    .iter()
+                    .map(|(id, r, _)| (*id, *r))
+                    .collect::<Vec<_>>()
+            );
+            outputs.push((reference, actual));
+        }
+        Ok(outputs)
+    }))
+    .await?;
+    for orientation in 0..2 {
+        for candidate in 0..results[0][orientation].0.anon_stats_matches.len() {
+            let mut expected = (0u32, 0u32);
+            let mut actual = (0u32, 0u32);
+            for party in &results {
+                let reference = party[orientation].0.anon_stats_matches[candidate].2;
+                let spectral = party[orientation].1.anon_stats_matches[candidate].2;
+                expected.0 = expected.0.wrapping_add(reference.code_dot.a.0);
+                expected.1 = expected.1.wrapping_add(reference.mask_dot.a.0);
+                actual.0 = actual.0.wrapping_add(spectral.code_dot.a.0);
+                actual.1 = actual.1.wrapping_add(spectral.mask_dot.a.0);
+            }
+            assert_eq!(actual, expected, "retained anonymous distance differs");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn fused_full_rotation_threshold_scan_matches_legacy() -> Result<()> {
     let mut rng = AesRng::seed_from_u64(0x6675_7365_645f_6668);
     let vectors_and_graphs = shared_random_setup(&mut rng, 3, NetworkType::Local).await?;

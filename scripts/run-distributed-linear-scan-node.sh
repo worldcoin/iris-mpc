@@ -16,6 +16,11 @@ CONNECTION_PARALLELISM=${LINEAR_SCAN_BENCH_CONNECTION_PARALLELISM:-16}
 TOKIO_CORES=${LINEAR_SCAN_BENCH_TOKIO_CORES:-11}
 CLIENT_RNG_SEED=${LINEAR_SCAN_BENCH_CLIENT_RNG_SEED:-8675309}
 PIPELINED_REQUESTS=${LINEAR_SCAN_BENCH_PIPELINED_REQUESTS:-0}
+NTT_SCAN=${LINEAR_SCAN_BENCH_NTT:-0}
+[[ ${NTT_SCAN} =~ ^[01]$ ]] || {
+    echo "LINEAR_SCAN_BENCH_NTT must be 0 or 1" >&2
+    exit 2
+}
 AUX_CPU_LIST="0-$((TOKIO_CORES - 1))"
 
 usage() {
@@ -124,6 +129,7 @@ run_client() {
     fi
     cat >"$config" <<EOF
 results_output_path = "$output"
+record_timings = true
 cleanup_on_exit = false
 
 [request_batch.Simple]
@@ -273,6 +279,7 @@ start_server() {
         RUST_BACKTRACE=1 \
         RUST_MIN_STACK=104857600 \
         SMPC__ENVIRONMENT=dev \
+        IRIS_MPC_CPU_NTT="$NTT_SCAN" \
         SMPC__PARTY_ID="$party" \
         SMPC__DATABASE__URL="postgres://postgres@127.0.0.1:${POSTGRES_PORT}/${db_name}" \
         SMPC__DATABASE__MIGRATE=true \
@@ -300,7 +307,7 @@ start_server() {
         SMPC__ENABLE_RECOVERY=true \
         SMPC__LUC_ENABLED=true \
         SMPC__LUC_LOOKBACK_RECORDS=500 \
-        SMPC__COLD_EYE_LFU_CACHE_RECORDS=4096 \
+        SMPC__COLD_EYE_LFU_CACHE_RECORDS=12288 \
         SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST=true \
         SMPC__FULL_SCAN_SIDE=Left \
         SMPC__FULL_SCAN_SIDE_SWITCHING_ENABLED=false \
@@ -357,7 +364,7 @@ status() {
         echo "NODE_BENCH_SERVER_READY party=${party} pid=$(<"$pid_file")"
     else
         echo "NODE_BENCH_SERVER_NOT_RUNNING party=${party}" >&2
-        return 1
+        return 2
     fi
 }
 

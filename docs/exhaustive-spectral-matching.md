@@ -1,12 +1,12 @@
 # Exact exhaustive iris matching through circular correlation
 
-Research note, 2026-09-05. This work is now based on
+Algebra and kernel research note, 2026-09-05. This work is now based on
 [PR #2348](https://github.com/worldcoin/iris-mpc/pull/2348), commit
 `42cdb2ad0e41fea8c0e35d933ac02f54b065619b`, on branch `codex/cpu-spectral-ntt-smmla`.
 The original measurements used the older stack baseline
 `94e4a13a8c8a35d946989b603369da27c1dc8c87`.
 
-**Latest CPU measurements on the updated stack:** On the target AWS r8g.24xlarge,
+**Standalone CPU kernel measurements (not end to end):** On the target AWS r8g.24xlarge,
 the packed SMMLA NTT score stage takes **90.1 ms** versus **277.7 ms** for
 PR #2348's fused UMMLA kernel (**3.08x faster**), scanning 1,048,576 records,
 both orientations, with 85 workers pinned to CPUs 11–95. The initial packing
@@ -20,8 +20,14 @@ The earlier paired-inverse experiment found only 1.5% improvement from pairing i
 These are local score times with production CPU allocation and 256-record
 worker tasks; secure field conversion/comparison and service overhead are
 excluded.
-The GPU operation counts below describe the original research model, not CPU
-measurements.
+The first integrated CPU server was slower end to end because it converted every
+prime score back into the production ring. The current implementation instead
+uses F_52201, combines code/mask spectra into one anonymous-threshold score, and
+tests it directly with a binary MPC circuit. Only public candidates recover
+separate ring scores. Its migration, measurements, and rollout are described in
+[CPU NTT scan](cpu-ntt-scan.md). The F_25601 algebra and kernel measurements below
+describe the original spectral experiment. The GPU operation counts
+below describe the original research model, not CPU measurements.
 
 The strongest candidate found is to change the sharing field and store each
 iris in a number-theoretic transform (NTT) representation. Compute the circular
@@ -32,9 +38,9 @@ or approximate match decision.
 
 The arithmetic model gives **about 14 times fewer INT8 multiply-accumulates** for
 the score stage, including a simple selected inverse transform. This is an
-operation count, **not a measured GPU or end-to-end speedup**. The experiment
-proves arithmetic equivalence with simulated three-party shares. A GPU kernel
-and secure field conversion remain to be implemented and benchmarked.
+operation count, **not a measured GPU or end-to-end speedup**. The original experiment checks arithmetic equivalence with simulated three-party
+shares. The CPU implementation now adds private field conversion and production
+server integration. A GPU implementation remains outside this CPU-only work.
 
 ## What the current implementation already does
 
@@ -251,7 +257,7 @@ all 200 impulse positions, random spectra, signed extrema, DC, and the Nyquist
 entry. Additional full-width direct-dot checks cover normal/mirror input arrays,
 mask scaling, and target tails. These are arithmetic kernel checks; secure share
 conversion, actual query ingestion, and the production match policy remain
-outside the experiment.
+outside this standalone kernel experiment; the integrated CPU tests cover them.
 
 ## Pack the spectral products for SMMLA on CPU
 
@@ -327,7 +333,8 @@ offsets, rerandomize, and then perform any required redistribution/conversion.
 There is no need to communicate the 200 frequency results.
 
 The current comparator expects replicated shares over powers of two. Prime-field
-shares cannot be fed into it or cast to `u16` shares. Required options are:
+shares cannot be fed into it or cast to `u16` shares. The integrated CPU path uses
+the first of these options:
 
 1. Convert only the final code/mask scores securely to the existing ring, then
    reuse the existing exact threshold circuit.
@@ -344,8 +351,8 @@ Existing Galois-ring database shares also cannot be converted by applying `%
 25601` locally. Their modulus and basis encoding differ. Deployment requires a
 secure migration or newly encoded shares, plus query/update/serialization parity.
 Mirroring and the two-eye AND/OR policies must continue to use the same coordinate
-permutations, sign changes, and record identities as today. These service paths
-are outside the arithmetic experiment's validation scope.
+permutations, sign changes, and record identities as today. The integrated CPU implementation and tests cover these service paths; they are
+outside the standalone arithmetic experiment's validation scope.
 
 ## GPU cost and layout
 
@@ -426,16 +433,10 @@ visible mask pair, circular wraparound, rotations at +/-15 and outside the
 allowed window, and values at/adjacent to the 0.345 boundary. Both GPU threshold
 expressions are checked against independently calculated plaintext scores.
 
-The script is deliberately not a timing comparison between Python loops. No CUDA
-benchmark, secure score-conversion protocol, end-to-end privacy proof, or
-CPU/GPU service-parity test has been completed. Production Rust/CUDA code is
-unchanged.
-
-The next experiment should benchmark the frequency GEMMs, tiled inverse,
-modular reduction, and final-score conversion at the actual batch/chunk sizes.
-Profile code and mask GEMM time, transfers, and threshold time separately first.
-Only pursue the database migration if the complete measured path beats the
-current scan.
+The script is deliberately not a timing comparison between Python loops. The
+production CPU path now includes private score conversion and restartable database
+migration; see [its documentation](cpu-ntt-scan.md) for validation and measurement
+boundaries. No CUDA implementation or GPU benchmark is included in this work.
 
 ## Other approaches considered
 

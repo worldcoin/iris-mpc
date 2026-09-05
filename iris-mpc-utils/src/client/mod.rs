@@ -52,6 +52,7 @@ pub struct ServiceClient {
     shares_generator: SharesGenerator<StdRng>,
     request_id_rng: Option<StdRng>,
     results_output_path: Option<PathBuf>,
+    record_timings: bool,
     cleanup_on_exit: bool,
     state: ExecState,
 }
@@ -74,6 +75,7 @@ impl ServiceClient {
             shares_generator,
             request_id_rng,
             results_output_path: None,
+            record_timings: false,
             cleanup_on_exit: true,
             state: ExecState::new(),
         })
@@ -81,6 +83,11 @@ impl ServiceClient {
 
     pub fn with_results_output_path(mut self, path: Option<&Path>) -> Self {
         self.results_output_path = path.map(Path::to_path_buf);
+        self
+    }
+
+    pub fn with_record_timings(mut self, enabled: bool) -> Self {
+        self.record_timings = enabled;
         self
     }
 
@@ -195,6 +202,7 @@ impl ServiceClient {
         batch_idx: usize,
         batch: Vec<options::RequestOptions>,
     ) -> Result<(), ServiceClientError> {
+        self.state.batch_started = self.record_timings.then(Instant::now);
         // Phase 1: Prepare requests and generate shares.
         let (batch_requests, batch_shares) = self.prepare_batch_requests(batch_idx, &batch)?;
 
@@ -207,6 +215,7 @@ impl ServiceClient {
         // Phase 4: Publish requests to SNS.
         // From this point forward, continue on error in an attempt to clean up requests
         // which have already been published
+        self.state.publish_started = self.record_timings.then(Instant::now);
         let published_idxs = self.publish_requests(&batch_requests).await;
 
         // Phase 5: Track published requests and wait for responses.
@@ -492,10 +501,19 @@ struct CanonicalResultRecord {
     /// Responses are always stored in node-id order, regardless of SQS
     /// delivery order.
     responses: Vec<typeset::ResponsePayload>,
+    /// Monotonic client timing from SNS publish start until all three responses.
+    /// Includes server S3 fetch, queueing, MPC, persistence and result delivery.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    publish_to_all_responses_seconds: Option<f64>,
+    /// Includes client preparation, S3 upload and the configured propagation wait.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prepare_to_all_responses_seconds: Option<f64>,
 }
 
 // Holds the cross-batch state needed while processing requests and responses.
 struct ExecState {
+    batch_started: Option<Instant>,
+    publish_started: Option<Instant>,
     uniqueness_labels: HashMap<String, SerialId>,
     signup_id_to_labels: HashMap<Uuid, String>,
     outstanding_requests: HashMap<Uuid, typeset::RequestInfo>,
@@ -547,6 +565,8 @@ fn handle_completion<K: std::fmt::Display + std::hash::Hash + Eq>(
 impl ExecState {
     fn new() -> Self {
         Self {
+            batch_started: None,
+            publish_started: None,
             uniqueness_labels: HashMap::new(),
             signup_id_to_labels: HashMap::new(),
             outstanding_requests: HashMap::new(),
@@ -595,6 +615,12 @@ impl ExecState {
             batch_item_index: info.batch_item_idx(),
             label: info.label().clone(),
             responses,
+            publish_to_all_responses_seconds: self
+                .publish_started
+                .map(|start| start.elapsed().as_secs_f64()),
+            prepare_to_all_responses_seconds: self
+                .batch_started
+                .map(|start| start.elapsed().as_secs_f64()),
         });
     }
 

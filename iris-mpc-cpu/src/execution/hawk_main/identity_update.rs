@@ -38,6 +38,14 @@ pub async fn search_to_identity_update(
         hawk_actor.worker_pools[LEFT].cache_queries(id_update_cache[LEFT].clone()),
         hawk_actor.worker_pools[RIGHT].cache_queries(id_update_cache[RIGHT].clone()),
     )?;
+    for side in [LEFT, RIGHT] {
+        if let Some(spectral) = hawk_actor.worker_pools[side].spectral() {
+            let mut store = sessions[side][0].aby3_store.write().await;
+            spectral
+                .cache_queries(&mut store.session, &id_update_cache[side])
+                .await?;
+        }
+    }
 
     let search_params = SearchParams::new_no_match(hawk_actor.searcher(), hawk_actor.search_mode());
 

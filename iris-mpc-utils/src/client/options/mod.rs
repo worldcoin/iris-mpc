@@ -31,6 +31,9 @@ pub struct ServiceClientOptions {
     /// Optional path for the canonical, order-independent result capture.
     #[serde(default)]
     results_output_path: Option<PathBuf>,
+    /// Include nondeterministic latency measurements only for benchmarks.
+    #[serde(default)]
+    record_timings: bool,
 
     /// Whether to delete all identities inserted by the client after the run.
     /// Ground-truth runs disable this so that untracked cleanup results cannot
@@ -54,6 +57,10 @@ impl ServiceClientOptions {
 
     pub fn results_output_path(&self) -> Option<&Path> {
         self.results_output_path.as_deref()
+    }
+
+    pub fn record_timings(&self) -> bool {
+        self.record_timings
     }
 
     pub fn cleanup_on_exit(&self) -> bool {
