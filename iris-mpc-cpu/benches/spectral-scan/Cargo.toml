@@ -1,0 +1,17 @@
+[package]
+name = "iris-spectral-cpu-bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Keep this kernel experiment independent of service/AWS/CUDA dependencies.
+[workspace]
+
+[dependencies]
+rustfft = "=6.4.1"
+rayon = "=1.12.0"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
