@@ -6,7 +6,11 @@ use ampc_actor_utils::{
     network::mpc::NetworkValue,
 };
 use ampc_secret_sharing::shares::{
-    bit::Bit, ring_impl::RingElement, share::Share, vecshare_bittranspose::Transpose64, VecShare,
+    bit::Bit,
+    ring_impl::{RingElement, VecRingElement},
+    share::Share,
+    vecshare_bittranspose::Transpose64,
+    VecShare,
 };
 use eyre::{ensure, Result};
 use num_traits::Zero;
@@ -41,25 +45,24 @@ async fn split(session: &mut Session, scores: &[u16]) -> Result<(VecShare<u16>, 
         .zip(previous_masks)
         .map(|(a, b)| (uniform(a.0, true), uniform(b.0, false)))
         .collect();
-    let own: Vec<_> = scores
+    let own: VecRingElement<u16> = scores
         .iter()
         .zip(masks)
         .map(|(&x, (mine, prev))| {
             RingElement(reduce(
                 i64::from(x) + i64::from(mine) - i64::from(prev)
-                    + if role == 0 { 32000 } else { 0 },
+                    + if role == 0 { 32768 } else { 0 },
             ))
         })
-        .collect();
-    session
+        .collect::<Vec<_>>()
+        .into();
+    session.network_session.send_ring_vec_next(&own).await?;
+    let previous = session
         .network_session
-        .send_next(NetworkValue::VecRing16(own.clone()))
+        .receive_ring_vec_prev::<u16>()
         .await?;
-    let NetworkValue::VecRing16(previous) = session.network_session.receive_prev().await? else {
-        eyre::bail!("expected refreshed field components");
-    };
     ensure!(
-        previous.len() == scores.len() && previous.iter().all(|x| x.0 < MODULUS),
+        previous.len() == scores.len() && previous.0.iter().all(|x| x.0 < MODULUS),
         "invalid refreshed field components"
     );
     let n = scores.len();
@@ -68,18 +71,23 @@ async fn split(session: &mut Session, scores: &[u16]) -> Result<(VecShare<u16>, 
     let mut u = vec![Share::<u16>::zero(); n];
     let mut v = vec![Share::<u16>::zero(); n];
     let mut sent = Vec::with_capacity(lengths[role]);
+    // Draw the XOR pads in bulk, using both bytes of each u16. The adjacent
+    // party draws the same length from the same pairwise stream, including
+    // uneven and empty split chunks.
+    let mine = session.prf.gen_rands_mine::<u16>(lengths[(role + 1) % 3]);
+    let previous_masks = session.prf.gen_rands_prev::<u16>(lengths[role]);
     for owner in 0..3 {
         for i in starts[owner]..starts[owner] + lengths[owner] {
             if owner == role {
-                let mask: u16 = session.prf.prev_prf.gen();
-                let value = reduce(i64::from(own[i].0) + i64::from(previous[i].0)) ^ mask;
+                let mask = previous_masks.0[i - starts[owner]].0;
+                let value = reduce(i64::from(own.0[i].0) + i64::from(previous.0[i].0)) ^ mask;
                 sent.push(RingElement(value));
                 u[i] = Share::new(RingElement(value), RingElement(mask));
             } else if (owner + 1) % 3 == role {
-                v[i].a = own[i];
+                v[i].a = own.0[i];
             } else {
-                u[i].a = RingElement(session.prf.my_prf.gen());
-                v[i].b = previous[i];
+                u[i].a = mine.0[i - starts[owner]];
+                v[i].b = previous.0[i];
             }
         }
     }
@@ -107,19 +115,18 @@ async fn and_layer(
     inputs: &[(Share<u64>, Share<u64>)],
 ) -> Result<Vec<Share<u64>>> {
     let (mine, previous) = session.prf.gen_rands_batch::<u64>(inputs.len());
-    let local: Vec<_> = inputs
+    let local: VecRingElement<u64> = inputs
         .iter()
         .zip(mine)
         .zip(previous)
         .map(|(((a, b), r), s)| (a & b) ^ r ^ s)
-        .collect();
-    session
+        .collect::<Vec<_>>()
+        .into();
+    session.network_session.send_ring_vec_next(&local).await?;
+    let remote = session
         .network_session
-        .send_next(NetworkValue::VecRing64(local.clone()))
+        .receive_ring_vec_prev::<u64>()
         .await?;
-    let NetworkValue::VecRing64(remote) = session.network_session.receive_prev().await? else {
-        eyre::bail!("expected packed field-threshold ANDs");
-    };
     ensure!(
         remote.len() == local.len(),
         "invalid field-threshold AND length"
@@ -133,14 +140,17 @@ async fn and_layer(
 
 /// Return the same NOT-accepted bit as the existing anonymous threshold.
 /// Inputs are local contributions to g=2*C-m, where M=2m. For valid irises,
-/// Y=g+32000 is in [0,51200]. After splitting, W=u+v is at most 104400:
-/// [Y>=32000] = [W>=32000] XOR [W>=52201] XOR [W>=84201].
-/// The addition and three public comparisons stream low bits to high bits
-/// together: 46 packed ANDs in 17 layers, without arithmetic score conversion.
-pub async fn anon_stats_greater_than(
+/// g is in [-32000,19200], so Y=g+32768 is in [768,51968] and fits F_52201.
+/// Accept exactly when bit 15 of the canonical Y is set. After splitting,
+/// W=u+v is at most 104400. Let B=bit15(W), C=bit16(W), and
+/// L=[low15(W)>=19433], where 19433=52201-32768. Then
+/// [Y>=32768] = B XOR (L AND (B XOR C)). The two possible wrap comparisons
+/// share all 15 low bits. This uses 16 adder ANDs, 14 comparison ANDs, and
+/// one final mux: 31 packed ANDs in 17 layers, without score conversion.
+async fn anon_stats_greater_than_packed(
     session: &mut Session,
     scores: &[u16],
-) -> Result<Vec<Share<Bit>>> {
+) -> Result<Vec<Share<u64>>> {
     if scores.is_empty() {
         return Ok(Vec::new());
     }
@@ -151,79 +161,96 @@ pub async fn anon_stats_greater_than(
     let zero = Share::<u64>::zero();
     let one = Share::from_const(u64::MAX, session.own_role());
     let mut carry = vec![zero; words];
-    let mut ge = [vec![zero; words], vec![zero; words], vec![zero; words]];
-    let thresholds = [32000, 52201, 84201];
-    // The comparisons against p and p+32000 share their low eight bits.
-    // The low eight bits of 32000 are zero. Share the prefix and simplify
-    // constant gates; at bit 8 the two different updates reuse one product.
+    let mut ge = vec![zero; words];
+    let mut high = vec![zero; words];
+    const LOW_THRESHOLD: u16 = MODULUS - 32768;
     for bit in 0..16 {
         let sum: Vec<_> = (0..words)
             .map(|j| u[bit].get_at(j) ^ v[bit].get_at(j) ^ carry[j])
             .collect();
-        let mut inputs = Vec::with_capacity(4 * words);
+        let mut inputs = Vec::with_capacity(2 * words);
         inputs
             .extend((0..words).map(|j| (u[bit].get_at(j) ^ carry[j], v[bit].get_at(j) ^ carry[j])));
-        match bit {
-            0 => {}
-            1..=8 => inputs.extend((0..words).map(|j| (sum[j], ge[1][j]))),
-            _ => {
-                for g in &ge {
-                    inputs.extend((0..words).map(|j| (sum[j], g[j])));
-                }
-            }
+        if (1..15).contains(&bit) {
+            inputs.extend((0..words).map(|j| (sum[j], ge[j])));
         }
         let products = and_layer(session, &inputs).await?;
         for j in 0..words {
             carry[j] ^= products[j];
         }
-        if bit == 0 {
-            ge[0].fill(one);
-            ge[1].clone_from(&sum);
-            ge[2].clone_from(&sum);
-        } else if bit <= 8 {
-            for j in 0..words {
-                let product = products[words + j];
-                if bit == 8 {
-                    ge[0][j] = sum[j];
-                    ge[2][j] = sum[j] ^ ge[1][j] ^ product;
-                    ge[1][j] = product;
-                } else {
-                    ge[1][j] = if thresholds[1] >> bit & 1 != 0 {
-                        product
-                    } else {
-                        sum[j] ^ ge[1][j] ^ product
-                    };
-                    ge[2][j] = ge[1][j];
-                }
-            }
-        } else {
-            for (index, (g, threshold)) in ge.iter_mut().zip(thresholds).enumerate() {
+        match bit {
+            // The low bit of 19433 is one, so its initial comparison is free.
+            0 => ge = sum,
+            15 => high = sum,
+            _ => {
                 for j in 0..words {
-                    let product = products[(index + 1) * words + j];
-                    g[j] = if threshold >> bit & 1 != 0 {
+                    let product = products[words + j];
+                    ge[j] = if LOW_THRESHOLD >> bit & 1 != 0 {
                         product
                     } else {
-                        sum[j] ^ g[j] ^ product
+                        sum[j] ^ ge[j] ^ product
                     };
                 }
             }
         }
     }
-    // If W's top bit is set, the two lower thresholds are both true and
-    // cancel. Otherwise the upper threshold is false. One mux replaces all
-    // three final comparison gates. Count: 16 + 8 + 7*3 + 1 = 46 ANDs.
-    let inputs: Vec<_> = (0..words)
-        .map(|j| (carry[j], ge[0][j] ^ ge[1][j] ^ ge[2][j]))
-        .collect();
+    let inputs: Vec<_> = (0..words).map(|j| (ge[j], high[j] ^ carry[j])).collect();
     let mux = and_layer(session, &inputs).await?;
-    let mut out = VecShare::new_vec(
-        (0..words)
-            .map(|j| ge[0][j] ^ ge[1][j] ^ mux[j] ^ one)
-            .collect(),
-    )
-    .convert_to_bits();
-    out.truncate(scores.len());
-    Ok(out.inner())
+    Ok((0..words).map(|j| high[j] ^ mux[j] ^ one).collect())
+}
+
+/// Keep a secret-shared result for callers that need further binary MPC.
+pub async fn anon_stats_greater_than(
+    session: &mut Session,
+    scores: &[u16],
+) -> Result<Vec<Share<Bit>>> {
+    let packed = anon_stats_greater_than_packed(session, scores).await?;
+    let mut bits = VecShare::new_vec(packed).convert_to_bits();
+    bits.truncate(scores.len());
+    Ok(bits.inner())
+}
+
+/// Open only the existing anonymous predicate, directly from its packed shares.
+/// Avoid expanding shares to individual bits only to repack them for the wire.
+/// Padding bits are zeroed and excluded from the public output.
+pub async fn open_anon_stats_matches(session: &mut Session, scores: &[u16]) -> Result<Vec<bool>> {
+    if scores.is_empty() {
+        return Ok(Vec::new());
+    }
+    let shares = anon_stats_greater_than_packed(session, scores).await?;
+    let byte_count = scores.len().div_ceil(8);
+    let mut packed = Vec::with_capacity(shares.len() * 8);
+    for share in &shares {
+        packed.extend_from_slice(&share.b.0.to_le_bytes());
+    }
+    packed.truncate(byte_count);
+    if !scores.len().is_multiple_of(8) {
+        *packed.last_mut().unwrap() &= (1 << (scores.len() % 8)) - 1;
+    }
+    session
+        .network_session
+        .send_next(NetworkValue::VecRingBit(packed, scores.len()))
+        .await?;
+    let NetworkValue::VecRingBit(remote, bit_count) =
+        session.network_session.receive_prev().await?
+    else {
+        eyre::bail!("expected packed anonymous predicate bits");
+    };
+    ensure!(
+        bit_count == scores.len() && remote.len() == byte_count,
+        "anonymous predicate bit count mismatch"
+    );
+    let mut result = Vec::with_capacity(bit_count);
+    for (share, bytes) in shares.into_iter().zip(remote.chunks(8)) {
+        let local = (share.a ^ share.b).0.to_le_bytes();
+        for (a, b) in local.into_iter().zip(bytes) {
+            let accepted = !(a ^ b);
+            for bit in 0..(bit_count - result.len()).min(8) {
+                result.push(accepted >> bit & 1 != 0);
+            }
+        }
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -244,7 +271,7 @@ mod tests {
                 [
                     a,
                     b,
-                    reduce(i64::from(y) - 32000 - i64::from(a) - i64::from(b)),
+                    reduce(i64::from(y) - 32768 - i64::from(a) - i64::from(b)),
                 ]
             })
             .collect();
@@ -254,15 +281,29 @@ mod tests {
                 let input: Vec<_> = inputs.iter().map(|x| x[party]).collect();
                 async move {
                     let mut result = Vec::new();
-                    // Nonmultiples of 3 and 64 exercise split and packed tails.
-                    for batch in input.chunks(4093) {
-                        let shares = anon_stats_greater_than(&mut session, batch).await?;
-                        result.extend(
-                            open_bin(&mut session, &shares)
-                                .await?
-                                .into_iter()
-                                .map(bool::from),
-                        );
+                    // Empty and tiny split chunks, then nonmultiples of 3 and
+                    // 64, exercise pairwise PRF alignment and packed tails.
+                    let ranges = [0..0, 0..1, 1..3, 3..6].into_iter().chain(
+                        (6..input.len())
+                            .step_by(4093)
+                            .map(|start| start..(start + 4093).min(input.len())),
+                    );
+                    for range in ranges {
+                        let shares =
+                            anon_stats_greater_than(&mut session, &input[range.clone()]).await?;
+                        let opened: Vec<_> = open_bin(&mut session, &shares)
+                            .await?
+                            .into_iter()
+                            .map(bool::from)
+                            .collect();
+                        let direct =
+                            open_anon_stats_matches(&mut session, &input[range.clone()]).await?;
+                        assert!(opened
+                            .iter()
+                            .zip(&direct)
+                            .all(|(&rejected, &accepted)| rejected != accepted));
+                        assert_eq!(opened.len(), direct.len());
+                        result.extend(opened);
                     }
                     Ok::<_, eyre::Report>(result)
                 }
@@ -271,7 +312,7 @@ mod tests {
         .await?;
         for result in results {
             for (y, rejected) in result.into_iter().enumerate() {
-                assert_eq!(rejected, y < 32000, "field representative {y}");
+                assert_eq!(rejected, y < 32768, "field representative {y}");
             }
         }
         Ok(())

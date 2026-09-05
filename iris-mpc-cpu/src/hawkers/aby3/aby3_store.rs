@@ -1028,7 +1028,7 @@ impl Aby3Store<FhdOps> {
         }
         let vectors_len = n_vectors;
         let expected_dots = vectors_len * ROTATIONS * 2;
-        let (anon_gt, dot_shares) = match dot_contributions.into() {
+        let (mut anon_rotation_bits, dot_shares) = match dot_contributions.into() {
             FullRotationDotContributions::Ring(dots) => {
                 eyre::ensure!(
                     dots.len() == expected_dots,
@@ -1036,7 +1036,12 @@ impl Aby3Store<FhdOps> {
                 );
                 let (bits, shares) =
                     fhd_greater_than_anon_stats_from_galois(&mut self.session, dots).await?;
-                (bits, RetainedDotShares::Fused(shares))
+                let accepted = open_bin(&mut self.session, &bits)
+                    .await?
+                    .into_iter()
+                    .map(|bit| !bool::from(bit))
+                    .collect::<Vec<_>>();
+                (accepted, RetainedDotShares::Fused(shares))
             }
             FullRotationDotContributions::Field {
                 scores,
@@ -1048,7 +1053,7 @@ impl Aby3Store<FhdOps> {
                     "full-rotation field result has unexpected length"
                 );
                 let bits =
-                    crate::protocol::ntt::anon_stats_greater_than(&mut self.session, &scores)
+                    crate::protocol::ntt::open_anon_stats_matches(&mut self.session, &scores)
                         .await?;
                 (bits, RetainedDotShares::Recover { query, vectors })
             }
@@ -1057,11 +1062,6 @@ impl Aby3Store<FhdOps> {
             dot_shares.len() == vectors_len * ROTATIONS,
             "fused full-rotation dot result has unexpected length"
         );
-        let mut anon_rotation_bits = open_bin(&mut self.session, &anon_gt)
-            .await?
-            .into_iter()
-            .map(|bit| !bool::from(bit))
-            .collect::<Vec<_>>();
 
         eyre::ensure!(
             anon_rotation_bits.len() == dot_shares.len(),

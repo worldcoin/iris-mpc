@@ -9,7 +9,7 @@ mod threshold;
 mod transform;
 
 pub use conversion::{convert_irises, FieldIris};
-pub use threshold::anon_stats_greater_than;
+pub use threshold::{anon_stats_greater_than, open_anon_stats_matches};
 pub use transform::{score_chunk, SpectralIris, SpectralQuery};
 
 /// The smallest prime supporting a 200-point transform and the exact combined anonymous-statistics score.
