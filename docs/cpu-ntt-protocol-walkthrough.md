@@ -76,7 +76,7 @@ $$
 Its inverse gives the circular correlation:
 
 $$
-\operatorname{INTT}(P)[r]
+\mathrm{INTT}(P)[r]
 =200^{-1}\sum_{k=0}^{199}P[k]\omega^{-kr}
 =\sum_{t=0}^{199}q[t]d[t+r].
 $$
@@ -101,8 +101,8 @@ $$
 Linearity gives:
 
 $$
-\sum_a\operatorname{INTT}(P_a)
-=\operatorname{INTT}\left(\sum_aP_a\right).
+\sum_a\mathrm{INTT}(P_a)
+=\mathrm{INTT}\left(\sum_aP_a\right).
 $$
 
 **This removes the need for 64 separate code inverses.** The same applies to
@@ -203,7 +203,7 @@ masked code coordinate satisfies:
 
 $$
 x\in\{-1,0,1\},\qquad
-x=\operatorname{LSB}(x)-2\operatorname{MSB}(x),
+x=\mathrm{LSB}(x)-2\mathrm{MSB}(x),
 $$
 
 where the bits refer to its original 16-bit ring encoding. Mask coordinates
@@ -282,7 +282,7 @@ $$
 Therefore:
 
 $$
-g\ge0\iff\operatorname{bit}_{15}(Y)=1.
+g\ge0\iff\mathrm{bit}_{15}(Y)=1.
 $$
 
 Extracting that bit from secret shares still requires MPC. First refresh the
@@ -300,8 +300,8 @@ XOR-masking it. Neither the pair sum nor the score is opened.
 Because $u,v<p$, there is at most one field wrap. Define:
 
 $$
-b_{15}=\operatorname{bit}_{15}(W),\qquad
-b_{16}=\operatorname{bit}_{16}(W),\qquad
+b_{15}=\mathrm{bit}_{15}(W),\qquad
+b_{16}=\mathrm{bit}_{16}(W),\qquad
 L=[W\bmod32768\ge19433].
 $$
 
