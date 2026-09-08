@@ -53,6 +53,21 @@ impl<R, const ROTMASK: u32> VecRotationSupport<R, ROTMASK> {
         &self.rotations[self.rotations.len() / 2]
     }
 
+    /// Mutably access the item attached to the center rotation.
+    pub fn center_mut(&mut self) -> &mut R {
+        let center = self.rotations.len() / 2;
+        &mut self.rotations[center]
+    }
+
+    /// Consume the collection and return its center-rotation item.
+    pub fn into_center(self) -> R {
+        let center = self.rotations.len() / 2;
+        self.rotations
+            .into_iter()
+            .nth(center)
+            .expect("rotation support must contain a center")
+    }
+
     /// Flatten a batch of something with rotations into a concatenated Vec.
     /// Attach a copy of the corresponding `B` to each rotation.
     pub fn flatten_broadcast<'a, B>(batch: impl IntoIterator<Item = (&'a Self, B)>) -> Vec<(R, B)>

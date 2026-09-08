@@ -216,6 +216,25 @@ impl<I: Clone> SharedIrises<I> {
         }
     }
 
+    /// Convert every stored value (including the empty-iris template) while
+    /// preserving ids, versions, and checksums. Used to materialize a worker
+    /// pool store in its resident layout from a seed store.
+    pub fn map_values<J: Clone>(self, f: impl Fn(I) -> J) -> SharedIrises<J> {
+        SharedIrises {
+            points: self
+                .points
+                .into_iter()
+                .map(|opt| opt.map(|(v, iris)| (v, f(iris))))
+                .collect(),
+            size: self.size,
+            next_id: self.next_id,
+            empty_iris: f(self.empty_iris),
+            set_hash: self.set_hash,
+            // Ids and versions are unchanged, so the cached list stays valid.
+            live_ids: self.live_ids,
+        }
+    }
+
     /// Create a metadata-only registry from this store.
     ///
     /// Preserves all VectorId presence, version, and checksum data but

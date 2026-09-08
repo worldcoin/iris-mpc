@@ -499,7 +499,20 @@ mod tests {
                 .to_arc()
         });
         let worker_pools = [LEFT, RIGHT].map(|side| {
-            LocalIrisWorkerPool::new_local(iris_stores[side].clone(), HAWK_DISTANCE_MODE, PARTY_ID)
+            use crate::protocol::shared_iris::{ResidentIris, ResidentLayout};
+            let resident_store = iris_stores[side]
+                .data
+                .try_read()
+                .unwrap()
+                .clone()
+                .map_values(|iris| ResidentIris::from_arc(iris, ResidentLayout::U16))
+                .to_arc();
+            LocalIrisWorkerPool::new_local(
+                resident_store,
+                ResidentLayout::U16,
+                HAWK_DISTANCE_MODE,
+                PARTY_ID,
+            )
         });
         (registries, worker_pools, SIZE_OF_IRIS_DB)
     }
