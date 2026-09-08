@@ -1,7 +1,7 @@
 image: "ghcr.io/worldcoin/iris-mpc-linear-scan:bead695a9a1b1d0eaa24d99da07c579ae9a1b776"
 
 environment: prod
-replicaCount: 0
+replicaCount: 1
 
 # Common environment variables shared across all hnsw nodes.
 # Defined as a map (keyed by variable name) so Helm deep-merges these with the
