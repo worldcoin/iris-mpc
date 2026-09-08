@@ -3,7 +3,7 @@ use std::time::Instant;
 use super::{
     rot::CENTER_ONLY_MASK,
     search::{self, SearchParams, SearchQueries, SearchResults},
-    BothEyes, HawkActor, HawkRequest, HawkSession, LEFT, RIGHT,
+    BothEyes, HawkActor, HawkRequest, HawkSearchMode, HawkSession, LEFT, RIGHT,
 };
 use crate::execution::hawk_main::{iris_worker::QueryId, search::SearchIds};
 use eyre::Result;
@@ -39,7 +39,7 @@ pub async fn search_to_identity_update(
         hawk_actor.worker_pools[RIGHT].cache_queries(id_update_cache[RIGHT].clone()),
     )?;
 
-    let search_params = SearchParams::new_no_match(hawk_actor.searcher());
+    let search_params = SearchParams::new_no_match(hawk_actor.searcher(), hawk_actor.search_mode());
 
     // Search the central rotation to determine how to insert the update vectors.
     let search_results = search::search::<{ CENTER_ONLY_MASK }>(
@@ -66,7 +66,10 @@ pub async fn search_to_identity_update(
 }
 
 pub async fn apply_deletions(hawk_actor: &mut HawkActor, request: &HawkRequest) -> Result<()> {
-    if hawk_actor.args.hnsw_disable_memory_persistence {
+    if hawk_actor.args.hnsw_disable_memory_persistence
+        || (hawk_actor.search_mode() == HawkSearchMode::LinearScan
+            && hawk_actor.args.disable_persistence)
+    {
         tracing::debug!("In-memory persistence disabled, skipping deletions");
         return Ok(());
     }

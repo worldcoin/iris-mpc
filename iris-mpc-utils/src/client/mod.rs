@@ -1,12 +1,15 @@
 use std::{
     collections::{HashMap, HashSet},
+    fs,
+    path::{Path, PathBuf},
     time::Duration,
 };
 
 use async_from::{self, AsyncFrom};
 use futures::StreamExt;
 use iris_mpc_cpu::execution::hawk_main::BothEyes;
-use rand::rngs::StdRng;
+use rand::{rngs::StdRng, RngCore, SeedableRng};
+use serde::Serialize;
 
 use iris_mpc_common::{helpers::smpc_request, SerialId};
 use tokio::time::{sleep, timeout, Instant};
@@ -47,6 +50,9 @@ pub struct ServiceClient {
     aws_client: AwsClient,
     request_batch: Option<RequestBatchOptions>,
     shares_generator: SharesGenerator<StdRng>,
+    request_id_rng: Option<StdRng>,
+    results_output_path: Option<PathBuf>,
+    cleanup_on_exit: bool,
     state: ExecState,
 }
 
@@ -57,14 +63,30 @@ impl ServiceClient {
         shares_generator: SharesGeneratorOptions,
     ) -> Result<Self, ServiceClientError> {
         let aws_client = AwsClient::async_from(opts_aws).await;
+        let request_id_rng = request_batch
+            .deterministic_seed()
+            .map(|seed| StdRng::seed_from_u64(seed ^ 0x6a09_e667_f3bc_c909));
         let shares_generator = SharesGenerator::<StdRng>::from_options(shares_generator);
 
         Ok(Self {
             aws_client,
             request_batch: Some(request_batch),
             shares_generator,
+            request_id_rng,
+            results_output_path: None,
+            cleanup_on_exit: true,
             state: ExecState::new(),
         })
+    }
+
+    pub fn with_results_output_path(mut self, path: Option<&Path>) -> Self {
+        self.results_output_path = path.map(Path::to_path_buf);
+        self
+    }
+
+    pub fn with_cleanup_on_exit(mut self, cleanup_on_exit: bool) -> Self {
+        self.cleanup_on_exit = cleanup_on_exit;
+        self
     }
 
     async fn init(&mut self) -> Result<(), ServiceClientError> {
@@ -86,15 +108,36 @@ impl ServiceClient {
         self.init().await?;
 
         // Run main batch loop, interruptible by Ctrl+C.
-        tokio::select! {
-            _ = self.exec() => {
+        let execution_result = tokio::select! {
+            result = self.exec() => {
                 tracing::info!("service client finished");
+                result
             },
             _ = tokio::signal::ctrl_c() => {
-                tracing::info!("\nCtrl+C received. Initiating cleanup...");
+                tracing::info!("\nCtrl+C received. Stopping service client...");
+                Err(ServiceClientError::ResponseError(
+                    "service client interrupted".to_string(),
+                ))
             }
         };
 
+        if let Some(path) = self.results_output_path.as_deref() {
+            self.state.write_results(path)?;
+        }
+
+        if self.cleanup_on_exit {
+            self.cleanup_live_serial_ids().await;
+        } else {
+            tracing::info!(
+                "Skipping cleanup of {} live serial IDs for ground-truth capture",
+                self.state.live_serial_ids.len()
+            );
+        }
+
+        execution_result
+    }
+
+    async fn cleanup_live_serial_ids(&mut self) {
         tracing::info!(
             "Cleaning up {} serial IDs",
             self.state.live_serial_ids.len()
@@ -132,22 +175,19 @@ impl ServiceClient {
         } else {
             tracing::info!("Cleanup complete. Deletions have been submitted.");
         }
-
-        Ok(())
     }
 
-    async fn exec(&mut self) {
+    async fn exec(&mut self) -> Result<(), ServiceClientError> {
         let request_batch = self
             .request_batch
             .take()
             .expect("exec() called more than once");
 
         for (batch_idx, batch) in request_batch.into_iter().enumerate() {
-            if let Err(e) = self.handle_batch(batch_idx, batch).await {
-                tracing::error!("{}", e);
-                break;
-            }
+            self.handle_batch(batch_idx, batch).await?;
         }
+
+        Ok(())
     }
 
     async fn handle_batch(
@@ -234,7 +274,19 @@ impl ServiceClient {
                 opts.label(),
                 opts.expected().cloned(),
             );
-            let request = match opts.make_request(info, parent_serial_id) {
+            let correlation_id = if let Some(rng) = self.request_id_rng.as_mut() {
+                let mut bytes = [0u8; 16];
+                rng.fill_bytes(&mut bytes);
+                // Set RFC 4122 variant and v4 bits while keeping the UUID fully
+                // deterministic for a given ground-truth seed.
+                bytes[6] = (bytes[6] & 0x0f) | 0x40;
+                bytes[8] = (bytes[8] & 0x3f) | 0x80;
+                Uuid::from_bytes(bytes)
+            } else {
+                Uuid::new_v4()
+            };
+            let request = match opts.make_request_with_uuid(info, parent_serial_id, correlation_id)
+            {
                 Ok(r) => r,
                 Err(e) => {
                     // may as well see all the failed requests in the batch. continuing won't result
@@ -426,6 +478,22 @@ impl std::fmt::Display for ErrorBits {
     }
 }
 
+#[derive(Debug, Serialize)]
+struct CanonicalResultsFile<'a> {
+    schema_version: u32,
+    records: &'a [CanonicalResultRecord],
+}
+
+#[derive(Debug, Serialize)]
+struct CanonicalResultRecord {
+    batch_index: usize,
+    batch_item_index: usize,
+    label: Option<String>,
+    /// Responses are always stored in node-id order, regardless of SQS
+    /// delivery order.
+    responses: Vec<typeset::ResponsePayload>,
+}
+
 // Holds the cross-batch state needed while processing requests and responses.
 struct ExecState {
     uniqueness_labels: HashMap<String, SerialId>,
@@ -433,6 +501,7 @@ struct ExecState {
     outstanding_requests: HashMap<Uuid, typeset::RequestInfo>,
     outstanding_deletions: HashMap<SerialId, typeset::RequestInfo>,
     live_serial_ids: HashSet<SerialId>,
+    captured_results: Vec<CanonicalResultRecord>,
     error_bits: ErrorBits,
 }
 
@@ -483,8 +552,87 @@ impl ExecState {
             outstanding_requests: HashMap::new(),
             outstanding_deletions: HashMap::new(),
             live_serial_ids: HashSet::new(),
+            captured_results: Vec::new(),
             error_bits: ErrorBits::new(),
         }
+    }
+
+    fn capture_completed(&mut self, info: typeset::RequestInfo) {
+        let responses = info
+            .responses()
+            .iter()
+            .cloned()
+            .collect::<Option<Vec<_>>>()
+            .expect("capture_completed requires one response from every party");
+
+        let normalized = responses
+            .iter()
+            .map(|response| {
+                let mut value = serde_json::to_value(response)
+                    .expect("serializing an SMPC response should not fail");
+                if let Some(payload) = value.as_object_mut().and_then(|outer| {
+                    outer
+                        .values_mut()
+                        .next()
+                        .and_then(serde_json::Value::as_object_mut)
+                }) {
+                    payload.remove("node_id");
+                }
+                value
+            })
+            .collect::<Vec<_>>();
+        if normalized.windows(2).any(|pair| pair[0] != pair[1]) {
+            self.error_bits.set_validation_error();
+            tracing::error!(
+                "request {} produced disagreeing party responses: {:?}",
+                info,
+                normalized
+            );
+        }
+
+        self.captured_results.push(CanonicalResultRecord {
+            batch_index: info.batch_idx(),
+            batch_item_index: info.batch_item_idx(),
+            label: info.label().clone(),
+            responses,
+        });
+    }
+
+    fn write_results(&mut self, path: &Path) -> Result<(), ServiceClientError> {
+        self.captured_results
+            .sort_by_key(|record| (record.batch_index, record.batch_item_index));
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            fs::create_dir_all(parent).map_err(|error| {
+                ServiceClientError::ResponseError(format!(
+                    "failed to create result directory {}: {error}",
+                    parent.display()
+                ))
+            })?;
+        }
+        let contents = serde_json::to_vec_pretty(&CanonicalResultsFile {
+            schema_version: 1,
+            records: &self.captured_results,
+        })
+        .map_err(|error| {
+            ServiceClientError::ResponseError(format!(
+                "failed to serialize canonical results: {error}"
+            ))
+        })?;
+        fs::write(path, contents).map_err(|error| {
+            ServiceClientError::ResponseError(format!(
+                "failed to write canonical results to {}: {error}",
+                path.display()
+            ))
+        })?;
+        tracing::info!(
+            "Wrote {} canonical results to {}",
+            self.captured_results.len(),
+            path.display()
+        );
+        Ok(())
     }
 
     /// Correlates a single response to its outstanding request/deletion, updating state.
@@ -498,15 +646,14 @@ impl ExecState {
             typeset::ResponsePayload::ResetUpdate(r) => r.request_id.parse().ok(),
             typeset::ResponsePayload::RecoveryUpdate(r) => r.request_id.parse().ok(),
             typeset::ResponsePayload::IdentityDeletion(r) => {
-                if handle_completion(
+                if let Some(info) = handle_completion(
                     &r.serial_id,
                     response,
                     &mut self.outstanding_deletions,
                     &mut self.error_bits,
-                )
-                .is_some()
-                {
+                ) {
                     self.live_serial_ids.remove(&r.serial_id);
+                    self.capture_completed(info);
                 }
                 return;
             }
@@ -537,6 +684,7 @@ impl ExecState {
                         self.live_serial_ids.insert(serial_id);
                     }
                 }
+                self.capture_completed(info);
             }
         }
     }

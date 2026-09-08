@@ -32,6 +32,10 @@ pub async fn intra_batch_is_match(
     assert_eq!(n_sessions, sessions[RIGHT].len());
     let n_requests = search_queries[LEFT].len();
     assert_eq!(n_requests, search_queries[RIGHT].len());
+    if n_requests <= 1 {
+        metrics::histogram!("intra_batch_duration").record(start.elapsed().as_secs_f64());
+        return Ok(vec![Vec::new(); n_requests]);
+    }
     let n_rotations = VecRotations::<Aby3Query>::n_rotations();
 
     let batches = Schedule::new(n_sessions, n_requests, n_rotations).intra_match_batches();
@@ -181,6 +185,28 @@ mod tests {
                 }],
             ]
         );
+        actor.sync_peers().await?;
+        Ok(actor)
+    }
+
+    #[tokio::test]
+    async fn singleton_batch_has_no_intra_matches() -> Result<()> {
+        let actors = setup_hawk_actors().await?;
+
+        parallelize(actors.into_iter().map(go_singleton_batch)).await?;
+
+        Ok(())
+    }
+
+    async fn go_singleton_batch(mut actor: HawkActor) -> Result<HawkActor> {
+        let sessions = actor.new_sessions().await?;
+        let request = make_request_intra_match(1, actor.party_id);
+        request.cache_into(&actor.worker_pools).await?;
+        let search_queries = &request.queries(Orientation::Normal);
+
+        let result = intra_batch_is_match(&sessions, search_queries, search_queries).await?;
+        assert_eq!(result, vec![vec![]]);
+
         actor.sync_peers().await?;
         Ok(actor)
     }

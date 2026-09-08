@@ -1,0 +1,39 @@
+# Per-node overrides; shared vars live in common-values-iris-mpc-linear-scan.yaml.
+env:
+  SMPC__SERVER_COORDINATION__PARTY_ID: "1"
+  SMPC__DB_CHUNKS_BUCKET_NAME: "iris-mpc-db-exporter-store-node-1-prod--eun1-az3--x-s3"
+  SMPC__SERVICE__METRICS__PREFIX: "smpcv2-linear-scan-1"
+
+initContainer:
+  enabled: true
+  image: "amazon/aws-cli:2.17.62"
+  name: "iris-mpc-linear-scan-dns-records-updater"
+  env:
+    - name: PARTY_ID
+      value: "2"
+    - name: MY_NODE_IP
+      valueFrom:
+        fieldRef:
+          fieldPath: status.hostIP
+  configMap:
+    init.sh: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "$PARTY_ID".smpcv2.worldcoin.org --query "HostedZones[0].Id" --output text)
+      BATCH_JSON=$(cat <<EOF
+      {
+        "Comment": "Upsert the A record for iris-mpc linear scan",
+        "Changes": [{
+          "Action": "UPSERT",
+          "ResourceRecordSet": {
+            "Name": "iris-mpc-node.$PARTY_ID.smpcv2.worldcoin.org",
+            "TTL": 5,
+            "Type": "A",
+            "ResourceRecords": [{"Value": "$MY_NODE_IP"}]
+          }
+        }]
+      }
+      EOF
+      )
+      aws route53 change-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --change-batch "$BATCH_JSON"

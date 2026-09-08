@@ -15,6 +15,21 @@ docker compose -f docker-compose.dev.yaml up -d
 
 ## Running server in different deployment modes
 
+### Exact CPU linear scan with LocalStack
+
+Build and run the separate linear-scan integration target, then execute the
+existing encrypted-request client against all three participants:
+
+```bash
+docker build -f Dockerfile.dev.linear-scan -t linear-scan-server-local-build:latest .
+docker compose -f docker-compose.test.linear-scan.yaml up -d --wait
+docker compose -f docker-compose.test.linear-scan.yaml exec iris_mpc_linear_scan_client ./run-client-docker.sh
+docker compose -f docker-compose.test.linear-scan.yaml down -v
+```
+
+This target uses the GPU-compatible `SMPC__DATABASE` contract expected by the
+exact CPU scanner. It is additive and does not change the Hawk Compose target.
+
 ### Standard
 
 This is used currently for local only. It is the default mode of operation, in which the server reads/writes data to the CPU database (both irises and graph data)

@@ -35,10 +35,11 @@ ndarray = "0.16.0"
 float_eq = "1"
 tracing-subscriber.workspace = true
 uuid.workspace = true
+tokio-util.workspace = true
 
 [features]
 default = []
-gpu_dependent = []
+gpu_dependent = ["iris-mpc-cpu/gpu-parity"]
 
 [[bench]]
 name = "preprocessing"

@@ -1,0 +1,63 @@
+include:
+  - docker-compose.dev.yaml
+
+services:
+  linear_scan_participant_0:
+    image: linear-scan-server-local-build:latest
+    env_file:
+      - .test.env
+      - .test.linear-scan.env
+      - .test.linear-scan0.env
+    depends_on:
+      localstack:
+        condition: service_healthy
+      dev_db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:4000:4000"
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 10s
+      retries: 10
+    entrypoint: ./run-server-docker.sh 0 linear-scan
+
+  linear_scan_participant_1:
+    image: linear-scan-server-local-build:latest
+    env_file:
+      - .test.env
+      - .test.linear-scan.env
+      - .test.linear-scan1.env
+    depends_on:
+      localstack:
+        condition: service_healthy
+      dev_db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:4001:4001"
+      - "3001:3001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 10s
+      retries: 10
+    entrypoint: ./run-server-docker.sh 1 linear-scan
+
+  linear_scan_participant_2:
+    image: linear-scan-server-local-build:latest
+    env_file:
+      - .test.env
+      - .test.linear-scan.env
+      - .test.linear-scan2.env
+    depends_on:
+      localstack:
+        condition: service_healthy
+      dev_db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:4002:4002"
+      - "3002:3002"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3002/health"]
+      interval: 10s
+      retries: 10
+    entrypoint: ./run-server-docker.sh 2 linear-scan

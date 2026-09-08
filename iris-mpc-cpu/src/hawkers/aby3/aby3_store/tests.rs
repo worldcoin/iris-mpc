@@ -35,6 +35,20 @@ use tokio::task::JoinSet;
 use tracing::{info_span, Instrument};
 use tracing_test::traced_test;
 
+#[test]
+fn gpu_prefilter_expands_candidate_records_to_all_rotations() {
+    let mut anon_rotation_bits = vec![false; 3 * ROTATIONS];
+    anon_rotation_bits[4] = true;
+    anon_rotation_bits[2 * ROTATIONS + ROTATIONS - 1] = true;
+
+    let expanded = gpu_candidate_rotation_indices(&anon_rotation_bits);
+    let expected = (0..ROTATIONS)
+        .chain(2 * ROTATIONS..3 * ROTATIONS)
+        .collect::<Vec<_>>();
+
+    assert_eq!(expanded, expected);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn test_gr_hnsw() -> Result<()> {
     let mut rng = AesRng::seed_from_u64(0_u64);

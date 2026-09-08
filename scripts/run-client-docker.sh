@@ -9,11 +9,12 @@ export AWS_SECRET_ACCESS_KEY=test
 export AWS_REGION=us-east-1
 export AWS_DEFAULT_REGION=us-east-1
 
+PARTICIPANT_SERVICE_PREFIX="${PARTICIPANT_SERVICE_PREFIX:-hawk_participant}"
 
 for i in 0 1 2
 do
-  echo "Checking hawk\_participant\_${i} at <url>:300${i}/health..."
-  curl -f hawk_participant_${i}:300${i}/health
+  echo "Checking ${PARTICIPANT_SERVICE_PREFIX}_${i} at <url>:300${i}/health..."
+  curl -f "${PARTICIPANT_SERVICE_PREFIX}_${i}:300${i}/health"
 done
 
 echo "All endpoints are healthy. Running now the client..."

@@ -3,6 +3,8 @@ pub(crate) mod actor;
 pub mod anon_stats;
 
 use crate::dot::{share_db::preprocess_query, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS};
+#[cfg(feature = "gpu_dependent")]
+pub use actor::AnonStatsParityBatch;
 pub use actor::{
     generate_luc_records, prepare_or_policy_bitmap, Orientation, ServerActor, ServerActorHandle,
 };

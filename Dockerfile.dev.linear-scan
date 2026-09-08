@@ -1,0 +1,49 @@
+FROM public.ecr.aws/ubuntu/ubuntu:22.04 AS build-image
+
+WORKDIR /src
+RUN apt-get update && apt-get install -y \
+    curl \
+    build-essential \
+    libssl-dev \
+    texinfo \
+    libcap2-bin \
+    pkg-config \
+    git \
+    devscripts \
+    debhelper \
+    ca-certificates \
+    protobuf-compiler \
+    wget
+
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+ENV RUSTUP_HOME="/root/.rustup"
+ENV CARGO_HOME="/root/.cargo"
+RUN rustup toolchain install 1.89.0
+RUN rustup default 1.89.0
+RUN rustup component add cargo
+
+FROM build-image AS build-app
+WORKDIR /src/iris-mpc
+COPY . .
+
+RUN cargo build -p iris-mpc-bins --release \
+    --bin iris-mpc-linear-scan \
+    --bin key-manager \
+    --bin client
+
+FROM public.ecr.aws/ubuntu/ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y ca-certificates awscli curl
+COPY certs /usr/local/share/ca-certificates/
+RUN update-ca-certificates
+
+COPY --from=build-app /src/iris-mpc/target/release/iris-mpc-linear-scan /bin/iris-mpc-linear-scan
+COPY --from=build-app /src/iris-mpc/target/release/key-manager /bin/key-manager
+COPY --from=build-app /src/iris-mpc/target/release/client /bin/client
+
+COPY scripts/run-server-docker.sh .
+COPY scripts/run-client-docker.sh .
+
+USER 65534

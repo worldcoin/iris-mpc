@@ -56,10 +56,10 @@ impl ConsensusTransport for RingConsensusTransport {
         let mut ch = self.channel.lock().await;
         let result = tokio::time::timeout(timeout, async {
             // Sends first to avoid deadlock — see module doc.
-            ch.send_next(NetworkValue::Bytes(bytes.clone()))
+            ch.send_next(NetworkValue::Bytes(bytes.clone().into()))
                 .await
                 .map_err(|e| CycleError::Transient(format!("control_channel.send_next: {e}")))?;
-            ch.send_prev(NetworkValue::Bytes(bytes))
+            ch.send_prev(NetworkValue::Bytes(bytes.into()))
                 .await
                 .map_err(|e| CycleError::Transient(format!("control_channel.send_prev: {e}")))?;
             tracing::debug!(
@@ -117,7 +117,7 @@ async fn recv_bytes(
     result: eyre::Result<NetworkValue>,
 ) -> Result<Vec<u8>, CycleError> {
     match result {
-        Ok(NetworkValue::Bytes(b)) => Ok(b),
+        Ok(NetworkValue::Bytes(b)) => Ok(b.to_vec()),
         Ok(other) => Err(CycleError::Fatal(format!(
             "control_channel.{label}: expected NetworkValue::Bytes, got {other:?}"
         ))),
@@ -178,7 +178,7 @@ pub(crate) mod test_ring {
         }
         async fn sync(&mut self) -> Result<()> {
             // Mirror the real ring barrier: send a token both ways, recv from each.
-            let token = NetworkValue::Bytes(vec![0x5e]);
+            let token = NetworkValue::Bytes(vec![0x5e].into());
             self.send_next(token.clone()).await?;
             self.send_prev(token).await?;
             self.recv_next().await?;

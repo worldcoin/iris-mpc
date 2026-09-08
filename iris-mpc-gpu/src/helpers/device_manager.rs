@@ -220,18 +220,30 @@ impl DeviceManager {
         let max_size = max_db_length / self.device_count();
         for (device_index, device) in self.devices().iter().enumerate() {
             device.bind_to_thread().unwrap();
-            unsafe {
-                let _ = cudarc::driver::sys::lib().cuMemHostRegister_v2(
-                    db.code_gr.limb_0[device_index] as *mut _,
-                    max_size * code_length,
-                    CU_MEMHOSTALLOC_PORTABLE,
-                );
-
-                let _ = cudarc::driver::sys::lib().cuMemHostRegister_v2(
-                    db.code_gr.limb_1[device_index] as *mut _,
-                    max_size * code_length,
-                    CU_MEMHOSTALLOC_PORTABLE,
-                );
+            // Page-locking is an optimization for asynchronous copies. Keep the
+            // long-standing fallback to pageable memory, but make a failure
+            // visible instead of discarding it.
+            for (limb, host_ptr) in [
+                (0, db.code_gr.limb_0[device_index]),
+                (1, db.code_gr.limb_1[device_index]),
+            ] {
+                let result = unsafe {
+                    cudarc::driver::sys::lib().cuMemHostRegister_v2(
+                        host_ptr as *mut _,
+                        max_size * code_length,
+                        CU_MEMHOSTALLOC_PORTABLE,
+                    )
+                }
+                .result();
+                if let Err(error) = result {
+                    tracing::warn!(
+                        device_index,
+                        limb,
+                        ?error,
+                        "failed to page-lock database limb for asynchronous CUDA copies; \
+                         continuing with pageable memory"
+                    );
+                }
             }
             self.track_locked_db(db.code_gr.clone());
         }

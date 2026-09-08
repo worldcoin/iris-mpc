@@ -48,6 +48,14 @@ impl RequestInfo {
         &self.label
     }
 
+    pub(crate) fn batch_idx(&self) -> usize {
+        self.batch_idx
+    }
+
+    pub(crate) fn batch_item_idx(&self) -> usize {
+        self.batch_item_idx
+    }
+
     pub fn uid(&self) -> &uuid::Uuid {
         &self.uid
     }
@@ -121,5 +129,35 @@ impl fmt::Display for RequestInfo {
             Some(label) => write!(f, "{}", label),
             None => write!(f, "{}.{}", self.batch_idx, self.batch_item_idx),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use iris_mpc_common::helpers::smpc_response::UniquenessResult;
+
+    use super::{RequestInfo, ResponsePayload};
+
+    #[test]
+    fn responses_are_stored_in_party_order_not_arrival_order() {
+        let mut info = RequestInfo::with_indices(7, 3, Some("ordered".to_string()), None);
+        for node_id in [2, 0, 1] {
+            let response = ResponsePayload::Uniqueness(UniquenessResult::new_error_result(
+                node_id,
+                "request-id".to_string(),
+                "probe",
+            ));
+            info.record_response(&response);
+        }
+
+        let node_ids = info
+            .responses()
+            .iter()
+            .map(|response| match response.as_ref().unwrap() {
+                ResponsePayload::Uniqueness(result) => result.node_id,
+                _ => unreachable!(),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(node_ids, vec![0, 1, 2]);
     }
 }
