@@ -445,6 +445,7 @@ fn process_config(config: &Config, search_mode: HawkSearchMode) -> Result<()> {
     }
     validate_max_batch_size(config.max_batch_size, search_mode)?;
     validate_full_scan_side_switching(config.full_scan_side_switching_enabled, search_mode)?;
+    validate_persistence_enabled(config.disable_persistence, search_mode)?;
     // Load batch_size config
     tracing::info!("Set max batch size to {}", config.max_batch_size);
     Ok(())
@@ -455,6 +456,24 @@ fn validate_max_batch_size(max_batch_size: usize, search_mode: HawkSearchMode) -
         bail!(
             "exact CPU linear-scan mode requires max_batch_size=1; got {max_batch_size}. \
              Batched execution is not yet covered by end-to-end GPU-parity validation"
+        );
+    }
+    Ok(())
+}
+
+/// The non-resident eye is served from Postgres plus an overlay of mutations
+/// whose transactions have not committed yet; that overlay is only released
+/// by result persistence. Without persistence nothing ever releases it and it
+/// would grow by one iris per mutation for the process lifetime.
+fn validate_persistence_enabled(
+    disable_persistence: bool,
+    search_mode: HawkSearchMode,
+) -> Result<()> {
+    if search_mode == HawkSearchMode::LinearScan && disable_persistence {
+        bail!(
+            "exact CPU linear-scan mode requires persistence: the database-backed eye's \
+             mutation overlay is released only when results are persisted \
+             (SMPC__DISABLE_PERSISTENCE=false)"
         );
     }
     Ok(())
@@ -1284,6 +1303,13 @@ mod config_tests {
     #[test]
     fn hnsw_keeps_batched_requests() {
         assert!(validate_max_batch_size(64, HawkSearchMode::Hnsw).is_ok());
+    }
+
+    #[test]
+    fn linear_scan_requires_persistence() {
+        assert!(validate_persistence_enabled(false, HawkSearchMode::LinearScan).is_ok());
+        assert!(validate_persistence_enabled(true, HawkSearchMode::Hnsw).is_ok());
+        assert!(validate_persistence_enabled(true, HawkSearchMode::LinearScan).is_err());
     }
 
     #[test]
