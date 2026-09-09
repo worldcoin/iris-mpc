@@ -132,6 +132,8 @@ impl<V: VectorStore + Send + Sync> TerminalAction for UploadAndRecord<'_, V> {
             .commit()
             .await
             .map_err(|e| CycleError::Transient(format!("commit tx: {e}")))?;
+        metrics::counter!("graph_checkpoint_db_row_committed_total", "party" => self.party_id.to_string())
+            .increment(1);
 
         let graph_checkpoint = GraphCheckpointState {
             s3_key,
@@ -157,10 +159,24 @@ impl<V: VectorStore + Send + Sync> TerminalAction for UploadAndRecord<'_, V> {
         .await
         {
             tracing::warn!("failed to clean up old s3 checkpoints: {e}");
+            metrics::counter!("graph_checkpoint_cleanup_failed_total", "party" => self.party_id.to_string())
+                .increment(1);
         }
 
-        if let Err(e) = prune_wal_before_earliest_checkpoint(self.graph_store).await {
-            tracing::warn!("failed to prune the WAL below the oldest checkpoint: {e}");
+        match prune_wal_before_earliest_checkpoint(self.graph_store).await {
+            Ok(rows_pruned) => {
+                // Distinguishes healthy pruning (varying counts) from the
+                // silent-forever-zero case (no live checkpoint, or the oldest
+                // one predates graph_mutation_id tracking) — both log at
+                // `info` today with no other externally visible signal.
+                metrics::gauge!("graph_checkpoint_wal_rows_pruned", "party" => self.party_id.to_string())
+                    .set(rows_pruned as f64);
+            }
+            Err(e) => {
+                tracing::warn!("failed to prune the WAL below the oldest checkpoint: {e}");
+                metrics::counter!("graph_checkpoint_wal_prune_failed_total", "party" => self.party_id.to_string())
+                    .increment(1);
+            }
         }
 
         Ok(())
