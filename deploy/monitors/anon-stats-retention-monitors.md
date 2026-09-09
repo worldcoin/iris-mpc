@@ -6,7 +6,11 @@ The `retention-reaper` CronJob emits these StatsD metrics (prefix per deploy, ta
 - `retention.last_success` — gauge `1` on a fully successful run.
 - `retention.rows_deleted` — count per run, per table.
 - `retention.oldest_retained_seconds` — gauge: age of the oldest surviving row (min `created_at`) per table. This is the "is retention actually working" signal.
-- `retention.dead_tuple_ratio` — gauge: `n_dead_tup / (n_dead_tup + n_live_tup)` from `pg_stat_user_tables`. **The key health signal for DELETE-based retention** — if autovacuum can't keep pace with the delete churn, this climbs.
+- `retention.dead_tuple_ratio` — pre-delete gauge: `n_dead_tup / (n_dead_tup + n_live_tup)` from `pg_stat_user_tables`. Sampling before the daily delete gives autovacuum the complete inter-run window; sustained elevation means vacuum is not keeping pace.
+- `retention.dead_tuples` / `retention.live_tuples` — pre-delete tuple estimates underlying the ratio.
+- `retention.autovacuum_count` — pre-delete autovacuum count from `pg_stat_user_tables`.
+- `retention.autovacuum_seen` — gauge `1` once `last_autovacuum` exists, otherwise `0`.
+- `retention.last_autovacuum_age_seconds` — age of `last_autovacuum`, emitted once one has occurred.
 - `retention.run.duration` — histogram.
 
 Validate all of these in **staging** before enabling prod (prod ships `suspend: true`). Two clusters run independently (smpcv2 + ampc-hnsw), so group by `service` (encodes cluster+party); the cross-party monitor evaluates within each cluster.
@@ -22,8 +26,8 @@ If the reaper stops deleting (bug, lock contention, guard mistake), the oldest r
 - **Metric monitor**: threshold = **active retention window + 2 days** slack (matching the cross-party tolerance in #5). Stage runs a 5-day window → `max(last_6h):max:retention.oldest_retained_seconds{env:stage} by {service,table} > 604800` (= 7 days). Prod (when enabled, 14-day window) → `> 1382400` (= 16 days). Page. The old backfilled-legacy-rows margin is obsolete once the first live run drains the migration-stamped cohort; if the first run hasn't happened yet, expect this to read ~window-of-backfill until it does.
 
 ## 3. Bloat — dead-tuple ratio climbing  (the DELETE-approach risk)
-The one real failure mode of batched DELETE: autovacuum not keeping up with delete churn → table/index bloat.
-- **Metric monitor**: `avg(last_2h):avg:retention.dead_tuple_ratio{env:stage} by {service,table} > 0.4` warn, `> 0.6` alert. If this fires sustained at scale, the escalation is (a) tune per-table autovacuum (`autovacuum_vacuum_scale_factor` down, cost limit up), then (b) if still losing, partition that table via **pg_partman** (the documented Option-B escalation) — not a bespoke binary.
+The one real failure mode of batched DELETE: autovacuum not keeping up with delete churn → table/index bloat. The ratio is sampled immediately before the daily delete so the current run cannot create its own alert.
+- **Metric monitor**: alert on a pre-delete ratio above the fleet baseline. Diagnose with the absolute tuple and autovacuum gauges before changing table settings. If the ratio remains elevated across runs, first tune per-table autovacuum (`autovacuum_vacuum_scale_factor` down, cost limit up); if it still loses, partition that table via **pg_partman**.
 
 ## 4. Rows-deleted anomaly  (over-deletion guard)
 Catches a mis-set retention/guard deleting far more than a normal day.
