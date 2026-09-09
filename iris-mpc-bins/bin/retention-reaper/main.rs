@@ -1,7 +1,8 @@
 //! retention-reaper — a generic, config-driven retention CronJob for append-only Postgres
 //! tables. For each configured job it runs a bounded, batched, guarded `DELETE` of rows
 //! older than a retention window, and emits Datadog/StatsD metrics (rows deleted, oldest
-//! retained age, dead-tuple ratio, last success). One binary, N jobs via `RETENTION_JOBS`
+//! retained age, pre-delete dead-tuple/vacuum stats, last success). One binary, N jobs via
+//! `RETENTION_JOBS`
 //! config — reusable across anon_stats (POP-3905), modifications (POP-3931), and future
 //! append-only stores. No table-specific code, no partition/catalog manipulation.
 //!
@@ -233,6 +234,10 @@ async fn reap(
     let mut conn = pool.acquire().await.wrap_err("acquire connection")?;
     set_statement_timeout(&mut conn, statement_timeout).await?;
 
+    // Sample bloat before creating this run's dead tuples. This gives autovacuum the full
+    // inter-run window and makes a high ratio evidence of sustained bloat, not delete churn.
+    emit_bloat_metrics(&mut conn, job, statement_timeout, party).await;
+
     if dry_run {
         // Read-only preview: COUNT exactly the rows the live path would delete, using the
         // identical predicate (no LIMIT, no ctid, no DELETE). The logged number is what a
@@ -272,9 +277,8 @@ async fn reap(
             "party" => party.to_string()
         )
         .set(would_delete as f64);
-        // Read-only health gauges are still useful during a dry run (verify oldest-retained /
-        // bloat look sane before enabling live deletes).
-        emit_health_metrics(&mut conn, job, statement_timeout, party).await;
+        // The dry-run leaves the table unchanged, so the lag sample remains read-only.
+        emit_retention_lag_metric(&mut conn, job, statement_timeout, party).await;
         return Ok(would_delete);
     }
 
@@ -319,18 +323,14 @@ async fn reap(
         "party" => party.to_string()
     )
     .increment(total as u64);
-    // Health gauges are best-effort: a probe failure must never fail the run or block deletes.
-    emit_health_metrics(&mut conn, job, statement_timeout, party).await;
+    // Lag is sampled after deletion so it reports whether this run drained eligible rows.
+    emit_retention_lag_metric(&mut conn, job, statement_timeout, party).await;
     Ok(total)
 }
 
-/// Oldest-retained age (retention actually working) + dead-tuple ratio (bloat — the one real
-/// risk of DELETE-based retention). Both best-effort; logged and skipped on error. Runs on
-/// the caller's statement_timeout-bounded connection, plus a client-side tokio timeout —
-/// a slow probe (the oldest-retained scan carries the full guard, subqueries and all) must
-/// never hang the pod: with `concurrencyPolicy: Forbid` a hung run would block every
-/// subsequent run and silently stop retention.
-async fn emit_health_metrics(
+/// Oldest-retained age after deletion. Best-effort and bounded: a slow health probe must not
+/// hang the pod because `concurrencyPolicy: Forbid` would then block subsequent runs.
+async fn emit_retention_lag_metric(
     conn: &mut PgConnection,
     job: &RetentionJob,
     statement_timeout: Duration,
@@ -359,21 +359,36 @@ async fn emit_health_metrics(
     .map_err(eyre::Report::from)
     .and_then(|r| r.map_err(eyre::Report::from))
     {
-        Ok(row) => {
-            if let Ok(age) = row.try_get::<Option<f64>, _>("age") {
+        Ok(row) => match row.try_get::<Option<f64>, _>("age") {
+            Ok(age) => {
                 metrics::gauge!(
                     "retention.oldest_retained_seconds",
                     "table" => job.table.clone(), "party" => party.to_string()
                 )
                 .set(age.unwrap_or(0.0));
             }
-        }
+            Err(e) => {
+                warn!(table = %job.table, error = %e, "oldest_retained probe returned invalid stats");
+            }
+        },
         Err(e) => warn!(table = %job.table, error = %e, "oldest_retained probe failed"),
     }
+}
 
-    // schemaname filter: the same table name can exist in several schemas of one DB
-    // (e.g. per-party SMPC_* schemas) — pin the probe to the connection's search_path.
-    let bloat_sql = "SELECT n_dead_tup, n_live_tup FROM pg_stat_user_tables \
+/// Dead/live tuple estimates and autovacuum state before deletion. Sampling before mutation
+/// measures whether vacuum kept pace during the complete inter-run window.
+async fn emit_bloat_metrics(
+    conn: &mut PgConnection,
+    job: &RetentionJob,
+    statement_timeout: Duration,
+    party: &str,
+) {
+    // Pin the probe to the connection's search_path because identical table names can exist
+    // in several schemas of the same database.
+    let bloat_sql = "SELECT n_dead_tup, n_live_tup, autovacuum_count, \
+                     EXTRACT(EPOCH FROM (now() - last_autovacuum))::float8 \
+                         AS last_autovacuum_age_seconds \
+                     FROM pg_stat_user_tables \
                      WHERE relname = $1 AND schemaname = current_schema()";
     match timeout(
         statement_timeout + Duration::from_secs(5),
@@ -386,21 +401,70 @@ async fn emit_health_metrics(
     .and_then(|r| r.map_err(eyre::Report::from))
     {
         Ok(Some(row)) => {
-            let dead: i64 = row.try_get("n_dead_tup").unwrap_or(0);
-            let live: i64 = row.try_get("n_live_tup").unwrap_or(0);
-            let ratio = if dead + live > 0 {
-                dead as f64 / (dead + live) as f64
-            } else {
-                0.0
+            let parse_stats =
+                || -> std::result::Result<(i64, i64, i64, Option<f64>), sqlx::Error> {
+                    Ok((
+                        row.try_get("n_dead_tup")?,
+                        row.try_get("n_live_tup")?,
+                        row.try_get("autovacuum_count")?,
+                        row.try_get("last_autovacuum_age_seconds")?,
+                    ))
+                };
+            let (dead, live, autovacuum_count, last_autovacuum_age_seconds) = match parse_stats() {
+                Ok(stats) => stats,
+                Err(e) => {
+                    warn!(table = %job.table, error = %e, "dead tuple probe returned invalid stats");
+                    return;
+                }
             };
             metrics::gauge!(
                 "retention.dead_tuple_ratio",
                 "table" => job.table.clone(), "party" => party.to_string()
             )
-            .set(ratio);
+            .set(dead_tuple_ratio(dead, live));
+            metrics::gauge!(
+                "retention.dead_tuples",
+                "table" => job.table.clone(), "party" => party.to_string()
+            )
+            .set(dead as f64);
+            metrics::gauge!(
+                "retention.live_tuples",
+                "table" => job.table.clone(), "party" => party.to_string()
+            )
+            .set(live as f64);
+            metrics::gauge!(
+                "retention.autovacuum_count",
+                "table" => job.table.clone(), "party" => party.to_string()
+            )
+            .set(autovacuum_count as f64);
+            metrics::gauge!(
+                "retention.autovacuum_seen",
+                "table" => job.table.clone(), "party" => party.to_string()
+            )
+            .set(if last_autovacuum_age_seconds.is_some() {
+                1.0
+            } else {
+                0.0
+            });
+            if let Some(age) = last_autovacuum_age_seconds {
+                metrics::gauge!(
+                    "retention.last_autovacuum_age_seconds",
+                    "table" => job.table.clone(), "party" => party.to_string()
+                )
+                .set(age.max(0.0));
+            }
         }
-        Ok(None) => {}
+        Ok(None) => warn!(table = %job.table, "dead tuple probe found no matching table"),
         Err(e) => warn!(table = %job.table, error = %e, "dead_tuple probe failed"),
+    }
+}
+
+fn dead_tuple_ratio(dead: i64, live: i64) -> f64 {
+    let total = dead.saturating_add(live);
+    if total > 0 {
+        dead as f64 / total as f64
+    } else {
+        0.0
     }
 }
 
@@ -478,6 +542,14 @@ mod tests {
     #[test]
     fn quotes_identifiers() {
         assert_eq!(quote_ident("anon_stats_1d"), "\"anon_stats_1d\"");
+    }
+
+    #[test]
+    fn computes_dead_tuple_ratio() {
+        assert_eq!(dead_tuple_ratio(0, 0), 0.0);
+        assert_eq!(dead_tuple_ratio(0, 100), 0.0);
+        assert_eq!(dead_tuple_ratio(25, 75), 0.25);
+        assert_eq!(dead_tuple_ratio(100, 0), 1.0);
     }
 
     #[test]
