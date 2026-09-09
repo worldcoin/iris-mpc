@@ -41,13 +41,13 @@ env:
   SMPC__N_BUCKETS_1D_NHD: "400"
   SMPC__N_BUCKETS_2D_NHD: "400"
   SMPC__MIN_1D_JOB_SIZE_REAUTH: "10"
-  SMPC__MIN_1D_JOB_SIZE: "64"
-  SMPC__MIN_1D_JOB_SIZE_MIRROR: "64"
+  SMPC__MIN_1D_JOB_SIZE: "1" # Correctness test: publish even the final single bundle.
+  SMPC__MIN_1D_JOB_SIZE_MIRROR: "1"
   SMPC__MIN_2D_JOB_SIZE_REAUTH: "10"
   SMPC__MIN_2D_JOB_SIZE: "64"
   SMPC__MIN_2D_JOB_SIZE_MIRROR: "64"
   SMPC__NHD_THRESHOLD_RATIO: "0.4"
-  SMPC__POLL_INTERVAL_SECS: "30"
+  SMPC__POLL_INTERVAL_SECS: "5"
   SMPC__TLS__PRIVATE_KEY: "/etc/ssl/private/key.pem"
   SMPC__TLS__LEAF_CERT: "/etc/ssl/private/certificate.crt"
   SMPC__TLS__ROOT_CERTS: '["/usr/local/share/ca-certificates/ca_ampc_hnsw_party_stage_0.crt", "/usr/local/share/ca-certificates/ca_ampc_hnsw_party_stage_1.crt", "/usr/local/share/ca-certificates/ca_ampc_hnsw_party_stage_2.crt"]'

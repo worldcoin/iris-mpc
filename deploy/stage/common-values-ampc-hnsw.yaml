@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-linear-scan:f5b38fe3439e7ebd3b05f03adba8b44e5c4bda16"
+image: "ghcr.io/worldcoin/iris-mpc-linear-scan:bead695a9a1b1d0eaa24d99da07c579ae9a1b776"
 
 environment: stage
 replicaCount: 1
@@ -51,11 +51,11 @@ env:
   SMPC__SERVER_COORDINATION__HEARTBEAT_INTERVAL_SECS: "3"
   SMPC__PUBLIC_KEY_BASE_URL: "https://pki-smpcv2-stage.worldcoin.org"
   SMPC__SHARES_BUCKET_NAME: "wf-smpcv2-stage-sns-requests"
-  SMPC__ENABLE_S3_IMPORTER: "true"
+  SMPC__ENABLE_S3_IMPORTER: "false" # Correctness test: load only the cleared stage database.
   SMPC__DB_CHUNKS_FOLDER_NAME: "hnsw_even_odd_with_version_id_output_16k"
   SMPC__LOAD_CHUNKS_PARALLELISM: "64"
   SMPC__LOAD_CHUNKS_BUFFER_SIZE: "1024"
-  SMPC__CLEAR_DB_BEFORE_INIT: "true"
+  SMPC__CLEAR_DB_BEFORE_INIT: "false"
   SMPC__INIT_DB_SIZE: "0"
   SMPC__MAX_DB_SIZE: "100000"
   SMPC__FAKE_DB_SIZE: "0"
@@ -77,7 +77,7 @@ env:
   SMPC__ENABLE_RECOVERY: "true"
   SMPC__LUC_ENABLED: "false"
   SMPC__LUC_LOOKBACK_RECORDS: "50"
-  SMPC__COLD_EYE_LFU_CACHE_RECORDS: "4096"
+  SMPC__COLD_EYE_LFU_CACHE_RECORDS: "12288"
   SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST: "true"
   SMPC__SERVICE__METRICS__HOST:
     valueFrom:
