@@ -27,7 +27,7 @@ If the reaper stops deleting (bug, lock contention, guard mistake), the oldest r
 
 ## 3. Bloat — dead-tuple ratio climbing  (the DELETE-approach risk)
 The one real failure mode of batched DELETE: autovacuum not keeping up with delete churn → table/index bloat. The ratio is sampled immediately before the daily delete so the current run cannot create its own alert.
-- **Metric monitor**: alert on a pre-delete ratio above the fleet baseline. Diagnose with the absolute tuple and autovacuum gauges before changing table settings. If the ratio remains elevated across runs, first tune per-table autovacuum (`autovacuum_vacuum_scale_factor` down, cost limit up); if it still loses, partition that table via **pg_partman**.
+- **Metric monitor**: use `max(last_1d)` over the three per-party pre-delete gauges, warning at `> 0.7` and critical at `> 0.9` (the current production window and thresholds). Diagnose with the absolute tuple and autovacuum gauges before changing table settings. If the ratio remains elevated across runs, first tune per-table autovacuum (`autovacuum_vacuum_scale_factor` down, cost limit up); if it still loses, partition that table via **pg_partman**.
 
 ## 4. Rows-deleted anomaly  (over-deletion guard)
 Catches a mis-set retention/guard deleting far more than a normal day.
