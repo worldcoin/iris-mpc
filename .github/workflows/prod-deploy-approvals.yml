@@ -11,6 +11,11 @@ jobs:
       contents: read
       pull-requests: read
     steps:
+      - name: Fetch PR history for merge verification
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
       - name: Check approvals for deploy/prod changes
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
@@ -101,6 +106,8 @@ jobs:
               latestReviewByUser.set(review.user.login, review);
             }
 
+            const { execFileSync } = require('node:child_process');
+
             const isAncestorOfBaseCache = new Map();
             const isAncestorOfBase = async (sha) => {
               if (!isAncestorOfBaseCache.has(sha)) {
@@ -113,6 +120,29 @@ jobs:
                 isAncestorOfBaseCache.set(sha, data.ahead_by === 0);
               }
               return isAncestorOfBaseCache.get(sha);
+            };
+
+            const isExactAutomaticMerge = (commit) => {
+              if (commit.parents.length !== 2) {
+                return false;
+              }
+
+              try {
+                const expectedTree = execFileSync(
+                  'git',
+                  ['merge-tree', '--write-tree', commit.parents[0].sha, commit.parents[1].sha],
+                  { encoding: 'utf8' },
+                ).trim();
+                const actualTree = execFileSync(
+                  'git',
+                  ['rev-parse', `${commit.sha}^{tree}`],
+                  { encoding: 'utf8' },
+                ).trim();
+                return expectedTree === actualTree;
+              } catch (error) {
+                core.info(`Cannot verify merge ${commit.sha}: ${error.message}`);
+                return false;
+              }
             };
 
             const approvalIsCurrent = async (review) => {
@@ -142,15 +172,15 @@ jobs:
                   continue;
                 }
 
-                // A non-base commit is acceptable only if it is a merge whose
-                // other parent is already in main. This is the shape produced by
-                // GitHub's "Update branch" operation; a normal PR push invalidates
-                // the approval and requires it to be renewed.
+                // A non-base commit is acceptable only if it is an exact automatic
+                // merge of the PR branch and a main ancestor. This preserves
+                // approvals after GitHub's "Update branch" operation, but rejects
+                // a hand-built merge with unreviewed conflict-resolution changes.
                 const hasBaseParent = await Promise.all(
                   commit.parents.map((parent) => isAncestorOfBase(parent.sha)),
                 );
-                if (commit.parents.length !== 2 || !hasBaseParent.some(Boolean)) {
-                  core.info(`Approval ${review.id} is stale: ${commit.sha} is a non-base PR commit`);
+                if (!hasBaseParent.some(Boolean) || !isExactAutomaticMerge(commit)) {
+                  core.info(`Approval ${review.id} is stale: ${commit.sha} is not a verified branch update`);
                   return false;
                 }
               }
