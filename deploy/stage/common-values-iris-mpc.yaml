@@ -62,7 +62,8 @@ env:
   SMPC__INIT_DB_SIZE: "0"
   SMPC__FAKE_DB_SIZE: "0"
   SMPC__MAX_DB_SIZE: "100000" # "1300000"
-  SMPC__MAX_BATCH_SIZE: "1"
+  # GPU allocation requires aligned capacity; submit one enrollment at a time.
+  SMPC__MAX_BATCH_SIZE: "64"
   SMPC__FULL_SCAN_SIDE: "Left"
   SMPC__FULL_SCAN_SIDE_SWITCHING_ENABLED: "false"
   SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT: "500"
