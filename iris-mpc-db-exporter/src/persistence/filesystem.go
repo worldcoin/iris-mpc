@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -18,12 +17,12 @@ func (f *FilesystemWriter) Persist(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	err := os.MkdirAll(dir, 0755)
 	if err != nil {
-		log.Fatalf("Failed to create directories: %v", err)
+		return fmt.Errorf("create directories for %s: %w", path, err)
 	}
 
 	err = os.WriteFile(path, data, 0644)
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("write file %s: %w", path, err)
 	}
 	return nil
 }
@@ -51,7 +50,7 @@ func (f *FilesystemWriter) PersistStream(ctx context.Context, path string, input
 		case item, ok := <-inputChannel:
 			if !ok {
 				// channel closed; we're done receiving data
-				return nil
+				return file.Close()
 			}
 			if _, writeErr := file.Write(item); writeErr != nil {
 				return fmt.Errorf("failed to write to file: %w", writeErr)

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"log"
+	"os"
 	"slices"
 	"syscall"
 	"time"
@@ -72,7 +73,7 @@ func exportCommand() *cobra.Command {
 	var exportCmd = &cobra.Command{
 		Use:   "export-db",
 		Short: "Export iris-mpc participant database",
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancelMainCtxFn := context.WithCancel(context.Background()) // mainCtx
 			defer cancelMainCtxFn()
 
@@ -119,7 +120,7 @@ func exportCommand() *cobra.Command {
 			// Avoid blocking producers by defining a chan buffer in case consumers are slower
 			chanBufferLen := cfg.MaxItemsPerUploadPart * 2
 
-			commands.ExportCommand(ctx, exportMode, outputFolder, *store, converter.NewBinaryConverter(CodeSize, MaskSize, IdSize, VersionIdSize), writer, reader, batchSize, parallelism, endIndex, chanBufferLen)
+			return commands.ExportCommand(ctx, exportMode, outputFolder, *store, converter.NewBinaryConverter(CodeSize, MaskSize, IdSize, VersionIdSize), writer, reader, batchSize, parallelism, endIndex, chanBufferLen)
 		},
 	}
 
@@ -136,6 +137,10 @@ func exportCommand() *cobra.Command {
 }
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	rootCmd := &cobra.Command{Use: "app"}
 	cfg := config.Load()
 	ctx := context.Background()
@@ -182,6 +187,7 @@ func main() {
 	err = rootCmd.Execute()
 	if err != nil {
 		o11y.S(ctx).With(zap.Error(err)).Error("Error executing command")
-		return
+		return 1
 	}
+	return 0
 }

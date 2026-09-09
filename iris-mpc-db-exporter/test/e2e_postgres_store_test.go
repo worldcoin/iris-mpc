@@ -69,13 +69,14 @@ func TestPostgresRangeReadsAreOrderedByID(t *testing.T) {
 	})
 
 	t.Run("streaming range", func(t *testing.T) {
-		records, err := store.StreamStoredIrisesByRange(ctx, 1, 4, 4)
+		records, streamError, err := store.StreamStoredIrisesByRange(ctx, 1, 4, 4)
 		require.NoError(t, err)
 
 		var ids []int64
 		for record := range records {
 			ids = append(ids, record.ID)
 		}
+		require.NoError(t, <-streamError)
 		require.Equal(t, []int64{1, 2, 3, 4}, ids)
 	})
 }

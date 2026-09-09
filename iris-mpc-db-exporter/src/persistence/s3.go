@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -126,7 +125,7 @@ func (s *S3Writer) Persist(path string, data []byte) error {
 		Body:   bytes.NewReader(data),
 	})
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("put object %s: %w", path, err)
 	}
 	return nil
 }
