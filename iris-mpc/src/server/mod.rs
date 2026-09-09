@@ -261,7 +261,7 @@ pub async fn server_main(config: Config) -> Result<()> {
         let schema = config.get_anon_stats_db_schema();
         let anon_client =
             AnonStatsPgClient::new(&url, &schema, AnonStatsAccessMode::ReadWrite).await?;
-        let anon_store = AnonStatsStore::new(&anon_client).await?;
+        let anon_store = AnonStatsStore::new(&anon_client, false).await?;
         hawk_actor.set_anon_stats_store(Some(anon_store));
     } else {
         tracing::warn!(

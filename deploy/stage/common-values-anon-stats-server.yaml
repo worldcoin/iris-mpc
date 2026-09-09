@@ -8,6 +8,7 @@ replicaCount: 1
 env:
   RUST_LOG: "info"
   SMPC__ENVIRONMENT: "stage"
+  SMPC__IGNORE_MISSING_MIGRATIONS: "true"
   SMPC__SNS_BUFFER_BUCKET_NAME: "wf-smpcv2-stage-sns-buffer"
   SMPC__DB_URL:
     valueFrom:
