@@ -1,7 +1,7 @@
 # POP-3905 — anon-stats retention CronJob (stage, smpcv2). Uses the common-cronjob chart
 # (chartVersion 1.11.0, worldcoin-foundation/common-cronjob) via wf-cluster-apps, mirroring
 # iris-mpc-db-exporter. Per-cluster env (RETENTION__*, map format) lives in the per-node values files.
-image: "ghcr.io/worldcoin/retention-reaper:d9a3d33342dfd9e95c7b11e8ef4e4101a3e6ed80"
+image: "ghcr.io/worldcoin/retention-reaper:e021e13dad7710f4dda417c210fadf2c0c43b43a@sha256:70c52f46bef422afae1a706b10b8b82322f1258145465e8953349ec78f7fac82"
 
 # STAGE LIVE: dry-run validated 2026-07-03 → 2026-07-09 (daily runs, all parties, exact
 # delete predicate logged incl. the processed=TRUE guard; 0 rows eligible only because
