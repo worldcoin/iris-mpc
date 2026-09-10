@@ -3,6 +3,7 @@ module github.com/worldcoin/iris-mpc-db-exporter
 go 1.23.11
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/DataDog/datadog-go/v5 v5.6.0
 	github.com/aws/aws-sdk-go-v2 v1.36.3
 	github.com/aws/aws-sdk-go-v2/config v1.29.14
