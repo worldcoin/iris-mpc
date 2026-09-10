@@ -9,7 +9,7 @@
 # coordination exists or is needed. The GPU MPCV2 DB's copy grows the same way; its
 # reaper instance FOLLOWS SHORTLY (same binary, values + cluster-apps entry only).
 #
-image: "ghcr.io/worldcoin/retention-reaper:v0.32.6@sha256:366cc7dcd9e9132bbfe2b5719332ff8d1f301ed5b487cbfc458fbc97cca92ace"
+image: "ghcr.io/worldcoin/retention-reaper:e021e13dad7710f4dda417c210fadf2c0c43b43a@sha256:70c52f46bef422afae1a706b10b8b82322f1258145465e8953349ec78f7fac82"
 
 # STAGE LIVE: dry-run cleared after clean daily previews (2026-07-09 → 2026-07-20 all
 # "would delete 0"). The reaper now performs the real guarded DELETE. This is a no-op
