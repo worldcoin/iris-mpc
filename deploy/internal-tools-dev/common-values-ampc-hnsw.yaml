@@ -1,0 +1,156 @@
+image: "ghcr.io/worldcoin/iris-mpc-cpu:v0.31.5@sha256:9c69b755ec49a73d3d7bd684203137d29833a5f183d647356f5d2eec64148045"
+
+environment: internal-tools-dev
+replicaCount: 1
+
+env:
+  RUST_LOG: "info"
+  RUST_BACKTRACE: "full"
+  SMPC__SEPARATE_TOKIO_CORES_PER_NODE: "16"
+  SMPC__ENVIRONMENT: "internal-tools-dev"
+  SMPC__AWS__REGION: "eu-west-1"
+  SMPC__CPU_DATABASE__URL:
+    valueFrom:
+      secretKeyRef:
+        key: DATABASE_AURORA_HNSW_URL
+        name: application
+  SMPC__HNSW_SCHEMA_NAME_SUFFIX: "_minfhd"
+  SMPC__MAX_DB_SIZE: "2000000"
+  SMPC__MAX_BATCH_SIZE: "96"
+  SMPC__BATCH_SYNC_POLLING_TIMEOUT_SECS: "30"
+  SMPC__PROCESSING_TIMEOUT_SECS: "1800"
+  SMPC__HNSW_FIXED_LAYER_SEARCH_BATCH_SIZE: "8000"
+  SMPC__HAWK_REQUEST_PARALLELISM: "96"
+  SMPC__HAWK_CONNECTION_PARALLELISM: "64"
+  SMPC__HAWK_STREAM_PARALLELISM: "32"
+  SMPC__DISABLE_PERSISTENCE: "true"
+  SMPC__ENABLE_REAUTH: "true"
+  SMPC__ENABLE_RESET: "true"
+  SMPC__ENABLE_DELETION: "true"
+  SMPC__LUC_ENABLED: "true"
+  SMPC__LUC_LOOKBACK_RECORDS: "5"
+  SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST: "false"
+  SMPC__SERVICE_PORTS: '["4000","4001","4002"]'
+  SMPC__SERVER_COORDINATION__IMAGE_NAME: $(IMAGE_NAME)
+  SMPC__ENABLE_S3_IMPORTER: "false"
+  SMPC__REQUESTS_QUEUE_URL:
+    valueFrom:
+      secretKeyRef:
+        key: SQS_URL
+        name: application
+  SMPC__RESULTS_TOPIC_ARN:
+    valueFrom:
+      secretKeyRef:
+        key: SNS_RESULTS_ARN
+        name: application
+  SMPC__KMS_KEY_ARNS:
+    valueFrom:
+      secretKeyRef:
+        key: KMS_KEYS
+        name: application
+  SMPC__SERVER_COORDINATION__HEARTBEAT_INITIAL_RETRIES: "65"
+  SMPC__SERVER_COORDINATION__HEARTBEAT_INTERVAL_SECS: "3"
+  SMPC__SERVICE__METRICS__HOST:
+    valueFrom:
+      fieldRef:
+        fieldPath: status.hostIP
+  SMPC__SERVICE__METRICS__PORT: "8125"
+  SMPC__SERVICE__METRICS__QUEUE_SIZE: "5000"
+  SMPC__SERVICE__METRICS__BUFFER_SIZE: "256"
+  SMPC__ENABLE_MODIFICATIONS_SYNC: "true"
+  SMPC__ENABLE_MODIFICATIONS_REPLAY: "false"
+  SMPC__TLS__PRIVATE_KEY: "/etc/ssl/private/key.pem"
+  SMPC__TLS__LEAF_CERT: "/etc/ssl/private/certificate.crt"
+  # Root CA order must match KMS_KEYS order (local-first) in the terraform-mpc-setup application Secret.
+  SMPC__TLS__ROOT_CERTS: '["/usr/local/share/ca-certificates/ca_party_dev_0.crt", "/usr/local/share/ca-certificates/ca_party_dev_1.crt", "/usr/local/share/ca-certificates/ca_party_dev_2.crt"]'
+  SMPC__TLS__CLIENT_ONLY_TLS: "false"
+
+strategy:
+  type: Recreate
+
+datadog:
+  enabled: true
+
+hostNetwork: false
+
+ports:
+  - containerPort: 3000
+    name: health
+    protocol: TCP
+  - containerPort: 4000
+    name: tcp-4000
+    protocol: TCP
+  - containerPort: 4001
+    name: tcp-4001
+    protocol: TCP
+  - containerPort: 4002
+    name: tcp-4002
+    protocol: TCP
+  - containerPort: 4100
+    name: tcp-4100
+    protocol: TCP
+  - containerPort: 4101
+    name: tcp-4101
+    protocol: TCP
+  - containerPort: 4102
+    name: tcp-4102
+    protocol: TCP
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: health
+
+readinessProbe:
+  periodSeconds: 30
+  httpGet:
+    path: /ready
+    port: health
+
+startupProbe:
+  initialDelaySeconds: 60
+  failureThreshold: 120
+  periodSeconds: 30
+  httpGet:
+    path: /ready
+    port: health
+
+resources:
+  limits:
+    cpu: "1"
+    memory: 16Gi
+  requests:
+    cpu: "1"
+    memory: 16Gi
+
+imagePullSecrets:
+  - name: github-secret
+
+podAnnotations:
+  karpenter.sh/do-not-disrupt: "true"
+
+nodeSelector:
+  kubernetes.io/arch: arm64
+  karpenter.sh/capacity-type: on-demand
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: karpenter.k8s.aws/instance-family
+              operator: In
+              values: ["r8g", "c8g", "m8g"]
+
+podSecurityContext:
+  runAsUser: 65534
+  runAsGroup: 65534
+
+preStop:
+  sleepPeriod: 10
+
+terminationGracePeriodSeconds: 240
+
+mountSSLCerts:
+  enabled: true
+  mountPath: /etc/ssl/private

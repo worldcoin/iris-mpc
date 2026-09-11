@@ -1,0 +1,45 @@
+# Per-node overrides. Shared vars live in deploy/internal-tools-dev/common-values-ampc-hnsw.yaml.
+env:
+  SMPC__SERVICE__SERVICE_NAME: "hnsw-service-1"
+  SMPC__SERVER_COORDINATION__PARTY_ID: "1"
+  SMPC__SERVER_COORDINATION__NODE_HOSTNAMES: '["0.0.0.0","node.ampc-hnsw-0.dev.internal.worldcoin.org","node.ampc-hnsw-2.dev.internal.worldcoin.org"]'
+  SMPC__SERVICE__METRICS__PREFIX: "hnsw-1"
+
+initContainer:
+  enabled: true
+  image: "amazon/aws-cli:2.17.62"
+  name: "hnsw-mpc-dns-records-updater"
+  env:
+    - name: PARTY_ID
+      value: "1"
+    - name: POD_IP
+      valueFrom:
+        fieldRef:
+          fieldPath: status.podIP
+  configMap:
+    init.sh: |
+      #!/usr/bin/env bash
+      HOSTED_ZONE_ID=$(aws route53 list-hosted-zones-by-name --dns-name "ampc-hnsw-$PARTY_ID.dev.internal.worldcoin.org" --query "HostedZones[0].Id" --output text)
+      BATCH_JSON=$(cat <<EOF
+      {
+        "Comment": "Upsert the A record for HNSW pod",
+        "Changes": [
+          {
+            "Action": "UPSERT",
+            "ResourceRecordSet": {
+              "Name": "node.ampc-hnsw-$PARTY_ID.dev.internal.worldcoin.org",
+              "TTL": 5,
+              "Type": "A",
+              "ResourceRecords": [{
+                "Value": "$POD_IP"
+              }]
+            }
+          }
+        ]
+      }
+      EOF
+      )
+      aws route53 change-resource-record-sets --hosted-zone-id "$HOSTED_ZONE_ID" --change-batch "$BATCH_JSON"
+
+attachSecurityGroupPolicy:
+  enabled: false
