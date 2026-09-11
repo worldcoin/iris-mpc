@@ -72,7 +72,7 @@ func runCompleteExportCommand(ctx context.Context, mode, outputFolder string, st
 	}
 	// The writer consumes producerStatus after a complete input stream. If it
 	// returned early, the caller owns the remaining status after draining.
-	producerErr, _ := <-producerStatus
+	producerErr := <-producerStatus
 	if err = errors.Join(err, producerErr); err != nil {
 		return fmt.Errorf("export chunk %s: %w", path, err)
 	}
