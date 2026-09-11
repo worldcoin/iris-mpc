@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -18,21 +19,50 @@ import (
 	"github.com/worldcoin/iris-mpc-db-exporter/src/o11y"
 )
 
+type s3WriterClient interface {
+	CreateMultipartUpload(context.Context, *s3.CreateMultipartUploadInput, ...func(*s3.Options)) (*s3.CreateMultipartUploadOutput, error)
+	UploadPart(context.Context, *s3.UploadPartInput, ...func(*s3.Options)) (*s3.UploadPartOutput, error)
+	CompleteMultipartUpload(context.Context, *s3.CompleteMultipartUploadInput, ...func(*s3.Options)) (*s3.CompleteMultipartUploadOutput, error)
+	AbortMultipartUpload(context.Context, *s3.AbortMultipartUploadInput, ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error)
+	PutObject(context.Context, *s3.PutObjectInput, ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+}
+
 type S3Writer struct {
-	Client                *s3.Client
+	Client                s3WriterClient
 	Bucket                string
 	MaxItemsPerPartUpload int
 }
 
-func (s *S3Writer) PersistStream(ctx context.Context, path string, inputChannel <-chan []byte) error {
+func (s *S3Writer) PersistStream(ctx context.Context, path string, inputChannel <-chan []byte, producerStatus <-chan error) (resultErr error) {
+	if s.MaxItemsPerPartUpload <= 0 {
+		return errors.New("max items per part upload must be positive")
+	}
+
 	input := &s3.CreateMultipartUploadInput{
 		Bucket: &s.Bucket,
 		Key:    &path,
 	}
 	resp, err := s.Client.CreateMultipartUpload(ctx, input)
 	if err != nil {
-		return err
+		return fmt.Errorf("create multipart upload for %s: %w", path, err)
 	}
+	completed := false
+	defer func() {
+		if completed {
+			return
+		}
+
+		abortCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		_, abortErr := s.Client.AbortMultipartUpload(abortCtx, &s3.AbortMultipartUploadInput{
+			Bucket:   resp.Bucket,
+			Key:      resp.Key,
+			UploadId: resp.UploadId,
+		})
+		if abortErr != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("abort multipart upload for %s: %w", path, abortErr))
+		}
+	}()
 
 	o11y.S(ctx).Infof("Created multipart upload with ID %s", *resp.UploadId)
 
@@ -43,10 +73,18 @@ func (s *S3Writer) PersistStream(ctx context.Context, path string, inputChannel 
 	itemIdx := 0
 
 	for {
-		item, ok := <-inputChannel
+		var item []byte
+		var ok bool
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case item, ok = <-inputChannel:
+		}
 		if ok {
 			outputBuffer = append(outputBuffer, item...)
 			itemIdx++
+		} else if err := readProducerStatus(producerStatus); err != nil {
+			return fmt.Errorf("producer failed for %s: %w", path, err)
 		}
 
 		// if we have collected enough items or the channel is closed, upload the part
@@ -60,16 +98,7 @@ func (s *S3Writer) PersistStream(ctx context.Context, path string, inputChannel 
 			}
 			uploadResult, err := s.Client.UploadPart(ctx, partInput)
 			if err != nil {
-				aboInput := &s3.AbortMultipartUploadInput{
-					Bucket:   resp.Bucket,
-					Key:      resp.Key,
-					UploadId: resp.UploadId,
-				}
-				_, aboErr := s.Client.AbortMultipartUpload(ctx, aboInput)
-				if aboErr != nil {
-					return aboErr
-				}
-				return err
+				return fmt.Errorf("upload part %d for %s: %w", partNumber, path, err)
 			}
 			o11y.S(ctx).Infof("Uploaded part %d to path %s", partNumber, path)
 			completedParts = append(completedParts, types.CompletedPart{
@@ -102,18 +131,10 @@ func (s *S3Writer) PersistStream(ctx context.Context, path string, inputChannel 
 	_, err = s.Client.CompleteMultipartUpload(ctx, compInput)
 	if err != nil {
 		o11y.S(ctx).With(zap.Error(err)).Error("Failed to complete multipart upload, aborting")
-		abortInput := &s3.AbortMultipartUploadInput{
-			Bucket:   resp.Bucket,
-			Key:      resp.Key,
-			UploadId: resp.UploadId,
-		}
-		_, abortErr := s.Client.AbortMultipartUpload(ctx, abortInput)
-		if abortErr != nil {
-			return abortErr
-		}
-		return err
+		return fmt.Errorf("complete multipart upload for %s: %w", path, err)
 	}
 
+	completed = true
 	return nil
 }
 
