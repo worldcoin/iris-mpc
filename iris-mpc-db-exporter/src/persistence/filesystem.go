@@ -2,6 +2,8 @@ package persistence
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +13,22 @@ import (
 )
 
 type FilesystemWriter struct{}
+
+func createTempFile(dir, base string, mode os.FileMode) (*os.File, error) {
+	for range 100 {
+		var suffix [8]byte
+		if _, err := rand.Read(suffix[:]); err != nil {
+			return nil, fmt.Errorf("generate temporary filename: %w", err)
+		}
+		path := filepath.Join(dir, "."+base+".tmp-"+hex.EncodeToString(suffix[:]))
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		return file, err
+	}
+	return nil, errors.New("failed to allocate a unique temporary filename")
+}
 
 func (f *FilesystemWriter) Persist(path string, data []byte) error {
 	// Ensure the directory exists
@@ -35,7 +53,16 @@ func (f *FilesystemWriter) PersistStream(ctx context.Context, path string, input
 		return fmt.Errorf("failed to create directories: %w", err)
 	}
 
-	file, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	mode := os.FileMode(0644)
+	preserveMode := false
+	if info, statErr := os.Stat(path); statErr == nil {
+		mode = info.Mode().Perm()
+		preserveMode = true
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return fmt.Errorf("stat existing file %s: %w", path, statErr)
+	}
+
+	file, err := createTempFile(dir, filepath.Base(path), mode)
 	if err != nil {
 		return fmt.Errorf("create temporary file for %s: %w", path, err)
 	}
@@ -54,6 +81,11 @@ func (f *FilesystemWriter) PersistStream(ctx context.Context, path string, input
 			}
 		}
 	}()
+	if preserveMode {
+		if err := file.Chmod(mode); err != nil {
+			return fmt.Errorf("preserve permissions for %s: %w", path, err)
+		}
+	}
 
 	// Write chunks as they arrive on the channel
 	for {
@@ -64,9 +96,6 @@ func (f *FilesystemWriter) PersistStream(ctx context.Context, path string, input
 			if !ok {
 				if err := readProducerStatus(producerStatus); err != nil {
 					return fmt.Errorf("producer failed for %s: %w", path, err)
-				}
-				if err := file.Chmod(0644); err != nil {
-					return fmt.Errorf("chmod temporary file for %s: %w", path, err)
 				}
 				if err := file.Close(); err != nil {
 					return fmt.Errorf("close temporary file for %s: %w", path, err)

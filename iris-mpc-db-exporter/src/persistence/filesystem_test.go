@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -34,7 +35,20 @@ func TestFilesystemPersistStreamAtomicallyReplacesFile(t *testing.T) {
 	require.Equal(t, []byte("new"), contents)
 	info, err := os.Stat(path)
 	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0644), info.Mode().Perm())
+	require.Equal(t, os.FileMode(0600), info.Mode().Perm())
+	require.Empty(t, temporaryFiles(t, dir))
+}
+
+func TestFilesystemPersistStreamHonorsUmaskForNewFile(t *testing.T) {
+	oldUmask := syscall.Umask(0077)
+	t.Cleanup(func() { syscall.Umask(oldUmask) })
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "chunk.bin")
+	require.NoError(t, (&FilesystemWriter{}).PersistStream(context.Background(), path, streamInput([]byte("new")), terminalStatus(nil)))
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0600), info.Mode().Perm())
 	require.Empty(t, temporaryFiles(t, dir))
 }
 
