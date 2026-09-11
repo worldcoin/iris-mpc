@@ -27,7 +27,7 @@ func (f *FilesystemWriter) Persist(path string, data []byte) error {
 	return nil
 }
 
-func (f *FilesystemWriter) PersistStream(ctx context.Context, path string, inputChannel <-chan []byte) error {
+func (f *FilesystemWriter) PersistStream(ctx context.Context, path string, inputChannel <-chan []byte, producerStatus <-chan error) (resultErr error) {
 	// Ensure the directory exists
 	dir := filepath.Dir(path)
 	err := os.MkdirAll(dir, 0755)
@@ -35,12 +35,25 @@ func (f *FilesystemWriter) PersistStream(ctx context.Context, path string, input
 		return fmt.Errorf("failed to create directories: %w", err)
 	}
 
-	// Open (or create) the file for writing
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	file, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
-		return fmt.Errorf("failed to open file for writing: %w", err)
+		return fmt.Errorf("create temporary file for %s: %w", path, err)
 	}
-	defer file.Close()
+	tempPath := file.Name()
+	fileClosed := false
+	committed := false
+	defer func() {
+		if !fileClosed {
+			if closeErr := file.Close(); closeErr != nil {
+				resultErr = errors.Join(resultErr, fmt.Errorf("close temporary file for %s: %w", path, closeErr))
+			}
+		}
+		if !committed {
+			if removeErr := os.Remove(tempPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				resultErr = errors.Join(resultErr, fmt.Errorf("remove temporary file for %s: %w", path, removeErr))
+			}
+		}
+	}()
 
 	// Write chunks as they arrive on the channel
 	for {
@@ -49,8 +62,21 @@ func (f *FilesystemWriter) PersistStream(ctx context.Context, path string, input
 			return ctx.Err() // context canceled or deadline exceeded
 		case item, ok := <-inputChannel:
 			if !ok {
-				// channel closed; we're done receiving data
-				return file.Close()
+				if err := readProducerStatus(producerStatus); err != nil {
+					return fmt.Errorf("producer failed for %s: %w", path, err)
+				}
+				if err := file.Chmod(0644); err != nil {
+					return fmt.Errorf("chmod temporary file for %s: %w", path, err)
+				}
+				if err := file.Close(); err != nil {
+					return fmt.Errorf("close temporary file for %s: %w", path, err)
+				}
+				fileClosed = true
+				if err := os.Rename(tempPath, path); err != nil {
+					return fmt.Errorf("replace file %s: %w", path, err)
+				}
+				committed = true
+				return nil
 			}
 			if _, writeErr := file.Write(item); writeErr != nil {
 				return fmt.Errorf("failed to write to file: %w", writeErr)

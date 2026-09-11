@@ -40,31 +40,40 @@ func runCompleteExportCommand(ctx context.Context, mode, outputFolder string, st
 	}
 
 	outputChannel := make(chan []byte, chanBufferLen)
-	conversionError := make(chan error, 1)
+	producerStatus := make(chan error, 1)
 	go func() {
 		defer close(outputChannel)
-		defer close(conversionError)
+		defer close(producerStatus)
+		var conversionError error
 		for item := range irisesStream {
 			convertedIrises, err := converter.ConvertSingle(item)
 			if err != nil {
-				conversionError <- fmt.Errorf("convert iris %d: %w", item.ID, err)
+				conversionError = fmt.Errorf("convert iris %d: %w", item.ID, err)
 				// Let the database producer finish even when conversion stops.
 				for range irisesStream {
 				}
-				return
+				break
 			}
 			outputChannel <- convertedIrises
 		}
+		streamErr, ok := <-streamError
+		if !ok {
+			streamErr = errors.New("database stream status channel closed without a value")
+		}
+		producerStatus <- errors.Join(conversionError, streamErr)
 	}()
 
 	path := fmt.Sprintf("%s/%d.%s", outputFolder, startIndex, converter.GetExtension())
 
 	persistStart := time.Now()
-	err = writer.PersistStream(ctx, path, outputChannel)
+	err = writer.PersistStream(ctx, path, outputChannel, producerStatus)
 	// Persistence may return before consuming the stream; unblock the producer.
 	for range outputChannel {
 	}
-	if err = errors.Join(err, <-conversionError, <-streamError); err != nil {
+	// The writer consumes producerStatus after a complete input stream. If it
+	// returned early, the caller owns the remaining status after draining.
+	producerErr, _ := <-producerStatus
+	if err = errors.Join(err, producerErr); err != nil {
 		return fmt.Errorf("export chunk %s: %w", path, err)
 	}
 	elapsedPersist := time.Since(persistStart)
