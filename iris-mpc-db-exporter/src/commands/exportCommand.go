@@ -2,6 +2,8 @@ package commands
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -22,6 +24,59 @@ import (
 
 const CompleteExport = "COMPLETE_EXPORT"
 const IncrementalExport = "INCREMENTAL_EXPORT"
+
+const generationMarkerVersion = "v2-bin"
+const completionMarkerTimeout = 30 * time.Second
+
+var readGenerationRandom = rand.Read
+var exportNow = time.Now
+
+type exportPlan struct {
+	mode          string
+	chunkFolder   string
+	markerPath    string
+	batchSize     int
+	totalIrises   int
+	exportNewerAt *int64
+}
+
+func newGenerationID() (string, error) {
+	var id [16]byte
+	n, err := readGenerationRandom(id[:])
+	if err != nil {
+		return "", fmt.Errorf("generate export generation id: %w", err)
+	}
+	if n != len(id) {
+		return "", fmt.Errorf("generate export generation id: read %d random bytes, expected %d", n, len(id))
+	}
+	return hex.EncodeToString(id[:]), nil
+}
+
+func buildExportPlan(mode, outputFolder string, batchSize, totalIrises int, exportNewerAt *int64) (exportPlan, error) {
+	now := exportNow()
+	markerTimestamp := now.Unix()
+	plan := exportPlan{
+		mode:          mode,
+		chunkFolder:   outputFolder,
+		batchSize:     batchSize,
+		totalIrises:   totalIrises,
+		exportNewerAt: exportNewerAt,
+	}
+
+	if mode == CompleteExport {
+		markerTimestamp = now.UnixNano()
+		generationID, err := newGenerationID()
+		if err != nil {
+			return exportPlan{}, err
+		}
+		plan.chunkFolder = fmt.Sprintf("%s/generations/%s", outputFolder, generationID)
+		plan.markerPath = fmt.Sprintf("%s/%s/%d_%d_%d_%s-%s", outputFolder, persistence.TimestampsFolder, markerTimestamp, batchSize, totalIrises, generationMarkerVersion, generationID)
+		return plan, nil
+	}
+
+	plan.markerPath = fmt.Sprintf("%s/%s/%d_%d_%d", outputFolder, persistence.TimestampsFolder, markerTimestamp, batchSize, totalIrises)
+	return plan, nil
+}
 
 func runCompleteExportCommand(ctx context.Context, mode, outputFolder string, store iris.Store, converter converter.Converter, writer persistence.Writer, startIndex, endIndex, chanBufferLen int) error {
 	start := time.Now()
@@ -45,7 +100,9 @@ func runCompleteExportCommand(ctx context.Context, mode, outputFolder string, st
 		defer close(outputChannel)
 		defer close(producerStatus)
 		var conversionError error
+		rowCount := 0
 		for item := range irisesStream {
+			rowCount++
 			convertedIrises, err := converter.ConvertSingle(item)
 			if err != nil {
 				conversionError = fmt.Errorf("convert iris %d: %w", item.ID, err)
@@ -60,7 +117,12 @@ func runCompleteExportCommand(ctx context.Context, mode, outputFolder string, st
 		if !ok {
 			streamErr = errors.New("database stream status channel closed without a value")
 		}
-		producerStatus <- errors.Join(conversionError, streamErr)
+		expectedRows := endIndex - startIndex + 1
+		var rowCountErr error
+		if rowCount != expectedRows {
+			rowCountErr = fmt.Errorf("database stream returned %d rows, expected %d for range %d-%d", rowCount, expectedRows, startIndex, endIndex)
+		}
+		producerStatus <- errors.Join(conversionError, streamErr, rowCountErr)
 	}()
 
 	path := fmt.Sprintf("%s/%d.%s", outputFolder, startIndex, converter.GetExtension())
@@ -125,7 +187,7 @@ func runIncrementalExportCommand(ctx context.Context, outputFolder string, expor
 	path := fmt.Sprintf("%s/%d_%d.%s", outputFolder, startIndex, endIndex, converter.GetExtension())
 
 	persistStart := time.Now()
-	err = writer.Persist(path, convertedIrises)
+	err = writer.Persist(ctx, path, convertedIrises)
 	if err != nil {
 		return err
 	}
@@ -141,6 +203,15 @@ func runIncrementalExportCommand(ctx context.Context, outputFolder string, expor
 func ExportCommand(ctx context.Context, mode, outputFolder string, store iris.Store, converter converter.Converter, writer persistence.Writer, reader persistence.Reader, batchSize, parallelism, endIndex, chanBufferLen int) error {
 	if mode != CompleteExport && mode != IncrementalExport {
 		return fmt.Errorf("invalid mode: %s", mode)
+	}
+	if batchSize <= 0 {
+		return fmt.Errorf("batch size must be positive: %d", batchSize)
+	}
+	if parallelism <= 0 {
+		return fmt.Errorf("parallelism must be positive: %d", parallelism)
+	}
+	if chanBufferLen < 0 {
+		return fmt.Errorf("channel buffer length cannot be negative: %d", chanBufferLen)
 	}
 
 	startTime := time.Now()
@@ -169,13 +240,26 @@ func ExportCommand(ctx context.Context, mode, outputFolder string, store iris.St
 		}
 	}
 
-	// Get current time in unix format. It's stored as BIGINT in postgres
-	unixTime := time.Now().Unix()
-	timestampFilePath := fmt.Sprintf("%s/%s/%d_%d_%d", outputFolder, persistence.TimestampsFolder, unixTime, batchSize, totalIrises)
+	var exportNewerThan *int64
+	if mode == IncrementalExport {
+		exportNewerThan, err = reader.GetTimeOfLastExport(ctx, outputFolder)
+
+		// if we failed to get the time of the last export, we will do a complete export
+		if err != nil {
+			o11y.S(ctx).With(zap.Error(err)).Warn("Incremental export unavailable; falling back to a complete generation")
+			mode = CompleteExport
+			exportNewerThan = nil
+		}
+	}
+
+	plan, err := buildExportPlan(mode, outputFolder, batchSize, totalIrises, exportNewerThan)
+	if err != nil {
+		return err
+	}
 
 	o11y.S(ctx).Infof("Total irises: %d", totalIrises)
 
-	batchesCountFloat := float64(totalIrises) / float64(batchSize)
+	batchesCountFloat := float64(totalIrises) / float64(plan.batchSize)
 	batchesCount := int(math.Ceil(batchesCountFloat))
 
 	o11y.S(ctx).Infof("Will be processed in %d batches. \n", batchesCount)
@@ -185,22 +269,13 @@ func ExportCommand(ctx context.Context, mode, outputFolder string, store iris.St
 	var firstBatchError error
 	var recordBatchError sync.Once
 
-	var exportNewerThan *int64
-	if mode == IncrementalExport {
-		exportNewerThan, err = reader.GetTimeOfLastExport(ctx, outputFolder)
-
-		// if we failed to get the time of the last export, we will do a complete export
-		if err != nil {
-			mode = CompleteExport
-		}
-	}
-
 	for i := 0; i < batchesCount; i++ {
-		start := i*batchSize + 1
+		start := i*plan.batchSize + 1
+		count := plan.batchSize
 
 		// if we are on the last batch, we need to adjust the batch size
 		if i == batchesCount-1 {
-			batchSize = totalIrises - start + 1
+			count = totalIrises - start + 1
 		}
 
 		for runningCoroutines.Load() >= int32(parallelism) {
@@ -215,12 +290,12 @@ func ExportCommand(ctx context.Context, mode, outputFolder string, store iris.St
 			defer runningCoroutines.Add(-1)
 			var batchErr error
 
-			if mode == CompleteExport {
-				batchErr = runCompleteExportCommand(ctx, mode, outputFolder, store, converter, writer, start, start+count, chanBufferLen)
+			if plan.mode == CompleteExport {
+				batchErr = runCompleteExportCommand(ctx, plan.mode, plan.chunkFolder, store, converter, writer, start, start+count, chanBufferLen)
 			}
 
-			if mode == IncrementalExport {
-				batchErr = runIncrementalExportCommand(ctx, outputFolder, *exportNewerThan, store, converter, writer, start, start+count)
+			if plan.mode == IncrementalExport {
+				batchErr = runIncrementalExportCommand(ctx, plan.chunkFolder, *plan.exportNewerAt, store, converter, writer, start, start+count)
 			}
 
 			if batchErr != nil {
@@ -232,7 +307,7 @@ func ExportCommand(ctx context.Context, mode, outputFolder string, store iris.St
 				o11y.S(ctx).Infof("Batch %d/%d completed", i+1, batchesCount)
 				successfulBatches.Add(1)
 			}
-		}(start, batchSize-1)
+		}(start, count-1)
 	}
 
 	wg.Wait()
@@ -253,9 +328,11 @@ func ExportCommand(ctx context.Context, mode, outputFolder string, store iris.St
 	}
 
 	// Create the file with the date of the beginning of the export to mark the completion of the export
-	err = writer.Persist(timestampFilePath, []byte{})
+	markerCtx, cancelMarker := context.WithTimeout(ctx, completionMarkerTimeout)
+	defer cancelMarker()
+	err = writer.Persist(markerCtx, plan.markerPath, []byte{})
 	if err != nil {
-		return fmt.Errorf("persist completion marker %s: %w", timestampFilePath, err)
+		return fmt.Errorf("persist completion marker %s: %w", plan.markerPath, err)
 	}
 	return nil
 }

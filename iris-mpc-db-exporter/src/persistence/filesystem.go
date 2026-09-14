@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 )
 
 type FilesystemWriter struct{}
@@ -30,7 +28,10 @@ func createTempFile(dir, base string, mode os.FileMode) (*os.File, error) {
 	return nil, errors.New("failed to allocate a unique temporary filename")
 }
 
-func (f *FilesystemWriter) Persist(path string, data []byte) error {
+func (f *FilesystemWriter) Persist(ctx context.Context, path string, data []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// Ensure the directory exists
 	dir := filepath.Dir(path)
 	err := os.MkdirAll(dir, 0755)
@@ -124,14 +125,18 @@ func (f *FilesystemReader) GetTimeOfLastExport(ctx context.Context, exportPath s
 		if err != nil {
 			return err
 		}
-		// Check if the file has the desired extension
+		// Ignore unrelated files, but fail closed on malformed marker-shaped names.
 		if !info.IsDir() {
 			fileName := filepath.Base(path)
-
-			timestampStr := strings.Split(fileName, "_")[0]
-			unixTime, err := strconv.ParseInt(timestampStr, 10, 64)
+			unixTime, generation, recognized, err := parseExportMarker(fileName)
 			if err != nil {
-				return fmt.Errorf("failed to parse timestamp: %w", err)
+				return err
+			}
+			if !recognized {
+				return nil
+			}
+			if generation {
+				return fmt.Errorf("%w: %s", ErrIncrementalExportUnsupported, path)
 			}
 			lastExportTime = max(lastExportTime, unixTime)
 		}

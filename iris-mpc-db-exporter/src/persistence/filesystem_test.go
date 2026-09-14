@@ -16,7 +16,7 @@ func TestFilesystemPersistenceErrors(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "existing-file")
 	require.NoError(t, os.WriteFile(file, []byte("existing"), 0600))
 	for _, path := range []string{filepath.Join(file, "child"), t.TempDir()} {
-		require.Error(t, writer.Persist(path, nil))
+		require.Error(t, writer.Persist(context.Background(), path, nil))
 		input := make(chan []byte)
 		close(input)
 		require.Error(t, writer.PersistStream(context.Background(), path, input, terminalStatus(nil)))
@@ -80,6 +80,45 @@ func TestFilesystemPersistStreamRejectsMissingProducerStatus(t *testing.T) {
 	require.ErrorIs(t, err, errMissingProducerStatus)
 	require.NoFileExists(t, path)
 	require.Empty(t, temporaryFiles(t, dir))
+}
+
+func TestFilesystemReaderReturnsLatestLegacyMarkerAndIgnoresUnrelatedFiles(t *testing.T) {
+	exportPath := t.TempDir()
+	timestampsPath := filepath.Join(exportPath, TimestampsFolder)
+	require.NoError(t, os.MkdirAll(timestampsPath, 0755))
+	for _, filename := range []string{"notes.txt", "123_100_958", "125_100_960"} {
+		require.NoError(t, os.WriteFile(filepath.Join(timestampsPath, filename), nil, 0644))
+	}
+
+	timestamp, err := (&FilesystemReader{}).GetTimeOfLastExport(context.Background(), exportPath)
+	require.NoError(t, err)
+	require.Equal(t, int64(125), *timestamp)
+}
+
+func TestFilesystemReaderRejectsIncrementalAfterGenerationMarker(t *testing.T) {
+	exportPath := t.TempDir()
+	timestampsPath := filepath.Join(exportPath, TimestampsFolder)
+	require.NoError(t, os.MkdirAll(timestampsPath, 0755))
+	for _, filename := range []string{
+		"200_100_960",
+		"100_100_958_v2-bin-0123456789abcdef0123456789abcdef",
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(timestampsPath, filename), nil, 0644))
+	}
+
+	_, err := (&FilesystemReader{}).GetTimeOfLastExport(context.Background(), exportPath)
+	require.ErrorIs(t, err, ErrIncrementalExportUnsupported)
+}
+
+func TestFilesystemReaderFailsClosedOnMalformedMarker(t *testing.T) {
+	exportPath := t.TempDir()
+	timestampsPath := filepath.Join(exportPath, TimestampsFolder)
+	require.NoError(t, os.MkdirAll(timestampsPath, 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(timestampsPath, "123_100_958_v2-bin-not-a-generation-id"), nil, 0644))
+
+	_, err := (&FilesystemReader{}).GetTimeOfLastExport(context.Background(), exportPath)
+	require.ErrorContains(t, err, "invalid generation export marker")
+	require.NotErrorIs(t, err, ErrIncrementalExportUnsupported)
 }
 
 func temporaryFiles(t *testing.T, dir string) []string {
