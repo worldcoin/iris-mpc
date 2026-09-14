@@ -86,13 +86,18 @@ func (w *testWriter) Persist(path string, data []byte) error {
 	return w.persistErr
 }
 
-func (w *testWriter) PersistStream(_ context.Context, path string, input <-chan []byte) error {
+func (w *testWriter) PersistStream(_ context.Context, path string, input <-chan []byte, producerStatus <-chan error) error {
 	if w.streamErr != nil {
 		return w.streamErr // Intentionally leaves producers blocked unless the caller drains.
 	}
 	var data []byte
 	for item := range input {
 		data = append(data, item...)
+	}
+	if err, ok := <-producerStatus; !ok {
+		return errors.New("missing producer status")
+	} else if err != nil {
+		return err
 	}
 	return w.Persist(path, data)
 }
@@ -134,8 +139,25 @@ func TestCompleteExportFailuresSuppressMarker(t *testing.T) {
 				require.ErrorIs(t, err, wantErr)
 			}
 			require.Empty(t, writer.markers)
+			require.Empty(t, writer.chunks)
 		})
 	}
+}
+
+func TestCompleteExportJoinsConversionAndDatabaseStreamErrors(t *testing.T) {
+	store, mock := exportStore(t, 2)
+	conversionErr := errors.New("conversion failed")
+	streamErr := errors.New("database stream failed")
+	rows := irisRows(1, 2)
+	rows.RowError(1, streamErr)
+	mock.ExpectQuery("SELECT id").WithArgs(1, 2).WillReturnRows(rows).RowsWillBeClosed()
+	writer := &testWriter{}
+
+	err := ExportCommand(context.Background(), CompleteExport, "output", store, testConverter{err: conversionErr}, writer, testReader{}, 2, 1, 0, 0)
+	require.ErrorIs(t, err, conversionErr)
+	require.ErrorIs(t, err, streamErr)
+	require.Empty(t, writer.chunks)
+	require.Empty(t, writer.markers)
 }
 
 func TestExportAllBatchesBeforeMarker(t *testing.T) {
