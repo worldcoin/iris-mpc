@@ -7,7 +7,7 @@ use aws_sdk_s3::{primitives::ByteStream, Client};
 use eyre::{bail, eyre, Result};
 use futures::{stream, StreamExt};
 use iris_mpc_common::{VectorId, IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
-use std::{mem, sync::Arc, time::Duration};
+use std::{cmp::Ordering, mem, sync::Arc, time::Duration};
 use tokio::{io::AsyncReadExt, sync::mpsc::Sender};
 
 const SINGLE_ELEMENT_SIZE: usize = IRIS_CODE_LENGTH * mem::size_of::<u16>() * 2
@@ -225,29 +225,89 @@ impl ObjectStore for S3Store {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SnapshotLayout {
+    Legacy,
+    Generation { id: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LastSnapshotDetails {
     pub timestamp: i64,
     pub last_serial_id: i64,
     pub chunk_size: i64,
+    pub layout: SnapshotLayout,
 }
 
 impl LastSnapshotDetails {
-    // Parse last snapshot from s3 file name.
-    // It is in {unixTime}_{batchSize}_{lastSerialId} format.
+    // Parse either a legacy marker ({unixTime}_{batchSize}_{lastSerialId}) or a
+    // generation marker ({unixTime}_{batchSize}_{lastSerialId}_v2-bin-{id}).
     pub fn new_from_str(last_snapshot_str: &str) -> Option<Self> {
         let parts: Vec<&str> = last_snapshot_str.split('_').collect();
-        match parts.len() {
-            3 => Some(Self {
-                timestamp: parts[0].parse().unwrap(),
-                chunk_size: parts[1].parse().unwrap(),
-                last_serial_id: parts[2].parse().unwrap(),
-            }),
-            _ => {
-                tracing::warn!("Invalid export timestamp file name: {}", last_snapshot_str);
-                None
+        let layout = match parts.as_slice() {
+            [_, _, _] => SnapshotLayout::Legacy,
+            [_, _, _, descriptor] => {
+                let descriptor_parts: Vec<&str> = descriptor.split('-').collect();
+                match descriptor_parts.as_slice() {
+                    ["v2", "bin", id]
+                        if id.len() == 32
+                            && id.bytes().all(|byte| {
+                                byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+                            }) =>
+                    {
+                        SnapshotLayout::Generation {
+                            id: (*id).to_owned(),
+                        }
+                    }
+                    _ => return Self::invalid_marker(last_snapshot_str),
+                }
+            }
+            _ => return Self::invalid_marker(last_snapshot_str),
+        };
+
+        let parse_positive = |value: &str| value.parse::<i64>().ok().filter(|parsed| *parsed > 0);
+        let (Some(timestamp), Some(chunk_size), Some(last_serial_id)) = (
+            parse_positive(parts[0]),
+            parse_positive(parts[1]),
+            parse_positive(parts[2]),
+        ) else {
+            return Self::invalid_marker(last_snapshot_str);
+        };
+
+        Some(Self {
+            timestamp,
+            chunk_size,
+            last_serial_id,
+            layout,
+        })
+    }
+
+    fn invalid_marker(last_snapshot_str: &str) -> Option<Self> {
+        tracing::warn!("Invalid export timestamp file name: {}", last_snapshot_str);
+        None
+    }
+
+    fn chunk_prefix(&self, stable_prefix: &str) -> String {
+        match &self.layout {
+            SnapshotLayout::Legacy => stable_prefix.to_owned(),
+            SnapshotLayout::Generation { id } => {
+                format!("{stable_prefix}/generations/{id}")
             }
         }
+    }
+
+    fn compare_recency(&self, other: &Self) -> Ordering {
+        self.timestamp
+            .cmp(&other.timestamp)
+            .then_with(|| match (&self.layout, &other.layout) {
+                (SnapshotLayout::Legacy, SnapshotLayout::Legacy) => Ordering::Equal,
+                (SnapshotLayout::Legacy, SnapshotLayout::Generation { .. }) => Ordering::Less,
+                (SnapshotLayout::Generation { .. }, SnapshotLayout::Legacy) => Ordering::Greater,
+                (
+                    SnapshotLayout::Generation { id: self_id },
+                    SnapshotLayout::Generation { id: other_id },
+                ) => self_id.cmp(other_id),
+            })
     }
 }
 
@@ -265,7 +325,7 @@ pub async fn last_snapshot_timestamp(
             Some(file_name) => LastSnapshotDetails::new_from_str(file_name),
             _ => None,
         })
-        .max_by_key(|s| s.timestamp)
+        .max_by(|left, right| left.compare_recency(right))
         .ok_or_else(|| eyre::eyre!("No snapshot found"))
 }
 
@@ -306,12 +366,13 @@ pub async fn fetch_and_parse_chunks(
     } else {
         last_snapshot_details.chunk_size as usize
     };
+    let chunk_prefix = last_snapshot_details.chunk_prefix(&prefix_name);
 
     let chunk_iterator = (1_i64..=effective_last_serial_id).step_by(range_size);
     let stream = stream::iter(chunk_iterator).map(|chunk| {
         let chunk_id =
             (chunk / last_snapshot_details.chunk_size) * last_snapshot_details.chunk_size + 1;
-        let prefix_name = prefix_name.clone();
+        let chunk_prefix = chunk_prefix.clone();
         let offset_within_chunk = (chunk - chunk_id) as usize;
         let remaining_items = (effective_last_serial_id - chunk + 1) as usize;
         let requested_range_size = remaining_items.min(range_size);
@@ -319,7 +380,7 @@ pub async fn fetch_and_parse_chunks(
         let store = Arc::clone(&store);
         let tx = tx.clone();
         let shutdown = Arc::clone(&shutdown_handler);
-        let key = format!("{}/{}.bin", prefix_name, chunk_id);
+        let key = format!("{}/{}.bin", chunk_prefix, chunk_id);
 
         async move {
             tokio::spawn(async move {
@@ -407,17 +468,18 @@ async fn read_range_in_chunk(
         .await?
         .into_async_read();
 
-    let mut slice = vec![0_u8; SINGLE_ELEMENT_SIZE];
-
-    loop {
-        match stream.read_exact(&mut slice).await {
-            Ok(_) => {
-                let iris = S3StoredIris::from_bytes(&slice)?;
-                tx.send(iris).await?;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-            Err(e) => return Err(e.into()),
-        }
+    let mut records = Vec::with_capacity(range_size);
+    for record_index in 0..range_size {
+        let mut slice = vec![0_u8; SINGLE_ELEMENT_SIZE];
+        stream.read_exact(&mut slice).await.map_err(|error| {
+            eyre!(
+                "short read for {key}: requested {range_size} records at offset {offset_within_chunk}, failed at record {record_index}: {error}"
+            )
+        })?;
+        records.push(S3StoredIris::from_bytes(&slice)?);
+    }
+    for iris in records {
+        tx.send(iris).await?;
     }
 
     Ok(())
@@ -567,6 +629,7 @@ mod tests {
             timestamp: 0,
             last_serial_id: n as i64,
             chunk_size: chunk_size as i64,
+            layout: SnapshotLayout::Legacy,
         }
     }
 
@@ -583,6 +646,85 @@ mod tests {
         assert_eq!(last_snapshot.timestamp, 125);
         assert_eq!(last_snapshot.last_serial_id, 958);
         assert_eq!(last_snapshot.chunk_size, 100);
+        assert_eq!(last_snapshot.layout, SnapshotLayout::Legacy);
+    }
+
+    #[test]
+    fn test_snapshot_marker_parses_legacy_and_generation_layouts() {
+        assert_eq!(
+            LastSnapshotDetails::new_from_str("123_100_958"),
+            Some(LastSnapshotDetails {
+                timestamp: 123,
+                chunk_size: 100,
+                last_serial_id: 958,
+                layout: SnapshotLayout::Legacy,
+            })
+        );
+        assert_eq!(
+            LastSnapshotDetails::new_from_str(
+                "123_100_958_v2-bin-0123456789abcdef0123456789abcdef"
+            ),
+            Some(LastSnapshotDetails {
+                timestamp: 123,
+                chunk_size: 100,
+                last_serial_id: 958,
+                layout: SnapshotLayout::Generation {
+                    id: "0123456789abcdef0123456789abcdef".to_owned(),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn test_snapshot_marker_rejects_malformed_values() {
+        for marker in [
+            "not-a-number_100_958",
+            "123_not-a-number_958",
+            "123_100_not-a-number",
+            "0_100_958",
+            "123_0_958",
+            "123_-1_958",
+            "123_100_0",
+            "123_100_-1",
+            "123_100_958_v3-bin-0123456789abcdef0123456789abcdef",
+            "123_100_958_v2-json-0123456789abcdef0123456789abcdef",
+            "123_100_958_v2-bin-short",
+            "123_100_958_v2-bin-0123456789ABCDEF0123456789ABCDEF",
+            "123_100_958_v2-bin-0123456789abcdef0123456789abcdeg",
+            "123_100_958_v2-bin-0123456789abcdef0123456789abcdef_extra",
+        ] {
+            assert_eq!(
+                LastSnapshotDetails::new_from_str(marker),
+                None,
+                "marker should be rejected: {marker}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_order_prefers_generation_then_generation_id_on_ties() {
+        let mut store = MockStore::new();
+        store.add_timestamp_file("out/timestamps/124_100_958");
+        store.add_timestamp_file(
+            "out/timestamps/124_100_958_v2-bin-00000000000000000000000000000001",
+        );
+        store.add_timestamp_file(
+            "out/timestamps/124_100_958_v2-bin-00000000000000000000000000000002",
+        );
+        store.add_timestamp_file(
+            "out/timestamps/123_100_958_v2-bin-ffffffffffffffffffffffffffffffff",
+        );
+
+        let snapshot = last_snapshot_timestamp(&store, "out".to_owned())
+            .await
+            .unwrap();
+        assert_eq!(snapshot.timestamp, 124);
+        assert_eq!(
+            snapshot.layout,
+            SnapshotLayout::Generation {
+                id: "00000000000000000000000000000002".to_owned()
+            }
+        );
     }
 
     #[tokio::test]
@@ -605,6 +747,7 @@ mod tests {
             timestamp: 0,
             last_serial_id: MOCK_ENTRIES as i64,
             chunk_size: MOCK_CHUNK_SIZE as i64,
+            layout: SnapshotLayout::Legacy,
         };
         let (tx, mut rx) = mpsc::channel::<S3StoredIris>(1024);
         let store_arc = Arc::new(store);
@@ -631,6 +774,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_fetch_and_parse_chunks_uses_generation_prefix() {
+        const GENERATION_ID: &str = "0123456789abcdef0123456789abcdef";
+        let mut store = MockStore::new();
+        store.add_test_data(
+            &format!("out/generations/{GENERATION_ID}/1.bin"),
+            (1..=2).map(dummy_entry).collect(),
+        );
+        let details = LastSnapshotDetails {
+            timestamp: 123,
+            last_serial_id: 2,
+            chunk_size: 2,
+            layout: SnapshotLayout::Generation {
+                id: GENERATION_ID.to_owned(),
+            },
+        };
+        let (tx, mut rx) = mpsc::channel(2);
+
+        fetch_and_parse_chunks(
+            Arc::new(store),
+            1,
+            "out".to_owned(),
+            details,
+            None,
+            tx,
+            1,
+            0,
+            Arc::new(ShutdownHandler::new(1)),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(rx.recv().await.unwrap().serial_id(), 1);
+        assert_eq!(rx.recv().await.unwrap().serial_id(), 2);
+        assert!(rx.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_read_range_rejects_premature_eof_without_sending_partial_records() {
+        let mut store = MockStore::new();
+        store.add_test_data("out/1.bin", vec![dummy_entry(1)]);
+        let (tx, mut rx) = mpsc::channel(2);
+
+        let error = read_range_in_chunk(Arc::new(store), "out/1.bin", 0, 2, tx)
+            .await
+            .expect_err("one record cannot satisfy a two-record read");
+
+        assert!(format!("{error:#}").contains("short read"));
+        assert!(rx.recv().await.is_none());
+    }
+
+    #[tokio::test]
     async fn test_fetch_and_parse_chunks_respects_max_serial_id_to_load() {
         const SNAPSHOT_ENTRIES: usize = 36;
         const MAX_SERIAL_ID_TO_LOAD: usize = 25;
@@ -651,6 +845,7 @@ mod tests {
             timestamp: 0,
             last_serial_id: SNAPSHOT_ENTRIES as i64,
             chunk_size: MOCK_CHUNK_SIZE as i64,
+            layout: SnapshotLayout::Legacy,
         };
         let (tx, mut rx) = mpsc::channel::<S3StoredIris>(1024);
         let store_arc = Arc::new(store);
@@ -707,6 +902,7 @@ mod tests {
             timestamp: 0,
             last_serial_id: MOCK_ENTRIES as i64,
             chunk_size: MOCK_CHUNK_SIZE as i64,
+            layout: SnapshotLayout::Legacy,
         };
 
         let (tx, mut rx) = mpsc::channel::<S3StoredIris>(1024);

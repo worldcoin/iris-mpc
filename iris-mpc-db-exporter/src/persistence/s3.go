@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +24,10 @@ type s3WriterClient interface {
 	CompleteMultipartUpload(context.Context, *s3.CompleteMultipartUploadInput, ...func(*s3.Options)) (*s3.CompleteMultipartUploadOutput, error)
 	AbortMultipartUpload(context.Context, *s3.AbortMultipartUploadInput, ...func(*s3.Options)) (*s3.AbortMultipartUploadOutput, error)
 	PutObject(context.Context, *s3.PutObjectInput, ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+}
+
+type s3ReaderClient interface {
+	ListObjectsV2(context.Context, *s3.ListObjectsV2Input, ...func(*s3.Options)) (*s3.ListObjectsV2Output, error)
 }
 
 type S3Writer struct {
@@ -138,8 +141,7 @@ func (s *S3Writer) PersistStream(ctx context.Context, path string, inputChannel 
 	return nil
 }
 
-func (s *S3Writer) Persist(path string, data []byte) error {
-	ctx := context.Background()
+func (s *S3Writer) Persist(ctx context.Context, path string, data []byte) error {
 	_, err := s.Client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: &s.Bucket,
 		Key:    &path,
@@ -152,7 +154,7 @@ func (s *S3Writer) Persist(path string, data []byte) error {
 }
 
 type S3Reader struct {
-	Client *s3.Client
+	Client s3ReaderClient
 	Bucket string
 }
 
@@ -172,17 +174,25 @@ func (s *S3Reader) GetTimeOfLastExport(ctx context.Context, exportPath string) (
 		}
 
 		for _, object := range result.Contents {
+			if object.Key == nil {
+				continue
+			}
 			key := *object.Key
 			filename := filepath.Base(key)
-			timestampStr := strings.Split(filename, "_")[0]
-			unixTime, err := strconv.ParseInt(timestampStr, 10, 64)
+			unixTime, generation, recognized, err := parseExportMarker(filename)
 			if err != nil {
-				return nil, fmt.Errorf("failed to parse timestamp: %v", err)
+				return nil, err
+			}
+			if !recognized {
+				continue
+			}
+			if generation {
+				return nil, fmt.Errorf("%w: %s", ErrIncrementalExportUnsupported, key)
 			}
 			lastExportTime = max(lastExportTime, unixTime)
 		}
 
-		if *result.IsTruncated {
+		if result.IsTruncated != nil && *result.IsTruncated {
 			input.ContinuationToken = result.NextContinuationToken
 		} else {
 			break

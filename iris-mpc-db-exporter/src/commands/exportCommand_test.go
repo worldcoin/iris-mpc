@@ -5,9 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/DataDog/datadog-go/v5/statsd"
@@ -16,6 +18,7 @@ import (
 	"github.com/worldcoin/iris-mpc-db-exporter/src/config"
 	"github.com/worldcoin/iris-mpc-db-exporter/src/iris"
 	"github.com/worldcoin/iris-mpc-db-exporter/src/metrics"
+	"github.com/worldcoin/iris-mpc-db-exporter/src/persistence"
 )
 
 type discardMetrics struct{ io.Writer }
@@ -67,16 +70,20 @@ type testWriter struct {
 	mu         sync.Mutex
 	chunks     map[string]string
 	markers    []string
+	contexts   []context.Context
+	markerCtxs []context.Context
 	persistErr error
 	streamErr  error
 	markerErr  error
 }
 
-func (w *testWriter) Persist(path string, data []byte) error {
+func (w *testWriter) Persist(ctx context.Context, path string, data []byte) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	w.contexts = append(w.contexts, ctx)
 	if strings.Contains(path, "/timestamps/") {
 		w.markers = append(w.markers, path)
+		w.markerCtxs = append(w.markerCtxs, ctx)
 		return w.markerErr
 	}
 	if w.chunks == nil {
@@ -86,7 +93,7 @@ func (w *testWriter) Persist(path string, data []byte) error {
 	return w.persistErr
 }
 
-func (w *testWriter) PersistStream(_ context.Context, path string, input <-chan []byte, producerStatus <-chan error) error {
+func (w *testWriter) PersistStream(ctx context.Context, path string, input <-chan []byte, producerStatus <-chan error) error {
 	if w.streamErr != nil {
 		return w.streamErr // Intentionally leaves producers blocked unless the caller drains.
 	}
@@ -99,14 +106,28 @@ func (w *testWriter) PersistStream(_ context.Context, path string, input <-chan 
 	} else if err != nil {
 		return err
 	}
-	return w.Persist(path, data)
+	return w.Persist(ctx, path, data)
 }
 
-type testReader struct{}
+type testReader struct{ err error }
 
-func (testReader) GetTimeOfLastExport(context.Context, string) (*int64, error) {
+func (r testReader) GetTimeOfLastExport(context.Context, string) (*int64, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
 	timestamp := int64(123)
 	return &timestamp, nil
+}
+
+func generationIDFromMarker(t *testing.T, marker string) string {
+	t.Helper()
+	parts := strings.Split(filepath.Base(marker), "_")
+	require.Len(t, parts, 4)
+	version := strings.Split(parts[3], "-")
+	require.Len(t, version, 3)
+	require.Equal(t, []string{"v2", "bin"}, version[:2])
+	require.Regexp(t, `^[0-9a-f]{32}$`, version[2])
+	return version[2]
 }
 
 func TestCompleteExportFailuresSuppressMarker(t *testing.T) {
@@ -179,11 +200,19 @@ func TestExportAllBatchesBeforeMarker(t *testing.T) {
 				require.ErrorIs(t, err, wantErr)
 				require.Empty(t, writer.markers)
 				require.Len(t, writer.chunks, 2)
+				for path := range writer.chunks {
+					require.Regexp(t, `^output/generations/[0-9a-f]{32}/(1|5)\.bin$`, path)
+				}
 			} else {
 				require.NoError(t, err)
 				require.Len(t, writer.markers, 1)
-				require.True(t, strings.HasSuffix(writer.markers[0], "_2_5"))
-				require.Equal(t, map[string]string{"output/1.bin": "1,2,", "output/3.bin": "3,4,", "output/5.bin": "5,"}, writer.chunks)
+				generationID := generationIDFromMarker(t, writer.markers[0])
+				require.Contains(t, writer.markers[0], "_2_5_v2-bin-")
+				require.Equal(t, map[string]string{
+					fmt.Sprintf("output/generations/%s/1.bin", generationID): "1,2,",
+					fmt.Sprintf("output/generations/%s/3.bin", generationID): "3,4,",
+					fmt.Sprintf("output/generations/%s/5.bin", generationID): "5,",
+				}, writer.chunks)
 			}
 		})
 	}
@@ -245,4 +274,108 @@ func TestIncrementalFailuresSuppressMarker(t *testing.T) {
 			require.Empty(t, writer.markers)
 		})
 	}
+}
+
+func TestCompleteExportRejectsShortDatabaseRangeAndSuppressesMarker(t *testing.T) {
+	store, mock := exportStore(t, 3)
+	mock.ExpectQuery("SELECT id").WithArgs(1, 3).WillReturnRows(irisRows(1, 2)).RowsWillBeClosed()
+	writer := &testWriter{}
+
+	err := ExportCommand(context.Background(), CompleteExport, "output", store, testConverter{}, writer, testReader{}, 3, 1, 0, 0)
+	require.ErrorContains(t, err, "returned 2 rows, expected 3")
+	require.Empty(t, writer.chunks)
+	require.Empty(t, writer.markers)
+}
+
+func TestCompleteExportInvocationsUseDistinctGenerations(t *testing.T) {
+	ids := make(map[string]struct{})
+	for range 2 {
+		store, mock := exportStore(t, 1)
+		mock.ExpectQuery("SELECT id").WithArgs(1, 1).WillReturnRows(irisRows(1)).RowsWillBeClosed()
+		writer := &testWriter{}
+		require.NoError(t, ExportCommand(context.Background(), CompleteExport, "output", store, testConverter{}, writer, testReader{}, 1, 1, 0, 0))
+		require.Len(t, writer.markers, 1)
+		ids[generationIDFromMarker(t, writer.markers[0])] = struct{}{}
+	}
+	require.Len(t, ids, 2)
+}
+
+func TestGenerationMarkersUseNanosecondOrdering(t *testing.T) {
+	previousNow := exportNow
+	exportNow = func() time.Time { return time.Unix(123, 456) }
+	t.Cleanup(func() { exportNow = previousNow })
+
+	completePlan, err := buildExportPlan(CompleteExport, "output", 100, 958, nil)
+	require.NoError(t, err)
+	require.Equal(t, "123000000456", strings.Split(filepath.Base(completePlan.markerPath), "_")[0])
+
+	incrementalPlan, err := buildExportPlan(IncrementalExport, "output", 100, 958, new(int64))
+	require.NoError(t, err)
+	require.Equal(t, "123", strings.Split(filepath.Base(incrementalPlan.markerPath), "_")[0])
+}
+
+func TestGenerationRandomnessFailurePrecedesPersistence(t *testing.T) {
+	previousRead := readGenerationRandom
+	readGenerationRandom = func([]byte) (int, error) { return 0, errors.New("randomness unavailable") }
+	t.Cleanup(func() { readGenerationRandom = previousRead })
+	store, _ := exportStore(t, 1)
+	writer := &testWriter{}
+
+	err := ExportCommand(context.Background(), CompleteExport, "output", store, testConverter{}, writer, testReader{}, 1, 1, 0, 0)
+	require.ErrorContains(t, err, "generate export generation id")
+	require.Empty(t, writer.contexts)
+	require.Empty(t, writer.chunks)
+	require.Empty(t, writer.markers)
+}
+
+func TestGenuineIncrementalExportKeepsLegacyLayout(t *testing.T) {
+	store, mock := exportStore(t, 1)
+	mock.ExpectQuery("SELECT id").WithArgs(1, 1, int64(123)).WillReturnRows(irisRows(1)).RowsWillBeClosed()
+	mock.ExpectQuery("SELECT id").WithArgs(1, 1).WillReturnRows(irisRows(1)).RowsWillBeClosed()
+	writer := &testWriter{}
+
+	require.NoError(t, ExportCommand(context.Background(), IncrementalExport, "output", store, testConverter{}, writer, testReader{}, 1, 1, 0, 0))
+	require.Equal(t, map[string]string{"output/1_1.bin": "converted"}, writer.chunks)
+	require.Len(t, writer.markers, 1)
+	require.Len(t, strings.Split(filepath.Base(writer.markers[0]), "_"), 3)
+}
+
+func TestIncrementalFallbackUsesGenerationLayout(t *testing.T) {
+	store, mock := exportStore(t, 1)
+	mock.ExpectQuery("SELECT id").WithArgs(1, 1).WillReturnRows(irisRows(1)).RowsWillBeClosed()
+	writer := &testWriter{}
+
+	require.NoError(t, ExportCommand(context.Background(), IncrementalExport, "output", store, testConverter{}, writer, testReader{err: errors.New("no prior export")}, 1, 1, 0, 0))
+	require.Len(t, writer.markers, 1)
+	generationID := generationIDFromMarker(t, writer.markers[0])
+	require.Equal(t, map[string]string{fmt.Sprintf("output/generations/%s/1.bin", generationID): "1,"}, writer.chunks)
+}
+
+func TestIncrementalAfterGenerationMarkerFallsBackToCompleteGeneration(t *testing.T) {
+	store, mock := exportStore(t, 1)
+	mock.ExpectQuery("SELECT id").WithArgs(1, 1).WillReturnRows(irisRows(1)).RowsWillBeClosed()
+	writer := &testWriter{}
+
+	require.NoError(t, ExportCommand(context.Background(), IncrementalExport, "output", store, testConverter{}, writer, testReader{err: persistence.ErrIncrementalExportUnsupported}, 1, 1, 0, 0))
+	require.Len(t, writer.markers, 1)
+	generationID := generationIDFromMarker(t, writer.markers[0])
+	require.Equal(t, map[string]string{fmt.Sprintf("output/generations/%s/1.bin", generationID): "1,"}, writer.chunks)
+}
+
+func TestCompletionMarkerUsesCallerContext(t *testing.T) {
+	type contextKey string
+	ctx := context.WithValue(context.Background(), contextKey("request"), "test-request")
+	store, mock := exportStore(t, 1)
+	mock.ExpectQuery("SELECT id").WithArgs(1, 1).WillReturnRows(irisRows(1)).RowsWillBeClosed()
+	writer := &testWriter{}
+
+	require.NoError(t, ExportCommand(ctx, CompleteExport, "output", store, testConverter{}, writer, testReader{}, 1, 1, 0, 0))
+	require.NotEmpty(t, writer.contexts)
+	for _, persistedCtx := range writer.contexts {
+		require.Equal(t, "test-request", persistedCtx.Value(contextKey("request")))
+	}
+	require.Len(t, writer.markerCtxs, 1)
+	deadline, ok := writer.markerCtxs[0].Deadline()
+	require.True(t, ok)
+	require.WithinDuration(t, time.Now().Add(completionMarkerTimeout), deadline, time.Second)
 }

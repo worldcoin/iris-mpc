@@ -10,12 +10,29 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/stretchr/testify/require"
 )
 
 type failingHTTPClient struct{ err error }
 
 func (c failingHTTPClient) Do(*http.Request) (*http.Response, error) { return nil, c.err }
+
+type fakeS3ReaderClient struct {
+	keys []string
+	err  error
+}
+
+func (c *fakeS3ReaderClient) ListObjectsV2(_ context.Context, _ *s3.ListObjectsV2Input, _ ...func(*s3.Options)) (*s3.ListObjectsV2Output, error) {
+	if c.err != nil {
+		return nil, c.err
+	}
+	objects := make([]types.Object, 0, len(c.keys))
+	for _, key := range c.keys {
+		objects = append(objects, types.Object{Key: aws.String(key)})
+	}
+	return &s3.ListObjectsV2Output{Contents: objects, IsTruncated: aws.Bool(false)}, nil
+}
 
 type fakeS3WriterClient struct {
 	createErr       error
@@ -169,6 +186,38 @@ func TestS3PersistenceErrors(t *testing.T) {
 		Bucket:                "test-bucket",
 		MaxItemsPerPartUpload: 1,
 	}
-	require.ErrorIs(t, writer.Persist("timestamps/test", nil), wantErr)
+	require.ErrorIs(t, writer.Persist(context.Background(), "timestamps/test", nil), wantErr)
 	require.ErrorIs(t, writer.PersistStream(context.Background(), "chunk", streamInput(), terminalStatus(nil)), wantErr)
+}
+
+func TestS3ReaderReturnsLatestLegacyMarkerAndIgnoresUnrelatedFiles(t *testing.T) {
+	reader := &S3Reader{Client: &fakeS3ReaderClient{keys: []string{
+		"output/timestamps/notes.txt",
+		"output/timestamps/123_100_958",
+		"output/timestamps/125_100_960",
+	}}, Bucket: "bucket"}
+
+	timestamp, err := reader.GetTimeOfLastExport(context.Background(), "output")
+	require.NoError(t, err)
+	require.Equal(t, int64(125), *timestamp)
+}
+
+func TestS3ReaderRejectsIncrementalAfterGenerationMarker(t *testing.T) {
+	reader := &S3Reader{Client: &fakeS3ReaderClient{keys: []string{
+		"output/timestamps/200_100_960",
+		"output/timestamps/100_100_958_v2-bin-0123456789abcdef0123456789abcdef",
+	}}, Bucket: "bucket"}
+
+	_, err := reader.GetTimeOfLastExport(context.Background(), "output")
+	require.ErrorIs(t, err, ErrIncrementalExportUnsupported)
+}
+
+func TestS3ReaderFailsClosedOnMalformedMarker(t *testing.T) {
+	reader := &S3Reader{Client: &fakeS3ReaderClient{keys: []string{
+		"output/timestamps/123_100_958_v2-bin-not-a-generation-id",
+	}}, Bucket: "bucket"}
+
+	_, err := reader.GetTimeOfLastExport(context.Background(), "output")
+	require.ErrorContains(t, err, "invalid generation export marker")
+	require.NotErrorIs(t, err, ErrIncrementalExportUnsupported)
 }
