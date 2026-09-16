@@ -132,6 +132,9 @@ struct Args {
     /// visible in either fixed database snapshot.
     #[arg(long)]
     max_iris_id: Option<i64>,
+    /// Inclusive lower serial-ID boundary for --iris-only. Defaults to zero.
+    #[arg(long)]
+    min_iris_id: Option<i64>,
     /// Maximum mismatch examples retained in the --iris-only JSON report.
     #[arg(long, default_value_t = 100)]
     max_reported_mismatches: usize,
@@ -721,7 +724,6 @@ struct IrisComparisonRow {
 struct DatabaseSnapshot {
     snapshot_id: String,
     captured_at: String,
-    row_count: i64,
     max_iris_id: i64,
 }
 
@@ -736,8 +738,10 @@ struct IrisMismatch {
 #[derive(Serialize)]
 struct FullIrisComparisonReport {
     passed: bool,
+    comparison_min_iris_id: i64,
     comparison_max_iris_id: i64,
-    boundary_source: &'static str,
+    min_boundary_source: &'static str,
+    max_boundary_source: &'static str,
     batch_size: usize,
     gpu_snapshot: DatabaseSnapshot,
     hnsw_snapshot: DatabaseSnapshot,
@@ -768,19 +772,24 @@ async fn start_fixed_snapshot<'a>(
     Ok((tx, snapshot_id, captured_at))
 }
 
-async fn snapshot_extent(tx: &mut Transaction<'_, Postgres>) -> Result<(i64, i64)> {
-    Ok(
-        sqlx::query_as("SELECT COUNT(*), COALESCE(MAX(id), 0) FROM irises")
-            .fetch_one(&mut **tx)
-            .await?,
-    )
-}
-
-async fn rows_in_scope(tx: &mut Transaction<'_, Postgres>, max_iris_id: i64) -> Result<i64> {
-    let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM irises WHERE id <= $1")
-        .bind(max_iris_id)
+async fn snapshot_max_iris_id(tx: &mut Transaction<'_, Postgres>) -> Result<i64> {
+    let (max_iris_id,): (i64,) = sqlx::query_as("SELECT COALESCE(MAX(id), 0) FROM irises")
         .fetch_one(&mut **tx)
         .await?;
+    Ok(max_iris_id)
+}
+
+async fn rows_in_scope(
+    tx: &mut Transaction<'_, Postgres>,
+    min_iris_id: i64,
+    max_iris_id: i64,
+) -> Result<i64> {
+    let (count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM irises WHERE id >= $1 AND id <= $2")
+            .bind(min_iris_id)
+            .bind(max_iris_id)
+            .fetch_one(&mut **tx)
+            .await?;
     Ok(count)
 }
 
@@ -851,6 +860,23 @@ fn retain_mismatch(
     }
 }
 
+fn iris_comparison_range(
+    min_iris_id: Option<i64>,
+    max_iris_id: Option<i64>,
+    gpu_max_id: i64,
+    hnsw_max_id: i64,
+) -> Result<(i64, i64)> {
+    let min_id = min_iris_id.unwrap_or(0);
+    let max_id = max_iris_id.unwrap_or_else(|| gpu_max_id.max(hnsw_max_id));
+    eyre::ensure!(min_id >= 0, "--min-iris-id must be non-negative");
+    eyre::ensure!(max_id >= 0, "--max-iris-id must be non-negative");
+    eyre::ensure!(
+        min_id <= max_id,
+        "--min-iris-id must be less than or equal to --max-iris-id"
+    );
+    Ok((min_id, max_id))
+}
+
 /// Full, bounded-memory comparison of the source-of-truth GPU iris table and
 /// the HNSW/CPU iris table. Both transactions remain on fixed repeatable-read
 /// snapshots for the entire scan. The GPU snapshot is established first.
@@ -866,26 +892,23 @@ async fn run_full_iris_comparison(args: &Args) -> Result<()> {
         PostgresClient::new(&args.gpu_db_url, &args.gpu_schema, AccessMode::ReadOnly).await?;
 
     let (mut gpu_tx, gpu_snapshot_id, gpu_captured_at) = start_fixed_snapshot(&gpu_pg.pool).await?;
-    let (gpu_total_rows, gpu_max_id) = snapshot_extent(&mut gpu_tx).await?;
+    let gpu_max_id = snapshot_max_iris_id(&mut gpu_tx).await?;
 
     let (mut hnsw_tx, hnsw_snapshot_id, hnsw_captured_at) =
         start_fixed_snapshot(&hnsw_pg.pool).await?;
-    let (hnsw_total_rows, hnsw_max_id) = snapshot_extent(&mut hnsw_tx).await?;
+    let hnsw_max_id = snapshot_max_iris_id(&mut hnsw_tx).await?;
 
-    let comparison_max_id = args
-        .max_iris_id
-        .unwrap_or_else(|| gpu_max_id.max(hnsw_max_id));
-    if comparison_max_id < 0 {
-        eyre::bail!("--max-iris-id must be non-negative");
-    }
+    let (comparison_min_id, comparison_max_id) =
+        iris_comparison_range(args.min_iris_id, args.max_iris_id, gpu_max_id, hnsw_max_id)?;
 
-    let gpu_scope_count = rows_in_scope(&mut gpu_tx, comparison_max_id).await?;
-    let hnsw_scope_count = rows_in_scope(&mut hnsw_tx, comparison_max_id).await?;
+    let gpu_scope_count = rows_in_scope(&mut gpu_tx, comparison_min_id, comparison_max_id).await?;
+    let hnsw_scope_count =
+        rows_in_scope(&mut hnsw_tx, comparison_min_id, comparison_max_id).await?;
 
     let mut gpu_rows = VecDeque::new();
     let mut hnsw_rows = VecDeque::new();
-    let mut gpu_after = -1i64;
-    let mut hnsw_after = -1i64;
+    let mut gpu_after = comparison_min_id - 1;
+    let mut hnsw_after = comparison_min_id - 1;
     let mut gpu_finished = false;
     let mut hnsw_finished = false;
     let mut gpu_hasher = blake3::Hasher::new();
@@ -1006,8 +1029,14 @@ async fn run_full_iris_comparison(args: &Args) -> Result<()> {
         && gpu_hash == hnsw_hash;
     let report = FullIrisComparisonReport {
         passed,
+        comparison_min_iris_id: comparison_min_id,
         comparison_max_iris_id: comparison_max_id,
-        boundary_source: if args.max_iris_id.is_some() {
+        min_boundary_source: if args.min_iris_id.is_some() {
+            "--min-iris-id"
+        } else {
+            "zero"
+        },
+        max_boundary_source: if args.max_iris_id.is_some() {
             "--max-iris-id"
         } else {
             "highest ID in either fixed snapshot"
@@ -1016,13 +1045,11 @@ async fn run_full_iris_comparison(args: &Args) -> Result<()> {
         gpu_snapshot: DatabaseSnapshot {
             snapshot_id: gpu_snapshot_id,
             captured_at: gpu_captured_at,
-            row_count: gpu_total_rows,
             max_iris_id: gpu_max_id,
         },
         hnsw_snapshot: DatabaseSnapshot {
             snapshot_id: hnsw_snapshot_id,
             captured_at: hnsw_captured_at,
-            row_count: hnsw_total_rows,
             max_iris_id: hnsw_max_id,
         },
         gpu_rows_in_scope: gpu_scope_count,
@@ -1060,9 +1087,11 @@ async fn run_full_iris_comparison(args: &Args) -> Result<()> {
     );
     rpt!(
         output,
-        "Comparison boundary: id <= {} ({})",
+        "Comparison range: id >= {} ({}) and id <= {} ({})",
+        comparison_min_id,
+        report.min_boundary_source,
         comparison_max_id,
-        report.boundary_source
+        report.max_boundary_source
     );
     rpt!(
         output,
@@ -2884,5 +2913,20 @@ mod tests {
         hnsw.right_mask[1] ^= 1;
 
         assert_eq!(differing_iris_columns(&gpu, &hnsw), vec!["right_mask"]);
+    }
+
+    #[test]
+    fn explicit_iris_comparison_range_is_inclusive() {
+        let range =
+            iris_comparison_range(Some(17_411_881), Some(17_511_880), 20_000_000, 19_000_000)
+                .unwrap();
+
+        assert_eq!(range, (17_411_881, 17_511_880));
+        assert_eq!(range.1 - range.0 + 1, 100_000);
+    }
+
+    #[test]
+    fn iris_comparison_range_rejects_reversed_bounds() {
+        assert!(iris_comparison_range(Some(11), Some(10), 20, 20).is_err());
     }
 }
