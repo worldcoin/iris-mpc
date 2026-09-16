@@ -28,8 +28,9 @@ use iris_mpc_store::Store;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 use serde::{Deserialize, Serialize};
+use sqlx::{Postgres, Transaction};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     fmt::Write as FmtWrite,
     fs,
     io::Write as IoWrite,
@@ -121,9 +122,22 @@ struct Args {
     /// Directory for JSON output files
     #[arg(long, default_value = ".")]
     output_dir: PathBuf,
-    /// RNG seed for reproducible cross-schema sampling
+    /// Compare every iris row and skip all graph/checkpoint checks.
+    #[arg(long, default_value_t = false)]
+    iris_only: bool,
+    /// Maximum number of rows held from each database during --iris-only.
+    #[arg(long, default_value_t = 1_000)]
+    batch_size: usize,
+    /// Inclusive serial-ID boundary for --iris-only. Defaults to the highest ID
+    /// visible in either fixed database snapshot.
     #[arg(long)]
-    seed: u64,
+    max_iris_id: Option<i64>,
+    /// Maximum mismatch examples retained in the --iris-only JSON report.
+    #[arg(long, default_value_t = 100)]
+    max_reported_mismatches: usize,
+    /// RNG seed for reproducible cross-schema sampling in graph-check mode.
+    #[arg(long, required_unless_present = "iris_only")]
+    seed: Option<u64>,
     /// S3 URI to upload output files to (e.g. s3://bucket/prefix/)
     #[arg(long)]
     s3_output: Option<String>,
@@ -142,8 +156,12 @@ struct Args {
     scc: bool,
     /// Number of consecutive serial IDs per bucket for all per-bucket reports
     /// (degree, hops, neighbor-serial matrix). Required.
-    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
-    bucket_size: u32,
+    #[arg(
+        long,
+        required_unless_present = "iris_only",
+        value_parser = clap::value_parser!(u32).range(1..)
+    )]
+    bucket_size: Option<u32>,
     /// Emit an in-depth per-serial reachability dossier (`probe_report.txt` /
     /// `.json`) for these serial IDs. Comma-separated. Enables the BFS + SCC
     /// passes needed to populate the dossier.
@@ -689,6 +707,396 @@ impl Stats {
     }
 }
 
+#[derive(sqlx::FromRow)]
+struct IrisComparisonRow {
+    id: i64,
+    version_id: i16,
+    left_code: Vec<u8>,
+    left_mask: Vec<u8>,
+    right_code: Vec<u8>,
+    right_mask: Vec<u8>,
+}
+
+#[derive(Serialize)]
+struct DatabaseSnapshot {
+    snapshot_id: String,
+    captured_at: String,
+    row_count: i64,
+    max_iris_id: i64,
+}
+
+#[derive(Serialize)]
+struct IrisMismatch {
+    id: i64,
+    kind: &'static str,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    differing_columns: Vec<&'static str>,
+}
+
+#[derive(Serialize)]
+struct FullIrisComparisonReport {
+    passed: bool,
+    comparison_max_iris_id: i64,
+    boundary_source: &'static str,
+    batch_size: usize,
+    gpu_snapshot: DatabaseSnapshot,
+    hnsw_snapshot: DatabaseSnapshot,
+    gpu_rows_in_scope: i64,
+    hnsw_rows_in_scope: i64,
+    gpu_rows_scanned: u64,
+    hnsw_rows_scanned: u64,
+    matching_rows: u64,
+    content_mismatches: u64,
+    only_in_gpu: u64,
+    only_in_hnsw: u64,
+    gpu_blake3: String,
+    hnsw_blake3: String,
+    mismatch_examples: Vec<IrisMismatch>,
+}
+
+async fn start_fixed_snapshot<'a>(
+    pool: &'a sqlx::PgPool,
+) -> Result<(Transaction<'a, Postgres>, String, String)> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
+        .execute(&mut *tx)
+        .await?;
+    let (snapshot_id, captured_at): (String, String) =
+        sqlx::query_as("SELECT txid_current_snapshot()::text, clock_timestamp()::text")
+            .fetch_one(&mut *tx)
+            .await?;
+    Ok((tx, snapshot_id, captured_at))
+}
+
+async fn snapshot_extent(tx: &mut Transaction<'_, Postgres>) -> Result<(i64, i64)> {
+    Ok(
+        sqlx::query_as("SELECT COUNT(*), COALESCE(MAX(id), 0) FROM irises")
+            .fetch_one(&mut **tx)
+            .await?,
+    )
+}
+
+async fn rows_in_scope(tx: &mut Transaction<'_, Postgres>, max_iris_id: i64) -> Result<i64> {
+    let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM irises WHERE id <= $1")
+        .bind(max_iris_id)
+        .fetch_one(&mut **tx)
+        .await?;
+    Ok(count)
+}
+
+async fn fetch_iris_batch(
+    tx: &mut Transaction<'_, Postgres>,
+    after_id: i64,
+    max_iris_id: i64,
+    batch_size: usize,
+) -> Result<Vec<IrisComparisonRow>> {
+    Ok(sqlx::query_as(
+        "SELECT id, version_id, left_code, left_mask, right_code, right_mask \
+         FROM irises WHERE id > $1 AND id <= $2 ORDER BY id ASC LIMIT $3",
+    )
+    .bind(after_id)
+    .bind(max_iris_id)
+    .bind(i64::try_from(batch_size)?)
+    .fetch_all(&mut **tx)
+    .await?)
+}
+
+fn hash_iris_row(hasher: &mut blake3::Hasher, row: &IrisComparisonRow) {
+    hasher.update(&row.id.to_be_bytes());
+    hasher.update(&row.version_id.to_be_bytes());
+    for bytes in [
+        &row.left_code,
+        &row.left_mask,
+        &row.right_code,
+        &row.right_mask,
+    ] {
+        hasher.update(&(bytes.len() as u64).to_be_bytes());
+        hasher.update(bytes);
+    }
+}
+
+fn differing_iris_columns(gpu: &IrisComparisonRow, hnsw: &IrisComparisonRow) -> Vec<&'static str> {
+    let mut columns = Vec::new();
+    if gpu.version_id != hnsw.version_id {
+        columns.push("version_id");
+    }
+    if gpu.left_code != hnsw.left_code {
+        columns.push("left_code");
+    }
+    if gpu.left_mask != hnsw.left_mask {
+        columns.push("left_mask");
+    }
+    if gpu.right_code != hnsw.right_code {
+        columns.push("right_code");
+    }
+    if gpu.right_mask != hnsw.right_mask {
+        columns.push("right_mask");
+    }
+    columns
+}
+
+fn retain_mismatch(
+    examples: &mut Vec<IrisMismatch>,
+    limit: usize,
+    id: i64,
+    kind: &'static str,
+    differing_columns: Vec<&'static str>,
+) {
+    if examples.len() < limit {
+        examples.push(IrisMismatch {
+            id,
+            kind,
+            differing_columns,
+        });
+    }
+}
+
+/// Full, bounded-memory comparison of the source-of-truth GPU iris table and
+/// the HNSW/CPU iris table. Both transactions remain on fixed repeatable-read
+/// snapshots for the entire scan. The GPU snapshot is established first.
+async fn run_full_iris_comparison(args: &Args) -> Result<()> {
+    eyre::ensure!(
+        args.batch_size > 0,
+        "--batch-size must be greater than zero"
+    );
+
+    let hnsw_pg =
+        PostgresClient::new(&args.hnsw_db_url, &args.hnsw_schema, AccessMode::ReadOnly).await?;
+    let gpu_pg =
+        PostgresClient::new(&args.gpu_db_url, &args.gpu_schema, AccessMode::ReadOnly).await?;
+
+    let (mut gpu_tx, gpu_snapshot_id, gpu_captured_at) = start_fixed_snapshot(&gpu_pg.pool).await?;
+    let (gpu_total_rows, gpu_max_id) = snapshot_extent(&mut gpu_tx).await?;
+
+    let (mut hnsw_tx, hnsw_snapshot_id, hnsw_captured_at) =
+        start_fixed_snapshot(&hnsw_pg.pool).await?;
+    let (hnsw_total_rows, hnsw_max_id) = snapshot_extent(&mut hnsw_tx).await?;
+
+    let comparison_max_id = args
+        .max_iris_id
+        .unwrap_or_else(|| gpu_max_id.max(hnsw_max_id));
+    if comparison_max_id < 0 {
+        eyre::bail!("--max-iris-id must be non-negative");
+    }
+
+    let gpu_scope_count = rows_in_scope(&mut gpu_tx, comparison_max_id).await?;
+    let hnsw_scope_count = rows_in_scope(&mut hnsw_tx, comparison_max_id).await?;
+
+    let mut gpu_rows = VecDeque::new();
+    let mut hnsw_rows = VecDeque::new();
+    let mut gpu_after = -1i64;
+    let mut hnsw_after = -1i64;
+    let mut gpu_finished = false;
+    let mut hnsw_finished = false;
+    let mut gpu_hasher = blake3::Hasher::new();
+    let mut hnsw_hasher = blake3::Hasher::new();
+    let mut matching_rows = 0u64;
+    let mut content_mismatches = 0u64;
+    let mut only_in_gpu = 0u64;
+    let mut only_in_hnsw = 0u64;
+    let mut examples = Vec::new();
+
+    loop {
+        if gpu_rows.is_empty() && !gpu_finished {
+            let batch =
+                fetch_iris_batch(&mut gpu_tx, gpu_after, comparison_max_id, args.batch_size)
+                    .await?;
+            if let Some(last) = batch.last() {
+                gpu_after = last.id;
+                gpu_rows.extend(batch);
+            } else {
+                gpu_finished = true;
+            }
+        }
+        if hnsw_rows.is_empty() && !hnsw_finished {
+            let batch =
+                fetch_iris_batch(&mut hnsw_tx, hnsw_after, comparison_max_id, args.batch_size)
+                    .await?;
+            if let Some(last) = batch.last() {
+                hnsw_after = last.id;
+                hnsw_rows.extend(batch);
+            } else {
+                hnsw_finished = true;
+            }
+        }
+
+        match (gpu_rows.front(), hnsw_rows.front()) {
+            (Some(gpu), Some(hnsw)) if gpu.id == hnsw.id => {
+                let gpu = gpu_rows.pop_front().expect("front exists");
+                let hnsw = hnsw_rows.pop_front().expect("front exists");
+                hash_iris_row(&mut gpu_hasher, &gpu);
+                hash_iris_row(&mut hnsw_hasher, &hnsw);
+                let columns = differing_iris_columns(&gpu, &hnsw);
+                if columns.is_empty() {
+                    matching_rows += 1;
+                } else {
+                    content_mismatches += 1;
+                    retain_mismatch(
+                        &mut examples,
+                        args.max_reported_mismatches,
+                        gpu.id,
+                        "different_content",
+                        columns,
+                    );
+                }
+            }
+            (Some(gpu), Some(hnsw)) if gpu.id < hnsw.id => {
+                let gpu = gpu_rows.pop_front().expect("front exists");
+                hash_iris_row(&mut gpu_hasher, &gpu);
+                only_in_gpu += 1;
+                retain_mismatch(
+                    &mut examples,
+                    args.max_reported_mismatches,
+                    gpu.id,
+                    "only_in_gpu",
+                    Vec::new(),
+                );
+            }
+            (Some(_), Some(_)) => {
+                let hnsw = hnsw_rows.pop_front().expect("front exists");
+                hash_iris_row(&mut hnsw_hasher, &hnsw);
+                only_in_hnsw += 1;
+                retain_mismatch(
+                    &mut examples,
+                    args.max_reported_mismatches,
+                    hnsw.id,
+                    "only_in_hnsw",
+                    Vec::new(),
+                );
+            }
+            (Some(_), None) if hnsw_finished => {
+                let gpu = gpu_rows.pop_front().expect("front exists");
+                hash_iris_row(&mut gpu_hasher, &gpu);
+                only_in_gpu += 1;
+                retain_mismatch(
+                    &mut examples,
+                    args.max_reported_mismatches,
+                    gpu.id,
+                    "only_in_gpu",
+                    Vec::new(),
+                );
+            }
+            (None, Some(_)) if gpu_finished => {
+                let hnsw = hnsw_rows.pop_front().expect("front exists");
+                hash_iris_row(&mut hnsw_hasher, &hnsw);
+                only_in_hnsw += 1;
+                retain_mismatch(
+                    &mut examples,
+                    args.max_reported_mismatches,
+                    hnsw.id,
+                    "only_in_hnsw",
+                    Vec::new(),
+                );
+            }
+            (None, None) if gpu_finished && hnsw_finished => break,
+            _ => continue,
+        }
+    }
+
+    let gpu_hash = gpu_hasher.finalize().to_hex().to_string();
+    let hnsw_hash = hnsw_hasher.finalize().to_hex().to_string();
+    let gpu_rows_scanned = matching_rows + content_mismatches + only_in_gpu;
+    let hnsw_rows_scanned = matching_rows + content_mismatches + only_in_hnsw;
+    let passed = content_mismatches == 0
+        && only_in_gpu == 0
+        && only_in_hnsw == 0
+        && gpu_scope_count == hnsw_scope_count
+        && gpu_rows_scanned == gpu_scope_count as u64
+        && hnsw_rows_scanned == hnsw_scope_count as u64
+        && gpu_hash == hnsw_hash;
+    let report = FullIrisComparisonReport {
+        passed,
+        comparison_max_iris_id: comparison_max_id,
+        boundary_source: if args.max_iris_id.is_some() {
+            "--max-iris-id"
+        } else {
+            "highest ID in either fixed snapshot"
+        },
+        batch_size: args.batch_size,
+        gpu_snapshot: DatabaseSnapshot {
+            snapshot_id: gpu_snapshot_id,
+            captured_at: gpu_captured_at,
+            row_count: gpu_total_rows,
+            max_iris_id: gpu_max_id,
+        },
+        hnsw_snapshot: DatabaseSnapshot {
+            snapshot_id: hnsw_snapshot_id,
+            captured_at: hnsw_captured_at,
+            row_count: hnsw_total_rows,
+            max_iris_id: hnsw_max_id,
+        },
+        gpu_rows_in_scope: gpu_scope_count,
+        hnsw_rows_in_scope: hnsw_scope_count,
+        gpu_rows_scanned,
+        hnsw_rows_scanned,
+        matching_rows,
+        content_mismatches,
+        only_in_gpu,
+        only_in_hnsw,
+        gpu_blake3: gpu_hash,
+        hnsw_blake3: hnsw_hash,
+        mismatch_examples: examples,
+    };
+
+    fs::create_dir_all(&args.output_dir)?;
+    let json_path = args.output_dir.join("iris_comparison.json");
+    fs::write(&json_path, serde_json::to_string_pretty(&report)?)?;
+
+    let mut output = Report::new();
+    rpt!(output, "=== Full Iris Comparison ===");
+    rpt!(output, "GPU schema: {}", args.gpu_schema);
+    rpt!(output, "HNSW/CPU schema: {}", args.hnsw_schema);
+    rpt!(
+        output,
+        "Fixed GPU snapshot: {} at {}",
+        report.gpu_snapshot.snapshot_id,
+        report.gpu_snapshot.captured_at
+    );
+    rpt!(
+        output,
+        "Fixed HNSW snapshot: {} at {}",
+        report.hnsw_snapshot.snapshot_id,
+        report.hnsw_snapshot.captured_at
+    );
+    rpt!(
+        output,
+        "Comparison boundary: id <= {} ({})",
+        comparison_max_id,
+        report.boundary_source
+    );
+    rpt!(
+        output,
+        "Rows in scope: GPU={gpu_scope_count}, HNSW={hnsw_scope_count}"
+    );
+    rpt!(output, "Matching rows: {matching_rows}");
+    rpt!(output, "Content mismatches: {content_mismatches}");
+    rpt!(output, "Only in GPU: {only_in_gpu}");
+    rpt!(output, "Only in HNSW: {only_in_hnsw}");
+    rpt!(output, "GPU BLAKE3: {}", report.gpu_blake3);
+    rpt!(output, "HNSW BLAKE3: {}", report.hnsw_blake3);
+    rpt!(
+        output,
+        "=== Result: {} ===",
+        if passed { "PASS" } else { "FAIL" }
+    );
+    let report_path = output.save(&args.output_dir)?;
+    println!("Wrote {}", json_path.display());
+    println!("Wrote {}", report_path.display());
+
+    let output_files = vec![json_path, report_path];
+    if let Some(s3_uri) = &args.s3_output {
+        let config = SanityCheckConfig::load()?;
+        upload_to_s3(s3_uri, &output_files, config.force_path_style()).await?;
+    }
+
+    gpu_tx.rollback().await?;
+    hnsw_tx.rollback().await?;
+    if !passed {
+        process::exit(1);
+    }
+    Ok(())
+}
+
 #[derive(Serialize, Clone)]
 struct ProbeNeighbor {
     serial: u32,
@@ -1024,6 +1432,11 @@ fn format_probe(r: &ProbeReport) -> String {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
+
+    if args.iris_only {
+        return run_full_iris_comparison(&args).await;
+    }
+
     let config = SanityCheckConfig::load()?;
 
     let mut rpt = Report::new();
@@ -1200,7 +1613,7 @@ async fn main() -> Result<()> {
         &mut degree_buckets,
         &mut matrix_entries,
         &mut hop_buckets,
-        args.bucket_size,
+        args.bucket_size.expect("required outside --iris-only"),
         args.bfs_hops,
         args.scc,
         &mut stats,
@@ -1226,7 +1639,7 @@ async fn main() -> Result<()> {
     run_cross_schema_checks(
         iris_max,
         last_mod_id,
-        args.seed,
+        args.seed.expect("required outside --iris-only"),
         &hnsw_store.pool,
         &gpu_pg.pool,
         &mut checks,
@@ -2433,4 +2846,43 @@ async fn upload_to_s3(s3_uri: &str, files: &[PathBuf], force_path_style: bool) -
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn iris_row(id: i64) -> IrisComparisonRow {
+        IrisComparisonRow {
+            id,
+            version_id: 3,
+            left_code: vec![1, 2],
+            left_mask: vec![3, 4],
+            right_code: vec![5, 6],
+            right_mask: vec![7, 8],
+        }
+    }
+
+    #[test]
+    fn identical_iris_rows_have_no_differences_and_same_digest() {
+        let gpu = iris_row(42);
+        let hnsw = iris_row(42);
+
+        assert!(differing_iris_columns(&gpu, &hnsw).is_empty());
+
+        let mut gpu_hasher = blake3::Hasher::new();
+        let mut hnsw_hasher = blake3::Hasher::new();
+        hash_iris_row(&mut gpu_hasher, &gpu);
+        hash_iris_row(&mut hnsw_hasher, &hnsw);
+        assert_eq!(gpu_hasher.finalize(), hnsw_hasher.finalize());
+    }
+
+    #[test]
+    fn iris_row_difference_identifies_exact_column() {
+        let gpu = iris_row(42);
+        let mut hnsw = iris_row(42);
+        hnsw.right_mask[1] ^= 1;
+
+        assert_eq!(differing_iris_columns(&gpu, &hnsw), vec!["right_mask"]);
+    }
 }

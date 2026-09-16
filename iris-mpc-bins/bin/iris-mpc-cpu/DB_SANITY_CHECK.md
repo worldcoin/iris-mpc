@@ -1,6 +1,38 @@
 # db-sanity-check
 
-Read-only validation of a single MPC party's Postgres database state. Checks HNSW graph structure, persistent state consistency, and cross-schema (HNSW vs GPU) alignment.
+Read-only validation of a single MPC party's Postgres database state. It supports a strict, full iris-table comparison and the original HNSW graph checks.
+
+## Full iris comparison
+
+Use `--iris-only` during migration validation. This mode:
+
+- skips all graph, checkpoint, S3, and exclusions checks;
+- opens fixed `REPEATABLE READ, READ ONLY` snapshots, GPU first and HNSW/CPU second;
+- compares every row in serial-ID order with bounded memory;
+- compares `version_id`, `left_code`, `left_mask`, `right_code`, and `right_mask` exactly;
+- fails on any content mismatch or ID present in only one database;
+- writes `iris_comparison.json` and `report.txt` and exits with code 1 on mismatch.
+
+By default, the inclusive comparison boundary is the highest iris ID visible in either fixed snapshot. Pass `--max-iris-id` to record and enforce an explicit migration watermark. The snapshots make each database stable for the entire scan, but snapshots from separate PostgreSQL instances are not globally atomic. For an authoritative result, pause writes or ensure the CPU system has caught up to the chosen watermark before starting the checker.
+
+### Stage example
+
+Run once for each participant:
+
+```bash
+db-sanity-check \
+  --iris-only \
+  --hnsw-db-url "$STAGE_CPU_DATABASE_URL" \
+  --gpu-db-url "$STAGE_GPU_DATABASE_URL" \
+  --hnsw-schema "SMPC_stage_0" \
+  --gpu-schema "SMPC_stage_0" \
+  --batch-size 1000 \
+  --output-dir "sanity-check/stage/party0"
+```
+
+To compare a previously agreed watermark, add `--max-iris-id <ID>`. The JSON report records both PostgreSQL snapshot IDs, capture times, the boundary, counts, whole-table BLAKE3 digests, totals, and up to 100 mismatch examples. `--max-reported-mismatches` changes that example limit without changing the full scan.
+
+## Graph validation
 
 The graph can be loaded either from the Postgres `hawk_graph_links` table or from an S3 genesis checkpoint. Mode is controlled by the `SMPC__GRAPH_CHECKPOINT_BUCKET_NAME` environment variable — non-empty enables S3-checkpoint mode, empty falls back to Postgres. S3 mode adds check 0a which validates checkpoint metadata against the `persistent_state` watermarks.
 
@@ -41,7 +73,11 @@ db-sanity-check \
 | `--gpu-db-url` | `GPU_DATABASE_URL` | yes | | Postgres connection string for the GPU database |
 | `--hnsw-schema` | | yes | | HNSW (CPU) schema name (e.g. `SMPC_hnsw_dev_0`) |
 | `--gpu-schema` | | yes | | GPU schema name (e.g. `SMPC_gpu_dev_0`) |
-| `--seed` | | yes | | RNG seed for reproducible cross-schema sampling (check 3c) |
+| `--iris-only` | | no | `false` | Run only the strict full iris comparison |
+| `--batch-size` | | no | `1000` | Maximum rows buffered per database in iris-only mode |
+| `--max-iris-id` | | no | highest ID in either snapshot | Inclusive fixed comparison boundary |
+| `--max-reported-mismatches` | | no | `100` | Mismatch examples retained in the JSON report |
+| `--seed` | | graph mode only | | RNG seed for reproducible cross-schema sampling (check 3c) |
 | `--m` | | no | `256` | HNSW M parameter for degree bound checks |
 | `--layer-probability` | | no | `1/M` | Layer probability q for geometric distribution check |
 | `--exclusions-s3-uri` | | no | | S3 URI to JSON exclusions file with `{"deleted_serial_ids": [...]}` (e.g. `s3://bucket/path/deleted_serial_ids.json`) |
