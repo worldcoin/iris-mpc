@@ -134,6 +134,9 @@ struct Args {
     /// database. Connections for each database must reach the same DB instance.
     #[arg(long, default_value_t = 1)]
     workers: usize,
+    /// Emit a progress checkpoint after this many processed IDs (also every 60s).
+    #[arg(long, default_value_t = 100_000)]
+    progress_every_rows: u64,
     /// Maximum total scan runtime (including connections/counts), in seconds.
     /// Expiry is an error, never a successful partial comparison.
     #[arg(long, default_value_t = 10_800)]
@@ -898,6 +901,7 @@ struct IrisScanProgress {
     started: Instant,
     last_log: Instant,
     next_checkpoint: u64,
+    checkpoint_every: u64,
     gpu_total: u64,
     hnsw_total: u64,
     matching_rows: u64,
@@ -915,6 +919,7 @@ impl IrisScanProgress {
             started: now,
             last_log: now,
             next_checkpoint: 100_000,
+            checkpoint_every: 100_000,
             gpu_total: 0,
             hnsw_total: 0,
             matching_rows: 0,
@@ -987,7 +992,7 @@ impl IrisScanProgress {
         let processed = self.processed_ids();
         if processed >= self.next_checkpoint || self.last_log.elapsed() >= Duration::from_secs(60) {
             self.log("scanning");
-            self.next_checkpoint = (processed / 100_000 + 1) * 100_000;
+            self.next_checkpoint = (processed / self.checkpoint_every + 1) * self.checkpoint_every;
         }
     }
 }
@@ -1325,6 +1330,10 @@ async fn run_full_iris_comparison(args: &Args) -> Result<()> {
         args.scan_timeout_seconds > 0,
         "--scan-timeout-seconds must be positive"
     );
+    eyre::ensure!(
+        args.progress_every_rows > 0,
+        "--progress-every-rows must be positive"
+    );
     tokio::time::timeout(
         Duration::from_secs(args.scan_timeout_seconds),
         run_full_iris_comparison_inner(args),
@@ -1339,6 +1348,8 @@ async fn run_full_iris_comparison_inner(args: &Args) -> Result<()> {
         "--batch-size must be greater than zero"
     );
     let mut progress = IrisScanProgress::new();
+    progress.checkpoint_every = args.progress_every_rows;
+    progress.next_checkpoint = args.progress_every_rows;
     tracing::info!(
         event = "iris_comparison_start",
         batch_size = args.batch_size,

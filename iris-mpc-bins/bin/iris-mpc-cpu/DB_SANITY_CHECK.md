@@ -49,7 +49,7 @@ Candidate configuration for participant 0, subject to a production throughput be
 - Pod request: 4 CPUs / 4 GiB; limit: 4 CPUs / 8 GiB.
 - Standard shares use 76,800 payload bytes per iris per database. Sixteen workers with 500-row batches buffer about 1.23 GB of payload in total, plus driver/runtime overhead.
 - Sixteen workers use 17 database connections per side including the snapshot coordinator. One-worker mode uses the original snapshot transactions directly.
-- Progress is logged globally every 100,000 processed IDs or 60 seconds, including while queries are pending. Fields include checked/total rows per database, percentage, elapsed time, approximate ETA, mismatches, and cumulative query times. These are progress logs, not resumable checkpoints.
+- Progress is logged globally every 100,000 processed IDs or 60 seconds, including while queries are pending. Use `--progress-every-rows 1000` for a small stage test. Fields include checked/total rows per database, percentage, elapsed time, approximate ETA, mismatches, and cumulative query times. These are progress logs, not resumable checkpoints.
 - The final report includes per-range row-stream BLAKE3 hashes. With multiple workers the top-level hashes are roots over ordered range boundaries, counts, and digests; `digest_format` identifies this representation. They differ from a serial whole-stream hash and depend on partition boundaries. Every byte is still compared directly.
 - Timeout is a nonzero failure with an incomplete comparison, never a partial PASS. An independently configured Kubernetes Job deadline should stop the pod, and automatic retries should remain disabled.
 
@@ -101,6 +101,7 @@ db-sanity-check \
 | `--iris-only` | | no | `false` | Run only the strict full iris comparison |
 | `--batch-size` | | no | `1000` | Maximum rows buffered per database per worker in iris-only mode |
 | `--workers` | | no | `1` | Parallel iris range workers, from 1 to 32 |
+| `--progress-every-rows` | | no | `100000` | Processed IDs between progress checkpoints; must be positive |
 | `--scan-timeout-seconds` | | no | `10800` | Iris-only runtime limit; expiry fails the incomplete comparison |
 | `--min-iris-id` | | no | `0` | Inclusive lower iris ID boundary |
 | `--max-iris-id` | | no | highest ID in either snapshot | Inclusive fixed comparison boundary |
