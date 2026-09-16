@@ -2,7 +2,7 @@
 # (common-cronjob 1.11.0 via wf-cluster-apps); per-cluster env + the
 # attachSecurityGroupPolicy that lets the pod reach the anon-stats Aurora live per-node.
 # Stage-validated 2026-07-09 (see the smpcv2 common values for details).
-image: "ghcr.io/worldcoin/retention-reaper:v0.32.6@sha256:366cc7dcd9e9132bbfe2b5719332ff8d1f301ed5b487cbfc458fbc97cca92ace"
+image: "ghcr.io/worldcoin/retention-reaper:e021e13dad7710f4dda417c210fadf2c0c43b43a@sha256:70c52f46bef422afae1a706b10b8b82322f1258145465e8953349ec78f7fac82"
 
 # LIVE (POP-4134 flip, 2026-08-03): DRY_RUN=false — the guarded batched DELETE runs for
 # real (10k-row ctid batches, 100ms pause, per-batch commit; concurrencyPolicy Forbid).
