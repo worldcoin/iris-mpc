@@ -6,7 +6,7 @@
 # the Aurora only from some nodes (intermittent "pool timed out"/"failed to connect to
 # postgres" — same class as the stage fix in #2303); the anon-stats reaper connects from
 # this pool with a 13-day clean record.
-image: "ghcr.io/worldcoin/retention-reaper:v0.32.6@sha256:366cc7dcd9e9132bbfe2b5719332ff8d1f301ed5b487cbfc458fbc97cca92ace"
+image: "ghcr.io/worldcoin/retention-reaper:e021e13dad7710f4dda417c210fadf2c0c43b43a@sha256:70c52f46bef422afae1a706b10b8b82322f1258145465e8953349ec78f7fac82"
 
 # LIVE DELETION (POP-4134): ENABLED + DRY_RUN=false — the daily run executes the guarded
 # DELETE on rows past the retention window, bounded by the newest-10k floor. Deleted rows

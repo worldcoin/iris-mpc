@@ -472,7 +472,7 @@ async fn server_main(config: Config) -> Result<()> {
         let schema = config.get_anon_stats_db_schema();
         let anon_client =
             AnonStatsPgClient::new(&url, &schema, AnonStatsAccessMode::ReadWrite).await?;
-        let anon_store = AnonStatsStore::new(&anon_client).await?;
+        let anon_store = AnonStatsStore::new(&anon_client, false).await?;
         Some((anon_store, runtime_handle.clone()))
     } else {
         tracing::warn!("No database URL configured for anon stats; skipping DB persistence");

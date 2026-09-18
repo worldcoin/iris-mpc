@@ -8,8 +8,14 @@ jobs:
     runs-on:
       group: arc-public-xlarge-amd64-runner
     permissions:
+      contents: read
       pull-requests: read
     steps:
+      - name: Fetch PR history for merge verification
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
       - name: Check approvals for deploy/prod changes
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
@@ -19,7 +25,7 @@ jobs:
             const protectedPath = 'deploy/prod';
 
             // Define approval groups - each group must have at least one approval
-            approversGroupA = [
+            const approversGroupA = [
               'philsippl',
               'eaypek-tfh',
               'carlomazzaferro',
@@ -29,7 +35,7 @@ jobs:
               'gryaele'
             ];
 
-            approversGroupB = [
+            const approversGroupB = [
               'camelop',       // UC Berkeley
               'stneng',        // UC Berkeley
               'jweberphipps',  // UC Berkeley
@@ -48,6 +54,15 @@ jobs:
             const pull_number = context.payload.pull_request.number;
             const { owner, repo } = context.repo;
             core.info(`Checking PR #${pull_number} in ${owner}/${repo}`);
+
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner,
+              repo,
+              pull_number,
+            });
+            const headSha = pullRequest.head.sha;
+            const baseSha = pullRequest.base.sha;
+            core.info(`Current PR head: ${headSha}; base: ${baseSha}`);
 
             const files = await github.paginate(github.rest.pulls.listFiles, {
               owner,
@@ -76,20 +91,114 @@ jobs:
             });
             core.info(`Found ${reviews.length} total reviews`);
 
-            const latestReviewStateByUser = new Map();
+            // The reviews endpoint is chronological, so the final entry for a
+            // reviewer is their effective review state. A review remains valid
+            // only when no non-base commit was added after it. This deliberately
+            // keeps approvals after GitHub's "Update branch" button: that action
+            // adds a merge commit plus commits already reachable from main.
+            const latestReviewByUser = new Map();
             for (const review of reviews) {
               if (!review.user || !review.user.login) {
                 core.info(`Skipping review without user info: ${JSON.stringify(review)}`);
                 continue;
               }
-              core.info(`Review from ${review.user.login}: ${review.state}`);
-              latestReviewStateByUser.set(review.user.login, review.state);
+              core.info(`Review from ${review.user.login}: ${review.state} at ${review.commit_id}`);
+              latestReviewByUser.set(review.user.login, review);
             }
-            core.info(`Latest review states: ${JSON.stringify(Object.fromEntries(latestReviewStateByUser))}`);
 
-            const approvedLogins = Array.from(latestReviewStateByUser.entries())
-              .filter(([, state]) => state === 'APPROVED')
-              .map(([login]) => login);
+            const { execFileSync } = require('node:child_process');
+
+            const isAncestorOfBaseCache = new Map();
+            const isAncestorOfBase = async (sha) => {
+              if (!isAncestorOfBaseCache.has(sha)) {
+                const { data } = await github.rest.repos.compareCommits({
+                  owner,
+                  repo,
+                  base: baseSha,
+                  head: sha,
+                });
+                isAncestorOfBaseCache.set(sha, data.ahead_by === 0);
+              }
+              return isAncestorOfBaseCache.get(sha);
+            };
+
+            const isExactAutomaticMerge = (commit) => {
+              if (commit.parents.length !== 2) {
+                return false;
+              }
+
+              try {
+                const expectedTree = execFileSync(
+                  'git',
+                  ['merge-tree', '--write-tree', commit.parents[0].sha, commit.parents[1].sha],
+                  { encoding: 'utf8' },
+                ).trim();
+                const actualTree = execFileSync(
+                  'git',
+                  ['rev-parse', `${commit.sha}^{tree}`],
+                  { encoding: 'utf8' },
+                ).trim();
+                return expectedTree === actualTree;
+              } catch (error) {
+                core.info(`Cannot verify merge ${commit.sha}: ${error.message}`);
+                return false;
+              }
+            };
+
+            const approvalIsCurrent = async (review) => {
+              if (!review.commit_id) {
+                return false;
+              }
+              if (review.commit_id === headSha) {
+                return true;
+              }
+
+              const { data: comparison } = await github.rest.repos.compareCommits({
+                owner,
+                repo,
+                base: review.commit_id,
+                head: headSha,
+              });
+
+              // compareCommits returns at most 250 commits. Never accept an
+              // approval when the history is too large to validate completely.
+              if (comparison.total_commits > comparison.commits.length) {
+                core.warning(`Cannot validate approval ${review.id}: ${comparison.total_commits} commits since review`);
+                return false;
+              }
+
+              for (const commit of comparison.commits) {
+                if (await isAncestorOfBase(commit.sha)) {
+                  continue;
+                }
+
+                // A non-base commit is acceptable only if it is an exact automatic
+                // merge of the PR branch and a main ancestor. This preserves
+                // approvals after GitHub's "Update branch" operation, but rejects
+                // a hand-built merge with unreviewed conflict-resolution changes.
+                const hasBaseParent = await Promise.all(
+                  commit.parents.map((parent) => isAncestorOfBase(parent.sha)),
+                );
+                if (!hasBaseParent.some(Boolean) || !isExactAutomaticMerge(commit)) {
+                  core.info(`Approval ${review.id} is stale: ${commit.sha} is not a verified branch update`);
+                  return false;
+                }
+              }
+
+              return true;
+            };
+
+            const approvedLogins = [];
+            for (const [login, review] of latestReviewByUser) {
+              if (review.state !== 'APPROVED') {
+                continue;
+              }
+              if (await approvalIsCurrent(review)) {
+                approvedLogins.push(login);
+              } else {
+                core.info(`Ignoring stale approval from ${login}`);
+              }
+            }
             core.info(`Approved logins: [${approvedLogins.join(', ')}] (${approvedLogins.length} total)`);
 
             if (approvedLogins.length < 2) {

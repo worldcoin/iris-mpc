@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/anon-stats-server:6429fa5c3cd96ca5e1839da651588d6807c0c6ff"
+image: "ghcr.io/worldcoin/anon-stats-server:15ddc27bd654a81ee0517a82db1064b7fb7589eb"
 
 environment: stage
 replicaCount: 1
@@ -8,6 +8,7 @@ replicaCount: 1
 env:
   RUST_LOG: "info"
   SMPC__ENVIRONMENT: "stage"
+  SMPC__IGNORE_MISSING_MIGRATIONS: "true"
   SMPC__SNS_BUFFER_BUCKET_NAME: "wf-hnsw-stage-sns-buffer"
   SMPC__DB_URL:
     valueFrom:
