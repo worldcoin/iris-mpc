@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-database-exporter:v0.31.11@sha256:0dcd552aa455b6af8064529298eab4787bbfa0c539a5bcd01e009b408ec14149"
+image: "ghcr.io/worldcoin/iris-mpc-database-exporter:1df123cf6a992a085511c56815c6cec3f5a819fa@sha256:e257b2d30a3aa91461c4a46171d7e89dbf9463aed81f6d3c6233b138cc763b94"
 
 environment: prod
 
