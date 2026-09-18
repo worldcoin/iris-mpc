@@ -18,7 +18,7 @@ set -euo pipefail
 #
 # Required commands: cargo, curl, Python 3.10+, initdb, pg_ctl, createdb.
 # Set MOTO_PYTHON_BIN to a Python interpreter containing moto and boto3.
-# Otherwise a temporary venv is populated with moto[server]==5.2.2 and boto3.
+# Otherwise a temporary venv is populated with moto[server]==5.1.22 and boto3.
 # Set MOTO_BASE_PYTHON to select the interpreter used to create that venv.
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -209,11 +209,11 @@ elif [[ -z ${MOTO_BASE_PYTHON:-} ]] && python3 -c 'import boto3, moto' >/dev/nul
 else
     MOTO_BASE_PYTHON=${MOTO_BASE_PYTHON:-python3}
     "$MOTO_BASE_PYTHON" -c 'import sys; assert sys.version_info >= (3, 10)' || {
-        echo "Moto 5.2.2 requires Python 3.10 or newer; set MOTO_BASE_PYTHON" >&2
+        echo "Moto 5.1.22 requires Python 3.10 or newer; set MOTO_BASE_PYTHON" >&2
         exit 1
     }
     "$MOTO_BASE_PYTHON" -m venv "$RUN_ROOT/moto-venv"
-    "$RUN_ROOT/moto-venv/bin/pip" install -q 'moto[server]==5.2.2' boto3
+    "$RUN_ROOT/moto-venv/bin/pip" install -q 'moto[server]==5.1.22' boto3
     MOTO_PYTHON="$RUN_ROOT/moto-venv/bin/python"
 fi
 

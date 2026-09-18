@@ -7,10 +7,10 @@ use crate::execution::hawk_main::iris_worker::{
 };
 use crate::execution::hawk_main::{BothEyes, HawkOps, LEFT, RIGHT};
 use crate::hawkers::aby3::aby3_store::{
-    Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store, DistanceMode, VectorIdRegistryRef,
+    Aby3SharedIrises, Aby3Store, DistanceMode, VectorIdRegistryRef,
 };
-use crate::hawkers::shared_irises::SharedIrises;
-use crate::protocol::shared_iris::GaloisRingSharedIris;
+use crate::hawkers::shared_irises::{SharedIrises, SharedIrisesRef};
+use crate::protocol::shared_iris::{GaloisRingSharedIris, ResidentIris, ResidentLayout};
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use async_trait::async_trait;
 use eyre::Result;
@@ -64,6 +64,10 @@ pub struct LocalWorkerPoolInitializer {
     pub distance_mode: DistanceMode,
     pub numa: bool,
     pub mode: LocalInitMode,
+    /// Resident representation of the pools' iris stores. `U16` (default)
+    /// keeps plain `ArcIris` values as required by the HNSW hot paths;
+    /// exact-scan actors opt into `preferred_scan_layout()`.
+    pub layout: ResidentLayout,
 }
 
 impl LocalWorkerPoolInitializer {
@@ -73,7 +77,14 @@ impl LocalWorkerPoolInitializer {
             distance_mode,
             numa,
             mode: LocalInitMode::Empty,
+            layout: ResidentLayout::U16,
         }
+    }
+
+    /// Choose the resident representation of the pools' iris stores.
+    pub fn with_resident_layout(mut self, layout: ResidentLayout) -> Self {
+        self.layout = layout;
+        self
     }
 
     pub fn new_seeded(
@@ -87,6 +98,7 @@ impl LocalWorkerPoolInitializer {
             distance_mode,
             numa,
             mode: LocalInitMode::Seeded(seed_stores),
+            layout: ResidentLayout::U16,
         }
     }
 
@@ -101,6 +113,7 @@ impl LocalWorkerPoolInitializer {
             distance_mode,
             numa,
             mode: LocalInitMode::LoadFromDb(params),
+            layout: ResidentLayout::U16,
         }
     }
 }
@@ -113,23 +126,25 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
             distance_mode,
             numa,
             mode,
+            layout,
         } = *self;
 
         // Materialize the iris stores. `Seeded` installs caller-provided
         // stores; the rest start blank.
-        let iris_stores: BothEyes<Aby3SharedIrisesRef> = match &mode {
-            LocalInitMode::Seeded(seeds) => {
-                let [left, right] = seeds.clone();
-                [SharedIrises::to_arc(left), SharedIrises::to_arc(right)]
-            }
-            _ => [
-                Aby3Store::<HawkOps>::new_storage(None).to_arc(),
-                Aby3Store::<HawkOps>::new_storage(None).to_arc(),
-            ],
+        let iris_stores: BothEyes<SharedIrisesRef<ResidentIris>> = match &mode {
+            LocalInitMode::Seeded(seeds) => seeds.clone().map(|seed| {
+                seed.map_values(|iris| ResidentIris::from_arc(iris, layout))
+                    .to_arc()
+            }),
+            _ => [LEFT, RIGHT].map(|_| {
+                Aby3Store::<HawkOps>::new_storage(None)
+                    .map_values(|iris| ResidentIris::from_arc(iris, layout))
+                    .to_arc()
+            }),
         };
 
         let workers_handle: BothEyes<IrisPoolHandle> =
-            [LEFT, RIGHT].map(|side| init_workers(side, iris_stores[side].clone(), numa));
+            [LEFT, RIGHT].map(|side| init_workers(side, iris_stores[side].clone(), numa, layout));
 
         let mut db_size: usize = 0;
         let mut cold_storage: Option<(Store, usize, usize, usize)> = None;
@@ -219,6 +234,7 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                     LocalIrisWorkerPool::new_cold(
                         workers_handle[cold_side].clone(),
                         iris_stores[cold_side].clone(),
+                        layout,
                         distance_mode,
                         party_id,
                         ColdStorageInit {
@@ -245,6 +261,7 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                 LocalIrisWorkerPool::new(
                     workers_handle[side].clone(),
                     iris_stores[side].clone(),
+                    layout,
                     distance_mode,
                     party_id,
                 )
@@ -349,9 +366,13 @@ mod tests {
 
     #[tokio::test]
     async fn single_eye_loader_does_not_materialize_cold_eye() -> Result<()> {
-        let stores: BothEyes<Aby3SharedIrisesRef> =
-            [LEFT, RIGHT].map(|_| Aby3Store::<HawkOps>::new_storage(None).to_arc());
-        let handles = [LEFT, RIGHT].map(|side| init_workers(side, stores[side].clone(), false));
+        let stores: BothEyes<SharedIrisesRef<ResidentIris>> = [LEFT, RIGHT].map(|_| {
+            Aby3Store::<HawkOps>::new_storage(None)
+                .map_values(|iris| ResidentIris::from_arc(iris, ResidentLayout::U16))
+                .to_arc()
+        });
+        let handles = [LEFT, RIGHT]
+            .map(|side| init_workers(side, stores[side].clone(), false, ResidentLayout::U16));
         let iris = GaloisRingSharedIris::default_for_party(0);
         let id = VectorId::from_0_index(7);
         let mut loader = FanoutLoader {
