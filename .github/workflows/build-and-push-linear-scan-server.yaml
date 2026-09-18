@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - adjust-linear-scan-image
   release:
     types:
       - published
