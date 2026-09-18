@@ -2338,6 +2338,25 @@ impl HawkHandle {
             metrics::histogram!("all_search_duration").record(start.elapsed().as_secs_f64());
             (search_normal, search_mirror, match_result)
         };
+
+        if hawk_actor.search_mode() == HawkSearchMode::LinearScan {
+            // Every scan of this batch has consumed the cold-eye records it
+            // asked for. Drop whatever prefetch reservations are left (a
+            // record hinted by one orientation but read from the LFU by the
+            // other, or hints from a stage that did not run) so reservations
+            // never accumulate across batches.
+            let (left_released, right_released) = tokio::join!(
+                hawk_actor.worker_pools[LEFT].release_prefetched(),
+                hawk_actor.worker_pools[RIGHT].release_prefetched(),
+            );
+            if left_released + right_released > 0 {
+                tracing::debug!(
+                    left_released,
+                    right_released,
+                    "Released leftover cold-eye prefetch reservations"
+                );
+            }
+        }
         let sessions_mutations = &sessions.for_mutations(Orientation::Normal);
 
         hawk_actor
