@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -33,30 +34,47 @@ func runCompleteExportCommand(ctx context.Context, mode, outputFolder string, st
 
 	o11y.S(ctx).Infof("Starting %s from %d to %d", mode, startIndex, endIndex)
 
-	irisesStream, err := store.StreamStoredIrisesByRange(ctx, startIndex, endIndex, chanBufferLen)
+	irisesStream, streamError, err := store.StreamStoredIrisesByRange(ctx, startIndex, endIndex, chanBufferLen)
 	if err != nil {
 		return err
 	}
 
 	outputChannel := make(chan []byte, chanBufferLen)
+	producerStatus := make(chan error, 1)
 	go func() {
 		defer close(outputChannel)
+		defer close(producerStatus)
+		var conversionError error
 		for item := range irisesStream {
 			convertedIrises, err := converter.ConvertSingle(item)
 			if err != nil {
-				o11y.S(ctx).With(zap.Error(err)).Error("Failed to convert iris")
-				panic(err)
+				conversionError = fmt.Errorf("convert iris %d: %w", item.ID, err)
+				// Let the database producer finish even when conversion stops.
+				for range irisesStream {
+				}
+				break
 			}
 			outputChannel <- convertedIrises
 		}
+		streamErr, ok := <-streamError
+		if !ok {
+			streamErr = errors.New("database stream status channel closed without a value")
+		}
+		producerStatus <- errors.Join(conversionError, streamErr)
 	}()
 
 	path := fmt.Sprintf("%s/%d.%s", outputFolder, startIndex, converter.GetExtension())
 
 	persistStart := time.Now()
-	err = writer.PersistStream(ctx, path, outputChannel)
-	if err != nil {
-		return err
+	err = writer.PersistStream(ctx, path, outputChannel, producerStatus)
+	// Persistence may return before consuming the stream; unblock the producer.
+	for range outputChannel {
+	}
+	// The writer consumes producerStatus after a complete input stream. If it
+	// returned early, the caller owns the remaining status after draining.
+	producerErr := <-producerStatus
+	if err = errors.Join(err, producerErr); err != nil {
+		return fmt.Errorf("export chunk %s: %w", path, err)
 	}
 	elapsedPersist := time.Since(persistStart)
 	o11y.S(ctx).Infof("Persisting irises in chunk from %d to %d took %f", startIndex, endIndex, elapsedPersist.Seconds())
@@ -120,10 +138,9 @@ func runIncrementalExportCommand(ctx context.Context, outputFolder string, expor
 	return nil
 }
 
-func ExportCommand(ctx context.Context, mode, outputFolder string, store iris.Store, converter converter.Converter, writer persistence.Writer, reader persistence.Reader, batchSize, parallelism, endIndex, chanBufferLen int) {
+func ExportCommand(ctx context.Context, mode, outputFolder string, store iris.Store, converter converter.Converter, writer persistence.Writer, reader persistence.Reader, batchSize, parallelism, endIndex, chanBufferLen int) error {
 	if mode != CompleteExport && mode != IncrementalExport {
-		o11y.S(ctx).Errorf("Invalid mode: %s", mode)
-		return
+		return fmt.Errorf("invalid mode: %s", mode)
 	}
 
 	startTime := time.Now()
@@ -134,12 +151,12 @@ func ExportCommand(ctx context.Context, mode, outputFolder string, store iris.St
 	var wg sync.WaitGroup
 	totalIrises, err := store.GetCount(ctx)
 	if err != nil {
-		o11y.S(ctx).With(zap.Error(err)).Fatal("Error getting count of irises")
+		return fmt.Errorf("get iris count: %w", err)
 	}
 
 	if totalIrises == 0 {
 		o11y.S(ctx).Info("No irises to export")
-		return
+		return nil
 	}
 
 	if endIndex != 0 {
@@ -148,7 +165,7 @@ func ExportCommand(ctx context.Context, mode, outputFolder string, store iris.St
 			o11y.S(ctx).Infof("End index has been provided %d", totalIrises)
 		} else {
 			o11y.S(ctx).Infof("End index provided is greater than total irises %d", totalIrises)
-			return
+			return nil
 		}
 	}
 
@@ -165,6 +182,8 @@ func ExportCommand(ctx context.Context, mode, outputFolder string, store iris.St
 
 	var runningCoroutines atomic.Int32
 	var successfulBatches atomic.Int32
+	var firstBatchError error
+	var recordBatchError sync.Once
 
 	var exportNewerThan *int64
 	if mode == IncrementalExport {
@@ -193,36 +212,26 @@ func ExportCommand(ctx context.Context, mode, outputFolder string, store iris.St
 		runningCoroutines.Add(1)
 		go func(start, count int) {
 			defer wg.Done()
-			success := true
+			defer runningCoroutines.Add(-1)
+			var batchErr error
 
 			if mode == CompleteExport {
-				err = runCompleteExportCommand(ctx, mode, outputFolder, store, converter, writer, start, start+count, chanBufferLen)
-				if err != nil {
-					o11y.S(ctx).With(zap.Error(err)).Errorf("Failed to run export command on interval %d-%d", start, start+count)
-					success = false
-				}
+				batchErr = runCompleteExportCommand(ctx, mode, outputFolder, store, converter, writer, start, start+count, chanBufferLen)
 			}
 
 			if mode == IncrementalExport {
-				err = runIncrementalExportCommand(ctx, outputFolder, *exportNewerThan, store, converter, writer, start, start+count)
-				if err != nil {
-					o11y.S(ctx).With(zap.Error(err)).Errorf("Failed to run export command on interval %d-%d", start, start+count)
-					success = false
-				}
+				batchErr = runIncrementalExportCommand(ctx, outputFolder, *exportNewerThan, store, converter, writer, start, start+count)
 			}
 
-			if err != nil {
-				o11y.S(ctx).With(zap.Error(err)).Errorf("Failed to run export command on interval %d-%d", start, start+count)
-				success = false
+			if batchErr != nil {
+				o11y.S(ctx).With(zap.Error(batchErr)).Errorf("Failed to run export command on interval %d-%d", start, start+count)
+				recordBatchError.Do(func() {
+					firstBatchError = fmt.Errorf("export interval %d-%d: %w", start, start+count, batchErr)
+				})
 			} else {
 				o11y.S(ctx).Infof("Batch %d/%d completed", i+1, batchesCount)
-			}
-
-			if success {
 				successfulBatches.Add(1)
 			}
-
-			runningCoroutines.Add(-1)
 		}(start, batchSize-1)
 	}
 
@@ -240,9 +249,13 @@ func ExportCommand(ctx context.Context, mode, outputFolder string, store iris.St
 
 	if !exportSuccess {
 		o11y.S(ctx).Error("Export did not fully succeed, skipping timestamp marker to avoid advancing the checkpoint")
-		return
+		return firstBatchError
 	}
 
 	// Create the file with the date of the beginning of the export to mark the completion of the export
 	err = writer.Persist(timestampFilePath, []byte{})
+	if err != nil {
+		return fmt.Errorf("persist completion marker %s: %w", timestampFilePath, err)
+	}
+	return nil
 }
