@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use serde::{Deserialize, Serialize};
 
 mod types;
@@ -25,6 +27,20 @@ pub struct ServiceClientOptions {
 
     // Associated Iris shares generator configuration.
     pub shares_generator: SharesGeneratorOptions,
+
+    /// Optional path for the canonical, order-independent result capture.
+    #[serde(default)]
+    results_output_path: Option<PathBuf>,
+
+    /// Whether to delete all identities inserted by the client after the run.
+    /// Ground-truth runs disable this so that untracked cleanup results cannot
+    /// leak into the captured result stream.
+    #[serde(default = "default_cleanup_on_exit")]
+    cleanup_on_exit: bool,
+}
+
+fn default_cleanup_on_exit() -> bool {
+    true
 }
 
 impl ServiceClientOptions {
@@ -34,6 +50,14 @@ impl ServiceClientOptions {
 
     pub fn shares_generator(&self) -> &SharesGeneratorOptions {
         &self.shares_generator
+    }
+
+    pub fn results_output_path(&self) -> Option<&Path> {
+        self.results_output_path.as_deref()
+    }
+
+    pub fn cleanup_on_exit(&self) -> bool {
+        self.cleanup_on_exit
     }
 
     /// Overrides the NDJSON file path when shares generator is `FromFile`.
@@ -93,6 +117,35 @@ impl ServiceClientOptions {
                     )));
                 }
             }
+            RequestBatchOptions::GroundTruth {
+                request_count,
+                initial_uniqueness_count,
+                ..
+            } => {
+                if *request_count == 0 {
+                    return Err(ServiceClientError::InvalidOptions(
+                        "RequestBatchOptions::GroundTruth request_count must be greater than zero"
+                            .to_string(),
+                    ));
+                }
+                if *initial_uniqueness_count == 0 || initial_uniqueness_count > request_count {
+                    return Err(ServiceClientError::InvalidOptions(format!(
+                        "RequestBatchOptions::GroundTruth initial_uniqueness_count must be in \
+                         1..={request_count}, got {initial_uniqueness_count}"
+                    )));
+                }
+                if !matches!(
+                    self.shares_generator(),
+                    SharesGeneratorOptions::FromFile { .. }
+                ) {
+                    return Err(ServiceClientError::InvalidOptions(
+                        "RequestBatchOptions::GroundTruth requires \
+                         SharesGeneratorOptions::FromFile so matching operations can replay the \
+                         exact same iris pair"
+                            .to_string(),
+                    ));
+                }
+            }
             RequestBatchOptions::Complex { .. } => {
                 // Error if used alongside compute shares generation.
                 if matches!(
@@ -138,6 +191,8 @@ impl ServiceClientOptions {
                 if !matches!(
                     batch_kind.as_str(),
                     smpc_request::IDENTITY_DELETION_MESSAGE_TYPE
+                        | smpc_request::RECOVERY_CHECK_MESSAGE_TYPE
+                        | smpc_request::RECOVERY_UPDATE_MESSAGE_TYPE
                         | smpc_request::REAUTH_MESSAGE_TYPE
                         | smpc_request::RESET_CHECK_MESSAGE_TYPE
                         | smpc_request::RESET_UPDATE_MESSAGE_TYPE

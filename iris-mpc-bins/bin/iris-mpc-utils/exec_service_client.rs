@@ -43,12 +43,16 @@ pub async fn main() -> Result<()> {
     }
     opts.validate()?;
 
+    let results_output_path = opts.results_output_path().map(PathBuf::from);
+    let cleanup_on_exit = opts.cleanup_on_exit();
     let client = ServiceClient::new(
         AwsOptions::from(&options),
         opts.request_batch,
         opts.shares_generator,
     )
-    .await?;
+    .await?
+    .with_results_output_path(results_output_path.as_deref())
+    .with_cleanup_on_exit(cleanup_on_exit);
 
     client.run().await?;
 

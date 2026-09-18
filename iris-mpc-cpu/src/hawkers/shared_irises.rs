@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, OnceLock},
+};
 
 use iris_mpc_common::{SerialId, VectorId, VersionId};
 use itertools::Itertools;
@@ -8,13 +11,31 @@ use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use crate::execution::hawk_main::state_check::SetHash;
 
 /// Storage of inserted irises.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SharedIrises<I: Clone> {
     points: Vec<Option<(VersionId, I)>>,
     pub size: usize, // Number of Some() stored in points
     pub next_id: u32,
     pub empty_iris: I,
     pub set_hash: SetHash,
+    /// Serial-ordered current `VectorId`s, built on first use and dropped by
+    /// every mutation. The exact linear scan needs this list for every
+    /// request; rebuilding it from millions of `points` per scan is
+    /// measurable, while between batches it does not change.
+    #[serde(skip)]
+    live_ids: OnceLock<Arc<[VectorId]>>,
+}
+
+impl<I: Clone + PartialEq> PartialEq for SharedIrises<I> {
+    fn eq(&self, other: &Self) -> bool {
+        // The cache is derived state; two registries with equal contents are
+        // equal regardless of whether either has materialized it.
+        self.points == other.points
+            && self.size == other.size
+            && self.next_id == other.next_id
+            && self.empty_iris == other.empty_iris
+            && self.set_hash == other.set_hash
+    }
 }
 
 impl<I: Clone + Default> Default for SharedIrises<I> {
@@ -25,6 +46,7 @@ impl<I: Clone + Default> Default for SharedIrises<I> {
             next_id: 1,
             empty_iris: Default::default(),
             set_hash: Default::default(),
+            live_ids: OnceLock::new(),
         }
     }
 }
@@ -49,11 +71,31 @@ impl<I: Clone> SharedIrises<I> {
             next_id,
             empty_iris,
             set_hash,
+            live_ids: OnceLock::new(),
         }
     }
 
     pub fn get_points(&self) -> &Vec<Option<(VersionId, I)>> {
         &self.points
+    }
+
+    /// All current `VectorId`s (one per present serial ID, at its current
+    /// version) in ascending serial order. Cached until the next mutation, so
+    /// repeated callers within one batch share a single allocation.
+    pub fn live_vector_ids(&self) -> Arc<[VectorId]> {
+        self.live_ids
+            .get_or_init(|| {
+                self.points
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(serial_id, entry)| {
+                        entry
+                            .as_ref()
+                            .map(|(version, _)| VectorId::new(serial_id as u32, *version))
+                    })
+                    .collect()
+            })
+            .clone()
     }
 
     /// Inserts the given iris into the database with the specified id.  If an
@@ -82,6 +124,7 @@ impl<I: Clone> SharedIrises<I> {
         self.points[serial_id] = Some((vector_id.version_id(), iris));
         self.set_hash.add_unordered(vector_id);
         self.next_id = self.next_id.max(serial_id as u32 + 1);
+        self.live_ids = OnceLock::new();
 
         vector_id
     }
@@ -189,6 +232,7 @@ impl<I: Clone> SharedIrises<I> {
             next_id: self.next_id,
             empty_iris: (),
             set_hash: self.set_hash.clone(),
+            live_ids: OnceLock::new(),
         }
     }
 
@@ -349,5 +393,40 @@ impl<I: Clone> SharedIrisesRef<I> {
             Err(arc) => Err(SharedIrisesRef { data: arc }),
             Ok(lock) => Ok(lock.into_inner()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn live_vector_ids_track_mutations() {
+        let mut store = SharedIrises::<u8>::default();
+        assert!(store.live_vector_ids().is_empty());
+
+        let first = store.append(1);
+        let second = store.append(2);
+        let ids = store.live_vector_ids();
+        assert_eq!(&*ids, &[first, second]);
+        // Repeated calls share the cached allocation until a mutation.
+        assert!(Arc::ptr_eq(&ids, &store.live_vector_ids()));
+
+        let updated = store.update(first, 3);
+        assert_eq!(&*store.live_vector_ids(), &[updated, second]);
+
+        // A sparse insert leaves the gap out of the list.
+        let far = VectorId::from_serial_id(10);
+        store.insert(far, 4);
+        assert_eq!(&*store.live_vector_ids(), &[updated, second, far]);
+
+        // The cache is derived state and does not take part in equality.
+        let mut other = SharedIrises::<u8>::default();
+        other.append(3);
+        other.append(2);
+        let _ = other.live_vector_ids();
+        let mut mirror = other.clone();
+        mirror.live_ids = OnceLock::new();
+        assert_eq!(other, mirror);
     }
 }

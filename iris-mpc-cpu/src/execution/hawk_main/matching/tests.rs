@@ -672,6 +672,8 @@ fn run_test_matching(tc: &TestCase) -> MatchResults {
                     saturated: side_saturated,
                 },
                 pre_extension,
+                linear_scan_supermatch_threshold: None,
+                partial_match_rotations: Vec::new(),
             },
             plan: InsertPlanV {
                 query: Aby3Query::new(QueryId::new()),

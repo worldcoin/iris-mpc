@@ -206,6 +206,9 @@ pub struct Config {
     #[serde(default)]
     pub gpu_schema_name_suffix: String,
 
+    /// Number of Hawk request groups provisioned in the MPC network. The
+    /// linear-scan backend gets one search session per base rotation from each
+    /// group (currently three per eye and orientation).
     #[serde(default = "default_hawk_request_parallelism")]
     pub hawk_request_parallelism: usize,
 

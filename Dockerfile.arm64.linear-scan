@@ -1,0 +1,64 @@
+FROM public.ecr.aws/ubuntu/ubuntu:22.04 AS build-image
+
+WORKDIR /src
+RUN apt-get update && apt-get install -y \
+    curl \
+    build-essential \
+    libssl-dev \
+    texinfo \
+    libcap2-bin \
+    pkg-config \
+    git \
+    devscripts \
+    debhelper \
+    ca-certificates \
+    protobuf-compiler \
+    wget
+
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y
+ENV PATH="/root/.cargo/bin:${PATH}"
+ENV RUSTUP_HOME="/root/.rustup"
+ENV CARGO_HOME="/root/.cargo"
+RUN rustup toolchain install 1.89.0
+RUN rustup default 1.89.0
+RUN rustup component add cargo
+RUN cargo install cargo-edit --version 0.13.6 --locked
+
+FROM build-image AS build-app
+WORKDIR /src/iris-mpc
+COPY . .
+
+# Graviton4/r8g production build. aes_armv8 selects aes-prng's hardware path;
+# omitting it more than halves the measured end-to-end scan throughput.
+ENV RUSTFLAGS="--cfg aes_armv8 -C force-frame-pointers=yes -Ctarget-cpu=neoverse-v2 -Ctarget-feature=+lse"
+RUN cargo build -p iris-mpc-bins --release --features aes_rng_prf --target=aarch64-unknown-linux-gnu --bin iris-mpc-linear-scan
+
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+
+ARG ARCHITECTURE
+ENV ARCHITECTURE=$ARCHITECTURE
+
+RUN apt-get update && apt-get install -y ca-certificates curl unzip
+
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-$ARCHITECTURE.zip" -o "awscliv2.zip" && \
+  unzip awscliv2.zip && \
+  ./aws/install && \
+  aws --version
+
+RUN curl -o /usr/local/share/ca-certificates/ca_smpcv2_party_stage_0.crt https://wf-smpcv2-ca-stage-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_stage_1.stage.smpcv2.worldcoin.dev.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_smpcv2_party_stage_1.crt https://wf-smpcv2-ca-stage-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_stage_2.stage.smpcv2.worldcoin.dev.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_smpcv2_party_stage_2.crt https://wf-smpcv2-ca-stage-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_stage_3.stage.smpcv2.worldcoin.dev.pem
+
+RUN curl -o /usr/local/share/ca-certificates/ca_smpcv2_party_prod_0.crt https://wf-smpcv2-ca-prod-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_prod_1.smpcv2.worldcoin.org.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_smpcv2_party_prod_1.crt https://wf-smpcv2-ca-prod-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_prod_2.smpcv2.worldcoin.org.pem && \
+    curl -o /usr/local/share/ca-certificates/ca_smpcv2_party_prod_2.crt https://wf-smpcv2-ca-prod-eu-north-1.s3.eu-north-1.amazonaws.com/ca_party_prod_3.smpcv2.worldcoin.org.pem
+
+COPY certs /usr/local/share/ca-certificates/
+RUN update-ca-certificates
+
+COPY --from=build-app /src/iris-mpc/target/aarch64-unknown-linux-gnu/release/iris-mpc-linear-scan /bin/iris-mpc-linear-scan
+
+USER 65534
+
+ENTRYPOINT ["/bin/iris-mpc-linear-scan"]
