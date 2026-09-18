@@ -197,12 +197,21 @@ impl DistanceFn {
 pub(super) fn transpose_from_flat<T: IntRing2k>(
     distances: &[DistanceShare<T>],
 ) -> Vec<Vec<DistanceShare<T>>> {
-    (0..HAWK_MIN_DIST_ROTATIONS)
+    transpose_from_flat_with_rotations(distances, HAWK_MIN_DIST_ROTATIONS)
+}
+
+/// Dynamic counterpart used by exact linear scan, whose single fused query
+/// covers all 31 rotations rather than one HNSW 11-rotation window.
+pub(super) fn transpose_from_flat_with_rotations<T: IntRing2k>(
+    distances: &[DistanceShare<T>],
+    rotations: usize,
+) -> Vec<Vec<DistanceShare<T>>> {
+    (0..rotations)
         .map(|i| {
             distances
                 .iter()
                 .skip(i)
-                .step_by(HAWK_MIN_DIST_ROTATIONS)
+                .step_by(rotations)
                 .cloned()
                 .collect()
         })
