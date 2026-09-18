@@ -1,0 +1,19 @@
+include:
+  - docker-compose.linear-scan.yaml
+
+services:
+  iris_mpc_linear_scan_client:
+    image: linear-scan-server-local-build:latest
+    entrypoint: tail -f /dev/null
+    env_file:
+      - .test.env
+    environment:
+      - PARTICIPANT_SERVICE_PREFIX=linear_scan_participant
+    command: tail -f /dev/null
+    depends_on:
+      linear_scan_participant_0:
+        condition: service_healthy
+      linear_scan_participant_1:
+        condition: service_healthy
+      linear_scan_participant_2:
+        condition: service_healthy
