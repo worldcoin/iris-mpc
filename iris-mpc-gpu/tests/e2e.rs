@@ -125,7 +125,7 @@ mod e2e_test {
                         AnonStatsAccessMode::ReadWrite,
                     )
                     .await?;
-                    let anon_store = AnonStatsStore::new(&anon_client).await?;
+                    let anon_store = AnonStatsStore::new(&anon_client, false).await?;
                     Ok(Some((anon_store, Handle::current())))
                 }
                 Err(_) => Ok(None),

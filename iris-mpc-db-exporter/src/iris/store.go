@@ -37,6 +37,10 @@ type Store struct {
 	schema string
 }
 
+func storedIrisesByRangeQuery(schema string) string {
+	return fmt.Sprintf(`SELECT id, last_modified_at, left_code, left_mask, right_code, right_mask, version_id FROM "%s".irises WHERE id >= $1 AND id <= $2 ORDER BY id ASC;`, schema)
+}
+
 func NewStore(ctx context.Context, db *sql.DB, config config.Config) *Store {
 	var schema string
 	if config.ForceOverrideSchemaName {
@@ -70,6 +74,7 @@ func (s *Store) GetCount(ctx context.Context) (int, error) {
 		o11y.S(ctx).With(zap.Error(err)).Error("Failed to fetch count")
 		return -1, err
 	}
+	defer rows.Close()
 
 	var count int
 	for rows.Next() {
@@ -79,7 +84,7 @@ func (s *Store) GetCount(ctx context.Context) (int, error) {
 		}
 	}
 
-	return count, nil
+	return count, rows.Err()
 }
 
 func (s *Store) GetStoredIrisesByRange(ctx context.Context, startIndex, endIndex int) ([]StoredIris, error) {
@@ -89,7 +94,7 @@ func (s *Store) GetStoredIrisesByRange(ctx context.Context, startIndex, endIndex
 	span.SetTag("startIndex", startIndex)
 	span.SetTag("endIndex", endIndex)
 
-	query := fmt.Sprintf(`SELECT id, last_modified_at, left_code, left_mask, right_code, right_mask, version_id FROM "%s".irises WHERE id >= $1 AND id <= $2;`, s.schema)
+	query := storedIrisesByRangeQuery(s.schema)
 	rows, err := s.db.Query(query, startIndex, endIndex)
 	if err != nil {
 		o11y.S(ctx).With(zap.Error(err)).Errorf("Failed to fetch irises in range %d, %d. Error: %v", startIndex, endIndex, err)
@@ -111,38 +116,42 @@ func (s *Store) GetStoredIrisesByRange(ctx context.Context, startIndex, endIndex
 		irises = append(irises, storedIris)
 	}
 
-	return irises, nil
+	return irises, rows.Err()
 }
 
-func (s *Store) StreamStoredIrisesByRange(ctx context.Context, startIndex, endIndex, chanBufferLen int) (<-chan StoredIris, error) {
+func (s *Store) StreamStoredIrisesByRange(ctx context.Context, startIndex, endIndex, chanBufferLen int) (<-chan StoredIris, <-chan error, error) {
 	span, ctx := tracer.StartSpanFromContext(ctx, "pgsql.get_stored_irises_by_range")
 	defer span.Finish()
 
 	span.SetTag("startIndex", startIndex)
 	span.SetTag("endIndex", endIndex)
 	outputChannel := make(chan StoredIris, chanBufferLen)
+	streamError := make(chan error, 1)
 
-	query := fmt.Sprintf(`SELECT id, last_modified_at, left_code, left_mask, right_code, right_mask, version_id FROM "%s".irises WHERE id >= $1 AND id <= $2;`, s.schema)
+	query := storedIrisesByRangeQuery(s.schema)
 	rows, err := s.db.Query(query, startIndex, endIndex)
 	if err != nil {
 		o11y.S(ctx).With(zap.Error(err)).Errorf("Failed to fetch irises in range %d, %d. Error: %v", startIndex, endIndex, err)
-		return nil, err
+		return nil, nil, err
 	}
 
 	go func() {
-		defer rows.Close()
 		defer close(outputChannel)
+		defer close(streamError)
+		defer rows.Close()
 		for rows.Next() {
 			var storedIris StoredIris
 			if err := rows.Scan(&storedIris.ID, &storedIris.LastModifiedAt, &storedIris.LeftCode, &storedIris.LeftMask, &storedIris.RightCode, &storedIris.RightMask, &storedIris.VersionID); err != nil {
 				o11y.S(ctx).With(zap.Error(err)).Error("Failed to populate iris")
+				streamError <- err
 				return
 			}
 			outputChannel <- storedIris
 		}
+		streamError <- rows.Err()
 	}()
 
-	return outputChannel, nil
+	return outputChannel, streamError, nil
 }
 
 func (s *Store) GetStoredIrisesOlderThanByRange(ctx context.Context, lastModifiedAt int64, startIndex, endIndex int) ([]StoredIris, error) {
@@ -173,7 +182,7 @@ func (s *Store) GetStoredIrisesOlderThanByRange(ctx context.Context, lastModifie
 		irises = append(irises, storedIris)
 	}
 
-	return irises, nil
+	return irises, rows.Err()
 }
 
 func (s *Store) InsertIris(ctx context.Context, iris StoredIris) error {

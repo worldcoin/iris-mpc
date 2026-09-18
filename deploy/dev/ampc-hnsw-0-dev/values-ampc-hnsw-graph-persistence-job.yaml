@@ -11,6 +11,7 @@ env:
   SMPC__CPU_DATABASE__SCHEMA: "SMPC_minfhd_SMALL_JUNE_2026_dev_0"
   SMPC__GRAPH_CHECKPOINT_BUCKET_NAME: "ampc-hnsw-graph-store-node-0-dev-eu-central-1"
   SMPC__SERVICE__SERVICE_NAME: "wal-sidecar-hnsw-0"
+  SMPC__SERVICE__METRICS__PREFIX: "wal-sidecar-hnsw-0"
 
 initContainer:
   enabled: true

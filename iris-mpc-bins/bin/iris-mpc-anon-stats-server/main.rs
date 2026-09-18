@@ -966,7 +966,8 @@ async fn main() -> Result<()> {
         AnonStatsAccessMode::ReadWrite,
     )
     .await?;
-    let anon_stats_store = AnonStatsStore::new(&postgres_client).await?;
+    let anon_stats_store =
+        AnonStatsStore::new(&postgres_client, config.ignore_missing_migrations).await?;
 
     let sns_client = build_sns_client(&config).await?;
     let s3_client = build_s3_client(&config).await?;
