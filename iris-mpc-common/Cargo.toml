@@ -10,6 +10,7 @@ repository.workspace = true
 [features]
 default = ["helpers"]
 helpers = [
+  "dep:alkali",
   "dep:aws-config",
   "dep:aws-sdk-kms",
   "dep:aws-sdk-sns",
@@ -46,7 +47,7 @@ telemetry-batteries.workspace = true
 config.workspace = true
 chrono = { version = "0.4.38", features = ["serde"] }
 reqwest = { workspace = true, optional = true, features = ["blocking", "json"] }
-sodiumoxide = "0.2.7"
+alkali = { workspace = true, optional = true }
 hmac = "0.12"
 http = "1.1.0"
 percent-encoding = "2"

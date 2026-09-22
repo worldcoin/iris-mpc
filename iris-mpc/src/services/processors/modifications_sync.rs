@@ -27,7 +27,7 @@ pub async fn sync_modifications<'a>(
     config: &Config,
     store: &'a Store,
     aws_clients: &AwsClients,
-    shares_encryption_key_pair: &SharesEncryptionKeyPairs,
+    shares_encryption_key_pair: &Arc<SharesEncryptionKeyPairs>,
     sync_result: SyncResult,
 ) -> eyre::Result<Transaction<'a, Postgres>, Report> {
     let (mut to_update, to_delete) = sync_result.compare_modifications();

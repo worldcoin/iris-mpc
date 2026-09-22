@@ -2,6 +2,7 @@
 use crate::client::iris_data::{
     generate_party_shares, read_iris_data_from_file, IrisCodePartyShares,
 };
+use alkali::asymmetric::seal::curve25519xsalsa20poly1305 as sealedbox;
 use aws_config::retry::RetryConfig;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_sns::{config::Region, types::MessageAttributeValue, Client as SnsClient};
@@ -23,7 +24,6 @@ use iris_mpc_common::helpers::{
 };
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use serde_json::to_string;
-use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -121,7 +121,7 @@ pub struct E2EClient {
     requests: Arc<Mutex<HashMap<String, IrisCodePartyShares>>>,
     // the responses contain the serial id and the iris code shares
     responses: Arc<Mutex<HashMap<u32, IrisCodePartyShares>>>,
-    encryption_public_keys: Vec<PublicKey>,
+    encryption_public_keys: Vec<[u8; 32]>,
     semaphore: Arc<Semaphore>,
     file_data: Arc<Vec<IrisCodePartyShares>>,
 }
@@ -181,8 +181,10 @@ impl E2EClient {
             let public_key_bytes = general_purpose::STANDARD
                 .decode(public_key_string)
                 .context("Failed to decode public key")?;
-            let public_key =
-                PublicKey::from_slice(&public_key_bytes).context("Failed to parse public key")?;
+            let public_key = public_key_bytes
+                .as_slice()
+                .try_into()
+                .context("Failed to parse public key: expected 32 bytes")?;
             self.encryption_public_keys.push(public_key);
         }
 
@@ -502,16 +504,19 @@ impl E2EClient {
 
         for i in 0..3 {
             let iris_code_shares_json = party_shares.party(i);
-            let serialized_iris_codes_json = to_string(&iris_code_shares_json)
-                .expect("Serialization failed")
-                .clone();
+            let serialized_iris_codes_json =
+                to_string(&iris_code_shares_json).context("Failed to serialize iris shares")?;
 
             let hash_string = sha256_as_hex_string(&serialized_iris_codes_json);
 
-            let encrypted_bytes = sealedbox::seal(
+            let mut encrypted_bytes =
+                vec![0; serialized_iris_codes_json.len() + sealedbox::OVERHEAD_LENGTH];
+            sealedbox::encrypt(
                 serialized_iris_codes_json.as_bytes(),
                 &self.encryption_public_keys[i],
-            );
+                &mut encrypted_bytes,
+            )
+            .wrap_err_with(|| format!("Failed to encrypt iris shares for party {i}"))?;
 
             iris_codes_shares_base64[i] = general_purpose::STANDARD.encode(&encrypted_bytes);
             iris_shares_file_hashes[i] = hash_string;

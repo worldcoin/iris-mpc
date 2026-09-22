@@ -29,7 +29,7 @@ rand.workspace = true
 rayon.workspace = true
 serde = { version = "1.0.214", features = ["derive"] }
 serde_json.workspace = true
-sodiumoxide.workspace = true
+alkali.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 toml.workspace = true

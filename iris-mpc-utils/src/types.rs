@@ -1,7 +1,5 @@
 use std::path::Path;
 
-use sodiumoxide::crypto::box_::PublicKey;
-
 use iris_mpc_common::config::Config as NodeConfig;
 
 use super::constants::N_PARTIES;
@@ -39,4 +37,4 @@ impl Default for NodeExecutionHost {
 pub type PartyIdx = usize;
 
 // MPC party public keys (used for encryption).
-pub type PublicKeyset = [PublicKey; N_PARTIES];
+pub type PublicKeyset = [[u8; 32]; N_PARTIES];
