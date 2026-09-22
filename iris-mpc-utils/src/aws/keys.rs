@@ -1,6 +1,5 @@
 use base64::{engine::general_purpose, Engine};
 use eyre::Result;
-use sodiumoxide::crypto::box_::PublicKey;
 use thiserror::Error;
 
 use iris_mpc_common::helpers::key_pair;
@@ -28,7 +27,7 @@ pub(super) async fn download_public_keyset(base_url: &str) -> Result<PublicKeyse
     async fn download_public_key(
         party_idx: usize,
         base_url: &str,
-    ) -> Result<PublicKey, PublicKeyError> {
+    ) -> Result<[u8; 32], PublicKeyError> {
         let pbk_b64 = key_pair::download_public_key(base_url.to_owned(), party_idx.to_string())
             .await
             .map_err(|e| {
@@ -41,7 +40,7 @@ pub(super) async fn download_public_keyset(base_url: &str) -> Result<PublicKeyse
             .decode(pbk_b64)
             .map_err(|e| PublicKeyError::DecodeError(e.to_string()))?;
 
-        PublicKey::from_slice(&pbk_bytes).ok_or_else(|| {
+        pbk_bytes.try_into().map_err(|_| {
             PublicKeyError::FormatError(format!("Node-{}: public key format is invalid", party_idx))
         })
     }

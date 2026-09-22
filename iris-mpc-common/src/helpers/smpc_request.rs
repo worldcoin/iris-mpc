@@ -311,16 +311,14 @@ pub fn decrypt_iris_share(
         .open_sealed_box(share_bytes.clone())
     {
         Ok(bytes) => Ok(bytes),
-        Err(_) => {
-            match if let Some(key_pair) = key_pairs.previous_key_pair.clone() {
+        Err(SharesDecodingError::SealedBoxOpenError) => {
+            if let Some(key_pair) = &key_pairs.previous_key_pair {
                 key_pair.open_sealed_box(share_bytes)
             } else {
-                Err(SharesDecodingError::PreviousKeyNotFound)
-            } {
-                Ok(bytes) => Ok(bytes),
-                Err(_) => Err(SharesDecodingError::SealedBoxOpenError),
+                Err(SharesDecodingError::SealedBoxOpenError)
             }
         }
+        Err(error) => Err(error),
     };
 
     let iris_share = match decrypted {

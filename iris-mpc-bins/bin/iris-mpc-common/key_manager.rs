@@ -1,3 +1,4 @@
+use alkali::asymmetric::seal::curve25519xsalsa20poly1305::{Keypair, PrivateKey, PublicKey, Seed};
 use aws_config::SdkConfig;
 use aws_sdk_s3::{
     config::Region as S3Region, operation::put_object::PutObjectOutput, Client as S3Client,
@@ -9,10 +10,9 @@ use aws_sdk_secretsmanager::{
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use clap::{Parser, Subcommand};
-use eyre::Result;
+use eyre::{ensure, eyre, Result, WrapErr};
 use rand::{thread_rng, Rng};
 use reqwest::Client;
-use sodiumoxide::crypto::box_::{curve25519xsalsa20poly1305, PublicKey, SecretKey, Seed};
 
 const PUBLIC_KEY_S3_BUCKET_NAME: &str = "wf-smpcv2-stage-public-keys";
 const PUBLIC_KEY_S3_KEY_NAME_PREFIX: &str = "public-key";
@@ -142,29 +142,32 @@ async fn validate_keys(
         PUBLIC_KEY_S3_BUCKET_NAME.to_string()
     };
     // Parse user-provided public key, if present
-    let pub_key = if let Some(b64_pub_key) = b64_pub_key {
-        let user_pubkey = STANDARD.decode(b64_pub_key.as_bytes()).unwrap();
-        match PublicKey::from_slice(&user_pubkey) {
-            Some(key) => key,
-            None => panic!("Invalid public key"),
-        }
+    let public_key_string = if let Some(b64_pub_key) = b64_pub_key {
+        b64_pub_key
     } else {
         // Otherwise, get the latest one from S3 using HTTPS
-        let user_pubkey_string =
-            download_key_from_s3(bucket_name.as_str(), bucket_key_name, region.clone()).await?;
-        let user_pubkey = STANDARD.decode(user_pubkey_string.as_bytes()).unwrap();
-        match PublicKey::from_slice(&user_pubkey) {
-            Some(key) => key,
-            None => panic!("Invalid public key"),
-        }
+        download_key_from_s3(bucket_name.as_str(), bucket_key_name, region.clone()).await?
     };
+    let pub_key: PublicKey = STANDARD
+        .decode(public_key_string.as_bytes())
+        .wrap_err("Invalid base64 public key")?
+        .try_into()
+        .map_err(|_| eyre!("Public key must contain 32 bytes"))?;
 
     let private_key = download_key_from_asm(&sm_client, secret_id, version_stage).await?;
-    let data = private_key.secret_string.unwrap();
-    let user_privkey = STANDARD.decode(data.as_bytes()).unwrap();
-    let decoded_priv_key = SecretKey::from_slice(&user_privkey).unwrap();
+    let data = private_key
+        .secret_string
+        .ok_or_else(|| eyre!("Secrets Manager returned no private key string"))?;
+    let user_privkey = STANDARD
+        .decode(data.as_bytes())
+        .wrap_err("Invalid base64 private key")?;
+    let decoded_priv_key =
+        PrivateKey::try_from(user_privkey.as_slice()).wrap_err("Invalid private key")?;
 
-    assert_eq!(decoded_priv_key.public_key(), pub_key);
+    ensure!(
+        Keypair::from_private_key(&decoded_priv_key)?.public_key == pub_key,
+        "Stored private key does not match public key"
+    );
     Ok(())
 }
 
@@ -184,9 +187,8 @@ async fn rotate_keys(
         PUBLIC_KEY_S3_BUCKET_NAME.to_string()
     };
 
-    let mut seedbuf = [0u8; 32];
-    rng.fill(&mut seedbuf);
-    let pk_seed = Seed(seedbuf);
+    let mut pk_seed = Seed::new_empty()?;
+    rng.fill(&mut pk_seed[..]);
 
     let mut s3_config_builder = aws_sdk_s3::config::Builder::from(sdk_config);
     let mut sm_config_builder = aws_sdk_secretsmanager::config::Builder::from(sdk_config);
@@ -200,23 +202,25 @@ async fn rotate_keys(
     let s3_client = S3Client::from_conf(s3_config_builder.build());
     let sm_client = SecretsManagerClient::from_conf(sm_config_builder.build());
 
-    let (public_key, private_key) = generate_key_pairs(pk_seed);
-    let pub_key_str = STANDARD.encode(public_key);
-    let priv_key_str = STANDARD.encode(private_key.clone());
+    let keypair = Keypair::from_seed(&pk_seed)?;
+    let pub_key_str = STANDARD.encode(keypair.public_key);
+    let priv_key_str = STANDARD.encode(&keypair.private_key[..]);
 
     if dry_run.unwrap_or(false) {
         println!("Dry run enabled, skipping upload of public key to S3");
         println!("Public key: {}", pub_key_str);
 
-        let user_pubkey = STANDARD.decode(pub_key_str.as_bytes()).unwrap();
-        let decoded_pub_key = PublicKey::from_slice(&user_pubkey).unwrap();
+        let decoded_pub_key = STANDARD.decode(pub_key_str.as_bytes())?;
+        ensure!(
+            keypair.public_key == decoded_pub_key.as_slice(),
+            "Public key roundtrip failed"
+        );
 
-        assert_eq!(public_key, decoded_pub_key);
-
-        let user_privkey = STANDARD.decode(priv_key_str.as_bytes()).unwrap();
-        let decoded_priv_key = SecretKey::from_slice(&user_privkey).unwrap();
-
-        assert_eq!(private_key, decoded_priv_key);
+        let decoded_priv_key = STANDARD.decode(priv_key_str.as_bytes())?;
+        ensure!(
+            keypair.private_key[..] == decoded_priv_key,
+            "Private key roundtrip failed"
+        );
 
         return Ok(());
     }
@@ -312,56 +316,52 @@ async fn upload_public_key_to_s3(
         .await?)
 }
 
-fn generate_key_pairs(seed: Seed) -> (PublicKey, SecretKey) {
-    // Generate an ephemeral secret (private key)
-    let (public_key, private_key) = curve25519xsalsa20poly1305::keypair_from_seed(&seed);
-
-    (public_key, private_key)
-}
-
 // tests
 #[cfg(test)]
 mod test {
     use super::*;
-    use sodiumoxide::crypto::sealedbox;
-    use std::{fs::File, io::Read};
-
-    pub fn get_public_key(user_pub_key: &str) -> PublicKey {
-        let user_pubkey = STANDARD.decode(user_pub_key.as_bytes()).unwrap();
-        match PublicKey::from_slice(&user_pubkey) {
-            Some(key) => key,
-            None => panic!("Invalid public key"),
-        }
-    }
+    use alkali::asymmetric::seal::curve25519xsalsa20poly1305 as sealedbox;
 
     #[test]
-    fn test_encode_pk_to_pem() {
-        let (public_key, _) = generate_key_pairs(Seed([0u8; 32]));
-        let pub_key_str = STANDARD.encode(public_key);
-        let decoded_pub_key = get_public_key(&pub_key_str);
-        assert_eq!(public_key, decoded_pub_key);
-    }
-
-    #[test]
-    #[ignore = "requires ./data/iris_codes.json fixture"]
-    fn test_encode_and_decode_shares() {
-        let (server_public_key, server_private_key) = generate_key_pairs(Seed([0u8; 32]));
-
-        let iris_code_file = "./data/iris_codes.json";
-        let mut file = File::open(iris_code_file).expect("Unable to open file");
-        let mut contents = String::new();
-        file.read_to_string(&mut contents)
-            .expect("Unable to read file");
-
-        let client_iris_code_plaintext = STANDARD.encode(contents);
-        let ciphertext = sealedbox::seal(client_iris_code_plaintext.as_bytes(), &server_public_key);
-
-        let server_iris_code_plaintext =
-            sealedbox::open(&ciphertext, &server_public_key, &server_private_key).unwrap();
-
+    fn seeded_keys_preserve_libsodium_bytes_and_base64_roundtrip() -> Result<()> {
+        let keypair = Keypair::from_seed(&Seed::try_from(&[0u8; 32])?)?;
+        // Synthetic all-zero seed, derived with libsodium's crypto_box_seed_keypair.
         assert_eq!(
-            client_iris_code_plaintext.as_bytes(),
-            server_iris_code_plaintext.as_slice()
+            hex::encode(keypair.public_key),
+            "5bf55c73b82ebe22be80f3430667af570fae2556a6415e6b30d4065300aa947d"
         );
+        assert_eq!(
+            hex::encode(&keypair.private_key[..]),
+            "5046adc1dba838867b2bbbfdd0c3423e58b57970b5267a90f57960924a87f196"
+        );
+        let public_key = STANDARD.decode(STANDARD.encode(keypair.public_key))?;
+        let private_key = STANDARD.decode(STANDARD.encode(&keypair.private_key[..]))?;
+        assert_eq!(keypair.public_key.as_slice(), public_key);
+        assert_eq!(&keypair.private_key[..], private_key);
+        let restored = Keypair::from_private_key(&PrivateKey::try_from(private_key.as_slice())?)?;
+        assert_eq!(restored.public_key, keypair.public_key);
+        Ok(())
+    }
+
+    #[test]
+    fn sealed_boxes_roundtrip_and_open_libsodium_ciphertext() -> Result<()> {
+        let keypair = Keypair::from_seed(&Seed::try_from(&[0u8; 32])?)?;
+        let message = b"synthetic key-manager compatibility test";
+        let mut ciphertext = vec![0; message.len() + sealedbox::OVERHEAD_LENGTH];
+        assert_eq!(
+            sealedbox::encrypt(message, &keypair.public_key, &mut ciphertext)?,
+            ciphertext.len()
+        );
+        // Captured from crypto_box_seal for the same synthetic seed and message.
+        let legacy_ciphertext = hex::decode("513ffc344fab940cac38ab1cfa94999babebd0b741ca633897a28e8ffa0bc9672db843064eac93fe811dd9dac10e4d7d2404cb0ae3d0827ebf114d7ec6ef4268fa25d7f0879b592a0cc16f4e706c4106fe989013d857ddf6")?;
+        for ciphertext in [ciphertext, legacy_ciphertext] {
+            let mut plaintext = vec![0; message.len()];
+            assert_eq!(
+                sealedbox::decrypt(&ciphertext, &keypair, &mut plaintext)?,
+                message.len()
+            );
+            assert_eq!(plaintext, message);
+        }
+        Ok(())
     }
 }

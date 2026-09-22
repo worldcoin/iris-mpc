@@ -1,6 +1,6 @@
+use alkali::asymmetric::seal::curve25519xsalsa20poly1305 as sealedbox;
 use base64::{engine::general_purpose::STANDARD as b64, Engine};
-use serde_json;
-use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
+use eyre::{Result, WrapErr};
 use uuid::Uuid;
 
 use iris_mpc::client::iris_data::IrisCodePartyShares;
@@ -10,7 +10,10 @@ use iris_mpc_common::helpers::{
 };
 use iris_mpc_cpu::execution::hawk_main::{BothEyes, LEFT as LEFT_EYE, RIGHT as RIGHT_EYE};
 
-use crate::{constants::N_PARTIES, irises::GaloisRingSharedIrisForUpload, misc::encode_b64};
+use crate::{
+    constants::N_PARTIES, irises::GaloisRingSharedIrisForUpload, misc::encode_b64,
+    types::PublicKeyset,
+};
 
 /// TODO: review use of these constants.
 const IRIS_VERSION: &str = "1.0";
@@ -41,30 +44,34 @@ fn create_iris_code_shares_json(
     })
 }
 
-/// Converts iris code shares into a JSON representation.
+/// Serializes and encrypts each party's shares for upload to S3.
+///
+/// Returns an error if serialization or encryption fails, including when a recipient
+/// public key is rejected by libsodium. No partial S3 object is returned.
 pub fn create_iris_code_shares_s3(
     shares: &IrisCodePartyShares,
-    encryption_keys: &[PublicKey; N_PARTIES],
-) -> SharesS3Object {
+    encryption_keys: &PublicKeyset,
+) -> Result<SharesS3Object> {
     let mut hash_set: [String; N_PARTIES] = Default::default();
     let mut content_set: [String; N_PARTIES] = Default::default();
     for i in 0..N_PARTIES {
-        let as_json = serde_json::to_string(shares.party(i))
-            .expect("Serialization failed")
-            .clone();
-        let as_bytes = sealedbox::seal(as_json.as_bytes(), &encryption_keys[i]);
+        let as_json =
+            serde_json::to_string(shares.party(i)).wrap_err("Failed to serialize iris shares")?;
+        let mut as_bytes = vec![0; as_json.len() + sealedbox::OVERHEAD_LENGTH];
+        sealedbox::encrypt(as_json.as_bytes(), &encryption_keys[i], &mut as_bytes)
+            .wrap_err_with(|| format!("Failed to encrypt iris shares for party {i}"))?;
         content_set[i] = b64.encode(&as_bytes);
         hash_set[i] = sha256_as_hex_string(&as_json);
     }
 
-    SharesS3Object {
+    Ok(SharesS3Object {
         iris_share_0: content_set[0].clone(),
         iris_share_1: content_set[1].clone(),
         iris_share_2: content_set[2].clone(),
         iris_hashes_0: hash_set[0].clone(),
         iris_hashes_1: hash_set[1].clone(),
         iris_hashes_2: hash_set[2].clone(),
-    }
+    })
 }
 
 #[cfg(test)]
@@ -73,13 +80,14 @@ mod tests {
         create_iris_code_shares, create_iris_code_shares_json, create_iris_code_shares_s3,
     };
     use crate::{constants::N_PARTIES, irises::generate_iris_shares_for_upload_both_eyes};
+    use alkali::{
+        asymmetric::seal::{curve25519xsalsa20poly1305 as sealedbox, SealError},
+        AlkaliError,
+    };
+    use base64::{engine::general_purpose::STANDARD as b64, Engine};
+    use iris_mpc_common::helpers::sha256::sha256_as_hex_string;
     use rand::{rngs::StdRng, SeedableRng};
-    use sodiumoxide::crypto::box_::{gen_keypair, PublicKey};
     use uuid::Uuid;
-
-    fn create_public_keys_for_encryption() -> [PublicKey; N_PARTIES] {
-        std::array::from_fn(|_| gen_keypair().0)
-    }
 
     #[test]
     fn test_create_iris_code_shares() {
@@ -98,11 +106,56 @@ mod tests {
 
     #[test]
     fn test_create_iris_code_shares_s3() {
-        let mut rng = StdRng::from_entropy();
-        let keys = create_public_keys_for_encryption();
+        let mut rng = StdRng::seed_from_u64(42);
+        let keypairs: [_; N_PARTIES] =
+            std::array::from_fn(|_| sealedbox::Keypair::generate().unwrap());
+        let keys = std::array::from_fn(|i| keypairs[i].public_key);
         let shares = generate_iris_shares_for_upload_both_eyes(&mut rng, None, None);
         let signup_id = Uuid::new_v4();
         let shares_1 = create_iris_code_shares(&signup_id, &shares);
-        let _ = create_iris_code_shares_s3(&shares_1, &keys);
+        let result = create_iris_code_shares_s3(&shares_1, &keys).unwrap();
+        let contents = [
+            result.iris_share_0,
+            result.iris_share_1,
+            result.iris_share_2,
+        ];
+        let hashes = [
+            result.iris_hashes_0,
+            result.iris_hashes_1,
+            result.iris_hashes_2,
+        ];
+
+        for i in 0..N_PARTIES {
+            let expected = serde_json::to_string(shares_1.party(i)).unwrap();
+            let encrypted = b64.decode(&contents[i]).unwrap();
+            assert_eq!(encrypted.len(), expected.len() + sealedbox::OVERHEAD_LENGTH);
+            let mut decrypted = vec![0; expected.len()];
+            let written = sealedbox::decrypt(&encrypted, &keypairs[i], &mut decrypted).unwrap();
+            assert_eq!(written, expected.len());
+            assert_eq!(decrypted, expected.as_bytes());
+            assert_eq!(hashes[i], sha256_as_hex_string(&expected));
+        }
+    }
+
+    #[test]
+    fn test_create_iris_code_shares_s3_rejects_invalid_recipient() {
+        let mut rng = StdRng::seed_from_u64(42);
+        let shares = generate_iris_shares_for_upload_both_eyes(&mut rng, None, None);
+        let shares = create_iris_code_shares(&Uuid::new_v4(), &shares);
+        let valid_key = sealedbox::Keypair::generate().unwrap().public_key;
+
+        for party in 0..N_PARTIES {
+            let mut keys = [valid_key; N_PARTIES];
+            keys[party] = [0; 32];
+            let error = create_iris_code_shares_s3(&shares, &keys).unwrap_err();
+            assert_eq!(
+                error.downcast_ref::<AlkaliError>(),
+                Some(&AlkaliError::SealError(SealError::PublicKeyUnacceptable))
+            );
+            assert_eq!(
+                error.to_string(),
+                format!("Failed to encrypt iris shares for party {party}")
+            );
+        }
     }
 }

@@ -33,7 +33,6 @@ use iris_mpc_cpu::{
     execution::session::Session,
     network::mpc::{build_network_handle, NetworkHandleArgs},
 };
-use sodiumoxide::hex;
 use std::collections::HashSet;
 use std::{
     collections::HashMap,

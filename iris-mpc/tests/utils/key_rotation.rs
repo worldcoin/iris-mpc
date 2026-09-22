@@ -10,13 +10,12 @@
 //! 1. Polls Secrets Manager until LocalStack *and* its init-script are ready.
 //! 2. Rotates ECDH keys twice for each of the three MPC parties.
 
+use alkali::asymmetric::seal::curve25519xsalsa20poly1305::Keypair;
 use aws_config::SdkConfig;
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use eyre::Result;
-use rand::{thread_rng, Rng};
-use sodiumoxide::crypto::box_::{curve25519xsalsa20poly1305, Seed};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -131,13 +130,9 @@ pub async fn rotate_keys(
 ) -> Result<()> {
     let bucket_name = public_key_bucket_name.unwrap_or_else(|| PUBLIC_KEY_BUCKET.to_string());
 
-    // Generate a fresh key pair from a random seed.
-    let mut seedbuf = [0u8; 32];
-    thread_rng().fill(&mut seedbuf);
-    let (public_key, private_key) = curve25519xsalsa20poly1305::keypair_from_seed(&Seed(seedbuf));
-
-    let pub_key_str = STANDARD.encode(public_key);
-    let priv_key_str = STANDARD.encode(private_key);
+    let keypair = Keypair::generate()?;
+    let pub_key_str = STANDARD.encode(keypair.public_key);
+    let priv_key_str = STANDARD.encode(keypair.private_key.as_ref());
 
     if dry_run.unwrap_or(false) {
         tracing::info!(%pub_key_str, "dry-run: skipping upload");

@@ -1,15 +1,15 @@
+use alkali::{
+    asymmetric::seal::{curve25519xsalsa20poly1305 as sealedbox, SealError},
+    AlkaliError,
+};
 use aws_sdk_secretsmanager::{
     error::SdkError, operation::get_secret_value::GetSecretValueError,
     Client as SecretsManagerClient,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
-use sodiumoxide::crypto::{
-    box_::{PublicKey, SecretKey},
-    sealedbox,
-};
-use std::string::FromUtf8Error;
+use std::{fmt, string::FromUtf8Error};
 use thiserror::Error;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 const CURRENT_SECRET_LABEL: &str = "AWSCURRENT";
 const PREVIOUS_SECRET_LABEL: &str = "AWSPREVIOUS";
@@ -28,6 +28,8 @@ pub enum SharesDecodingError {
     DecodedShareParsingToUTF8Error(#[from] FromUtf8Error),
     #[error("Parsing key error")]
     ParsingKeyError,
+    #[error("Sealed box library error")]
+    CryptoError(#[from] AlkaliError),
     #[error("Sealed box open error")]
     SealedBoxOpenError,
     #[error("Public key not found error")]
@@ -155,48 +157,70 @@ impl SharesEncryptionKeyPairs {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SharesEncryptionKeyPair {
-    pk: PublicKey,
-    sk: SecretKey,
+    pk: sealedbox::PublicKey,
+    // Preserve infallible Clone and explicit Zeroize without sharing secret storage.
+    // Each decryption imports its own short-lived hardened alkali private key.
+    sk: Zeroizing<[u8; sealedbox::PRIVATE_KEY_LENGTH]>,
+}
+
+impl fmt::Debug for SharesEncryptionKeyPair {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SharesEncryptionKeyPair")
+            .field("pk", &self.pk)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Zeroize for SharesEncryptionKeyPair {
     fn zeroize(&mut self) {
-        self.pk.0.zeroize();
-        self.sk.0.zeroize();
+        self.pk.zeroize();
+        self.sk.zeroize();
     }
 }
 
 impl Drop for SharesEncryptionKeyPair {
     fn drop(&mut self) {
-        self.pk.0.zeroize();
-        self.sk.0.zeroize();
+        self.zeroize();
     }
 }
 
 impl SharesEncryptionKeyPair {
     pub fn from_b64_private_key_string(sk: String) -> Result<Self, SharesDecodingError> {
-        let sk_bytes = match STANDARD.decode(sk) {
-            Ok(bytes) => bytes,
-            Err(e) => return Err(SharesDecodingError::DecodingError(e)),
-        };
-
-        let sk = match SecretKey::from_slice(&sk_bytes) {
-            Some(sk) => sk,
-            None => return Err(SharesDecodingError::ParsingKeyError),
-        };
-
-        let pk_from_sk = sk.public_key();
-        Ok(Self { pk: pk_from_sk, sk })
+        let sk = Zeroizing::new(sk);
+        let sk_bytes = Zeroizing::new(STANDARD.decode(sk.as_bytes())?);
+        if sk_bytes.len() != sealedbox::PRIVATE_KEY_LENGTH {
+            return Err(SharesDecodingError::ParsingKeyError);
+        }
+        let private_key = sealedbox::PrivateKey::try_from(sk_bytes.as_slice())?;
+        let keypair = sealedbox::Keypair::from_private_key(&private_key)?;
+        let mut sk = Zeroizing::new([0; sealedbox::PRIVATE_KEY_LENGTH]);
+        sk.copy_from_slice(sk_bytes.as_slice());
+        Ok(Self {
+            pk: keypair.public_key,
+            sk,
+        })
     }
 
     pub fn open_sealed_box(&self, code: Vec<u8>) -> Result<Vec<u8>, SharesDecodingError> {
-        let decrypted = sealedbox::open(&code, &self.pk, &self.sk);
-        match decrypted {
-            Ok(bytes) => Ok(bytes),
-            Err(_) => Err(SharesDecodingError::SealedBoxOpenError),
-        }
+        let plaintext_length = code
+            .len()
+            .checked_sub(sealedbox::OVERHEAD_LENGTH)
+            .ok_or(SharesDecodingError::SealedBoxOpenError)?;
+        let keypair = sealedbox::Keypair {
+            public_key: self.pk,
+            private_key: sealedbox::PrivateKey::try_from(&self.sk[..])?,
+        };
+        let mut plaintext = Zeroizing::new(vec![0; plaintext_length]);
+        sealedbox::decrypt(&code, &keypair, &mut plaintext).map_err(|error| {
+            if error == AlkaliError::SealError(SealError::DecryptionFailed) {
+                SharesDecodingError::SealedBoxOpenError
+            } else {
+                SharesDecodingError::CryptoError(error)
+            }
+        })?;
+        Ok(std::mem::take(&mut *plaintext))
     }
 }
 
@@ -250,5 +274,93 @@ pub async fn download_public_key(
             }
         }
         Err(e) => Err(SharesDecodingError::RequestError(e)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Synthetic native-libsodium fixture, generated with crypto_box_seed_keypair
+    // from seed bytes 0..31 and crypto_box_seal (the sodiumoxide construction).
+    const SECRET: &str = "PZTupJxYCu+BaTV2K+BJVZ1tFEDe3hLmoSXxhB//jm8=";
+    const PUBLIC: &str = "RwHQhIhFH1RaQJ+1iuPlhYHKQKw/fxFGmM1x3qxzygE=";
+    const CIPHERTEXT: &str = "tYslsdK1fan3ZTcJfhqRpv1McqHvOrkpkyVgxvbHc13vpTUfSy+nCvqcHZl/E8kJu40kKpk6Q5eWeMjpEwDbeFS8zvuJ/r6g4d4CT/shyp3l5R+2F2A/HyjZusSnwQ==";
+    const MESSAGE: &[u8] = b"synthetic sodiumoxide-compatible share fixture";
+
+    #[test]
+    fn imports_existing_private_key_and_opens_native_sealed_box() {
+        let key = SharesEncryptionKeyPair::from_b64_private_key_string(SECRET.into()).unwrap();
+        assert_eq!(STANDARD.encode(key.pk), PUBLIC);
+        assert_eq!(
+            key.open_sealed_box(STANDARD.decode(CIPHERTEXT).unwrap())
+                .unwrap(),
+            MESSAGE
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_private_key_encoding_and_lengths() {
+        assert!(matches!(
+            SharesEncryptionKeyPair::from_b64_private_key_string("!".into()),
+            Err(SharesDecodingError::DecodingError(_))
+        ));
+        for len in [0, 31, 33, 64] {
+            assert!(matches!(
+                SharesEncryptionKeyPair::from_b64_private_key_string(STANDARD.encode(vec![1; len])),
+                Err(SharesDecodingError::ParsingKeyError)
+            ));
+        }
+    }
+
+    #[test]
+    fn rejects_wrong_key_tampering_and_truncated_ciphertexts() {
+        let key = SharesEncryptionKeyPair::from_b64_private_key_string(SECRET.into()).unwrap();
+        let ciphertext = STANDARD.decode(CIPHERTEXT).unwrap();
+        let wrong = SharesEncryptionKeyPair::from_b64_private_key_string(STANDARD.encode([42; 32]))
+            .unwrap();
+        assert!(matches!(
+            wrong.open_sealed_box(ciphertext.clone()),
+            Err(SharesDecodingError::SealedBoxOpenError)
+        ));
+        for i in 0..ciphertext.len() {
+            let mut changed = ciphertext.clone();
+            changed[i] ^= 1;
+            assert!(matches!(
+                key.open_sealed_box(changed),
+                Err(SharesDecodingError::SealedBoxOpenError)
+            ));
+            assert!(matches!(
+                key.open_sealed_box(ciphertext[..i].to_vec()),
+                Err(SharesDecodingError::SealedBoxOpenError)
+            ));
+        }
+    }
+
+    #[test]
+    fn clone_owns_independent_secret_and_debug_omits_secret() {
+        let mut key = SharesEncryptionKeyPair::from_b64_private_key_string(SECRET.into()).unwrap();
+        let clone = key.clone();
+        assert_eq!(
+            format!("{key:?}"),
+            format!("SharesEncryptionKeyPair {{ pk: {:?}, .. }}", key.pk)
+        );
+        key.zeroize();
+        assert_eq!(key.pk, [0; 32]);
+        assert_eq!(*key.sk, [0; 32]);
+        assert_eq!(
+            clone
+                .open_sealed_box(STANDARD.decode(CIPHERTEXT).unwrap())
+                .unwrap(),
+            MESSAGE
+        );
+    }
+
+    #[test]
+    fn empty_plaintext_round_trips() {
+        let key = SharesEncryptionKeyPair::from_b64_private_key_string(SECRET.into()).unwrap();
+        let mut ciphertext = vec![0; sealedbox::OVERHEAD_LENGTH];
+        sealedbox::encrypt(b"", &key.pk, &mut ciphertext).unwrap();
+        assert_eq!(key.open_sealed_box(ciphertext).unwrap(), b"");
     }
 }

@@ -20,6 +20,7 @@ networking_metrics = ["iris-mpc-cpu/networking_metrics"]
 
 [dependencies]
 aes-prng = { git = "https://github.com/tf-encrypted/aes-prng.git", branch = "dragos/display" }
+alkali.workspace = true
 async-trait.workspace = true
 async_from = "0.2.0"
 axum.workspace = true
@@ -40,6 +41,7 @@ dotenvy.workspace = true
 eyre.workspace = true
 futures.workspace = true
 hkdf.workspace = true
+hex.workspace = true
 itertools.workspace = true
 rand.workspace = true
 reqwest = { workspace = true, optional = true, features = ["blocking", "json"] }
@@ -49,7 +51,6 @@ serde.workspace = true
 serde_json.workspace = true
 serde_path_to_error = "*"
 sha2.workspace = true
-sodiumoxide = "0.2.7"
 sqlx.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

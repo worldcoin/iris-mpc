@@ -50,7 +50,6 @@ use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
 use iris_mpc_store::Store;
 use pprof::protos::Message;
 use pprof::ProfilerGuardBuilder;
-use sodiumoxide::hex;
 use std::collections::HashMap;
 use std::process::exit;
 use std::sync::atomic::{AtomicU64, Ordering};

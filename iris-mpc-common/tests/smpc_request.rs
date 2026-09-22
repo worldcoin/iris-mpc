@@ -1,4 +1,5 @@
 mod tests {
+    use alkali::asymmetric::seal::curve25519xsalsa20poly1305 as sealedbox;
     use aws_credential_types::{provider::SharedCredentialsProvider, Credentials};
     use aws_sdk_s3::Client as S3Client;
     use base64::{engine::general_purpose::STANDARD, Engine};
@@ -11,7 +12,6 @@ mod tests {
         },
     };
     use serde_json::json;
-    use sodiumoxide::crypto::{box_::PublicKey, sealedbox};
     use std::sync::Arc;
     use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
 
@@ -21,13 +21,19 @@ mod tests {
     const CURRENT_PUBLIC_KEY: &str = "HDp962tQyZIG9t+GX4JM0i1wgJx/YGpHGsuDSD34KBA=";
     const CURRENT_PRIVATE_KEY: &str = "14Z6Zijg3kbFN//R9BRKLeTS/wCiZMfK6AurEr/nAZg=";
 
+    fn seal(message: &[u8], public_key: &sealedbox::PublicKey) -> Vec<u8> {
+        let mut ciphertext = vec![0; message.len() + sealedbox::OVERHEAD_LENGTH];
+        sealedbox::encrypt(message, public_key, &mut ciphertext).unwrap();
+        ciphertext
+    }
+
     fn get_key_pairs(
-        current_pk_string: String,
-        previous_pk_string: String,
+        current_sk_string: String,
+        previous_sk_string: String,
     ) -> SharesEncryptionKeyPairs {
         SharesEncryptionKeyPairs::from_b64_private_key_strings(
-            current_pk_string.to_string().clone(),
-            previous_pk_string.to_string().clone(),
+            current_sk_string,
+            previous_sk_string,
         )
         .unwrap()
     }
@@ -135,17 +141,16 @@ mod tests {
         };
 
         let decoded_public_key = STANDARD.decode(CURRENT_PUBLIC_KEY.as_bytes()).unwrap();
-        let shares_encryption_public_key = PublicKey::from_slice(&decoded_public_key).unwrap();
+        let shares_encryption_public_key =
+            sealedbox::PublicKey::try_from(decoded_public_key.as_slice()).unwrap();
 
         // convert iris code to JSON string, sealbox and encode as BASE64
         let json_string = serde_json::to_string(&iris_codes_json).unwrap();
-        let sealed_box = sealedbox::seal(json_string.as_bytes(), &shares_encryption_public_key);
+        let sealed_box = seal(json_string.as_bytes(), &shares_encryption_public_key);
         let encoded_share = STANDARD.encode(sealed_box);
 
-        let key_pair = get_key_pairs(
-            PREVIOUS_PRIVATE_KEY.to_string(),
-            CURRENT_PRIVATE_KEY.to_string(),
-        );
+        // A current-key success must not depend on a fallback key being present.
+        let key_pair = get_key_pairs(CURRENT_PRIVATE_KEY.to_string(), String::new());
 
         let result = decrypt_iris_share(encoded_share, key_pair);
 
@@ -160,17 +165,25 @@ mod tests {
 
         // Use previous public key to encrypt the shares
         let decoded_public_key = STANDARD.decode(PREVIOUS_PUBLIC_KEY.as_bytes()).unwrap();
-        let shares_encryption_public_key = PublicKey::from_slice(&decoded_public_key).unwrap();
+        let shares_encryption_public_key =
+            sealedbox::PublicKey::try_from(decoded_public_key.as_slice()).unwrap();
 
         // convert iris code to JSON string, sealbox and encode as BASE64
         let json_string = serde_json::to_string(&iris_code_shares_json).unwrap();
-        let sealed_box = sealedbox::seal(json_string.as_bytes(), &shares_encryption_public_key);
+        let sealed_box = seal(json_string.as_bytes(), &shares_encryption_public_key);
         let encoded_share = STANDARD.encode(sealed_box);
 
         let key_pair = get_key_pairs(
-            PREVIOUS_PRIVATE_KEY.to_string(),
             CURRENT_PRIVATE_KEY.to_string(),
+            PREVIOUS_PRIVATE_KEY.to_string(),
         );
+
+        assert!(matches!(
+            key_pair
+                .current_key_pair
+                .open_sealed_box(STANDARD.decode(&encoded_share).unwrap()),
+            Err(SharesDecodingError::SealedBoxOpenError)
+        ));
 
         // Decrypt the share. It will succeed, by first attempting to use the current
         // private key (failing), and then the previous private key (succeeding)
@@ -187,16 +200,17 @@ mod tests {
 
         // Use previous public key to encrypt the shares
         let decoded_public_key = STANDARD.decode(PREVIOUS_PUBLIC_KEY.as_bytes()).unwrap();
-        let shares_encryption_public_key = PublicKey::from_slice(&decoded_public_key).unwrap();
+        let shares_encryption_public_key =
+            sealedbox::PublicKey::try_from(decoded_public_key.as_slice()).unwrap();
         let json_string = serde_json::to_string(&iris_code_shares_json).unwrap();
-        let sealed_box = sealedbox::seal(json_string.as_bytes(), &shares_encryption_public_key);
+        let sealed_box = seal(json_string.as_bytes(), &shares_encryption_public_key);
         let encoded_share = STANDARD.encode(&sealed_box);
 
         // Set the previous key to be empty
         let key_pair = get_key_pairs(CURRENT_PRIVATE_KEY.to_string(), "".to_string());
 
         // Decrypt the share. It will fail: it will attempt to decrypt using the current
-        // key, but the share was encrypted using the current key. The previous
+        // key, but the share was encrypted using the previous key. The previous
         // key does not exist, so it will return a sealed box open error
         let result = decrypt_iris_share(encoded_share, key_pair);
         assert!(matches!(
@@ -226,8 +240,9 @@ mod tests {
         let invalid_utf8 = vec![0, 159, 146, 150]; // Not valid UTF-8
 
         let decoded_public_key = STANDARD.decode(CURRENT_PUBLIC_KEY.as_bytes()).unwrap();
-        let shares_encryption_public_key = PublicKey::from_slice(&decoded_public_key).unwrap();
-        let sealed_box = sealedbox::seal(&invalid_utf8, &shares_encryption_public_key);
+        let shares_encryption_public_key =
+            sealedbox::PublicKey::try_from(decoded_public_key.as_slice()).unwrap();
+        let sealed_box = seal(&invalid_utf8, &shares_encryption_public_key);
         let encoded_share = STANDARD.encode(&sealed_box);
 
         let key_pair = get_key_pairs(
@@ -248,8 +263,9 @@ mod tests {
         let invalid_json = "totally-not-a-json-string";
 
         let decoded_public_key = STANDARD.decode(CURRENT_PUBLIC_KEY.as_bytes()).unwrap();
-        let shares_encryption_public_key = PublicKey::from_slice(&decoded_public_key).unwrap();
-        let sealed_box = sealedbox::seal(invalid_json.as_bytes(), &shares_encryption_public_key);
+        let shares_encryption_public_key =
+            sealedbox::PublicKey::try_from(decoded_public_key.as_slice()).unwrap();
+        let sealed_box = seal(invalid_json.as_bytes(), &shares_encryption_public_key);
         let encoded_share = STANDARD.encode(&sealed_box);
 
         let key_pair = get_key_pairs(
