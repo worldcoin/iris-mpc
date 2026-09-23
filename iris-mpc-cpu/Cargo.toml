@@ -50,8 +50,9 @@ thiserror.workspace = true
 toml.workspace = true
 tokio.workspace = true
 tokio-stream = "0.1"
-tokio-util = { workspace = true, features = ["io-util"] }
+tokio-util = { workspace = true, features = ["io-util", "rt"] }
 metrics.workspace = true
+moka = { version = "0.12.15", features = ["sync"] }
 tracing.workspace = true
 chrono.workspace = true
 tracing-forest = { git = "https://github.com/QnnOkabayashi/tracing-forest.git", rev = "5683eba", features = [
@@ -86,7 +87,9 @@ tempfile = "3"
 db_dependent = []
 networking_metrics = []
 chacha_prf = []
+aes_rng_prf = ["ampc-actor-utils/aes_rng_prf"]
 phase_trace = []
+gpu-parity = []
 
 [[bench]]
 name = "hnsw"
@@ -94,6 +97,14 @@ harness = false
 
 [[bench]]
 name = "networking"
+harness = false
+
+[[bench]]
+name = "linear_scan_dot_cpu"
+harness = false
+
+[[bench]]
+name = "linear_scan_candidates"
 harness = false
 
 [[bench]]

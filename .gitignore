@@ -9,3 +9,6 @@
 vendor/
 
 iris-mpc-db-exporter/test/test_output
+
+# Generated GPU/CPU equivalence captures.
+/ground-truth-results/

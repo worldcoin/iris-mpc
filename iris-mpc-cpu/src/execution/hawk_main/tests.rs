@@ -44,6 +44,8 @@ async fn test_seeded_initializer_populates_registry() -> Result<()> {
         hnsw_prf_key: None,
         numa: false,
         disable_persistence: true,
+        return_partial_results: false,
+        full_scan_side: Eye::Left,
         hnsw_disable_memory_persistence: false,
         tls: None,
     };
@@ -110,6 +112,7 @@ async fn test_hawk_main() -> Result<()> {
                 &320.to_string(),
                 "--hnsw-param-m",
                 &256.to_string(),
+                "--return-partial-results",
             ]);
 
             // Make the test async.

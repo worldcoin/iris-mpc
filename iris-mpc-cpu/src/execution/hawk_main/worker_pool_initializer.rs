@@ -3,14 +3,14 @@
 //! via `to_registry`, so it mirrors exactly what was loaded.
 
 use crate::execution::hawk_main::iris_worker::{
-    init_workers, IrisPoolHandle, IrisWorkerPool, LocalIrisWorkerPool,
+    init_workers, ColdStorageInit, IrisPoolHandle, IrisWorkerPool, LocalIrisWorkerPool,
 };
 use crate::execution::hawk_main::{BothEyes, HawkOps, LEFT, RIGHT};
 use crate::hawkers::aby3::aby3_store::{
-    Aby3SharedIrises, Aby3SharedIrisesRef, Aby3Store, DistanceMode, VectorIdRegistryRef,
+    Aby3SharedIrises, Aby3Store, DistanceMode, VectorIdRegistryRef,
 };
-use crate::hawkers::shared_irises::SharedIrises;
-use crate::protocol::shared_iris::GaloisRingSharedIris;
+use crate::hawkers::shared_irises::{SharedIrises, SharedIrisesRef};
+use crate::protocol::shared_iris::{GaloisRingSharedIris, ResidentIris, ResidentLayout};
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use async_trait::async_trait;
 use eyre::Result;
@@ -44,6 +44,9 @@ pub struct DbLoadParams {
     pub parallelism: usize,
     pub s3_max_serial_id: Option<usize>,
     pub shutdown_handler: Arc<ShutdownHandler>,
+    /// If set, materialize only this eye. The other eye remains database-backed,
+    /// retaining its LUC lookback window while fetching older candidates sparsely.
+    pub resident_side: Option<usize>,
 }
 
 /// Strategy for populating the local pools' iris stores at startup.
@@ -61,6 +64,10 @@ pub struct LocalWorkerPoolInitializer {
     pub distance_mode: DistanceMode,
     pub numa: bool,
     pub mode: LocalInitMode,
+    /// Resident representation of the pools' iris stores. `U16` (default)
+    /// keeps plain `ArcIris` values as required by the HNSW hot paths;
+    /// exact-scan actors opt into `preferred_scan_layout()`.
+    pub layout: ResidentLayout,
 }
 
 impl LocalWorkerPoolInitializer {
@@ -70,7 +77,14 @@ impl LocalWorkerPoolInitializer {
             distance_mode,
             numa,
             mode: LocalInitMode::Empty,
+            layout: ResidentLayout::U16,
         }
+    }
+
+    /// Choose the resident representation of the pools' iris stores.
+    pub fn with_resident_layout(mut self, layout: ResidentLayout) -> Self {
+        self.layout = layout;
+        self
     }
 
     pub fn new_seeded(
@@ -84,6 +98,7 @@ impl LocalWorkerPoolInitializer {
             distance_mode,
             numa,
             mode: LocalInitMode::Seeded(seed_stores),
+            layout: ResidentLayout::U16,
         }
     }
 
@@ -98,6 +113,7 @@ impl LocalWorkerPoolInitializer {
             distance_mode,
             numa,
             mode: LocalInitMode::LoadFromDb(params),
+            layout: ResidentLayout::U16,
         }
     }
 }
@@ -110,25 +126,28 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
             distance_mode,
             numa,
             mode,
+            layout,
         } = *self;
 
         // Materialize the iris stores. `Seeded` installs caller-provided
         // stores; the rest start blank.
-        let iris_stores: BothEyes<Aby3SharedIrisesRef> = match &mode {
-            LocalInitMode::Seeded(seeds) => {
-                let [left, right] = seeds.clone();
-                [SharedIrises::to_arc(left), SharedIrises::to_arc(right)]
-            }
-            _ => [
-                Aby3Store::<HawkOps>::new_storage(None).to_arc(),
-                Aby3Store::<HawkOps>::new_storage(None).to_arc(),
-            ],
+        let iris_stores: BothEyes<SharedIrisesRef<ResidentIris>> = match &mode {
+            LocalInitMode::Seeded(seeds) => seeds.clone().map(|seed| {
+                seed.map_values(|iris| ResidentIris::from_arc(iris, layout))
+                    .to_arc()
+            }),
+            _ => [LEFT, RIGHT].map(|_| {
+                Aby3Store::<HawkOps>::new_storage(None)
+                    .map_values(|iris| ResidentIris::from_arc(iris, layout))
+                    .to_arc()
+            }),
         };
 
         let workers_handle: BothEyes<IrisPoolHandle> =
-            [LEFT, RIGHT].map(|side| init_workers(side, iris_stores[side].clone(), numa));
+            [LEFT, RIGHT].map(|side| init_workers(side, iris_stores[side].clone(), numa, layout));
 
         let mut db_size: usize = 0;
+        let mut cold_storage: Option<(Store, usize, usize, usize)> = None;
 
         // INVARIANT: each eye gets its own `Arc<RwLock>`. `Aby3Store::insert`
         // allocates `next_id` per eye, so sharing one Arc would advance
@@ -150,12 +169,28 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                     parallelism,
                     s3_max_serial_id,
                     shutdown_handler,
+                    resident_side,
                 } = params;
                 let mut adapter = FanoutLoader {
                     party_id,
                     iris_pools: workers_handle.clone(),
                     db_size: 0,
+                    resident_side,
                 };
+                if let Some(side) = resident_side {
+                    let luc_window_capacity =
+                        if config.luc_enabled && config.luc_lookback_records > 0 {
+                            config.luc_lookback_records + 1
+                        } else {
+                            0
+                        };
+                    cold_storage = Some((
+                        store.clone(),
+                        side,
+                        luc_window_capacity,
+                        config.cold_eye_lfu_cache_records,
+                    ));
+                }
                 load_iris_db(
                     &mut adapter,
                     &store,
@@ -173,33 +208,92 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                     workers_handle[RIGHT].wait_completion(),
                 )?;
                 db_size = adapter.db_size;
-                [
-                    iris_stores[LEFT].data.read().await.to_registry().to_arc(),
-                    iris_stores[RIGHT].data.read().await.to_registry().to_arc(),
-                ]
+                if let Some(side) = resident_side {
+                    let registry = iris_stores[side].data.read().await.to_registry();
+                    [registry.clone().to_arc(), registry.to_arc()]
+                } else {
+                    [
+                        iris_stores[LEFT].data.read().await.to_registry().to_arc(),
+                        iris_stores[RIGHT].data.read().await.to_registry().to_arc(),
+                    ]
+                }
             }
         };
 
+        let resident_side = cold_storage.as_ref().map(|(_, side, _, _)| *side);
+        let mut cold_worker =
+            if let Some((store, resident_side, luc_window_capacity, lfu_cache_capacity)) =
+                cold_storage
+            {
+                let cold_side = 1 - resident_side;
+                let registry = registries[cold_side].read().await;
+                let luc_window_ids = registry.last_vector_ids(luc_window_capacity);
+                drop(registry);
+                Some((
+                    cold_side,
+                    LocalIrisWorkerPool::new_cold(
+                        workers_handle[cold_side].clone(),
+                        iris_stores[cold_side].clone(),
+                        layout,
+                        distance_mode,
+                        party_id,
+                        ColdStorageInit {
+                            store,
+                            side: cold_side,
+                            luc_window_ids,
+                            luc_window_capacity,
+                            lfu_cache_capacity,
+                        },
+                    )
+                    .await?,
+                ))
+            } else {
+                None
+            };
+
         let pools: BothEyes<Arc<dyn IrisWorkerPool>> = [LEFT, RIGHT].map(|side| {
-            Arc::new(LocalIrisWorkerPool::new(
-                workers_handle[side].clone(),
-                iris_stores[side].clone(),
-                distance_mode,
-                party_id,
-            )) as Arc<dyn IrisWorkerPool>
+            let worker = if cold_worker
+                .as_ref()
+                .is_some_and(|(cold_side, _)| *cold_side == side)
+            {
+                cold_worker.take().expect("cold worker exists").1
+            } else {
+                LocalIrisWorkerPool::new(
+                    workers_handle[side].clone(),
+                    iris_stores[side].clone(),
+                    layout,
+                    distance_mode,
+                    party_id,
+                )
+            };
+            Arc::new(worker) as Arc<dyn IrisWorkerPool>
         });
 
         let post_load_checksums = [
-            iris_stores[LEFT].data.read().await.set_hash.checksum(),
-            iris_stores[RIGHT].data.read().await.set_hash.checksum(),
+            registries[LEFT].read().await.set_hash.checksum(),
+            registries[RIGHT].read().await.set_hash.checksum(),
         ];
 
-        tracing::info!(
-            "Workers initialized. Checksums: L={:#x} R={:#x}, db_size={}",
-            post_load_checksums[LEFT],
-            post_load_checksums[RIGHT],
-            db_size,
-        );
+        match resident_side {
+            Some(resident_side) => {
+                // Only the resident eye was loaded; the other registry is a
+                // copy of it, so a second checksum would not be an independent
+                // check of anything.
+                let resident = if resident_side == LEFT { "L" } else { "R" };
+                tracing::info!(
+                    "Workers initialized. Resident {resident} checksum={:#x} (the other eye is \
+                     database-backed and shares this registry), db_size={}",
+                    post_load_checksums[resident_side],
+                    db_size,
+                );
+            }
+            None => tracing::info!(
+                "Workers initialized. Checksums: L={:#x} R={:#x}, db_size={}",
+                post_load_checksums[LEFT],
+                post_load_checksums[RIGHT],
+                db_size,
+            ),
+        }
 
         Ok(InitializedWorkers { pools, registries })
     }
@@ -211,6 +305,7 @@ struct FanoutLoader {
     party_id: usize,
     iris_pools: BothEyes<IrisPoolHandle>,
     db_size: usize,
+    resident_side: Option<usize>,
 }
 
 const IRIS_STORE_RESERVE_EXTRA: f64 = 0.2;
@@ -225,11 +320,16 @@ impl InMemoryStore for FanoutLoader {
         right_code: &[u16],
         right_mask: &[u16],
     ) {
-        for (pool, code, mask) in izip!(
+        for (side, (pool, code, mask)) in izip!(
             &self.iris_pools,
             [left_code, right_code],
             [left_mask, right_mask]
-        ) {
+        )
+        .enumerate()
+        {
+            if self.resident_side.is_some_and(|resident| resident != side) {
+                continue;
+            }
             let iris = GaloisRingSharedIris::try_from_buffers(self.party_id, code, mask)
                 .expect("Wrong code or mask size");
             pool.insert(vector_id, iris).unwrap();
@@ -242,8 +342,10 @@ impl InMemoryStore for FanoutLoader {
 
     fn reserve(&mut self, additional: usize) {
         let additional = additional + (additional as f64 * IRIS_STORE_RESERVE_EXTRA) as usize;
-        for side in &self.iris_pools {
-            side.reserve(additional).unwrap();
+        for (side, pool) in self.iris_pools.iter().enumerate() {
+            if self.resident_side.is_none_or(|resident| resident == side) {
+                pool.reserve(additional).unwrap();
+            }
         }
     }
 
@@ -255,5 +357,48 @@ impl InMemoryStore for FanoutLoader {
         unreachable!(
             "FanoutLoader is only used for LoadFromDb; load_iris_db never invokes fake_db"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn single_eye_loader_does_not_materialize_cold_eye() -> Result<()> {
+        let stores: BothEyes<SharedIrisesRef<ResidentIris>> = [LEFT, RIGHT].map(|_| {
+            Aby3Store::<HawkOps>::new_storage(None)
+                .map_values(|iris| ResidentIris::from_arc(iris, ResidentLayout::U16))
+                .to_arc()
+        });
+        let handles = [LEFT, RIGHT]
+            .map(|side| init_workers(side, stores[side].clone(), false, ResidentLayout::U16));
+        let iris = GaloisRingSharedIris::default_for_party(0);
+        let id = VectorId::from_0_index(7);
+        let mut loader = FanoutLoader {
+            party_id: 0,
+            iris_pools: handles.clone(),
+            db_size: 0,
+            resident_side: Some(RIGHT),
+        };
+
+        loader.reserve(1);
+        loader.load_single_record_from_db(
+            7,
+            id,
+            &iris.code.coefs,
+            &iris.mask.coefs,
+            &iris.code.coefs,
+            &iris.mask.coefs,
+        );
+        try_join!(
+            handles[LEFT].wait_completion(),
+            handles[RIGHT].wait_completion(),
+        )?;
+
+        assert_eq!(stores[LEFT].data.read().await.db_size(), 0);
+        assert_eq!(stores[RIGHT].data.read().await.db_size(), 1);
+        assert!(stores[RIGHT].data.read().await.get_vector(&id).is_some());
+        Ok(())
     }
 }
