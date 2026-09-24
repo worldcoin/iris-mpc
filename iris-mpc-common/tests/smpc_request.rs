@@ -152,7 +152,7 @@ mod tests {
         // A current-key success must not depend on a fallback key being present.
         let key_pair = get_key_pairs(CURRENT_PRIVATE_KEY.to_string(), String::new());
 
-        let result = decrypt_iris_share(encoded_share, key_pair);
+        let result = decrypt_iris_share(encoded_share, &key_pair);
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), iris_codes_json);
@@ -187,7 +187,7 @@ mod tests {
 
         // Decrypt the share. It will succeed, by first attempting to use the current
         // private key (failing), and then the previous private key (succeeding)
-        let result = decrypt_iris_share(encoded_share, key_pair);
+        let result = decrypt_iris_share(encoded_share, &key_pair);
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), iris_code_shares_json);
@@ -212,7 +212,7 @@ mod tests {
         // Decrypt the share. It will fail: it will attempt to decrypt using the current
         // key, but the share was encrypted using the previous key. The previous
         // key does not exist, so it will return a sealed box open error
-        let result = decrypt_iris_share(encoded_share, key_pair);
+        let result = decrypt_iris_share(encoded_share, &key_pair);
         assert!(matches!(
             result,
             Err(SharesDecodingError::SealedBoxOpenError)
@@ -227,7 +227,7 @@ mod tests {
             CURRENT_PRIVATE_KEY.to_string(),
         );
 
-        let result = decrypt_iris_share(invalid_base64.to_string(), key_pair);
+        let result = decrypt_iris_share(invalid_base64.to_string(), &key_pair);
 
         assert!(matches!(
             result,
@@ -250,7 +250,7 @@ mod tests {
             CURRENT_PRIVATE_KEY.to_string(),
         );
 
-        let result = decrypt_iris_share(encoded_share, key_pair);
+        let result = decrypt_iris_share(encoded_share, &key_pair);
 
         assert!(matches!(
             result,
@@ -273,7 +273,7 @@ mod tests {
             CURRENT_PRIVATE_KEY.to_string(),
         );
 
-        let result = decrypt_iris_share(encoded_share, key_pair);
+        let result = decrypt_iris_share(encoded_share, &key_pair);
 
         assert!(matches!(result, Err(SharesDecodingError::SerdeError(_))));
     }

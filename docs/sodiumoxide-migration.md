@@ -1,6 +1,6 @@
 # Sodiumoxide replacement: prepared, blocked on ampc-common
 
-Status as of 2026-09-22: the direct consumers in this workspace have been
+Status as of 2026-09-24: the direct consumers in this workspace have been
 migrated to alkali 0.3. This is a **dependency-blocked draft**, not a validated
 release. Do not merge or deploy it until the dependency and validation steps
 below are complete. The ampc-common migration is owned separately.
@@ -9,7 +9,7 @@ below are complete. The ampc-common migration is owned separately.
 
 | Package | Change |
 | --- | --- |
-| `iris-mpc-common` | Import existing private keys and decrypt shares through alkali; preserve current/previous-key fallback and independent, zeroizable key clones. |
+| `iris-mpc-common` | Import existing private keys into retained hardened keypairs; borrow them for decryption and preserve current/previous-key fallback. |
 | `iris-mpc` | Migrate client encryption and key-rotation test helpers; replace sodiumoxide hex formatting with the existing hex crate. |
 | `iris-mpc-utils` | Migrate public-key parsing and share encryption; propagate encryption failures before any upload. |
 | `iris-mpc-bins` | Migrate key-manager generation/import/validation and its tests; replace sodiumoxide hex formatting in the anonymous-statistics server. |
@@ -37,10 +37,25 @@ feature. This does not promise a crypto-free transitive dependency graph: other
 dependencies may still use a binding. No global `use-pkg-config` feature is added;
 native-library provisioning continues to use the binding's default build behavior.
 
-Key storage retains the existing infallible `Clone` and explicit `Zeroize`
-contract using independently owned `Zeroizing` arrays. Decryption temporarily
-imports a hardened alkali private key. Debug output omits the secret; decoded
-private-key buffers and failed plaintext output buffers are wiped on drop.
+Key storage holds an alkali `Keypair` directly; decryption no longer copies the
+private bytes into a new native allocation on each call. Key types no longer
+implement `Clone`. GPU/HNSW servers, batch processing and modification-sync tasks
+share an immutable `Arc<SharesEncryptionKeyPairs>` instead, cloning only ownership
+handles. `decrypt_iris_share` now borrows `&SharesEncryptionKeyPairs`.
+
+The keys are wiped when the final owning handle is dropped, including task
+cancellation. This does not implement immediate key revocation: dropping one
+handle cannot invalidate keys still in use by another task. Explicit `Zeroize`
+requires exclusive access to the key set (for shared ownership, a successful
+`Arc::get_mut`). No lock or mutable shared key storage is introduced.
+
+Production key-manager rotation uses `Keypair::generate()`; deterministic
+`from_seed()` remains only in tests. Public-key-only derivation uses
+`PrivateKey::public_key()` without cloning the secret into a temporary keypair.
+All crypto calls keep explicit `curve25519xsalsa20poly1305` imports.
+
+Debug output omits the secret; decoded private-key buffers and failed plaintext
+output buffers in the share-decryption helper are wiped on drop.
 This is not a guarantee of complete memory erasure: caller copies, allocator
 reallocations, AWS SDK buffers, returned plaintext and process aborts remain
 outside that guarantee.
@@ -51,7 +66,10 @@ outside that guarantee.
 - Native deterministic seed-derived public/private bytes and base64 round trips.
 - Empty plaintext, malformed base64 and private-key lengths.
 - Wrong recipient, tampering at every ciphertext byte and every truncated prefix.
-- Independent key cloning, explicit zeroization and secret-free Debug output.
+- Shared hardened storage across tasks, last-owner release, cancellation cleanup,
+  explicit zeroization and secret-free Debug output.
+- Generated production-style keys survive base64 export/import and decrypt the
+  original ciphertext; seeded native compatibility vectors remain covered.
 - Current-key decryption without a previous key; actual previous-key fallback.
 - Encryption/decryption and JSON/hash equality for all three share recipients.
 - Invalid recipient rejection at each party index, including the native error.
@@ -125,7 +143,7 @@ the lockfile by hand would hide the blocker, not fix it.
    a legacy-produced ciphertext decrypts under the new service and new client
    ciphertext decrypts under a legacy service, including rotation overlap.
    Measure share-decryption throughput and allocation cost under representative
-   load: importing a hardened private key adds a native allocation per decryption.
+   load, confirming that retained hardened keys avoid per-decryption key imports.
    Compare current-key success and previous-key fallback against the old service.
 5. Re-review the final dependency and source diff for secrets, update this status
    with actual validation results, and only then submit/merge the migration.

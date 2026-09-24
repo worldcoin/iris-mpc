@@ -100,7 +100,8 @@ pub async fn server_main(config: Config) -> Result<()> {
     let (iris_store, graph_store) = prepare_stores(&config).await?;
 
     let aws_clients = init_aws_services(&config).await?;
-    let shares_encryption_key_pair = get_shares_encryption_key_pair(&config, &aws_clients).await?;
+    let shares_encryption_key_pair =
+        Arc::new(get_shares_encryption_key_pair(&config, &aws_clients).await?);
     let sns_attributes_maps = init_sns_attributes_maps()?;
 
     maybe_seed_random_shares(&config, &iris_store).await?;
@@ -871,7 +872,7 @@ async fn run_main_server_loop(
     config: &Config,
     iris_store: &Store,
     aws_clients: &AwsClients,
-    shares_encryption_key_pair: SharesEncryptionKeyPairs,
+    shares_encryption_key_pair: Arc<SharesEncryptionKeyPairs>,
     mut task_monitor: TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
     hawk_actor: HawkActor,

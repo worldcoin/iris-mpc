@@ -298,7 +298,7 @@ pub async fn get_iris_data_by_party_id(
 
 pub fn decrypt_iris_share(
     share: String,
-    key_pairs: SharesEncryptionKeyPairs,
+    key_pairs: &SharesEncryptionKeyPairs,
 ) -> Result<IrisCodeSharesJSON, SharesDecodingError> {
     let share_bytes = STANDARD
         .decode(share.as_bytes())

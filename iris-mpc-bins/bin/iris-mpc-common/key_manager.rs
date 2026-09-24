@@ -1,4 +1,4 @@
-use alkali::asymmetric::seal::curve25519xsalsa20poly1305::{Keypair, PrivateKey, PublicKey, Seed};
+use alkali::asymmetric::seal::curve25519xsalsa20poly1305::{Keypair, PrivateKey, PublicKey};
 use aws_config::SdkConfig;
 use aws_sdk_s3::{
     config::Region as S3Region, operation::put_object::PutObjectOutput, Client as S3Client,
@@ -11,7 +11,6 @@ use aws_sdk_secretsmanager::{
 use base64::{engine::general_purpose::STANDARD, Engine};
 use clap::{Parser, Subcommand};
 use eyre::{ensure, eyre, Result, WrapErr};
-use rand::{thread_rng, Rng};
 use reqwest::Client;
 
 const PUBLIC_KEY_S3_BUCKET_NAME: &str = "wf-smpcv2-stage-public-keys";
@@ -165,7 +164,7 @@ async fn validate_keys(
         PrivateKey::try_from(user_privkey.as_slice()).wrap_err("Invalid private key")?;
 
     ensure!(
-        Keypair::from_private_key(&decoded_priv_key)?.public_key == pub_key,
+        decoded_priv_key.public_key()? == pub_key,
         "Stored private key does not match public key"
     );
     Ok(())
@@ -179,16 +178,11 @@ async fn rotate_keys(
     public_key_bucket_name: Option<String>,
     endpoint_url: Option<String>,
 ) -> Result<()> {
-    let mut rng = thread_rng();
-
     let bucket_name = if let Some(bucket_name) = public_key_bucket_name {
         bucket_name
     } else {
         PUBLIC_KEY_S3_BUCKET_NAME.to_string()
     };
-
-    let mut pk_seed = Seed::new_empty()?;
-    rng.fill(&mut pk_seed[..]);
 
     let mut s3_config_builder = aws_sdk_s3::config::Builder::from(sdk_config);
     let mut sm_config_builder = aws_sdk_secretsmanager::config::Builder::from(sdk_config);
@@ -202,7 +196,7 @@ async fn rotate_keys(
     let s3_client = S3Client::from_conf(s3_config_builder.build());
     let sm_client = SecretsManagerClient::from_conf(sm_config_builder.build());
 
-    let keypair = Keypair::from_seed(&pk_seed)?;
+    let keypair = Keypair::generate()?;
     let pub_key_str = STANDARD.encode(keypair.public_key);
     let priv_key_str = STANDARD.encode(&keypair.private_key[..]);
 
@@ -321,6 +315,36 @@ async fn upload_public_key_to_s3(
 mod test {
     use super::*;
     use alkali::asymmetric::seal::curve25519xsalsa20poly1305 as sealedbox;
+    use sealedbox::Seed;
+
+    #[test]
+    fn generated_key_export_import_preserves_decryption() -> Result<()> {
+        let keypair = Keypair::generate()?;
+        let message = b"synthetic rotated-key compatibility test";
+        let mut ciphertext = vec![0; message.len() + sealedbox::OVERHEAD_LENGTH];
+        assert_eq!(
+            sealedbox::encrypt(message, &keypair.public_key, &mut ciphertext)?,
+            ciphertext.len()
+        );
+        let exported_private_key = STANDARD.encode(&keypair.private_key[..]);
+        let exported_public_key = STANDARD.encode(keypair.public_key);
+        drop(keypair);
+
+        let private_key_bytes = STANDARD.decode(exported_private_key)?;
+        let private_key = PrivateKey::try_from(private_key_bytes.as_slice())?;
+        let restored = Keypair {
+            public_key: private_key.public_key()?,
+            private_key,
+        };
+        assert_eq!(STANDARD.encode(restored.public_key), exported_public_key);
+        let mut plaintext = vec![0; message.len()];
+        assert_eq!(
+            sealedbox::decrypt(&ciphertext, &restored, &mut plaintext)?,
+            message.len()
+        );
+        assert_eq!(plaintext, message);
+        Ok(())
+    }
 
     #[test]
     fn seeded_keys_preserve_libsodium_bytes_and_base64_roundtrip() -> Result<()> {
@@ -338,8 +362,8 @@ mod test {
         let private_key = STANDARD.decode(STANDARD.encode(&keypair.private_key[..]))?;
         assert_eq!(keypair.public_key.as_slice(), public_key);
         assert_eq!(&keypair.private_key[..], private_key);
-        let restored = Keypair::from_private_key(&PrivateKey::try_from(private_key.as_slice())?)?;
-        assert_eq!(restored.public_key, keypair.public_key);
+        let restored_private_key = PrivateKey::try_from(private_key.as_slice())?;
+        assert_eq!(restored_private_key.public_key()?, keypair.public_key);
         Ok(())
     }
 

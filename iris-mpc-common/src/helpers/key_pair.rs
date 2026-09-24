@@ -76,7 +76,9 @@ impl From<aws_sdk_s3::error::SdkError<aws_sdk_s3::operation::get_object::GetObje
     }
 }
 
-#[derive(Clone, Debug)]
+/// Loaded once and shared by server tasks through `Arc`; secret bytes are not cloned.
+/// Explicit zeroization requires exclusive access. Drop wipes the last owner's keys.
+#[derive(Debug)]
 pub struct SharesEncryptionKeyPairs {
     pub current_key_pair: SharesEncryptionKeyPair,
     pub previous_key_pair: Option<SharesEncryptionKeyPair>,
@@ -157,26 +159,22 @@ impl SharesEncryptionKeyPairs {
     }
 }
 
-#[derive(Clone)]
 pub struct SharesEncryptionKeyPair {
-    pk: sealedbox::PublicKey,
-    // Preserve infallible Clone and explicit Zeroize without sharing secret storage.
-    // Each decryption imports its own short-lived hardened alkali private key.
-    sk: Zeroizing<[u8; sealedbox::PRIVATE_KEY_LENGTH]>,
+    keypair: sealedbox::Keypair,
 }
 
 impl fmt::Debug for SharesEncryptionKeyPair {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SharesEncryptionKeyPair")
-            .field("pk", &self.pk)
+            .field("pk", &self.keypair.public_key)
             .finish_non_exhaustive()
     }
 }
 
 impl Zeroize for SharesEncryptionKeyPair {
     fn zeroize(&mut self) {
-        self.pk.zeroize();
-        self.sk.zeroize();
+        self.keypair.public_key.zeroize();
+        self.keypair.private_key.as_mut().zeroize();
     }
 }
 
@@ -194,12 +192,12 @@ impl SharesEncryptionKeyPair {
             return Err(SharesDecodingError::ParsingKeyError);
         }
         let private_key = sealedbox::PrivateKey::try_from(sk_bytes.as_slice())?;
-        let keypair = sealedbox::Keypair::from_private_key(&private_key)?;
-        let mut sk = Zeroizing::new([0; sealedbox::PRIVATE_KEY_LENGTH]);
-        sk.copy_from_slice(sk_bytes.as_slice());
+        let public_key = private_key.public_key()?;
         Ok(Self {
-            pk: keypair.public_key,
-            sk,
+            keypair: sealedbox::Keypair {
+                public_key,
+                private_key,
+            },
         })
     }
 
@@ -208,12 +206,8 @@ impl SharesEncryptionKeyPair {
             .len()
             .checked_sub(sealedbox::OVERHEAD_LENGTH)
             .ok_or(SharesDecodingError::SealedBoxOpenError)?;
-        let keypair = sealedbox::Keypair {
-            public_key: self.pk,
-            private_key: sealedbox::PrivateKey::try_from(&self.sk[..])?,
-        };
         let mut plaintext = Zeroizing::new(vec![0; plaintext_length]);
-        sealedbox::decrypt(&code, &keypair, &mut plaintext).map_err(|error| {
+        sealedbox::decrypt(&code, &self.keypair, &mut plaintext).map_err(|error| {
             if error == AlkaliError::SealError(SealError::DecryptionFailed) {
                 SharesDecodingError::SealedBoxOpenError
             } else {
@@ -291,7 +285,7 @@ mod tests {
     #[test]
     fn imports_existing_private_key_and_opens_native_sealed_box() {
         let key = SharesEncryptionKeyPair::from_b64_private_key_string(SECRET.into()).unwrap();
-        assert_eq!(STANDARD.encode(key.pk), PUBLIC);
+        assert_eq!(STANDARD.encode(key.keypair.public_key), PUBLIC);
         assert_eq!(
             key.open_sealed_box(STANDARD.decode(CIPHERTEXT).unwrap())
                 .unwrap(),
@@ -338,29 +332,83 @@ mod tests {
     }
 
     #[test]
-    fn clone_owns_independent_secret_and_debug_omits_secret() {
+    fn explicit_zeroize_clears_hardened_key_and_debug_omits_secret() {
         let mut key = SharesEncryptionKeyPair::from_b64_private_key_string(SECRET.into()).unwrap();
-        let clone = key.clone();
         assert_eq!(
             format!("{key:?}"),
-            format!("SharesEncryptionKeyPair {{ pk: {:?}, .. }}", key.pk)
+            format!(
+                "SharesEncryptionKeyPair {{ pk: {:?}, .. }}",
+                key.keypair.public_key
+            )
         );
         key.zeroize();
-        assert_eq!(key.pk, [0; 32]);
-        assert_eq!(*key.sk, [0; 32]);
-        assert_eq!(
-            clone
-                .open_sealed_box(STANDARD.decode(CIPHERTEXT).unwrap())
+        assert_eq!(key.keypair.public_key, [0; 32]);
+        assert_eq!(&key.keypair.private_key[..], &[0; 32]);
+    }
+
+    #[tokio::test]
+    async fn tasks_share_hardened_storage_until_the_last_owner_drops() {
+        use std::sync::Arc;
+        use tokio::sync::oneshot;
+
+        let keys = Arc::new(
+            SharesEncryptionKeyPairs::from_b64_private_key_strings(SECRET.into(), String::new())
                 .unwrap(),
-            MESSAGE
         );
+        let weak = Arc::downgrade(&keys);
+        let storage = keys.current_key_pair.keypair.private_key.as_ptr() as usize;
+        let worker_keys = Arc::clone(&keys);
+        let (start, wait) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            wait.await.unwrap();
+            assert_eq!(
+                worker_keys.current_key_pair.keypair.private_key.as_ptr() as usize,
+                storage
+            );
+            worker_keys
+                .current_key_pair
+                .open_sealed_box(STANDARD.decode(CIPHERTEXT).unwrap())
+                .unwrap()
+        });
+        assert_eq!(Arc::strong_count(&keys), 2);
+        drop(keys);
+        assert!(weak.upgrade().is_some());
+        start.send(()).unwrap();
+        assert_eq!(task.await.unwrap(), MESSAGE);
+        // The final task owner releases the key set; Drop clears its private buffers.
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_task_releases_its_key_ownership() {
+        use std::sync::Arc;
+        use tokio::sync::oneshot;
+
+        let keys = Arc::new(
+            SharesEncryptionKeyPairs::from_b64_private_key_strings(SECRET.into(), String::new())
+                .unwrap(),
+        );
+        let weak = Arc::downgrade(&keys);
+        let worker_keys = Arc::clone(&keys);
+        let (ready, started) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            ready.send(()).unwrap();
+            std::future::pending::<()>().await;
+            drop(worker_keys);
+        });
+        started.await.unwrap();
+        drop(keys);
+        assert!(weak.upgrade().is_some());
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(weak.upgrade().is_none());
     }
 
     #[test]
     fn empty_plaintext_round_trips() {
         let key = SharesEncryptionKeyPair::from_b64_private_key_string(SECRET.into()).unwrap();
         let mut ciphertext = vec![0; sealedbox::OVERHEAD_LENGTH];
-        sealedbox::encrypt(b"", &key.pk, &mut ciphertext).unwrap();
+        sealedbox::encrypt(b"", &key.keypair.public_key, &mut ciphertext).unwrap();
         assert_eq!(key.open_sealed_box(ciphertext).unwrap(), b"");
     }
 }
