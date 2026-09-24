@@ -140,10 +140,31 @@ pub enum SkipReason {
 
 #[derive(Debug, Error)]
 pub enum CycleError {
+    /// Retry the cycle unchanged: a round timeout, a dropped channel, a DB
+    /// blip. Nothing about the checkpoint state is suspect.
     #[error("transient: {0}")]
     Transient(String),
+    /// The agreed base was corrupted and the corresponding row was
+    /// deleted from the party's checkpoints table. The
+    /// next cycle will agree on a different base.
+    #[error("base rejected: {0}")]
+    BaseRejected(String),
+    /// A retry cannot help: version skew, a violated invariant, a peer
+    /// speaking the wrong protocol, or cross-party graph divergence.
     #[error("fatal: {0}")]
     Fatal(String),
+}
+
+impl CycleError {
+    /// Whether the caller's daemon loop should run the cycle again. Callers
+    /// classify through this rather than by matching variants, so retry policy
+    /// is decided in exactly one place.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::Transient(_) | Self::BaseRejected(_) => true,
+            Self::Fatal(_) => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -166,6 +187,23 @@ pub trait Materializer {
         base: CheckpointMeta,
         freeze: FreezeHeight,
     ) -> Result<Graph, CycleError>;
+
+    /// Drops candidates whose checkpoint object is missing from the backing
+    /// object store, preserving the newest-first order of the rest.
+    ///
+    /// A row can outlive its object (lifecycle expiry, manual cleanup, an
+    /// upload that never landed). Proposing such a row in Phase 1 can only
+    /// end in a materialization failure once it wins base agreement, so it
+    /// is filtered out before the exchange.
+    ///
+    /// Probe failures that are *not* "object absent" must surface as
+    /// [`CycleError::Transient`] rather than dropping the candidate: a flaky
+    /// probe would otherwise manufacture a spurious
+    /// [`SkipReason::NoCommonBase`].
+    async fn filter_available(
+        &self,
+        candidates: Vec<CheckpointMeta>,
+    ) -> Result<Vec<CheckpointMeta>, CycleError>;
 }
 
 #[async_trait]
@@ -274,8 +312,12 @@ where
     // startup skew (mesh formation is bounded upstream by the caller).
     transport.barrier().await?;
 
-    // Phase 1 — base agreement.
-    let my_recent = store.recent_checkpoints(cfg.checkpoint_window).await?;
+    // Phase 1 — base agreement. Rows whose S3 object is gone are dropped
+    // before the exchange: advertising one only defers the failure to the
+    // materialization that follows base agreement, and it would take the
+    // peers down with it.
+    let local_rows = store.recent_checkpoints(cfg.checkpoint_window).await?;
+    let my_recent = materializer.filter_available(local_rows).await?;
     tracing::info!(
         local_recent = my_recent.len(),
         window = cfg.checkpoint_window,
