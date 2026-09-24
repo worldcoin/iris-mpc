@@ -242,8 +242,9 @@ async fn server_main(config: Config) -> Result<()> {
     tracing::info!("Size of the database before init: {}", store_len);
 
     // Seed the persistent storage with random shares if configured and db is still
-    // empty.
-    if store_len == 0 && config.init_db_size > 0 {
+    // empty. Skipped when fake_db_size is set — that path generates into GPU
+    // memory only and must not touch Postgres.
+    if store_len == 0 && config.init_db_size > 0 && config.fake_db_size == 0 {
         tracing::info!(
             "Initialize persistent iris DB with {} randomly generated shares",
             config.init_db_size
@@ -257,6 +258,13 @@ async fn server_main(config: Config) -> Result<()> {
                 config.clear_db_before_init,
             )
             .await?;
+    } else if config.fake_db_size > 0 && config.init_db_size > 0 {
+        tracing::warn!(
+            "Both fake_db_size ({}) and init_db_size ({}) are set; skipping Postgres init \
+             and generating into GPU memory only",
+            config.fake_db_size,
+            config.init_db_size
+        );
     }
 
     // Fetch again in case we've just initialized the DB
@@ -506,9 +514,24 @@ async fn server_main(config: Config) -> Result<()> {
             Ok((mut actor, handle)) => {
                 tracing::info!("⚓️ ANCHOR: Load the database");
                 let res = if config.fake_db_size > 0 {
-                    // TODO: does this even still work, since we do not page-lock the memory here?
-                    actor.fake_db(config.fake_db_size);
-                    Ok(())
+                    if config.fake_db_size > config.max_db_size {
+                        Err(eyre!(
+                            "fake_db_size ({}) exceeds max_db_size ({})",
+                            config.fake_db_size,
+                            config.max_db_size
+                        ))
+                    } else {
+                        if store_len > 0 {
+                            tracing::warn!(
+                                "fake_db_size={} but Postgres already has {} irises; \
+                                 prefer an empty iris table so sync/persistence stay consistent",
+                                config.fake_db_size,
+                                store_len
+                            );
+                        }
+                        actor.fake_db(config.fake_db_size);
+                        Ok(())
+                    }
                 } else {
                     tracing::info!(
                         "Initialize iris db: Loading from DB (parallelism: {})",
