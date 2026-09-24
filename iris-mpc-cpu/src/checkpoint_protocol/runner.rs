@@ -266,8 +266,9 @@ pub enum RestartOutcome {
     /// A graph was installed at the reported height.
     Installed { height: GraphMutationId },
     /// No party has any `genesis_graph_checkpoint` row (agreed via the ring,
-    /// not inferred locally); caller falls back to its own bootstrap path
-    /// (empty graph, plaintext checkpoint migration).
+    /// not inferred locally). The caller may bootstrap an empty graph, but
+    /// only over an empty iris store: an empty graph above indexed irises
+    /// matches nothing, so Hawk main treats that combination as fatal.
     NoCheckpoint,
     /// A peer's `current_max_mutation_id` came in below the agreed base.
     /// Restart can be retried once peers catch up; not a fatal error.
