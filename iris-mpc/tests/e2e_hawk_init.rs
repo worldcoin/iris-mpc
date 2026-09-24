@@ -20,8 +20,8 @@ use crate::utils::runner::TestRun;
 use eyre::bail;
 use serial_test::serial;
 use workflows::{
-    wal_104::Wal104, wal_105::Wal105, wal_106::Wal106, wal_109::Wal109, wal_110::Wal110,
-    wal_111::Wal111,
+    startup_120::Startup120, startup_121::Startup121, startup_122::Startup122, wal_104::Wal104,
+    wal_105::Wal105, wal_106::Wal106, wal_109::Wal109, wal_110::Wal110, wal_111::Wal111,
 };
 
 const RUST_LOG: &str = "info";
@@ -56,42 +56,81 @@ macro_rules! run_test {
             bail!("A previous test has failed, aborting further tests.");
         }
 
-        let rt = tokio::runtime::Runtime::new()?;
-        rt.block_on(async {
-            let ctx = utils::runner::CpuTestContext::new($kind, $idx).await;
+        // Run the body on a thread we own. The party futures are `tokio::spawn`ed onto
+        // the runtime's workers, but the test body — context construction plus the
+        // composed setup/execute/teardown future — is polled by `block_on` on the
+        // calling thread, and libtest picks that thread's stack size, not us. That
+        // future is large enough to blow it.
+        let body = std::thread::Builder::new()
+            .name(format!("test-{}-{}", $kind, $idx))
+            .stack_size(utils::TEST_THREAD_STACK_SIZE)
+            .spawn(move || -> eyre::Result<()> {
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .thread_stack_size(utils::TEST_THREAD_STACK_SIZE)
+                    .build()?;
+                rt.block_on(async {
+                    let ctx = utils::runner::CpuTestContext::new($kind, $idx).await;
 
-            // One-time global setup: runs only for the first test in the suite.
-            // Tests are serial so there is no concurrent access concern here.
-            if !GLOBAL_SETUP_DONE.load(Ordering::SeqCst) {
-                match utils::key_rotation::global_setup(ctx.env.s3_endpoint()).await {
-                    Ok(()) => GLOBAL_SETUP_DONE.store(true, Ordering::SeqCst),
-                    Err(e) => {
+                    // One-time global setup: runs only for the first test in the suite.
+                    // Tests are serial so there is no concurrent access concern here.
+                    if !GLOBAL_SETUP_DONE.load(Ordering::SeqCst) {
+                        match utils::key_rotation::global_setup(ctx.env.s3_endpoint()).await {
+                            Ok(()) => GLOBAL_SETUP_DONE.store(true, Ordering::SeqCst),
+                            Err(e) => {
+                                TEST_FAILED.store(true, Ordering::SeqCst);
+                                return Err(e.wrap_err("global setup failed"));
+                            }
+                        }
+                    }
+
+                    // Cancel ctx.abort on Ctrl+C so that run_hawk!/run_sidecar! can
+                    // shut down their services cleanly rather than being dropped
+                    // mid-flight.
+                    //
+                    // Keeps listening rather than firing once.
+                    {
+                        let abort = ctx.abort.clone();
+                        tokio::spawn(async move {
+                            loop {
+                                if tokio::signal::ctrl_c().await.is_err() {
+                                    return;
+                                }
+                                if abort.is_cancelled() {
+                                    tracing::error!("Ctrl+C again — exiting immediately");
+                                    std::process::exit(130);
+                                }
+                                tracing::warn!(
+                                    "Ctrl+C received — aborting test (press again to force exit)"
+                                );
+                                abort.cancel();
+                            }
+                        });
+                    }
+
+                    let mut test = $test;
+                    let r = test.run(&ctx).await;
+
+                    let aborted = ctx.abort.is_cancelled();
+                    if r.is_err() || aborted {
                         TEST_FAILED.store(true, Ordering::SeqCst);
-                        return Err(e.wrap_err("global setup failed"));
                     }
-                }
-            }
-
-            // Cancel ctx.abort on Ctrl+C so that run_hawk!/run_sidecar! can
-            // shut down their services cleanly rather than being dropped mid-flight.
-            {
-                let abort = ctx.abort.clone();
-                tokio::spawn(async move {
-                    if tokio::signal::ctrl_c().await.is_ok() {
-                        tracing::warn!("Ctrl+C received — aborting test");
-                        abort.cancel();
+                    // A real phase error is the more informative one, so it wins; the
+                    // abort only has to supply a failure when every phase happened to
+                    // return `Ok`.
+                    if aborted && r.is_ok() {
+                        bail!("aborted by Ctrl+C");
                     }
-                });
-            }
+                    r
+                })
+            })?;
 
-            let mut test = $test;
-            let r = test.run(&ctx).await;
-
-            if r.is_err() && !ctx.abort.is_cancelled() {
-                TEST_FAILED.store(true, Ordering::SeqCst);
-            }
-            r
-        })
+        // Re-raise a panic as a panic so the harness still prints the assertion
+        // message and location instead of an opaque join error.
+        match body.join() {
+            Ok(r) => r,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
     }};
 }
 
@@ -165,4 +204,39 @@ fn test_wal_110() -> eyre::Result<()> {
 #[ignore = "requires external setup"]
 fn test_wal_111() -> eyre::Result<()> {
     run_test!(111, 1, Wal111::new())
+}
+
+// ---------------------------------------------------------------------------
+// startup_120 – startup_122: single-party restart around the startup handshake,
+// exercising the data-derived startup fleet sync-state digest and the boundary
+// past which it no longer permits a rejoin.
+// ---------------------------------------------------------------------------
+
+/// Rejoin: one party restarts mid-handshake with unchanged data. It recomputes the
+/// same fleet sync-state digest and rejoins; the other two neither restart nor advance past the
+/// commit barrier while it is gone.
+#[test]
+#[serial]
+#[ignore = "requires external setup"]
+fn test_startup_120() -> eyre::Result<()> {
+    run_test!(120, 1, Startup120::new())
+}
+
+/// Mismatch: one party restarts mid-handshake with changed data, so it derives a
+/// different fleet sync-state digest than its peers hold. No party may come up.
+#[test]
+#[serial]
+#[ignore = "requires external setup"]
+fn test_startup_121() -> eyre::Result<()> {
+    run_test!(121, 1, Startup121::new())
+}
+
+/// Too late: one party restarts after the fleet is serving, with unchanged data and
+/// so an unchanged sync state. The rejoin is scoped to startup, so it must still be
+/// refused and no party may be left serving.
+#[test]
+#[serial]
+#[ignore = "requires external setup"]
+fn test_startup_122() -> eyre::Result<()> {
+    run_test!(122, 1, Startup122::new())
 }

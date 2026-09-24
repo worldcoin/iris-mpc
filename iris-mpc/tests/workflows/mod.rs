@@ -1,3 +1,7 @@
+pub mod startup_120;
+pub mod startup_121;
+pub mod startup_122;
+
 #[allow(dead_code)]
 pub mod wal_102;
 pub mod wal_104;
@@ -20,49 +24,28 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{info_span, Instrument};
 
-use crate::utils::{runner::CpuTestContext, CpuNodeConfig};
+use crate::utils::{hawk_fleet::hawk_party, runner::CpuTestContext, CpuNodeConfig};
 
-/// Spawn `server_main` (hawk_main) for all 3 parties concurrently.
+/// Spawn `server_main` (hawk_main) for all 3 parties concurrently, all under
+/// `shutdown` and joined as a unit.
 ///
-/// `server_main` holds `!Send` state, so each party runs in its own OS thread
-/// via `spawn_blocking` with a dedicated multi-thread runtime.
-/// `CancellationToken` is cloned directly into each
-/// `spawn_blocking` closure and selected on inside the new runtime.
+/// Per-party control — stopping one party while the others keep running — is
+/// [`crate::utils::hawk_fleet::HawkFleet`] instead; both build on [`hawk_party`].
 pub fn run_hawk(
     configs: &[CpuNodeConfig; 3],
     shutdown: CancellationToken,
     ctx: &CpuTestContext,
 ) -> JoinSet<eyre::Result<()>> {
-    use iris_mpc::server::server_main;
-
     let mut join_set: JoinSet<eyre::Result<()>> = JoinSet::new();
 
     for (party_idx, cpu_cfg) in configs.iter().enumerate() {
         let config = crate::utils::configs::make_hawk_config(cpu_cfg, configs, &ctx.env);
-        let shutdown = shutdown.clone();
-        let abort = ctx.abort.clone();
-
-        // server_main is !Send; block_on inside spawn_blocking avoids Send requirements.
-        // CancellationToken is Send + Sync and runtime-agnostic: clone it directly.
-        join_set.spawn(async move {
-            tokio::task::spawn_blocking(move || {
-                let rt = tokio::runtime::Builder::new_multi_thread()
-                    .enable_all()
-                    .build()
-                    .expect("failed to build server runtime");
-                let span = info_span!("mpc_node", idx = party_idx);
-                rt.block_on(async move {
-                    tokio::select! {
-                        res = server_main(config).instrument(span) => res,
-                        _ = shutdown.cancelled() => Ok(()),
-                        _ = abort.cancelled() => Ok(()),
-                    }
-                })
-            })
-            .await
-            .map_err(|e| eyre::eyre!("server task panicked: {e}"))
-            .and_then(|r| r)
-        });
+        join_set.spawn(hawk_party(
+            party_idx,
+            config,
+            shutdown.clone(),
+            ctx.abort.clone(),
+        ));
     }
 
     join_set

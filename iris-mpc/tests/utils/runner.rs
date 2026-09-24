@@ -1,6 +1,19 @@
 use super::CpuConfigs;
 use aws_config;
+use std::future::Future;
 use tokio_util::sync::CancellationToken;
+
+/// Run one lifecycle phase, giving up as soon as `abort` fires.
+async fn until_abort<T>(
+    abort: &CancellationToken,
+    phase: impl Future<Output = eyre::Result<T>>,
+) -> eyre::Result<T> {
+    tokio::select! {
+        biased;
+        _ = abort.cancelled() => eyre::bail!("aborted by Ctrl+C"),
+        res = phase => res,
+    }
+}
 
 /// Lifecycle trait implemented by each `wal_NNN` test struct.
 ///
@@ -18,24 +31,24 @@ pub trait TestRun {
 
         // Capture the first failure from setup → exec → exec_assert without
         // short-circuiting out of `run`, so teardown always gets a chance to run.
-        let setup_res = async {
+        let setup_res = until_abort(&ctx.abort, async {
             tracing::info!("[{}] Starting phase: setup", test_id);
             self.setup(ctx).await?;
             tracing::info!("[{}] Starting phase: setup_assert", test_id);
             self.setup_assert(ctx).await
-        }
+        })
         .await;
 
         let phase_res = if let Err(ref e) = setup_res {
             tracing::error!("[{}] Setup error: {}", test_id, e);
             setup_res
         } else {
-            let exec_res = async {
+            let exec_res = until_abort(&ctx.abort, async {
                 tracing::info!("[{}] Starting phase: exec", test_id);
                 self.exec(ctx).await?;
                 tracing::info!("[{}] Starting phase: exec_assert", test_id);
                 self.exec_assert(ctx).await
-            }
+            })
             .await;
 
             if let Err(ref e) = exec_res {
@@ -44,7 +57,7 @@ pub trait TestRun {
             exec_res
         };
 
-        // Teardown always runs, even if an earlier phase failed.
+        // Teardown always runs, even if an earlier phase failed
         let teardown_res = self.teardown(ctx).await;
         if let Err(ref e) = teardown_res {
             tracing::error!(
