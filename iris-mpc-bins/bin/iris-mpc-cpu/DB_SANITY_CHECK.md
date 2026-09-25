@@ -1,6 +1,64 @@
 # db-sanity-check
 
-Read-only validation of a single MPC party's Postgres database state. Checks HNSW graph structure, persistent state consistency, and cross-schema (HNSW vs GPU) alignment.
+Read-only validation of a single MPC party's Postgres database state. It supports a strict, full iris-table comparison and the original HNSW graph checks.
+
+## Full iris comparison
+
+Use `--iris-only` during migration validation. This mode:
+
+- skips all graph, checkpoint, S3, and exclusions checks;
+- opens fixed `REPEATABLE READ, READ ONLY` snapshots, GPU first and HNSW/CPU second;
+- compares every row in serial-ID order with bounded memory;
+- compares `version_id`, `left_code`, `left_mask`, `right_code`, and `right_mask` exactly;
+- fails on any content mismatch or ID present in only one database;
+- writes `iris_comparison.json` and `report.txt` and exits with code 1 on mismatch.
+
+By default, the inclusive comparison boundary is the highest iris ID visible in either fixed snapshot. Pass `--max-iris-id` to record and enforce an explicit migration watermark. The snapshots make each database stable for the entire scan, but snapshots from separate PostgreSQL instances are not globally atomic. For an authoritative result, pause writes or ensure the CPU system has caught up to the chosen watermark before starting the checker.
+
+### Stage example
+
+Run once for each participant:
+
+```bash
+db-sanity-check \
+  --iris-only \
+  --hnsw-db-url "$STAGE_CPU_DATABASE_URL" \
+  --gpu-db-url "$STAGE_GPU_DATABASE_URL" \
+  --hnsw-schema "SMPC_stage_0" \
+  --gpu-schema "SMPC_stage_0" \
+  --batch-size 1000 \
+  --output-dir "sanity-check/stage/party0"
+```
+
+To compare a previously agreed watermark, add `--max-iris-id <ID>`. Use `--min-iris-id <ID>` for an inclusive lower bound (default: zero). The JSON report records both PostgreSQL snapshot IDs, capture times, the range, counts, digests, totals, and mismatch examples. `--max-reported-mismatches` controls the global example list and each worker's bounded example list without limiting the scan.
+
+### Parallel scans and production runtime
+
+`--workers N` (1–32, default 1) splits the inclusive ID range into disjoint ranges. Every row is still compared byte-for-byte; there is no sampling. Each worker buffers at most `--batch-size` rows per database and fetches the two databases concurrently.
+
+For parallel scans, the two coordinator transactions export their snapshots. Every worker imports the corresponding database's snapshot before querying iris data. All GPU connections must reach one GPU database instance, and all CPU connections must reach one CPU database instance. Prefer instance endpoints over load-balanced reader endpoints. Snapshot import or instance-identity failures abort the run; there is no fallback to independent snapshots. The two databases' snapshots remain independently captured, not globally atomic. See [PostgreSQL synchronized snapshots](https://www.postgresql.org/docs/16/app-pgdump.html) and [Aurora instance endpoints](https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Endpoints.Instance.html).
+
+Candidate configuration for participant 0, subject to a production throughput benchmark:
+
+```text
+--iris-only --workers 16 --batch-size 500
+--min-iris-id 0 --max-iris-id 17511880
+--scan-timeout-seconds 10800
+```
+
+- Pod request: 4 CPUs / 4 GiB; limit: 4 CPUs / 8 GiB.
+- Standard shares use 76,800 payload bytes per iris per database. Sixteen workers with 500-row batches buffer about 1.23 GB of payload in total, plus driver/runtime overhead.
+- Sixteen workers use 17 database connections per side including the snapshot coordinator. One-worker mode uses the original snapshot transactions directly.
+- Progress is logged globally every 100,000 processed IDs or 60 seconds, including while queries are pending. Use `--progress-every-rows 1000` for a small stage test. Fields include checked/total rows per database, percentage, elapsed time, approximate ETA, mismatches, and cumulative query times. These are progress logs, not resumable checkpoints.
+- Set `RUST_LOG=warn,db_sanity_check=info` to enable progress events. The stage and production job wrappers set this explicitly; the existing tracing initializer otherwise defaults to ERROR when `RUST_LOG` is absent.
+- The final report includes per-range row-stream BLAKE3 hashes. With multiple workers the top-level hashes are roots over ordered range boundaries, counts, and digests; `digest_format` identifies this representation. They differ from a serial whole-stream hash and depend on partition boundaries. Every byte is still compared directly.
+- Timeout is a nonzero failure with an incomplete comparison, never a partial PASS. An independently configured Kubernetes Job deadline should stop the pod, and automatic retries should remain disabled.
+
+The September 16 production baseline took about 15 minutes for 100,000 IDs. A 17.5-million-ID scan needs at least 1,622 IDs/second for three hours, excluding setup; target at least 1,800 sustained IDs/second to leave overhead. Two hours requires about 2,432 IDs/second before overhead. Do not infer this speed from worker count: database I/O and network throughput can cap scaling. Stage validates correctness and log delivery; only a representative production benchmark validates the runtime target.
+
+Validate locally with the unit tests and the opt-in PostgreSQL integration test. The latter accepts only an explicitly supplied `SANITY_CHECK_TEST_DATABASE_URL` on `127.0.0.1` with database name `sanity_check_test`; it creates, mutates, and removes synthetic test schemas.
+
+## Graph validation
 
 The graph can be loaded either from the Postgres `hawk_graph_links` table or from an S3 genesis checkpoint. Mode is controlled by the `SMPC__GRAPH_CHECKPOINT_BUCKET_NAME` environment variable — non-empty enables S3-checkpoint mode, empty falls back to Postgres. S3 mode adds check 0a which validates checkpoint metadata against the `persistent_state` watermarks.
 
@@ -41,7 +99,15 @@ db-sanity-check \
 | `--gpu-db-url` | `GPU_DATABASE_URL` | yes | | Postgres connection string for the GPU database |
 | `--hnsw-schema` | | yes | | HNSW (CPU) schema name (e.g. `SMPC_hnsw_dev_0`) |
 | `--gpu-schema` | | yes | | GPU schema name (e.g. `SMPC_gpu_dev_0`) |
-| `--seed` | | yes | | RNG seed for reproducible cross-schema sampling (check 3c) |
+| `--iris-only` | | no | `false` | Run only the strict full iris comparison |
+| `--batch-size` | | no | `1000` | Maximum rows buffered per database per worker in iris-only mode |
+| `--workers` | | no | `1` | Parallel iris range workers, from 1 to 32 |
+| `--progress-every-rows` | | no | `100000` | Processed IDs between progress checkpoints; must be positive |
+| `--scan-timeout-seconds` | | no | `10800` | Iris-only runtime limit; expiry fails the incomplete comparison |
+| `--min-iris-id` | | no | `0` | Inclusive lower iris ID boundary |
+| `--max-iris-id` | | no | highest ID in either snapshot | Inclusive fixed comparison boundary |
+| `--max-reported-mismatches` | | no | `100` | Mismatch examples retained in the JSON report |
+| `--seed` | | graph mode only | | RNG seed for reproducible cross-schema sampling (check 3c) |
 | `--m` | | no | `256` | HNSW M parameter for degree bound checks |
 | `--layer-probability` | | no | `1/M` | Layer probability q for geometric distribution check |
 | `--exclusions-s3-uri` | | no | | S3 URI to JSON exclusions file with `{"deleted_serial_ids": [...]}` (e.g. `s3://bucket/path/deleted_serial_ids.json`) |
