@@ -42,7 +42,8 @@ impl AwsClient {
         let shares = create_iris_code_shares_s3(
             &create_iris_code_shares(signup_id, shares),
             &self.public_keyset(),
-        );
+        )
+        .map_err(|e| AwsClientError::IrisSharesEncryptAndUploadError(format!("{e:#}")))?;
 
         // Upload to AWS-S3.
         let s3_obj_info = S3ObjectInfo::new(

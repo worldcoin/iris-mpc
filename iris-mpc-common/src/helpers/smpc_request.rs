@@ -298,7 +298,7 @@ pub async fn get_iris_data_by_party_id(
 
 pub fn decrypt_iris_share(
     share: String,
-    key_pairs: SharesEncryptionKeyPairs,
+    key_pairs: &SharesEncryptionKeyPairs,
 ) -> Result<IrisCodeSharesJSON, SharesDecodingError> {
     let share_bytes = STANDARD
         .decode(share.as_bytes())
@@ -311,16 +311,14 @@ pub fn decrypt_iris_share(
         .open_sealed_box(share_bytes.clone())
     {
         Ok(bytes) => Ok(bytes),
-        Err(_) => {
-            match if let Some(key_pair) = key_pairs.previous_key_pair.clone() {
+        Err(SharesDecodingError::SealedBoxOpenError) => {
+            if let Some(key_pair) = &key_pairs.previous_key_pair {
                 key_pair.open_sealed_box(share_bytes)
             } else {
-                Err(SharesDecodingError::PreviousKeyNotFound)
-            } {
-                Ok(bytes) => Ok(bytes),
-                Err(_) => Err(SharesDecodingError::SealedBoxOpenError),
+                Err(SharesDecodingError::SealedBoxOpenError)
             }
         }
+        Err(error) => Err(error),
     };
 
     let iris_share = match decrypted {

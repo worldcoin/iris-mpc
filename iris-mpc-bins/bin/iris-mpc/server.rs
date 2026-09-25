@@ -212,7 +212,7 @@ async fn server_main(config: Config) -> Result<()> {
     )
     .await
     {
-        Ok(key_pair) => key_pair,
+        Ok(key_pair) => Arc::new(key_pair),
         Err(e) => {
             tracing::error!("Failed to initialize shares encryption key pairs: {:?}", e);
             return Ok(());

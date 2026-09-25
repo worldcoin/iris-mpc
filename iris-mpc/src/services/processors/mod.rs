@@ -49,7 +49,7 @@ fn decode_iris_message_shares(
 
 pub fn get_iris_shares_parse_task(
     party_id: usize,
-    shares_encryption_key_pairs: SharesEncryptionKeyPairs,
+    shares_encryption_key_pairs: Arc<SharesEncryptionKeyPairs>,
     semaphore: Arc<Semaphore>,
     s3_client_arc: S3Client,
     bucket_name: String,
@@ -71,7 +71,7 @@ pub fn get_iris_shares_parse_task(
                 };
 
             let iris_message_share =
-                match decrypt_iris_share(share_b64, shares_encryption_key_pairs.clone()) {
+                match decrypt_iris_share(share_b64, &shares_encryption_key_pairs) {
                     Ok(iris_data) => iris_data,
                     Err(e) => {
                         tracing::error!("Failed to decrypt iris shares: {:?}", e);

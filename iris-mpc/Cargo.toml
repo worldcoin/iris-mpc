@@ -27,7 +27,8 @@ rand.workspace = true
 reqwest.workspace = true
 base64.workspace = true
 uuid.workspace = true
-sodiumoxide.workspace = true
+alkali.workspace = true
+hex.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
 itertools.workspace = true
@@ -45,7 +46,6 @@ ampc-server-utils.workspace = true
 ampc-actor-utils.workspace = true
 blake3.workspace = true
 futures.workspace = true
-hex.workspace = true
 serial_test.workspace = true
 tracing-subscriber.workspace = true
 iris-mpc-utils = { path = "../iris-mpc-utils" }
