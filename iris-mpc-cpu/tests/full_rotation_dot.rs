@@ -1,12 +1,12 @@
 use eyre::Result;
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
-    IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS,
+    VectorId, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS,
 };
 use iris_mpc_cpu::{
     execution::hawk_main::iris_worker::{IrisWorkerPool, LocalIrisWorkerPool, QueryId, QuerySpec},
     hawkers::{aby3::aby3_store::DistanceMode, shared_irises::SharedIrises},
-    protocol::shared_iris::GaloisRingSharedIris,
+    protocol::shared_iris::{preferred_scan_layout, GaloisRingSharedIris, Residents},
     shares::RingElement,
 };
 use std::{collections::HashMap, sync::Arc};
@@ -47,29 +47,28 @@ fn fused_full_rotation_dot_matches_three_hnsw_windows() -> Result<()> {
 
 fn run_test() -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
-    // `preferred_scan_layout()` stores mixed planes where the UMMLA kernel is
-    // available, so the fused scan below runs the mixed kernel while the
+    // `preferred_scan_layout()` stores AMX groups or mixed planes where those
+    // kernels are available, so the fused scan below runs them while the
     // windowed comparison paths run the u16 kernel — a cross-kernel check.
-    let layout = iris_mpc_cpu::protocol::shared_iris::preferred_scan_layout();
+    let residents = Residents::new(preferred_scan_layout(), 0);
     let mut store = SharedIrises::new(
         HashMap::new(),
-        iris_mpc_cpu::protocol::shared_iris::ResidentIris::from_arc(
-            Arc::new(GaloisRingSharedIris::default_for_party(0)),
-            layout,
-        ),
+        residents.placeholder(Arc::new(GaloisRingSharedIris::default_for_party(0))),
     );
     let vector_ids = (0..TARGETS)
         .map(|idx| {
-            store.append(iris_mpc_cpu::protocol::shared_iris::ResidentIris::from_arc(
-                Arc::new(deterministic_iris(idx as u16 + 1)),
-                layout,
-            ))
+            let id = VectorId::from_0_index(idx as u32);
+            store.insert(
+                id,
+                residents.resident(id, Arc::new(deterministic_iris(idx as u16 + 1))),
+            )
         })
         .collect::<Vec<_>>();
     // The windowed comparison below is the cross-kernel oracle; production
-    // pools refuse it on mixed-plane residents, so opt in explicitly.
-    let pool = LocalIrisWorkerPool::new_local(store.to_arc(), layout, DistanceMode::MinRotation, 0)
-        .with_windowed_ops_on_mixed_residents();
+    // pools refuse it on scan-layout residents, so opt in explicitly.
+    let pool =
+        LocalIrisWorkerPool::new_local(store.to_arc(), residents, DistanceMode::MinRotation, 0)
+            .with_windowed_ops_on_mixed_residents();
     let query_id = QueryId::new();
     runtime.block_on(pool.cache_queries(vec![(query_id, Arc::new(deterministic_iris(0x5a5a)))]))?;
 
@@ -100,7 +99,6 @@ fn run_test() -> Result<()> {
         .chunks_exact(2)
         .flat_map(|pair| [pair[0], RingElement(2) * pair[1]])
         .collect::<Vec<_>>();
-
     for target in 0..TARGETS {
         let fused_record = &fused[target * ROTATIONS * 2..(target + 1) * ROTATIONS * 2];
         let mut reconstructed = Vec::with_capacity(ROTATIONS * 2);

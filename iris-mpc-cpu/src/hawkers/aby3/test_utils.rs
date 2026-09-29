@@ -76,15 +76,12 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
         .zip(storages)
         .map(|(session, storage)| {
             let party_id = session.network_session.own_role.index();
-            let layout = crate::protocol::shared_iris::preferred_scan_layout();
-            let resident_storage = storage
-                .data
-                .try_read()
-                .unwrap()
-                .clone()
-                .map_values(|iris| {
-                    crate::protocol::shared_iris::ResidentIris::from_arc(iris, layout)
-                })
+            let residents = crate::protocol::shared_iris::Residents::new(
+                crate::protocol::shared_iris::preferred_scan_layout(),
+                party_id,
+            );
+            let resident_storage = residents
+                .build_store(storage.data.try_read().unwrap().clone())
                 .to_arc();
             // Test stores use the scan layout of this CPU so the HNSW-style
             // windowed ops double as a cross-kernel check; production pools
@@ -92,7 +89,7 @@ pub async fn setup_local_aby3_players_with_preloaded_db<R: RngCore + CryptoRng>(
             let workers: Arc<dyn IrisWorkerPool> = Arc::new(
                 LocalIrisWorkerPool::new_local(
                     resident_storage,
-                    layout,
+                    residents,
                     plain_store.distance_mode,
                     party_id,
                 )
@@ -116,16 +113,17 @@ pub async fn setup_local_store_aby3_players(network_t: NetworkType) -> Result<Ve
         .into_iter()
         .map(|session| {
             let party_id = session.network_session.own_role.index();
-            let layout = crate::protocol::shared_iris::preferred_scan_layout();
-            let storage = Aby3Store::<FhdOps>::new_storage(None)
-                .map_values(|iris| {
-                    crate::protocol::shared_iris::ResidentIris::from_arc(iris, layout)
-                })
+            let residents = crate::protocol::shared_iris::Residents::new(
+                crate::protocol::shared_iris::preferred_scan_layout(),
+                party_id,
+            );
+            let storage = residents
+                .build_store(Aby3Store::<FhdOps>::new_storage(None))
                 .to_arc();
             let workers: Arc<dyn IrisWorkerPool> = Arc::new(
                 LocalIrisWorkerPool::new_local(
                     storage.clone(),
-                    layout,
+                    residents,
                     TEST_DISTANCE_MODE,
                     party_id,
                 )
