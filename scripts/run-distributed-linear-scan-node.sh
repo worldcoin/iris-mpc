@@ -16,7 +16,40 @@ CONNECTION_PARALLELISM=${LINEAR_SCAN_BENCH_CONNECTION_PARALLELISM:-16}
 TOKIO_CORES=${LINEAR_SCAN_BENCH_TOKIO_CORES:-11}
 CLIENT_RNG_SEED=${LINEAR_SCAN_BENCH_CLIENT_RNG_SEED:-8675309}
 PIPELINED_REQUESTS=${LINEAR_SCAN_BENCH_PIPELINED_REQUESTS:-0}
-AUX_CPU_LIST="0-$((TOKIO_CORES - 1))"
+MAX_BATCH_SIZE=${LINEAR_SCAN_BENCH_MAX_BATCH_SIZE:-1}
+TOKIO_SMT_SIBLINGS=${LINEAR_SCAN_BENCH_TOKIO_SMT_SIBLINGS:-0}
+if [[ ${TOKIO_SMT_SIBLINGS} == 1 ]]; then
+    # Tokio runs on the first TOKIO_CORES SMT siblings of every NUMA node and
+    # the dot workers on the first thread of every core. Auxiliary processes
+    # (Postgres, Moto, the client) use the first node's remaining siblings, or
+    # share the tokio siblings when none remain.
+    AUX_CPU_LIST=$(python3 - "$TOKIO_CORES" <<'PY'
+import sys
+from pathlib import Path
+
+def cpulist(text):
+    cpus = []
+    for part in text.strip().split(","):
+        low, _, high = part.partition("-")
+        cpus.extend(range(int(low), int(high or low) + 1))
+    return cpus
+
+count = int(sys.argv[1])
+node0 = cpulist(Path("/sys/devices/system/node/node0/cpulist").read_text())
+seen, siblings = set(), []
+for cpu in sorted(node0):
+    topology = Path(f"/sys/devices/system/cpu/cpu{cpu}/topology")
+    core = (topology / "physical_package_id").read_text(), (topology / "core_id").read_text()
+    if core in seen:
+        siblings.append(cpu)
+    seen.add(core)
+spare = siblings[count:count + 8]
+print(",".join(str(cpu) for cpu in (spare or siblings[:count])))
+PY
+)
+else
+    AUX_CPU_LIST="0-$((TOKIO_CORES - 1))"
+fi
 
 usage() {
     echo "usage: $0 <prepare-db|start-server|stop-server|status> [party-id]" >&2
@@ -117,8 +150,8 @@ run_client() {
     local batch_size=1
     if [[ ${PIPELINED_REQUESTS} == 1 ]]; then
         # Publish independent requests together so the production server has a
-        # sustained queue. SMPC__MAX_BATCH_SIZE=1 still makes the server scan
-        # them serially; this only removes client-side S3/response idle gaps.
+        # sustained queue. The server scans up to SMPC__MAX_BATCH_SIZE of them
+        # together; this also removes client-side S3/response idle gaps.
         batch_count=1
         batch_size=$REQUEST_COUNT
     fi
@@ -287,7 +320,7 @@ start_server() {
         SMPC__GRAPH_CHECKPOINT_BUCKET_NAME=wf-smpcv2-dev-hnsw-checkpoint \
         SMPC__KMS_KEY_ARNS='["unused-0","unused-1","unused-2"]' \
         SMPC__FIXED_SHARED_SECRETS=true \
-        SMPC__MAX_BATCH_SIZE=1 \
+        SMPC__MAX_BATCH_SIZE="$MAX_BATCH_SIZE" \
         SMPC__MAX_DB_SIZE="$max_db_size" \
         SMPC__INIT_DB_SIZE="$DATABASE_SIZE" \
         SMPC__CLEAR_DB_BEFORE_INIT=true \
@@ -307,6 +340,7 @@ start_server() {
         SMPC__HAWK_REQUEST_PARALLELISM="$REQUEST_PARALLELISM" \
         SMPC__HAWK_CONNECTION_PARALLELISM="$CONNECTION_PARALLELISM" \
         SMPC__SEPARATE_TOKIO_CORES_PER_NODE="$TOKIO_CORES" \
+        SMPC__TOKIO_ON_SMT_SIBLINGS="$([[ ${TOKIO_SMT_SIBLINGS} == 1 ]] && echo true || echo false)" \
         SMPC__SERVICE_PORTS='["4000","4001","4002"]' \
         SMPC__NODE_HOSTNAMES="$LINEAR_SCAN_BENCH_NODE_HOSTNAMES" \
         SMPC__SERVER_COORDINATION__NODE_HOSTNAMES="$LINEAR_SCAN_BENCH_NODE_HOSTNAMES" \
