@@ -333,12 +333,91 @@ thread_local! {
     static PREROTATED_CACHE: RefCell<PrerotatedQueryCache> = const { RefCell::new(PrerotatedQueryCache::new()) };
 }
 
+/// Per-party `(code, trimmed mask)` contribution for a missing exact-scan
+/// target. It reconstructs to code dot `-6` and trimmed mask dot `3` (full mask
+/// dot `6`), a fractional Hamming distance of exactly 1. That is the maximum,
+/// like [`SHARE_OF_MAX_DISTANCE`], whose odd full mask dot has no trimmed
+/// counterpart.
+pub const SHARE_OF_MAX_DISTANCE_TRIMMED: (u16, u16) = (u16::MAX - 1, 1);
+
+/// Scale of the mask half of the interleaved `(code, mask)` additive
+/// contributions produced by the rotation-aware kernels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MaskDotScale {
+    /// `2 * <trimmed masks>`: the full-resolution mask dot the generic
+    /// distance protocols consume. Missing targets get [`SHARE_OF_MAX_DISTANCE`].
+    Full,
+    /// The trimmed-mask dot itself. The exact-scan anonymous threshold needs it
+    /// to evaluate `2 * code - trimmed_mask` in the 16-bit ring. Missing targets
+    /// get [`SHARE_OF_MAX_DISTANCE_TRIMMED`].
+    Trimmed,
+}
+
+impl MaskDotScale {
+    /// Scale present targets' mask lanes and fill missing targets' sentinel.
+    fn apply_epilogue<const ROTATIONS: usize>(
+        self,
+        present: impl Iterator<Item = bool>,
+        additive_shares: &mut [RingElement<u16>],
+    ) {
+        let (sentinel_code, sentinel_mask) = match self {
+            MaskDotScale::Full => SHARE_OF_MAX_DISTANCE,
+            MaskDotScale::Trimmed => SHARE_OF_MAX_DISTANCE_TRIMMED,
+        };
+        for (target_idx, present) in present.enumerate() {
+            let record =
+                &mut additive_shares[target_idx * ROTATIONS * 2..(target_idx + 1) * ROTATIONS * 2];
+            if !present {
+                for pair in record.chunks_exact_mut(2) {
+                    pair[0] = RingElement(sentinel_code);
+                    pair[1] = RingElement(sentinel_mask);
+                }
+            } else if self == MaskDotScale::Full {
+                for pair in record.chunks_exact_mut(2) {
+                    pair[1] = RingElement(2) * pair[1];
+                }
+            }
+        }
+    }
+}
+
 /// Row-major rotation-aware distance - processes row-by-row for L1 cache efficiency.
 /// Uses a bounded two-entry thread-local cache to minimize allocations and
 /// prerotation work at high thread counts.
 pub fn rotation_aware_pairwise_distance_rowmajor<'a, const ROTATIONS: usize, I>(
     query: &'a ArcIris,
     targets: I,
+) -> Vec<RingElement<u16>>
+where
+    I: Iterator<Item = Option<&'a ArcIris>> + ExactSizeIterator,
+{
+    rotation_aware_pairwise_distance_rowmajor_scaled::<ROTATIONS, _>(
+        query,
+        targets,
+        MaskDotScale::Full,
+    )
+}
+
+/// [`rotation_aware_pairwise_distance_rowmajor`] with `(code, trimmed mask)`
+/// output ([`MaskDotScale::Trimmed`]), as consumed by the exact scan.
+pub fn rotation_aware_pairwise_distance_rowmajor_trimmed<'a, const ROTATIONS: usize, I>(
+    query: &'a ArcIris,
+    targets: I,
+) -> Vec<RingElement<u16>>
+where
+    I: Iterator<Item = Option<&'a ArcIris>> + ExactSizeIterator,
+{
+    rotation_aware_pairwise_distance_rowmajor_scaled::<ROTATIONS, _>(
+        query,
+        targets,
+        MaskDotScale::Trimmed,
+    )
+}
+
+fn rotation_aware_pairwise_distance_rowmajor_scaled<'a, const ROTATIONS: usize, I>(
+    query: &'a ArcIris,
+    targets: I,
+    mask_scale: MaskDotScale,
 ) -> Vec<RingElement<u16>>
 where
     I: Iterator<Item = Option<&'a ArcIris>> + ExactSizeIterator,
@@ -351,7 +430,7 @@ where
         let mut cache = cell.borrow_mut();
         let (storage, _) = cache.get_or_fill::<ROTATIONS>(query);
         let prerotated = PrerotatedQueryRowMajorView::<ROTATIONS> { storage };
-        rotation_aware_inner(&prerotated, targets, &mut additive_shares);
+        rotation_aware_inner(&prerotated, targets, &mut additive_shares, mask_scale);
     });
 
     additive_shares
@@ -363,6 +442,7 @@ fn rotation_aware_inner<'a, const ROTATIONS: usize, I>(
     prerotated: &PrerotatedQueryRowMajorView<ROTATIONS>,
     targets: I,
     additive_shares: &mut [RingElement<u16>],
+    mask_scale: MaskDotScale,
 ) where
     I: Iterator<Item = Option<&'a ArcIris>> + ExactSizeIterator,
 {
@@ -421,7 +501,7 @@ fn rotation_aware_inner<'a, const ROTATIONS: usize, I>(
                 }
             }
         }
-        // Process mask rows - accumulate first, multiply by 2 later
+        // Process mask rows - accumulate first, scale in the epilogue
         for row_idx in 0..MASK_ROWS {
             let query_rows = prerotated.mask_row_rotations(row_idx);
 
@@ -442,23 +522,8 @@ fn rotation_aware_inner<'a, const ROTATIONS: usize, I>(
         }
     }
 
-    // Multiply mask results by 2 for Some targets, set max distance for None targets
-    for (target_idx, target_opt) in targets.iter().enumerate() {
-        let base_idx = target_idx * ROTATIONS * 2;
-        if target_opt.is_some() {
-            for rot_idx in 0..ROTATIONS {
-                let mask_idx = base_idx + rot_idx * 2 + 1;
-                additive_shares[mask_idx] = RingElement(2) * additive_shares[mask_idx];
-            }
-        } else {
-            let (a, b) = SHARE_OF_MAX_DISTANCE;
-            for rot_idx in 0..ROTATIONS {
-                let code_idx = base_idx + rot_idx * 2;
-                additive_shares[code_idx] = RingElement(a);
-                additive_shares[code_idx + 1] = RingElement(b);
-            }
-        }
-    }
+    // Scale mask results of present targets, set max distance for missing ones.
+    mask_scale.apply_epilogue::<ROTATIONS>(targets.iter().map(Option::is_some), additive_shares);
 }
 
 /// Accumulate six rotations against four targets at a time. The tile keeps
@@ -764,9 +829,7 @@ pub use mixed_scan::{
 /// bit-identical to the u16 MLA kernel.
 #[cfg(target_arch = "aarch64")]
 mod mixed_scan {
-    use super::{
-        PrerotatedQueryRowMajor, PrerotatedQueryRowMajorView, RingElement, SHARE_OF_MAX_DISTANCE,
-    };
+    use super::{MaskDotScale, PrerotatedQueryRowMajor, PrerotatedQueryRowMajorView, RingElement};
     use crate::protocol::shared_iris::{ArcIris, MixedPlaneIris};
     use std::arch::asm;
     use std::cell::RefCell;
@@ -1126,9 +1189,9 @@ mod mixed_scan {
     }
 
     /// Scatter one rotation's packed-pair accumulator block (`[a, b, c]` for
-    /// two targets x two queries) into both queries' share vectors. The
-    /// packed path writes each result exactly once, so the mask lane's
-    /// doubling (the epilogue's job on the other paths) is folded in here.
+    /// two targets x two queries) into both queries' share vectors. Mask
+    /// lanes stay trimmed ([`super::MaskDotScale::Trimmed`]), like every
+    /// mixed-plane path.
     #[inline(always)]
     fn scatter_pair_block<const ROTATIONS: usize>(
         block: &[[u32; 4]],
@@ -1141,16 +1204,12 @@ mod mixed_scan {
         let acc_a = &block[0];
         let acc_b = &block[1];
         let acc_c = &block[2];
-        let lane_scale = 1 + result_lane as u16;
         for (query, shares) in additive_shares.iter_mut().enumerate() {
             let first =
-                (acc_a[query].wrapping_add(acc_a[2 + query].wrapping_add(acc_c[query]) << 8)
-                    as u16)
-                    .wrapping_mul(lane_scale);
-            let second = (acc_b[query]
+                acc_a[query].wrapping_add(acc_a[2 + query].wrapping_add(acc_c[query]) << 8) as u16;
+            let second = acc_b[query]
                 .wrapping_add(acc_b[2 + query].wrapping_add(acc_c[2 + query]) << 8)
-                as u16)
-                .wrapping_mul(lane_scale);
+                as u16;
             let first_idx =
                 (base_target_idx + pair * 2) * ROTATIONS * 2 + rotation * 2 + result_lane;
             let second_idx =
@@ -1494,8 +1553,10 @@ mod mixed_scan {
     }
 
     /// Mixed-plane counterpart of
-    /// [`super::rotation_aware_pairwise_distance_rowmajor`]: identical inputs,
-    /// outputs, and sentinel semantics, operating on plane residents.
+    /// [`super::rotation_aware_pairwise_distance_rowmajor_trimmed`]: identical
+    /// inputs, outputs, and sentinel semantics, operating on plane residents.
+    /// Like every mixed-plane kernel it serves only the exact scan, so the mask
+    /// lanes are trimmed ([`MaskDotScale::Trimmed`]).
     ///
     /// # Panics
     /// The caller must only invoke this when the `i8mm` CPU feature is
@@ -1558,28 +1619,14 @@ mod mixed_scan {
         additive_shares
     }
 
-    /// Same epilogue as the u16 kernel: double the mask lanes of present
-    /// targets, fill sentinel distances for missing ones.
+    /// The trimmed-scale epilogue of the u16 kernel: mask lanes stay trimmed
+    /// and missing targets get the trimmed max-distance sentinel.
     fn apply_scan_epilogue<const ROTATIONS: usize>(
         targets: &[Option<&MixedPlaneIris>],
         additive_shares: &mut [RingElement<u16>],
     ) {
-        for (target_idx, target) in targets.iter().enumerate() {
-            let base_idx = target_idx * ROTATIONS * 2;
-            if target.is_some() {
-                for rot_idx in 0..ROTATIONS {
-                    let mask_idx = base_idx + rot_idx * 2 + 1;
-                    additive_shares[mask_idx] = RingElement(2) * additive_shares[mask_idx];
-                }
-            } else {
-                let (a, b) = SHARE_OF_MAX_DISTANCE;
-                for rot_idx in 0..ROTATIONS {
-                    let code_idx = base_idx + rot_idx * 2;
-                    additive_shares[code_idx] = RingElement(a);
-                    additive_shares[code_idx + 1] = RingElement(b);
-                }
-            }
-        }
+        MaskDotScale::Trimmed
+            .apply_epilogue::<ROTATIONS>(targets.iter().map(Option::is_some), additive_shares);
     }
 
     /// Fused two-query scan: identical outputs to two independent
@@ -1660,8 +1707,8 @@ mod mixed_scan {
             }
         });
 
-        // No epilogue: every target is present by construction and the mask
-        // doubling is applied inside the single per-result scatter.
+        // No epilogue: every target is present by construction and trimmed
+        // mask lanes need no scaling.
         additive_shares
     }
 
@@ -2048,9 +2095,33 @@ mod tests {
                 .map(|(target, present)| present.then_some(target))
                 .collect();
 
-            let expected = rotation_aware_pairwise_distance_rowmajor::<31, _>(&query, u16_targets);
+            let u16_targets: Vec<_> = u16_targets.collect();
+            let expected = rotation_aware_pairwise_distance_rowmajor_trimmed::<31, _>(
+                &query,
+                u16_targets.iter().copied(),
+            );
             let actual = rotation_aware_pairwise_distance_mixed::<31>(&query, &mixed_targets);
             assert_eq!(actual, expected, "party {party}");
+
+            // Trimmed and full scale differ only by the mask doubling of
+            // present targets and by the missing-target sentinel.
+            let full =
+                rotation_aware_pairwise_distance_rowmajor::<31, _>(&query, u16_targets.into_iter());
+            for (target, &present) in present.iter().enumerate() {
+                let range = target * 31 * 2..(target + 1) * 31 * 2;
+                for (trimmed, full) in expected[range.clone()]
+                    .chunks_exact(2)
+                    .zip(full[range].chunks_exact(2))
+                {
+                    if present {
+                        assert_eq!(full[0], trimmed[0]);
+                        assert_eq!(full[1], RingElement(2) * trimmed[1]);
+                    } else {
+                        assert_eq!((trimmed[0].0, trimmed[1].0), SHARE_OF_MAX_DISTANCE_TRIMMED);
+                        assert_eq!((full[0].0, full[1].0), SHARE_OF_MAX_DISTANCE);
+                    }
+                }
+            }
         }
     }
 
