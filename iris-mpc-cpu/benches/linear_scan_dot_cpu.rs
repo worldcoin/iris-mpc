@@ -180,9 +180,13 @@ fn main() -> Result<()> {
 
     let run_fused = || -> Result<Duration> {
         let started = Instant::now();
-        let [normal_output, mirror_output] = runtime.block_on(
-            pool.compute_dot_products_full_rotations_pair([normal, mirror], vector_ids.clone()),
-        )?;
+        let [normal_output, mirror_output] = <[_; 2]>::try_from(runtime.block_on(
+            pool.compute_dot_products_full_rotations_batch(
+                vec![vec![normal], vec![mirror]],
+                vector_ids.clone(),
+            ),
+        )?)
+        .map_err(|_| eyre::eyre!("expected two fused outputs"))?;
         let elapsed = started.elapsed();
         ensure!(
             normal_output.len() == expected_len && mirror_output.len() == expected_len,
