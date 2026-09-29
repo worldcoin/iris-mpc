@@ -16,7 +16,7 @@ use iris_mpc_cpu::{
         aby3::aby3_store::{Aby3Store, DistanceMode, FhdOps},
         shared_irises::SharedIrises,
     },
-    protocol::shared_iris::{GaloisRingSharedIris, ResidentIris, ResidentLayout},
+    protocol::shared_iris::{GaloisRingSharedIris, ResidentIris, ResidentLayout, Residents},
 };
 use iris_mpc_store::{
     test_utils::{cleanup, temporary_name, test_db_url},
@@ -54,7 +54,7 @@ async fn cold_eye_prefetched_dot_product_matches_resident_and_populates_lfu() ->
             .to_arc();
     let resident: Arc<dyn IrisWorkerPool> = Arc::new(LocalIrisWorkerPool::new_local(
         resident_store,
-        ResidentLayout::U16,
+        Residents::new(ResidentLayout::U16, 0),
         DistanceMode::MinRotation,
         0,
     ));
@@ -69,9 +69,14 @@ async fn cold_eye_prefetched_dot_product_matches_resident_and_populates_lfu() ->
     .to_arc();
     let cold: Arc<dyn IrisWorkerPool> = Arc::new(
         LocalIrisWorkerPool::new_cold(
-            init_workers(RIGHT, cold_store.clone(), false, ResidentLayout::U16),
+            init_workers(
+                RIGHT,
+                cold_store.clone(),
+                false,
+                Residents::new(ResidentLayout::U16, 0),
+            ),
             cold_store.clone(),
-            ResidentLayout::U16,
+            Residents::new(ResidentLayout::U16, 0),
             DistanceMode::MinRotation,
             0,
             ColdStorageInit {
@@ -175,9 +180,14 @@ async fn cold_eye_luc_window_rolls_forward_and_survives_persistence_ack() -> Res
     .to_arc();
     let cold: Arc<dyn IrisWorkerPool> = Arc::new(
         LocalIrisWorkerPool::new_cold(
-            init_workers(RIGHT, cold_store.clone(), false, ResidentLayout::U16),
+            init_workers(
+                RIGHT,
+                cold_store.clone(),
+                false,
+                Residents::new(ResidentLayout::U16, 0),
+            ),
             cold_store,
-            ResidentLayout::U16,
+            Residents::new(ResidentLayout::U16, 0),
             DistanceMode::MinRotation,
             0,
             ColdStorageInit {
@@ -254,9 +264,14 @@ async fn cold_eye_version_miss_fails_foreground_fetch_after_prefetch() -> Result
     .to_arc();
     let cold: Arc<dyn IrisWorkerPool> = Arc::new(
         LocalIrisWorkerPool::new_cold(
-            init_workers(RIGHT, cold_store.clone(), false, ResidentLayout::U16),
+            init_workers(
+                RIGHT,
+                cold_store.clone(),
+                false,
+                Residents::new(ResidentLayout::U16, 0),
+            ),
             cold_store,
-            ResidentLayout::U16,
+            Residents::new(ResidentLayout::U16, 0),
             DistanceMode::MinRotation,
             0,
             ColdStorageInit {
@@ -334,9 +349,14 @@ async fn cold_eye_coalesces_prefetch_commands_and_batches_large_fetches() -> Res
     .to_arc();
     let cold: Arc<dyn IrisWorkerPool> = Arc::new(
         LocalIrisWorkerPool::new_cold(
-            init_workers(RIGHT, cold_store.clone(), false, ResidentLayout::U16),
+            init_workers(
+                RIGHT,
+                cold_store.clone(),
+                false,
+                Residents::new(ResidentLayout::U16, 0),
+            ),
             cold_store,
-            ResidentLayout::U16,
+            Residents::new(ResidentLayout::U16, 0),
             DistanceMode::MinRotation,
             0,
             ColdStorageInit {
