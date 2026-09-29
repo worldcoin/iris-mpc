@@ -336,6 +336,15 @@ pub struct Config {
     #[serde(default = "default_separate_tokio_cores_per_node")]
     pub separate_tokio_cores_per_node: Option<usize>,
 
+    /// Run the tokio runtime on the second hardware thread of every physical
+    /// core and keep the first one for dot-product workers. The exact scan's
+    /// AMX kernel runs one thread per core; its tile unit is not shared well
+    /// by two scan threads, while the MPC runtime's scalar and network work
+    /// fits beside it. With `separate_tokio_cores_per_node`, only that many
+    /// siblings per NUMA node run tokio. Ignored on hosts without SMT.
+    #[serde(default)]
+    pub tokio_on_smt_siblings: bool,
+
     #[serde(default = "default_sns_retry_max_attempts")]
     pub sns_retry_max_attempts: u32,
 
@@ -895,6 +904,7 @@ impl From<Config> for CommonConfig {
             pprof_profile_only: _,
             enable_pprof_per_batch: _,
             separate_tokio_cores_per_node: _,
+            tokio_on_smt_siblings: _,
             sns_retry_max_attempts: _,
             graph_checkpoint_bucket_name: _,
             graph_checkpoint_bucket_region: _,

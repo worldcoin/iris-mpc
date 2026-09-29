@@ -21,6 +21,9 @@ set -euo pipefail
 #   LINEAR_SCAN_BENCH_PRELOAD_REQUESTS=0      # 1: publish all requests before the
 #                                              # servers start (needs pipelining), so
 #                                              # batches never wait on the emulator
+#   LINEAR_SCAN_BENCH_TOKIO_SMT_SIBLINGS=0    # 1: tokio on SMT siblings (x86 AMX hosts)
+#   LINEAR_SCAN_BENCH_RUSTFLAGS=...           # default: Graviton4 flags; x86 AMX
+#                                              # hosts use '-C target-cpu=native'
 #   LINEAR_SCAN_BENCH_REUSE_DB=1             # reuse the expensive seeded DB
 #   LINEAR_SCAN_BENCH_SKIP_BUILD=1           # reuse binaries already copied
 #   LINEAR_SCAN_BENCH_KEEP_RUNNING=1          # leave servers and Moto running
@@ -45,6 +48,8 @@ CLIENT_RNG_SEED=${LINEAR_SCAN_BENCH_CLIENT_RNG_SEED:-8675309}
 PIPELINED_REQUESTS=${LINEAR_SCAN_BENCH_PIPELINED_REQUESTS:-0}
 MAX_BATCH_SIZE=${LINEAR_SCAN_BENCH_MAX_BATCH_SIZE:-1}
 PRELOAD_REQUESTS=${LINEAR_SCAN_BENCH_PRELOAD_REQUESTS:-0}
+TOKIO_SMT_SIBLINGS=${LINEAR_SCAN_BENCH_TOKIO_SMT_SIBLINGS:-0}
+RUSTFLAGS_BUILD=${LINEAR_SCAN_BENCH_RUSTFLAGS:---cfg aes_armv8 -C force-frame-pointers=yes -Ctarget-cpu=neoverse-v2 -Ctarget-feature=+lse}
 REMOTE_RUN_DIR=${LINEAR_SCAN_BENCH_REMOTE_RUN_DIR:-/var/tmp/iris-mpc-real-server-bench}
 COMMIT=$(git -C "$PROJECT_ROOT" rev-parse HEAD)
 REMOTE_SOURCE=${LINEAR_SCAN_BENCH_REMOTE_SOURCE:-/var/tmp/iris-mpc-source-${COMMIT}}
@@ -79,6 +84,10 @@ REMOTE_SOURCE=${LINEAR_SCAN_BENCH_REMOTE_SOURCE:-/var/tmp/iris-mpc-source-${COMM
 }
 [[ ${MAX_BATCH_SIZE} =~ ^[1-9][0-9]*$ ]] || {
     echo "LINEAR_SCAN_BENCH_MAX_BATCH_SIZE must be positive" >&2
+    exit 2
+}
+[[ ${TOKIO_SMT_SIBLINGS} =~ ^[01]$ ]] || {
+    echo "LINEAR_SCAN_BENCH_TOKIO_SMT_SIBLINGS must be 0 or 1" >&2
     exit 2
 }
 [[ ${WARMUP_REQUESTS} =~ ^[0-9]+$ && ${WARMUP_REQUESTS} -lt ${REQUEST_COUNT} ]] || {
@@ -118,6 +127,7 @@ remote_env() {
         "LINEAR_SCAN_BENCH_CLIENT_RNG_SEED=${CLIENT_RNG_SEED}" \
         "LINEAR_SCAN_BENCH_PIPELINED_REQUESTS=${PIPELINED_REQUESTS}" \
         "LINEAR_SCAN_BENCH_MAX_BATCH_SIZE=${MAX_BATCH_SIZE}" \
+        "LINEAR_SCAN_BENCH_TOKIO_SMT_SIBLINGS=${TOKIO_SMT_SIBLINGS}" \
         "LINEAR_SCAN_BENCH_NODE_HOSTNAMES=${NODE_HOSTNAMES_JSON}" \
         "LINEAR_SCAN_BENCH_AWS_ENDPOINT=${AWS_ENDPOINT}" \
         "LINEAR_SCAN_BENCH_SERVER_BINARY=${REMOTE_SOURCE}/target/release/iris-mpc-linear-scan" \
@@ -173,7 +183,7 @@ fi
 NODE_HOSTNAMES_JSON=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' \
     "${NODE_ADDRESSES[@]}")
 AWS_ENDPOINT="http://${NODE_ADDRESSES[0]}:4566"
-echo "REAL_SERVER_BENCH_TOPOLOGY commit=${COMMIT} nodes=${NODE_ADDRESSES[*]} moto=${AWS_ENDPOINT} request_parallelism=${REQUEST_PARALLELISM} connection_parallelism=${CONNECTION_PARALLELISM} tokio_cores=${TOKIO_CORES} client_rng_seed=${CLIENT_RNG_SEED} pipelined_requests=${PIPELINED_REQUESTS} max_batch_size=${MAX_BATCH_SIZE}"
+echo "REAL_SERVER_BENCH_TOPOLOGY commit=${COMMIT} nodes=${NODE_ADDRESSES[*]} moto=${AWS_ENDPOINT} request_parallelism=${REQUEST_PARALLELISM} connection_parallelism=${CONNECTION_PARALLELISM} tokio_cores=${TOKIO_CORES} tokio_smt_siblings=${TOKIO_SMT_SIBLINGS} client_rng_seed=${CLIENT_RNG_SEED} pipelined_requests=${PIPELINED_REQUESTS} max_batch_size=${MAX_BATCH_SIZE}"
 
 if [[ ${LINEAR_SCAN_BENCH_SKIP_SYNC:-0} != 1 ]]; then
     git -C "$PROJECT_ROOT" archive --format=tar "$COMMIT" -o "${LOCAL_TMP}/source.tar"
@@ -190,7 +200,7 @@ fi
 
 if [[ ${LINEAR_SCAN_BENCH_SKIP_BUILD:-0} != 1 ]]; then
     remote "${HOSTS[0]}" bash -lc \
-        "cd '$REMOTE_SOURCE' && RUSTFLAGS='--cfg aes_armv8 -C force-frame-pointers=yes -Ctarget-cpu=neoverse-v2 -Ctarget-feature=+lse' cargo build --release -p iris-mpc-bins --features aes_rng_prf --bin iris-mpc-linear-scan --bin key-manager --bin service-client"
+        "cd '$REMOTE_SOURCE' && RUSTFLAGS='${RUSTFLAGS_BUILD}' cargo build --release -p iris-mpc-bins --features aes_rng_prf --bin iris-mpc-linear-scan --bin key-manager --bin service-client"
     for binary in iris-mpc-linear-scan key-manager service-client; do
         scp "${SCP_OPTIONS[@]}" \
             "${HOSTS[0]}:${REMOTE_SOURCE}/target/release/${binary}" \
