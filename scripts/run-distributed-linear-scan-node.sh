@@ -16,6 +16,7 @@ CONNECTION_PARALLELISM=${LINEAR_SCAN_BENCH_CONNECTION_PARALLELISM:-16}
 TOKIO_CORES=${LINEAR_SCAN_BENCH_TOKIO_CORES:-11}
 CLIENT_RNG_SEED=${LINEAR_SCAN_BENCH_CLIENT_RNG_SEED:-8675309}
 PIPELINED_REQUESTS=${LINEAR_SCAN_BENCH_PIPELINED_REQUESTS:-0}
+MAX_BATCH_SIZE=${LINEAR_SCAN_BENCH_MAX_BATCH_SIZE:-1}
 AUX_CPU_LIST="0-$((TOKIO_CORES - 1))"
 
 usage() {
@@ -117,8 +118,8 @@ run_client() {
     local batch_size=1
     if [[ ${PIPELINED_REQUESTS} == 1 ]]; then
         # Publish independent requests together so the production server has a
-        # sustained queue. SMPC__MAX_BATCH_SIZE=1 still makes the server scan
-        # them serially; this only removes client-side S3/response idle gaps.
+        # sustained queue. The server scans up to SMPC__MAX_BATCH_SIZE of them
+        # together; this also removes client-side S3/response idle gaps.
         batch_count=1
         batch_size=$REQUEST_COUNT
     fi
@@ -287,7 +288,7 @@ start_server() {
         SMPC__GRAPH_CHECKPOINT_BUCKET_NAME=wf-smpcv2-dev-hnsw-checkpoint \
         SMPC__KMS_KEY_ARNS='["unused-0","unused-1","unused-2"]' \
         SMPC__FIXED_SHARED_SECRETS=true \
-        SMPC__MAX_BATCH_SIZE=1 \
+        SMPC__MAX_BATCH_SIZE="$MAX_BATCH_SIZE" \
         SMPC__MAX_DB_SIZE="$max_db_size" \
         SMPC__INIT_DB_SIZE="$DATABASE_SIZE" \
         SMPC__CLEAR_DB_BEFORE_INIT=true \
