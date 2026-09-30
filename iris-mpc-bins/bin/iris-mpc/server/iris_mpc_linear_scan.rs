@@ -15,10 +15,12 @@ fn main() -> Result<()> {
     let mut config: Config = Config::load_config("SMPC").unwrap();
     config.overwrite_defaults_with_cli_args(Opt::parse());
 
-    numactl::init_with_smt_siblings(
-        config.separate_tokio_cores_per_node,
-        config.tokio_on_smt_siblings,
-    );
+    // The AMX scan keeps the first hardware thread of every core, so tokio
+    // moves to the SMT siblings whenever that kernel runs, unless configured.
+    let tokio_on_smt_siblings = config
+        .tokio_on_smt_siblings
+        .unwrap_or_else(iris_mpc_cpu::protocol::amx_scan::amx_available);
+    numactl::init_with_smt_siblings(config.separate_tokio_cores_per_node, tokio_on_smt_siblings);
     numactl::restrict_tokio_runtime();
 
     let runtime = tokio::runtime::Builder::new_multi_thread()

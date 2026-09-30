@@ -17,8 +17,15 @@ TOKIO_CORES=${LINEAR_SCAN_BENCH_TOKIO_CORES:-11}
 CLIENT_RNG_SEED=${LINEAR_SCAN_BENCH_CLIENT_RNG_SEED:-8675309}
 PIPELINED_REQUESTS=${LINEAR_SCAN_BENCH_PIPELINED_REQUESTS:-0}
 MAX_BATCH_SIZE=${LINEAR_SCAN_BENCH_MAX_BATCH_SIZE:-1}
-TOKIO_SMT_SIBLINGS=${LINEAR_SCAN_BENCH_TOKIO_SMT_SIBLINGS:-0}
-if [[ ${TOKIO_SMT_SIBLINGS} == 1 ]]; then
+# Empty: the server decides (tokio on SMT siblings exactly when its AMX scan
+# kernel runs); 0 or 1 overrides that.
+TOKIO_SMT_SIBLINGS=${LINEAR_SCAN_BENCH_TOKIO_SMT_SIBLINGS:-}
+SMT_PLACEMENT=${TOKIO_SMT_SIBLINGS}
+if [[ -z ${SMT_PLACEMENT} ]]; then
+    SMT_PLACEMENT=0
+    grep -qw amx_int8 /proc/cpuinfo 2>/dev/null && SMT_PLACEMENT=1
+fi
+if [[ ${SMT_PLACEMENT} == 1 ]]; then
     # Tokio runs on the first TOKIO_CORES SMT siblings of every NUMA node and
     # the dot workers on the first thread of every core. Auxiliary processes
     # (Postgres, Moto, the client) use the first node's remaining siblings, or
@@ -294,8 +301,13 @@ start_server() {
     local image_name=${LINEAR_SCAN_BENCH_IMAGE_NAME:-real-server-benchmark}
     mkdir -p "$RUN_DIR"
     : >"$log_file"
+    local smt_env=()
+    if [[ -n ${TOKIO_SMT_SIBLINGS} ]]; then
+        smt_env+=("SMPC__TOKIO_ON_SMT_SIBLINGS=$([[ ${TOKIO_SMT_SIBLINGS} == 1 ]] && echo true || echo false)")
+    fi
 
     nohup env \
+        ${smt_env[@]+"${smt_env[@]}"} \
         AWS_ACCESS_KEY_ID=test \
         AWS_SECRET_ACCESS_KEY=test \
         AWS_REGION=us-east-1 \
@@ -340,7 +352,6 @@ start_server() {
         SMPC__HAWK_REQUEST_PARALLELISM="$REQUEST_PARALLELISM" \
         SMPC__HAWK_CONNECTION_PARALLELISM="$CONNECTION_PARALLELISM" \
         SMPC__SEPARATE_TOKIO_CORES_PER_NODE="$TOKIO_CORES" \
-        SMPC__TOKIO_ON_SMT_SIBLINGS="$([[ ${TOKIO_SMT_SIBLINGS} == 1 ]] && echo true || echo false)" \
         SMPC__SERVICE_PORTS='["4000","4001","4002"]' \
         SMPC__NODE_HOSTNAMES="$LINEAR_SCAN_BENCH_NODE_HOSTNAMES" \
         SMPC__SERVER_COORDINATION__NODE_HOSTNAMES="$LINEAR_SCAN_BENCH_NODE_HOSTNAMES" \
