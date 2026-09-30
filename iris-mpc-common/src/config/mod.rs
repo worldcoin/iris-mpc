@@ -342,8 +342,11 @@ pub struct Config {
     /// by two scan threads, while the MPC runtime's scalar and network work
     /// fits beside it. With `separate_tokio_cores_per_node`, only that many
     /// siblings per NUMA node run tokio. Ignored on hosts without SMT.
+    ///
+    /// Unset (the default), the linear-scan server enables it exactly when
+    /// the AMX scan kernel is available; `true` or `false` overrides that.
     #[serde(default)]
-    pub tokio_on_smt_siblings: bool,
+    pub tokio_on_smt_siblings: Option<bool>,
 
     #[serde(default = "default_sns_retry_max_attempts")]
     pub sns_retry_max_attempts: u32,
