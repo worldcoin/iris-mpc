@@ -93,6 +93,8 @@ Only SHA-256 and SHA-512 are supported.
 
 Repository-hosted key paths must not contain symlinks, including in parent directories, because GitHub raw URLs do not serve the dereferenced checkout contents.
 
+Raw GitHub hostname matching is case-insensitive and accepts an explicit default port (`:443` for HTTPS or `:80` for HTTP). When checkout validation is enabled, raw GitHub URLs with credentials or non-default ports are rejected.
+
 Run the same validation locally with `python3 scripts/check-key-checksums.py keys.json`. To generate a checksum, run `sha256sum key.pub` or `sha512sum key.pub` (on macOS, `shasum -a 256 key.pub` or `shasum -a 512 key.pub`). Prefix the resulting hex digest with `sha256:` or `sha512:`.
 
 To also validate repository-hosted keys against your local checkout, run `python3 scripts/check-key-checksums.py keys.json --repository worldcoin/iris-mpc --repo-root .`.

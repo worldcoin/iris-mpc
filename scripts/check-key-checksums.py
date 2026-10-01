@@ -61,8 +61,11 @@ def parse_registry(registry):
 def checkout_path(url, repository, repo_root):
     """Map this repository's main URLs to the proposed checkout contents."""
     parsed = urlsplit(url)
-    if not repository or parsed.netloc != "raw.githubusercontent.com":
+    if not repository or parsed.hostname != "raw.githubusercontent.com":
         return None
+    default_port = 443 if parsed.scheme == "https" else 80
+    if parsed.username is not None or parsed.password is not None or parsed.port not in (None, default_port):
+        raise ValueError("Raw GitHub URLs must not contain credentials or non-default ports")
     for ref in ("refs/heads/main", "main"):
         prefix = f"/{repository}/{ref}/"
         if parsed.path.startswith(prefix) and not parsed.query:

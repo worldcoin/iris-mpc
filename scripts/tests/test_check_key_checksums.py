@@ -246,6 +246,52 @@ class CheckKeyChecksumsTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "must not contain symlinks"):
                 validator.checkout_path(url, "worldcoin/iris-mpc", root)
 
+    def test_equivalent_raw_github_authorities_use_checkout(self):
+        authorities = (
+            "RAW.GITHUBUSERCONTENT.COM",
+            "raw.githubusercontent.com:443",
+            "Raw.Githubusercontent.Com:443",
+        )
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            key = root / "party.pub"
+            for authority in authorities:
+                for ref in ("main", "refs/heads/main"):
+                    with self.subTest(authority=authority, ref=ref):
+                        url = f"https://{authority}/worldcoin/iris-mpc/{ref}/party.pub"
+                        key.write_bytes(b"public key\n")
+                        result, download = self.verify(
+                            self.registry(urls=url), [],
+                            repository="worldcoin/iris-mpc", repo_root=root,
+                        )
+                        self.assertEqual(result, 0)
+                        download.assert_not_called()
+                        # Retaining the old checksum must fail against the new local key.
+                        key.write_bytes(b"changed public key\n")
+                        result, download = self.verify(
+                            self.registry(urls=url), [],
+                            repository="worldcoin/iris-mpc", repo_root=root,
+                        )
+                        self.assertEqual(result, 1)
+                        download.assert_not_called()
+
+    def test_raw_github_credentials_and_non_default_ports_are_rejected(self):
+        for authority in (
+            "user@raw.githubusercontent.com",
+            "user:password@raw.githubusercontent.com",
+            "raw.githubusercontent.com:444",
+            "raw.githubusercontent.com:invalid",
+        ):
+            with self.subTest(authority=authority):
+                url = f"https://{authority}/worldcoin/iris-mpc/main/party.pub"
+                with self.assertRaises(ValueError):
+                    validator.checkout_path(url, "worldcoin/iris-mpc", ".")
+                result, download = self.verify(
+                    self.registry(urls=url), [], repository="worldcoin/iris-mpc",
+                )
+                self.assertEqual(result, 1)
+                download.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
