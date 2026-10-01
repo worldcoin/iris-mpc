@@ -71,7 +71,7 @@ This security model forms the baseline of the implementation, and any attacks or
 | `pub` | String or array of strings | URL of the party’s public key, or multiple URLs providing mirrors of the same key. |
 | `chk` | String | Expected checksum as `sha256:<64 hex digits>` or `sha512:<128 hex digits>`. Hex digits are case-insensitive. |
 
-Every URL in `pub` must serve the same public key bytes. Consumers should verify the downloaded key against `chk` before using it. Checksums cover the entire downloaded file, including whitespace and line endings, without normalization. URLs must use HTTP or HTTPS.
+Every URL in `pub` must serve the same public key bytes. Consumers should verify the downloaded key against `chk` before using it. Checksums cover the entire downloaded file, including whitespace and line endings, without normalization. URLs must use HTTP or HTTPS and must not contain fragments (`#...`).
 
 For example, a FAU party entry has this shape:
 

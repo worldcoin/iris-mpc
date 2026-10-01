@@ -52,6 +52,8 @@ def parse_registry(registry):
             parsed = urlsplit(url)
             if parsed.scheme not in ("http", "https") or not parsed.hostname:
                 raise ValueError(f"{label}.pub must contain HTTP(S) URLs")
+            if "#" in url:
+                raise ValueError(f"{label}.pub URLs must not contain fragments")
             locations.append((slug, url, algorithm, digest.lower()))
     return locations
 
@@ -63,7 +65,7 @@ def checkout_path(url, repository, repo_root):
         return None
     for ref in ("refs/heads/main", "main"):
         prefix = f"/{repository}/{ref}/"
-        if parsed.path.startswith(prefix) and not parsed.query and not parsed.fragment:
+        if parsed.path.startswith(prefix) and not parsed.query:
             root = Path(repo_root).resolve()
             relative = unquote(parsed.path[len(prefix):])
             relative_path = Path(relative)

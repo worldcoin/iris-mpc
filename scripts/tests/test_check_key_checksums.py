@@ -100,6 +100,26 @@ class CheckKeyChecksumsTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     validator.parse_registry(invalid)
 
+    def test_url_fragments_are_rejected_before_download(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "party.pub").write_bytes(b"changed public key\n")
+            urls = [
+                "https://raw.githubusercontent.com/worldcoin/iris-mpc/main/party.pub#key",
+                "https://raw.githubusercontent.com/worldcoin/iris-mpc/refs/heads/main/party.pub#key",
+                "https://raw.githubusercontent.com/worldcoin/iris-mpc/main/party.pub#",
+                "https://example.org/party.pub#key",
+            ]
+            for url in urls:
+                with self.subTest(url=url):
+                    # The old digest could match main while the checkout has a new key.
+                    with patch.object(validator, "urlopen") as download:
+                        with self.assertRaisesRegex(ValueError, "must not contain fragments"):
+                            validator.verify_registry(
+                                self.registry(urls=url), "worldcoin/iris-mpc", root,
+                            )
+                        download.assert_not_called()
+
     def test_empty_registry_checks_no_locations(self):
         result, download = self.verify({"iris": {"parties": []}}, [])
         self.assertEqual(result, 0)
