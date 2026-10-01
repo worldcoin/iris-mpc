@@ -12,7 +12,7 @@ use iris_mpc_common::helpers::smpc_request::{
     UNIQUENESS_MESSAGE_TYPE,
 };
 use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
-use iris_mpc_common::helpers::sync::{Modification, SyncResult};
+use iris_mpc_common::helpers::sync::{Modification, SyncResult, MOD_STATUS_COMPLETED};
 use iris_mpc_common::iris_db::get_dummy_shares_for_deletion;
 use iris_mpc_store::{ExplicitVersionToken, Store, StoredIrisRef};
 use sqlx::{Postgres, Transaction};
@@ -75,9 +75,14 @@ pub async fn sync_modifications<'a>(
 
     // Persist changes into iris and graph tables
     for modification in &to_update {
-        if !modification.persisted {
+        let local = sync_result
+            .my_state
+            .modifications
+            .iter()
+            .find(|m| m.id == modification.id);
+        if !requires_iris_update(modification, local) {
             tracing::debug!(
-                "Skip writing non-persisted modification to iris table: {:?}",
+                "Skip writing already applied or non-persisted modification to iris table: {:?}",
                 modification
             );
             continue;
@@ -158,6 +163,12 @@ pub async fn sync_modifications<'a>(
     drop(version_tx);
 
     Ok(iris_tx)
+}
+
+// Metadata repairs must not replay old shares over later committed mutations.
+fn requires_iris_update(modification: &Modification, local: Option<&Modification>) -> bool {
+    modification.persisted
+        && !local.is_some_and(|m| m.status == MOD_STATUS_COMPLETED && m.persisted)
 }
 
 pub async fn send_last_modifications_to_sns(
@@ -335,4 +346,56 @@ pub async fn send_last_modifications_to_sns(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ampc_server_utils::modifications::compare_modifications;
+    use iris_mpc_common::helpers::sync::MOD_STATUS_IN_PROGRESS;
+
+    #[test]
+    fn completed_metadata_repair_does_not_replay_older_uniqueness_shares() {
+        let older = Modification {
+            id: 1,
+            request_type: UNIQUENESS_MESSAGE_TYPE.into(),
+            status: MOD_STATUS_COMPLETED.into(),
+            persisted: true,
+            ..Default::default()
+        };
+        let newer = Modification {
+            id: 2,
+            serial_id: Some(100),
+            request_type: REAUTH_MESSAGE_TYPE.into(),
+            ..older.clone()
+        };
+        let repaired = Modification {
+            serial_id: Some(100),
+            ..older.clone()
+        };
+        let local = vec![older.clone(), newer.clone()];
+        let (updates, _) =
+            compare_modifications(&local, &[local.clone(), vec![repaired, newer]]).unwrap();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].serial_id, Some(100));
+        assert!(!requires_iris_update(&updates[0], Some(&older)));
+    }
+
+    #[test]
+    fn applies_gallery_only_when_the_persisted_mutation_is_missing_locally() {
+        let modification = Modification {
+            persisted: true,
+            ..Default::default()
+        };
+        for status in [MOD_STATUS_IN_PROGRESS, MOD_STATUS_COMPLETED] {
+            let local = Modification {
+                status: status.into(),
+                persisted: false,
+                ..Default::default()
+            };
+            assert!(requires_iris_update(&modification, Some(&local)));
+        }
+        assert!(requires_iris_update(&modification, None));
+        assert!(!requires_iris_update(&Modification::default(), None));
+    }
 }
