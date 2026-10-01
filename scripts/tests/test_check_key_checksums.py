@@ -183,6 +183,49 @@ class CheckKeyChecksumsTests(unittest.TestCase):
                     self.assertEqual(result, 1)
                     download.assert_not_called()
 
+    def test_repository_key_symlink_inside_checkout_is_rejected(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "actual.pub").write_bytes(b"public key\n")
+            (root / "link.pub").symlink_to("actual.pub")
+            for ref in ("main", "refs/heads/main"):
+                with self.subTest(ref=ref):
+                    url = f"https://raw.githubusercontent.com/worldcoin/iris-mpc/{ref}/link.pub"
+                    with self.assertRaisesRegex(ValueError, "must not contain symlinks"):
+                        validator.checkout_path(url, "worldcoin/iris-mpc", root)
+                    result, download = self.verify(
+                        self.registry(urls=url), [],
+                        repository="worldcoin/iris-mpc", repo_root=root,
+                    )
+                    self.assertEqual(result, 1)
+                    download.assert_not_called()
+
+    def test_repository_key_symlinked_parent_is_rejected(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "actual").mkdir()
+            (root / "actual" / "party.pub").write_bytes(b"public key\n")
+            (root / "certs").symlink_to("actual", target_is_directory=True)
+            for relative in ("certs/party.pub", "%63erts/party.pub"):
+                with self.subTest(relative=relative):
+                    url = f"https://raw.githubusercontent.com/worldcoin/iris-mpc/main/{relative}"
+                    with self.assertRaisesRegex(ValueError, "must not contain symlinks"):
+                        validator.checkout_path(url, "worldcoin/iris-mpc", root)
+                    result, download = self.verify(
+                        self.registry(urls=url), [],
+                        repository="worldcoin/iris-mpc", repo_root=root,
+                    )
+                    self.assertEqual(result, 1)
+                    download.assert_not_called()
+
+    def test_dangling_repository_key_symlink_is_rejected(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "link.pub").symlink_to("missing.pub")
+            url = "https://raw.githubusercontent.com/worldcoin/iris-mpc/main/link.pub"
+            with self.assertRaisesRegex(ValueError, "must not contain symlinks"):
+                validator.checkout_path(url, "worldcoin/iris-mpc", root)
+
 
 if __name__ == "__main__":
     unittest.main()

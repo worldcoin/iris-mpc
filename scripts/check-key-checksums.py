@@ -66,7 +66,15 @@ def checkout_path(url, repository, repo_root):
         if parsed.path.startswith(prefix) and not parsed.query and not parsed.fragment:
             root = Path(repo_root).resolve()
             relative = unquote(parsed.path[len(prefix):])
-            path = (root / relative).resolve()
+            relative_path = Path(relative)
+            if not relative or relative_path.is_absolute() or ".." in relative_path.parts:
+                raise ValueError("Repository key path must stay inside the checkout")
+            path = root
+            for component in relative_path.parts:
+                path = path / component
+                if path.is_symlink():
+                    raise ValueError("Repository key path must not contain symlinks")
+            path = path.resolve()
             if not relative or not path.is_relative_to(root):
                 raise ValueError("Repository key path must stay inside the checkout")
             return path
