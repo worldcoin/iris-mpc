@@ -5,6 +5,7 @@ Use the `iris-mpc-linear-scan` binary with the active cell's database/schema and
 ```sh
 SMPC__CPU_STARTUP_MODE=candidate
 SMPC__ENABLE_S3_IMPORTER=false
+SMPC__CLEAR_DB_BEFORE_INIT=false
 SMPC__CANDIDATE_STATUS_PORT=3090
 ```
 
