@@ -2,6 +2,7 @@ use crate::server::MAX_CONCURRENT_REQUESTS;
 use crate::services::aws::clients::AwsClients;
 use crate::services::processors::get_iris_shares_parse_task;
 use crate::services::processors::result_message::send_results_to_sns;
+use ampc_server_utils::modifications::{recovery_plan, replay_modification_results};
 use aws_sdk_sns::Client as SNSClient;
 use eyre::{eyre, Report};
 use iris_mpc_common::config::Config;
@@ -30,22 +31,34 @@ pub async fn sync_modifications<'a>(
     shares_encryption_key_pair: &Arc<SharesEncryptionKeyPairs>,
     sync_result: SyncResult,
 ) -> eyre::Result<Transaction<'a, Postgres>, Report> {
-    let (mut to_update, to_delete) = sync_result.compare_modifications();
+    let all = sync_result
+        .all_states
+        .iter()
+        .map(|state| state.modifications.clone())
+        .collect::<Vec<_>>();
+    let mut plan = recovery_plan(
+        &sync_result.my_state.modifications,
+        &all,
+        sync_result
+            .my_state
+            .common_config
+            .get_max_modifications_lookback(),
+    )
+    .expect("Inconsistent modification snapshots or lookback");
     tracing::info!(
         "Modifications to update: {:?}, to delete: {:?}",
-        to_update,
-        to_delete
+        plan.updates,
+        plan.deletes
     );
 
     let dummy_shares_for_deletions = get_dummy_shares_for_deletion(config.party_id);
 
-    // Sort modifications in id order
-    to_update.sort_by_key(|m| m.id);
-
     // Update node_id for each modification and collect &refs
-    let to_update_refs: Vec<&Modification> = to_update
+    let to_update_refs: Vec<&Modification> = plan
+        .updates
         .iter_mut()
-        .map(|modification| {
+        .map(|update| {
+            let modification = &mut update.modification;
             if let Err(e) = modification.update_result_message_node_id(config.party_id) {
                 tracing::error!("Failed to update modification node_id: {:?}", e);
             }
@@ -59,7 +72,9 @@ pub async fn sync_modifications<'a>(
     store
         .update_modifications(&mut iris_tx, &to_update_refs)
         .await?;
-    store.delete_modifications(&mut iris_tx, &to_delete).await?;
+    store
+        .delete_modifications(&mut iris_tx, &plan.deletes)
+        .await?;
 
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS));
 
@@ -74,10 +89,11 @@ pub async fn sync_modifications<'a>(
     let mut version_tx = ExplicitVersionToken::enable(&mut iris_tx).await?;
 
     // Persist changes into iris and graph tables
-    for modification in &to_update {
-        if !modification.persisted {
+    for update in &plan.updates {
+        let modification = &update.modification;
+        if !update.apply_mutation {
             tracing::debug!(
-                "Skip writing non-persisted modification to iris table: {:?}",
+                "Skip writing already applied or non-persisted modification to iris table: {:?}",
                 modification
             );
             continue;
@@ -166,173 +182,90 @@ pub async fn send_last_modifications_to_sns(
     config: &Config,
     lookback: usize,
 ) -> eyre::Result<()> {
-    let uniqueness_result_attributes = create_message_type_attribute_map(UNIQUENESS_MESSAGE_TYPE);
-    let reauth_message_attributes = create_message_type_attribute_map(REAUTH_MESSAGE_TYPE);
-    let reset_update_message_attributes =
-        create_message_type_attribute_map(RESET_UPDATE_MESSAGE_TYPE);
-    let recovery_update_message_attributes =
-        create_message_type_attribute_map(RECOVERY_UPDATE_MESSAGE_TYPE);
-    let deletion_message_attributes =
-        create_message_type_attribute_map(IDENTITY_DELETION_MESSAGE_TYPE);
-    let reset_check_message_attributes =
-        create_message_type_attribute_map(RESET_CHECK_MESSAGE_TYPE);
-    let recovery_check_message_attributes =
-        create_message_type_attribute_map(RECOVERY_CHECK_MESSAGE_TYPE);
-
-    // Fetch the last modifications from the database
     let last_modifications = store.last_modifications(lookback).await?;
     tracing::info!(
         "Replaying last {} modification results to SNS",
         last_modifications.len()
     );
+    let order = [
+        UNIQUENESS_MESSAGE_TYPE,
+        IDENTITY_DELETION_MESSAGE_TYPE,
+        REAUTH_MESSAGE_TYPE,
+        RESET_UPDATE_MESSAGE_TYPE,
+        RESET_CHECK_MESSAGE_TYPE,
+        RECOVERY_CHECK_MESSAGE_TYPE,
+        RECOVERY_UPDATE_MESSAGE_TYPE,
+    ];
+    replay_modification_results(
+        &last_modifications,
+        &order,
+        |request_type, bodies| async move {
+            let attributes = create_message_type_attribute_map(request_type);
+            send_results_to_sns(
+                bodies,
+                &Vec::new(),
+                sns_client,
+                config,
+                &attributes,
+                request_type,
+            )
+            .await
+        },
+    )
+    .await
+}
 
-    if last_modifications.is_empty() {
-        tracing::info!("No last modifications found to send to SNS");
-        return Ok(());
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ampc_server_utils::modifications::{
+        compare_modifications, requires_modification_apply as requires_iris_update,
+    };
+    use iris_mpc_common::helpers::sync::MOD_STATUS_COMPLETED;
+    use iris_mpc_common::helpers::sync::MOD_STATUS_IN_PROGRESS;
+
+    #[test]
+    fn completed_metadata_repair_does_not_replay_older_uniqueness_shares() {
+        let older = Modification {
+            id: 1,
+            request_type: UNIQUENESS_MESSAGE_TYPE.into(),
+            status: MOD_STATUS_COMPLETED.into(),
+            persisted: true,
+            ..Default::default()
+        };
+        let newer = Modification {
+            id: 2,
+            serial_id: Some(100),
+            request_type: REAUTH_MESSAGE_TYPE.into(),
+            ..older.clone()
+        };
+        let repaired = Modification {
+            serial_id: Some(100),
+            ..older.clone()
+        };
+        let local = vec![older.clone(), newer.clone()];
+        let (updates, _) =
+            compare_modifications(&local, &[local.clone(), vec![repaired, newer]]).unwrap();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].serial_id, Some(100));
+        assert!(!requires_iris_update(&updates[0], Some(&older)));
     }
 
-    // Collect messages by type
-    let mut deletion_messages = Vec::new();
-    let mut reauth_messages = Vec::new();
-    let mut reset_update_messages = Vec::new();
-    let mut recovery_update_messages = Vec::new();
-    let mut reset_check_messages = Vec::new();
-    let mut uniqueness_messages = Vec::new();
-    let mut recovery_check_messages = Vec::new();
-    for modification in &last_modifications {
-        if modification.result_message_body.is_none() {
-            tracing::error!("Missing modification result message body");
-            continue;
+    #[test]
+    fn applies_gallery_only_when_the_persisted_mutation_is_missing_locally() {
+        let modification = Modification {
+            persisted: true,
+            ..Default::default()
+        };
+        for status in [MOD_STATUS_IN_PROGRESS, MOD_STATUS_COMPLETED] {
+            let local = Modification {
+                status: status.into(),
+                persisted: false,
+                ..Default::default()
+            };
+            assert!(requires_iris_update(&modification, Some(&local)));
         }
-
-        let body = modification
-            .result_message_body
-            .as_ref()
-            .expect("Missing SNS message body")
-            .clone();
-
-        match modification.request_type.as_str() {
-            IDENTITY_DELETION_MESSAGE_TYPE => {
-                deletion_messages.push(body);
-            }
-            REAUTH_MESSAGE_TYPE => {
-                reauth_messages.push(body);
-            }
-            RESET_UPDATE_MESSAGE_TYPE => {
-                reset_update_messages.push(body);
-            }
-            RECOVERY_UPDATE_MESSAGE_TYPE => {
-                recovery_update_messages.push(body);
-            }
-            RESET_CHECK_MESSAGE_TYPE => {
-                reset_check_messages.push(body);
-            }
-            RECOVERY_CHECK_MESSAGE_TYPE => {
-                recovery_check_messages.push(body);
-            }
-            UNIQUENESS_MESSAGE_TYPE => {
-                uniqueness_messages.push(body);
-            }
-            other => {
-                tracing::error!("Unknown message type: {}", other);
-            }
-        }
+        assert!(requires_iris_update(&modification, None));
+        assert!(!requires_iris_update(&Modification::default(), None));
     }
-
-    tracing::info!(
-        "Sending {} last modifications to SNS. {} uniqueness, {} deletion, {} reauth, {} reset update, {} recovery update, {} reset check, {} recovery check",
-        last_modifications.len(),
-        uniqueness_messages.len(),
-        deletion_messages.len(),
-        reauth_messages.len(),
-        reset_update_messages.len(),
-        recovery_update_messages.len(),
-        reset_check_messages.len(),
-        recovery_check_messages.len(),
-    );
-
-    if !uniqueness_messages.is_empty() {
-        send_results_to_sns(
-            uniqueness_messages,
-            &Vec::new(),
-            sns_client,
-            config,
-            &uniqueness_result_attributes,
-            UNIQUENESS_MESSAGE_TYPE,
-        )
-        .await?;
-    }
-
-    if !deletion_messages.is_empty() {
-        send_results_to_sns(
-            deletion_messages,
-            &Vec::new(),
-            sns_client,
-            config,
-            &deletion_message_attributes,
-            IDENTITY_DELETION_MESSAGE_TYPE,
-        )
-        .await?;
-    }
-
-    if !reauth_messages.is_empty() {
-        send_results_to_sns(
-            reauth_messages,
-            &Vec::new(),
-            sns_client,
-            config,
-            &reauth_message_attributes,
-            REAUTH_MESSAGE_TYPE,
-        )
-        .await?;
-    }
-
-    if !reset_update_messages.is_empty() {
-        send_results_to_sns(
-            reset_update_messages,
-            &Vec::new(),
-            sns_client,
-            config,
-            &reset_update_message_attributes,
-            RESET_UPDATE_MESSAGE_TYPE,
-        )
-        .await?;
-    }
-
-    if !reset_check_messages.is_empty() {
-        send_results_to_sns(
-            reset_check_messages,
-            &Vec::new(),
-            sns_client,
-            config,
-            &reset_check_message_attributes,
-            RESET_CHECK_MESSAGE_TYPE,
-        )
-        .await?;
-    }
-    if !recovery_check_messages.is_empty() {
-        send_results_to_sns(
-            recovery_check_messages,
-            &Vec::new(),
-            sns_client,
-            config,
-            &recovery_check_message_attributes,
-            RECOVERY_CHECK_MESSAGE_TYPE,
-        )
-        .await?;
-    }
-
-    if !recovery_update_messages.is_empty() {
-        send_results_to_sns(
-            recovery_update_messages,
-            &Vec::new(),
-            sns_client,
-            config,
-            &recovery_update_message_attributes,
-            RECOVERY_UPDATE_MESSAGE_TYPE,
-        )
-        .await?;
-    }
-
-    Ok(())
 }
