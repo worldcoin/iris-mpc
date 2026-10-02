@@ -16,6 +16,8 @@ concurrency:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: "${{ github.repository }}-linear-scan"
+  # Intel Granite Rapids (r8i) build with the AMX scan kernel.
+  IMAGE_NAME_AMD64: "${{ github.repository }}-linear-scan-amd64"
 
 jobs:
   docker:
@@ -76,3 +78,55 @@ jobs:
           cache-from: type=gha,scope=linear-scan-arm64
           cache-to: type=gha,mode=max,scope=linear-scan-arm64
           file: Dockerfile.arm64.linear-scan
+
+  docker-amd64:
+    name: Build and push amd64 image
+    timeout-minutes: 40
+    runs-on:
+      group: arc-public-4xlarge-amd64-runner
+    permissions:
+      packages: write
+      contents: read
+      attestations: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435
+
+      - name: Log in to the container registry
+        uses: docker/login-action@5e57cd118135c172c3672efd75eb46360885c0ef
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare image tags
+        id: tags
+        env:
+          RELEASE_TAG_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          {
+            echo "tags<<EOF"
+            echo "${REGISTRY}/${IMAGE_NAME_AMD64}:${GITHUB_SHA}"
+            echo "${REGISTRY}/${IMAGE_NAME_AMD64}:latest"
+            if [ -n "${RELEASE_TAG_NAME}" ]; then
+              echo "${REGISTRY}/${IMAGE_NAME_AMD64}:${RELEASE_TAG_NAME}"
+            fi
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Build and push
+        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          platforms: linux/amd64
+          build-args: |
+            ARCHITECTURE=x86_64
+          cache-from: type=gha,scope=linear-scan-amd64
+          cache-to: type=gha,mode=max,scope=linear-scan-amd64
+          file: Dockerfile.amd64.linear-scan

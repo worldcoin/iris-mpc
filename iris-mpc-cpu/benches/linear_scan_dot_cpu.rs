@@ -5,7 +5,7 @@ use iris_mpc_cpu::{
         init_workers, IrisWorkerPool, LocalIrisWorkerPool, QueryId, QuerySpec,
     },
     hawkers::{aby3::aby3_store::DistanceMode, shared_irises::SharedIrises},
-    protocol::shared_iris::{ArcIris, GaloisRingSharedIris},
+    protocol::shared_iris::{preferred_scan_layout, ArcIris, GaloisRingSharedIris, Residents},
 };
 use rayon::prelude::*;
 use std::{
@@ -44,22 +44,16 @@ fn build_pool(db_size: usize, numa_shard: usize) -> (LocalIrisWorkerPool, Vec<Ve
         .into_par_iter()
         .map(|_| Arc::new((*query).clone()))
         .collect::<Vec<_>>();
-    let layout = iris_mpc_cpu::protocol::shared_iris::preferred_scan_layout();
+    let residents = Residents::new(preferred_scan_layout(), 0);
     let mut store = SharedIrises::new(
         HashMap::new(),
-        iris_mpc_cpu::protocol::shared_iris::ResidentIris::from_arc(
-            Arc::new(GaloisRingSharedIris::default_for_party(0)),
-            layout,
-        ),
+        residents.placeholder(Arc::new(GaloisRingSharedIris::default_for_party(0))),
     );
     store.reserve(db_size);
     let mut vector_ids = Vec::with_capacity(db_size);
-    for iris in irises {
-        vector_ids.push(
-            store.append(iris_mpc_cpu::protocol::shared_iris::ResidentIris::from_arc(
-                iris, layout,
-            )),
-        );
+    for (index, iris) in irises.into_iter().enumerate() {
+        let id = VectorId::from_0_index(index as u32);
+        vector_ids.push(store.insert(id, residents.resident(id, iris)));
     }
     println!(
         "BENCH_LOADED seconds={:.3}",
@@ -67,9 +61,9 @@ fn build_pool(db_size: usize, numa_shard: usize) -> (LocalIrisWorkerPool, Vec<Ve
     );
 
     let store = store.to_arc();
-    let workers = init_workers(numa_shard, store.clone(), true, layout);
+    let workers = init_workers(numa_shard, store.clone(), true, residents.clone());
     (
-        LocalIrisWorkerPool::new(workers, store, layout, DistanceMode::MinRotation, 0),
+        LocalIrisWorkerPool::new(workers, store, residents, DistanceMode::MinRotation, 0),
         vector_ids,
         query,
     )
