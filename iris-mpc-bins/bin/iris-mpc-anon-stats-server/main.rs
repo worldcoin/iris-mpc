@@ -883,7 +883,10 @@ impl AnonStatsProcessor {
         )
         .record(job_size as f64);
 
-        info!("Completed anon stats job of kind: {:?} and metric: {:?}", kind, metric_name_suffix);
+        info!(
+            "Completed anon stats job of kind: {:?} and metric: {:?}",
+            kind, metric_name_suffix
+        );
     }
 
     async fn log_available_entries(
