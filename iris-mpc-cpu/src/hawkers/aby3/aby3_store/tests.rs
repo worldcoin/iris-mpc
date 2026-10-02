@@ -49,6 +49,86 @@ fn gpu_prefilter_expands_candidate_records_to_all_rotations() {
     assert_eq!(expanded, expected);
 }
 
+#[test]
+fn packed_zero_lanes_ignores_padding_and_keeps_order() {
+    // Word 0: every lane set except 3 and 63. Word 1: lanes 0 and 5 clear,
+    // but only 4 lanes of it are in range.
+    let words = [!((1 << 3) | (1 << 63)), !((1 << 0) | (1 << 5))];
+    assert_eq!(packed_zero_lanes(&words, 68), vec![3, 63, 64]);
+    assert_eq!(packed_zero_lanes(&words, 64), vec![3, 63]);
+    assert_eq!(packed_zero_lanes(&words, 3), Vec::<usize>::new());
+    assert_eq!(packed_zero_lanes(&[], 0), Vec::<usize>::new());
+}
+
+#[test]
+fn sparse_candidate_expansion_matches_dense_prefilter() {
+    let mut anon_rotation_bits = vec![false; 4 * ROTATIONS];
+    for index in [4, 5, 2 * ROTATIONS + ROTATIONS - 1, 3 * ROTATIONS] {
+        anon_rotation_bits[index] = true;
+    }
+    let sparse = anon_rotation_bits
+        .iter()
+        .enumerate()
+        .filter_map(|(index, &bit)| bit.then_some(index))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        expand_candidate_records(&sparse),
+        gpu_candidate_rotation_indices(&anon_rotation_bits)
+    );
+}
+
+/// Forced records are kept for anonymous statistics at every rotation, while
+/// strict matches and the other records' anonymous matches are unchanged.
+#[tokio::test(flavor = "multi_thread")]
+async fn fused_full_rotation_forced_anon_stats_keeps_all_rotations() -> Result<()> {
+    let mut rng = AesRng::seed_from_u64(0x666f_7263_6564);
+    let vectors_and_graphs = shared_random_setup(&mut rng, 3, NetworkType::Local).await?;
+
+    let tasks = vectors_and_graphs
+        .into_iter()
+        .map(|(store, _graph)| async move {
+            let mut store = store.lock_owned().await;
+            let ids = [
+                VectorId::from_0_index(0),
+                VectorId::from_0_index(1),
+                VectorId::from_0_index(2),
+            ];
+            let query = store.cache_query_from_store(&ids[0]).await?;
+            let plain = store
+                .eval_distance_batch_full_rotation_thresholds_fused(&query, &ids)
+                .await?;
+            let forced = store
+                .eval_distance_batch_full_rotation_thresholds_fused_with_forced_anon_stats(
+                    &query,
+                    &ids,
+                    &[2, 2],
+                )
+                .await?;
+            Ok((plain, forced))
+        });
+    for (plain, forced) in parallelize(tasks).await? {
+        assert_eq!(plain.match_rotations, forced.match_rotations);
+        let key = |matches: &[(usize, usize, DistanceShare<u32>)], keep: fn(usize) -> bool| {
+            matches
+                .iter()
+                .filter(|(vector, _, _)| keep(*vector))
+                .map(|(vector, rotation, _)| (*vector, *rotation))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            key(&plain.anon_stats_matches, |vector| vector != 2),
+            key(&forced.anon_stats_matches, |vector| vector != 2)
+        );
+        assert_eq!(
+            key(&forced.anon_stats_matches, |vector| vector == 2),
+            (0..ROTATIONS)
+                .map(|rotation| (2, rotation))
+                .collect::<Vec<_>>()
+        );
+    }
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn full_rotation_threshold_scan_matches_min_distance_reference() -> Result<()> {
     let mut rng = AesRng::seed_from_u64(0x7468_7265_7368_6f6c);

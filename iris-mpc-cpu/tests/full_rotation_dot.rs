@@ -7,6 +7,7 @@ use iris_mpc_cpu::{
     execution::hawk_main::iris_worker::{IrisWorkerPool, LocalIrisWorkerPool, QueryId, QuerySpec},
     hawkers::{aby3::aby3_store::DistanceMode, shared_irises::SharedIrises},
     protocol::shared_iris::GaloisRingSharedIris,
+    shares::RingElement,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -92,6 +93,13 @@ fn run_test() -> Result<()> {
     for window in &windows {
         assert_eq!(window.len(), TARGETS * WINDOW_ROTATIONS * 2);
     }
+
+    // The full-rotation scan emits trimmed mask dots; the windowed path the
+    // doubled ones.
+    let fused = fused
+        .chunks_exact(2)
+        .flat_map(|pair| [pair[0], RingElement(2) * pair[1]])
+        .collect::<Vec<_>>();
 
     for target in 0..TARGETS {
         let fused_record = &fused[target * ROTATIONS * 2..(target + 1) * ROTATIONS * 2];
