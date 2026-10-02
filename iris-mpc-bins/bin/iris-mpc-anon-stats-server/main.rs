@@ -461,8 +461,6 @@ impl AnonStatsProcessor {
                 stats.next_start_time_utc_timestamp = Some(report_time);
 
                 self.publish_1d_stats(&stats).await?;
-                self.log_job_metrics("1d", origin, kind, job_size, start.elapsed())
-                    .await;
 
                 let start = Instant::now();
                 let mut stats = process_1d_anon_stats_score_normalization_job(
@@ -885,7 +883,10 @@ impl AnonStatsProcessor {
         )
         .record(job_size as f64);
 
-        info!("Completed anon stats job of kind: {:?}", kind);
+        info!(
+            "Completed anon stats job of kind: {:?} and metric: {:?}",
+            kind, metric_name_suffix
+        );
     }
 
     async fn log_available_entries(
