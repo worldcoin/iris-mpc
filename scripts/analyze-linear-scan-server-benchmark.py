@@ -11,6 +11,12 @@ synchronized MPC interval from the last party's ingress until the last party
 finishes.  This prevents a slow SNS/SQS emulator fan-out from being mistaken for
 linear-scan compute/network time while retaining an end-to-end rate that includes
 that skew.
+
+Each summary line covers one batch, which may hold several requests. The
+sustained rate divides all retained comparisons by the wall-clock interval from
+the first retained batch's ingress to the last one's completion, so it also
+counts the per-batch work outside the cascade (query caching, mutations,
+persistence, result publication) and any idle time between batches.
 """
 
 from __future__ import annotations
@@ -37,7 +43,7 @@ def parse_args() -> argparse.Namespace:
         "--warmup-requests",
         type=int,
         default=1,
-        help="discard this many requests from each party and orientation",
+        help="discard this many batches from each party and orientation",
     )
     parser.add_argument(
         "--minimum-cps",
@@ -127,6 +133,8 @@ def summarize(
     end_to_end_durations = []
     ingress_skews = []
     comparisons_per_request = []
+    first_ingress = None
+    last_completion = None
     for sample in range(samples):
         total_comparisons = 0
         slowest_duration = 0.0
@@ -172,6 +180,9 @@ def summarize(
             earliest_ingress = min(party_starts)
             latest_ingress = max(party_starts)
             completion = max(completion_times)
+            if first_ingress is None:
+                first_ingress = earliest_ingress
+            last_completion = completion
             ingress_skew = latest_ingress - earliest_ingress
             end_to_end_duration = completion - earliest_ingress
             synchronized_duration = completion - latest_ingress
@@ -204,6 +215,12 @@ def summarize(
         "min_comparisons_per_second": min(synchronized_rates),
         "max_comparisons_per_second": max(synchronized_rates),
     }
+    if first_ingress is not None and last_completion is not None:
+        sustained_elapsed = last_completion - first_ingress
+        result["sustained_elapsed_seconds"] = sustained_elapsed
+        result["sustained_comparisons_per_second"] = (
+            sum(comparisons_per_request) / sustained_elapsed
+        )
     return result
 
 
@@ -226,6 +243,12 @@ def main() -> int:
         f"{result['median_end_to_end_comparisons_per_second']:.3f} "
         f"median_ingress_skew_seconds={result['median_ingress_skew_seconds']:.6f} "
         f"max_ingress_skew_seconds={result['max_ingress_skew_seconds']:.6f}"
+        + (
+            f" sustained_comparisons_per_second="
+            f"{result['sustained_comparisons_per_second']:.3f}"
+            if "sustained_comparisons_per_second" in result
+            else ""
+        )
     )
     if args.json is not None:
         args.json.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
