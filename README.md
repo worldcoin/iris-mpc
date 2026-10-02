@@ -61,6 +61,44 @@ The architecture of both the GPU and CPU client implementations is based on the 
 
 This security model forms the baseline of the implementation, and any attacks or exploits which can succeed under these fairly strong assumptions should be considered meaningful vulnurabilities.  Attacks or exploits which require weakening of these assumptions to be viable are not considered critical.  However, the codebase does incorporate some mechanisms targeting "defense in depth", providing redundant protections or limited protections under weaker adversarial assumptions, so reports of such attacks are welcome and may be acted on if the costs of mitigation to performance and codebase complexity are acceptable.
 
+### Production key registry (`keys.json`)
+
+`keys.json` lists the participating organizations and their public key locations. Entries are grouped under `iris.parties`, with one object per party.
+
+| Field | Type | Description |
+|---|---|---|
+| `slu` | String | Party identifier, such as `berkeley-university`, `fau`, or `kaist-university`. |
+| `pub` | String or array of strings | URL of the party’s public key, or multiple URLs providing mirrors of the same key. |
+| `chk` | String | Expected checksum as `sha256:<64 hex digits>` or `sha512:<128 hex digits>`. Hex digits are case-insensitive. |
+
+Every URL in `pub` must serve the same public key bytes. Consumers should verify the downloaded key against `chk` before using it. Checksums cover the entire downloaded file, including whitespace and line endings, without normalization. URLs must use HTTP or HTTPS and must not contain fragments (`#...`).
+
+For example, a FAU party entry has this shape:
+
+```json
+{
+  "slu": "fau",
+  "pub": [
+    "https://pki-smpc.worldcoin.org/public-key-0"
+  ],
+  "chk": "sha256:613696db7be07adb5ccb06d50b12a3cb96914346d6f3a050669844c89542b372"
+}
+```
+
+The `Check public key checksums` GitHub workflow runs for pull requests changing `keys.json` and pushes to `main` changing that file. It verifies **every** URL, including every mirror, and fails on malformed entries, unsupported algorithms, missing files, download errors, or checksum mismatches. Downloads have a 30-second timeout and all keys have a 1 MiB size limit. An empty `iris.parties` array succeeds with zero locations checked. Party identifiers must be nonempty and unique, and URL arrays must be nonempty.
+
+For keys stored in this repository, use a URL such as `https://raw.githubusercontent.com/worldcoin/iris-mpc/refs/heads/main/certs/party.pub`. CI verifies these URLs against the corresponding file in its checkout, so a PR can add or update both the key and its checksum before the key is available on `main`. The shorter `/worldcoin/iris-mpc/main/certs/party.pub` form also works. Missing checkout files fail validation without falling back to the published version. URLs for other repositories or refs, and external mirrors, are downloaded normally. This checks the proposed repository contents; it does not check availability of the raw GitHub URL. Changes to a key file alone do not trigger this workflow; update `keys.json` in the same change.
+
+Only SHA-256 and SHA-512 are supported.
+
+Repository-hosted key paths must not contain symlinks, including in parent directories, because GitHub raw URLs do not serve the dereferenced checkout contents.
+
+Raw GitHub hostname matching is case-insensitive and accepts an explicit default port (`:443` for HTTPS or `:80` for HTTP). When checkout validation is enabled, raw GitHub URLs with credentials or non-default ports are rejected.
+
+Run the same validation locally with `python3 scripts/check-key-checksums.py keys.json`. To generate a checksum, run `sha256sum key.pub` or `sha512sum key.pub` (on macOS, `shasum -a 256 key.pub` or `shasum -a 512 key.pub`). Prefix the resulting hex digest with `sha256:` or `sha512:`.
+
+To also validate repository-hosted keys against your local checkout, run `python3 scripts/check-key-checksums.py keys.json --repository worldcoin/iris-mpc --repo-root .`.
+
 ## GPU Implementation
 
 #### Running the E2E test binary (single machine)
