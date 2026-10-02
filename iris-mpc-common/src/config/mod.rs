@@ -26,10 +26,30 @@ pub struct Opt {
     party_id: Option<usize>,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CpuStartupMode {
+    #[default]
+    Active,
+    Candidate,
+}
+
+fn default_candidate_status_port() -> u16 {
+    3090
+}
+
 // note that the config is loaded from environment variables which are transformed from all upper case
 // to all lower case. ex: SMPC__SCHEMA_NAME -> schema_name.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// Passive preloading is supported only by the CPU linear-scan service.
+    #[serde(default)]
+    pub cpu_startup_mode: CpuStartupMode,
+
+    /// Operator status, bound to loopback only in candidate mode.
+    #[serde(default = "default_candidate_status_port")]
+    pub candidate_status_port: u16,
+
     #[serde(default = "default_schema_name")]
     pub schema_name: String,
 
@@ -805,6 +825,8 @@ impl From<Config> for CommonConfig {
         // This is destructured here intentionally to cause a compile error if
         // any of the fields are added to the struct without being considered if they should be in the common config hash or not.
         let Config {
+            cpu_startup_mode: _, // candidate processes never join active coordination
+            candidate_status_port: _,
             environment,
             party_id: _,           // party id is different for each server
             requests_queue_url: _, // requests queue url is different for each server

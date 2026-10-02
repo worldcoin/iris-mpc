@@ -139,6 +139,10 @@ async fn main() -> Result<()> {
 }
 
 async fn server_main(config: Config) -> Result<()> {
+    if config.cpu_startup_mode == iris_mpc_common::config::CpuStartupMode::Candidate {
+        bail!("candidate startup requires the CPU linear-scan binary");
+    }
+
     if config.db_backed_ingest && config.disable_persistence {
         bail!(
             "db_backed_ingest=true is incompatible with disable_persistence=true: ingested request claims would never be marked persisted and would be re-formed on every restart"
