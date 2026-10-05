@@ -1,0 +1,35 @@
+name: Check public key checksums
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - keys.json
+  pull_request:
+    paths:
+      - keys.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: "${{ github.workflow }} @ ${{ github.head_ref || github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # pin@v6.0.1
+        with:
+          persist-credentials: false
+
+      - name: Test checksum validator
+        run: python3 -m unittest discover -s scripts/tests -p 'test_check_key_checksums.py'
+
+      - name: Verify every public key location
+        # Own-repository main URLs use files in the checkout, including PR changes.
+        run: python3 scripts/check-key-checksums.py keys.json --repository "$GITHUB_REPOSITORY" --repo-root "$GITHUB_WORKSPACE"
