@@ -22,7 +22,7 @@ env:
 
 jobs:
   docker:
-    if: github.ref_name != "carlomazzaferro/pop-4401-intel-stage"
+    if: github.ref_name != 'carlomazzaferro/pop-4401-intel-stage'
     name: Build and push arm64 image
     timeout-minutes: 40
     runs-on:
