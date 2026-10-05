@@ -2,7 +2,9 @@ use crate::server::MAX_CONCURRENT_REQUESTS;
 use crate::services::aws::clients::AwsClients;
 use crate::services::processors::get_iris_shares_parse_task;
 use crate::services::processors::result_message::send_results_to_sns;
-use ampc_server_utils::modifications::{recovery_plan, replay_modification_results};
+use ampc_server_utils::modifications::{
+    recovery_plan, replay_modification_results, ModificationInput,
+};
 use aws_sdk_sns::Client as SNSClient;
 use eyre::{eyre, Report};
 use iris_mpc_common::config::Config;
@@ -113,9 +115,15 @@ pub async fn sync_modifications<'a>(
             | RESET_UPDATE_MESSAGE_TYPE
             | RECOVERY_UPDATE_MESSAGE_TYPE
             | UNIQUENESS_MESSAGE_TYPE => {
-                let s3_url = modification.s3_url.clone().ok_or_else(|| {
-                    eyre!("Persisted modification missing s3_url: {:?}", modification)
-                })?;
+                let s3_url = match store
+                    .load_modification_input(version_tx.tx(), modification)
+                    .await?
+                {
+                    ModificationInput::S3(url) => url,
+                    ModificationInput::Inline { .. } => {
+                        return Err(eyre!("Iris recovery requires S3 input"))
+                    }
+                };
                 let (left_shares, right_shares) = get_iris_shares_parse_task(
                     config.party_id,
                     shares_encryption_key_pair.clone(),

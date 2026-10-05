@@ -25,7 +25,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{
     fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
 };
-use sqlx::{PgPool, Postgres, Row, Transaction};
+use sqlx::{PgConnection, PgPool, Postgres, Row, Transaction};
 use std::ops::DerefMut;
 
 /// Capability token for writing `version_id` verbatim: required by
@@ -191,11 +191,13 @@ impl From<&DbStoredIris> for VectorId {
 }
 
 pub use ampc_server_utils::modifications::postgres::StoredModification;
+use ampc_server_utils::modifications::{ModificationInput, ModificationInputStorage};
 
 #[derive(Clone, Debug)]
 pub struct Store {
     pub pool: PgPool,
     pub schema_name: String,
+    modification_input_storage: ModificationInputStorage,
 }
 
 impl Store {
@@ -208,6 +210,7 @@ impl Store {
         Ok(Store {
             pool: postgres_client.pool.clone(),
             schema_name: postgres_client.schema_name.clone(),
+            modification_input_storage: ModificationInputStorage::S3,
         })
     }
 
@@ -859,17 +862,37 @@ WHERE id = $1;
         request_type: &str,
         s3_url: Option<&str>,
     ) -> Result<Modification> {
+        let input = s3_url.map(|url| ModificationInput::S3(url.to_owned()));
         ampc_server_utils::modifications::postgres::insert_modification(
             &self.pool,
             serial_id,
             request_type,
-            s3_url,
+            input.as_ref(),
+            self.modification_input_storage,
         )
         .await
     }
 
     pub async fn last_modifications(&self, count: usize) -> Result<Vec<Modification>> {
-        ampc_server_utils::modifications::postgres::last_modifications(&self.pool, count).await
+        ampc_server_utils::modifications::postgres::last_modifications(
+            &self.pool,
+            count,
+            self.modification_input_storage,
+        )
+        .await
+    }
+
+    pub async fn load_modification_input(
+        &self,
+        conn: &mut PgConnection,
+        modification: &Modification,
+    ) -> Result<ModificationInput> {
+        ampc_server_utils::modifications::postgres::load_modification_input(
+            conn,
+            modification,
+            self.modification_input_storage,
+        )
+        .await
     }
 
     /// Fetch modifications updated after a certain ID that are less than a serial id.
@@ -905,7 +928,7 @@ WHERE id = $1;
                     id,
                     serial_id,
                     request_type,
-                    s3_url,
+                    s3_url AS input_reference,
                     status,
                     persisted,
                     result_message_body
@@ -940,7 +963,10 @@ WHERE id = $1;
         .fetch_one(&mut *tx)
         .await?;
 
-        let modifications = rows.into_iter().map(Into::into).collect();
+        let modifications = rows
+            .into_iter()
+            .map(|row| row.into_modification(self.modification_input_storage))
+            .collect();
         Ok((modifications, max_id))
     }
 
@@ -2105,7 +2131,10 @@ pub mod tests {
         assert_eq!(actual.id, expected_id);
         assert_eq!(actual.serial_id, expected_serial_id);
         assert_eq!(actual.request_type, expected_request_type);
-        assert_eq!(actual.s3_url, expected_s3_url);
+        assert_eq!(
+            actual.input,
+            expected_s3_url.map(ampc_server_utils::modifications::ModificationInputReference::S3)
+        );
         assert_eq!(actual.status, expected_status.to_string());
         assert_eq!(actual.persisted, expected_persisted);
         assert_eq!(actual.result_message_body, expected_result_body);
