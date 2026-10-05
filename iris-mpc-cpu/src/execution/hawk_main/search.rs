@@ -996,7 +996,12 @@ struct FullStageOrientation<'a, const ROTMASK: u32> {
     context: LinearScanEyeContext,
 }
 
-/// Alignment of full-stage chunk boundaries, in records.
+/// Alignment of full-stage chunk boundaries, in records: one group of the
+/// AMX layout. Unit tests use single records so that their small databases
+/// still span many chunks.
+#[cfg(not(test))]
+const FULL_STAGE_ALIGN: usize = crate::protocol::amx_scan::GROUP;
+#[cfg(test)]
 const FULL_STAGE_ALIGN: usize = 1;
 
 /// Record ranges of the full-stage chunks of `records` records for
@@ -1004,7 +1009,9 @@ const FULL_STAGE_ALIGN: usize = 1;
 /// [`LINEAR_SCAN_CHUNK_SIZE`] comparisons per orientation, and every lane gets
 /// the same number of chunks: the lanes are assigned round-robin, and a lane
 /// with one chunk more than the others would run the end of the stage alone.
-/// Chunk boundaries are multiples of `align` records.
+/// Chunk boundaries are multiples of `align` records. With the dense serial
+/// IDs of a linear-scan database, record positions are arena positions, so
+/// [`FULL_STAGE_ALIGN`] keeps AMX groups within one chunk.
 ///
 /// The result depends only on its arguments, so all parties derive the same
 /// chunks.
@@ -2229,7 +2236,7 @@ mod tests {
 
     #[test]
     fn full_stage_chunks_cover_records_evenly_over_lanes() {
-        for align in [1, 16] {
+        for align in [1, crate::protocol::amx_scan::GROUP] {
             for (records, n_requests, lanes) in [
                 (0, 1, 4),
                 (1, 1, 4),

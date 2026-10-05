@@ -235,6 +235,32 @@ impl<I: Clone> SharedIrises<I> {
         }
     }
 
+    /// Like [`Self::map_values`], but the stored values see their
+    /// `VectorId`. `empty` maps the empty placeholder.
+    pub fn map_entries<J: Clone>(
+        self,
+        f: impl Fn(VectorId, I) -> J,
+        empty: impl FnOnce(I) -> J,
+    ) -> SharedIrises<J> {
+        SharedIrises {
+            points: self
+                .points
+                .into_iter()
+                .enumerate()
+                .map(|(serial_id, opt)| {
+                    opt.map(|(version, iris)| {
+                        (version, f(VectorId::new(serial_id as u32, version), iris))
+                    })
+                })
+                .collect(),
+            size: self.size,
+            next_id: self.next_id,
+            empty_iris: empty(self.empty_iris),
+            set_hash: self.set_hash,
+            live_ids: self.live_ids,
+        }
+    }
+
     /// Create a metadata-only registry from this store.
     ///
     /// Preserves all VectorId presence, version, and checksum data but

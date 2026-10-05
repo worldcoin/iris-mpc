@@ -4,10 +4,19 @@ use std::sync::OnceLock;
 // Static Variables
 // =============================================================================
 
-/// The number of cores reserved for the tokio runtime per NUMA node.
-/// Set via `init()` before using other functions in this module.
-/// If None, no cores are reserved and overlapping is allowed.
-static TOKIO_THREAD_COUNT: OnceLock<Option<usize>> = OnceLock::new();
+/// How CPUs are split between the tokio runtime and pinned worker threads.
+/// Set via `init()` or `init_with_smt_siblings()` before using other functions
+/// in this module.
+#[derive(Clone, Copy, Debug, Default)]
+struct TokioReservation {
+    /// Tokio CPUs per NUMA node. `None` without SMT placement means no
+    /// reservation: tokio and workers may overlap.
+    per_node: Option<usize>,
+    /// Place tokio on the second hardware thread of each physical core.
+    smt_siblings: bool,
+}
+
+static TOKIO_RESERVATION: OnceLock<TokioReservation> = OnceLock::new();
 
 // =============================================================================
 // Public API
@@ -20,44 +29,122 @@ static TOKIO_THREAD_COUNT: OnceLock<Option<usize>> = OnceLock::new();
 ///
 /// Panics if the reservation exceeds available cores on any NUMA node.
 pub fn init(tokio_threads: Option<usize>) {
+    init_with_smt_siblings(tokio_threads, false);
+}
+
+/// Like [`init`], but with `smt_siblings` the tokio runtime runs on the
+/// second hardware thread of every physical core (at most `tokio_threads` per
+/// NUMA node when set) and workers keep the first hardware threads. Falls
+/// back to [`init`]'s placement on hosts without SMT.
+pub fn init_with_smt_siblings(tokio_threads: Option<usize>, smt_siblings: bool) {
+    let smt_siblings = smt_siblings && {
+        let available = get_numa_nodes()
+            .into_iter()
+            .all(|node| !smt_secondaries(&all_cores_for_node(node)).is_empty());
+        if !available {
+            eprintln!("Warning: tokio_on_smt_siblings is set, but the host has no SMT siblings");
+        }
+        available
+    };
     if let Some(count) = tokio_threads {
         for node in get_numa_nodes() {
-            let available = all_cores_for_node(node).len();
+            let all = all_cores_for_node(node);
+            let available = if smt_siblings {
+                smt_secondaries(&all).len()
+            } else {
+                all.len()
+            };
             assert!(
                 count <= available,
                 "separate_tokio_cores_per_node ({count}) exceeds available cores ({available}) on NUMA node {node}"
             );
         }
     }
-    TOKIO_THREAD_COUNT
-        .set(tokio_threads)
+    TOKIO_RESERVATION
+        .set(TokioReservation {
+            per_node: tokio_threads,
+            smt_siblings,
+        })
         .expect("numactl::init() called more than once");
 }
 
+fn reservation() -> TokioReservation {
+    TOKIO_RESERVATION.get().copied().unwrap_or_default()
+}
+
+/// The CPUs of `node` reserved for the tokio runtime, or `None` if the
+/// runtime is not restricted.
+fn tokio_cores_for_node(node: usize) -> Option<Vec<usize>> {
+    let reservation = reservation();
+    let all = all_cores_for_node(node);
+    if reservation.smt_siblings {
+        let siblings = smt_secondaries(&all);
+        Some(match reservation.per_node {
+            Some(count) => siblings.into_iter().take(count).collect(),
+            None => siblings,
+        })
+    } else {
+        reservation
+            .per_node
+            .map(|count| all.into_iter().take(count).collect())
+    }
+}
+
 /// Returns the CPU IDs belonging to the specified NUMA node, skipping
-/// the first X cores reserved for the tokio runtime on this node (where X is set via `init()`).
+/// the CPUs reserved for the tokio runtime on this node (see `init()`).
 /// If init was called with None, no cores are skipped (overlapping allowed).
-/// Each NUMA node independently reserves its first X cores for tokio threads.
+/// Each NUMA node independently reserves its tokio CPUs.
 /// This ensures balanced core allocation across NUMA nodes for worker threads.
 /// On non-Linux or if detection fails, returns available CPU IDs for node 0
 /// (minus reserved cores), or an empty vec for other nodes.
 pub fn get_cores_for_node(node: usize) -> Vec<usize> {
     let cpus = all_cores_for_node(node);
-    let skip_count = TOKIO_THREAD_COUNT.get().copied().flatten().unwrap_or(0);
-    cpus.into_iter().skip(skip_count).collect()
+    match tokio_cores_for_node(node) {
+        Some(reserved) => cpus
+            .into_iter()
+            .filter(|cpu| !reserved.contains(cpu))
+            .collect(),
+        None => cpus,
+    }
+}
+
+/// One worker CPU per physical core of `node`: the first hardware thread of
+/// every core whose first hardware thread is not reserved for tokio. Kernels
+/// that saturate a per-core unit (such as AMX tiles) lose throughput when two
+/// hardware threads of one core share it. With `tokio_on_smt_siblings`, tokio
+/// shares every core through its second hardware thread; otherwise cores
+/// reserved for tokio get no worker.
+pub fn get_physical_cores_for_node(node: usize) -> Vec<usize> {
+    let mut all = all_cores_for_node(node);
+    all.sort_unstable();
+    let reserved = tokio_cores_for_node(node).unwrap_or_default();
+    let mut seen = Vec::new();
+    all.into_iter()
+        .filter(|&cpu| {
+            let core = core_key(cpu);
+            if core.is_some_and(|core| seen.contains(&core)) {
+                return false;
+            }
+            seen.extend(core);
+            !reserved.contains(&cpu)
+        })
+        .collect()
 }
 
 /// Returns the total number of tokio worker threads across all NUMA nodes.
-/// If set via init(Some(n)), returns n * number_of_numa_nodes.
-/// If not set via init(), defaults to the number of available CPU cores.
+/// With a reservation this is the number of reserved CPUs; otherwise it
+/// defaults to the number of available CPU cores.
 pub fn get_tokio_worker_threads() -> usize {
-    let r = TOKIO_THREAD_COUNT.get().copied().flatten();
-    r.map(|count| count * get_numa_nodes().len())
-        .unwrap_or_else(|| {
-            core_affinity::get_core_ids()
-                .map(|ids| ids.len())
-                .unwrap_or(1)
-        })
+    let reserved = get_numa_nodes()
+        .into_iter()
+        .map(tokio_cores_for_node)
+        .try_fold(0, |total, cpus| cpus.map(|cpus| total + cpus.len()));
+    match reserved {
+        Some(count) if count > 0 => count,
+        _ => core_affinity::get_core_ids()
+            .map(|ids| ids.len())
+            .unwrap_or(1),
+    }
 }
 
 /// Returns a list of all available NUMA node IDs on the system.
@@ -89,38 +176,34 @@ pub fn get_numa_nodes() -> Vec<usize> {
     vec![0]
 }
 
-/// Restricts the current process to run only on the first X CPUs of EACH NUMA node,
-/// where X is the per-node tokio thread count set via `init()`.
-/// If init was called with None, this function does nothing (no restriction).
+/// Restricts the current process (or thread) to the CPUs reserved for the
+/// tokio runtime by `init()`. Without a reservation this does nothing.
 /// On non-Linux systems, this is a no-op.
 #[cfg(target_os = "linux")]
 pub fn restrict_tokio_runtime() {
     use nix::sched::{sched_setaffinity, CpuSet};
     use nix::unistd::Pid;
 
-    let tokio_count_per_node = match TOKIO_THREAD_COUNT.get().copied().flatten() {
-        None | Some(0) => return,
-        Some(x) => x,
-    };
-
     let mut cpuset = CpuSet::new();
-    let numa_nodes = get_numa_nodes();
-
-    for node in numa_nodes {
-        let all_cpus = all_cores_for_node(node);
-        let cpus: Vec<_> = all_cpus.into_iter().take(tokio_count_per_node).collect();
-
+    let mut any = false;
+    for node in get_numa_nodes() {
+        let Some(cpus) = tokio_cores_for_node(node) else {
+            return;
+        };
         if cpus.is_empty() {
             eprintln!("Warning: No CPUs found for tokio runtime on node {}", node);
             continue;
         }
-
-        for &cpu in cpus.iter() {
+        for cpu in cpus {
             if let Err(e) = cpuset.set(cpu) {
                 eprintln!("Warning: Failed to set CPU {} in cpuset: {}", cpu, e);
                 continue;
             }
+            any = true;
         }
+    }
+    if !any {
+        return;
     }
 
     if let Err(e) = sched_setaffinity(Pid::from_raw(0), &cpuset) {
@@ -139,6 +222,45 @@ pub fn restrict_tokio_runtime() {
 // =============================================================================
 // Private Helper Functions
 // =============================================================================
+
+/// `(package, core)` of a CPU, or `None` if the topology is unknown.
+fn core_key(cpu: usize) -> Option<(u32, u32)> {
+    #[cfg(target_os = "linux")]
+    {
+        let read = |name: &str| {
+            std::fs::read_to_string(format!("/sys/devices/system/cpu/cpu{cpu}/topology/{name}"))
+                .ok()?
+                .trim()
+                .parse::<u32>()
+                .ok()
+        };
+        Some((read("physical_package_id")?, read("core_id")?))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = cpu;
+        None
+    }
+}
+
+/// The CPUs of `cpus` that share their physical core with a lower-numbered
+/// CPU of the list, i.e. every hardware thread but the first of each core.
+fn smt_secondaries(cpus: &[usize]) -> Vec<usize> {
+    let mut sorted = cpus.to_vec();
+    sorted.sort_unstable();
+    let mut seen = Vec::new();
+    sorted
+        .into_iter()
+        .filter(|&cpu| match core_key(cpu) {
+            Some(core) if seen.contains(&core) => true,
+            Some(core) => {
+                seen.push(core);
+                false
+            }
+            None => false,
+        })
+        .collect()
+}
 
 /// Parses a Linux cpulist format string (e.g., "0-15,32-47") into a vector of CPU IDs.
 #[cfg(any(target_os = "linux", test))]

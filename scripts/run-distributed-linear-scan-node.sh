@@ -17,7 +17,46 @@ TOKIO_CORES=${LINEAR_SCAN_BENCH_TOKIO_CORES:-11}
 CLIENT_RNG_SEED=${LINEAR_SCAN_BENCH_CLIENT_RNG_SEED:-8675309}
 PIPELINED_REQUESTS=${LINEAR_SCAN_BENCH_PIPELINED_REQUESTS:-0}
 MAX_BATCH_SIZE=${LINEAR_SCAN_BENCH_MAX_BATCH_SIZE:-1}
-AUX_CPU_LIST="0-$((TOKIO_CORES - 1))"
+# Empty: the server decides (tokio on SMT siblings exactly when its AMX scan
+# kernel runs); 0 or 1 overrides that.
+TOKIO_SMT_SIBLINGS=${LINEAR_SCAN_BENCH_TOKIO_SMT_SIBLINGS:-}
+SMT_PLACEMENT=${TOKIO_SMT_SIBLINGS}
+if [[ -z ${SMT_PLACEMENT} ]]; then
+    SMT_PLACEMENT=0
+    grep -qw amx_int8 /proc/cpuinfo 2>/dev/null && SMT_PLACEMENT=1
+fi
+if [[ ${SMT_PLACEMENT} == 1 ]]; then
+    # Tokio runs on the first TOKIO_CORES SMT siblings of every NUMA node and
+    # the dot workers on the first thread of every core. Auxiliary processes
+    # (Postgres, Moto, the client) use the first node's remaining siblings, or
+    # share the tokio siblings when none remain.
+    AUX_CPU_LIST=$(python3 - "$TOKIO_CORES" <<'PY'
+import sys
+from pathlib import Path
+
+def cpulist(text):
+    cpus = []
+    for part in text.strip().split(","):
+        low, _, high = part.partition("-")
+        cpus.extend(range(int(low), int(high or low) + 1))
+    return cpus
+
+count = int(sys.argv[1])
+node0 = cpulist(Path("/sys/devices/system/node/node0/cpulist").read_text())
+seen, siblings = set(), []
+for cpu in sorted(node0):
+    topology = Path(f"/sys/devices/system/cpu/cpu{cpu}/topology")
+    core = (topology / "physical_package_id").read_text(), (topology / "core_id").read_text()
+    if core in seen:
+        siblings.append(cpu)
+    seen.add(core)
+spare = siblings[count:count + 8]
+print(",".join(str(cpu) for cpu in (spare or siblings[:count])))
+PY
+)
+else
+    AUX_CPU_LIST="0-$((TOKIO_CORES - 1))"
+fi
 
 usage() {
     echo "usage: $0 <prepare-db|start-server|stop-server|status> [party-id]" >&2
@@ -262,8 +301,13 @@ start_server() {
     local image_name=${LINEAR_SCAN_BENCH_IMAGE_NAME:-real-server-benchmark}
     mkdir -p "$RUN_DIR"
     : >"$log_file"
+    local smt_env=()
+    if [[ -n ${TOKIO_SMT_SIBLINGS} ]]; then
+        smt_env+=("SMPC__TOKIO_ON_SMT_SIBLINGS=$([[ ${TOKIO_SMT_SIBLINGS} == 1 ]] && echo true || echo false)")
+    fi
 
     nohup env \
+        ${smt_env[@]+"${smt_env[@]}"} \
         AWS_ACCESS_KEY_ID=test \
         AWS_SECRET_ACCESS_KEY=test \
         AWS_REGION=us-east-1 \
