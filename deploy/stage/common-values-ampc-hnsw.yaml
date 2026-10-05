@@ -10,7 +10,7 @@ env:
   RUST_LOG: "info"
   RUST_BACKTRACE: "full"
   SMPC__ENVIRONMENT: "stage"
-  SMPC__SCHEMA_NAME: "POP4401"
+  SMPC__SCHEMA_NAME: "POP4401_17M"
   SMPC__GPU_SCHEMA_NAME_SUFFIX: ""
   SMPC__DATABASE__URL:
     valueFrom:
@@ -58,7 +58,7 @@ env:
   SMPC__LOAD_CHUNKS_PARALLELISM: "64"
   SMPC__LOAD_CHUNKS_BUFFER_SIZE: "1024"
   SMPC__CLEAR_DB_BEFORE_INIT: "false"
-  SMPC__INIT_DB_SIZE: "0"
+  SMPC__INIT_DB_SIZE: "17000000"
   SMPC__MAX_DB_SIZE: "18000000"
   SMPC__FAKE_DB_SIZE: "0"
   SMPC__MAX_BATCH_SIZE: "16"
@@ -128,7 +128,8 @@ readinessProbe:
 
 startupProbe:
   initialDelaySeconds: 900
-  failureThreshold: 120
+  # Allow initial fixture seeding to finish before normal startup validation.
+  failureThreshold: 2880
   periodSeconds: 30
   httpGet:
     path: /ready
