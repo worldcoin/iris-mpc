@@ -25,7 +25,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{
     fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
 };
-use sqlx::{PgPool, Postgres, Row, Transaction};
+use sqlx::{PgConnection, PgPool, Postgres, Row, Transaction};
 use std::ops::DerefMut;
 
 /// Capability token for writing `version_id` verbatim: required by
@@ -197,6 +197,7 @@ use ampc_server_utils::modifications::{ModificationInput, ModificationInputStora
 pub struct Store {
     pub pool: PgPool,
     pub schema_name: String,
+    modification_input_storage: ModificationInputStorage,
 }
 
 impl Store {
@@ -209,6 +210,7 @@ impl Store {
         Ok(Store {
             pool: postgres_client.pool.clone(),
             schema_name: postgres_client.schema_name.clone(),
+            modification_input_storage: ModificationInputStorage::S3,
         })
     }
 
@@ -866,6 +868,7 @@ WHERE id = $1;
             serial_id,
             request_type,
             input.as_ref(),
+            self.modification_input_storage,
         )
         .await
     }
@@ -874,7 +877,20 @@ WHERE id = $1;
         ampc_server_utils::modifications::postgres::last_modifications(
             &self.pool,
             count,
-            ModificationInputStorage::S3,
+            self.modification_input_storage,
+        )
+        .await
+    }
+
+    pub async fn load_modification_input(
+        &self,
+        conn: &mut PgConnection,
+        modification: &Modification,
+    ) -> Result<ModificationInput> {
+        ampc_server_utils::modifications::postgres::load_modification_input(
+            conn,
+            modification,
+            self.modification_input_storage,
         )
         .await
     }
@@ -949,7 +965,7 @@ WHERE id = $1;
 
         let modifications = rows
             .into_iter()
-            .map(|row| row.into_modification(ModificationInputStorage::S3))
+            .map(|row| row.into_modification(self.modification_input_storage))
             .collect();
         Ok((modifications, max_id))
     }
