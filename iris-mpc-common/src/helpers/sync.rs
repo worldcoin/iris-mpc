@@ -59,7 +59,8 @@ pub enum ModificationKey {
 }
 
 pub use ampc_server_utils::modifications::{
-    Modification, ModificationStatus, MOD_STATUS_COMPLETED, MOD_STATUS_IN_PROGRESS,
+    Modification, ModificationInputReference, ModificationStatus, MOD_STATUS_COMPLETED,
+    MOD_STATUS_IN_PROGRESS,
 };
 
 impl SyncResult {
@@ -174,7 +175,7 @@ mod tests {
             id,
             serial_id,
             request_type: request_type.to_string(),
-            s3_url: s3_url.map(|s| s.to_string()),
+            input: s3_url.map(|s| ModificationInputReference::S3(s.to_owned())),
             status: status.to_string(),
             persisted,
             result_message_body: None,
@@ -762,7 +763,9 @@ mod tests {
             id: 1,
             serial_id: Some(123),
             request_type: REAUTH_MESSAGE_TYPE.to_string(),
-            s3_url: "http://example.com/123".to_string().into(),
+            input: Some(ModificationInputReference::S3(
+                "http://example.com/123".to_owned(),
+            )),
             status: ModificationStatus::Completed.to_string(),
             persisted: true,
             result_message_body: Some(serialized_reauth),
@@ -808,7 +811,7 @@ mod tests {
             id: 2,
             serial_id: Some(456),
             request_type: IDENTITY_DELETION_MESSAGE_TYPE.to_string(),
-            s3_url: None,
+            input: None,
             status: ModificationStatus::Completed.to_string(),
             persisted: true,
             result_message_body: Some(serialized_deletion),

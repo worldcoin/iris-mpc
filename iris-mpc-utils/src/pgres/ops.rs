@@ -1,5 +1,8 @@
 use eyre::Result;
-use iris_mpc_common::{helpers::sync::Modification, VectorId};
+use iris_mpc_common::{
+    helpers::sync::{Modification, ModificationInputReference},
+    VectorId,
+};
 use iris_mpc_store::{ExplicitVersionToken, Store};
 use sqlx::{Postgres, Transaction};
 use std::ops::DerefMut;
@@ -67,6 +70,13 @@ pub async fn write_modification(
     tx: &mut Transaction<'_, Postgres>,
     m: &Modification,
 ) -> Result<()> {
+    let s3_url = match &m.input {
+        Some(ModificationInputReference::S3(url)) => Some(url.as_str()),
+        Some(ModificationInputReference::Inline(_)) => {
+            eyre::bail!("Iris modifications require S3 input")
+        }
+        None => None,
+    };
     let query = sqlx::query(
         r#"
             INSERT INTO modifications (id, serial_id, request_type, s3_url, status, persisted)
@@ -82,7 +92,7 @@ pub async fn write_modification(
     .bind(m.id)
     .bind(m.serial_id)
     .bind(m.request_type.as_str())
-    .bind(m.s3_url.as_ref())
+    .bind(s3_url)
     .bind(m.status.as_str())
     .bind(m.persisted);
 

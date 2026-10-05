@@ -573,6 +573,15 @@ pub mod db_ops {
         tx: &mut Transaction<'_, Postgres>,
         m: &Modification,
     ) -> Result<()> {
+        let s3_url = match &m.input {
+            Some(ampc_server_utils::modifications::ModificationInputReference::S3(url)) => {
+                Some(url.as_str())
+            }
+            Some(ampc_server_utils::modifications::ModificationInputReference::Inline(_)) => {
+                eyre::bail!("Iris modifications require S3 input")
+            }
+            None => None,
+        };
         let query = sqlx::query(
             r#"
             INSERT INTO modifications (id, serial_id, request_type, s3_url, status, result_message_body, persisted)
@@ -589,7 +598,7 @@ pub mod db_ops {
         .bind(m.id)
         .bind(m.serial_id)
         .bind(m.request_type.as_str())
-        .bind(m.s3_url.as_ref())
+        .bind(s3_url)
         .bind(m.status.as_str())
         .bind(m.result_message_body.clone())
         .bind(m.persisted);

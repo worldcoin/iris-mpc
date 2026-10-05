@@ -191,6 +191,7 @@ impl From<&DbStoredIris> for VectorId {
 }
 
 pub use ampc_server_utils::modifications::postgres::StoredModification;
+use ampc_server_utils::modifications::{ModificationInput, ModificationInputStorage};
 
 #[derive(Clone, Debug)]
 pub struct Store {
@@ -859,17 +860,23 @@ WHERE id = $1;
         request_type: &str,
         s3_url: Option<&str>,
     ) -> Result<Modification> {
+        let input = s3_url.map(|url| ModificationInput::S3(url.to_owned()));
         ampc_server_utils::modifications::postgres::insert_modification(
             &self.pool,
             serial_id,
             request_type,
-            s3_url,
+            input.as_ref(),
         )
         .await
     }
 
     pub async fn last_modifications(&self, count: usize) -> Result<Vec<Modification>> {
-        ampc_server_utils::modifications::postgres::last_modifications(&self.pool, count).await
+        ampc_server_utils::modifications::postgres::last_modifications(
+            &self.pool,
+            count,
+            ModificationInputStorage::S3,
+        )
+        .await
     }
 
     /// Fetch modifications updated after a certain ID that are less than a serial id.
@@ -905,7 +912,7 @@ WHERE id = $1;
                     id,
                     serial_id,
                     request_type,
-                    s3_url,
+                    s3_url AS input_reference,
                     status,
                     persisted,
                     result_message_body
@@ -940,7 +947,10 @@ WHERE id = $1;
         .fetch_one(&mut *tx)
         .await?;
 
-        let modifications = rows.into_iter().map(Into::into).collect();
+        let modifications = rows
+            .into_iter()
+            .map(|row| row.into_modification(ModificationInputStorage::S3))
+            .collect();
         Ok((modifications, max_id))
     }
 
@@ -2105,7 +2115,10 @@ pub mod tests {
         assert_eq!(actual.id, expected_id);
         assert_eq!(actual.serial_id, expected_serial_id);
         assert_eq!(actual.request_type, expected_request_type);
-        assert_eq!(actual.s3_url, expected_s3_url);
+        assert_eq!(
+            actual.input,
+            expected_s3_url.map(ampc_server_utils::modifications::ModificationInputReference::S3)
+        );
         assert_eq!(actual.status, expected_status.to_string());
         assert_eq!(actual.persisted, expected_persisted);
         assert_eq!(actual.result_message_body, expected_result_body);
