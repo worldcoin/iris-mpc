@@ -6,6 +6,7 @@ use crate::{
         ops::{
             galois_ring_pairwise_distance, non_existent_distance, pairwise_distance,
             rotation_aware_pairwise_distance, rotation_aware_pairwise_distance_rowmajor,
+            rotation_aware_pairwise_distance_rowmajor_trimmed,
         },
         shared_iris::{ArcIris, GaloisRingSharedIris, ResidentIris, ResidentLayout},
     },
@@ -772,8 +773,9 @@ fn worker_thread(
                 rsp,
             } => {
                 let targets = targets[range].iter().map(Some);
-                let result =
-                    rotation_aware_pairwise_distance_rowmajor::<ROTATIONS, _>(&query, targets);
+                let result = rotation_aware_pairwise_distance_rowmajor_trimmed::<ROTATIONS, _>(
+                    &query, targets,
+                );
                 let _ = rsp.send(result);
             }
 
@@ -833,9 +835,10 @@ fn record_missing_resident_targets(missing: usize, total: usize) {
     }
 }
 
-/// Full 31-rotation distances against resident targets, dispatching on the
-/// resident representation: mixed-plane targets use the UMMLA kernel,
-/// u16 targets the MLA kernel. Results are bit-identical between the two.
+/// Full 31-rotation `(code, trimmed mask)` contributions against resident
+/// targets, dispatching on the resident representation: mixed-plane targets
+/// use the UMMLA kernel, u16 targets the MLA kernel. Results are
+/// bit-identical between the two.
 fn full_rotation_distance_resident<'a, I>(query: &ArcIris, targets: I) -> Vec<RingElement<u16>>
 where
     I: Iterator<Item = Option<&'a ResidentIris>> + ExactSizeIterator,
@@ -867,7 +870,7 @@ where
         .iter()
         .map(|target| target.map(ResidentIris::to_arc))
         .collect();
-    rotation_aware_pairwise_distance_rowmajor::<ROTATIONS, _>(
+    rotation_aware_pairwise_distance_rowmajor_trimmed::<ROTATIONS, _>(
         query,
         owned.iter().map(Option::as_ref),
     )
@@ -915,7 +918,7 @@ where
         .map(|target| target.map(ResidentIris::to_arc))
         .collect();
     [&queries[0], &queries[1]].map(|query| {
-        rotation_aware_pairwise_distance_rowmajor::<ROTATIONS, _>(
+        rotation_aware_pairwise_distance_rowmajor_trimmed::<ROTATIONS, _>(
             query,
             owned.iter().map(Option::as_ref),
         )
@@ -1028,6 +1031,11 @@ pub trait IrisWorkerPool: Debug + Send + Sync {
     /// Compute the 31 rotation dot products for one query in a single target
     /// traversal. Exact linear scan uses this instead of HNSW's 3 x 11
     /// rotation-window task decomposition.
+    ///
+    /// Unlike [`IrisWorkerPool::compute_dot_products`], the mask half of each
+    /// interleaved pair is the trimmed-mask dot, not doubled
+    /// ([`crate::protocol::ops::MaskDotScale::Trimmed`]). The exact-scan
+    /// anonymous threshold needs it in that form.
     fn compute_dot_products_full_rotations<'a>(
         &'a self,
         query: QuerySpec,
