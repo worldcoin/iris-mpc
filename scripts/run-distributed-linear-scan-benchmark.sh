@@ -17,6 +17,10 @@ set -euo pipefail
 #   LINEAR_SCAN_BENCH_REQUEST_PARALLELISM=48  # tuned for r8g.24xlarge
 #   LINEAR_SCAN_BENCH_CONNECTION_PARALLELISM=16
 #   LINEAR_SCAN_BENCH_PIPELINED_REQUESTS=1    # queue independent requests together
+#   LINEAR_SCAN_BENCH_MAX_BATCH_SIZE=1        # requests the server scans together
+#   LINEAR_SCAN_BENCH_PRELOAD_REQUESTS=0      # 1: publish all requests before the
+#                                              # servers start (needs pipelining), so
+#                                              # batches never wait on the emulator
 #   LINEAR_SCAN_BENCH_REUSE_DB=1             # reuse the expensive seeded DB
 #   LINEAR_SCAN_BENCH_SKIP_BUILD=1           # reuse binaries already copied
 #   LINEAR_SCAN_BENCH_KEEP_RUNNING=1          # leave servers and Moto running
@@ -39,6 +43,8 @@ CONNECTION_PARALLELISM=${LINEAR_SCAN_BENCH_CONNECTION_PARALLELISM:-16}
 TOKIO_CORES=${LINEAR_SCAN_BENCH_TOKIO_CORES:-11}
 CLIENT_RNG_SEED=${LINEAR_SCAN_BENCH_CLIENT_RNG_SEED:-8675309}
 PIPELINED_REQUESTS=${LINEAR_SCAN_BENCH_PIPELINED_REQUESTS:-0}
+MAX_BATCH_SIZE=${LINEAR_SCAN_BENCH_MAX_BATCH_SIZE:-1}
+PRELOAD_REQUESTS=${LINEAR_SCAN_BENCH_PRELOAD_REQUESTS:-0}
 REMOTE_RUN_DIR=${LINEAR_SCAN_BENCH_REMOTE_RUN_DIR:-/var/tmp/iris-mpc-real-server-bench}
 COMMIT=$(git -C "$PROJECT_ROOT" rev-parse HEAD)
 REMOTE_SOURCE=${LINEAR_SCAN_BENCH_REMOTE_SOURCE:-/var/tmp/iris-mpc-source-${COMMIT}}
@@ -65,6 +71,14 @@ REMOTE_SOURCE=${LINEAR_SCAN_BENCH_REMOTE_SOURCE:-/var/tmp/iris-mpc-source-${COMM
 }
 [[ ${PIPELINED_REQUESTS} =~ ^[01]$ ]] || {
     echo "LINEAR_SCAN_BENCH_PIPELINED_REQUESTS must be 0 or 1" >&2
+    exit 2
+}
+[[ ${PRELOAD_REQUESTS} =~ ^[01]$ && ( ${PRELOAD_REQUESTS} == 0 || ${PIPELINED_REQUESTS} == 1 ) ]] || {
+    echo "LINEAR_SCAN_BENCH_PRELOAD_REQUESTS must be 0, or 1 with pipelined requests" >&2
+    exit 2
+}
+[[ ${MAX_BATCH_SIZE} =~ ^[1-9][0-9]*$ ]] || {
+    echo "LINEAR_SCAN_BENCH_MAX_BATCH_SIZE must be positive" >&2
     exit 2
 }
 [[ ${WARMUP_REQUESTS} =~ ^[0-9]+$ && ${WARMUP_REQUESTS} -lt ${REQUEST_COUNT} ]] || {
@@ -103,6 +117,7 @@ remote_env() {
         "LINEAR_SCAN_BENCH_TOKIO_CORES=${TOKIO_CORES}" \
         "LINEAR_SCAN_BENCH_CLIENT_RNG_SEED=${CLIENT_RNG_SEED}" \
         "LINEAR_SCAN_BENCH_PIPELINED_REQUESTS=${PIPELINED_REQUESTS}" \
+        "LINEAR_SCAN_BENCH_MAX_BATCH_SIZE=${MAX_BATCH_SIZE}" \
         "LINEAR_SCAN_BENCH_NODE_HOSTNAMES=${NODE_HOSTNAMES_JSON}" \
         "LINEAR_SCAN_BENCH_AWS_ENDPOINT=${AWS_ENDPOINT}" \
         "LINEAR_SCAN_BENCH_SERVER_BINARY=${REMOTE_SOURCE}/target/release/iris-mpc-linear-scan" \
@@ -116,6 +131,7 @@ mkdir -p "$OUTPUT_DIR"
 LOCAL_TMP=$(mktemp -d "${TMPDIR:-/tmp}/iris-mpc-real-server-bench.XXXXXX")
 SERVERS_STARTED=false
 MOTO_STARTED=false
+SERVER_STARTS=()
 cleanup() {
     local exit_code=$?
     trap - EXIT INT TERM
@@ -157,7 +173,7 @@ fi
 NODE_HOSTNAMES_JSON=$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' \
     "${NODE_ADDRESSES[@]}")
 AWS_ENDPOINT="http://${NODE_ADDRESSES[0]}:4566"
-echo "REAL_SERVER_BENCH_TOPOLOGY commit=${COMMIT} nodes=${NODE_ADDRESSES[*]} moto=${AWS_ENDPOINT} request_parallelism=${REQUEST_PARALLELISM} connection_parallelism=${CONNECTION_PARALLELISM} tokio_cores=${TOKIO_CORES} client_rng_seed=${CLIENT_RNG_SEED} pipelined_requests=${PIPELINED_REQUESTS}"
+echo "REAL_SERVER_BENCH_TOPOLOGY commit=${COMMIT} nodes=${NODE_ADDRESSES[*]} moto=${AWS_ENDPOINT} request_parallelism=${REQUEST_PARALLELISM} connection_parallelism=${CONNECTION_PARALLELISM} tokio_cores=${TOKIO_CORES} client_rng_seed=${CLIENT_RNG_SEED} pipelined_requests=${PIPELINED_REQUESTS} max_batch_size=${MAX_BATCH_SIZE}"
 
 if [[ ${LINEAR_SCAN_BENCH_SKIP_SYNC:-0} != 1 ]]; then
     git -C "$PROJECT_ROOT" archive --format=tar "$COMMIT" -o "${LOCAL_TMP}/source.tar"
@@ -232,11 +248,22 @@ for party in 0 1 2; do
 done
 wait
 
+CLIENT_PID=
+if [[ ${PRELOAD_REQUESTS} == 1 ]]; then
+    # The emulated SNS/SQS fan-out delivers requests more slowly than a batched
+    # scan consumes them. Queue the whole run while the servers load their
+    # databases so that every batch starts from a full backlog.
+    remote_env "${HOSTS[0]}" "${REMOTE_SOURCE}/scripts/run-distributed-linear-scan-node.sh" \
+        run-client &
+    CLIENT_PID=$!
+fi
+
 for party in 0 1 2; do
     remote_env "${HOSTS[$party]}" \
         "${REMOTE_SOURCE}/scripts/run-distributed-linear-scan-node.sh" start-server "$party" &
+    SERVER_STARTS+=("$!")
 done
-wait
+wait "${SERVER_STARTS[@]}"
 SERVERS_STARTED=true
 
 for _ in $(seq 1 7200); do
@@ -255,8 +282,12 @@ done
 }
 echo "REAL_SERVER_BENCH_SERVERS_READY database_size=${DATABASE_SIZE}"
 
-remote_env "${HOSTS[0]}" "${REMOTE_SOURCE}/scripts/run-distributed-linear-scan-node.sh" \
-    run-client
+if [[ -n ${CLIENT_PID} ]]; then
+    wait "$CLIENT_PID"
+else
+    remote_env "${HOSTS[0]}" "${REMOTE_SOURCE}/scripts/run-distributed-linear-scan-node.sh" \
+        run-client
+fi
 
 for party in 0 1 2; do
     scp "${SCP_OPTIONS[@]}" \

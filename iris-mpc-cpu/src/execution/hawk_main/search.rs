@@ -18,6 +18,7 @@ use crate::{
 };
 use ampc_anon_stats::types::Eye;
 use eyre::{OptionExt, Result};
+use futures::future::try_join_all;
 use iris_mpc_common::iris_db::iris::Threshold;
 use iris_mpc_common::{VectorId, ROTATIONS};
 use std::collections::HashSet;
@@ -28,14 +29,15 @@ use std::sync::{
 use std::time::Instant;
 use tokio::sync::{
     mpsc::{unbounded_channel, UnboundedSender},
-    Notify,
+    Notify, OwnedRwLockReadGuard, OwnedRwLockWriteGuard,
 };
 use tracing::instrument;
 
-/// Keep enough records in each MPC call to amortize its fixed costs without
-/// making one session monopolize the scan. On the production r8g.24xlarge,
-/// 4K records per session keeps the dot-product workers, MPC circuit, and TCP
-/// streams overlapped throughout a large scan.
+/// Comparisons (records times requests) in each MPC call: enough to amortize
+/// its fixed costs without making one session monopolize the scan. 4K per
+/// session keeps the dot-product workers, MPC circuit, and TCP streams
+/// overlapped throughout a large scan on r8g.24xlarge and r8i.24xlarge. The
+/// full-eye stage divides it among the requests of a batch.
 #[cfg(not(test))]
 const LINEAR_SCAN_CHUNK_SIZE: usize = 1 << 12;
 // Exercise chunk sharding and result merging in the small in-process tests.
@@ -321,7 +323,6 @@ pub async fn linear_scan_cascade<const ROTMASK: u32>(
         let registry = vector_store.registry.read().await;
         registry.live_vector_ids()
     };
-    let full_scan_ids = Arc::new(vec![live_ids.clone(); n_requests]);
     let first_eye_comparisons = live_ids.len() * n_requests;
     let known_second_stage_ids = Arc::new(
         extra_candidate_ids
@@ -353,30 +354,39 @@ pub async fn linear_scan_cascade<const ROTMASK: u32>(
     // is running; any database I/O is thereby hidden behind the long stage.
     // Candidates discovered by the anonymous-statistics threshold are still
     // prefetched chunk by chunk and checked below.
-    let first_eye_scan = linear_scan_eye(
-        sessions,
-        search_queries,
-        &search_params,
-        LinearScanEyeContext {
-            eye: full_scan_side,
-            stage: LinearScanStage::Full,
-            orientation,
-        },
-        full_scan_ids,
-        Arc::new(forced_anon_stats_ids.clone()),
-        LinearScanHooks {
-            prefetch: Some(LinearScanPrefetch {
-                worker: prefetch_worker.clone(),
-                excluded_ids: Arc::new(
-                    known_second_stage_ids
-                        .iter()
-                        .map(|ids| ids.to_vec())
-                        .collect(),
-                ),
-            }),
-            progress: Some(first_eye_progress.clone()),
-        },
-    );
+    let first_eye_scan = async {
+        let orientations = [FullStageOrientation {
+            sessions,
+            queries: search_queries,
+            params: &search_params,
+            context: LinearScanEyeContext {
+                eye: full_scan_side,
+                stage: LinearScanStage::Full,
+                orientation,
+            },
+        }];
+        let mut results = linear_scan_full_stage(
+            &orientations,
+            live_ids.clone(),
+            Arc::new(forced_anon_stats_ids.clone()),
+            LinearScanHooks {
+                prefetch: Some(LinearScanPrefetch {
+                    worker: prefetch_worker.clone(),
+                    excluded_ids: Arc::new(
+                        known_second_stage_ids
+                            .iter()
+                            .map(|ids| ids.to_vec())
+                            .collect(),
+                    ),
+                }),
+                progress: Some(first_eye_progress.clone()),
+            },
+        )
+        .await?;
+        results
+            .pop()
+            .ok_or_eyre("full linear-scan stage returned no orientation")
+    };
     let known_second_eye_scan = async {
         first_eye_progress.wait_for_candidate_start().await;
         linear_scan_eye(
@@ -601,7 +611,8 @@ async fn linear_scan_eye<const ROTMASK: u32>(
     // The HNSW scheduler distributes query rotations, but the exact scan has
     // only one useful query rotation: its center query already evaluates all
     // 31 database rotations. Instead, shard every request's candidate list so
-    // batch-size=1 can use the whole machine and pipeline dot/MPC/network work.
+    // a single request can use the whole machine and pipeline dot/MPC/network
+    // work.
     let mut chunks_per_request = Vec::with_capacity(n_requests);
     let mut chunks = Vec::new();
     for (i_request, ids) in candidate_ids.iter().enumerate() {
@@ -977,211 +988,249 @@ fn emit_linear_scan_eye_summary<const ROTMASK: u32>(
     );
 }
 
-/// Fused full-eye stage for both orientations: one chunk grid over the shared
-/// live-ID list, with paired sessions. Each chunk streams its targets once for
-/// both orientations' dot products; each orientation's threshold rounds then
-/// run on that orientation's own session. Chunk-to-session assignment matches
-/// [`linear_scan_eye`], so every per-orientation session sees the same chunk
-/// sequence (and therefore the same network transcript) as two independent
-/// stages.
-#[allow(clippy::too_many_arguments)]
-async fn linear_scan_full_stage_paired<const ROTMASK: u32>(
-    sessions_both: [&BothEyes<Vec<HawkSession>>; 2],
-    search_queries_both: [&SearchQueries<ROTMASK>; 2],
-    search_params_both: [&SearchParams; 2],
-    contexts: [LinearScanEyeContext; 2],
-    full_scan_ids: Arc<VecRequests<Arc<[VectorId]>>>,
+/// One orientation of a full-eye stage.
+struct FullStageOrientation<'a, const ROTMASK: u32> {
+    sessions: &'a BothEyes<Vec<HawkSession>>,
+    queries: &'a SearchQueries<ROTMASK>,
+    params: &'a SearchParams,
+    context: LinearScanEyeContext,
+}
+
+/// Alignment of full-stage chunk boundaries, in records.
+const FULL_STAGE_ALIGN: usize = 1;
+
+/// Record ranges of the full-stage chunks of `records` records for
+/// `n_requests` requests on `lanes` lanes. A chunk holds at most about
+/// [`LINEAR_SCAN_CHUNK_SIZE`] comparisons per orientation, and every lane gets
+/// the same number of chunks: the lanes are assigned round-robin, and a lane
+/// with one chunk more than the others would run the end of the stage alone.
+/// Chunk boundaries are multiples of `align` records.
+///
+/// The result depends only on its arguments, so all parties derive the same
+/// chunks.
+fn full_stage_chunks(
+    records: usize,
+    n_requests: usize,
+    lanes: usize,
+    align: usize,
+) -> Vec<std::ops::Range<usize>> {
+    let align = align.max(1);
+    let units = records.div_ceil(align);
+    if units == 0 {
+        return std::iter::once(0..0).collect();
+    }
+    let units_per_chunk = LINEAR_SCAN_CHUNK_SIZE
+        .div_ceil(n_requests.max(1))
+        .div_ceil(align);
+    let nominal = units.div_ceil(units_per_chunk);
+    let lanes = lanes.clamp(1, nominal);
+    let n_chunks = (nominal.div_ceil(lanes) * lanes).min(units);
+    (0..n_chunks)
+        .map(|chunk| {
+            let start = (chunk * units / n_chunks * align).min(records);
+            let end = ((chunk + 1) * units / n_chunks * align).min(records);
+            start..end
+        })
+        .collect()
+}
+
+/// Full-eye stage of a batch: one chunk grid over the shared live-ID list,
+/// where every chunk evaluates all requests of the batch in every given
+/// orientation. The resident eye is therefore streamed once per chunk for
+/// the whole batch, and each loaded group feeds the dot products of all
+/// queries. Each lane pairs one session per orientation; an orientation's
+/// threshold rounds run on its own session, over the concatenation of the
+/// chunk's records of every request.
+async fn linear_scan_full_stage<const ROTMASK: u32>(
+    orientations: &[FullStageOrientation<'_, ROTMASK>],
+    live_ids: Arc<[VectorId]>,
     forced_anon_stats_ids: Arc<VecRequests<Vec<VectorId>>>,
     hooks: LinearScanHooks,
-) -> Result<[VecRequests<VecRotationSupport<HawkInsertPlan, ROTMASK>>; 2]> {
+) -> Result<Vec<VecRequests<VecRotationSupport<HawkInsertPlan, ROTMASK>>>> {
     let stage_start = Instant::now();
-    let eye_index = eye_index(contexts[0].eye);
-    debug_assert_eq!(eye_index, self::eye_index(contexts[1].eye));
-    let n_requests = search_queries_both[0][eye_index].len();
-    assert_eq!(n_requests, search_queries_both[1][eye_index].len());
-    assert_eq!(n_requests, full_scan_ids.len());
+    let first = orientations
+        .first()
+        .ok_or_eyre("full linear-scan stage needs an orientation")?;
+    let eye_index = eye_index(first.context.eye);
+    let n_requests = first.queries[eye_index].len();
+    for orientation in orientations {
+        debug_assert_eq!(eye_index, self::eye_index(orientation.context.eye));
+        assert_eq!(n_requests, orientation.queries[eye_index].len());
+        debug_assert_eq!(orientation.params.do_match, first.params.do_match);
+    }
     assert_eq!(n_requests, forced_anon_stats_ids.len());
-    let comparisons = full_scan_ids.iter().map(|ids| ids.len()).sum::<usize>();
+    let comparisons = live_ids.len() * n_requests;
     let central_rotation = ROTMASK.count_ones() as usize / 2;
 
-    let mut chunks_per_request = Vec::with_capacity(n_requests);
-    let mut chunks = Vec::new();
-    for (i_request, ids) in full_scan_ids.iter().enumerate() {
-        let n_chunks = ids.len().div_ceil(LINEAR_SCAN_CHUNK_SIZE).max(1);
-        chunks_per_request.push(n_chunks);
-        for i_chunk in 0..n_chunks {
-            let start = (i_chunk * LINEAR_SCAN_CHUNK_SIZE).min(ids.len());
-            let end = (start + LINEAR_SCAN_CHUNK_SIZE).min(ids.len());
-            chunks.push(LinearScanChunk {
-                i_request,
-                i_chunk,
-                range: start..end,
-            });
-        }
-    }
-
+    let configured_sessions = orientations
+        .iter()
+        .map(|orientation| orientation.sessions[eye_index].len())
+        .min()
+        .unwrap_or(0);
+    let lanes = configured_sessions.clamp(1, LINEAR_SCAN_MAX_IN_FLIGHT_CHUNKS);
+    let chunks = full_stage_chunks(live_ids.len(), n_requests, lanes, FULL_STAGE_ALIGN);
     let chunk_count = chunks.len();
-    let configured_sessions = sessions_both[0][eye_index]
-        .len()
-        .min(sessions_both[1][eye_index].len());
-    let n_workers = configured_sessions
-        .min(LINEAR_SCAN_MAX_IN_FLIGHT_CHUNKS)
-        .min(chunks.len())
-        .max(1);
+    let n_workers = lanes.min(chunk_count);
     let mut batches = vec![Vec::new(); n_workers];
-    for (index, chunk) in chunks.into_iter().enumerate() {
-        batches[index % n_workers].push(chunk);
+    for (i_chunk, range) in chunks.into_iter().enumerate() {
+        batches[i_chunk % n_workers].push((i_chunk, range));
     }
     let min_chunks_per_session = batches.iter().map(Vec::len).min().unwrap_or(0);
     let max_chunks_per_session = batches.iter().map(Vec::len).max().unwrap_or(0);
+
+    // The queries of every orientation, request-major: output buffer `o` of
+    // a chunk's dot products holds orientation `o`'s requests in order.
+    let queries = Arc::new(
+        orientations
+            .iter()
+            .map(|orientation| {
+                (0..n_requests)
+                    .map(|i_request| orientation.queries[eye_index][i_request][central_rotation])
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>(),
+    );
+    let params = orientations
+        .iter()
+        .map(|orientation| orientation.params.clone())
+        .collect::<Vec<_>>();
+    let do_match = first.params.do_match;
 
     let jobs = batches
         .into_iter()
         .enumerate()
         .filter(|(_, batch)| !batch.is_empty())
         .map(|(i_session, batch)| {
-            let session_a = sessions_both[0][eye_index][i_session].clone();
-            let session_b = sessions_both[1][eye_index][i_session].clone();
-            let search_queries_a = search_queries_both[0].clone();
-            let search_queries_b = search_queries_both[1].clone();
-            let search_params_a = search_params_both[0].clone();
-            let search_params_b = search_params_both[1].clone();
-            let full_scan_ids = full_scan_ids.clone();
+            let sessions = orientations
+                .iter()
+                .map(|orientation| orientation.sessions[eye_index][i_session].clone())
+                .collect::<Vec<_>>();
+            let queries = queries.clone();
+            let params = params.clone();
+            let live_ids = live_ids.clone();
             let forced_anon_stats_ids = forced_anon_stats_ids.clone();
             let hooks = hooks.clone();
             async move {
-                let mut store_a = session_a.aby3_store.write().await;
-                let mut store_b = session_b.aby3_store.write().await;
-                // The fused dot pass below is dispatched through `store_a`
-                // for both orientations' queries. That resolves the mirror
-                // query only because every session of one eye shares that
+                let mut stores = Vec::with_capacity(sessions.len());
+                let mut graphs = Vec::with_capacity(sessions.len());
+                for session in &sessions {
+                    stores.push(session.aby3_store.clone().write_owned().await);
+                    graphs.push(session.graph_store.clone().read_owned().await);
+                }
+                // The fused dot pass is dispatched through the first store for
+                // every orientation's queries. That resolves the mirror
+                // queries only because every session of one eye shares that
                 // eye's worker pool, into which `HawkRequest::cache_into`
                 // caches the normal and mirror queries alike. Make the
                 // assumption explicit rather than relying on it silently.
-                eyre::ensure!(
-                    Arc::ptr_eq(&store_a.workers, &store_b.workers),
-                    "paired linear scan requires both orientations' sessions to share one worker pool"
-                );
-                let graph_a = session_a.graph_store.clone().read_owned().await;
-                let graph_b = session_b.graph_store.clone().read_owned().await;
-                let mut results = Vec::with_capacity(batch.len());
+                for store in &stores[1..] {
+                    eyre::ensure!(
+                        Arc::ptr_eq(&store.workers, &stores[0].workers),
+                        "a fused linear-scan stage requires all orientations' sessions to share one worker pool"
+                    );
+                }
+                let dispatch = |store: &Aby3Store<HawkOps>, range: &std::ops::Range<usize>| {
+                    store.spawn_full_rotation_dot_contributions_batch(
+                        queries.as_ref().clone(),
+                        &live_ids[range.clone()],
+                    )
+                };
                 // Software-pipeline this lane: the next chunk's fused dot
                 // products run on the worker pool while the current chunk's
                 // threshold rounds are in flight, so the dot workers stay fed
-                // instead of idling for a round trip per chunk.
-                let queries_for = |chunk: &LinearScanChunk| {
-                    (
-                        search_queries_a[eye_index][chunk.i_request][central_rotation],
-                        search_queries_b[eye_index][chunk.i_request][central_rotation],
-                    )
-                };
-                let do_match = search_params_a.do_match;
-                let dispatch = |store: &Aby3Store<HawkOps>, chunk: &LinearScanChunk| {
-                    let (query_a, query_b) = queries_for(chunk);
-                    store.spawn_full_rotation_dot_contributions_pair(
-                        [&query_a, &query_b],
-                        &full_scan_ids[chunk.i_request][chunk.range.clone()],
-                    )
-                };
-                // Keep one chunk of dot work buffered per lane: the next
-                // chunk's dot products run while this chunk's threshold
-                // rounds are in flight. Deeper buffering measures worse — all
-                // dot work then completes early and the stage drains on
-                // thresholds alone with idle dot workers.
+                // instead of idling for a round trip per chunk. Deeper
+                // buffering measures worse: all dot work then completes early
+                // and the stage drains on thresholds alone with idle workers.
                 const DOT_PIPELINE_DEPTH: usize = 1;
                 // Handles abort their task when dropped, so an error anywhere
                 // in this lane (or a sibling lane failing `try_join!`) also
                 // cancels the lookahead chunk instead of leaving it running.
                 let mut pending_dots = std::collections::VecDeque::new();
                 if do_match {
-                    for chunk in batch.iter().take(DOT_PIPELINE_DEPTH) {
-                        pending_dots.push_back(dispatch(&store_a, chunk)?);
+                    for (_, range) in batch.iter().take(DOT_PIPELINE_DEPTH) {
+                        pending_dots.push_back(dispatch(&stores[0], range)?);
                     }
                 }
-                for (index, chunk) in batch.iter().enumerate() {
+                let mut results = Vec::with_capacity(batch.len());
+                for (index, (i_chunk, range)) in batch.iter().enumerate() {
                     let contributions = match pending_dots.pop_front() {
                         Some(handle) => handle
                             .await
                             .map_err(|error| eyre::eyre!("fused dot task failed: {error}"))??,
-                        None => [Vec::new(), Vec::new()],
+                        None => vec![Vec::new(); stores.len()],
                     };
                     if do_match {
-                        if let Some(next) = batch.get(index + DOT_PIPELINE_DEPTH) {
-                            pending_dots.push_back(dispatch(&store_a, next)?);
+                        if let Some((_, next)) = batch.get(index + DOT_PIPELINE_DEPTH) {
+                            pending_dots.push_back(dispatch(&stores[0], next)?);
                         }
                     }
-                    let (query_a, query_b) = queries_for(chunk);
-                    let chunk_ids = &full_scan_ids[chunk.i_request][chunk.range.clone()];
-                    let plans = per_linear_scan_chunk_pair(
-                        [query_a, query_b],
-                        [&search_params_a, &search_params_b],
-                        (&mut store_a, &mut store_b),
-                        (&graph_a, &graph_b),
+                    let chunk_ids = &live_ids[range.clone()];
+                    let plans = per_linear_scan_chunk_batch(
+                        &queries,
+                        &params,
+                        &mut stores,
+                        &graphs,
                         contributions,
                         chunk_ids,
-                        &forced_anon_stats_ids[chunk.i_request],
+                        &forced_anon_stats_ids,
                     )
                     .await?;
                     if let Some(prefetch) = &hooks.prefetch {
-                        // One union prefetch warms the cold eye for both
-                        // orientations' second-stage candidates.
-                        let mut prefetch_ids = collect_live_second_stage_ids(
-                            chunk_ids,
-                            plans.iter().flat_map(|plan| {
-                                plan.classified
-                                    .anon_stats_matches
-                                    .results
-                                    .iter()
-                                    .map(|(id, _)| *id)
-                            }),
-                            &[],
-                        );
-                        exclude_known_second_stage_ids(
-                            &mut prefetch_ids,
-                            &prefetch.excluded_ids[chunk.i_request],
-                        );
+                        // One union prefetch warms the cold eye for every
+                        // request's second-stage candidates in every orientation.
+                        let mut prefetch_ids = Vec::new();
+                        for i_request in 0..n_requests {
+                            let mut ids = collect_live_second_stage_ids(
+                                chunk_ids,
+                                plans.iter().flat_map(|plans| {
+                                    plans[i_request]
+                                        .classified
+                                        .anon_stats_matches
+                                        .results
+                                        .iter()
+                                        .map(|(id, _)| *id)
+                                }),
+                                &[],
+                            );
+                            exclude_known_second_stage_ids(
+                                &mut ids,
+                                &prefetch.excluded_ids[i_request],
+                            );
+                            prefetch_ids.extend(ids);
+                        }
+                        prefetch_ids.sort_unstable();
+                        prefetch_ids.dedup();
                         prefetch.worker.prefetch_irises(prefetch_ids).await?;
                     }
                     if let Some(progress) = &hooks.progress {
-                        progress.record(chunk.range.len());
+                        progress.record(range.len() * n_requests);
                     }
-                    results.push((chunk.i_request, chunk.i_chunk, plans));
+                    results.push((*i_chunk, plans));
                 }
                 Ok(results)
             }
         });
 
-    let mut chunk_results: [Vec<Vec<Option<HawkInsertPlan>>>; 2] = [
-        chunks_per_request
-            .iter()
-            .map(|&len| vec![None; len])
-            .collect(),
-        chunks_per_request
-            .iter()
-            .map(|&len| vec![None; len])
-            .collect(),
-    ];
-    for (i_request, i_chunk, plans) in parallelize(jobs).await?.into_iter().flatten() {
-        let [plan_a, plan_b] = plans;
-        chunk_results[0][i_request][i_chunk] = Some(plan_a);
-        chunk_results[1][i_request][i_chunk] = Some(plan_b);
+    let mut chunk_results = (0..orientations.len())
+        .map(|_| vec![vec![None; chunk_count]; n_requests])
+        .collect::<Vec<Vec<Vec<Option<HawkInsertPlan>>>>>();
+    for (i_chunk, plans) in parallelize(jobs).await?.into_iter().flatten() {
+        for (orientation_results, orientation_plans) in chunk_results.iter_mut().zip(plans) {
+            for (request_results, plan) in orientation_results.iter_mut().zip(orientation_plans) {
+                request_results[i_chunk] = Some(plan);
+            }
+        }
     }
-    let [chunk_results_a, chunk_results_b] = chunk_results;
 
-    let graph_a = sessions_both[0][eye_index][0].graph_store.read().await;
-    let graph_b = sessions_both[1][eye_index][0].graph_store.read().await;
-    let results = [
-        assemble_linear_scan_results(
-            chunk_results_a,
-            &search_queries_both[0][eye_index],
-            &graph_a,
-        )?,
-        assemble_linear_scan_results(
-            chunk_results_b,
-            &search_queries_both[1][eye_index],
-            &graph_b,
-        )?,
-    ];
+    let mut results = Vec::with_capacity(orientations.len());
+    for (orientation, chunk_results) in orientations.iter().zip(chunk_results) {
+        let graph = orientation.sessions[eye_index][0].graph_store.read().await;
+        results.push(assemble_linear_scan_results(
+            chunk_results,
+            &orientation.queries[eye_index],
+            &graph,
+        )?);
+    }
 
     let elapsed_seconds = stage_start.elapsed().as_secs_f64();
     let shape = LinearScanStageShape {
@@ -1193,8 +1242,8 @@ async fn linear_scan_full_stage_paired<const ROTMASK: u32>(
         min_chunks_per_session,
         max_chunks_per_session,
     };
-    for (context, results) in contexts.iter().zip(&results) {
-        emit_linear_scan_eye_summary(*context, shape, results, elapsed_seconds);
+    for (orientation, results) in orientations.iter().zip(&results) {
+        emit_linear_scan_eye_summary(orientation.context, shape, results, elapsed_seconds);
     }
 
     Ok(results)
@@ -1248,7 +1297,6 @@ pub async fn linear_scan_cascade_paired<const ROTMASK: u32>(
         let registry = vector_store.registry.read().await;
         registry.live_vector_ids()
     };
-    let full_scan_ids = Arc::new(vec![live_ids.clone(); n_requests]);
     let first_eye_comparisons = live_ids.len() * n_requests;
     debug_assert!(live_ids.windows(2).all(|pair| pair[0] < pair[1]));
 
@@ -1298,21 +1346,29 @@ pub async fn linear_scan_cascade_paired<const ROTMASK: u32>(
         orientation,
     });
     let forced_anon_stats_ids_shared = Arc::new(forced_anon_stats_ids.clone());
-    let first_eye_scan = linear_scan_full_stage_paired(
-        sessions_both,
-        search_queries_both,
-        [&search_params_both[0], &search_params_both[1]],
-        contexts,
-        full_scan_ids,
-        forced_anon_stats_ids_shared.clone(),
-        LinearScanHooks {
-            prefetch: Some(LinearScanPrefetch {
-                worker: prefetch_worker.clone(),
-                excluded_ids: prefetch_excluded_ids,
-            }),
-            progress: Some(first_eye_progress.clone()),
-        },
-    );
+    let first_eye_scan = async {
+        let orientations = [0, 1].map(|index| FullStageOrientation {
+            sessions: sessions_both[index],
+            queries: search_queries_both[index],
+            params: &search_params_both[index],
+            context: contexts[index],
+        });
+        let results = linear_scan_full_stage(
+            &orientations,
+            live_ids.clone(),
+            forced_anon_stats_ids_shared.clone(),
+            LinearScanHooks {
+                prefetch: Some(LinearScanPrefetch {
+                    worker: prefetch_worker.clone(),
+                    excluded_ids: prefetch_excluded_ids,
+                }),
+                progress: Some(first_eye_progress.clone()),
+            },
+        )
+        .await?;
+        <[_; 2]>::try_from(results)
+            .map_err(|_| eyre::eyre!("paired linear-scan stage must return two orientations"))
+    };
     // LUC and reauthentication candidates are public before the scan starts.
     // Check them on the cold eye per orientation while the fused resident-eye
     // scan is running.
@@ -1757,84 +1813,132 @@ fn extend_classified_from_thresholds(
     }
 }
 
-/// Threshold rounds and classification for one fused chunk whose local dot
-/// contributions were already computed (typically pipelined on the worker
-/// pool while the previous chunk's thresholds ran). Each orientation's
-/// threshold protocol runs on its own session, so the per-orientation network
-/// transcript is identical to the unfused path.
-#[allow(clippy::too_many_arguments)]
-async fn per_linear_scan_chunk_pair(
-    queries: [Aby3Query; 2],
-    search_params: [&SearchParams; 2],
-    stores: (&mut Aby3Store<HawkOps>, &mut Aby3Store<HawkOps>),
-    graph_stores: (&GraphMem, &GraphMem),
-    contributions: [Vec<RingElement<u16>>; 2],
-    vector_ids: &[VectorId],
-    forced_anon_stats_ids: &[VectorId],
-) -> Result<[HawkInsertPlan; 2]> {
-    let start = Instant::now();
-    let (store_a, store_b) = stores;
-    let mut classified = [ClassifiedMatches::default(), ClassifiedMatches::default()];
-    debug_assert_eq!(search_params[0].do_match, search_params[1].do_match);
-    debug_assert!(vector_ids.len() <= LINEAR_SCAN_CHUNK_SIZE);
+/// Split the threshold result of a chunk evaluated for `n_requests` requests
+/// at once (record `r * len + i` is record `i` of request `r`) back into one
+/// result per request.
+fn split_threshold_result(
+    result: FullRotationThresholdResult,
+    n_requests: usize,
+    len: usize,
+) -> Vec<FullRotationThresholdResult> {
+    let mut matches = result.matches.into_iter();
+    let mut match_rotations = result.match_rotations.into_iter();
+    let mut split = (0..n_requests)
+        .map(|_| FullRotationThresholdResult {
+            matches: matches.by_ref().take(len).collect(),
+            anon_stats_matches: Vec::new(),
+            match_rotations: match_rotations.by_ref().take(len).collect(),
+        })
+        .collect::<Vec<_>>();
+    for (vector, rotation, distance) in result.anon_stats_matches {
+        split[vector / len]
+            .anon_stats_matches
+            .push((vector % len, rotation, distance));
+    }
+    split
+}
 
-    if search_params[0].do_match {
-        let ids = vector_ids;
+/// Threshold rounds and classification for one full-stage chunk whose local
+/// dot contributions were already computed (typically pipelined on the
+/// worker pool while the previous chunk's thresholds ran). Each orientation's
+/// threshold protocol runs on its own session, over the chunk's records of
+/// every request at once; the results are then split back per request.
+/// Returns the plans per orientation and request.
+async fn per_linear_scan_chunk_batch(
+    queries: &[Vec<Aby3Query>],
+    params: &[SearchParams],
+    stores: &mut [OwnedRwLockWriteGuard<Aby3Store<HawkOps>>],
+    graphs: &[OwnedRwLockReadGuard<GraphMem>],
+    contributions: Vec<Vec<RingElement<u16>>>,
+    vector_ids: &[VectorId],
+    forced_anon_stats_ids: &VecRequests<Vec<VectorId>>,
+) -> Result<Vec<Vec<HawkInsertPlan>>> {
+    let start = Instant::now();
+    let n_requests = queries.first().map_or(0, Vec::len);
+    let len = vector_ids.len();
+    let mut classified = queries
+        .iter()
+        .map(|_| vec![ClassifiedMatches::default(); n_requests])
+        .collect::<Vec<_>>();
+
+    if params.first().is_some_and(|params| params.do_match) {
+        // Request `r`'s forced anonymous-statistics records sit at
+        // `r * len + position` of the concatenated chunk.
         let forced_anon_stats_vectors = forced_anon_stats_ids
             .iter()
-            .filter_map(|id| ids.binary_search(id).ok())
+            .enumerate()
+            .flat_map(|(i_request, ids)| {
+                ids.iter().filter_map(move |id| {
+                    vector_ids
+                        .binary_search(id)
+                        .ok()
+                        .map(|position| i_request * len + position)
+                })
+            })
             .collect::<Vec<_>>();
-        let [contributions_a, contributions_b] = contributions;
-        let (thresholds_a, thresholds_b) = tokio::try_join!(
-            store_a.eval_full_rotation_thresholds_fused_from_contributions_with_forced_anon_stats(
-                contributions_a,
-                ids.len(),
-                &forced_anon_stats_vectors,
-            ),
-            store_b.eval_full_rotation_thresholds_fused_from_contributions_with_forced_anon_stats(
-                contributions_b,
-                ids.len(),
-                &forced_anon_stats_vectors,
-            ),
-        )?;
-        extend_classified_from_thresholds(
-            &mut classified[0],
-            ids,
-            thresholds_a,
-            search_params[0].return_partial_results,
-        );
-        extend_classified_from_thresholds(
-            &mut classified[1],
-            ids,
-            thresholds_b,
-            search_params[1].return_partial_results,
-        );
-
-        for (side, params) in classified.iter_mut().zip(&search_params) {
-            side.linear_scan_supermatch_threshold = params
+        let thresholds = try_join_all(stores.iter_mut().zip(contributions).map(
+            |(store, contributions)| {
+                store.eval_full_rotation_thresholds_fused_from_contributions_with_forced_anon_stats(
+                    contributions,
+                    n_requests * len,
+                    &forced_anon_stats_vectors,
+                )
+            },
+        ))
+        .await?;
+        for ((classified, params), result) in classified.iter_mut().zip(params).zip(thresholds) {
+            // The CUDA actor compares its per-eye match counters against
+            // SUPERMATCH_THRESHOLD, but those counters are only fetched when
+            // return_partial_results is set; otherwise they stay at zero and
+            // no query is ever treated as a supermatcher. Apply the same gate.
+            let supermatch_threshold = params
                 .hnsw_supermatch
                 .as_ref()
+                .filter(|_| params.return_partial_results)
                 .map(|searcher| searcher.params.get_ef_search(0));
+            for (classified, result) in classified
+                .iter_mut()
+                .zip(split_threshold_result(result, n_requests, len))
+            {
+                extend_classified_from_thresholds(
+                    classified,
+                    vector_ids,
+                    result,
+                    params.return_partial_results,
+                );
+                classified.linear_scan_supermatch_threshold = supermatch_threshold;
+            }
         }
     }
 
     metrics::histogram!("linear_scan_query_duration").record(start.elapsed().as_secs_f64());
-    metrics::counter!("linear_scan_vectors_total").increment(2 * vector_ids.len() as u64);
+    metrics::counter!("linear_scan_vectors_total")
+        .increment((queries.len() * n_requests * len) as u64);
 
-    let [classified_a, classified_b] = classified;
-    let as_plan = |query: Aby3Query, as_of, classified| HawkInsertPlan {
-        plan: InsertPlanV {
-            query,
-            links: Vec::new(),
-            update_ep: UpdateEntryPoint::False,
-            as_of,
-        },
-        classified,
-    };
-    Ok([
-        as_plan(queries[0], graph_stores.0.last_update_seq_no, classified_a),
-        as_plan(queries[1], graph_stores.1.last_update_seq_no, classified_b),
-    ])
+    Ok(classified
+        .into_iter()
+        .zip(queries)
+        .zip(graphs)
+        .map(|((classified, queries), graph)| {
+            classified
+                .into_iter()
+                .zip(queries)
+                .map(|(classified, &query)| HawkInsertPlan {
+                    // Linear scan does not consume graph edges. Keep a minimal
+                    // plan so the common mutation pipeline can continue
+                    // assigning stable VectorIds and persisting the same
+                    // request-level mutations as the GPU actor.
+                    plan: InsertPlanV {
+                        query,
+                        links: Vec::new(),
+                        update_ep: UpdateEntryPoint::False,
+                        as_of: graph.last_update_seq_no,
+                    },
+                    classified,
+                })
+                .collect()
+        })
+        .collect())
 }
 
 /// Preserve the three-slot HNSW-shaped result container without rescanning the
@@ -2122,6 +2226,46 @@ mod tests {
     use crate::execution::hawk_main::test_utils::{init_graph, init_iris_db, make_request};
     use crate::execution::hawk_main::{HawkActor, Orientation};
     use iris_mpc_common::iris_db::iris::Threshold;
+
+    #[test]
+    fn full_stage_chunks_cover_records_evenly_over_lanes() {
+        for align in [1, 16] {
+            for (records, n_requests, lanes) in [
+                (0, 1, 4),
+                (1, 1, 4),
+                (7, 3, 4),
+                (1000, 1, 144),
+                (1000, 8, 3),
+                (4099, 2, 7),
+                (1 << 20, 16, 144),
+            ] {
+                let chunks = full_stage_chunks(records, n_requests, lanes, align);
+                assert!(!chunks.is_empty());
+                assert_eq!(chunks.first().unwrap().start, 0);
+                assert_eq!(chunks.last().unwrap().end, records);
+                for pair in chunks.windows(2) {
+                    assert_eq!(pair[0].end, pair[1].start);
+                    assert!(pair[0].end.is_multiple_of(align));
+                }
+                if records > 0 {
+                    assert!(chunks.iter().all(|chunk| !chunk.is_empty()));
+                    // Every chunk stays within the comparison budget, up to
+                    // the alignment.
+                    let limit = LINEAR_SCAN_CHUNK_SIZE
+                        .div_ceil(n_requests)
+                        .next_multiple_of(align);
+                    assert!(chunks.iter().all(|chunk| chunk.len() <= limit));
+                    // Either every lane gets the same number of chunks, or
+                    // there are too few records for that and every chunk is
+                    // minimal.
+                    assert!(
+                        chunks.len().is_multiple_of(lanes.min(chunks.len()))
+                            || chunks.len() == records.div_ceil(align)
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn match_threshold_is_stricter_than_anon_stats() {
