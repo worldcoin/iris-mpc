@@ -147,10 +147,17 @@ podAnnotations:
   karpenter.sh/do-not-disrupt: "true"
 
 nodeSelector:
+  karpenter.sh/nodepool: pop-4401-intel
   kubernetes.io/arch: amd64
   node.kubernetes.io/instance-type: "r8i.24xlarge"
   karpenter.sh/capacity-type: on-demand
   topology.k8s.aws/zone-id: "euc1-az1"
+
+tolerations:
+  - key: pop-stage-test
+    operator: Equal
+    value: pop-4401
+    effect: NoSchedule
 
 affinity:
   nodeAffinity:
