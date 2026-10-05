@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-linear-scan:c252a45892ec61a53ff39ca6663cb47d92f45459"
+image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:aa40ec683324497cf39eae5062255bedff53be9d"
 
 environment: stage
 replicaCount: 1
@@ -55,18 +55,14 @@ env:
   SMPC__DB_CHUNKS_FOLDER_NAME: "hnsw_even_odd_with_version_id_output_16k"
   SMPC__LOAD_CHUNKS_PARALLELISM: "64"
   SMPC__LOAD_CHUNKS_BUFFER_SIZE: "1024"
-  SMPC__CLEAR_DB_BEFORE_INIT: "true"
+  SMPC__CLEAR_DB_BEFORE_INIT: "false"
   SMPC__INIT_DB_SIZE: "0"
-  SMPC__MAX_DB_SIZE: "100000"
+  SMPC__MAX_DB_SIZE: "18000000"
   SMPC__FAKE_DB_SIZE: "0"
-  # Linear scan serializes requests. This makes the preceding mutation visible
-  # before the next scan and removes the need for intra-batch matching.
-  SMPC__MAX_BATCH_SIZE: "1"
-  # Match the r8g.24xlarge production tuning: 3 * 48 search sessions for each
-  # concurrently running normal/mirror orientation.
+  SMPC__MAX_BATCH_SIZE: "16"
   SMPC__HAWK_REQUEST_PARALLELISM: "48"
   SMPC__HAWK_CONNECTION_PARALLELISM: "16"
-  SMPC__SEPARATE_TOKIO_CORES_PER_NODE: "11"
+  SMPC__SEPARATE_TOKIO_CORES_PER_NODE: "12"
   SMPC__FULL_SCAN_SIDE: "Left"
   SMPC__FULL_SCAN_SIDE_SWITCHING_ENABLED: "false"
   SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT: "500"
@@ -75,9 +71,9 @@ env:
   SMPC__ENABLE_REAUTH: "true"
   SMPC__ENABLE_RESET: "true"
   SMPC__ENABLE_RECOVERY: "true"
-  SMPC__LUC_ENABLED: "false"
-  SMPC__LUC_LOOKBACK_RECORDS: "50"
-  SMPC__COLD_EYE_LFU_CACHE_RECORDS: "4096"
+  SMPC__LUC_ENABLED: "true"
+  SMPC__LUC_LOOKBACK_RECORDS: "500"
+  SMPC__COLD_EYE_LFU_CACHE_RECORDS: "12288"
   SMPC__LUC_SERIAL_IDS_FROM_SMPC_REQUEST: "true"
   SMPC__SERVICE__METRICS__HOST:
     valueFrom:
@@ -129,7 +125,7 @@ readinessProbe:
     port: health
 
 startupProbe:
-  initialDelaySeconds: 60
+  initialDelaySeconds: 900
   failureThreshold: 120
   periodSeconds: 30
   httpGet:
@@ -138,11 +134,11 @@ startupProbe:
 
 resources:
   limits:
-    cpu: "12"
-    memory: 16Gi
+    cpu: 92
+    memory: 700Gi
   requests:
-    cpu: "12"
-    memory: 16Gi
+    cpu: 92
+    memory: 700Gi
 
 imagePullSecrets:
   - name: github-secret
@@ -151,7 +147,8 @@ podAnnotations:
   karpenter.sh/do-not-disrupt: "true"
 
 nodeSelector:
-  kubernetes.io/arch: arm64
+  kubernetes.io/arch: amd64
+  node.kubernetes.io/instance-type: "r8i.24xlarge"
   karpenter.sh/capacity-type: on-demand
   topology.k8s.aws/zone-id: "euc1-az1"
 
@@ -162,7 +159,7 @@ affinity:
         - matchExpressions:
             - key: karpenter.k8s.aws/instance-family
               operator: In
-              values: ["r8g"]
+              values: ["r8i"]
 
 podSecurityContext:
   runAsUser: 65534
