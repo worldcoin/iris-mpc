@@ -32,7 +32,7 @@ COPY . .
 # runtime and needs no target features; the target CPU lets the compiler use
 # AES-NI, VAES and AVX-512 for the PRF and the MPC circuit.
 ENV RUSTFLAGS="-C force-frame-pointers=yes -Ctarget-cpu=graniterapids"
-RUN cargo build -p iris-mpc-bins --release --features aes_rng_prf --target=x86_64-unknown-linux-gnu --bin iris-mpc-linear-scan
+RUN cargo build -p iris-mpc-bins --release --features aes_rng_prf --target=x86_64-unknown-linux-gnu --bin iris-mpc-linear-scan --bin init-random-db
 
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
@@ -59,6 +59,7 @@ COPY certs /usr/local/share/ca-certificates/
 RUN update-ca-certificates
 
 COPY --from=build-app /src/iris-mpc/target/x86_64-unknown-linux-gnu/release/iris-mpc-linear-scan /bin/iris-mpc-linear-scan
+COPY --from=build-app /src/iris-mpc/target/x86_64-unknown-linux-gnu/release/init-random-db /bin/init-random-db
 
 USER 65534
 

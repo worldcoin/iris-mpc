@@ -6,6 +6,7 @@ on:
       - main
       - test-alkali-change
       - carlomazzaferro/pop-4401-intel-stage
+      - carlomazzaferro/pop-4401-isolated-loader
   release:
     types:
       - published

@@ -165,6 +165,10 @@ name = "init-single-db"
 path = "bin/iris-mpc-cpu/init_single_db.rs"
 
 [[bin]]
+name = "init-random-db"
+path = "bin/iris-mpc-cpu/init_random_db.rs"
+
+[[bin]]
 name = "generate_ideal_neighborhoods"
 path = "bin/iris-mpc-cpu/generate_ideal_neighborhoods.rs"
 

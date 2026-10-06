@@ -31,7 +31,7 @@ COPY . .
 # Graviton4/r8g production build. aes_armv8 selects aes-prng's hardware path;
 # omitting it more than halves the measured end-to-end scan throughput.
 ENV RUSTFLAGS="--cfg aes_armv8 -C force-frame-pointers=yes -Ctarget-cpu=neoverse-v2 -Ctarget-feature=+lse"
-RUN cargo build -p iris-mpc-bins --release --features aes_rng_prf --target=aarch64-unknown-linux-gnu --bin iris-mpc-linear-scan
+RUN cargo build -p iris-mpc-bins --release --features aes_rng_prf --target=aarch64-unknown-linux-gnu --bin iris-mpc-linear-scan --bin init-random-db
 
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
@@ -58,6 +58,7 @@ COPY certs /usr/local/share/ca-certificates/
 RUN update-ca-certificates
 
 COPY --from=build-app /src/iris-mpc/target/aarch64-unknown-linux-gnu/release/iris-mpc-linear-scan /bin/iris-mpc-linear-scan
+COPY --from=build-app /src/iris-mpc/target/aarch64-unknown-linux-gnu/release/init-random-db /bin/init-random-db
 
 USER 65534
 
