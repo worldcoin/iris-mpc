@@ -63,15 +63,15 @@ This security model forms the baseline of the implementation, and any attacks or
 
 ### Production key registry (`keys.json`)
 
-`keys.json` lists the participating organizations and their public key locations. Entries are grouped under `iris.parties`, with one object per party.
+`keys.json` lists the participating organizations and their public key locations. Entries are grouped under `iris.parties`, which must contain exactly one entry for each of `fau`, `berkeley-university`, and `kaist-university`. Array order is unrestricted; empty, missing, duplicate, and unknown parties are rejected.
 
 | Field | Type | Description |
 |---|---|---|
-| `slu` | String | Party identifier, such as `berkeley-university`, `fau`, or `kaist-university`. |
+| `slu` | String | Exactly one of `fau`, `berkeley-university`, or `kaist-university`. |
 | `pub` | String or array of strings | URL of the party’s public key, or multiple URLs providing mirrors of the same key. |
 | `chk` | String | Expected checksum as `sha256:<64 hex digits>` or `sha512:<128 hex digits>`. Hex digits are case-insensitive. |
 
-Every URL in `pub` must serve the same public key bytes. Consumers should verify the downloaded key against `chk` before using it. Checksums cover the entire downloaded file, including whitespace and line endings, without normalization. URLs must use HTTP or HTTPS and must not contain fragments (`#...`).
+Every URL in `pub` must serve the same public key bytes, and URL arrays must be nonempty. Consumers should verify the downloaded key against `chk` before using it. Checksums cover the entire downloaded file without normalization. After checksum verification, CI requires canonical standard base64 encoding of exactly 32 bytes, matching Oxide's decoder. Whitespace (including a trailing newline), missing or excess padding, URL-safe base64 characters, and nonzero unused padding bits are rejected. URLs must use HTTP or HTTPS, have a host, and contain neither credentials nor fragments (`#...`).
 
 For example, a FAU party entry has this shape:
 
@@ -85,9 +85,11 @@ For example, a FAU party entry has this shape:
 }
 ```
 
-The `Check public key checksums` GitHub workflow runs for pull requests changing `keys.json` and pushes to `main` changing that file. It verifies **every** URL, including every mirror, and fails on malformed entries, unsupported algorithms, missing files, download errors, or checksum mismatches. Downloads have a 30-second timeout and all keys have a 1 MiB size limit. An empty `iris.parties` array succeeds with zero locations checked. Party identifiers must be nonempty and unique, and URL arrays must be nonempty.
+The `Check public key checksums` GitHub workflow reports a `Validate public key registry` check for every pull request and push to `main`. It runs the validator tests and key validation when changes touch `keys.json`, `certs/**`, `scripts/check-key-checksums.py`, `scripts/tests/test_check_key_checksums.py`, or `.github/workflows/check-key-checksums.yaml`. Unrelated changes pass without downloading keys. If the previous commit is unavailable, validation runs conservatively. This internal change detection allows the check to be required without leaving unrelated PRs waiting on a workflow skipped by path filters.
 
-For keys stored in this repository, use a URL such as `https://raw.githubusercontent.com/worldcoin/iris-mpc/refs/heads/main/certs/party.pub`. CI verifies these URLs against the corresponding file in its checkout, so a PR can add or update both the key and its checksum before the key is available on `main`. The shorter `/worldcoin/iris-mpc/main/certs/party.pub` form also works. Missing checkout files fail validation without falling back to the published version. URLs for other repositories or refs, and external mirrors, are downloaded normally. This checks the proposed repository contents; it does not check availability of the raw GitHub URL. Changes to a key file alone do not trigger this workflow; update `keys.json` in the same change.
+Validation checks **every** URL, including every mirror, and fails on malformed entries or keys, unsupported algorithms, missing files, download errors, or checksum mismatches. Downloads have a 30-second timeout and all keys have a 1 MiB size limit. A mirror outage fails CI even if another mirror works. Oxide intentionally fails closed on invalid published manifests, so this gate must catch incompatible registry changes before merge. Repository administrators must separately make `Validate public key registry` a required status check to enforce that gate; adding the workflow alone does not enforce it.
+
+For keys stored in this repository, use a URL such as `https://raw.githubusercontent.com/worldcoin/iris-mpc/refs/heads/main/certs/party.pub`. CI verifies these URLs against the corresponding file in its checkout, so a PR can add or update both the key and its checksum before the key is available on `main`. The shorter `/worldcoin/iris-mpc/main/certs/party.pub` form also works. Missing checkout files fail validation without falling back to the published version. URLs for other repositories or refs, and external mirrors, are downloaded normally. This checks the proposed repository contents; it does not check availability of the raw GitHub URL. Changes to certificate files alone also trigger validation, so update their checksums in `keys.json` in the same change.
 
 Only SHA-256 and SHA-512 are supported.
 

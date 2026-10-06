@@ -1,7 +1,9 @@
+import base64
 import contextlib
 import hashlib
 import importlib.util
 import io
+import itertools
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -16,15 +18,24 @@ validator = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(validator)
 
 
+PARTY_SLUGS = ("fau", "berkeley-university", "kaist-university")
+KEY = base64.b64encode(bytes(range(32)))
+
+
 class CheckKeyChecksumsTests(unittest.TestCase):
-    def registry(self, algorithm="sha256", urls="https://example.org/key.pub"):
+    def registry(self, algorithm="sha256", urls="https://example.org/key.pub", data=KEY):
         return {"iris": {"parties": [{
-            "slu": "party",
+            "slu": slug,
             "pub": urls,
-            "chk": f"{algorithm}:{hashlib.new(algorithm, b'public key\n').hexdigest()}",
-        }]}}
+            "chk": f"{algorithm}:{hashlib.new(algorithm, data).hexdigest()}",
+        } for slug in PARTY_SLUGS]}}
 
     def verify(self, registry, responses, **kwargs):
+        # Each party uses the supplied mirror responses, with fresh byte streams.
+        responses = [
+            io.BytesIO(response) if isinstance(response, bytes) else response
+            for _ in registry["iris"]["parties"] for response in responses
+        ]
         with patch.object(validator, "urlopen", side_effect=responses) as download:
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 result = validator.verify_registry(registry, **kwargs)
@@ -37,9 +48,9 @@ class CheckKeyChecksumsTests(unittest.TestCase):
                 party = registry["iris"]["parties"][0]
                 name, digest = party["chk"].split(":")
                 party["chk"] = f"{name}:{digest.upper()}"
-                result, download = self.verify(registry, [io.BytesIO(b"public key\n")])
+                result, download = self.verify(registry, [KEY])
                 self.assertEqual(result, 0)
-                download.assert_called_once()
+                self.assertEqual(download.call_count, 3)
                 request = download.call_args.args[0]
                 self.assertEqual(request.full_url, "https://example.org/key.pub")
                 self.assertEqual(request.get_header("User-agent"), validator.USER_AGENT)
@@ -48,27 +59,106 @@ class CheckKeyChecksumsTests(unittest.TestCase):
 
     def test_checks_every_mirror_after_mismatch(self):
         urls = ["https://example.org/first", "https://example.org/second"]
-        result, download = self.verify(self.registry(urls=urls), [io.BytesIO(b"wrong key"), io.BytesIO(b"public key\n")])
+        result, download = self.verify(self.registry(urls=urls), [b"wrong key", KEY])
         self.assertEqual(result, 1)
-        self.assertEqual([call.args[0].full_url for call in download.call_args_list], urls)
+        self.assertEqual([call.args[0].full_url for call in download.call_args_list], urls * 3)
 
     def test_all_mirrors_match(self):
-        result, download = self.verify(self.registry(urls=["https://example.org/a", "https://example.org/b"]), [io.BytesIO(b"public key\n"), io.BytesIO(b"public key\n")])
+        result, download = self.verify(self.registry(urls=["https://example.org/a", "https://example.org/b"]), [KEY, KEY])
         self.assertEqual(result, 0)
-        self.assertEqual(download.call_count, 2)
+        self.assertEqual(download.call_count, 6)
 
     def test_line_endings_are_not_normalized(self):
-        result, _ = self.verify(self.registry(), [io.BytesIO(b"public key\r\n")])
+        result, _ = self.verify(self.registry(), [KEY + b"\r\n"])
         self.assertEqual(result, 1)
+
+    def test_all_party_orders_are_accepted(self):
+        for slugs in itertools.permutations(PARTY_SLUGS):
+            with self.subTest(slugs=slugs):
+                registry = self.registry()
+                for party, slug in zip(registry["iris"]["parties"], slugs):
+                    party["slu"] = slug
+                result, download = self.verify(registry, [KEY])
+                self.assertEqual(result, 0)
+                self.assertEqual(download.call_count, 3)
+
+    def test_incorrect_party_sets_are_rejected_before_download(self):
+        for slugs in (
+            (), PARTY_SLUGS[:2], (*PARTY_SLUGS, "unknown"),
+            ("fau", "fau", "kaist-university"),
+            ("fau", "berkeley", "kaist-university"),
+            ("fau", "berkeley-university", "kaist-univeristy"),
+            ("FAU", "berkeley-university", "kaist-university"),
+            (" fau", "berkeley-university", "kaist-university"),
+            (None, "berkeley-university", "kaist-university"),
+            ([], "berkeley-university", "kaist-university"),
+        ):
+            with self.subTest(slugs=slugs):
+                template = self.registry()["iris"]["parties"][0]
+                registry = {"iris": {"parties": [dict(template, slu=slug) for slug in slugs]}}
+                with patch.object(validator, "urlopen") as download:
+                    with self.assertRaises(ValueError):
+                        validator.verify_registry(registry)
+                    download.assert_not_called()
+
+    def test_malformed_keys_fail_even_with_matching_checksums(self):
+        malformed = (
+            b"not base64", b"\xff" * 44,
+            KEY + b"\n", KEY + b"\r\n", b" " + KEY,
+            KEY[:4] + b"\t" + KEY[4:],
+            KEY[:-1], KEY + b"=", b"=" + KEY,
+            # The last symbol has nonzero unused bits but decodes to the same bytes.
+            KEY[:-2] + b"9=",
+            base64.urlsafe_b64encode(b"\xfb" * 32),
+        )
+        for data in malformed:
+            for algorithm in ("sha256", "sha512"):
+                with self.subTest(data=data, algorithm=algorithm):
+                    result, download = self.verify(self.registry(algorithm, data=data), [data])
+                    self.assertEqual(result, 1)
+                    self.assertEqual(download.call_count, 3)
+
+    def test_wrong_decoded_lengths_fail_with_matching_checksums(self):
+        for length in (0, 1, 31, 33, 64):
+            with self.subTest(length=length):
+                data = base64.b64encode(bytes(length))
+                with self.assertRaisesRegex(ValueError, "exactly 32 bytes"):
+                    validator.validate_public_key(data)
+                result, _ = self.verify(self.registry(data=data), [data])
+                self.assertEqual(result, 1)
+
+    def test_checksum_is_verified_before_decoding(self):
+        with patch.object(validator, "validate_public_key") as decode:
+            result, _ = self.verify(self.registry(), [b"wrong checksum and malformed key"])
+            self.assertEqual(result, 1)
+            decode.assert_not_called()
+
+    def test_standard_base64_alphabet_is_accepted(self):
+        data = base64.b64encode(b"\xfb\xff" * 16)
+        self.assertIn(b"+", data)
+        self.assertIn(b"/", data)
+        result, _ = self.verify(self.registry(data=data), [data])
+        self.assertEqual(result, 0)
+
+    def test_every_mirror_is_decoded(self):
+        data = KEY + b"\n"
+        registry = self.registry(urls=["https://example.org/a", "https://example.org/b"], data=data)
+        with patch.object(validator, "validate_public_key", wraps=validator.validate_public_key) as decode:
+            result, download = self.verify(registry, [data, data])
+        self.assertEqual(result, 1)
+        self.assertEqual(download.call_count, 6)
+        self.assertEqual(decode.call_count, 6)
 
     def test_download_failures(self):
         for error in (URLError("unreachable"), TimeoutError("timed out"), HTTPError("https://example.org", 404, "not found", {}, None)):
             with self.subTest(error=error):
                 result, _ = self.verify(self.registry(), [error])
                 self.assertEqual(result, 1)
+                if isinstance(error, HTTPError):
+                    error.close()
 
     def test_oversized_key(self):
-        result, _ = self.verify(self.registry(), [io.BytesIO(b"x" * (validator.MAX_KEY_BYTES + 1))])
+        result, _ = self.verify(self.registry(), [b"x" * (validator.MAX_KEY_BYTES + 1)])
         self.assertEqual(result, 1)
 
     def test_invalid_entries_rejected_before_download(self):
@@ -95,10 +185,31 @@ class CheckKeyChecksumsTests(unittest.TestCase):
     def test_invalid_registry_structure_and_duplicate_parties(self):
         registry = self.registry()
         registry["iris"]["parties"] *= 2
-        for invalid in (None, {}, {"iris": []}, {"iris": {"parties": {}}}, {"iris": {"parties": [None]}}, registry):
+        for invalid in (None, {}, {"iris": []}, {"iris": {"parties": {}}}, {"iris": {"parties": [None] * 3}}, registry):
             with self.subTest(registry=invalid):
                 with self.assertRaises(ValueError):
                     validator.parse_registry(invalid)
+
+    def test_rejected_urls_fail_before_download(self):
+        for url in (
+            "ftp://example.org/key", "file:///key", "//example.org/key",
+            "https:///key", "https://", "https://example.org/key#", "https://example.org/key#key",
+            "https://user@example.org/key", "https://user:password@example.org/key",
+            "https://:password@example.org/key", "https://@example.org/key",
+            "https://raw.githubusercontent.com:invalid/worldcoin/iris-mpc/main/key.pub",
+            "https://example.org:invalid/key", "https://example.org:65536/key", "https://[invalid/key",
+            "https://user@raw.githubusercontent.com/worldcoin/iris-mpc/main/key.pub",
+        ):
+            with self.subTest(url=url), patch.object(validator, "urlopen") as download:
+                with self.assertRaises(ValueError):
+                    validator.verify_registry(self.registry(urls=url), repository="worldcoin/iris-mpc")
+                download.assert_not_called()
+
+    def test_http_https_hosts_ports_and_queries_are_accepted(self):
+        for url in ("http://example.org/key", "https://example.org:8443/key?version=2", "https://[::1]/key"):
+            with self.subTest(url=url):
+                result, _ = self.verify(self.registry(urls=url), [KEY])
+                self.assertEqual(result, 0)
 
     def test_url_fragments_are_rejected_before_download(self):
         with TemporaryDirectory() as directory:
@@ -120,16 +231,17 @@ class CheckKeyChecksumsTests(unittest.TestCase):
                             )
                         download.assert_not_called()
 
-    def test_empty_registry_checks_no_locations(self):
-        result, download = self.verify({"iris": {"parties": []}}, [])
-        self.assertEqual(result, 0)
-        download.assert_not_called()
+    def test_empty_registry_is_rejected_before_download(self):
+        with patch.object(validator, "urlopen") as download:
+            with self.assertRaisesRegex(ValueError, "exactly three parties"):
+                validator.verify_registry({"iris": {"parties": []}})
+            download.assert_not_called()
 
     def test_repository_main_urls_use_checkout(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "certs" / "party.pub"
             path.parent.mkdir()
-            path.write_bytes(b"public key\n")
+            path.write_bytes(KEY)
             for ref in ("main", "refs/heads/main"):
                 with self.subTest(ref=ref):
                     url = f"https://raw.githubusercontent.com/worldcoin/iris-mpc/{ref}/certs/party.pub"
@@ -157,6 +269,21 @@ class CheckKeyChecksumsTests(unittest.TestCase):
             self.assertEqual(result, 1)
             download.assert_not_called()
 
+    def test_malformed_checkout_keys_fail_with_matching_checksums(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "unpublished.pub"
+            url = "https://raw.githubusercontent.com/worldcoin/iris-mpc/main/unpublished.pub"
+            for data in (b"not base64", KEY + b"\n", base64.b64encode(bytes(31)), KEY[:-2] + b"9="):
+                for algorithm in ("sha256", "sha512"):
+                    with self.subTest(data=data, algorithm=algorithm):
+                        path.write_bytes(data)
+                        result, download = self.verify(
+                            self.registry(algorithm, urls=url, data=data), [],
+                            repository="worldcoin/iris-mpc", repo_root=directory,
+                        )
+                        self.assertEqual(result, 1)
+                        download.assert_not_called()
+
     def test_external_repository_and_other_refs_are_downloaded(self):
         urls = [
             "https://raw.githubusercontent.com/other/repo/main/certs/party.pub",
@@ -164,25 +291,25 @@ class CheckKeyChecksumsTests(unittest.TestCase):
             "https://raw.githubusercontent.com/worldcoin/iris-mpc/refs/heads/main-extra/certs/party.pub",
         ]
         result, download = self.verify(
-            self.registry(urls=urls), [io.BytesIO(b"public key\n") for _ in urls],
+            self.registry(urls=urls), [KEY for _ in urls],
             repository="worldcoin/iris-mpc",
         )
         self.assertEqual(result, 0)
-        self.assertEqual(download.call_count, len(urls))
+        self.assertEqual(download.call_count, 3 * len(urls))
 
     def test_checkout_key_and_external_mirror(self):
         with TemporaryDirectory() as directory:
-            (Path(directory) / "party.pub").write_bytes(b"public key\n")
+            (Path(directory) / "party.pub").write_bytes(KEY)
             urls = [
                 "https://raw.githubusercontent.com/worldcoin/iris-mpc/main/party.pub",
                 "https://example.org/party.pub",
             ]
             result, download = self.verify(
-                self.registry(urls=urls), [io.BytesIO(b"public key\n")],
+                self.registry(urls=urls), [KEY],
                 repository="worldcoin/iris-mpc", repo_root=directory,
             )
             self.assertEqual(result, 0)
-            download.assert_called_once()
+            self.assertEqual(download.call_count, 3)
             self.assertEqual(download.call_args.args[0].full_url, urls[1])
             self.assertEqual(download.call_args.kwargs, {"timeout": 30})
 
@@ -191,7 +318,7 @@ class CheckKeyChecksumsTests(unittest.TestCase):
             root = Path(directory) / "checkout"
             root.mkdir()
             outside = Path(directory) / "outside.pub"
-            outside.write_bytes(b"public key\n")
+            outside.write_bytes(KEY)
             (root / "link.pub").symlink_to(outside)
             for relative in ("../outside.pub", "%2e%2e/outside.pub", "%2foutside.pub", "link.pub"):
                 with self.subTest(relative=relative):
@@ -206,7 +333,7 @@ class CheckKeyChecksumsTests(unittest.TestCase):
     def test_repository_key_symlink_inside_checkout_is_rejected(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "actual.pub").write_bytes(b"public key\n")
+            (root / "actual.pub").write_bytes(KEY)
             (root / "link.pub").symlink_to("actual.pub")
             for ref in ("main", "refs/heads/main"):
                 with self.subTest(ref=ref):
@@ -224,7 +351,7 @@ class CheckKeyChecksumsTests(unittest.TestCase):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "actual").mkdir()
-            (root / "actual" / "party.pub").write_bytes(b"public key\n")
+            (root / "actual" / "party.pub").write_bytes(KEY)
             (root / "certs").symlink_to("actual", target_is_directory=True)
             for relative in ("certs/party.pub", "%63erts/party.pub"):
                 with self.subTest(relative=relative):
@@ -259,7 +386,7 @@ class CheckKeyChecksumsTests(unittest.TestCase):
                 for ref in ("main", "refs/heads/main"):
                     with self.subTest(authority=authority, ref=ref):
                         url = f"https://{authority}/worldcoin/iris-mpc/{ref}/party.pub"
-                        key.write_bytes(b"public key\n")
+                        key.write_bytes(KEY)
                         result, download = self.verify(
                             self.registry(urls=url), [],
                             repository="worldcoin/iris-mpc", repo_root=root,
@@ -275,12 +402,9 @@ class CheckKeyChecksumsTests(unittest.TestCase):
                         self.assertEqual(result, 1)
                         download.assert_not_called()
 
-    def test_raw_github_credentials_and_non_default_ports_are_rejected(self):
+    def test_raw_github_non_default_ports_are_rejected(self):
         for authority in (
-            "user@raw.githubusercontent.com",
-            "user:password@raw.githubusercontent.com",
             "raw.githubusercontent.com:444",
-            "raw.githubusercontent.com:invalid",
         ):
             with self.subTest(authority=authority):
                 url = f"https://{authority}/worldcoin/iris-mpc/main/party.pub"
