@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Verify the exact downloaded bytes of every key and mirror in keys.json."""
+"""Verify checksums and Oxide-compatible public keys at every registry location."""
 
 import argparse
+import base64
+import binascii
 import hashlib
 import json
 import re
@@ -12,6 +14,7 @@ from urllib.request import Request, urlopen
 
 
 MAX_KEY_BYTES = 1024 * 1024
+PARTY_SLUGS = frozenset(("fau", "berkeley-university", "kaist-university"))
 USER_AGENT = "Mozilla/5.0 (compatible; iris-mpc-key-check/1.0; +https://github.com/worldcoin/iris-mpc)"
 
 
@@ -21,6 +24,8 @@ def parse_registry(registry):
     parties = registry["iris"].get("parties")
     if not isinstance(parties, list):
         raise ValueError("iris.parties must be an array")
+    if len(parties) != len(PARTY_SLUGS):
+        raise ValueError("iris.parties must contain exactly three parties")
 
     locations = []
     slugs = set()
@@ -29,8 +34,8 @@ def parse_registry(registry):
         if not isinstance(party, dict):
             raise ValueError(f"{label} must be an object")
         slug = party.get("slu")
-        if not isinstance(slug, str) or not slug.strip() or slug in slugs:
-            raise ValueError(f"{label}.slu must be a nonempty, unique string")
+        if not isinstance(slug, str) or slug not in PARTY_SLUGS or slug in slugs:
+            raise ValueError(f"{label}.slu must be one of {', '.join(sorted(PARTY_SLUGS))}, each exactly once")
         slugs.add(slug)
         checksum = party.get("chk")
         if not isinstance(checksum, str):
@@ -52,10 +57,29 @@ def parse_registry(registry):
             parsed = urlsplit(url)
             if parsed.scheme not in ("http", "https") or not parsed.hostname:
                 raise ValueError(f"{label}.pub must contain HTTP(S) URLs")
+            if parsed.username is not None or parsed.password is not None:
+                raise ValueError(f"{label}.pub URLs must not contain credentials")
+            # Accessing port also rejects malformed or out-of-range ports.
+            _ = parsed.port
             if "#" in url:
                 raise ValueError(f"{label}.pub URLs must not contain fragments")
             locations.append((slug, url, algorithm, digest.lower()))
     return locations
+
+
+def validate_public_key(data):
+    """Match Oxide's base64::STANDARD decoder and 32-byte PublicKey::from_slice."""
+    try:
+        decoded = base64.b64decode(data, validate=True)
+    except binascii.Error as error:
+        raise ValueError(f"Key is not valid base64: {error}") from error
+    # Python's strict decoder still accepts nonzero unused padding bits. Rust's
+    # STANDARD decoder requires canonical padding and zero unused bits. Do not
+    # strip whitespace: Oxide decodes the original key without normalization.
+    if base64.b64encode(decoded) != data:
+        raise ValueError("Key must use canonical standard base64")
+    if len(decoded) != 32:
+        raise ValueError(f"Key must decode to exactly 32 bytes, got {len(decoded)}")
 
 
 def checkout_path(url, repository, repo_root):
@@ -105,6 +129,7 @@ def verify_registry(registry, repository=None, repo_root="."):
             actual = hashlib.new(algorithm, data).hexdigest()
             if actual != expected:
                 raise ValueError(f"Checksum mismatch: expected {algorithm}:{expected}, got {algorithm}:{actual}")
+            validate_public_key(data)
             print(f"OK: {slug} {url} (source: {source})")
         except (OSError, ValueError) as error:
             failures += 1
