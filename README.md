@@ -1,4 +1,4 @@
-# iris-mpc
+# iris-mpc1
 
 ## Contributing
 
