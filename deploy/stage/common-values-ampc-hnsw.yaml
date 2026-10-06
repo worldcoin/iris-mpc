@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:aa40ec683324497cf39eae5062255bedff53be9d"
+image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64@sha256:2cf390451dfab57083b53a101f42dbca5680b7bbbe396cb3699f7d990b72202c"
 
 environment: stage
 replicaCount: 1
@@ -10,7 +10,7 @@ env:
   RUST_LOG: "info"
   RUST_BACKTRACE: "full"
   SMPC__ENVIRONMENT: "stage"
-  SMPC__SCHEMA_NAME: "POP4401_17M"
+  SMPC__SCHEMA_NAME: "POP4401_17M_a20261006"
   SMPC__GPU_SCHEMA_NAME_SUFFIX: ""
   SMPC__DATABASE__URL:
     valueFrom:
@@ -58,7 +58,7 @@ env:
   SMPC__LOAD_CHUNKS_PARALLELISM: "64"
   SMPC__LOAD_CHUNKS_BUFFER_SIZE: "1024"
   SMPC__CLEAR_DB_BEFORE_INIT: "false"
-  SMPC__INIT_DB_SIZE: "17000000"
+  SMPC__INIT_DB_SIZE: "0"
   SMPC__MAX_DB_SIZE: "18000000"
   SMPC__FAKE_DB_SIZE: "0"
   SMPC__MAX_BATCH_SIZE: "16"
@@ -127,10 +127,10 @@ readinessProbe:
     port: health
 
 startupProbe:
-  initialDelaySeconds: 900
-  # Allow initial fixture seeding to finish before normal startup validation.
-  failureThreshold: 2880
+  initialDelaySeconds: 60
+  failureThreshold: 240
   periodSeconds: 30
+  timeoutSeconds: 10
   httpGet:
     path: /ready
     port: health
