@@ -68,6 +68,7 @@ pub struct LocalWorkerPoolInitializer {
     /// keeps plain `ArcIris` values as required by the HNSW hot paths;
     /// exact-scan actors opt into `preferred_scan_layout()`.
     pub layout: ResidentLayout,
+    defer_cold_storage: bool,
 }
 
 impl LocalWorkerPoolInitializer {
@@ -77,8 +78,17 @@ impl LocalWorkerPoolInitializer {
             distance_mode,
             numa,
             mode: LocalInitMode::Empty,
+            defer_cold_storage: false,
             layout: ResidentLayout::U16,
         }
+    }
+
+    /// Keep passive preloads local. The cold-eye cache must be initialized
+    /// after reconciliation; rereading it while the active cell writes can
+    /// otherwise disagree with versions captured by the resident-eye loader.
+    pub fn defer_cold_storage(mut self) -> Self {
+        self.defer_cold_storage = true;
+        self
     }
 
     /// Choose the resident representation of the pools' iris stores.
@@ -98,6 +108,7 @@ impl LocalWorkerPoolInitializer {
             distance_mode,
             numa,
             mode: LocalInitMode::Seeded(seed_stores),
+            defer_cold_storage: false,
             layout: ResidentLayout::U16,
         }
     }
@@ -113,6 +124,7 @@ impl LocalWorkerPoolInitializer {
             distance_mode,
             numa,
             mode: LocalInitMode::LoadFromDb(params),
+            defer_cold_storage: false,
             layout: ResidentLayout::U16,
         }
     }
@@ -127,6 +139,7 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
             numa,
             mode,
             layout,
+            defer_cold_storage,
         } = *self;
 
         // Materialize the iris stores. `Seeded` installs caller-provided
@@ -221,6 +234,9 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
         };
 
         let resident_side = cold_storage.as_ref().map(|(_, side, _, _)| *side);
+        if defer_cold_storage {
+            cold_storage = None;
+        }
         let mut cold_worker =
             if let Some((store, resident_side, luc_window_capacity, lfu_cache_capacity)) =
                 cold_storage
@@ -275,6 +291,9 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
         ];
 
         match resident_side {
+            Some(resident_side) if defer_cold_storage => tracing::info!(
+                resident_side, db_size, "Passive workers initialized; cold-eye initialization deferred until reconciliation"
+            ),
             Some(resident_side) => {
                 // Only the resident eye was loaded; the other registry is a
                 // copy of it, so a second checksum would not be an independent
