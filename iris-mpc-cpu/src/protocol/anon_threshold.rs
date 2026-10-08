@@ -486,6 +486,68 @@ mod tests {
         }
     }
 
+    /// Reference transpose straight from the definition: bit `k` of
+    /// `input[j]` is bit `j` of `output[k]`.
+    fn naive_transpose(input: &[u16; 64]) -> [u64; BITS] {
+        let mut out = [0_u64; BITS];
+        for (j, &value) in input.iter().enumerate() {
+            for (k, word) in out.iter_mut().enumerate() {
+                *word |= u64::from((value >> k) & 1) << j;
+            }
+        }
+        out
+    }
+
+    /// Edge blocks (all-zero, all-one, every single bit of every lane, lane
+    /// patterns) plus random blocks.
+    fn transpose_test_blocks(rng: &mut AesRng) -> Vec<[u16; 64]> {
+        let mut blocks = vec![[0_u16; 64], [u16::MAX; 64]];
+        for lane in 0..64 {
+            for bit in 0..BITS {
+                let mut block = [0_u16; 64];
+                block[lane] = 1 << bit;
+                blocks.push(block);
+            }
+        }
+        blocks.push(std::array::from_fn(|j| j as u16));
+        blocks.push(std::array::from_fn(|j| 1 << (j % BITS)));
+        blocks.push(std::array::from_fn(|j| (j as u16).wrapping_mul(0x9e37)));
+        for _ in 0..256 {
+            let mut block = [0_u16; 64];
+            fill_u16(rng, &mut block);
+            blocks.push(block);
+        }
+        blocks
+    }
+
+    #[test]
+    fn scalar_transpose_matches_naive() {
+        let mut rng = AesRng::seed_from_u64(0x7a11);
+        for block in transpose_test_blocks(&mut rng) {
+            assert_eq!(
+                transpose_u16_block(&block),
+                naive_transpose(&block),
+                "{block:?}"
+            );
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn avx512_transpose_matches_scalar_and_naive() {
+        if !std::arch::is_x86_feature_detected!("avx512bw") {
+            eprintln!("skipping: CPU lacks AVX-512BW");
+            return;
+        }
+        let mut rng = AesRng::seed_from_u64(0x7a12);
+        for block in transpose_test_blocks(&mut rng) {
+            // SAFETY: AVX-512BW was detected above.
+            let avx512 = unsafe { transpose_u16_block_avx512(&block) };
+            assert_eq!(avx512, naive_transpose(&block), "{block:?}");
+            assert_eq!(avx512, transpose_u16_block(&block), "{block:?}");
+        }
+    }
+
     /// Plaintext `(code, trimmed mask)` pairs inside the iris bounds, with the
     /// boundary `b = 2c` and the extreme ranges.
     fn sample_pairs(rng: &mut AesRng, count: usize) -> Vec<(i64, i64)> {
