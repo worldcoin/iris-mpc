@@ -1,0 +1,30 @@
+{
+  "iris": {
+    "parties": [
+      {
+        "slu": "fau",
+        "pub": [
+          "https://pki-smpc.worldcoin.org/public-key-0",
+          "https://raw.githubusercontent.com/worldcoin/iris-mpc/refs/heads/main/certs/party-0.pub"
+        ],
+        "chk": "sha256:613696db7be07adb5ccb06d50b12a3cb96914346d6f3a050669844c89542b372"
+      },
+      {
+        "slu": "berkeley-university",
+        "pub": [
+          "https://pki-smpc.worldcoin.org/public-key-1",
+          "https://raw.githubusercontent.com/worldcoin/iris-mpc/refs/heads/main/certs/party-1.pub"
+        ],
+        "chk": "sha256:886f018f82264da9d9e06a2b77902d281ed9d041fc32a4c24008e0e5761e0dd8"
+      },
+      {
+        "slu": "kaist-university",
+        "pub": [
+          "https://pki-smpc.worldcoin.org/public-key-2",
+          "https://raw.githubusercontent.com/worldcoin/iris-mpc/refs/heads/main/certs/party-2.pub"
+        ],
+        "chk": "sha256:c9d1b7f1947adddeb0f984b820e6e6dc8bc73c8f60e4e0bb75b56513f27566b9"
+      }
+    ]
+  }
+}

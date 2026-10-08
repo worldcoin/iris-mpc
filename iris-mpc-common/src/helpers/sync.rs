@@ -1,6 +1,5 @@
 use eyre::{ensure, Result};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fmt, fmt::Display, str::FromStr};
 
 use crate::config::CommonConfig;
 
@@ -59,128 +58,10 @@ pub enum ModificationKey {
     RequestId(String),
 }
 
-pub const MOD_STATUS_IN_PROGRESS: &str = "IN_PROGRESS";
-pub const MOD_STATUS_COMPLETED: &str = "COMPLETED";
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ModificationStatus {
-    InProgress,
-    Completed,
-}
-
-impl Display for ModificationStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ModificationStatus::InProgress => write!(f, "{MOD_STATUS_IN_PROGRESS}"),
-            ModificationStatus::Completed => write!(f, "{MOD_STATUS_COMPLETED}"),
-        }
-    }
-}
-
-impl FromStr for ModificationStatus {
-    type Err = ();
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            MOD_STATUS_IN_PROGRESS => Ok(ModificationStatus::InProgress),
-            MOD_STATUS_COMPLETED => Ok(ModificationStatus::Completed),
-            _ => Err(()),
-        }
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize, Default)]
-pub struct Modification {
-    pub id: i64,
-    pub serial_id: Option<i64>,
-    pub request_type: String,
-    pub s3_url: Option<String>,
-    pub status: String,
-    pub persisted: bool,
-    pub result_message_body: Option<String>,
-}
-
-impl PartialEq for Modification {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-            && self.serial_id == other.serial_id
-            && self.request_type == other.request_type
-            && self.s3_url == other.s3_url
-            && self.status == other.status
-            && self.persisted == other.persisted
-        // result_message_body is ignored since it differs across nodes
-    }
-}
-
-impl Eq for Modification {}
-
-impl fmt::Debug for Modification {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let result_message_summary = match &self.result_message_body {
-            Some(msg) => format!("Some([{} chars])", msg.chars().count()),
-            None => "None".to_string(),
-        };
-
-        f.debug_struct("Modification")
-            .field("id", &self.id)
-            .field("serial_id", &self.serial_id)
-            .field("request_type", &self.request_type)
-            .field("s3_url", &self.s3_url)
-            .field("status", &self.status)
-            .field("persisted", &self.persisted)
-            .field("result_message_body", &result_message_summary)
-            .finish()
-    }
-}
-
-impl Modification {
-    /// Marks the modification as completed, setting the status to "COMPLETED", updating the result message body and persisted flag.
-    ///
-    /// If `updated_serial_id` is provided, it updates the serial_id field as well.
-    /// It is used when the modification is a uniqueness request and the serial id is assigned after the protocol.
-    pub fn mark_completed(
-        &mut self,
-        persisted: bool,
-        result_message_body: &str,
-        updated_serial_id: Option<u32>,
-    ) {
-        self.status = ModificationStatus::Completed.to_string();
-        self.result_message_body = Some(result_message_body.to_string());
-        self.persisted = persisted;
-        if let Some(serial_id) = updated_serial_id {
-            self.serial_id = Some(serial_id as i64);
-        }
-    }
-
-    /// Updates the node_id field in the SNS message JSON to specified one
-    pub fn update_result_message_node_id(&mut self, party_id: usize) -> Result<()> {
-        if let Some(message) = &self.result_message_body {
-            // Parse the JSON message
-            match serde_json::from_str::<serde_json::Value>(message) {
-                Ok(mut json_value) => {
-                    // Update the node_id field if it exists
-                    if let Some(obj) = json_value.as_object_mut() {
-                        // Try to update node_id in the main object
-                        if obj.contains_key("node_id") {
-                            obj.insert(
-                                "node_id".to_string(),
-                                serde_json::Value::Number(serde_json::Number::from(party_id)),
-                            );
-                            self.result_message_body = Some(serde_json::to_string(&json_value)?);
-                        } else {
-                            return Err(eyre::eyre!("Message body does not contain node_id"));
-                        }
-                    }
-                }
-                Err(_) => {
-                    return Err(eyre::eyre!("Invalid JSON message"));
-                }
-            }
-        } else {
-            return Err(eyre::eyre!("Result message body is None"));
-        }
-        Ok(())
-    }
-}
+pub use ampc_server_utils::modifications::{
+    Modification, ModificationInputReference, ModificationStatus, MOD_STATUS_COMPLETED,
+    MOD_STATUS_IN_PROGRESS,
+};
 
 impl SyncResult {
     pub fn new(my_state: SyncState, all_states: Vec<SyncState>) -> Self {
@@ -254,129 +135,18 @@ impl SyncResult {
     /// - `to_delete`: modifications the local node should remove from the DB
     ///   (in-progress, never completed).
     pub fn compare_modifications(&self) -> (Vec<Modification>, Vec<Modification>) {
-        // 1. Group all modifications by id => Vec<Modification> (from different nodes)
-        let mut grouped: HashMap<i64, Vec<Modification>> = HashMap::new();
-        for m in self.all_states.iter().flat_map(|s| s.modifications.clone()) {
-            grouped.entry(m.id).or_default().push(m);
-        }
-
-        tracing::info!("Grouped modifications: {}", grouped.len());
-
-        let completed_max_mod_ids: Vec<Option<i64>> = self
+        let all = self
             .all_states
             .iter()
-            .map(|s| {
-                s.modifications
-                    .iter()
-                    .filter(|m| m.status == MOD_STATUS_COMPLETED)
-                    .map(|m| m.id)
-                    .max()
-            })
-            .collect();
-        let min_id = completed_max_mod_ids.iter().flatten().copied().min();
-        let max_id = completed_max_mod_ids.iter().flatten().copied().max();
-        if let (Some(min_id), Some(max_id)) = (min_id, max_id) {
-            let mod_id_diff = max_id.saturating_sub(min_id) as usize;
-            if mod_id_diff > self.my_state.common_config.get_max_modifications_lookback() {
-                panic!(
-                    "Modification ID difference across nodes is too large: {:?}. Min: {:?}, Max: {:?}. \
-             Can not safely handle this case, consider bumping lookback. Crashing!",
-                    completed_max_mod_ids, min_id, max_id
-                );
-            }
-        }
-
-        // Store the results here
-        let mut to_update = Vec::new();
-        let mut to_delete = Vec::new();
-
-        // 2. Analyze each modification group
-        for (&id, group_mods) in &grouped {
-            assert_modifications_consistency(group_mods);
-
-            // Find local node's copy, if any
-            let local_copy = self.my_state.modifications.iter().find(|m| m.id == id);
-
-            // Evaluate the global state across all nodes:
-            let any_completed = group_mods
-                .iter()
-                .any(|m| m.status == ModificationStatus::Completed.to_string());
-            let all_in_progress = group_mods
-                .iter()
-                .all(|m| m.status == ModificationStatus::InProgress.to_string());
-            let any_persisted = group_mods.iter().any(|m| m.persisted);
-
-            if all_in_progress {
-                // If they're all in-progress => ignore the modification by deleting it
-                if let Some(local_m) = local_copy {
-                    to_delete.push(local_m.clone());
-                }
-            } else if any_completed {
-                // If any node completed => unify to COMPLETED
-                let first_completed = group_mods
-                    .iter()
-                    .find(|m| m.status == ModificationStatus::Completed.to_string())
-                    .expect("At least one completed modification");
-                match local_copy {
-                    None => {
-                        // If an item is completed for a party, it should at least exist in the
-                        // local state because it should have been added during receive_batch.
-                        // This can only happen when other party misses an in_progress mod.
-                        // Local party will fetch until modification id X while the other party will
-                        // fetch until mod id X-1. In this case, local party won't find X-1.
-                        // We log and skip updating to avoid rolling back to an older share in local.
-                        tracing::info!(
-                            "Skip missing completed modification: {:?}",
-                            first_completed
-                        );
-                    }
-                    Some(local_m) => {
-                        if local_m.status != ModificationStatus::Completed.to_string()
-                            || local_m.persisted != any_persisted
-                        {
-                            // If local is not "completed" or doesn't match the final persisted
-                            // We'll roll forward local_m
-                            let mut roll_forward = first_completed.clone();
-                            roll_forward.status = ModificationStatus::Completed.to_string();
-                            roll_forward.persisted = any_persisted;
-                            tracing::warn!(
-                                "Planning to update modification row from {:?} to {:?}",
-                                local_m,
-                                roll_forward
-                            );
-                            to_update.push(roll_forward);
-                        } else {
-                            tracing::debug!("Local modification is already in sync: {:?}", local_m);
-                        }
-                    }
-                }
-            } else {
-                panic!("Unexpected modification state: {:?}", group_mods);
-            }
-        }
-
-        (to_update, to_delete)
-    }
-}
-
-/// Assert that all modifications in the group have the same ID, serial ID,
-/// request type, and S3 URL. If the assert fails, it means the modifications
-/// are inconsistent across nodes. Such a case would need manual intervention.
-fn assert_modifications_consistency(modifications: &[Modification]) {
-    let first = modifications.first().expect("Empty modifications");
-    for m in modifications.iter().skip(1) {
-        assert_eq!(first.id, m.id, "Inconsistent modification IDs");
-        assert_eq!(
-            first.request_type, m.request_type,
-            "Inconsistent request types"
-        );
-        assert_eq!(first.s3_url, m.s3_url, "Inconsistent S3 URLs");
-
-        // Below fields could be missing in the behind party (missing a modification)
-        // They should only be compared if both exists
-        if first.serial_id.is_some() && m.serial_id.is_some() {
-            assert_eq!(first.serial_id, m.serial_id, "Inconsistent serial IDs");
-        }
+            .map(|s| s.modifications.clone())
+            .collect::<Vec<_>>();
+        ampc_server_utils::modifications::ensure_modification_lookback(
+            &all,
+            self.my_state.common_config.get_max_modifications_lookback(),
+        )
+        .expect("Modification ID difference across nodes is too large");
+        ampc_server_utils::modifications::compare_modifications(&self.my_state.modifications, &all)
+            .expect("Inconsistent modification snapshots")
     }
 }
 
@@ -405,7 +175,7 @@ mod tests {
             id,
             serial_id,
             request_type: request_type.to_string(),
-            s3_url: s3_url.map(|s| s.to_string()),
+            input: s3_url.map(|s| ModificationInputReference::S3(s.to_owned())),
             status: status.to_string(),
             persisted,
             result_message_body: None,
@@ -993,7 +763,9 @@ mod tests {
             id: 1,
             serial_id: Some(123),
             request_type: REAUTH_MESSAGE_TYPE.to_string(),
-            s3_url: "http://example.com/123".to_string().into(),
+            input: Some(ModificationInputReference::S3(
+                "http://example.com/123".to_owned(),
+            )),
             status: ModificationStatus::Completed.to_string(),
             persisted: true,
             result_message_body: Some(serialized_reauth),
@@ -1039,7 +811,7 @@ mod tests {
             id: 2,
             serial_id: Some(456),
             request_type: IDENTITY_DELETION_MESSAGE_TYPE.to_string(),
-            s3_url: None,
+            input: None,
             status: ModificationStatus::Completed.to_string(),
             persisted: true,
             result_message_body: Some(serialized_deletion),

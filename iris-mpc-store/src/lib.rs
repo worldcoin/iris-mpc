@@ -7,7 +7,6 @@ use futures::{
     stream::{self},
     Stream, StreamExt, TryStreamExt,
 };
-use iris_mpc_common::helpers::sync::MOD_STATUS_IN_PROGRESS;
 use iris_mpc_common::postgres::PostgresClient;
 use iris_mpc_common::{
     config::Config,
@@ -22,12 +21,11 @@ use iris_mpc_common::{
     iris_db::iris::IrisCode,
     SerialId, VectorId,
 };
-use itertools::izip;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{
     fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
 };
-use sqlx::{PgPool, Postgres, Row, Transaction};
+use sqlx::{PgConnection, PgPool, Postgres, Row, Transaction};
 use std::ops::DerefMut;
 
 /// Capability token for writing `version_id` verbatim: required by
@@ -192,35 +190,14 @@ impl From<&DbStoredIris> for VectorId {
     }
 }
 
-#[derive(sqlx::FromRow, Debug, Default)]
-pub struct StoredModification {
-    pub id: i64,
-    pub serial_id: Option<i64>,
-    pub request_type: String,
-    pub s3_url: Option<String>,
-    pub status: String,
-    pub persisted: bool,
-    pub result_message_body: Option<String>,
-}
-
-impl From<StoredModification> for Modification {
-    fn from(stored: StoredModification) -> Self {
-        Self {
-            id: stored.id,
-            serial_id: stored.serial_id,
-            request_type: stored.request_type,
-            s3_url: stored.s3_url,
-            status: stored.status,
-            persisted: stored.persisted,
-            result_message_body: stored.result_message_body,
-        }
-    }
-}
+pub use ampc_server_utils::modifications::postgres::StoredModification;
+use ampc_server_utils::modifications::{ModificationInput, ModificationInputStorage};
 
 #[derive(Clone, Debug)]
 pub struct Store {
     pub pool: PgPool,
     pub schema_name: String,
+    modification_input_storage: ModificationInputStorage,
 }
 
 impl Store {
@@ -233,6 +210,7 @@ impl Store {
         Ok(Store {
             pool: postgres_client.pool.clone(),
             schema_name: postgres_client.schema_name.clone(),
+            modification_input_storage: ModificationInputStorage::S3,
         })
     }
 
@@ -884,62 +862,37 @@ WHERE id = $1;
         request_type: &str,
         s3_url: Option<&str>,
     ) -> Result<Modification> {
-        let persisted = false;
-        let inserted: StoredModification = sqlx::query_as::<_, StoredModification>(
-            r#"
-            INSERT INTO modifications (serial_id, request_type, s3_url, status, persisted)
-            VALUES ($1, $2, $3, $4, $5)
-            RETURNING
-                id,
-                serial_id,
-                request_type,
-                s3_url,
-                status,
-                persisted,
-                result_message_body
-            "#,
-        )
-        .bind(serial_id)
-        .bind(request_type)
-        .bind(s3_url)
-        .bind(MOD_STATUS_IN_PROGRESS)
-        .bind(persisted)
-        .fetch_one(&self.pool)
-        .await?;
-
-        tracing::debug!(
-            "Inserted {} modification: id={:?}, serial_id={:?}, request_type={}",
-            MOD_STATUS_IN_PROGRESS,
-            inserted.id,
+        let input = s3_url.map(|url| ModificationInput::S3(url.to_owned()));
+        ampc_server_utils::modifications::postgres::insert_modification(
+            &self.pool,
             serial_id,
-            request_type
-        );
-
-        Ok(inserted.into())
+            request_type,
+            input.as_ref(),
+            self.modification_input_storage,
+        )
+        .await
     }
 
     pub async fn last_modifications(&self, count: usize) -> Result<Vec<Modification>> {
-        let rows = sqlx::query_as::<_, StoredModification>(
-            r#"
-            SELECT
-                id,
-                serial_id,
-                request_type,
-                s3_url,
-                status,
-                persisted,
-                result_message_body
-            FROM modifications
-            ORDER BY id DESC
-            LIMIT $1
-            "#,
+        ampc_server_utils::modifications::postgres::last_modifications(
+            &self.pool,
+            count,
+            self.modification_input_storage,
         )
-        .bind(count as i64)
-        .fetch_all(&self.pool)
-        .await?;
+        .await
+    }
 
-        let modifications = rows.into_iter().map(Into::into).collect();
-        Ok(modifications)
+    pub async fn load_modification_input(
+        &self,
+        conn: &mut PgConnection,
+        modification: &Modification,
+    ) -> Result<ModificationInput> {
+        ampc_server_utils::modifications::postgres::load_modification_input(
+            conn,
+            modification,
+            self.modification_input_storage,
+        )
+        .await
     }
 
     /// Fetch modifications updated after a certain ID that are less than a serial id.
@@ -975,7 +928,7 @@ WHERE id = $1;
                     id,
                     serial_id,
                     request_type,
-                    s3_url,
+                    s3_url AS input_reference,
                     status,
                     persisted,
                     result_message_body
@@ -1010,7 +963,10 @@ WHERE id = $1;
         .fetch_one(&mut *tx)
         .await?;
 
-        let modifications = rows.into_iter().map(Into::into).collect();
+        let modifications = rows
+            .into_iter()
+            .map(|row| row.into_modification(self.modification_input_storage))
+            .collect();
         Ok((modifications, max_id))
     }
 
@@ -1044,56 +1000,11 @@ WHERE id = $1;
         tx: &mut Transaction<'_, Postgres>,
         modifications: &[&Modification],
     ) -> Result<(), sqlx::Error> {
-        if modifications.is_empty() {
-            return Ok(());
-        }
-
-        let ids: Vec<i64> = modifications.iter().map(|m| m.id).collect();
-        let statuses: Vec<String> = modifications.iter().map(|m| m.status.clone()).collect();
-        let persisted: Vec<bool> = modifications.iter().map(|m| m.persisted).collect();
-        let result_message_bodies: Vec<Option<String>> = modifications
-            .iter()
-            .map(|m| m.result_message_body.clone())
-            .collect();
-        let serial_ids: Vec<Option<i64>> = modifications.iter().map(|m| m.serial_id).collect();
-
-        for (id, status, persisted, serial_id) in izip!(&ids, &statuses, &persisted, &serial_ids) {
-            tracing::info!(
-                "Updating modification id={} with status={}, persisted={}, serial_id={:?}",
-                id,
-                status,
-                persisted,
-                serial_id
-            );
-        }
-
-        sqlx::query(
-            r#"
-            UPDATE modifications
-            SET status = data.status,
-                persisted = data.persisted,
-                result_message_body = data.result_message_body,
-                serial_id = data.serial_id
-            FROM (
-                SELECT
-                    unnest($1::bigint[])  as id,
-                    unnest($2::text[])    as status,
-                    unnest($3::bool[])    as persisted,
-                    unnest($4::text[])    as result_message_body,
-                    unnest($5::bigint[])  as serial_id
-            ) as data
-            WHERE modifications.id = data.id
-            "#,
+        ampc_server_utils::modifications::postgres::update_modifications(
+            tx.deref_mut(),
+            modifications,
         )
-        .bind(&ids)
-        .bind(&statuses)
-        .bind(&persisted)
-        .bind(&result_message_bodies)
-        .bind(&serial_ids)
-        .execute(tx.deref_mut())
-        .await?;
-
-        Ok(())
+        .await
     }
 
     /// Delete modifications based on their id.
@@ -1102,30 +1013,11 @@ WHERE id = $1;
         tx: &mut Transaction<'_, Postgres>,
         modifications: &[Modification],
     ) -> Result<()> {
-        if modifications.is_empty() {
-            return Ok(());
-        }
-
-        // Extract the IDs from the modifications.
-        let ids: Vec<i64> = modifications.iter().map(|m| m.id).collect();
-        tracing::warn!(
-            "Deleting modifications {:?} with IDs: {:?}",
+        ampc_server_utils::modifications::postgres::delete_modifications(
+            tx.deref_mut(),
             modifications,
-            ids
-        );
-
-        // Execute a bulk delete using the ANY clause.
-        sqlx::query(
-            r#"
-            DELETE FROM modifications
-            WHERE id = ANY($1::bigint[])
-            "#,
         )
-        .bind(&ids)
-        .execute(tx.deref_mut())
-        .await?;
-
-        Ok(())
+        .await
     }
 
     /// Delete all modifications from the modifications table.
@@ -1133,10 +1025,7 @@ WHERE id = $1;
         &self,
         tx: &mut Transaction<'_, Postgres>,
     ) -> Result<()> {
-        sqlx::query("DELETE FROM modifications")
-            .execute(tx.deref_mut())
-            .await?;
-        Ok(())
+        ampc_server_utils::modifications::postgres::clear_modifications_table(tx.deref_mut()).await
     }
 
     /// Initialize the database with random shares and masks. Cleans up the db
@@ -2242,7 +2131,10 @@ pub mod tests {
         assert_eq!(actual.id, expected_id);
         assert_eq!(actual.serial_id, expected_serial_id);
         assert_eq!(actual.request_type, expected_request_type);
-        assert_eq!(actual.s3_url, expected_s3_url);
+        assert_eq!(
+            actual.input,
+            expected_s3_url.map(ampc_server_utils::modifications::ModificationInputReference::S3)
+        );
         assert_eq!(actual.status, expected_status.to_string());
         assert_eq!(actual.persisted, expected_persisted);
         assert_eq!(actual.result_message_body, expected_result_body);

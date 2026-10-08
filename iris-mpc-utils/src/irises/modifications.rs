@@ -70,7 +70,7 @@ impl From<ModificationInput> for Modification {
             id: value.mod_id,
             serial_id: Some(value.serial_id),
             request_type: value.request_type.to_string(),
-            s3_url: None,
+            input: None,
             status: value.get_status().to_string(),
             persisted: value.persisted,
             result_message_body: None,
