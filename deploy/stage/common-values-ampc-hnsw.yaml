@@ -60,10 +60,10 @@ env:
   SMPC__MAX_DB_SIZE: "100000"
   SMPC__FAKE_DB_SIZE: "0"
   SMPC__MAX_BATCH_SIZE: "16"
-  # 3 * 48 search sessions for each concurrently running normal/mirror orientation.
-  SMPC__HAWK_REQUEST_PARALLELISM: "48"
-  SMPC__HAWK_CONNECTION_PARALLELISM: "16"
-  SMPC__SEPARATE_TOKIO_CORES_PER_NODE: "12"
+  # Three search sessions per request group, for each normal/mirror orientation.
+  SMPC__HAWK_REQUEST_PARALLELISM: "8"
+  SMPC__HAWK_CONNECTION_PARALLELISM: "4"
+  SMPC__SEPARATE_TOKIO_CORES_PER_NODE: "2"
   SMPC__FULL_SCAN_SIDE: "Left"
   SMPC__FULL_SCAN_SIDE_SWITCHING_ENABLED: "false"
   SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT: "500"
@@ -135,11 +135,11 @@ startupProbe:
 
 resources:
   limits:
-    cpu: "92"
-    memory: 700Gi
+    cpu: "12"
+    memory: 16Gi
   requests:
-    cpu: "92"
-    memory: 700Gi
+    cpu: "12"
+    memory: 16Gi
 
 imagePullSecrets:
   - name: github-secret
@@ -150,7 +150,7 @@ podAnnotations:
 nodeSelector:
   application: cpu-linear-scan
   kubernetes.io/arch: amd64
-  node.kubernetes.io/instance-type: "r8i.24xlarge"
+  node.kubernetes.io/instance-type: "r8i.4xlarge"
   karpenter.sh/capacity-type: on-demand
   topology.k8s.aws/zone-id: "euc1-az1"
 
