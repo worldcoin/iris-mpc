@@ -2071,7 +2071,7 @@ impl LocalIrisWorkerPool {
         Ok(Some(
             buffers
                 .into_iter()
-                .map(|buffer| buffer.into_iter().map(RingElement).collect())
+                .map(RingElement::convert_vec_rev)
                 .collect(),
         ))
     }
