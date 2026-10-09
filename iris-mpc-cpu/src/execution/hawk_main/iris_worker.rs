@@ -2391,9 +2391,9 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
             // request-major across the buffers, (normal 0, mirror 0),
             // (normal 1, mirror 1), ..., so a single request still runs as
             // one fused pair and two orientations never leave a query
-            // unpaired. The pairs run one after another: each already fans
-            // out over all workers, and running them concurrently would make
-            // the workers alternate between packed pairs (see `PAIR_PACKED`).
+            // unpaired. All pairs run concurrently on the worker pool; each
+            // worker thread keeps its most recent packed pairs (see
+            // `PAIR_PACKED`), so interleaved pairs do not re-pack.
             let longest = irises.iter().map(Vec::len).max().unwrap_or(0);
             let mut slots = Vec::with_capacity(irises.iter().map(Vec::len).sum());
             for position in 0..longest {
@@ -2403,32 +2403,49 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
                     }
                 }
             }
-            let mut inner = inner;
+            let vector_ids: Arc<[VectorId]> = vector_ids.into();
+            let parts = try_join_all(slots.chunks(2).map(|pair| {
+                let mut inner = inner.clone();
+                let vector_ids = vector_ids.clone();
+                let pair = pair.to_vec();
+                async move {
+                    match pair.as_slice() {
+                        [(first_buffer, first), (second_buffer, second)] => {
+                            let [first_output, second_output] = inner
+                                .full_rotation_dot_product_pair_batch(
+                                    [first.clone(), second.clone()],
+                                    &vector_ids,
+                                    task_size,
+                                )
+                                .await?;
+                            Ok::<_, eyre::Report>(vec![
+                                (*first_buffer, first_output),
+                                (*second_buffer, second_output),
+                            ])
+                        }
+                        [(buffer, single)] => Ok(vec![(
+                            *buffer,
+                            inner
+                                .full_rotation_dot_product_batch(
+                                    single.clone(),
+                                    &vector_ids,
+                                    task_size,
+                                )
+                                .await?,
+                        )]),
+                        _ => unreachable!("chunks of two"),
+                    }
+                }
+            }))
+            .await?;
+            // `try_join_all` keeps the slot order, so every buffer receives
+            // its queries' outputs in order.
             let mut buffers = irises
                 .iter()
                 .map(|queries| Vec::with_capacity(queries.len() * record_values))
                 .collect::<Vec<_>>();
-            for pair in slots.chunks(2) {
-                match pair {
-                    [(first_buffer, first), (second_buffer, second)] => {
-                        let [first_output, second_output] = inner
-                            .full_rotation_dot_product_pair_batch(
-                                [first.clone(), second.clone()],
-                                &vector_ids,
-                                task_size,
-                            )
-                            .await?;
-                        buffers[*first_buffer].extend(first_output);
-                        buffers[*second_buffer].extend(second_output);
-                    }
-                    [(buffer, single)] => {
-                        let output = inner
-                            .full_rotation_dot_product_batch(single.clone(), &vector_ids, task_size)
-                            .await?;
-                        buffers[*buffer].extend(output);
-                    }
-                    _ => unreachable!("chunks of two"),
-                }
+            for (buffer, output) in parts.into_iter().flatten() {
+                buffers[buffer].extend(output);
             }
             Ok(buffers)
         })
