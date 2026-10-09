@@ -906,8 +906,15 @@ mod mixed_scan {
         static DOUBLED_MIXED: RefCell<[Option<DoubledQueryMixed>; 2]> =
             const { RefCell::new([None, None]) };
         static MIXED_LRU: RefCell<usize> = const { RefCell::new(0) };
-        static PAIR_PACKED: RefCell<Option<PairPackedQueryMixed>> = const { RefCell::new(None) };
+        /// Packed query pairs of this thread, most recently used first.
+        static PAIR_PACKED: RefCell<Vec<PairPackedQueryMixed>> = const { RefCell::new(Vec::new()) };
     }
+
+    /// Packed pairs each worker thread keeps (~300 KB each). A batched scan
+    /// interleaves the pairs of its requests on the same workers; eight
+    /// cover a batch of eight requests in both orientations without
+    /// re-packing.
+    const PAIR_PACKED_ENTRIES: usize = 8;
 
     /// Cross-query packed doubled rows for the fused two-query scan. For each
     /// 8-coefficient group, one 16-byte block holds a single byte plane of
@@ -1672,9 +1679,24 @@ mod mixed_scan {
         ];
 
         PAIR_PACKED.with(|cell| {
-            let mut entry = cell.borrow_mut();
-            let packed = entry.get_or_insert_with(PairPackedQueryMixed::new_buffer);
-            packed.fill_if_changed::<ROTATIONS>(queries);
+            let mut entries = cell.borrow_mut();
+            let index = match entries
+                .iter()
+                .position(|entry| entry.matches::<ROTATIONS>(queries))
+            {
+                Some(index) => index,
+                None => {
+                    // Reuse the least recently used buffer once all exist.
+                    if entries.len() < PAIR_PACKED_ENTRIES {
+                        entries.push(PairPackedQueryMixed::new_buffer());
+                    }
+                    let last = entries.len() - 1;
+                    entries[last].fill_if_changed::<ROTATIONS>(queries);
+                    last
+                }
+            };
+            entries[..=index].rotate_right(1);
+            let packed = &entries[0];
 
             let code_targets: Vec<&[u8]> = targets
                 .iter()
