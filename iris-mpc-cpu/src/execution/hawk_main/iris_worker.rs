@@ -2911,16 +2911,18 @@ mod tests {
             let [share, _, _] = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris);
             Arc::new(share)
         };
-        let layout = crate::protocol::shared_iris::preferred_scan_layout();
+        // The preferred layout runs the scan kernel of this host: AMX groups,
+        // mixed planes (the packed pair kernel) or plain u16 shares.
+        let residents = Residents::new(crate::protocol::shared_iris::preferred_scan_layout(), 0);
         let vector_ids = (0..TEST_TARGETS)
             .map(|index| VectorId::from_0_index(index as u32))
             .collect::<Vec<_>>();
         let points = vector_ids
             .iter()
-            .map(|&id| (id, ResidentIris::from_arc(share(), layout)))
+            .map(|&id| (id, residents.resident(id, share())))
             .collect::<HashMap<_, _>>();
-        let storage = SharedIrises::new(points, ResidentIris::from_arc(share(), layout)).to_arc();
-        let pool = LocalIrisWorkerPool::new_local(storage, layout, DistanceMode::MinRotation, 0);
+        let storage = SharedIrises::new(points, residents.placeholder(share())).to_arc();
+        let pool = LocalIrisWorkerPool::new_local(storage, residents, DistanceMode::MinRotation, 0);
         let query_ids = (0..3).map(|_| QueryId::new()).collect::<Vec<_>>();
         runtime
             .block_on(pool.cache_queries(query_ids.iter().map(|&id| (id, share())).collect()))?;
