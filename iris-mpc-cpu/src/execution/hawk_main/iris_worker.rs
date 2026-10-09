@@ -33,7 +33,7 @@ use std::{
     num::NonZeroUsize,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, RwLock,
+        Arc, Barrier, RwLock,
     },
     time::Instant,
 };
@@ -82,7 +82,14 @@ enum IrisTask {
     /// Inserts a new iris in the vector store.
     Insert { vector_id: VectorId, iris: ArcIris },
     /// Pre-allocates memory in the iris store to accommodate a number of new irises.
-    Reserve { additional: usize },
+    ///
+    /// Inserts are spread over all workers, so every worker receives this
+    /// task and the reservation runs between the inserts queued before it and
+    /// those queued after it on any worker.
+    Reserve {
+        additional: usize,
+        barrier: Arc<Barrier>,
+    },
     /// Computes the dot product for a list of iris pairs.
     DotProductPairs {
         pairs: Vec<(ArcIris, VectorId)>,
@@ -166,7 +173,9 @@ enum IrisTask {
 /// Tasks are distributed among the workers to parallelize work. For read-only tasks
 /// (like dot products), a round-robin strategy is used. An `insert` goes to a
 /// worker chosen by the `VectorId`'s serial ID, so the inserts of one record keep
-/// their order while different records are prepared in parallel.
+/// their order while different records are prepared in parallel. A `reserve`
+/// goes to every worker and acts as a barrier between the inserts queued
+/// before and after it.
 #[derive(Clone, Debug)]
 pub struct IrisPoolHandle {
     /// Senders for each worker thread's task channel.
@@ -204,8 +213,13 @@ impl IrisPoolHandle {
     }
 
     pub fn reserve(&self, additional: usize) -> Result<()> {
-        let task = IrisTask::Reserve { additional };
-        self.get_mut_worker().send(task)?;
+        let barrier = Arc::new(Barrier::new(self.workers.len()));
+        for worker in self.workers.iter() {
+            worker.send(IrisTask::Reserve {
+                additional,
+                barrier: barrier.clone(),
+            })?;
+        }
         Ok(())
     }
 
@@ -592,11 +606,6 @@ impl IrisPoolHandle {
         &self.workers[idx]
     }
 
-    /// Get the worker responsible for store mutations.
-    fn get_mut_worker(&self) -> &Sender<IrisTask> {
-        &self.workers[0]
-    }
-
     /// The worker of all inserts of a serial ID. Neighbouring serial IDs share
     /// a worker per group of the AMX arena, so workers never write the same
     /// group.
@@ -712,9 +721,17 @@ fn worker_thread(
                 }
             }
 
-            IrisTask::Reserve { additional } => {
-                let mut store = iris_store.data.blocking_write();
-                store.reserve(additional);
+            IrisTask::Reserve {
+                additional,
+                barrier,
+            } => {
+                // Wait until every worker has applied the inserts queued
+                // before the reservation, reserve once, and only then let any
+                // worker continue with the inserts queued after it.
+                if barrier.wait().is_leader() {
+                    iris_store.data.blocking_write().reserve(additional);
+                }
+                barrier.wait();
             }
 
             IrisTask::DotProductPairs { pairs, rsp } => {
@@ -2848,6 +2865,46 @@ mod tests {
 
         assert!(state.lfu_cache.get(&hot).is_some());
         assert!(state.lfu_cache.entry_count() <= 2);
+    }
+
+    /// Inserts are spread over the workers, so a reservation has to wait for
+    /// the inserts queued before it on every worker, not only on the worker
+    /// that applies it.
+    #[test]
+    fn reserve_follows_inserts_on_every_worker() -> Result<()> {
+        let runtime = tokio::runtime::Runtime::new()?;
+        let iris = Arc::new(GaloisRingSharedIris::default_for_party(0));
+        let residents = Residents::new(ResidentLayout::U16, 0);
+        let storage =
+            SharedIrises::new(HashMap::new(), residents.placeholder(iris.clone())).to_arc();
+        let workers = init_workers(0, storage.clone(), false, residents);
+        let n_workers = workers.workers.len();
+
+        // Route every insert to the last worker, and hold the store while
+        // queuing so that none of them lands before the reservation is queued.
+        let serial_ids = (0..64)
+            .flat_map(|group| {
+                let first = (group * n_workers + n_workers - 1) * GROUP + 1;
+                first..first + GROUP
+            })
+            .collect::<Vec<_>>();
+        let additional = 1 << 20;
+        {
+            let _hold = storage.data.blocking_read();
+            for &serial_id in &serial_ids {
+                workers.insert(VectorId::from_serial_id(serial_id as u32), iris.clone())?;
+            }
+            workers.reserve(additional)?;
+        }
+        runtime.block_on(workers.wait_completion())?;
+
+        let store = storage.data.blocking_read();
+        assert_eq!(store.db_size(), serial_ids.len());
+        // After all inserts the registry holds every serial ID up to the
+        // largest one (serial ID 0 stays unused).
+        let len = serial_ids.last().expect("inserts were queued") + 1;
+        assert!(store.capacity() >= len + additional);
+        Ok(())
     }
 
     #[test]

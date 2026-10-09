@@ -169,6 +169,11 @@ impl<I: Clone> SharedIrises<I> {
         self.points.reserve(additional);
     }
 
+    #[cfg(test)]
+    pub(crate) fn capacity(&self) -> usize {
+        self.points.capacity()
+    }
+
     pub fn get_current_version(&self, serial_id: SerialId) -> Option<VersionId> {
         match &self.points.get(serial_id as usize) {
             Some(Some((version, _))) => Some(*version),
