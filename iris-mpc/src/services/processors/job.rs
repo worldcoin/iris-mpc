@@ -269,6 +269,7 @@ pub async fn process_job_result(
             let reauth_id = request_ids[i].clone();
             let serial_id = reauth_target_indices.get(&reauth_id).unwrap() + 1;
             let success = successful_reauths[i];
+            let persisted = success && !skip_persistence.get(i).copied().unwrap_or(false);
             let result_event = ReAuthResult::new(
                 reauth_id.clone(),
                 party_id,
@@ -276,12 +277,12 @@ pub async fn process_job_result(
                 success,
                 match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>(),
                 *reauth_or_rule_used.get(&reauth_id).unwrap(),
+                persisted,
             );
             let result_string = serde_json::to_string(&result_event)
                 .wrap_err("failed to serialize reauth result")?;
 
             let modification_key = RequestSerialId(serial_id);
-            let persisted = success && !skip_persistence.get(i).copied().unwrap_or(false);
             modifications
                 .get_mut(&modification_key)
                 .unwrap()

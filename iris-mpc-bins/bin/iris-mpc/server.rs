@@ -750,6 +750,7 @@ async fn server_main(config: Config) -> Result<()> {
                     let or_rule_used = reauth_or_rule_used.get(&reauth_id).unwrap();
                     let serial_id = reauth_target_indices.get(&reauth_id).unwrap() + 1;
                     let success = successful_reauths[i];
+                    let persisted = success && !skip_persistence.get(i).copied().unwrap_or(false);
                     let result_event = ReAuthResult::new(
                         reauth_id.clone(),
                         party_id,
@@ -757,10 +758,10 @@ async fn server_main(config: Config) -> Result<()> {
                         success,
                         match_ids[i].iter().map(|x| x + 1).collect::<Vec<_>>(),
                         *reauth_or_rule_used.get(&reauth_id).unwrap(),
+                        persisted,
                     );
                     let result_string = serde_json::to_string(&result_event)
                         .expect("failed to serialize reauth result");
-                    let persisted = success && !skip_persistence.get(i).copied().unwrap_or(false);
                     modifications
                         .get_mut(&RequestSerialId(serial_id))
                         .unwrap()
