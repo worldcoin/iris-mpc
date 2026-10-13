@@ -39,13 +39,13 @@ func TestExportFlagErrorPrintsUsage(t *testing.T) {
 
 	rootCmd := &cobra.Command{Use: "app"}
 	rootCmd.AddCommand(exportCmd)
-	rootCmd.SetArgs([]string{"export-db", "--export-ouput=s3"})
+	rootCmd.SetArgs([]string{"export-db", "--export-destination=s3"})
 	var output bytes.Buffer
 	rootCmd.SetOut(&output)
 	rootCmd.SetErr(&output)
 
 	err := rootCmd.Execute()
-	require.ErrorContains(t, err, "unknown flag: --export-ouput")
+	require.ErrorContains(t, err, "unknown flag: --export-destination")
 	require.Contains(t, output.String(), "Usage:")
 	require.Contains(t, output.String(), "--export-output")
 }
