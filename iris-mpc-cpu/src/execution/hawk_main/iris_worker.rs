@@ -1042,27 +1042,35 @@ pub trait IrisWorkerPool: Debug + Send + Sync {
         vector_ids: Vec<VectorId>,
     ) -> BoxFuture<'a, Result<Vec<RingElement<u16>>>>;
 
-    /// Compute two queries' full 31-rotation dot products over one shared
-    /// target traversal. The exact scan uses this to evaluate the normal and
-    /// mirror orientations while streaming the resident database once.
+    /// Compute the full 31-rotation dot products of several queries against
+    /// the same targets. The exact scan uses this to evaluate every request
+    /// of a batch, in both orientations, while streaming the resident
+    /// database once.
     ///
-    /// Each returned side is identical to a separate
+    /// `queries[b]` lists the queries of output buffer `b`. The buffer holds,
+    /// for each of its queries in order, `vector_ids.len()` records of
+    /// `2 * ROTATIONS` values, identical to a separate
     /// [`IrisWorkerPool::compute_dot_products_full_rotations`] call. The
-    /// default implementation evaluates the queries sequentially; pools with
+    /// default implementation evaluates the queries one by one; pools with
     /// fused kernels override it.
-    fn compute_dot_products_full_rotations_pair<'a>(
+    fn compute_dot_products_full_rotations_batch<'a>(
         &'a self,
-        queries: [QuerySpec; 2],
+        queries: Vec<Vec<QuerySpec>>,
         vector_ids: Vec<VectorId>,
-    ) -> BoxFuture<'a, Result<[Vec<RingElement<u16>>; 2]>> {
+    ) -> BoxFuture<'a, Result<Vec<Vec<RingElement<u16>>>>> {
         Box::pin(async move {
-            let first = self
-                .compute_dot_products_full_rotations(queries[0], vector_ids.clone())
-                .await?;
-            let second = self
-                .compute_dot_products_full_rotations(queries[1], vector_ids)
-                .await?;
-            Ok([first, second])
+            let mut buffers = Vec::with_capacity(queries.len());
+            for specs in queries {
+                let mut buffer = Vec::with_capacity(specs.len() * vector_ids.len() * 2 * ROTATIONS);
+                for spec in specs {
+                    buffer.extend(
+                        self.compute_dot_products_full_rotations(spec, vector_ids.clone())
+                            .await?,
+                    );
+                }
+                buffers.push(buffer);
+            }
+            Ok(buffers)
         })
     }
 
@@ -1156,12 +1164,12 @@ impl<T: ?Sized + IrisWorkerPool> IrisWorkerPool for Arc<T> {
     ) -> BoxFuture<'a, Result<Vec<RingElement<u16>>>> {
         (**self).compute_dot_products_full_rotations(query, vector_ids)
     }
-    fn compute_dot_products_full_rotations_pair<'a>(
+    fn compute_dot_products_full_rotations_batch<'a>(
         &'a self,
-        queries: [QuerySpec; 2],
+        queries: Vec<Vec<QuerySpec>>,
         vector_ids: Vec<VectorId>,
-    ) -> BoxFuture<'a, Result<[Vec<RingElement<u16>>; 2]>> {
-        (**self).compute_dot_products_full_rotations_pair(queries, vector_ids)
+    ) -> BoxFuture<'a, Result<Vec<Vec<RingElement<u16>>>>> {
+        (**self).compute_dot_products_full_rotations_batch(queries, vector_ids)
     }
     fn fetch_irises<'a>(&'a self, ids: Vec<VectorId>) -> BoxFuture<'a, Result<Vec<ArcIris>>> {
         (**self).fetch_irises(ids)
@@ -1236,6 +1244,33 @@ struct CachedQuery {
     preprocessed_rotations: Vec<ArcIris>,
     /// `all_rotations(preprocess(mirror(original)))` — 31 entries.
     mirrored_preprocessed_rotations: Vec<ArcIris>,
+}
+
+impl CachedQuery {
+    /// Preprocess and rotate both orientations of `iris`.
+    fn build(iris: ArcIris) -> Self {
+        // --- Normal: preprocess then rotate ---
+        let mut code_proc = iris.code.clone();
+        let mut mask_proc = iris.mask.clone();
+        code_proc.preprocess_iris_code_query_share();
+        mask_proc.preprocess_mask_code_query_share();
+        let preprocessed_rotations =
+            zip_rotations(code_proc.all_rotations(), mask_proc.all_rotations());
+
+        // --- Mirrored: mirror, preprocess, then rotate ---
+        let mut code_mirror = iris.code.mirrored_code();
+        let mut mask_mirror = iris.mask.mirrored();
+        code_mirror.preprocess_iris_code_query_share();
+        mask_mirror.preprocess_mask_code_query_share();
+        let mirrored_preprocessed_rotations =
+            zip_rotations(code_mirror.all_rotations(), mask_mirror.all_rotations());
+
+        Self {
+            original: iris,
+            preprocessed_rotations,
+            mirrored_preprocessed_rotations,
+        }
+    }
 }
 
 /// Local implementation of `IrisWorkerPool` that wraps `IrisPoolHandle` with
@@ -2004,33 +2039,16 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
             }
 
             // Preprocess + rotate, collecting all resulting ArcIris values.
-            let mut entries: Vec<(QueryId, CachedQuery)> = Vec::with_capacity(new_queries.len());
-            for (query_id, iris) in new_queries {
-                // --- Normal: preprocess then rotate ---
-                let mut code_proc = iris.code.clone();
-                let mut mask_proc = iris.mask.clone();
-                code_proc.preprocess_iris_code_query_share();
-                mask_proc.preprocess_mask_code_query_share();
-                let preprocessed_rotations =
-                    zip_rotations(code_proc.all_rotations(), mask_proc.all_rotations());
-
-                // --- Mirrored: mirror, preprocess, then rotate ---
-                let mut code_mirror = iris.code.mirrored_code();
-                let mut mask_mirror = iris.mask.mirrored();
-                code_mirror.preprocess_iris_code_query_share();
-                mask_mirror.preprocess_mask_code_query_share();
-                let mirrored_preprocessed_rotations =
-                    zip_rotations(code_mirror.all_rotations(), mask_mirror.all_rotations());
-
-                entries.push((
-                    query_id,
-                    CachedQuery {
-                        original: iris,
-                        preprocessed_rotations,
-                        mirrored_preprocessed_rotations,
-                    },
-                ));
-            }
+            // Each query is independent and a batch caches dozens of them, so
+            // build them in parallel off the async runtime.
+            let mut entries: Vec<(QueryId, CachedQuery)> = tokio::task::spawn_blocking(move || {
+                use rayon::prelude::*;
+                new_queries
+                    .into_par_iter()
+                    .map(|(query_id, iris)| (query_id, CachedQuery::build(iris)))
+                    .collect()
+            })
+            .await?;
 
             // NUMA-realloc all irises onto the worker pool's NUMA node.
             // The query iris is the "left" operand in every trick_dot and is
@@ -2183,52 +2201,123 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
         })
     }
 
-    fn compute_dot_products_full_rotations_pair<'a>(
+    fn compute_dot_products_full_rotations_batch<'a>(
         &'a self,
-        queries: [QuerySpec; 2],
+        queries: Vec<Vec<QuerySpec>>,
         vector_ids: Vec<VectorId>,
-    ) -> BoxFuture<'a, Result<[Vec<RingElement<u16>>; 2]>> {
+    ) -> BoxFuture<'a, Result<Vec<Vec<RingElement<u16>>>>> {
         let query_cache = self.query_cache.clone();
-        let mut inner = self.inner.clone();
-        let pool = self.clone();
+        let inner = self.inner.clone();
         let is_cold = self.cold_storage.is_some();
         let task_size = default_full_rotation_task_size();
         Box::pin(async move {
             let irises = {
                 let cache = query_cache.read().unwrap();
-                let mut resolved = Vec::with_capacity(2);
-                for query in queries {
-                    let cached = cache
-                        .get(&query.query_id)
-                        .ok_or_else(|| eyre::eyre!("Query {:?} not cached", query.query_id))?;
-                    let rotations = if query.mirrored {
-                        &cached.mirrored_preprocessed_rotations
-                    } else {
-                        &cached.preprocessed_rotations
-                    };
-                    resolved.push(rotations[query.rotation].clone());
-                }
-                let second = resolved.pop().expect("two resolved queries");
-                let first = resolved.pop().expect("two resolved queries");
-                [first, second]
+                queries
+                    .iter()
+                    .map(|specs| {
+                        specs
+                            .iter()
+                            .map(|query| {
+                                let cached = cache.get(&query.query_id).ok_or_else(|| {
+                                    eyre::eyre!("Query {:?} not cached", query.query_id)
+                                })?;
+                                let rotations = if query.mirrored {
+                                    &cached.mirrored_preprocessed_rotations
+                                } else {
+                                    &cached.preprocessed_rotations
+                                };
+                                Ok(rotations[query.rotation].clone())
+                            })
+                            .collect::<Result<Vec<_>>>()
+                    })
+                    .collect::<Result<Vec<_>>>()?
             };
+            let record_values = vector_ids.len() * 2 * ROTATIONS;
             if is_cold {
-                // Cold targets are fetched once and reused by both queries;
+                // Cold targets are fetched once and reused by every query;
                 // the dot passes themselves stay sequential on this rare path.
-                let targets = pool.fetch_irises_resident_or_cold(&vector_ids).await?;
-                let [query_a, query_b] = irises;
-                let first = inner
-                    .full_rotation_dot_product_irises_batch(query_a, targets.clone(), task_size)
-                    .await?;
-                let second = inner
-                    .full_rotation_dot_product_irises_batch(query_b, targets, task_size)
-                    .await?;
-                Ok([first, second])
-            } else {
-                inner
-                    .full_rotation_dot_product_pair_batch(irises, &vector_ids, task_size)
-                    .await
+                let targets = self.fetch_irises_resident_or_cold(&vector_ids).await?;
+                let mut buffers = Vec::with_capacity(irises.len());
+                for queries in irises {
+                    let mut buffer = Vec::with_capacity(queries.len() * record_values);
+                    for query in queries {
+                        buffer.extend(
+                            inner
+                                .full_rotation_dot_product_irises_batch(
+                                    query,
+                                    targets.clone(),
+                                    task_size,
+                                )
+                                .await?,
+                        );
+                    }
+                    buffers.push(buffer);
+                }
+                return Ok(buffers);
             }
+            // Resident targets: pairs of queries share one target traversal
+            // (the fused mixed-plane pair kernel). Queries are paired
+            // request-major across the buffers, (normal 0, mirror 0),
+            // (normal 1, mirror 1), ..., so a single request still runs as
+            // one fused pair and two orientations never leave a query
+            // unpaired. All pairs run concurrently on the worker pool; each
+            // worker thread keeps its most recent packed pairs (see
+            // `PAIR_PACKED`), so interleaved pairs do not re-pack.
+            let longest = irises.iter().map(Vec::len).max().unwrap_or(0);
+            let mut slots = Vec::with_capacity(irises.iter().map(Vec::len).sum());
+            for position in 0..longest {
+                for (buffer, queries) in irises.iter().enumerate() {
+                    if let Some(query) = queries.get(position) {
+                        slots.push((buffer, query.clone()));
+                    }
+                }
+            }
+            let vector_ids: Arc<[VectorId]> = vector_ids.into();
+            let parts = try_join_all(slots.chunks(2).map(|pair| {
+                let mut inner = inner.clone();
+                let vector_ids = vector_ids.clone();
+                let pair = pair.to_vec();
+                async move {
+                    match pair.as_slice() {
+                        [(first_buffer, first), (second_buffer, second)] => {
+                            let [first_output, second_output] = inner
+                                .full_rotation_dot_product_pair_batch(
+                                    [first.clone(), second.clone()],
+                                    &vector_ids,
+                                    task_size,
+                                )
+                                .await?;
+                            Ok::<_, eyre::Report>(vec![
+                                (*first_buffer, first_output),
+                                (*second_buffer, second_output),
+                            ])
+                        }
+                        [(buffer, single)] => Ok(vec![(
+                            *buffer,
+                            inner
+                                .full_rotation_dot_product_batch(
+                                    single.clone(),
+                                    &vector_ids,
+                                    task_size,
+                                )
+                                .await?,
+                        )]),
+                        _ => unreachable!("chunks of two"),
+                    }
+                }
+            }))
+            .await?;
+            // `try_join_all` keeps the slot order, so every buffer receives
+            // its queries' outputs in order.
+            let mut buffers = irises
+                .iter()
+                .map(|queries| Vec::with_capacity(queries.len() * record_values))
+                .collect::<Vec<_>>();
+            for (buffer, output) in parts.into_iter().flatten() {
+                buffers[buffer].extend(output);
+            }
+            Ok(buffers)
         })
     }
 
@@ -2678,6 +2767,86 @@ mod tests {
             per_layout.iter().all(|result| result == &per_layout[0]),
             "resident layouts must produce identical distances"
         );
+        Ok(())
+    }
+
+    /// The batched full-rotation scan pairs queries across its buffers and
+    /// must equal one scan per query for every shape: a single request (one
+    /// fused normal/mirror pair), several requests, and an odd count in a
+    /// single buffer (one query left unpaired).
+    #[test]
+    fn full_rotation_batch_matches_single_queries() -> Result<()> {
+        std::thread::Builder::new()
+            .name("full_rotation_batch".to_owned())
+            .stack_size(32 * 1024 * 1024)
+            .spawn(run_full_rotation_batch_test)?
+            .join()
+            .expect("full-rotation batch test thread panicked")
+    }
+
+    fn run_full_rotation_batch_test() -> Result<()> {
+        use iris_mpc_common::iris_db::iris::IrisCode;
+        use rand::{rngs::StdRng, SeedableRng};
+
+        let runtime = tokio::runtime::Runtime::new()?;
+        let mut rng = StdRng::seed_from_u64(11);
+        let mut share = || {
+            let iris = IrisCode::random_rng(&mut rng);
+            let [share, _, _] = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris);
+            Arc::new(share)
+        };
+        let layout = crate::protocol::shared_iris::preferred_scan_layout();
+        let vector_ids = (0..TEST_TARGETS)
+            .map(|index| VectorId::from_0_index(index as u32))
+            .collect::<Vec<_>>();
+        let points = vector_ids
+            .iter()
+            .map(|&id| (id, ResidentIris::from_arc(share(), layout)))
+            .collect::<HashMap<_, _>>();
+        let storage = SharedIrises::new(points, ResidentIris::from_arc(share(), layout)).to_arc();
+        let pool = LocalIrisWorkerPool::new_local(storage, layout, DistanceMode::MinRotation, 0);
+        let query_ids = (0..3).map(|_| QueryId::new()).collect::<Vec<_>>();
+        runtime
+            .block_on(pool.cache_queries(query_ids.iter().map(|&id| (id, share())).collect()))?;
+
+        let spec = |index: usize, mirrored: bool| {
+            QuerySpec::with_rotation(query_ids[index], CENTER_ROTATION, mirrored)
+        };
+        let normal = |count: usize| {
+            (0..count)
+                .map(|index| spec(index, false))
+                .collect::<Vec<_>>()
+        };
+        let mirror = |count: usize| {
+            (0..count)
+                .map(|index| spec(index, true))
+                .collect::<Vec<_>>()
+        };
+        for shape in [
+            vec![normal(1), mirror(1)],
+            vec![normal(2), mirror(2)],
+            vec![normal(3), mirror(3)],
+            vec![normal(3)],
+        ] {
+            let batched = runtime.block_on(
+                pool.compute_dot_products_full_rotations_batch(shape.clone(), vector_ids.clone()),
+            )?;
+            assert_eq!(batched.len(), shape.len());
+            for (buffer, specs) in batched.iter().zip(&shape) {
+                let mut expected = Vec::new();
+                for &spec in specs {
+                    expected.extend(runtime.block_on(
+                        pool.compute_dot_products_full_rotations(spec, vector_ids.clone()),
+                    )?);
+                }
+                assert_eq!(
+                    buffer,
+                    &expected,
+                    "batch shape {:?}",
+                    shape.iter().map(Vec::len).collect::<Vec<_>>()
+                );
+            }
+        }
         Ok(())
     }
 }
