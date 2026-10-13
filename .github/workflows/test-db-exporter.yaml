@@ -87,7 +87,7 @@ jobs:
       - name: Run unit tests
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         working-directory: iris-mpc-db-exporter
-        run: godotenv -f .env.ci go test -v ./src/...
+        run: godotenv -f .env.ci go test -v . ./src/...
 
       - name: Run PostgreSQL store tests
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
