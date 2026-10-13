@@ -2,10 +2,10 @@ use eyre::{ensure, Result};
 use iris_mpc_common::{VectorId, IRIS_CODE_LENGTH, MASK_CODE_LENGTH, ROTATIONS};
 use iris_mpc_cpu::{
     execution::hawk_main::iris_worker::{
-        init_workers, IrisWorkerPool, LocalIrisWorkerPool, QueryId, QuerySpec,
+        init_workers, IrisWorkerPool, LocalIrisWorkerPool, QueryId, QuerySpec, CENTER_ROTATION,
     },
     hawkers::{aby3::aby3_store::DistanceMode, shared_irises::SharedIrises},
-    protocol::shared_iris::{ArcIris, GaloisRingSharedIris},
+    protocol::shared_iris::{preferred_scan_layout, ArcIris, GaloisRingSharedIris, Residents},
 };
 use rayon::prelude::*;
 use std::{
@@ -44,22 +44,16 @@ fn build_pool(db_size: usize, numa_shard: usize) -> (LocalIrisWorkerPool, Vec<Ve
         .into_par_iter()
         .map(|_| Arc::new((*query).clone()))
         .collect::<Vec<_>>();
-    let layout = iris_mpc_cpu::protocol::shared_iris::preferred_scan_layout();
+    let residents = Residents::new(preferred_scan_layout(), 0);
     let mut store = SharedIrises::new(
         HashMap::new(),
-        iris_mpc_cpu::protocol::shared_iris::ResidentIris::from_arc(
-            Arc::new(GaloisRingSharedIris::default_for_party(0)),
-            layout,
-        ),
+        residents.placeholder(Arc::new(GaloisRingSharedIris::default_for_party(0))),
     );
     store.reserve(db_size);
     let mut vector_ids = Vec::with_capacity(db_size);
-    for iris in irises {
-        vector_ids.push(
-            store.append(iris_mpc_cpu::protocol::shared_iris::ResidentIris::from_arc(
-                iris, layout,
-            )),
-        );
+    for (index, iris) in irises.into_iter().enumerate() {
+        let id = VectorId::from_0_index(index as u32);
+        vector_ids.push(store.insert(id, residents.resident(id, iris)));
     }
     println!(
         "BENCH_LOADED seconds={:.3}",
@@ -67,9 +61,9 @@ fn build_pool(db_size: usize, numa_shard: usize) -> (LocalIrisWorkerPool, Vec<Ve
     );
 
     let store = store.to_arc();
-    let workers = init_workers(numa_shard, store.clone(), true, layout);
+    let workers = init_workers(numa_shard, store.clone(), true, residents.clone());
     (
-        LocalIrisWorkerPool::new(workers, store, layout, DistanceMode::MinRotation, 0),
+        LocalIrisWorkerPool::new(workers, store, residents, DistanceMode::MinRotation, 0),
         vector_ids,
         query,
     )
@@ -120,7 +114,9 @@ fn main() -> Result<()> {
         .build()?;
     let normal_id = QueryId::new();
     let mirror_id = QueryId::new();
-    runtime.block_on(pool.cache_queries(vec![(normal_id, query.clone()), (mirror_id, query)]))?;
+    runtime.block_on(
+        pool.cache_queries(vec![(normal_id, query.clone()), (mirror_id, query.clone())]),
+    )?;
     let normal = QuerySpec::new(normal_id);
     let mirror = QuerySpec::new(mirror_id);
     let expected_len = 2 * ROTATIONS * db_size;
@@ -180,9 +176,13 @@ fn main() -> Result<()> {
 
     let run_fused = || -> Result<Duration> {
         let started = Instant::now();
-        let [normal_output, mirror_output] = runtime.block_on(
-            pool.compute_dot_products_full_rotations_pair([normal, mirror], vector_ids.clone()),
-        )?;
+        let [normal_output, mirror_output] = <[_; 2]>::try_from(runtime.block_on(
+            pool.compute_dot_products_full_rotations_batch(
+                vec![vec![normal], vec![mirror]],
+                vector_ids.clone(),
+            ),
+        )?)
+        .map_err(|_| eyre::eyre!("expected two fused outputs"))?;
         let elapsed = started.elapsed();
         ensure!(
             normal_output.len() == expected_len && mirror_output.len() == expected_len,
@@ -204,9 +204,60 @@ fn main() -> Result<()> {
         fused_samples.push(elapsed);
     }
 
+    // With IRIS_MPC_DOT_BENCH_REQUESTS > 1, also measure one batched call
+    // for that many requests in both orientations, as a batched linear scan
+    // issues it.
+    let requests = env_usize("IRIS_MPC_DOT_BENCH_REQUESTS", 0)?;
+    let mut batch_samples = Vec::new();
+    if requests > 1 {
+        let ids = (0..requests).map(|_| QueryId::new()).collect::<Vec<_>>();
+        runtime
+            .block_on(pool.cache_queries(ids.iter().map(|&id| (id, query.clone())).collect()))?;
+        let normals = ids.iter().map(|&id| QuerySpec::new(id)).collect::<Vec<_>>();
+        let mirrors = ids
+            .iter()
+            .map(|&id| QuerySpec::with_rotation(id, CENTER_ROTATION, true))
+            .collect::<Vec<_>>();
+        let run_batch = || -> Result<Duration> {
+            let started = Instant::now();
+            let outputs = runtime.block_on(pool.compute_dot_products_full_rotations_batch(
+                vec![normals.clone(), mirrors.clone()],
+                vector_ids.clone(),
+            ))?;
+            let elapsed = started.elapsed();
+            ensure!(
+                outputs
+                    .iter()
+                    .all(|output| output.len() == requests * expected_len),
+                "unexpected batch result length"
+            );
+            black_box(outputs);
+            Ok(elapsed)
+        };
+        for _ in 0..warmup_runs {
+            black_box(run_batch()?);
+        }
+        for run in 0..measured_runs {
+            let elapsed = run_batch()?;
+            println!(
+                "BENCH_SAMPLE backend=cpu_batch_{requests} run={run} seconds={:.6}",
+                elapsed.as_secs_f64()
+            );
+            batch_samples.push(elapsed);
+        }
+    }
+
     report("cpu_single_orientation", db_size, 1, &single_samples);
     report("cpu_normal_and_mirror", db_size, 2, &mirror_samples);
     report("cpu_fused_pair", db_size, 2, &fused_samples);
+    if !batch_samples.is_empty() {
+        report(
+            &format!("cpu_batch_{requests}"),
+            db_size,
+            2 * requests,
+            &batch_samples,
+        );
+    }
     println!(
         "BENCH_MIRROR_RATIO wall_time_ratio={:.3}",
         median(&mirror_samples).as_secs_f64() / median(&single_samples).as_secs_f64()
