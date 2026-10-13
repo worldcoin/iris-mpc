@@ -1,10 +1,14 @@
 # Intel CPU linear-scan rollout
 
-Preparation only. Daniel Kalas owns stack review. Do not merge these values, sync Argo, or deploy until the release and live qualification gates below are complete and the production rollout is approved.
+Stage and production use the same immutable AMD64 image from release v0.32.12. Coordinate parent and child Argo synchronization in both environments before merging this combined configuration change. Complete stage acceptance before the approved production cutover.
+
+The PR also pins the existing GPU matcher, anon-stats servers, database exporters, reshare servers, retention jobs and suspended graph-persistence job to their v0.32.12 images. Their placement, data sources, schedules and suspension settings are unchanged. Include these applications in Argo sync coordination and stage acceptance; observe stats processing and job outcomes before promoting the release. The CPU cutover procedure below covers the Intel placement change.
 
 ## Configuration
 
-One existing deployment per party moves from ARM `r8g.24xlarge` to on-demand Intel `r8i.24xlarge`, selected and tolerated by `application=cpu-linear-scan`. Requests and limits remain 92 CPU / 700Gi. The dedicated 96-CPU NodePool has nominal capacity for one such host per party; Karpenter limits are eventually consistent, not a strict node-count guarantee. Creating the pool alone does not create a host.
+Stage uses r8i.4xlarge with the existing 12 CPU / 16Gi resources and 100k database cap, batch maximum 16, importer parallelism 8, two Tokio cores per NUMA node, and request/connection parallelism 8/4. Existing stage schemas, exporter paths and queues are preserved; clearing is disabled.
+
+In production, one existing deployment per party moves from ARM `r8g.24xlarge` to on-demand Intel `r8i.24xlarge`, selected and tolerated by `application=cpu-linear-scan`. Requests and limits remain 92 CPU / 700Gi. The dedicated 96-CPU NodePool has nominal capacity for one such host per party; Karpenter limits are eventually consistent, not a strict node-count guarantee. Creating the pool alone does not create a host.
 
 Batch maximum 16, S3 importer parallelism 8, and 12 Tokio cores per NUMA node follow stage configuration `d6b8bf42c74a1650518e59cf6c6c13fb5f54e1d7`. This is configuration evidence, not qualification of the eventual production image. `numactl::init` reserves the first 12 CPU IDs on each detected NUMA node; the runtime uses 12 times the NUMA-node count. NUMA defaults on. Verify actual topology, CPU affinity and allocatable capacity with the production AMI and container before serving traffic.
 
@@ -14,7 +18,7 @@ Batch maximum 16, S3 importer parallelism 8, and 12 Tokio cores per NUMA node fo
 
 ## Release gates
 
-- Replace `REPLACE_WITH_FINAL_RELEASE_DIGEST` with an approved immutable release digest in the AMD64 repository. The placeholder is deliberately invalid; Helm rendering alone does not make it deployable. Do not substitute the stage integration image. Verify registry platform `linux/amd64`, source revision, migration compatibility and Daniel's stack review, including batch correctness for duplicate, mutation, reauth/reset/recovery and persistence/replay behavior.
+- Confirm both values files pin the same published v0.32.12 AMD64 digest and release source e25518194bc95667b6d94327a2a0fd183d455bfa. A successful image build does not replace runtime qualification. Verify migration compatibility and batch correctness for duplicate, mutation, reauth/reset/recovery and persistence/replay behavior.
 - Render the actual ordered Argo values for each party, including any image-updater values and Helm parameters. Confirm no live override changes image, schema, data sources or sizing. Compare existing production migrations and journal semantics against the release and the rollback binary; a matching schema name alone is insufficient.
 - Confirm the dedicated production NodeClass resolves the reviewed AL2023 `v20260923` AMI, with kernel `6.12.103`, in each region. Stage recovered under this AMI after reclaim-related kernel panics on `6.12.110`; this observation does not replace production qualification. Check instance availability, quota, network/TLS/IMDS access and daemon overhead against the preserved 92 CPU / 700Gi reservation.
 - Production inspection remains pending because role assumption was denied. Regional offerings checked through the stage account list this 96-vCPU / 768Gi instance in `euc1-az1`, `euc1-az2` and `euc1-az3`; offerings and quota are not reserved capacity. Verify actual production subnets, quota, DB ACUs and all three provisioned nodes, including allocatable resources after DaemonSets and pod ENI requirements.

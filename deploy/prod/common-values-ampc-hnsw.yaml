@@ -1,5 +1,4 @@
-# Replace with the reviewed release digest before merging or syncing.
-image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64@sha256:REPLACE_WITH_FINAL_RELEASE_DIGEST"
+image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:v0.32.12@sha256:4d29fedde873bc94a52fc8275e91ceacd8c51fe9685e150e65cb4d9042d85334"
 
 environment: prod
 replicaCount: 1
