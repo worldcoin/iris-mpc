@@ -751,6 +751,7 @@ mod tests {
             success: true,
             matched_serial_ids: vec![123],
             or_rule_used: false,
+            persisted: true,
             error: None,
             error_reason: None,
         };
