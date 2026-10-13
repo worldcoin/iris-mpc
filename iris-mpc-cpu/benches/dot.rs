@@ -643,7 +643,12 @@ pub fn bench_worker_pool(c: &mut Criterion) {
         ),
     )
     .to_arc();
-    let pool = init_workers(0, shared_irises, true, layout);
+    let pool = init_workers(
+        0,
+        shared_irises,
+        true,
+        iris_mpc_cpu::protocol::shared_iris::Residents::new(layout, 0),
+    );
 
     // similar to numa_realloc
     for (idx, iris) in iris_codes.iter().enumerate() {

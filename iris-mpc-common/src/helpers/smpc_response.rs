@@ -198,6 +198,9 @@ pub struct ReAuthResult {
     pub matched_serial_ids: Vec<u32>,
     /// Whether the Reauth was performed using OR rule.
     pub or_rule_used: bool,
+    /// Whether the target's shares were overwritten (success without skip_persistence).
+    #[serde(default)]
+    pub persisted: bool,
     /// Error occurred during the MPC reauth check.
     pub error: Option<bool>,
     /// Error reason, if an error occurred.
@@ -212,6 +215,7 @@ impl ReAuthResult {
         success: bool,
         matched_serial_ids: Vec<u32>,
         or_rule_used: bool,
+        persisted: bool,
     ) -> Self {
         Self {
             reauth_id,
@@ -220,6 +224,7 @@ impl ReAuthResult {
             success,
             matched_serial_ids,
             or_rule_used,
+            persisted,
             error: None,
             error_reason: None,
         }
@@ -238,6 +243,7 @@ impl ReAuthResult {
             success: false,
             matched_serial_ids: vec![],
             or_rule_used: false,
+            persisted: false,
             error: Some(true),
             error_reason: Some(error_reason.to_string()),
         }
