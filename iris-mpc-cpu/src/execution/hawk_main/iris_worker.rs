@@ -1,14 +1,16 @@
+use super::amx_scan_pool::AmxScanPool;
 use crate::{
     execution::hawk_main::HAWK_MIN_DIST_ROTATIONS,
     hawkers::aby3::aby3_store::DistanceMode,
     hawkers::shared_irises::SharedIrisesRef,
     protocol::{
+        amx_scan::{AmxQuery, GROUP},
         ops::{
             galois_ring_pairwise_distance, non_existent_distance, pairwise_distance,
             rotation_aware_pairwise_distance, rotation_aware_pairwise_distance_rowmajor,
             rotation_aware_pairwise_distance_rowmajor_trimmed,
         },
-        shared_iris::{ArcIris, GaloisRingSharedIris, ResidentIris, ResidentLayout},
+        shared_iris::{ArcIris, GaloisRingSharedIris, ResidentIris, ResidentLayout, Residents},
     },
     shares::RingElement,
 };
@@ -31,7 +33,7 @@ use std::{
     num::NonZeroUsize,
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc, RwLock,
+        Arc, Barrier, RwLock,
     },
     time::Instant,
 };
@@ -80,7 +82,14 @@ enum IrisTask {
     /// Inserts a new iris in the vector store.
     Insert { vector_id: VectorId, iris: ArcIris },
     /// Pre-allocates memory in the iris store to accommodate a number of new irises.
-    Reserve { additional: usize },
+    ///
+    /// Inserts are spread over all workers, so every worker receives this
+    /// task and the reservation runs between the inserts queued before it and
+    /// those queued after it on any worker.
+    Reserve {
+        additional: usize,
+        barrier: Arc<Barrier>,
+    },
     /// Computes the dot product for a list of iris pairs.
     DotProductPairs {
         pairs: Vec<(ArcIris, VectorId)>,
@@ -162,9 +171,11 @@ enum IrisTask {
 ///
 /// # Task Distribution
 /// Tasks are distributed among the workers to parallelize work. For read-only tasks
-/// (like dot products), a round-robin strategy is used. For tasks that mutate the
-/// underlying iris store (like `insert`), a consistent worker is chosen based on the
-/// `VectorId` to ensure data consistency without requiring locks.
+/// (like dot products), a round-robin strategy is used. An `insert` goes to a
+/// worker chosen by the `VectorId`'s serial ID, so the inserts of one record keep
+/// their order while different records are prepared in parallel. A `reserve`
+/// goes to every worker and acts as a barrier between the inserts queued
+/// before and after it.
 #[derive(Clone, Debug)]
 pub struct IrisPoolHandle {
     /// Senders for each worker thread's task channel.
@@ -197,13 +208,18 @@ impl IrisPoolHandle {
 
     pub fn insert(&self, vector_id: VectorId, iris: ArcIris) -> Result<()> {
         let task = IrisTask::Insert { vector_id, iris };
-        self.get_mut_worker().send(task)?;
+        self.get_insert_worker(vector_id).send(task)?;
         Ok(())
     }
 
     pub fn reserve(&self, additional: usize) -> Result<()> {
-        let task = IrisTask::Reserve { additional };
-        self.get_mut_worker().send(task)?;
+        let barrier = Arc::new(Barrier::new(self.workers.len()));
+        for worker in self.workers.iter() {
+            worker.send(IrisTask::Reserve {
+                additional,
+                barrier: barrier.clone(),
+            })?;
+        }
         Ok(())
     }
 
@@ -590,17 +606,23 @@ impl IrisPoolHandle {
         &self.workers[idx]
     }
 
-    /// Get the worker responsible for store mutations.
-    fn get_mut_worker(&self) -> &Sender<IrisTask> {
-        &self.workers[0]
+    /// The worker of all inserts of a serial ID. Neighbouring serial IDs share
+    /// a worker per group of the AMX arena, so workers never write the same
+    /// group.
+    fn get_insert_worker(&self, vector_id: VectorId) -> &Sender<IrisTask> {
+        let group = vector_id.serial_id().saturating_sub(1) as usize / GROUP;
+        &self.workers[group % self.workers.len()]
     }
 }
+
+/// Most queued inserts a worker applies under one store lock.
+const INSERT_BATCH: usize = 256;
 
 pub fn init_workers(
     shard_index: usize,
     iris_store: SharedIrisesRef<ResidentIris>,
     numa: bool,
-    layout: ResidentLayout,
+    residents: Residents,
 ) -> IrisPoolHandle {
     let core_ids = select_core_ids(shard_index);
     info!(
@@ -608,7 +630,7 @@ pub fn init_workers(
         shard_index,
         core_ids.len(),
         core_ids,
-        layout,
+        residents.layout(),
     );
 
     let mut channels = vec![];
@@ -616,9 +638,10 @@ pub fn init_workers(
         let (tx, rx) = crossbeam::channel::unbounded::<IrisTask>();
         channels.push(tx);
         let iris_store = iris_store.clone();
+        let residents = residents.clone();
         std::thread::spawn(move || {
             let _ = core_affinity::set_for_current(core_id);
-            worker_thread(rx, iris_store, numa, layout);
+            worker_thread(rx, iris_store, numa, residents);
         });
     }
 
@@ -638,9 +661,11 @@ fn worker_thread(
     ch: Receiver<IrisTask>,
     iris_store: SharedIrisesRef<ResidentIris>,
     numa: bool,
-    layout: ResidentLayout,
+    residents: Residents,
 ) {
-    while let Ok(task) = ch.recv() {
+    // A task received while collecting a batch of inserts, run next.
+    let mut pending = None;
+    while let Some(task) = pending.take().or_else(|| ch.recv().ok()) {
         match task {
             IrisTask::Realloc { iris, rsp } => {
                 // Re-allocate from this thread.
@@ -658,22 +683,55 @@ fn worker_thread(
             }
 
             IrisTask::Insert { vector_id, iris } => {
-                // `from_arc` writes the resident representation from this
-                // thread, so first-touch places it NUMA-locally. The extra
-                // u16 clone is only needed when the resident layout keeps
-                // the incoming allocation.
-                let resident = match layout {
-                    ResidentLayout::U16 if numa => ResidentIris::U16(Arc::new((*iris).clone())),
-                    _ => ResidentIris::from_arc(iris, layout),
-                };
+                // Apply the inserts queued behind this one under a single
+                // store lock: while the database loads, every worker inserts,
+                // and one lock handoff per record would serialize them.
+                let mut inserts = vec![(vector_id, iris)];
+                while inserts.len() < INSERT_BATCH {
+                    match ch.try_recv() {
+                        Ok(IrisTask::Insert { vector_id, iris }) => inserts.push((vector_id, iris)),
+                        Ok(task) => {
+                            pending = Some(task);
+                            break;
+                        }
+                        Err(_) => break,
+                    }
+                }
+                // Per-record layouts are written from this thread, so
+                // first-touch places them NUMA-locally; the grouped arena
+                // binds its segments to nodes itself. The extra u16 clone is
+                // only needed when the resident layout keeps the incoming
+                // allocation.
+                let inserts = inserts
+                    .into_iter()
+                    .map(|(vector_id, iris)| {
+                        let resident = match residents.layout() {
+                            ResidentLayout::U16 if numa => {
+                                ResidentIris::U16(Arc::new((*iris).clone()))
+                            }
+                            _ => residents.resident(vector_id, iris),
+                        };
+                        (vector_id, resident)
+                    })
+                    .collect::<Vec<_>>();
 
                 let mut store = iris_store.data.blocking_write();
-                store.insert(vector_id, resident);
+                for (vector_id, resident) in inserts {
+                    store.insert(vector_id, resident);
+                }
             }
 
-            IrisTask::Reserve { additional } => {
-                let mut store = iris_store.data.blocking_write();
-                store.reserve(additional);
+            IrisTask::Reserve {
+                additional,
+                barrier,
+            } => {
+                // Wait until every worker has applied the inserts queued
+                // before the reservation, reserve once, and only then let any
+                // worker continue with the inserts queued after it.
+                if barrier.wait().is_leader() {
+                    iris_store.data.blocking_write().reserve(additional);
+                }
+                barrier.wait();
             }
 
             IrisTask::DotProductPairs { pairs, rsp } => {
@@ -1244,11 +1302,15 @@ struct CachedQuery {
     preprocessed_rotations: Vec<ArcIris>,
     /// `all_rotations(preprocess(mirror(original)))` — 31 entries.
     mirrored_preprocessed_rotations: Vec<ArcIris>,
+    /// AMX forms of the normal and mirrored center rotations, for pools with
+    /// grouped residents.
+    amx: Option<[Arc<AmxQuery>; 2]>,
 }
 
 impl CachedQuery {
-    /// Preprocess and rotate both orientations of `iris`.
-    fn build(iris: ArcIris) -> Self {
+    /// Preprocess and rotate both orientations of `iris`; with `amx`, also
+    /// pack the center rotations for the AMX scan.
+    fn build(iris: ArcIris, amx: bool) -> Self {
         // --- Normal: preprocess then rotate ---
         let mut code_proc = iris.code.clone();
         let mut mask_proc = iris.mask.clone();
@@ -1265,10 +1327,20 @@ impl CachedQuery {
         let mirrored_preprocessed_rotations =
             zip_rotations(code_mirror.all_rotations(), mask_mirror.all_rotations());
 
+        // The AMX scan evaluates all rotations from the packed center rotation
+        // of each orientation.
+        let amx = amx.then(|| {
+            [
+                &preprocessed_rotations[CENTER_ROTATION],
+                &mirrored_preprocessed_rotations[CENTER_ROTATION],
+            ]
+            .map(|query| Arc::new(AmxQuery::new(query)))
+        });
         Self {
             original: iris,
             preprocessed_rotations,
             mirrored_preprocessed_rotations,
+            amx,
         }
     }
 }
@@ -1281,7 +1353,7 @@ pub struct LocalIrisWorkerPool {
     inner: IrisPoolHandle,
     query_cache: Arc<RwLock<HashMap<QueryId, CachedQuery>>>,
     iris_store: SharedIrisesRef<ResidentIris>,
-    layout: ResidentLayout,
+    residents: Residents,
     mode: DistanceMode,
     party_id: usize,
     /// When set, the complete iris column stays in Postgres. RAM holds the
@@ -1819,7 +1891,7 @@ impl LocalIrisWorkerPool {
     pub fn new(
         inner: IrisPoolHandle,
         iris_store: SharedIrisesRef<ResidentIris>,
-        layout: ResidentLayout,
+        residents: Residents,
         mode: DistanceMode,
         party_id: usize,
     ) -> Self {
@@ -1827,7 +1899,7 @@ impl LocalIrisWorkerPool {
             inner,
             query_cache: Arc::new(RwLock::new(HashMap::new())),
             iris_store,
-            layout,
+            residents,
             mode,
             party_id,
             cold_storage: None,
@@ -1843,7 +1915,7 @@ impl LocalIrisWorkerPool {
     pub async fn new_cold(
         inner: IrisPoolHandle,
         iris_store: SharedIrisesRef<ResidentIris>,
-        layout: ResidentLayout,
+        residents: Residents,
         mode: DistanceMode,
         party_id: usize,
         init: ColdStorageInit,
@@ -1905,7 +1977,7 @@ impl LocalIrisWorkerPool {
             inner,
             query_cache: Arc::new(RwLock::new(HashMap::new())),
             iris_store,
-            layout,
+            residents,
             mode,
             party_id,
             cold_storage: Some(ColdStorage {
@@ -1930,12 +2002,78 @@ impl LocalIrisWorkerPool {
     /// Standard construction for tests, benchmarks, and single-node tools.
     pub fn new_local(
         iris_store: SharedIrisesRef<ResidentIris>,
-        layout: ResidentLayout,
+        residents: Residents,
         mode: DistanceMode,
         party_id: usize,
     ) -> Self {
-        let pool = init_workers(0, iris_store.clone(), true, layout);
-        Self::new(pool, iris_store, layout, mode, party_id)
+        let pool = init_workers(0, iris_store.clone(), true, residents.clone());
+        Self::new(pool, iris_store, residents, mode, party_id)
+    }
+
+    /// The full-rotation contributions of `queries` (see
+    /// [`IrisWorkerPool::compute_dot_products_full_rotations_batch`]) from the
+    /// AMX kernel, or `None` if this pool cannot serve them from it: it holds
+    /// no grouped residents, the host has no AMX, or it is database-backed.
+    async fn amx_full_rotations(
+        &self,
+        queries: &[Vec<QuerySpec>],
+        vector_ids: &[VectorId],
+    ) -> Result<Option<Vec<Vec<RingElement<u16>>>>> {
+        if self.cold_storage.is_some() {
+            return Ok(None);
+        }
+        let (Some(arena), Some(scan_pool)) = (self.residents.arena(), AmxScanPool::global()) else {
+            return Ok(None);
+        };
+        let scan_queries = {
+            let cache = self.query_cache.read().unwrap();
+            queries
+                .iter()
+                .map(|specs| {
+                    specs
+                        .iter()
+                        .map(|spec| {
+                            eyre::ensure!(
+                                spec.rotation == CENTER_ROTATION,
+                                "full-rotation scan must start from the center query rotation"
+                            );
+                            let cached = cache.get(&spec.query_id).ok_or_else(|| {
+                                eyre::eyre!("Query {:?} not cached", spec.query_id)
+                            })?;
+                            let amx = cached.amx.as_ref().ok_or_else(|| {
+                                eyre::eyre!("Query {:?} has no AMX form", spec.query_id)
+                            })?;
+                            Ok(amx[usize::from(spec.mirrored)].clone())
+                        })
+                        .collect::<Result<Vec<_>>>()
+                })
+                .collect::<Result<Vec<_>>>()?
+        };
+        let targets = {
+            let store = self.iris_store.data.read().await;
+            vector_ids
+                .iter()
+                .map(|id| {
+                    store
+                        .get_vector(id)
+                        .and_then(ResidentIris::as_grouped)
+                        .map(|grouped| grouped.index())
+                })
+                .collect::<Vec<_>>()
+        };
+        record_missing_resident_targets(
+            targets.iter().filter(|target| target.is_none()).count(),
+            targets.len(),
+        );
+        let buffers = scan_pool
+            .scan(arena.clone(), scan_queries, &targets)
+            .await?;
+        Ok(Some(
+            buffers
+                .into_iter()
+                .map(RingElement::convert_vec_rev)
+                .collect(),
+        ))
     }
 
     async fn fetch_irises_resident_or_cold(&self, ids: &[VectorId]) -> Result<Vec<ArcIris>> {
@@ -2024,6 +2162,7 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
     fn cache_queries<'a>(&'a self, queries: Vec<(QueryId, ArcIris)>) -> BoxFuture<'a, Result<()>> {
         let query_cache = self.query_cache.clone();
         let inner = self.inner.clone();
+        let grouped = self.residents.layout() == ResidentLayout::Grouped;
         Box::pin(async move {
             let start = Instant::now();
             // Filter out already-cached queries.
@@ -2045,7 +2184,7 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
                 use rayon::prelude::*;
                 new_queries
                     .into_par_iter()
-                    .map(|(query_id, iris)| (query_id, CachedQuery::build(iris)))
+                    .map(|(query_id, iris)| (query_id, CachedQuery::build(iris, grouped)))
                     .collect()
             })
             .await?;
@@ -2099,7 +2238,7 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
         let query_cache = self.query_cache.clone();
         let mut inner = self.inner.clone();
         let mode = self.mode;
-        let layout = self.layout;
+        let layout = self.residents.layout();
         let windowed_ops_on_mixed_residents = self.windowed_ops_on_mixed_residents;
         let pool = self.clone();
         let is_cold = self.cold_storage.is_some();
@@ -2176,6 +2315,11 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
         let is_cold = self.cold_storage.is_some();
         let task_size = default_full_rotation_task_size();
         Box::pin(async move {
+            if let Some(mut buffers) = pool.amx_full_rotations(&[vec![query]], &vector_ids).await? {
+                return buffers
+                    .pop()
+                    .ok_or_else(|| eyre::eyre!("missing AMX scan output"));
+            }
             let iris = {
                 let cache = query_cache.read().unwrap();
                 let cached = cache
@@ -2211,6 +2355,9 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
         let is_cold = self.cold_storage.is_some();
         let task_size = default_full_rotation_task_size();
         Box::pin(async move {
+            if let Some(buffers) = self.amx_full_rotations(&queries, &vector_ids).await? {
+                return Ok(buffers);
+            }
             let irises = {
                 let cache = query_cache.read().unwrap();
                 queries
@@ -2382,7 +2529,7 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
         let query_cache = self.query_cache.clone();
         let iris_store = self.iris_store.clone();
         let cold_storage = self.cold_storage.clone();
-        let layout = self.layout;
+        let residents = self.residents.clone();
         Box::pin(async move {
             // Resolve query IDs to irises (release cache lock before await).
             let resolved: Vec<_> = {
@@ -2410,10 +2557,10 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
             }
 
             // Build the resident representation before taking the lock; the
-            // mixed-plane interleave has no reason to run under it.
+            // plane interleave has no reason to run under it.
             let resident = resolved
                 .into_iter()
-                .map(|(vector_id, iris)| (vector_id, ResidentIris::from_arc(iris, layout)))
+                .map(|(vector_id, iris)| (vector_id, residents.resident(vector_id, iris)))
                 .collect::<Vec<_>>();
 
             // Write directly to the shared store (not via IrisPoolHandle::insert
@@ -2508,7 +2655,7 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
         let iris_store = self.iris_store.clone();
         let party_id = self.party_id;
         let cold_storage = self.cold_storage.clone();
-        let layout = self.layout;
+        let residents = self.residents.clone();
         Box::pin(async move {
             let dummy = Arc::new(GaloisRingSharedIris::dummy_for_party(party_id));
             if let Some(cold) = cold_storage {
@@ -2521,10 +2668,13 @@ impl IrisWorkerPool for LocalIrisWorkerPool {
                 }
                 return Ok(());
             }
-            let resident_dummy = ResidentIris::from_arc(dummy, layout);
+            let dummies = ids
+                .iter()
+                .map(|&id| (id, residents.resident(id.next_version(), dummy.clone())))
+                .collect::<Vec<_>>();
             let mut store = iris_store.data.write().await;
-            for id in ids {
-                store.update(id, resident_dummy.clone());
+            for (id, resident_dummy) in dummies {
+                store.update(id, resident_dummy);
             }
             Ok(())
         })
@@ -2717,6 +2867,46 @@ mod tests {
         assert!(state.lfu_cache.entry_count() <= 2);
     }
 
+    /// Inserts are spread over the workers, so a reservation has to wait for
+    /// the inserts queued before it on every worker, not only on the worker
+    /// that applies it.
+    #[test]
+    fn reserve_follows_inserts_on_every_worker() -> Result<()> {
+        let runtime = tokio::runtime::Runtime::new()?;
+        let iris = Arc::new(GaloisRingSharedIris::default_for_party(0));
+        let residents = Residents::new(ResidentLayout::U16, 0);
+        let storage =
+            SharedIrises::new(HashMap::new(), residents.placeholder(iris.clone())).to_arc();
+        let workers = init_workers(0, storage.clone(), false, residents);
+        let n_workers = workers.workers.len();
+
+        // Route every insert to the last worker, and hold the store while
+        // queuing so that none of them lands before the reservation is queued.
+        let serial_ids = (0..64)
+            .flat_map(|group| {
+                let first = (group * n_workers + n_workers - 1) * GROUP + 1;
+                first..first + GROUP
+            })
+            .collect::<Vec<_>>();
+        let additional = 1 << 20;
+        {
+            let _hold = storage.data.blocking_read();
+            for &serial_id in &serial_ids {
+                workers.insert(VectorId::from_serial_id(serial_id as u32), iris.clone())?;
+            }
+            workers.reserve(additional)?;
+        }
+        runtime.block_on(workers.wait_completion())?;
+
+        let store = storage.data.blocking_read();
+        assert_eq!(store.db_size(), serial_ids.len());
+        // After all inserts the registry holds every serial ID up to the
+        // largest one (serial ID 0 stays unused).
+        let len = serial_ids.last().expect("inserts were queued") + 1;
+        assert!(store.capacity() >= len + additional);
+        Ok(())
+    }
+
     #[test]
     fn full_rotation_task_size_only_changes_decomposition() -> Result<()> {
         std::thread::Builder::new()
@@ -2740,14 +2930,14 @@ mod tests {
             ResidentLayout::U16,
             crate::protocol::shared_iris::preferred_scan_layout(),
         ] {
+            let residents = Residents::new(layout, 0);
             let points = vector_ids
                 .iter()
                 .copied()
-                .map(|id| (id, ResidentIris::from_arc(iris.clone(), layout)))
+                .map(|id| (id, residents.resident(id, iris.clone())))
                 .collect::<HashMap<_, _>>();
-            let storage =
-                SharedIrises::new(points, ResidentIris::from_arc(iris.clone(), layout)).to_arc();
-            let workers = init_workers(0, storage, false, layout);
+            let storage = SharedIrises::new(points, residents.placeholder(iris.clone())).to_arc();
+            let workers = init_workers(0, storage, false, residents);
 
             let mut results = Vec::new();
             for task_size in [64, 128, 256, 512] {
@@ -2795,16 +2985,18 @@ mod tests {
             let [share, _, _] = GaloisRingSharedIris::generate_shares_locally(&mut rng, iris);
             Arc::new(share)
         };
-        let layout = crate::protocol::shared_iris::preferred_scan_layout();
+        // The preferred layout runs the scan kernel of this host: AMX groups,
+        // mixed planes (the packed pair kernel) or plain u16 shares.
+        let residents = Residents::new(crate::protocol::shared_iris::preferred_scan_layout(), 0);
         let vector_ids = (0..TEST_TARGETS)
             .map(|index| VectorId::from_0_index(index as u32))
             .collect::<Vec<_>>();
         let points = vector_ids
             .iter()
-            .map(|&id| (id, ResidentIris::from_arc(share(), layout)))
+            .map(|&id| (id, residents.resident(id, share())))
             .collect::<HashMap<_, _>>();
-        let storage = SharedIrises::new(points, ResidentIris::from_arc(share(), layout)).to_arc();
-        let pool = LocalIrisWorkerPool::new_local(storage, layout, DistanceMode::MinRotation, 0);
+        let storage = SharedIrises::new(points, residents.placeholder(share())).to_arc();
+        let pool = LocalIrisWorkerPool::new_local(storage, residents, DistanceMode::MinRotation, 0);
         let query_ids = (0..3).map(|_| QueryId::new()).collect::<Vec<_>>();
         runtime
             .block_on(pool.cache_queries(query_ids.iter().map(|&id| (id, share())).collect()))?;

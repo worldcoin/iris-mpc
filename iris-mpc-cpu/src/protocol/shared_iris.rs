@@ -1,9 +1,14 @@
-use crate::utils::constants::N_PARTIES;
+use crate::{
+    hawkers::shared_irises::SharedIrises,
+    protocol::amx_scan::{self, GroupArena},
+    utils::constants::N_PARTIES,
+};
 use eyre::Result;
 use iris_mpc_common::{
     galois_engine::degree4::{GaloisRingIrisCodeShare, GaloisRingTrimmedMaskCodeShare},
     iris_db::{get_dummy_shares_for_deletion, iris::IrisCode},
     job::IrisQueryBatchEntries,
+    VectorId,
 };
 use itertools::izip;
 use rand::{CryptoRng, Rng};
@@ -207,12 +212,23 @@ pub enum ResidentLayout {
     /// Mixed lo/hi plane values for the UMMLA exact-scan kernel. Non-scan
     /// access paths reconstruct the u16 share on demand.
     MixedPlane,
+    /// Records in the AMX group layout of a NUMA-bound [`GroupArena`],
+    /// indexed by serial ID. Non-scan access paths reconstruct the u16 share
+    /// on demand.
+    Grouped,
 }
 
-/// Layout to use for exact-scan worker pools on this machine: mixed planes
-/// when the UMMLA kernel is available (aarch64 with i8mm), unless disabled
-/// via `IRIS_MPC_DISABLE_MIXED_SCAN=1`.
+/// Layout to use for exact-scan worker pools on this machine: the AMX group
+/// layout where AMX is available (x86-64 Linux, unless disabled via
+/// `IRIS_MPC_DISABLE_AMX_SCAN=1`) and its scan pool is running, mixed planes
+/// where the UMMLA kernel is available (aarch64 with i8mm, unless disabled via
+/// `IRIS_MPC_DISABLE_MIXED_SCAN=1`), and plain u16 shares otherwise.
 pub fn preferred_scan_layout() -> ResidentLayout {
+    if amx_scan::amx_available()
+        && crate::execution::hawk_main::amx_scan_pool::AmxScanPool::global().is_some()
+    {
+        return ResidentLayout::Grouped;
+    }
     #[cfg(target_arch = "aarch64")]
     {
         let disabled = std::env::var("IRIS_MPC_DISABLE_MIXED_SCAN")
@@ -225,36 +241,151 @@ pub fn preferred_scan_layout() -> ResidentLayout {
     ResidentLayout::U16
 }
 
+/// A record stored in a [`GroupArena`].
+///
+/// Unlike the other layouts this is a slot, not an immutable snapshot: a
+/// later version of the same serial ID is written to the same slot, so an
+/// older `GroupedIris` then reads the new record. The service never scans
+/// while it applies mutations (a batch's mutations follow its searches), so
+/// no scan observes the change.
+#[derive(Clone)]
+pub struct GroupedIris {
+    arena: Arc<GroupArena>,
+    index: u32,
+}
+
+impl std::fmt::Debug for GroupedIris {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GroupedIris")
+            .field("index", &self.index)
+            .finish_non_exhaustive()
+    }
+}
+
+impl GroupedIris {
+    /// Position of the record in its arena.
+    pub fn index(&self) -> usize {
+        self.index as usize
+    }
+
+    pub fn arena(&self) -> &Arc<GroupArena> {
+        &self.arena
+    }
+}
+
 /// An iris share as resident in a worker pool store, in the pool's layout.
 #[derive(Debug, Clone)]
 pub enum ResidentIris {
     U16(ArcIris),
     Mixed(Arc<MixedPlaneIris>),
+    Grouped(GroupedIris),
 }
 
 impl ResidentIris {
+    /// Per-record resident representation. Grouped records live in an arena
+    /// at their serial position; build those through [`Residents`].
     pub fn from_arc(iris: ArcIris, layout: ResidentLayout) -> Self {
         match layout {
             ResidentLayout::U16 => Self::U16(iris),
             ResidentLayout::MixedPlane => Self::Mixed(Arc::new(MixedPlaneIris::from_iris(&iris))),
+            ResidentLayout::Grouped => {
+                panic!("grouped residents need an arena position; build them with `Residents`")
+            }
         }
     }
 
     /// The u16 form: a cheap handle clone for `U16`, an exact reconstruction
-    /// for `Mixed`.
+    /// otherwise.
     pub fn to_arc(&self) -> ArcIris {
         match self {
             Self::U16(iris) => iris.clone(),
             Self::Mixed(planes) => Arc::new(planes.to_iris()),
+            Self::Grouped(grouped) => Arc::new(
+                grouped
+                    .arena
+                    .read(grouped.index())
+                    .expect("a grouped resident's arena segment is allocated"),
+            ),
         }
     }
 
     #[inline(always)]
     pub fn as_mixed(&self) -> Option<&MixedPlaneIris> {
         match self {
-            Self::U16(_) => None,
             Self::Mixed(planes) => Some(planes),
+            _ => None,
         }
+    }
+
+    #[inline(always)]
+    pub fn as_grouped(&self) -> Option<&GroupedIris> {
+        match self {
+            Self::Grouped(grouped) => Some(grouped),
+            _ => None,
+        }
+    }
+}
+
+/// Builds the resident records of one worker pool's store in its layout.
+/// For [`ResidentLayout::Grouped`] it owns the pool's arena.
+#[derive(Debug, Clone)]
+pub struct Residents {
+    layout: ResidentLayout,
+    arena: Option<Arc<GroupArena>>,
+}
+
+impl Residents {
+    /// Residents of party `party_id` (0-based). A grouped layout places its
+    /// arena segments round-robin on the host's NUMA nodes.
+    pub fn new(layout: ResidentLayout, party_id: usize) -> Self {
+        let arena = (layout == ResidentLayout::Grouped).then(|| {
+            let numa_nodes = iris_mpc_common::helpers::numactl::get_numa_nodes();
+            Arc::new(GroupArena::new(party_id, numa_nodes))
+        });
+        Self { layout, arena }
+    }
+
+    pub fn layout(&self) -> ResidentLayout {
+        self.layout
+    }
+
+    pub fn arena(&self) -> Option<&Arc<GroupArena>> {
+        self.arena.as_ref()
+    }
+
+    /// The resident representation of `iris` stored under `id`. A grouped
+    /// layout writes the record into the arena at position `serial_id - 1`.
+    pub fn resident(&self, id: VectorId, iris: ArcIris) -> ResidentIris {
+        match &self.arena {
+            Some(arena) => {
+                let serial_id = id.serial_id();
+                assert!(serial_id >= 1, "serial IDs start at 1");
+                let index = serial_id - 1;
+                arena.write(index as usize, &iris);
+                ResidentIris::Grouped(GroupedIris {
+                    arena: arena.clone(),
+                    index,
+                })
+            }
+            None => ResidentIris::from_arc(iris, self.layout),
+        }
+    }
+
+    /// The representation of a store's empty placeholder, which is never
+    /// scanned and has no serial position.
+    pub fn placeholder(&self, iris: ArcIris) -> ResidentIris {
+        match self.layout {
+            ResidentLayout::Grouped => ResidentIris::U16(iris),
+            layout => ResidentIris::from_arc(iris, layout),
+        }
+    }
+
+    /// Convert a store of u16 shares to this layout.
+    pub fn build_store(&self, store: SharedIrises<ArcIris>) -> SharedIrises<ResidentIris> {
+        store.map_entries(
+            |id, iris| self.resident(id, iris),
+            |iris| self.placeholder(iris),
+        )
     }
 }
 
