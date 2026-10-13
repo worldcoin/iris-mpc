@@ -71,8 +71,9 @@ func exportCommand() *cobra.Command {
 
 	cfg := config.Load()
 	var exportCmd = &cobra.Command{
-		Use:   "export-db",
-		Short: "Export iris-mpc participant database",
+		Use:          "export-db",
+		Short:        "Export iris-mpc participant database",
+		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancelMainCtxFn := context.WithCancel(context.Background()) // mainCtx
 			defer cancelMainCtxFn()
