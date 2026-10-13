@@ -1149,6 +1149,12 @@ async fn server_main(config: Config) -> Result<()> {
             );
         }
 
+        // The first batch has ID 1: the initial batch sync state uses 0, which
+        // we consider to be invalid. Set it before starting the receiver, which
+        // reads it right away; otherwise parties can start on different batch
+        // IDs and time out waiting for each other.
+        current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
+
         // This batch can consist of N sets of iris_share + mask
         // It also includes a vector of request ids, mapping to the sets above
         let (mut batch_stream, sem) = receive_batch_stream(
@@ -1170,7 +1176,6 @@ async fn server_main(config: Config) -> Result<()> {
             store.clone(),
             batch_sync_shared_state.clone(),
         );
-        current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
 
         loop {
             let now = Instant::now();
