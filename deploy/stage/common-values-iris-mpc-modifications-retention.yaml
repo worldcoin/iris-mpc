@@ -8,7 +8,7 @@
 # Runs in the iris-mpc-db-exporter namespace for its `application` secret
 # (DATABASE_AURORA_URL). NOTE the original "generic nodes reach the Aurora, mirroring
 # iris-mpc-db-exporter" assumption held on prod but NOT on stage — see nodeSelector below.
-image: "ghcr.io/worldcoin/retention-reaper:v0.32.12@sha256:4e6434646504c7ef09ae6db4f3d60dd163b712e2f9741514b28a103296cb1029"
+image: "ghcr.io/worldcoin/retention-reaper:e021e13dad7710f4dda417c210fadf2c0c43b43a@sha256:70c52f46bef422afae1a706b10b8b82322f1258145465e8953349ec78f7fac82"
 
 # STAGE LIVE: dry-run cleared — the reaper now performs the real guarded DELETE against
 # the GPU MPCV2 DB. No-op today by design (created_at backfilled at migration boot + the

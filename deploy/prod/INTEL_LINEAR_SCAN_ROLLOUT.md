@@ -2,7 +2,7 @@
 
 Stage and production use the same immutable AMD64 image from release v0.32.12. Coordinate parent and child Argo synchronization in both environments before merging this combined configuration change. Complete stage acceptance before the approved production cutover.
 
-The PR also pins the existing GPU matcher, anon-stats servers, database exporters, reshare servers, retention jobs and suspended graph-persistence job to their v0.32.12 images. Their placement, data sources, schedules and suspension settings are unchanged. Include these applications in Argo sync coordination and stage acceptance; observe stats processing and job outcomes before promoting the release. The CPU cutover procedure below covers the Intel placement change.
+The PR also pins the CPU deployment’s anon-stats servers, database exporters, retention jobs and suspended graph-persistence job to their v0.32.12 images. Their placement, data sources, schedules and suspension settings are unchanged. Include these applications in Argo sync coordination and stage acceptance; observe stats processing and job outcomes before promoting the release. The CPU cutover procedure below covers the Intel placement change.
 
 ## Configuration
 
