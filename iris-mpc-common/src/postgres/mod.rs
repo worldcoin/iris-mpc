@@ -14,7 +14,10 @@ pub type PostgresSchemaName = String;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AccessMode {
-    ReadOnly,
+    /// Select an existing schema without restricting writes.
+    ExistingSchema,
+    /// Skip schema creation and reject writes on every pooled connection.
+    EnforcedReadOnly,
     ReadWrite,
 }
 
@@ -32,7 +35,12 @@ fn sanitize_identifier(input: &str) -> Result<()> {
 fn sql_switch_schema(schema_name: &str, access_mode: AccessMode) -> Result<String> {
     sanitize_identifier(schema_name)?;
 
-    if access_mode == AccessMode::ReadOnly {
+    if access_mode == AccessMode::EnforcedReadOnly {
+        Ok(format!(
+            "SET default_transaction_read_only = on; SET search_path TO \"{}\";",
+            schema_name
+        ))
+    } else if access_mode == AccessMode::ExistingSchema {
         Ok(format!("SET search_path TO \"{}\";", schema_name))
     } else {
         Ok(format!(
