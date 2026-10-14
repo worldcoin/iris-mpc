@@ -572,9 +572,12 @@ async fn get_service_clients(
                 db_config,
                 db_schema
             );
-            let db_client =
-                PostgresClient::new(&db_config.url, db_schema.as_str(), AccessMode::ReadOnly)
-                    .await?;
+            let db_client = PostgresClient::new(
+                &db_config.url,
+                db_schema.as_str(),
+                AccessMode::ExistingSchema,
+            )
+            .await?;
 
             IrisStore::new(&db_client).await
         }
