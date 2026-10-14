@@ -28,7 +28,7 @@ pub struct Opt {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CpuStartupMode {
+pub enum StartupMode {
     #[default]
     Active,
     Candidate,
@@ -44,7 +44,7 @@ fn default_candidate_status_port() -> u16 {
 pub struct Config {
     /// Passive preloading is supported only by the CPU linear-scan service.
     #[serde(default)]
-    pub cpu_startup_mode: CpuStartupMode,
+    pub startup_mode: StartupMode,
 
     /// Operator status, bound to loopback only in candidate mode.
     #[serde(default = "default_candidate_status_port")]
@@ -825,7 +825,7 @@ impl From<Config> for CommonConfig {
         // This is destructured here intentionally to cause a compile error if
         // any of the fields are added to the struct without being considered if they should be in the common config hash or not.
         let Config {
-            cpu_startup_mode: _, // candidate processes never join active coordination
+            startup_mode: _, // candidate processes never join active coordination
             candidate_status_port: _,
             environment,
             party_id: _,           // party id is different for each server

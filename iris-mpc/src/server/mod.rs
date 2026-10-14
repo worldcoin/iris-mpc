@@ -26,7 +26,7 @@ use ampc_server_utils::{
 };
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result, WrapErr};
-use iris_mpc_common::config::{CommonConfig, Config, CpuStartupMode};
+use iris_mpc_common::config::{CommonConfig, Config, StartupMode};
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::sha256::sha256_bytes;
 use iris_mpc_common::helpers::smpc_request::{
@@ -83,7 +83,7 @@ pub async fn linear_scan_server_main(config: Config) -> Result<()> {
 }
 
 async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMode) -> Result<()> {
-    if config.cpu_startup_mode == CpuStartupMode::Candidate {
+    if config.startup_mode == StartupMode::Candidate {
         candidate::validate_config(&config, search_mode)?;
         let shutdown = init_shutdown_handler(&config).await;
         return candidate::run(config, shutdown).await;

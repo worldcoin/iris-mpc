@@ -1046,10 +1046,18 @@ async fn main() -> Result<()> {
     );
     rpt!(rpt);
 
-    let hnsw_pg =
-        PostgresClient::new(&args.hnsw_db_url, &args.hnsw_schema, AccessMode::ReadOnly).await?;
-    let gpu_pg =
-        PostgresClient::new(&args.gpu_db_url, &args.gpu_schema, AccessMode::ReadOnly).await?;
+    let hnsw_pg = PostgresClient::new(
+        &args.hnsw_db_url,
+        &args.hnsw_schema,
+        AccessMode::ExistingSchema,
+    )
+    .await?;
+    let gpu_pg = PostgresClient::new(
+        &args.gpu_db_url,
+        &args.gpu_schema,
+        AccessMode::ExistingSchema,
+    )
+    .await?;
     let hnsw_store = Store::new(&hnsw_pg).await?;
     let graph_pg = GraphPg::<Aby3Store>::new(&hnsw_pg).await?;
 

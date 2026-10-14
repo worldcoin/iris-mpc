@@ -198,7 +198,7 @@ async fn rerandomize_db_main(config: ReRandomizeConfig) -> Result<()> {
     let postgres_client_read = PostgresClient::new(
         &config.source_db_url,
         &config.source_schema_name,
-        AccessMode::ReadOnly,
+        AccessMode::ExistingSchema,
     )
     .await?;
     let postgres_client_write = PostgresClient::new(
@@ -567,7 +567,8 @@ async fn download_public_key_from_http(base_url: &str, party_id: u8) -> Result<S
 }
 
 async fn build_read_only_store(db_url: &str, schema_name: &str) -> Result<Store> {
-    let postgres_client = PostgresClient::new(db_url, schema_name, AccessMode::ReadOnly).await?;
+    let postgres_client =
+        PostgresClient::new(db_url, schema_name, AccessMode::ExistingSchema).await?;
     Store::new(&postgres_client).await
 }
 

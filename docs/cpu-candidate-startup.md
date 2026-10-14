@@ -3,13 +3,13 @@
 Use the `iris-mpc-linear-scan` binary with the active cell's database/schema and CPU scan settings, plus:
 
 ```sh
-SMPC__CPU_STARTUP_MODE=candidate
+SMPC__STARTUP_MODE=candidate
 SMPC__ENABLE_S3_IMPORTER=false
 SMPC__CLEAR_DB_BEFORE_INIT=false
 SMPC__CANDIDATE_STATUS_PORT=3090
 ```
 
-`cpu_startup_mode` defaults to `active`, preserving coordinated startup. HNSW and GPU entrypoints reject candidate mode. Candidate mode rejects seeding/clearing, fake data, invalid party/loading settings, and unsupported CPU scan settings.
+`startup_mode` defaults to `active`, preserving coordinated startup. The HNSW entrypoint rejects candidate mode. Candidate mode rejects seeding/clearing, fake data, invalid party/loading settings, and unsupported CPU scan settings.
 
 The candidate opens existing Postgres tables with read-only transactions on every pooled connection. It preloads the configured resident eye using the exact-scan worker layout and retains row IDs and observed versions. It runs no migrations, coordination, MPC network, queue reads, claim resets, modification/result replay, or live execution. S3 loading is outside this first implementation.
 

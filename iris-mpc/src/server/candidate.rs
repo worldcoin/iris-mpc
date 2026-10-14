@@ -183,7 +183,7 @@ mod tests {
 
     fn config() -> Config {
         serde_json::from_value(serde_json::json!({
-            "cpu_startup_mode": "candidate",
+            "startup_mode": "candidate",
             "max_batch_size": 1,
             "disable_persistence": false,
             "full_scan_side_switching_enabled": false,
@@ -199,6 +199,7 @@ mod tests {
     #[test]
     fn candidate_config_is_explicit_and_rejects_unsupported_modes() {
         let mut config = config();
+        assert_eq!(config.startup_mode, StartupMode::Candidate);
         validate_config(&config, HawkSearchMode::LinearScan).unwrap();
         assert!(validate_config(&config, HawkSearchMode::Hnsw).is_err());
         config.enable_s3_importer = true;
@@ -207,11 +208,11 @@ mod tests {
         config.clear_db_before_init = true;
         assert!(validate_config(&config, HawkSearchMode::LinearScan).is_err());
         let ordinary: Config = serde_json::from_value(serde_json::json!({})).unwrap();
-        assert_eq!(ordinary.cpu_startup_mode, CpuStartupMode::Active);
-        assert!(serde_json::from_value::<Config>(
-            serde_json::json!({"cpu_startup_mode": "canidate"})
-        )
-        .is_err());
+        assert_eq!(ordinary.startup_mode, StartupMode::Active);
+        assert!(
+            serde_json::from_value::<Config>(serde_json::json!({"startup_mode": "canidate"}))
+                .is_err()
+        );
     }
 
     #[tokio::test]
