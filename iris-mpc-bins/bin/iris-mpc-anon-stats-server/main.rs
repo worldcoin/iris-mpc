@@ -1,5 +1,4 @@
-mod lifecycle;
-
+use ampc_anon_stats::lifecycle;
 use ampc_anon_stats::store::postgres::AccessMode as AnonStatsAccessMode;
 use ampc_anon_stats::store::postgres::PostgresClient as AnonStatsPgClient;
 use ampc_anon_stats::types::Eye;
