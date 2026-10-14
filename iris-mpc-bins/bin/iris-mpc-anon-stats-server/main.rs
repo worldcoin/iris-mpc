@@ -1,3 +1,5 @@
+mod lifecycle;
+
 use ampc_anon_stats::store::postgres::AccessMode as AnonStatsAccessMode;
 use ampc_anon_stats::store::postgres::PostgresClient as AnonStatsPgClient;
 use ampc_anon_stats::types::Eye;
@@ -959,20 +961,7 @@ async fn main() -> Result<()> {
     let _tracing_shutdown_handle =
         initialize_tracing(config.service.clone()).wrap_err("Failed to initialize tracing")?;
 
-    info!("Connecting to database");
-    let postgres_client = AnonStatsPgClient::new(
-        &config.db_url,
-        &config.db_schema_name,
-        AnonStatsAccessMode::ReadWrite,
-    )
-    .await?;
-    let anon_stats_store =
-        AnonStatsStore::new(&postgres_client, config.ignore_missing_migrations).await?;
-
-    let sns_client = build_sns_client(&config).await?;
-    let s3_client = build_s3_client(&config).await?;
-
-    info!("Starting anon stats server.");
+    info!("Starting anon stats coordination server.");
     let mut background_tasks = TaskMonitor::new();
     let verified_peers = Arc::new(Mutex::new(HashSet::new()));
     let uuid = Uuid::new_v4().to_string();
@@ -982,97 +971,97 @@ async fn main() -> Result<()> {
         verified_peers.clone(),
         uuid.clone(),
     );
-
-    background_tasks.check_tasks();
-    let health_port = server_coord_config
-        .healthcheck_ports
-        .get(config.party_id)
-        .cloned()
-        .unwrap_or_else(|| "8080".to_string());
-    info!("Healthcheck server running on port {}", health_port);
-
-    wait_for_startup_barriers(server_coord_config, &verified_peers, &uuid).await?;
-
-    let verified_peers = verified_peers.lock().await.clone();
-    init_heartbeat_task(
-        server_coord_config,
-        &mut background_tasks,
-        &shutdown_handler,
-        verified_peers.clone(),
-    )
-    .await
-    .wrap_err("failed to start heartbeat task")?;
-    background_tasks.check_tasks();
-
-    let args = NetworkHandleArgs {
-        party_index: server_coord_config.party_id,
-        addresses: node_addresses.clone(),
-        outbound_addresses: node_addresses,
-        connection_parallelism: 8,
-        request_parallelism: 8,
-        sessions_per_request: 1,
-        tls: config.tls.clone(),
-    };
     let ct = shutdown_handler.get_network_cancellation_token();
+    let drain_timeout = Duration::from_secs(config.shutdown_last_results_sync_timeout_secs);
 
-    let mut networking = build_network_handle(args, ct.child_token()).await?;
-    let mut sessions = networking.as_mut().make_sessions().await?;
-    let session = sessions
-        .0
-        .get_mut(0)
-        .ok_or_else(|| eyre!("expected at least one network session"))?;
+    let result = async {
+        let initialized = lifecycle::startup(&shutdown_handler, &coordination_handles, async {
+            info!("Connecting to database");
+            let postgres_client = AnonStatsPgClient::new(
+                &config.db_url,
+                &config.db_schema_name,
+                AnonStatsAccessMode::ReadWrite,
+            )
+            .await?;
+            let anon_stats_store =
+                AnonStatsStore::new(&postgres_client, config.ignore_missing_migrations).await?;
+            let sns_client = build_sns_client(&config).await?;
+            let s3_client = build_s3_client(&config).await?;
 
-    let mut processor =
-        AnonStatsProcessor::new(config.clone(), anon_stats_store, sns_client, s3_client);
+            lifecycle::check_background_tasks(&mut background_tasks)?;
+            wait_for_startup_barriers(server_coord_config, &verified_peers, &uuid).await?;
+            let verified_peers = verified_peers.lock().await.clone();
+            init_heartbeat_task(
+                server_coord_config,
+                &mut background_tasks,
+                &shutdown_handler,
+                verified_peers.clone(),
+            )
+            .await
+            .wrap_err("failed to start heartbeat task")?;
+            lifecycle::check_background_tasks(&mut background_tasks)?;
 
-    coordination_handles.set_ready();
-    wait_for_others_ready(server_coord_config, verified_peers)
-        .await
-        .wrap_err("waiting for other anon stats servers to become ready")?;
+            let args = NetworkHandleArgs {
+                party_index: server_coord_config.party_id,
+                addresses: node_addresses.clone(),
+                outbound_addresses: node_addresses,
+                connection_parallelism: 8,
+                request_parallelism: 8,
+                sessions_per_request: 1,
+                tls: config.tls.clone(),
+            };
+            let mut networking = build_network_handle(args, ct.child_token()).await?;
+            let sessions = networking.as_mut().make_sessions().await?;
+            let processor =
+                AnonStatsProcessor::new(config.clone(), anon_stats_store, sns_client, s3_client);
 
-    let mut poll_interval = interval(Duration::from_secs(config.poll_interval_secs));
-    poll_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
-
-    if let Err(err) = processor.run_iteration(session).await {
-        warn!(error = ?err, "Anon stats iteration failed");
-        shutdown_handler.trigger_manual_shutdown();
-    }
-
-    if !shutdown_handler.is_shutting_down() {
-        let shutdown_wait = shutdown_handler.wait_for_shutdown();
-        tokio::pin!(shutdown_wait);
-
+            lifecycle::set_ready(&shutdown_handler, &coordination_handles);
+            wait_for_others_ready(server_coord_config, verified_peers)
+                .await
+                .wrap_err("waiting for other anon stats servers to become ready")?;
+            Ok((networking, sessions, processor))
+        })
+        .await?;
+        let Some((_networking, mut sessions, mut processor)) = initialized else {
+            return Ok(());
+        };
+        let session = sessions
+            .0
+            .get_mut(0)
+            .ok_or_else(|| eyre!("expected at least one network session"))?;
+        let mut poll_interval = interval(Duration::from_secs(config.poll_interval_secs));
+        poll_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
         loop {
+            lifecycle::check_background_tasks(&mut background_tasks)?;
+            lifecycle::iteration(
+                &shutdown_handler,
+                &coordination_handles,
+                drain_timeout,
+                processor.run_iteration(session),
+            )
+            .await
+            .wrap_err("Anon stats iteration failed")?;
             tokio::select! {
-                _ = poll_interval.tick() => {
-                    tokio::select! {
-                        res = processor.run_iteration(session) => {
-                             if let Err(err) = res {
-                                warn!(error = ?err, "Anon stats iteration failed");
-                                shutdown_handler.trigger_manual_shutdown();
-                                break;
-                            }
-                        }
-                        _ = ct.cancelled() => {
-                             info!("Shutdown triggered during iteration, stopping.");
-                             break;
-                        }
-                    }
-                }
-                _ = shutdown_wait.as_mut() => {
+                biased;
+                _ = shutdown_handler.wait_for_shutdown() => {
+                    coordination_handles.mark_shutting_down();
                     info!("Shutdown triggered, stopping anon stats processor.");
                     break;
                 }
+                _ = poll_interval.tick() => {}
             }
         }
+        Ok(())
     }
+    .await;
 
-    shutdown_handler.wait_for_shutdown().await;
-    let _ = shutdown_handler.wait_for_pending_batches_completion().await;
-    ct.cancel();
-    background_tasks.abort_and_wait_for_finish().await;
-
-    Ok(())
+    lifecycle::cleanup(
+        &shutdown_handler,
+        &coordination_handles,
+        &mut background_tasks,
+        result,
+    )
+    .await
 }
 
 async fn build_sns_client(config: &AnonStatsServerConfig) -> Result<SNSClient> {
