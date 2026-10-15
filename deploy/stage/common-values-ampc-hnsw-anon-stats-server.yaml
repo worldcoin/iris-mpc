@@ -26,7 +26,7 @@ env:
   SMPC__SERVER_COORDINATION__HEARTBEAT_INITIAL_RETRIES: "5"
   SMPC__SERVER_COORDINATION__HTTP_QUERY_RETRY_DELAY_MS: "5000"
   SMPC__SERVER_COORDINATION__HEARTBEAT_INTERVAL_SECS: "3"
-  SMPC__SHUTDOWN_LAST_RESULTS_SYNC_TIMEOUT_SECS: "10"
+  SMPC__SERVER_COORDINATION__SHUTDOWN_LAST_RESULTS_SYNC_TIMEOUT_SECS: "10"
   SMPC__SERVICE__METRICS__HOST:
     valueFrom:
       fieldRef:
@@ -88,7 +88,7 @@ readinessProbe:
   periodSeconds: 20
   failureThreshold: 4
   httpGet:
-    path: /ready
+    path: /health
     port: health
 
 resources:
