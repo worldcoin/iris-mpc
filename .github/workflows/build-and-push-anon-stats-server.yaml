@@ -73,9 +73,9 @@ jobs:
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ (github.ref == 'refs/heads/main' || github.event_name == 'release') && format('{0}/{1}:latest', env.REGISTRY, env.IMAGE_NAME) || '' }}
             ${{ secrets.AWS_ECR_ANON_STATS_SERVER }}:${{ github.sha }}
-            ${{ secrets.AWS_ECR_ANON_STATS_SERVER }}:latest
+            ${{ (github.ref == 'refs/heads/main' || github.event_name == 'release') && format('{0}:latest', secrets.AWS_ECR_ANON_STATS_SERVER) || '' }}
             ${{ github.event.release.tag_name && format('{0}/{1}:{2}', env.REGISTRY, env.IMAGE_NAME, github.event.release.tag_name) || '' }}
             ${{ github.event.release.tag_name && format('{0}:{1}', secrets.AWS_ECR_ANON_STATS_SERVER, github.event.release.tag_name) || '' }}
           platforms: linux/amd64
