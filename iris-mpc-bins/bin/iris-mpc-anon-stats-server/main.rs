@@ -218,10 +218,17 @@ impl AnonStatsProcessor {
         }
     }
 
-    async fn run_iteration(&mut self, session: &mut Session) -> Result<()> {
+    async fn run_iteration(
+        &mut self,
+        session: &mut Session,
+        shutdown: &ShutdownHandler,
+    ) -> Result<()> {
         // --- GPU 1D ---
         // Uniqueness: Normal + Mirror
         for origin in GPU_1D_ORIGINS {
+            if shutdown.is_shutting_down() {
+                return Ok(());
+            }
             self.run_1d_job(
                 session,
                 origin,
@@ -232,6 +239,9 @@ impl AnonStatsProcessor {
         }
         // Reauth: Normal only
         for origin in GPU_1D_NORMAL_ORIGINS {
+            if shutdown.is_shutting_down() {
+                return Ok(());
+            }
             self.run_1d_job(
                 session,
                 origin,
@@ -242,6 +252,9 @@ impl AnonStatsProcessor {
         }
         // Recovery: Normal only
         for origin in GPU_1D_NORMAL_ORIGINS {
+            if shutdown.is_shutting_down() {
+                return Ok(());
+            }
             self.run_1d_job(
                 session,
                 origin,
@@ -254,6 +267,9 @@ impl AnonStatsProcessor {
         // --- HNSW 1D ---
         // Uniqueness: Normal + Mirror
         for origin in HNSW_1D_ORIGINS {
+            if shutdown.is_shutting_down() {
+                return Ok(());
+            }
             self.run_1d_job(
                 session,
                 origin,
@@ -264,6 +280,9 @@ impl AnonStatsProcessor {
         }
         // Reauth: Normal only
         for origin in HNSW_1D_NORMAL_ORIGINS {
+            if shutdown.is_shutting_down() {
+                return Ok(());
+            }
             self.run_1d_job(
                 session,
                 origin,
@@ -274,6 +293,9 @@ impl AnonStatsProcessor {
         }
         // Recovery: Normal only
         for origin in HNSW_1D_NORMAL_ORIGINS {
+            if shutdown.is_shutting_down() {
+                return Ok(());
+            }
             self.run_1d_job(
                 session,
                 origin,
@@ -286,6 +308,9 @@ impl AnonStatsProcessor {
         // --- GPU 2D ---
         // Uniqueness: Normal + Mirror
         for origin in GPU_2D_ORIGINS {
+            if shutdown.is_shutting_down() {
+                return Ok(());
+            }
             self.run_2d_job(
                 session,
                 origin,
@@ -296,6 +321,9 @@ impl AnonStatsProcessor {
         }
         // Reauth: Normal only
         for origin in GPU_2D_NORMAL_ORIGINS {
+            if shutdown.is_shutting_down() {
+                return Ok(());
+            }
             self.run_2d_job(
                 session,
                 origin,
@@ -306,6 +334,9 @@ impl AnonStatsProcessor {
         }
         // Recovery: Normal only
         for origin in GPU_2D_NORMAL_ORIGINS {
+            if shutdown.is_shutting_down() {
+                return Ok(());
+            }
             self.run_2d_job(
                 session,
                 origin,
@@ -318,6 +349,9 @@ impl AnonStatsProcessor {
         // --- HNSW 2D ---
         // Uniqueness: Normal + Mirror
         for origin in HNSW_2D_ORIGINS {
+            if shutdown.is_shutting_down() {
+                return Ok(());
+            }
             self.run_2d_job(
                 session,
                 origin,
@@ -328,6 +362,9 @@ impl AnonStatsProcessor {
         }
         // Reauth: Normal only
         for origin in HNSW_2D_NORMAL_ORIGINS {
+            if shutdown.is_shutting_down() {
+                return Ok(());
+            }
             self.run_2d_job(
                 session,
                 origin,
@@ -338,6 +375,9 @@ impl AnonStatsProcessor {
         }
         // Recovery: Normal only
         for origin in HNSW_2D_NORMAL_ORIGINS {
+            if shutdown.is_shutting_down() {
+                return Ok(());
+            }
             self.run_2d_job(
                 session,
                 origin,
@@ -1036,7 +1076,7 @@ async fn main() -> Result<()> {
                 &shutdown_handler,
                 &coordination_handles,
                 drain_timeout,
-                processor.run_iteration(session),
+                processor.run_iteration(session, &shutdown_handler),
             )
             .await
             .wrap_err("Anon stats iteration failed")?;
