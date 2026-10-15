@@ -31,7 +31,8 @@ passive startup; the older serving release does not.
 Each slot has distinct selectors and `pod-a.{party}.stage.hnsw.worldcoin.dev`
 or `pod-b.{party}.stage.hnsw.worldcoin.dev` peer names. The existing party
 certificates must cover those names. The DNS init container waits for Route53
-INSYNC before preload and uses CREATE rather than UPSERT to reject collisions.
+resolution to the pod's address before preload and uses CREATE rather than
+UPSERT to reject collisions. Retrying registration for the same pod IP is safe.
 
 ## Observe preload
 
@@ -74,8 +75,9 @@ claiming the networking is ready for activation.
 4. Before enabling the slot again, confirm its name is absent and keep the old
    revision disabled. An old init container cannot UPSERT over a new owner.
 
-A pod/init restart can leave a record behind. CREATE deliberately fails closed
-until the same retirement checks and exact-record deletion are complete.
+A replacement pod can leave the previous pod's record behind. CREATE fails
+closed until the retirement checks and exact-record deletion are complete;
+an init retry in the same pod accepts its own already-registered address.
 Rollback for this passive stage test is disabling the candidate and retiring
 its records; the existing serving deployment remains in place. These files do
 not implement promotion or production rollout.
