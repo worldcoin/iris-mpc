@@ -64,30 +64,9 @@ initContainer:
         echo "No exact hosted zone for $ZONE_NAME" >&2
         exit 1
       fi
-      if RESOLUTION=$(timeout 5 getent ahostsv4 "$RECORD_NAME"); then
-        read -r RESOLVED_IP _ <<< "$RESOLUTION"
-        if [[ "$RESOLVED_IP" != "$POD_IP" ]]; then
-          echo "$RECORD_NAME belongs to another pod; retire it before reuse" >&2
-          exit 1
-        fi
-        # A previous init attempt may have registered this pod successfully.
-        exit 0
-      fi
       # CREATE never overwrites a different owner, including a concurrent init.
       aws route53 change-resource-record-sets \
         --hosted-zone-id "$ZONE_ID" \
         --change-batch "{\"Changes\":[{\"Action\":\"CREATE\",\"ResourceRecordSet\":{\"Name\":\"$RECORD_NAME\",\"Type\":\"A\",\"TTL\":5,\"ResourceRecords\":[{\"Value\":\"$POD_IP\"}]}}]}" \
         --query ChangeInfo.Id --output text \
         --cli-connect-timeout 10 --cli-read-timeout 30 > /dev/null
-      # Wait on the resolver the process uses; this needs no GetChange IAM grant.
-      for ((attempt=0; attempt<60; attempt++)); do
-        if RESOLUTION=$(timeout 5 getent ahostsv4 "$RECORD_NAME"); then
-          read -r RESOLVED_IP _ <<< "$RESOLUTION"
-          if [[ "$RESOLVED_IP" == "$POD_IP" ]]; then
-            exit 0
-          fi
-        fi
-        sleep 2
-      done
-      echo "$RECORD_NAME did not resolve to this pod before the deadline" >&2
-      exit 1
