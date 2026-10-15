@@ -52,6 +52,7 @@ env:
   SMPC__PUBLIC_KEY_BASE_URL: "https://pki-smpcv2-stage.worldcoin.org"
   SMPC__SHARES_BUCKET_NAME: "wf-smpcv2-stage-sns-requests"
   SMPC__ENABLE_S3_IMPORTER: "true"
+  SMPC__DB_CHUNKS_BUCKET_REGION: "eu-central-1"
   SMPC__DB_CHUNKS_FOLDER_NAME: "hnsw_even_odd_with_version_id_output_16k"
   SMPC__LOAD_CHUNKS_PARALLELISM: "8"
   SMPC__LOAD_CHUNKS_BUFFER_SIZE: "1024"
