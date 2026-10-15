@@ -1,0 +1,75 @@
+# Applied after the existing common and per-party ampc-hnsw values.
+# Slots start disabled and passive; promotion is a separate operation.
+replicaCount: 0
+image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:6d02c230f49b93b6be7f88a97e83fdb48673a059@sha256:afb5eb5be7b0cfffc6b4d356b65449f45218e5da4c7b4e4053ac062f6d254fa2"
+
+serviceAccount:
+  create: false
+  name: ampc-hnsw
+
+service:
+  enabled: false
+
+env:
+  SMPC__STARTUP_MODE: "candidate"
+  SMPC__ENABLE_S3_IMPORTER: "false"
+  SMPC__DATABASE__MIGRATE: "false"
+  SMPC__DATABASE__CREATE: "false"
+  SMPC__CLEAR_DB_BEFORE_INIT: "false"
+  SMPC__INIT_DB_SIZE: "0"
+  SMPC__FAKE_DB_SIZE: "0"
+  SMPC__CANDIDATE_STATUS_PORT: "3090"
+
+# Candidate status is loopback-only. Never add this port to a Service.
+livenessProbe:
+  httpGet: null
+  exec:
+    command: ["curl", "--fail", "--silent", "--max-time", "2", "http://127.0.0.1:3090/health"]
+  timeoutSeconds: 3
+
+readinessProbe:
+  httpGet: null
+  exec:
+    command: ["curl", "--fail", "--silent", "--max-time", "2", "http://127.0.0.1:3090/ready"]
+  timeoutSeconds: 3
+
+startupProbe:
+  httpGet: null
+  exec:
+    command: ["curl", "--fail", "--silent", "--max-time", "2", "http://127.0.0.1:3090/startup"]
+  timeoutSeconds: 3
+  initialDelaySeconds: 0
+  periodSeconds: 10
+  failureThreshold: 366
+
+initContainer:
+  name: cpu-cell-dns
+  configMap:
+    init.sh: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      case "$PARTY_ID" in 0|1|2) ;; *) echo "Invalid party" >&2; exit 1;; esac
+      case "$CELL_SLOT" in a|b) ;; *) echo "Invalid cell slot" >&2; exit 1;; esac
+      if [[ ! "$POD_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+        echo "Expected an IPv4 pod address" >&2
+        exit 1
+      fi
+      ZONE_NAME="$PARTY_ID.stage.hnsw.worldcoin.dev"
+      RECORD_NAME="pod-$CELL_SLOT.$ZONE_NAME"
+      ZONE_ID=$(aws route53 list-hosted-zones-by-name \
+        --dns-name "$ZONE_NAME" \
+        --query "HostedZones[?Name == '$ZONE_NAME.'] | [0].Id" \
+        --output text --cli-connect-timeout 10 --cli-read-timeout 30)
+      if [[ -z "$ZONE_ID" || "$ZONE_ID" == "None" ]]; then
+        echo "No exact hosted zone for $ZONE_NAME" >&2
+        exit 1
+      fi
+      # CREATE fails closed if an old slot still owns this name. Retire its
+      # pods and init containers before explicitly removing the old record.
+      CHANGE_ID=$(aws route53 change-resource-record-sets \
+        --hosted-zone-id "$ZONE_ID" \
+        --change-batch "{\"Changes\":[{\"Action\":\"CREATE\",\"ResourceRecordSet\":{\"Name\":\"$RECORD_NAME\",\"Type\":\"A\",\"TTL\":5,\"ResourceRecords\":[{\"Value\":\"$POD_IP\"}]}}]}" \
+        --query ChangeInfo.Id --output text \
+        --cli-connect-timeout 10 --cli-read-timeout 30)
+      aws route53 wait resource-record-sets-changed --id "$CHANGE_ID" \
+        --cli-connect-timeout 10 --cli-read-timeout 30
