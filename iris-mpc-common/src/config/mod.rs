@@ -62,6 +62,10 @@ pub struct Config {
     #[serde(default)]
     pub requests_queue_url: String,
 
+    /// Region of the input SQS queue. Defaults to the shared AWS region.
+    #[serde(default)]
+    pub requests_queue_region: Option<String>,
+
     #[serde(default)]
     pub results_topic_arn: String,
 
@@ -840,8 +844,9 @@ impl From<Config> for CommonConfig {
             startup_mode: _, // candidate processes never join active coordination
             candidate_status_port: _,
             environment,
-            party_id: _,           // party id is different for each server
-            requests_queue_url: _, // requests queue url is different for each server
+            party_id: _,              // party id is different for each server
+            requests_queue_url: _,    // requests queue url is different for each server
+            requests_queue_region: _, // input transport settings are local to each server
             results_topic_arn,
             kms_key_arns: _, // kms key arns are different for each server
             tls: _,
