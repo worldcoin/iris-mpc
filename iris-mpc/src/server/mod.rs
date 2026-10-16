@@ -159,13 +159,14 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
         server_coord_config.healthcheck_ports
     );
 
+    let gallery_sync = ampc_server_utils::gallery_sync::GallerySync::default();
     let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server_with_extra_routes(
         &server_coord_config,
         &mut background_tasks,
         &shutdown_handler,
         &my_state,
         Some(batch_sync_shared_state.clone()),
-        None,
+        Some(gallery_sync.routes()),
     )
     .await;
     tracing::info!("Coordination server started");
@@ -280,6 +281,19 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
         return Ok(());
     }
 
+    let gallery_before_load = if search_mode == HawkSearchMode::LinearScan {
+        let state = iris_store.gallery_state().await?;
+        gallery_sync
+            .check(
+                &server_coord_config,
+                ampc_server_utils::gallery_sync::GalleryPhase::Recovered,
+                state.clone(),
+            )
+            .await?;
+        Some(state)
+    } else {
+        None
+    };
     let mut hawk_actor = init_hawk_actor(
         &config,
         &aws_clients.checkpoint_s3_client,
@@ -291,6 +305,17 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
     )
     .await?;
 
+    if let Some(before) = gallery_before_load {
+        let loaded = iris_store.gallery_state().await?;
+        ampc_server_utils::gallery_sync::ensure_gallery_unchanged(&before, &loaded)?;
+        gallery_sync
+            .check(
+                &server_coord_config,
+                ampc_server_utils::gallery_sync::GalleryPhase::Loaded,
+                loaded,
+            )
+            .await?;
+    }
     if let Some(url) = config.get_anon_stats_db_url() {
         let schema = config.get_anon_stats_db_schema();
         let anon_client =

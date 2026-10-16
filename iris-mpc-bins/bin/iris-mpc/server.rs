@@ -10,7 +10,8 @@ use ampc_server_utils::batch_sync::{
 use ampc_server_utils::{
     delete_messages_until_sequence_num, get_next_sns_seq_num, get_others_sync_state,
     init_heartbeat_task, set_node_ready, shutdown_handler::ShutdownHandler,
-    start_coordination_server, wait_for_others_ready, wait_for_startup_barriers, TaskMonitor,
+    start_coordination_server_with_extra_routes, wait_for_others_ready, wait_for_startup_barriers,
+    TaskMonitor,
 };
 use aws_sdk_s3::Client as S3Client;
 use aws_sdk_secretsmanager::Client as SecretsManagerClient;
@@ -315,12 +316,14 @@ async fn server_main(config: Config) -> Result<()> {
     let server_coord_config = config.server_coordination.clone().unwrap_or_else(|| {
         panic!("Server coordination config must be provided for healthcheck server");
     });
-    let (is_ready_flag, verified_peers, uuid) = start_coordination_server(
+    let gallery_sync = ampc_server_utils::gallery_sync::GallerySync::default();
+    let (is_ready_flag, verified_peers, uuid) = start_coordination_server_with_extra_routes(
         &server_coord_config,
         &mut background_tasks,
         &shutdown_handler,
         &my_state,
         Some(batch_sync_shared_state.clone()),
+        Some(gallery_sync.routes()),
     )
     .await;
 
@@ -463,6 +466,14 @@ async fn server_main(config: Config) -> Result<()> {
         return Ok(());
     }
 
+    let gallery_before_load = store.gallery_state().await?;
+    gallery_sync
+        .check(
+            &server_coord_config,
+            ampc_server_utils::gallery_sync::GalleryPhase::Recovered,
+            gallery_before_load.clone(),
+        )
+        .await?;
     // refetch store_len in case we rolled back
     let store_len = store.count_irises().await?;
     tracing::info!("Database store length after sync: {}", store_len);
@@ -551,6 +562,15 @@ async fn server_main(config: Config) -> Result<()> {
     });
 
     let (mut handle, store) = rx.await??;
+    let loaded = store.gallery_state().await?;
+    ampc_server_utils::gallery_sync::ensure_gallery_unchanged(&gallery_before_load, &loaded)?;
+    gallery_sync
+        .check(
+            &server_coord_config,
+            ampc_server_utils::gallery_sync::GalleryPhase::Loaded,
+            loaded,
+        )
+        .await?;
 
     background_tasks.check_tasks();
 
