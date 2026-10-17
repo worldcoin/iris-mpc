@@ -201,6 +201,36 @@ pub struct Store {
 }
 
 impl Store {
+    /// Public linear-scan gallery metadata from one SQL snapshot. Iris assigns the next
+    /// serial ID after its largest ID; unlike Face/DI it has no separate allocator table.
+    pub async fn gallery_state(&self) -> Result<ampc_server_utils::gallery_sync::GalleryState> {
+        use sha2::{Digest, Sha256};
+        let started = std::time::Instant::now();
+        let mut rows =
+            sqlx::query_scalar::<_, i64>("SELECT id FROM irises ORDER BY id").fetch(&self.pool);
+        let mut db_len = 0_u64;
+        let mut last = 0_i64;
+        let mut hasher = Sha256::new();
+        hasher.update(b"iris-mpc-serial-ids-v1");
+        while let Some(id) = rows.try_next().await? {
+            ensure!(
+                id > last,
+                "Gallery serial IDs must be positive and ordered: previous={last}, id={id}"
+            );
+            hasher.update(id.to_be_bytes());
+            db_len += 1;
+            last = id;
+        }
+        let next_available_serial_id = last
+            .checked_add(1)
+            .ok_or_else(|| eyre!("Gallery serial ID overflow"))?;
+        tracing::info!(db_len, elapsed = ?started.elapsed(), "Calculated gallery serial-ID digest");
+        Ok(ampc_server_utils::gallery_sync::GalleryState {
+            db_len,
+            next_available_serial_id,
+            serial_ids_digest: hasher.finalize().into(),
+        })
+    }
     pub async fn new(postgres_client: &PostgresClient) -> Result<Self> {
         tracing::info!(
             "Created and iris-mpc-store with schema: {}",
@@ -1130,6 +1160,37 @@ pub mod tests {
     // Max connections default to 100 for Postgres, but can't test at quite this level when running
     // multiple DB-related tests in parallel.
     const MAX_CONNECTIONS: u32 = 80;
+
+    #[tokio::test]
+    async fn gallery_metadata_distinguishes_sparse_id_sets() -> Result<()> {
+        let schema = temporary_name();
+        let client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema, AccessMode::ReadWrite).await?;
+        run_migrations(&client.pool, false).await?;
+        let store = Store::new(&client).await?;
+        let empty = store.gallery_state().await?;
+        assert_eq!((empty.db_len, empty.next_available_serial_id), (0, 1));
+        let rows = [1, 3].map(|id| StoredIrisRef {
+            id,
+            left_code: &[1, 2],
+            left_mask: &[3, 4],
+            right_code: &[5, 6],
+            right_mask: &[7, 8],
+        });
+        let mut tx = store.tx().await?;
+        store.insert_irises(&mut tx, &rows).await?;
+        tx.commit().await?;
+        let first = store.gallery_state().await?;
+        assert_eq!((first.db_len, first.next_available_serial_id), (2, 4));
+        sqlx::query("UPDATE irises SET id=2 WHERE id=1")
+            .execute(&client.pool)
+            .await?;
+        let second = store.gallery_state().await?;
+        assert_eq!((second.db_len, second.next_available_serial_id), (2, 4));
+        assert_ne!(first.serial_ids_digest, second.serial_ids_digest);
+        cleanup(&client, &schema).await?;
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_store() -> Result<()> {
