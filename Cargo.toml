@@ -101,3 +101,7 @@ debug = 1
 
 [profile.dev]
 panic = 'abort'
+
+[patch.crates-io]
+# Remove once libsodium-sys-stable releases its ZIP 9 update.
+libsodium-sys-stable = { git = "https://github.com/jedisct1/libsodium-sys-stable", rev = "29f7af869fcc51ba038ab382bdcc0661861ce310" }
