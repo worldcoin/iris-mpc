@@ -3399,6 +3399,7 @@ dependencies = [
  "iris-mpc-common",
  "itertools 0.13.0",
  "rand 0.8.6",
+ "sha2 0.10.9",
  "sqlx",
  "tokio",
  "tracing",

@@ -25,6 +25,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 pub use s3_importer::{
     fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
 };
+use sha2::{Digest, Sha256};
 use sqlx::{PgConnection, PgPool, Postgres, Row, Transaction};
 use std::ops::DerefMut;
 
@@ -816,6 +817,40 @@ WHERE id = $1;
         Ok(row.0)
     }
 
+    /// Called only after this active process has stopped and settled its workers.
+    /// SNS sequence numbers are ordered but not dense; prove the stored prefix,
+    /// rather than assuming MAX alone demonstrates gap-free persistence.
+    pub async fn drain_persisted_prefix(&self, watermark: Option<&str>) -> Result<(u64, String)> {
+        let unresolved: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM ingested_requests WHERE sequence_number <= $1 AND persisted_at IS NULL AND is_valid IS NOT FALSE",
+        ).bind(watermark).fetch_one(&self.pool).await?;
+        ensure!(
+            unresolved.0 == 0,
+            "{} unresolved valid ingested rows at or below persisted frontier",
+            unresolved.0
+        );
+        let mut rows = sqlx::query_scalar::<_, String>(
+            "SELECT sequence_number FROM ingested_requests WHERE persisted_at IS NOT NULL ORDER BY sequence_number",
+        ).fetch(&self.pool);
+        let mut count = 0u64;
+        let mut digest = Sha256::new();
+        let mut last = None;
+        while let Some(sequence) = rows.try_next().await? {
+            ensure!(
+                normalize_sns_sequence_number(&sequence)? == sequence,
+                "persisted sequence is not normalized"
+            );
+            digest.update(sequence.as_bytes());
+            count += 1;
+            last = Some(sequence);
+        }
+        ensure!(
+            last.as_deref() == watermark,
+            "persisted frontier changed while proving drain"
+        );
+        Ok((count, format!("{:x}", digest.finalize())))
+    }
+
     /// Startup skip-ahead (DB analog of the SQS queue trim): marks every
     /// unpersisted row at or below the fleet's persisted frontier as persisted,
     /// regardless of claim state. A row at or below the frontier was part of a
@@ -1130,6 +1165,67 @@ pub mod tests {
     // Max connections default to 100 for Postgres, but can't test at quite this level when running
     // multiple DB-related tests in parallel.
     const MAX_CONNECTIONS: u32 = 80;
+
+    #[tokio::test]
+    async fn drain_prefix_detects_gaps_and_changes_beyond_the_maximum() -> Result<()> {
+        let schema_name = temporary_name();
+        let client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        run_migrations(&client.pool, false).await?;
+        let store = Store::new(&client).await?;
+        let empty = store.drain_persisted_prefix(None).await?;
+        assert_eq!(empty.0, 0);
+        // SNS numbers are ordered, not dense. 10 -> 100 is a valid prefix.
+        for sequence in ["10", "100"] {
+            store
+                .insert_ingested_request(sequence, "body", true)
+                .await?;
+        }
+        let sequences: Vec<_> = ["10", "100"]
+            .iter()
+            .map(|s| normalize_sns_sequence_number(s).unwrap())
+            .collect();
+        let mut tx = store.tx().await?;
+        store
+            .mark_ingested_requests_persisted_tx(&mut tx, &sequences[1..])
+            .await?;
+        tx.commit().await?;
+        let watermark = store.max_persisted_sequence_number().await?;
+        assert!(
+            store
+                .drain_persisted_prefix(watermark.as_deref())
+                .await
+                .is_err(),
+            "same MAX must not hide an unresolved earlier valid row"
+        );
+        let mut tx = store.tx().await?;
+        store
+            .mark_ingested_requests_persisted_tx(&mut tx, &sequences[..1])
+            .await?;
+        tx.commit().await?;
+        let proof = store.drain_persisted_prefix(watermark.as_deref()).await?;
+        assert_eq!(proof.0, 2);
+        assert_ne!(proof.1, empty.1);
+        store.insert_ingested_request("50", "body", true).await?;
+        assert!(store
+            .drain_persisted_prefix(watermark.as_deref())
+            .await
+            .is_err());
+        let mut tx = store.tx().await?;
+        store
+            .mark_ingested_requests_persisted_tx(&mut tx, &[normalize_sns_sequence_number("50")?])
+            .await?;
+        tx.commit().await?;
+        let changed = store.drain_persisted_prefix(watermark.as_deref()).await?;
+        assert_eq!(changed.0, 3);
+        assert_ne!(
+            proof.1, changed.1,
+            "equal watermarks must not hide different persisted sets"
+        );
+        cleanup(&client, &schema_name).await?;
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_store() -> Result<()> {
