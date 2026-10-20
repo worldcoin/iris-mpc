@@ -468,11 +468,7 @@ async fn server_main(config: Config) -> Result<()> {
 
     let gallery_before_load = store.gallery_state().await?;
     gallery_sync
-        .check(
-            &server_coord_config,
-            ampc_server_utils::gallery_sync::GalleryPhase::Recovered,
-            gallery_before_load.clone(),
-        )
+        .check(&server_coord_config, gallery_before_load.clone())
         .await?;
     // refetch store_len in case we rolled back
     let store_len = store.count_irises().await?;
@@ -564,13 +560,6 @@ async fn server_main(config: Config) -> Result<()> {
     let (mut handle, store) = rx.await??;
     let loaded = store.gallery_state().await?;
     ampc_server_utils::gallery_sync::ensure_gallery_unchanged(&gallery_before_load, &loaded)?;
-    gallery_sync
-        .check(
-            &server_coord_config,
-            ampc_server_utils::gallery_sync::GalleryPhase::Loaded,
-            loaded,
-        )
-        .await?;
 
     background_tasks.check_tasks();
 

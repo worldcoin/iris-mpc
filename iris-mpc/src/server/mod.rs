@@ -284,11 +284,7 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
     let gallery_before_load = if search_mode == HawkSearchMode::LinearScan {
         let state = iris_store.gallery_state().await?;
         gallery_sync
-            .check(
-                &server_coord_config,
-                ampc_server_utils::gallery_sync::GalleryPhase::Recovered,
-                state.clone(),
-            )
+            .check(&server_coord_config, state.clone())
             .await?;
         Some(state)
     } else {
@@ -308,13 +304,6 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
     if let Some(before) = gallery_before_load {
         let loaded = iris_store.gallery_state().await?;
         ampc_server_utils::gallery_sync::ensure_gallery_unchanged(&before, &loaded)?;
-        gallery_sync
-            .check(
-                &server_coord_config,
-                ampc_server_utils::gallery_sync::GalleryPhase::Loaded,
-                loaded,
-            )
-            .await?;
     }
     if let Some(url) = config.get_anon_stats_db_url() {
         let schema = config.get_anon_stats_db_schema();
