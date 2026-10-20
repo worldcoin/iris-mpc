@@ -1,4 +1,4 @@
-//! Operator-authorized, one-way drain. Mutation is a local Unix signal, not HTTP.
+//! In-process, one-way drain with read-only status reporting.
 use ampc_server_utils::config::ServerCoordinationConfig;
 use axum::{routing::get, Json, Router};
 use eyre::Result;
@@ -231,7 +231,7 @@ impl Drain {
         self.changed.notify_waiters();
     }
 
-    /// Publish a positive offer while holding the same mutex used by SIGUSR1.
+    /// Publish a positive offer while holding the same mutex used by `request`.
     /// An offer cannot be retracted: a peer may already have admitted that batch.
     pub fn publish_offer(&self, batch_id: u64, messages: u32, publish: impl FnOnce()) -> bool {
         let mut inner = self.inner.lock().unwrap();
@@ -329,25 +329,6 @@ impl Drain {
                 cut = inner.status.cut,
                 "CPU cell workers settled; comparing persisted prefix"
             );
-        }
-    }
-
-    pub fn install_signal(self: &Arc<Self>) -> Result<()> {
-        #[cfg(unix)]
-        {
-            let mut signal =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::user_defined1())?;
-            let this = self.clone();
-            tokio::spawn(async move {
-                while signal.recv().await.is_some() {
-                    this.request();
-                }
-            });
-            Ok(())
-        }
-        #[cfg(not(unix))]
-        {
-            eyre::bail!("CPU cell drain requires Unix operator signals")
         }
     }
 
@@ -464,9 +445,8 @@ impl Drain {
                     .filter(|status| !status.requested)
                     .map(|status| status.party_id)
                     .collect();
-                last_peer_failure = Some(format!(
-                    "waiting for operator signal on parties {waiting:?}"
-                ));
+                last_peer_failure =
+                    Some(format!("waiting for drain request on parties {waiting:?}"));
                 continue;
             }
             let cut = statuses
@@ -789,7 +769,7 @@ mod tests {
         assert!(drain.status().report.is_none());
     }
     #[tokio::test]
-    async fn duplicate_cohort_identities_block_drain_before_operator_request() {
+    async fn duplicate_cohort_identities_block_drain_before_request() {
         let drain = Drain::new(0, Duration::from_secs(1), true);
         let config: ServerCoordinationConfig =
             serde_json::from_value(serde_json::json!({})).unwrap();

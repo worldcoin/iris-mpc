@@ -169,7 +169,6 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
             Duration::from_secs(config.cpu_drain_timeout_secs),
             config.db_backed_ingest,
         );
-        drain.install_signal()?;
         Some(drain)
     } else {
         None

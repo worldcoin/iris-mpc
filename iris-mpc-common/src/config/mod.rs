@@ -847,7 +847,7 @@ impl From<Config> for CommonConfig {
         let Config {
             startup_mode: _, // candidate processes never join active coordination
             candidate_status_port: _,
-            cpu_drain_timeout_secs: _, // local operator deadline does not change MPC computation
+            cpu_drain_timeout_secs: _, // local drain deadline does not change MPC computation
             environment,
             party_id: _,           // party id is different for each server
             requests_queue_url: _, // requests queue url is different for each server
