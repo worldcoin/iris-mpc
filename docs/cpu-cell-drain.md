@@ -23,21 +23,32 @@ handoff. Durable ownership and startup/recovery guards must be implemented
 before production handoff is enabled. Use only one active writer per
 party/database.
 
-On `Drain::request()`, each process freezes new positive batch offers. A batch
-offered by all three parties is admitted; the common cut is the minimum of
-the three frozen highest positive offers. This completes already-admitted work without
-admitting a unilateral prefetched next batch. Existing batch offers remain
-available until lagging parties finish. The ingest worker stops after settling
-its already-started SQS receive, durable insert and receipt deletion. Existing
-malformed-envelope/invalid-sequence discard policy is unchanged.
+Drain proceeds in three steps:
 
-The receiver must stop and every admitted result must commit and finish all
-SNS publications before unused claims can be released. Only then does the
-process query a fresh persisted watermark, reject unresolved valid rows below
-it, and stream a SHA-256 digest/count of the ordered persisted sequence set.
-SNS sequence numbers are not dense. Comparing maxima alone is insufficient.
-The final full batch digest and batch ID must acknowledge the common cut;
-cut zero has no new publication. All three current reports must agree.
+1. **Agree on the last batch to finish.** `Drain::request()` stops each party
+   from advertising new batches with work. These advertisements are called
+   *offers*. The last batch offered by all three parties is the stopping point,
+   or *cut*: the minimum of their frozen highest positive offers. For example,
+   offers through batches 42, 42 and 41 give a cut of 41. Existing offers stay
+   visible so slower parties can finish admitted work; a batch prefetched by
+   only one party cannot extend the cut.
+
+2. **Settle work already in flight.** Stop the batch receiver and let any
+   started SQS receive finish: save the request in Postgres before deleting
+   its receipt. Finish processing every admitted batch, committing its results
+   and completing its SNS publications. Only after the workers and publications
+   settle can unused database claims be released for later processing.
+   Existing malformed-envelope/invalid-sequence discard policy is unchanged.
+
+3. **Verify that all parties completed the same requests.** Each party reads
+   a fresh persisted request watermark, W, and rejects unresolved valid requests
+   at or below it. W is a request sequence number; the cut is a batch number.
+   Matching W alone is insufficient: sets `{10, 20, 30}` and `{10, 30}` both
+   end at 30. Each party therefore streams its ordered persisted sequence IDs
+   into a SHA-256 hash and counts them; all three reports must agree. Sequence
+   numbers need not be consecutive. For a nonzero cut, the final publication
+   must be for that batch, with the same full batch digest on every party.
+   Cut zero requires no new publication.
 
 `SMPC__CPU_DRAIN_TIMEOUT_SECS` bounds the whole operation (default 300 seconds).
 Tune it for the expected in-flight workload before starting the process. A
