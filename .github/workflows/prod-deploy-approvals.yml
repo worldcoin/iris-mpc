@@ -37,7 +37,7 @@ jobs:
 
             const approversGroupB = [
               'wzunknown',     // UC Berkeley
-              'stneng',        // UC Berkeley
+              'world-mpc',     // UC Berkeley
               'jweberphipps',  // UC Berkeley
               'happyhappy-jun',// KAIST
               'jungwook235',   // KAIST
