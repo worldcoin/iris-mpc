@@ -193,6 +193,14 @@ The example file contains a sample WSL env var.
 
 ## CPU Implementation
 
+### Messaging regions
+
+`SMPC__REQUESTS_QUEUE_REGION` overrides the matching service's input SQS region.
+`SMPC__RESULTS_TOPIC_REGION` overrides the result SNS region for both the matching
+service and `iris-mpc-anon-stats-server`. Both are optional and fall back to the
+shared AWS region (`SMPC__AWS__REGION`). Other clients, including S3 result
+payload offloading, keep their existing region configuration.
+
 ### Requirements
 
 1. `direnv` installed on your machine

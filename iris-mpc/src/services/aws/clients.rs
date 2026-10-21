@@ -34,7 +34,11 @@ impl AwsClients {
 
         let force_path_style = config.environment != ENV_PROD && config.environment != ENV_STAGE;
 
-        let sns_client = create_sns_client(&shared_config, config.sns_retry_max_attempts);
+        let sns_client = create_sns_client(
+            &shared_config,
+            config.sns_retry_max_attempts,
+            config.results_topic_region.clone().map(Region::new),
+        );
         let sqs_client = create_sqs_client(
             &shared_config,
             config.sqs_long_poll_wait_time,
