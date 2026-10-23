@@ -62,8 +62,16 @@ pub struct Config {
     #[serde(default)]
     pub requests_queue_url: String,
 
+    /// Region of the input SQS queue. Defaults to the shared AWS region.
+    #[serde(default)]
+    pub requests_queue_region: Option<String>,
+
     #[serde(default)]
     pub results_topic_arn: String,
+
+    /// Region of the result SNS topic. Defaults to the shared AWS region.
+    #[serde(default)]
+    pub results_topic_region: Option<String>,
 
     #[serde(default)]
     pub kms_key_arns: JsonStrWrapper<Vec<String>>,
@@ -840,10 +848,12 @@ impl From<Config> for CommonConfig {
             startup_mode: _, // candidate processes never join active coordination
             candidate_status_port: _,
             environment,
-            party_id: _,           // party id is different for each server
-            requests_queue_url: _, // requests queue url is different for each server
+            party_id: _,              // party id is different for each server
+            requests_queue_url: _,    // requests queue url is different for each server
+            requests_queue_region: _, // input transport settings are local to each server
             results_topic_arn,
-            kms_key_arns: _, // kms key arns are different for each server
+            results_topic_region: _, // result transport settings are local to each server
+            kms_key_arns: _,         // kms key arns are different for each server
             tls: _,
             service: _,
             server_coordination: _,
@@ -1001,6 +1011,17 @@ impl From<Config> for CommonConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn messaging_regions_are_optional_local_transport_settings() {
+        let mut config: Config = serde_json::from_str("{}").unwrap();
+        assert!(config.requests_queue_region.is_none());
+        assert!(config.results_topic_region.is_none());
+        let common = CommonConfig::from(config.clone());
+        config.requests_queue_region = Some("eu-central-1".to_owned());
+        config.results_topic_region = Some("eu-central-1".to_owned());
+        assert_eq!(CommonConfig::from(config), common);
+    }
 
     #[test]
     fn db_backed_ingest_is_part_of_common_config_equality() {
