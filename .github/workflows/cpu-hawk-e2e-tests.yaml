@@ -37,18 +37,6 @@ jobs:
               - scripts/**
               - .github/workflows/cpu-hawk-e2e-tests.yaml
 
-      - name: Cache Rust build
-        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb
-        id: cache-rust
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: rust-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            rust-build-${{ runner.os }}-
       - name: Set up QEMU
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
