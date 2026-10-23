@@ -34,6 +34,10 @@ pub enum StartupMode {
     Candidate,
 }
 
+fn default_cpu_drain_timeout_secs() -> u64 {
+    300
+}
+
 fn default_candidate_status_port() -> u16 {
     3090
 }
@@ -49,6 +53,10 @@ pub struct Config {
     /// Operator status, bound to loopback only in candidate mode.
     #[serde(default = "default_candidate_status_port")]
     pub candidate_status_port: u16,
+
+    /// Overall one-way CPU drain budget, including queue and publication settlement.
+    #[serde(default = "default_cpu_drain_timeout_secs")]
+    pub cpu_drain_timeout_secs: u64,
 
     #[serde(default = "default_schema_name")]
     pub schema_name: String,
@@ -847,6 +855,7 @@ impl From<Config> for CommonConfig {
         let Config {
             startup_mode: _, // candidate processes never join active coordination
             candidate_status_port: _,
+            cpu_drain_timeout_secs: _, // local drain deadline does not change MPC computation
             environment,
             party_id: _,              // party id is different for each server
             requests_queue_url: _,    // requests queue url is different for each server

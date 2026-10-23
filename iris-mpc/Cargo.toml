@@ -51,6 +51,7 @@ tracing-subscriber.workspace = true
 iris-mpc-utils = { path = "../iris-mpc-utils" }
 
 [features]
+db_dependent = []
 default = []
 # enable the BatchMessage sqs_request type. used by the client to circumvent
 # batching logic by uploading the desired batches directly.

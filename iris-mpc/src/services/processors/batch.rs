@@ -1,3 +1,4 @@
+use crate::server::drain::Drain;
 use crate::server::MAX_CONCURRENT_REQUESTS;
 use crate::services::processors::get_iris_shares_parse_task;
 use crate::services::processors::result_message::send_error_results_to_sns;
@@ -166,6 +167,7 @@ pub fn spawn_db_backed_ingest_task(
     config: Config,
     iris_store: Store,
     shutdown_handler: Arc<ShutdownHandler>,
+    drain: Option<Arc<Drain>>,
 ) {
     task_monitor.spawn(async move {
         let mut backoff = DbIngestBackoff::new(
@@ -174,16 +176,34 @@ pub fn spawn_db_backed_ingest_task(
         );
 
         tracing::info!("Starting DB-backed SQS ingest task");
-        while !shutdown_handler.is_shutting_down() {
+        let mut unsettled_error = false;
+        while !shutdown_handler.is_shutting_down()
+            && !drain.as_ref().is_some_and(|drain| drain.requested())
+        {
             match ingest_one_sqs_message(&client, &config, &iris_store).await {
                 Ok(received_message) => {
+                    unsettled_error = false;
                     if received_message {
                         tracing::debug!("DB-backed ingest processed one SQS message");
                     }
                     backoff.reset();
                 }
                 Err(err) => {
+                    unsettled_error = true;
+                    if let Some(drain) = &drain {
+                        drain.block(
+                            "earlier exhausted SQS ingest operation has an ambiguous outcome",
+                        );
+                    }
                     metrics::counter!("db_ingest_errors").increment(1);
+                    if let Some(drain) = &drain {
+                        if drain.requested() {
+                            drain.fail(
+                                "pending SQS receive, durable insert, or receipt deletion failed",
+                            );
+                            break;
+                        }
+                    }
                     let sleep = backoff.next_sleep();
                     tracing::warn!(
                         "DB-backed ingest error: {:?}; retrying after {:?}",
@@ -194,7 +214,13 @@ pub fn spawn_db_backed_ingest_task(
                 }
             }
         }
-        tracing::info!("DB-backed SQS ingest task idle: shutdown signaled");
+        if let Some(drain) = &drain {
+            if unsettled_error && drain.requested() {
+                drain.fail("SQS ingest exited with an unsettled operation");
+            }
+            drain.ingest_stopped();
+        }
+        tracing::info!("DB-backed SQS ingest task idle: shutdown or drain signaled");
         // Never return: TaskMonitor::check_tasks() panics on ANY finished task
         // (even Ok), and abort_all() runs check_tasks() first — so returning
         // here on the shutdown signal would turn a graceful drain into a panic
@@ -390,6 +416,7 @@ pub fn receive_batch_stream(
     current_batch_id_atomic: Arc<AtomicU64>,
     iris_store: Store,
     batch_sync_shared_state: Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
+    drain: Option<Arc<Drain>>,
 ) -> (
     Receiver<Result<Option<BatchQuery>, ReceiveRequestError>>,
     Arc<Semaphore>,
@@ -435,15 +462,26 @@ pub fn receive_batch_stream(
                     current_batch_id_atomic.clone(),
                     &iris_store,
                     batch_sync_shared_state.clone(),
+                    drain.clone(),
                 )
                 .await;
 
+                if let (Some(drain), Err(error)) = (&drain, &batch) {
+                    if drain.requested() {
+                        tracing::error!(?error, "Draining batch receiver failed");
+                        drain.fail("batch receiver failed before settlement");
+                        drain.request();
+                    }
+                }
                 let stop = matches!(batch, Err(_) | Ok(None));
                 permit.send(batch);
 
                 if stop {
                     break;
                 }
+            }
+            if let Some(drain) = &drain {
+                drain.receiver_stopped();
             }
             tracing::info!("Stopping batch receiver.");
         }
@@ -471,6 +509,7 @@ async fn receive_batch(
     current_batch_id_atomic: Arc<AtomicU64>,
     iris_store: &Store,
     batch_sync_shared_state: Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
+    drain: Option<Arc<Drain>>,
 ) -> Result<Option<BatchQuery>, ReceiveRequestError> {
     let mut processor = BatchProcessor::new(
         party_id,
@@ -492,6 +531,7 @@ async fn receive_batch(
         batch_sync_shared_state,
     );
 
+    processor.drain = drain;
     processor.receive_batch().await
 }
 
@@ -514,6 +554,7 @@ pub struct BatchProcessor<'a> {
     semaphore: Arc<Semaphore>,
     handles: Vec<JoinHandle<Result<(GaloisShares, GaloisShares), eyre::Error>>>,
     msg_counter: usize,
+    drain: Option<Arc<Drain>>,
     current_batch_id_atomic: Arc<AtomicU64>,
     iris_store: &'a Store,
     batch_sync_shared_state: Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
@@ -559,6 +600,7 @@ impl<'a> BatchProcessor<'a> {
             semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUESTS)),
             handles: vec![],
             msg_counter: 0,
+            drain: None,
             current_batch_id_atomic,
             iris_store,
             batch_sync_shared_state,
@@ -574,6 +616,11 @@ impl<'a> BatchProcessor<'a> {
         loop {
             let current_batch_id = self.current_batch_id_atomic.load(Ordering::SeqCst);
 
+            if let Some(drain) = &self.drain {
+                if !drain.may_finish(current_batch_id).await {
+                    return Ok(None);
+                }
+            }
             // Determine the number of messages to poll based on synchronized state
             let mut own_state = get_own_batch_sync_state(
                 self.config,
@@ -587,16 +634,28 @@ impl<'a> BatchProcessor<'a> {
             // Update the shared state with our current state
             {
                 let mut shared_state = self.batch_sync_shared_state.lock().await;
-                // we are here for the first time, set everything
-                if shared_state.batch_id != own_state.batch_id {
-                    shared_state.batch_id = own_state.batch_id;
-                    shared_state.messages_to_poll = own_state.messages_to_poll;
-                } else if shared_state.messages_to_poll == 0 {
-                    // we have been here before, only update messages_to_poll if it was 0, otherwise other parties could have state mismatches
-                    shared_state.messages_to_poll = own_state.messages_to_poll;
+                let offered_messages = own_state.messages_to_poll;
+                let mut publish = || {
+                    // we are here for the first time, set everything
+                    if shared_state.batch_id != own_state.batch_id {
+                        shared_state.batch_id = own_state.batch_id;
+                        shared_state.messages_to_poll = own_state.messages_to_poll;
+                    } else if shared_state.messages_to_poll == 0 {
+                        // we have been here before, only update messages_to_poll if it was 0, otherwise other parties could have state mismatches
+                        shared_state.messages_to_poll = own_state.messages_to_poll;
+                    } else {
+                        // we have already set this for this batch, so it might have gone out to other parties, so we need to update our own state to match what we already sent out
+                        own_state.messages_to_poll = shared_state.messages_to_poll;
+                    }
+                };
+                if let Some(drain) = &self.drain {
+                    if !drain.publish_offer(current_batch_id, offered_messages, publish) {
+                        // Freeze won the offer race: no new proposal is published.
+                        // Leave the lock before waiting for the three-party cut.
+                        own_state.messages_to_poll = shared_state.messages_to_poll;
+                    }
                 } else {
-                    // we have already set this for this batch, so it might have gone out to other parties, so we need to update our own state to match what we already sent out
-                    own_state.messages_to_poll = shared_state.messages_to_poll;
+                    publish();
                 }
 
                 let log_msg = format!(
@@ -609,20 +668,41 @@ impl<'a> BatchProcessor<'a> {
                 };
             }
 
+            if let Some(drain) = &self.drain {
+                if !drain.may_finish(current_batch_id).await {
+                    return Ok(None);
+                }
+            }
             let server_coord_config = self.config.server_coordination.as_ref().ok_or(
                 ReceiveRequestError::BatchSyncError(eyre::eyre!(
                     "Server coordination config is missing"
                 )),
             )?;
 
-            let all_states = get_batch_sync_states(
+            let sync = get_batch_sync_states(
                 server_coord_config,
                 Some(&own_state),
                 self.config.batch_sync_polling_timeout_secs,
-            )
-            .await
+            );
+            let all_states = if let Some(drain) = &self.drain {
+                tokio::select! {
+                    result = sync => result,
+                    _ = drain.wait_for_exclusion(current_batch_id) => return Ok(None),
+                }
+            } else {
+                sync.await
+            }
             .map_err(ReceiveRequestError::BatchSyncError)?;
 
+            if self.drain.as_ref().is_some_and(|drain| drain.requested())
+                && all_states
+                    .iter()
+                    .any(|state| state.batch_id != current_batch_id)
+            {
+                return Err(ReceiveRequestError::BatchSyncError(eyre!(
+                    "drain received a mismatched batch ID"
+                )));
+            }
             let batch_sync_result = BatchSyncResult::new(own_state, all_states);
             let messages_to_poll = batch_sync_result.messages_to_poll();
 
@@ -1871,6 +1951,132 @@ mod tests {
         UNIQUENESS_MESSAGE_TYPE,
     };
     use iris_mpc_store::{normalize_sns_sequence_number, SNS_SEQUENCE_NUMBER_WIDTH};
+
+    #[tokio::test]
+    #[cfg(feature = "db_dependent")]
+    async fn drain_waits_for_actual_receipt_delete_after_durable_ingest() -> eyre::Result<()> {
+        check_ingest_drain(false).await
+    }
+    #[tokio::test]
+    #[cfg(feature = "db_dependent")]
+    async fn drain_rejects_prior_ingest_error_even_after_empty_receive_succeeds() -> eyre::Result<()>
+    {
+        check_ingest_drain(true).await
+    }
+    #[cfg(feature = "db_dependent")]
+    async fn check_ingest_drain(prior_failure: bool) -> eyre::Result<()> {
+        use super::*;
+        use axum::{
+            http::{HeaderMap, StatusCode},
+            response::IntoResponse,
+            routing::post,
+            Json, Router,
+        };
+        use iris_mpc_common::postgres::{run_migrations, AccessMode, PostgresClient};
+        use std::sync::atomic::AtomicUsize;
+        use tokio::sync::Notify;
+
+        let schema = format!("drain_receipt_{}", uuid::Uuid::new_v4().simple());
+        let db = PostgresClient::new(
+            &iris_mpc_store::test_utils::test_db_url()?,
+            &schema,
+            AccessMode::ReadWrite,
+        )
+        .await?;
+        run_migrations(&db.pool, false).await?;
+        let store = Store::new(&db).await?;
+        let entered_delete = Arc::new(Notify::new());
+        let release_delete = Arc::new(Notify::new());
+        let receives = Arc::new(AtomicUsize::new(0));
+        let sns_body = serde_json::json!({
+            "Type":"Notification", "MessageId":"test", "SequenceNumber":"100", "TopicArn":"test",
+            "Message":"{}", "Timestamp":"test", "UnsubscribeURL":"test", "MessageAttributes":{}
+        })
+        .to_string();
+        let app = Router::new().route("/", post({
+            let entered = entered_delete.clone(); let release = release_delete.clone();
+            let receives = receives.clone(); let pool = db.pool.clone();
+            move |headers: HeaderMap| {
+                let entered = entered.clone(); let release = release.clone(); let receives = receives.clone();
+                let pool = pool.clone(); let sns_body = sns_body.clone();
+                async move {
+                    if headers.get("x-amz-target").unwrap().to_str().unwrap().ends_with("ReceiveMessage") {
+                        let attempt = receives.fetch_add(1, Ordering::SeqCst);
+                        if prior_failure {
+                            if attempt == 0 {
+                                return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"__type":"InternalError","message":"fixture failure"}))).into_response();
+                            }
+                            if attempt > 1 { entered.notify_one(); release.notified().await; }
+                            return Json(serde_json::json!({})).into_response();
+                        }
+                        Json(serde_json::json!({"Messages":[{"MessageId":"test","ReceiptHandle":"test-receipt","Body":sns_body}]})).into_response()
+                    } else {
+                        let persisted: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM ingested_requests").fetch_one(&pool).await.unwrap();
+                        assert_eq!(persisted.0, 1, "receipt deletion must follow the committed durable insert");
+                        entered.notify_one();
+                        release.notified().await;
+                        Json(serde_json::json!({})).into_response()
+                    }
+                }
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let endpoint = format!("http://{}", listener.local_addr()?);
+        let http = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let client = Client::from_conf(
+            aws_sdk_sqs::config::Builder::new()
+                .behavior_version_latest()
+                .retry_config(aws_sdk_sqs::config::retry::RetryConfig::disabled())
+                .region(aws_sdk_sqs::config::Region::new("us-east-1"))
+                .credentials_provider(aws_sdk_sqs::config::Credentials::new(
+                    "test", "test", None, None, "test",
+                ))
+                .endpoint_url(&endpoint)
+                .build(),
+        );
+        let mut config: Config = serde_json::from_value(serde_json::json!({}))?;
+        config.requests_queue_url = endpoint;
+        let drain = Drain::new(0, Duration::from_secs(5), true);
+        drain.receiver_stopped();
+        let mut monitor = TaskMonitor::new();
+        spawn_db_backed_ingest_task(
+            &mut monitor,
+            client,
+            config,
+            store,
+            Arc::new(ShutdownHandler::new(5)),
+            Some(drain.clone()),
+        );
+        tokio::time::timeout(Duration::from_secs(5), entered_delete.notified()).await?;
+        drain.request();
+        assert!(
+            !drain.settled(),
+            "a pending actual SQS delete must prevent the drain report"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        assert!(!drain.settled());
+        release_delete.notify_one();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !drain.settled() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await?;
+        assert_eq!(drain.failed(), prior_failure);
+        assert_eq!(
+            receives.load(Ordering::SeqCst),
+            if prior_failure { 3 } else { 1 },
+            "freeze must prevent another receive"
+        );
+        drop(monitor);
+        http.abort();
+        sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+            .execute(&db.pool)
+            .await?;
+        Ok(())
+    }
 
     #[test]
     fn is_request_payload_valid_accepts_well_formed_request() {
