@@ -1,5 +1,7 @@
 FROM public.ecr.aws/docker/library/postgres:16.10-alpine3.22
 
+RUN apk add --no-cache --upgrade ca-certificates-bundle
+
 # ---
 # copy a script to delete and recreate the CPU databases on every run
 COPY ./scripts/tools/pg-entrypoint-wrapper.sh /bin/pg-entrypoint-wrapper.sh
