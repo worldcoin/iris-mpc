@@ -970,6 +970,7 @@ async fn main() -> Result<()> {
 
     info!("Init config");
     let mut config = AnonStatsServerConfig::load_config("SMPC")?;
+    let results_topic_config = ResultsTopicConfig::load_config("SMPC")?;
     config.overwrite_defaults_with_cli_args(Opt::parse());
 
     if config.results_topic_arn.is_empty() {
@@ -1024,7 +1025,11 @@ async fn main() -> Result<()> {
             .await?;
             let anon_stats_store =
                 AnonStatsStore::new(&postgres_client, config.ignore_missing_migrations).await?;
-            let sns_client = build_sns_client(&config).await?;
+            let sns_client = build_sns_client(
+                &config,
+                results_topic_config.results_topic_region.as_deref(),
+            )
+            .await?;
             let s3_client = build_s3_client(&config).await?;
 
             lifecycle::check_background_tasks(&mut background_tasks)?;
@@ -1103,7 +1108,30 @@ async fn main() -> Result<()> {
     .await
 }
 
-async fn build_sns_client(config: &AnonStatsServerConfig) -> Result<SNSClient> {
+/// Transport settings local to this binary, supplementing the shared stats configuration.
+#[derive(Default, serde::Deserialize)]
+struct ResultsTopicConfig {
+    #[serde(default)]
+    results_topic_region: Option<String>,
+}
+
+impl ResultsTopicConfig {
+    fn load_config(prefix: &str) -> Result<Self> {
+        Ok(config::Config::builder()
+            .add_source(
+                config::Environment::with_prefix(prefix)
+                    .separator("__")
+                    .try_parsing(true),
+            )
+            .build()?
+            .try_deserialize()?)
+    }
+}
+
+async fn build_sns_client(
+    config: &AnonStatsServerConfig,
+    region_override: Option<&str>,
+) -> Result<SNSClient> {
     let mut loader = aws_config::from_env();
     if let Some(aws) = &config.aws {
         if let Some(region) = &aws.region {
@@ -1111,13 +1139,24 @@ async fn build_sns_client(config: &AnonStatsServerConfig) -> Result<SNSClient> {
         }
     }
     let shared_config = loader.load().await;
-    let mut sns_config_builder = aws_sdk_sns::config::Builder::from(&shared_config);
+    Ok(create_sns_client(config, &shared_config, region_override))
+}
+
+fn create_sns_client(
+    config: &AnonStatsServerConfig,
+    shared_config: &aws_config::SdkConfig,
+    region_override: Option<&str>,
+) -> SNSClient {
+    let mut sns_config_builder = aws_sdk_sns::config::Builder::from(shared_config);
+    if let Some(region) = region_override {
+        sns_config_builder = sns_config_builder.region(Region::new(region.to_owned()));
+    }
     if let Some(aws) = &config.aws {
         if let Some(endpoint) = &aws.endpoint {
             sns_config_builder = sns_config_builder.endpoint_url(endpoint);
         }
     }
-    Ok(SNSClient::from_conf(sns_config_builder.build()))
+    SNSClient::from_conf(sns_config_builder.build())
 }
 
 async fn build_s3_client(config: &AnonStatsServerConfig) -> Result<S3Client> {
@@ -1142,4 +1181,66 @@ async fn build_s3_client(config: &AnonStatsServerConfig) -> Result<S3Client> {
         }
     }
     Ok(S3Client::from_conf(s3_config.build()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stats_result_region_override_preserves_offload_region_endpoint_and_retries() {
+        let shared_config = aws_config::SdkConfig::builder()
+            .behavior_version(aws_config::BehaviorVersion::latest())
+            .region(Region::new("eu-north-1"))
+            .retry_config(RetryConfig::standard().with_max_attempts(7))
+            .build();
+        let config: AnonStatsServerConfig = serde_json::from_value(serde_json::json!({
+            "aws": {"region": "eu-north-1", "endpoint": "http://localhost:4566"}
+        }))
+        .unwrap();
+        for (region_override, expected_region) in
+            [(None, "eu-north-1"), (Some("eu-central-1"), "eu-central-1")]
+        {
+            let sns = create_sns_client(&config, &shared_config, region_override);
+            assert_eq!(sns.config().region().unwrap().as_ref(), expected_region);
+            assert_eq!(
+                config.aws.as_ref().unwrap().endpoint.as_deref(),
+                Some("http://localhost:4566")
+            );
+            assert_eq!(sns.config().retry_config().unwrap().max_attempts(), 7);
+            let s3 = S3Client::new(&shared_config);
+            assert_eq!(s3.config().region().unwrap().as_ref(), "eu-north-1");
+            assert_eq!(
+                config.aws.as_ref().unwrap().region.as_deref(),
+                Some("eu-north-1")
+            );
+        }
+    }
+
+    #[test]
+    fn stats_result_region_config_uses_smpc_prefix() {
+        for (source, expected) in [
+            (HashMap::new(), None),
+            (
+                HashMap::from([(
+                    "SMPC__RESULTS_TOPIC_REGION".to_owned(),
+                    "eu-central-1".to_owned(),
+                )]),
+                Some("eu-central-1"),
+            ),
+        ] {
+            let parsed: ResultsTopicConfig = config::Config::builder()
+                .add_source(
+                    config::Environment::with_prefix("SMPC")
+                        .separator("__")
+                        .try_parsing(true)
+                        .source(Some(source)),
+                )
+                .build()
+                .unwrap()
+                .try_deserialize()
+                .unwrap();
+            assert_eq!(parsed.results_topic_region.as_deref(), expected);
+        }
+    }
 }
