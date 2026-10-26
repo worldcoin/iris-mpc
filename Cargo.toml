@@ -37,7 +37,7 @@ aws-sdk-kms = { version = "1.115.0", default-features = false, features = ["defa
 aws-sdk-rds = { version = "1.144.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-sns = { version = "1.108.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-sqs = { version = "1.106.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
-aws-sdk-s3 = { version = "1.142.0", default-features = false, features = ["sigv4a", "http-1x", "default-https-client", "rt-tokio"] }
+aws-sdk-s3 = { version = "1.142.0", default-features = false, features = ["http-1x", "default-https-client", "rt-tokio"] }
 aws-sdk-secretsmanager = { version = "1.112.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 async-trait = "0.1.83"
 axum = "0.7"
@@ -82,7 +82,7 @@ static_assertions = "1.1"
 telemetry-batteries = "0.1.1"
 thiserror = "1"
 # Pinned: minor version updates have introduced performance regressions in the past
-tokio = { version = "=1.49", features = ["full", "rt-multi-thread"] }
+tokio = { version = "=1.51.6", features = ["full", "rt-multi-thread"] }
 tokio-util = "0.7.15"
 toml = { version = "0.8.23", features = ["preserve_order"] }
 uuid = { version = "1", features = ["v4"] }
