@@ -13,7 +13,10 @@ mod tests {
     };
     use serde_json::json;
     use std::sync::Arc;
-    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+    use wiremock::{
+        matchers::{header_regex, method},
+        Mock, MockServer, ResponseTemplate,
+    };
 
     const PREVIOUS_PUBLIC_KEY: &str = "1UY8lKlS7aVj5ZnorSfLIHlG3jg+L4ToVi4K+mLKqFQ=";
     const PREVIOUS_PRIVATE_KEY: &str = "X26wWfzP5fKMP7QMz0X3eZsEeF4NhJU92jT69wZg6x8=";
@@ -80,6 +83,10 @@ mod tests {
         let data = response_body.to_string();
 
         Mock::given(method("GET"))
+            .and(header_regex(
+                "authorization",
+                r"^AWS4-HMAC-SHA256 Credential=test-access-key/[0-9]{8}/us-west-2/s3/aws4_request,",
+            ))
             .respond_with(
                 ResponseTemplate::new(200)
                     .insert_header("Content-Type", "application/octet-stream")
