@@ -1334,7 +1334,7 @@ async fn run_main_server_loop(
         if drain.requested() {
             while !shutdown_handler.is_shutting_down() {
                 task_monitor.check_tasks();
-                if !drain.failed() && drain.settled() && drain.status().report.is_none() {
+                if drain.ready_to_report() {
                     let proof = tokio::time::timeout(drain.remaining_budget(), async {
                         iris_store.reset_unpersisted_ingested_claims().await?;
                         let watermark = iris_store.max_persisted_sequence_number().await?;

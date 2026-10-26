@@ -307,6 +307,10 @@ impl Drain {
         let inner = self.inner.lock().unwrap();
         inner.ingest_stopped && inner.receiver_stopped && inner.pending_results == 0
     }
+    pub fn ready_to_report(&self) -> bool {
+        let status = self.status();
+        status.error.is_none() && status.cut.is_some() && self.settled() && status.report.is_none()
+    }
     pub fn remaining_budget(&self) -> Duration {
         self.inner
             .lock()
@@ -634,6 +638,33 @@ mod tests {
                 batch_id: cut,
                 batch_sha256: "ab".repeat(32),
             }),
+        }
+    }
+    #[tokio::test]
+    async fn idle_drain_waits_for_cut_before_reporting() {
+        let (drains, tasks) = cohort(Duration::from_secs(4)).await;
+        for drain in &drains {
+            drain.request();
+            drain.ingest_stopped();
+            drain.receiver_stopped();
+            assert!(drain.settled());
+            assert_eq!(drain.status().cut, None);
+            assert!(!drain.ready_to_report());
+        }
+        until(|| drains.iter().all(|drain| drain.ready_to_report())).await;
+        for drain in &drains {
+            assert_eq!(drain.status().cut, Some(0));
+            drain.publish_report(Report {
+                watermark: None,
+                persisted_count: 0,
+                persisted_sha256: "ab".repeat(32),
+                last_publication: None,
+            });
+            assert!(!drain.ready_to_report());
+        }
+        until(|| drains.iter().all(|drain| drain.status().phase == "paused")).await;
+        for task in tasks {
+            task.abort();
         }
     }
     #[tokio::test]
