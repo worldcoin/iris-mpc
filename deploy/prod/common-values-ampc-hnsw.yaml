@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-linear-scan:bead695a9a1b1d0eaa24d99da07c579ae9a1b776"
+image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:v0.32.12@sha256:4d29fedde873bc94a52fc8275e91ceacd8c51fe9685e150e65cb4d9042d85334"
 
 environment: prod
 replicaCount: 1
@@ -54,21 +54,19 @@ env:
   SMPC__PUBLIC_KEY_BASE_URL: "https://pki-smpc.worldcoin.org"
   SMPC__SHARES_BUCKET_NAME: "wf-mpc-prod-smpcv2-sns-requests"
   SMPC__ENABLE_S3_IMPORTER: "true"
+  SMPC__DB_CHUNKS_BUCKET_REGION: "eu-central-1"
   SMPC__DB_CHUNKS_FOLDER_NAME: "hnsw_even_odd_with_version_id_output_16k"
-  SMPC__LOAD_CHUNKS_PARALLELISM: "64"
+  SMPC__LOAD_CHUNKS_PARALLELISM: "8"
   SMPC__LOAD_CHUNKS_BUFFER_SIZE: "1024"
-  SMPC__CLEAR_DB_BEFORE_INIT: "true"
+  SMPC__CLEAR_DB_BEFORE_INIT: "false"
   SMPC__INIT_DB_SIZE: "0"
   SMPC__MAX_DB_SIZE: "18000000"
   SMPC__FAKE_DB_SIZE: "0"
-  # Linear scan serializes requests. This makes the preceding mutation visible
-  # before the next scan and removes the need for intra-batch matching.
-  SMPC__MAX_BATCH_SIZE: "1"
-  # Match the r8g.24xlarge production tuning: 3 * 48 search sessions for each
-  # concurrently running normal/mirror orientation.
+  SMPC__MAX_BATCH_SIZE: "16"
+  # 3 * 48 search sessions for each concurrently running normal/mirror orientation.
   SMPC__HAWK_REQUEST_PARALLELISM: "48"
   SMPC__HAWK_CONNECTION_PARALLELISM: "16"
-  SMPC__SEPARATE_TOKIO_CORES_PER_NODE: "11"
+  SMPC__SEPARATE_TOKIO_CORES_PER_NODE: "12"
   SMPC__FULL_SCAN_SIDE: "Left"
   SMPC__FULL_SCAN_SIDE_SWITCHING_ENABLED: "false"
   SMPC__MATCH_DISTANCES_BUFFER_SIZE_EXTRA_PERCENT: "500"
@@ -141,10 +139,10 @@ startupProbe:
 resources:
   limits:
     cpu: 92
-    memory: 700Gi
+    memory: 698Gi
   requests:
     cpu: 92
-    memory: 700Gi
+    memory: 698Gi
 
 imagePullSecrets:
   - name: github-secret
@@ -153,10 +151,17 @@ podAnnotations:
   karpenter.sh/do-not-disrupt: "true"
 
 nodeSelector:
-  kubernetes.io/arch: arm64
+  application: cpu-linear-scan
+  kubernetes.io/arch: amd64
   karpenter.sh/capacity-type: on-demand
-  node.kubernetes.io/instance-type: "r8g.24xlarge"
+  node.kubernetes.io/instance-type: "r8i.24xlarge"
   topology.k8s.aws/zone-id: "euc1-az1"
+
+tolerations:
+  - key: application
+    operator: Equal
+    value: cpu-linear-scan
+    effect: NoSchedule
 
 podSecurityContext:
   runAsUser: 65534

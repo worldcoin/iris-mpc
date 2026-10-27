@@ -10,7 +10,7 @@ use crate::hawkers::aby3::aby3_store::{
     Aby3SharedIrises, Aby3Store, DistanceMode, VectorIdRegistryRef,
 };
 use crate::hawkers::shared_irises::{SharedIrises, SharedIrisesRef};
-use crate::protocol::shared_iris::{GaloisRingSharedIris, ResidentIris, ResidentLayout};
+use crate::protocol::shared_iris::{GaloisRingSharedIris, ResidentIris, ResidentLayout, Residents};
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use async_trait::async_trait;
 use eyre::Result;
@@ -68,6 +68,7 @@ pub struct LocalWorkerPoolInitializer {
     /// keeps plain `ArcIris` values as required by the HNSW hot paths;
     /// exact-scan actors opt into `preferred_scan_layout()`.
     pub layout: ResidentLayout,
+    defer_cold_storage: bool,
 }
 
 impl LocalWorkerPoolInitializer {
@@ -77,8 +78,17 @@ impl LocalWorkerPoolInitializer {
             distance_mode,
             numa,
             mode: LocalInitMode::Empty,
+            defer_cold_storage: false,
             layout: ResidentLayout::U16,
         }
+    }
+
+    /// Keep passive preloads local. The cold-eye cache must be initialized
+    /// after reconciliation; rereading it while the active cell writes can
+    /// otherwise disagree with versions captured by the resident-eye loader.
+    pub fn defer_cold_storage(mut self) -> Self {
+        self.defer_cold_storage = true;
+        self
     }
 
     /// Choose the resident representation of the pools' iris stores.
@@ -98,6 +108,7 @@ impl LocalWorkerPoolInitializer {
             distance_mode,
             numa,
             mode: LocalInitMode::Seeded(seed_stores),
+            defer_cold_storage: false,
             layout: ResidentLayout::U16,
         }
     }
@@ -113,6 +124,7 @@ impl LocalWorkerPoolInitializer {
             distance_mode,
             numa,
             mode: LocalInitMode::LoadFromDb(params),
+            defer_cold_storage: false,
             layout: ResidentLayout::U16,
         }
     }
@@ -127,24 +139,35 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
             numa,
             mode,
             layout,
+            defer_cold_storage,
         } = *self;
+
+        // Each eye's store builds its residents in the configured layout; a
+        // grouped layout gives each eye its own arena.
+        let residents: BothEyes<Residents> =
+            [LEFT, RIGHT].map(|_| Residents::new(layout, party_id));
 
         // Materialize the iris stores. `Seeded` installs caller-provided
         // stores; the rest start blank.
         let iris_stores: BothEyes<SharedIrisesRef<ResidentIris>> = match &mode {
-            LocalInitMode::Seeded(seeds) => seeds.clone().map(|seed| {
-                seed.map_values(|iris| ResidentIris::from_arc(iris, layout))
-                    .to_arc()
-            }),
-            _ => [LEFT, RIGHT].map(|_| {
-                Aby3Store::<HawkOps>::new_storage(None)
-                    .map_values(|iris| ResidentIris::from_arc(iris, layout))
+            LocalInitMode::Seeded(seeds) => {
+                [LEFT, RIGHT].map(|side| residents[side].build_store(seeds[side].clone()).to_arc())
+            }
+            _ => [LEFT, RIGHT].map(|side| {
+                residents[side]
+                    .build_store(Aby3Store::<HawkOps>::new_storage(None))
                     .to_arc()
             }),
         };
 
-        let workers_handle: BothEyes<IrisPoolHandle> =
-            [LEFT, RIGHT].map(|side| init_workers(side, iris_stores[side].clone(), numa, layout));
+        let workers_handle: BothEyes<IrisPoolHandle> = [LEFT, RIGHT].map(|side| {
+            init_workers(
+                side,
+                iris_stores[side].clone(),
+                numa,
+                residents[side].clone(),
+            )
+        });
 
         let mut db_size: usize = 0;
         let mut cold_storage: Option<(Store, usize, usize, usize)> = None;
@@ -221,6 +244,9 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
         };
 
         let resident_side = cold_storage.as_ref().map(|(_, side, _, _)| *side);
+        if defer_cold_storage {
+            cold_storage = None;
+        }
         let mut cold_worker =
             if let Some((store, resident_side, luc_window_capacity, lfu_cache_capacity)) =
                 cold_storage
@@ -234,7 +260,7 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                     LocalIrisWorkerPool::new_cold(
                         workers_handle[cold_side].clone(),
                         iris_stores[cold_side].clone(),
-                        layout,
+                        residents[cold_side].clone(),
                         distance_mode,
                         party_id,
                         ColdStorageInit {
@@ -261,7 +287,7 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                 LocalIrisWorkerPool::new(
                     workers_handle[side].clone(),
                     iris_stores[side].clone(),
-                    layout,
+                    residents[side].clone(),
                     distance_mode,
                     party_id,
                 )
@@ -275,6 +301,9 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
         ];
 
         match resident_side {
+            Some(resident_side) if defer_cold_storage => tracing::info!(
+                resident_side, db_size, "Passive workers initialized; cold-eye initialization deferred until reconciliation"
+            ),
             Some(resident_side) => {
                 // Only the resident eye was loaded; the other registry is a
                 // copy of it, so a second checksum would not be an independent
@@ -371,8 +400,14 @@ mod tests {
                 .map_values(|iris| ResidentIris::from_arc(iris, ResidentLayout::U16))
                 .to_arc()
         });
-        let handles = [LEFT, RIGHT]
-            .map(|side| init_workers(side, stores[side].clone(), false, ResidentLayout::U16));
+        let handles = [LEFT, RIGHT].map(|side| {
+            init_workers(
+                side,
+                stores[side].clone(),
+                false,
+                Residents::new(ResidentLayout::U16, 0),
+            )
+        });
         let iris = GaloisRingSharedIris::default_for_party(0);
         let id = VectorId::from_0_index(7);
         let mut loader = FanoutLoader {

@@ -31,6 +31,7 @@ futures.workspace = true
 iris-mpc-common = { path = "../iris-mpc-common" }
 iris-mpc-store = { path = "../iris-mpc-store" }
 itertools.workspace = true
+libc = "0.2"
 num-traits.workspace = true
 rand.workspace = true
 rand_distr = "0.4.3"

@@ -26,10 +26,30 @@ pub struct Opt {
     party_id: Option<usize>,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StartupMode {
+    #[default]
+    Active,
+    Candidate,
+}
+
+fn default_candidate_status_port() -> u16 {
+    3090
+}
+
 // note that the config is loaded from environment variables which are transformed from all upper case
 // to all lower case. ex: SMPC__SCHEMA_NAME -> schema_name.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    /// Passive preloading is supported only by the CPU linear-scan service.
+    #[serde(default)]
+    pub startup_mode: StartupMode,
+
+    /// Operator status, bound to loopback only in candidate mode.
+    #[serde(default = "default_candidate_status_port")]
+    pub candidate_status_port: u16,
+
     #[serde(default = "default_schema_name")]
     pub schema_name: String,
 
@@ -42,8 +62,16 @@ pub struct Config {
     #[serde(default)]
     pub requests_queue_url: String,
 
+    /// Region of the input SQS queue. Defaults to the shared AWS region.
+    #[serde(default)]
+    pub requests_queue_region: Option<String>,
+
     #[serde(default)]
     pub results_topic_arn: String,
+
+    /// Region of the result SNS topic. Defaults to the shared AWS region.
+    #[serde(default)]
+    pub results_topic_region: Option<String>,
 
     #[serde(default)]
     pub kms_key_arns: JsonStrWrapper<Vec<String>>,
@@ -335,6 +363,18 @@ pub struct Config {
 
     #[serde(default = "default_separate_tokio_cores_per_node")]
     pub separate_tokio_cores_per_node: Option<usize>,
+
+    /// Run the tokio runtime on the second hardware thread of every physical
+    /// core and keep the first one for dot-product workers. The exact scan's
+    /// AMX kernel runs one thread per core; its tile unit is not shared well
+    /// by two scan threads, while the MPC runtime's scalar and network work
+    /// fits beside it. With `separate_tokio_cores_per_node`, only that many
+    /// siblings per NUMA node run tokio. Ignored on hosts without SMT.
+    ///
+    /// Unset (the default), the linear-scan server enables it exactly when
+    /// the AMX scan kernel is available; `true` or `false` overrides that.
+    #[serde(default)]
+    pub tokio_on_smt_siblings: Option<bool>,
 
     #[serde(default = "default_sns_retry_max_attempts")]
     pub sns_retry_max_attempts: u32,
@@ -805,11 +845,15 @@ impl From<Config> for CommonConfig {
         // This is destructured here intentionally to cause a compile error if
         // any of the fields are added to the struct without being considered if they should be in the common config hash or not.
         let Config {
+            startup_mode: _, // candidate processes never join active coordination
+            candidate_status_port: _,
             environment,
-            party_id: _,           // party id is different for each server
-            requests_queue_url: _, // requests queue url is different for each server
+            party_id: _,              // party id is different for each server
+            requests_queue_url: _,    // requests queue url is different for each server
+            requests_queue_region: _, // input transport settings are local to each server
             results_topic_arn,
-            kms_key_arns: _, // kms key arns are different for each server
+            results_topic_region: _, // result transport settings are local to each server
+            kms_key_arns: _,         // kms key arns are different for each server
             tls: _,
             service: _,
             server_coordination: _,
@@ -895,6 +939,7 @@ impl From<Config> for CommonConfig {
             pprof_profile_only: _,
             enable_pprof_per_batch: _,
             separate_tokio_cores_per_node: _,
+            tokio_on_smt_siblings: _,
             sns_retry_max_attempts: _,
             graph_checkpoint_bucket_name: _,
             graph_checkpoint_bucket_region: _,
@@ -966,6 +1011,17 @@ impl From<Config> for CommonConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn messaging_regions_are_optional_local_transport_settings() {
+        let mut config: Config = serde_json::from_str("{}").unwrap();
+        assert!(config.requests_queue_region.is_none());
+        assert!(config.results_topic_region.is_none());
+        let common = CommonConfig::from(config.clone());
+        config.requests_queue_region = Some("eu-central-1".to_owned());
+        config.results_topic_region = Some("eu-central-1".to_owned());
+        assert_eq!(CommonConfig::from(config), common);
+    }
 
     #[test]
     fn db_backed_ingest_is_part_of_common_config_equality() {

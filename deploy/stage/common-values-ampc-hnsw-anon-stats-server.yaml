@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/anon-stats-server:15ddc27bd654a81ee0517a82db1064b7fb7589eb"
+image: "ghcr.io/worldcoin/anon-stats-server:89f8ce521774ebbfb21b1deae5d2cce00c8fcb7b@sha256:1b5c93a46e33d5d6f3f97d31924a9f13f2ba9149a7d2701001c29a2849056252"
 
 environment: stage
 replicaCount: 1
@@ -26,7 +26,7 @@ env:
   SMPC__SERVER_COORDINATION__HEARTBEAT_INITIAL_RETRIES: "5"
   SMPC__SERVER_COORDINATION__HTTP_QUERY_RETRY_DELAY_MS: "5000"
   SMPC__SERVER_COORDINATION__HEARTBEAT_INTERVAL_SECS: "3"
-  SMPC__SERVER_COORDINATION__SHUTDOWN_LAST_RESULTS_SYNC_TIMEOUT_SECS: "10"
+  SMPC__SHUTDOWN_LAST_RESULTS_SYNC_TIMEOUT_SECS: "10"
   SMPC__SERVICE__METRICS__HOST:
     valueFrom:
       fieldRef:
@@ -88,7 +88,7 @@ readinessProbe:
   periodSeconds: 20
   failureThreshold: 4
   httpGet:
-    path: /health
+    path: /ready
     port: health
 
 resources:

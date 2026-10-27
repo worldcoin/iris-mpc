@@ -43,20 +43,20 @@ jobs:
 
       - name: Install Dependencies
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        run: sudo apt-get update && sudo apt install protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
-      - name: Cache Rust build
+      - name: Cache Cargo downloads
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb
         id: cache-rust
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: rust-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-downloads-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            rust-build-${{ runner.os }}-
+            cargo-downloads-v1-${{ runner.os }}-
 
       - name: Install Rust
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
@@ -97,20 +97,20 @@ jobs:
 
       - name: Install Dependencies
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
-        run: sudo apt-get update && sudo apt install protobuf-compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
 
-      - name: Cache Rust build
+      - name: Cache Cargo downloads
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         uses: actions/cache@9255dc7a253b0ccc959486e2bca901246202afeb
         id: cache-rust
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: rust-build-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-downloads-v1-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            rust-build-${{ runner.os }}-
+            cargo-downloads-v1-${{ runner.os }}-
 
       - name: Install Rust
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'

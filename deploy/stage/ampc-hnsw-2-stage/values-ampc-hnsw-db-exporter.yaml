@@ -12,8 +12,10 @@ env:
     value: eu-north-1
   - name: GIN_MODE
     value: release
+  - name: EXPORT_S3_BUCKET_REGION
+    value: eu-central-1
   - name: EXPORT_S3_BUCKET_NAME
-    value: "ampc-hnsw-db-exporter-store-node-2-stage--eun1-az3--x-s3"
+    value: "iris-ampc-db-exporter-store-node-2-stage--euc1-az1--x-s3"
   - name: NODE_ID
     value: "2"
 

@@ -1,0 +1,15 @@
+env:
+  SMPC__SERVICE__SERVICE_NAME: "cpu-cell-b-2"
+  SMPC__SERVICE__METRICS__PREFIX: "cpu-cell-b-2"
+  SMPC__SERVER_COORDINATION__NODE_HOSTNAMES: '["pod-b.0.stage.hnsw.worldcoin.dev","pod-b.1.stage.hnsw.worldcoin.dev","0.0.0.0"]'
+
+initContainer:
+  env:
+    - name: PARTY_ID
+      value: "2"
+    - name: CELL_SLOT
+      value: "b"
+    - name: POD_IP
+      valueFrom:
+        fieldRef:
+          fieldPath: status.podIP

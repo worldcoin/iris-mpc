@@ -1,3 +1,5 @@
+mod candidate;
+
 use crate::services::aws::clients::AwsClients;
 use crate::services::processors::batch::{receive_batch_stream, spawn_db_backed_ingest_task};
 use crate::services::processors::job::{process_job_result, BatchTimings};
@@ -24,7 +26,7 @@ use ampc_server_utils::{
 };
 use chrono::Utc;
 use eyre::{bail, eyre, Report, Result, WrapErr};
-use iris_mpc_common::config::{CommonConfig, Config};
+use iris_mpc_common::config::{CommonConfig, Config, StartupMode};
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
 use iris_mpc_common::helpers::sha256::sha256_bytes;
 use iris_mpc_common::helpers::smpc_request::{
@@ -81,6 +83,12 @@ pub async fn linear_scan_server_main(config: Config) -> Result<()> {
 }
 
 async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMode) -> Result<()> {
+    if config.startup_mode == StartupMode::Candidate {
+        candidate::validate_config(&config, search_mode)?;
+        let shutdown = init_shutdown_handler(&config).await;
+        return candidate::run(config, shutdown).await;
+    }
+
     tracing::info!(
         ?search_mode,
         "Starting AMPC CPU server with configuration: {:?}",
@@ -443,21 +451,10 @@ fn process_config(config: &Config, search_mode: HawkSearchMode) -> Result<()> {
         }
         _ => {}
     }
-    validate_max_batch_size(config.max_batch_size, search_mode)?;
     validate_full_scan_side_switching(config.full_scan_side_switching_enabled, search_mode)?;
     validate_persistence_enabled(config.disable_persistence, search_mode)?;
     // Load batch_size config
     tracing::info!("Set max batch size to {}", config.max_batch_size);
-    Ok(())
-}
-
-fn validate_max_batch_size(max_batch_size: usize, search_mode: HawkSearchMode) -> Result<()> {
-    if search_mode == HawkSearchMode::LinearScan && max_batch_size != 1 {
-        bail!(
-            "exact CPU linear-scan mode requires max_batch_size=1; got {max_batch_size}. \
-             Batched execution is not yet covered by end-to-end GPU-parity validation"
-        );
-    }
     Ok(())
 }
 
@@ -1058,6 +1055,11 @@ async fn run_main_server_loop(
             );
         }
 
+        // The first batch has ID 1: the initial batch sync state uses 0, which
+        // we consider to be invalid. Set it before starting the receiver, which
+        // reads it right away; otherwise parties can start on different batch
+        // IDs and time out waiting for each other.
+        current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
         let (mut batch_stream, sem) = receive_batch_stream(
             party_id,
             aws_clients.sqs_client.clone(),
@@ -1078,10 +1080,7 @@ async fn run_main_server_loop(
             batch_sync_shared_state.clone(),
         );
 
-        current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
         loop {
-            // Increment batch_id for the next batch, we start at 1, since the initial state for the batch sync is set to 0, which we consider to be invalid
-
             let now = Instant::now();
 
             let mut batch = match batch_stream.recv().await {
@@ -1295,20 +1294,6 @@ async fn run_main_server_loop(
 #[cfg(test)]
 mod config_tests {
     use super::*;
-
-    #[test]
-    fn linear_scan_requires_single_request_batches() {
-        assert!(validate_max_batch_size(1, HawkSearchMode::LinearScan).is_ok());
-
-        let error = validate_max_batch_size(2, HawkSearchMode::LinearScan)
-            .expect_err("linear scan must reject batches larger than one");
-        assert!(error.to_string().contains("requires max_batch_size=1"));
-    }
-
-    #[test]
-    fn hnsw_keeps_batched_requests() {
-        assert!(validate_max_batch_size(64, HawkSearchMode::Hnsw).is_ok());
-    }
 
     #[test]
     fn linear_scan_requires_persistence() {

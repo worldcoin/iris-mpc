@@ -172,6 +172,7 @@ pub struct AnonStatsParityBatch {
     pub eyes: [Vec<AnonStatsParityEntry>; 2],
 }
 
+pub(crate) mod amx_scan_pool;
 mod identity_update;
 pub mod insert;
 mod intra_batch;

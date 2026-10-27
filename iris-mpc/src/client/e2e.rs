@@ -300,25 +300,34 @@ impl E2EClient {
                     let mut request_id = Uuid::new_v4().to_string();
 
                     let party_shares: IrisCodePartyShares = {
-                        // Automatic random tests
-                        let responses_len = {
-                            let tmp = responses.lock().await;
-                            tmp.len()
-                        };
-                        let used_responses_indices_len = {
-                            let indices = used_response_indices.lock().await;
-                            indices.len()
-                        };
+                        // Automatic random tests. Pick a previously inserted
+                        // iris to duplicate and claim it under the same locks:
+                        // the senders of a batch run concurrently, so another
+                        // one can claim the last unused iris between a
+                        // separate check and the pick.
+                        let duplicate = {
+                            let locked_responses = responses.lock().await;
+                            let mut locked_response_indices = used_response_indices.lock().await;
+                            let unused = locked_responses
+                                .keys()
+                                .filter(|serial_id| !locked_response_indices.contains(*serial_id))
+                                .copied()
+                                .collect::<Vec<_>>();
 
-                        let options =
-                            if responses_len == 0 || used_responses_indices_len == responses_len {
-                                1
+                            let options = if unused.is_empty() { 1 } else { 2 };
+                            if rng.gen_range(0..options) == 0 {
+                                None
                             } else {
-                                2
-                            };
+                                let serial_id = unused[rng.gen_range(0..unused.len())];
+                                locked_response_indices.insert(serial_id);
+                                let duplicated_party_shares = locked_responses[&serial_id]
+                                    .create_duplicate_party_shares(request_id.clone());
+                                Some((serial_id, duplicated_party_shares))
+                            }
+                        }; // `locked_responses` and `locked_response_indices` are released here
 
-                        match rng.gen_range(0..options) {
-                            0 => {
+                        match duplicate {
+                            None => {
                                 let party_share_data = if has_file_data_loaded {
                                     let mut index = rng.gen_range(0..file_data.len());
                                     let mut used_indices_locked = used_indices.lock().await;
@@ -338,52 +347,20 @@ impl E2EClient {
                                 }
                                 party_share_data
                             }
-                            1 => {
-                                let new_request_id_for_duplicate = request_id.clone(); // Capture new request_id for clarity
-                                let original_serial_id_to_duplicate;
-                                let duplicated_party_shares;
-
-                                {
-                                    // Scope for responses and used_response_indices locks
-                                    let locked_responses = responses.lock().await;
-                                    let mut locked_response_indices =
-                                        used_response_indices.lock().await;
-
-                                    let keys_vec =
-                                        locked_responses.keys().cloned().collect::<Vec<_>>();
-                                    let mut keys_idx = rng.gen_range(0..keys_vec.len());
-                                    while locked_response_indices.contains(&keys_vec[keys_idx]) {
-                                        keys_idx = rng.gen_range(0..keys_vec.len());
-                                    }
-                                    original_serial_id_to_duplicate = keys_vec[keys_idx];
-
-                                    let original_party_shares_to_duplicate = locked_responses
-                                        .get(&original_serial_id_to_duplicate)
-                                        .unwrap();
-                                    duplicated_party_shares = original_party_shares_to_duplicate
-                                        .create_duplicate_party_shares(
-                                            new_request_id_for_duplicate.clone(),
-                                        );
-
-                                    locked_response_indices.insert(original_serial_id_to_duplicate);
-                                } // `locked_responses` and `locked_response_indices` are released here
-
+                            Some((original_serial_id_to_duplicate, duplicated_party_shares)) => {
                                 {
                                     let mut tmp = expected_results.lock().await;
                                     tmp.insert(
-                                        new_request_id_for_duplicate.to_string(),
+                                        request_id.clone(),
                                         Some(original_serial_id_to_duplicate),
                                     );
                                 }
                                 println!(
                                     "Sending freshly inserted iris code for request id {} - this is a duplicate of data originally from serial id {:?}",
-                                    new_request_id_for_duplicate, Some(original_serial_id_to_duplicate)
+                                    request_id, Some(original_serial_id_to_duplicate)
                                 );
-                                // The party_shares variable for the outer scope should be the duplicated_party_shares
-                                request_id = new_request_id_for_duplicate; // Ensure outer request_id is the new one
-                                duplicated_party_shares // This becomes the party_shares for the current iteration
+                                duplicated_party_shares
                             }
-                            _ => unreachable!(),
                         }
                     };
 
