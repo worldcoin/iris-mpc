@@ -29,6 +29,17 @@ pub struct Report {
     pub last_publication: Option<Publication>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Phase {
+    Active,
+    Freezing,
+    Draining,
+    Quiescent,
+    Paused,
+    Failed,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Status {
@@ -37,7 +48,7 @@ pub struct Status {
     pub requested: bool,
     pub offered_through: u64,
     pub cut: Option<u64>,
-    pub phase: String,
+    pub phase: Phase,
     pub report: Option<Report>,
     pub error: Option<String>,
     pub blocked_reason: Option<String>,
@@ -57,13 +68,6 @@ async fn read_status(mut response: reqwest::Response) -> Result<Status> {
     eyre::ensure!(
         uuid::Uuid::parse_str(&status.process_uuid).is_ok() && status.party_id < 3,
         "invalid drain identity"
-    );
-    eyre::ensure!(
-        matches!(
-            status.phase.as_str(),
-            "active" | "freezing" | "draining" | "quiescent" | "paused" | "failed"
-        ),
-        "invalid drain phase"
     );
     if let Some(report) = &status.report {
         let valid_sha =
@@ -118,7 +122,7 @@ impl Drain {
                     requested: false,
                     offered_through: 0,
                     cut: None,
-                    phase: "active".into(),
+                    phase: Phase::Active,
                     report: None,
                     error: None,
                     blocked_reason: if supported {
@@ -163,13 +167,13 @@ impl Drain {
         inner.status.requested = true;
         inner.deadline = Some(Instant::now() + self.timeout);
         if inner.status.error.is_none() {
-            inner.status.phase = "freezing".into();
+            inner.status.phase = Phase::Freezing;
         }
         if let Some(ready) = &*self.ready.lock().unwrap() {
             ready.store(false, Ordering::SeqCst);
         }
         if let Some(reason) = &inner.status.blocked_reason.clone() {
-            inner.status.phase = "failed".into();
+            inner.status.phase = Phase::Failed;
             inner.status.error = Some(reason.clone());
         }
         metrics::counter!("cpu_cell_drain_transitions", "state" => "requested").increment(1);
@@ -219,7 +223,7 @@ impl Drain {
             ready.store(false, Ordering::SeqCst);
         }
         if inner.status.error.is_none() {
-            inner.status.phase = "failed".into();
+            inner.status.phase = Phase::Failed;
             inner.status.error = Some(operation.into());
             metrics::counter!("cpu_cell_drain_transitions", "state" => "failed").increment(1);
             tracing::error!(
@@ -326,7 +330,7 @@ impl Drain {
         let mut inner = self.inner.lock().unwrap();
         if inner.status.error.is_none() {
             inner.status.report = Some(report);
-            inner.status.phase = "quiescent".into();
+            inner.status.phase = Phase::Quiescent;
             metrics::counter!("cpu_cell_drain_transitions", "state" => "quiescent").increment(1);
             tracing::info!(
                 party_id = inner.status.party_id,
@@ -349,7 +353,7 @@ impl Drain {
             .build()?;
         let mut last_peer_failure: Option<String> = None;
         loop {
-            tokio::time::sleep(if self.status().phase == "paused" {
+            tokio::time::sleep(if self.status().phase == Phase::Paused {
                 Duration::from_secs(10)
             } else {
                 Duration::from_millis(500)
@@ -473,7 +477,7 @@ impl Drain {
                 }
                 if inner.status.cut.is_none() {
                     inner.status.cut = Some(cut);
-                    inner.status.phase = "draining".into();
+                    inner.status.phase = Phase::Draining;
                 } else if inner.status.cut != Some(cut) {
                     drop(inner);
                     self.fail("frozen drain admission cut changed");
@@ -484,7 +488,7 @@ impl Drain {
             if statuses.iter().all(|status| status.report.is_some()) {
                 if statuses.iter().any(|status| {
                     status.cut != Some(cut)
-                        || !matches!(status.phase.as_str(), "quiescent" | "paused")
+                        || !matches!(status.phase, Phase::Quiescent | Phase::Paused)
                 }) {
                     self.fail("peer report was produced outside the frozen quiescent cut");
                     continue;
@@ -524,7 +528,7 @@ impl Drain {
                     self.fail("drain deadline exceeded before final agreement");
                     continue;
                 }
-                if inner.status.phase != "paused" {
+                if inner.status.phase != Phase::Paused {
                     metrics::counter!("cpu_cell_drain_transitions", "state" => "paused")
                         .increment(1);
                     tracing::info!(
@@ -533,7 +537,7 @@ impl Drain {
                         "CPU cell drain agreed; process remains paused"
                     );
                 }
-                inner.status.phase = "paused".into();
+                inner.status.phase = Phase::Paused;
                 inner.deadline = None;
             }
         }
@@ -543,6 +547,32 @@ impl Drain {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_preserves_phase_wire_values_and_rejects_unknown_phases() {
+        let drain = Drain::new(0, Duration::from_secs(1), true);
+        let mut status = drain.status();
+        for (phase, wire_value) in [
+            (Phase::Active, "active"),
+            (Phase::Freezing, "freezing"),
+            (Phase::Draining, "draining"),
+            (Phase::Quiescent, "quiescent"),
+            (Phase::Paused, "paused"),
+            (Phase::Failed, "failed"),
+        ] {
+            status.phase = phase;
+            let value = serde_json::to_value(&status).unwrap();
+            assert_eq!(value["phase"], wire_value);
+            assert_eq!(
+                serde_json::from_value::<Status>(value).unwrap().phase,
+                phase
+            );
+        }
+        let mut value = serde_json::to_value(status).unwrap();
+        value["phase"] = serde_json::json!("unknown");
+        assert!(serde_json::from_value::<Status>(value).is_err());
+    }
+
     #[tokio::test]
     async fn freeze_rejects_new_offers_and_waits_for_the_frozen_cut() {
         let drain = Drain::new(0, Duration::from_secs(1), true);
@@ -582,7 +612,7 @@ mod tests {
             last_publication: None,
         });
         assert!(drain.status().report.is_none());
-        assert_eq!(drain.status().phase, "failed");
+        assert_eq!(drain.status().phase, Phase::Failed);
     }
     async fn cohort(timeout: Duration) -> (Vec<Arc<Drain>>, Vec<tokio::task::JoinHandle<()>>) {
         let drains: Vec<_> = (0..3)
@@ -662,7 +692,12 @@ mod tests {
             });
             assert!(!drain.ready_to_report());
         }
-        until(|| drains.iter().all(|drain| drain.status().phase == "paused")).await;
+        until(|| {
+            drains
+                .iter()
+                .all(|drain| drain.status().phase == Phase::Paused)
+        })
+        .await;
         for task in tasks {
             task.abort();
         }
@@ -680,7 +715,12 @@ mod tests {
         for drain in &drains {
             drain.publish_report(proof("100", 4));
         }
-        until(|| drains.iter().all(|drain| drain.status().phase == "paused")).await;
+        until(|| {
+            drains
+                .iter()
+                .all(|drain| drain.status().phase == Phase::Paused)
+        })
+        .await;
         for task in tasks {
             task.abort();
         }
@@ -697,7 +737,9 @@ mod tests {
         drains[1].publish_report(proof("100", 1));
         drains[2].publish_report(proof("100", 1));
         until(|| drains.iter().all(|drain| drain.failed())).await;
-        assert!(drains.iter().all(|drain| drain.status().phase == "failed"));
+        assert!(drains
+            .iter()
+            .all(|drain| drain.status().phase == Phase::Failed));
         for task in tasks {
             task.abort();
         }
@@ -741,7 +783,9 @@ mod tests {
                 drains[2].publish_report(proof("100", 4));
             }
             until(|| drains.iter().all(|drain| drain.failed())).await;
-            assert!(drains.iter().all(|drain| drain.status().phase == "failed"));
+            assert!(drains
+                .iter()
+                .all(|drain| drain.status().phase == Phase::Failed));
             for task in tasks {
                 task.abort();
             }
@@ -757,7 +801,7 @@ mod tests {
         drain.mark_ready();
         assert!(!ready.load(Ordering::SeqCst));
         assert!(drain.requested());
-        assert_eq!(drain.status().phase, "failed");
+        assert_eq!(drain.status().phase, Phase::Failed);
         assert!(!drain.publish_offer(1, 1, || panic!("failure admitted work")));
     }
     #[test]
@@ -766,7 +810,7 @@ mod tests {
         drain.result_started();
         drain.result_send_failed();
         assert!(!drain.requested());
-        assert_eq!(drain.status().phase, "active");
+        assert_eq!(drain.status().phase, Phase::Active);
         drain.request();
         assert!(drain.failed());
     }
@@ -784,7 +828,7 @@ mod tests {
         drain.mark_ready();
         assert!(drain.failed());
         assert!(drain.status().report.is_none());
-        assert_eq!(drain.status().phase, "failed");
+        assert_eq!(drain.status().phase, Phase::Failed);
     }
     #[test]
     fn eligibility_failure_after_request_blocks_a_late_report() {
@@ -792,7 +836,7 @@ mod tests {
         drain.request();
         drain.block("startup publication was unresolved");
         drain.publish_report(proof("100", 1));
-        assert_eq!(drain.status().phase, "failed");
+        assert_eq!(drain.status().phase, Phase::Failed);
         assert_eq!(
             drain.status().error.as_deref(),
             Some("startup publication was unresolved")
@@ -811,7 +855,7 @@ mod tests {
         assert!(!drain.requested());
         drain.request();
         assert!(drain.failed());
-        assert_eq!(drain.status().phase, "failed");
+        assert_eq!(drain.status().phase, Phase::Failed);
         assert!(drain.status().report.is_none());
         task.abort();
     }
