@@ -68,7 +68,7 @@ ampc-server-utils.workspace = true
 ampc-anon-stats.workspace = true
 nix.workspace = true
 core_affinity.workspace = true
-zstd = { version = "0.13", optional = true }
+zstd = { version = "0.14.3", optional = true }
 
 [dev-dependencies]
 float_eq = "1"
