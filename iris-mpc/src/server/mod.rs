@@ -1,4 +1,5 @@
 mod candidate;
+pub mod drain;
 
 use crate::services::aws::clients::AwsClients;
 use crate::services::processors::batch::{receive_batch_stream, spawn_db_backed_ingest_task};
@@ -159,15 +160,31 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
         server_coord_config.healthcheck_ports
     );
 
+    let drain = if search_mode == HawkSearchMode::LinearScan {
+        if config.cpu_drain_timeout_secs == 0 {
+            bail!("cpu_drain_timeout_secs must be positive");
+        }
+        let drain = drain::Drain::new(
+            config.party_id,
+            Duration::from_secs(config.cpu_drain_timeout_secs),
+            config.db_backed_ingest,
+        );
+        Some(drain)
+    } else {
+        None
+    };
     let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server_with_extra_routes(
         &server_coord_config,
         &mut background_tasks,
         &shutdown_handler,
         &my_state,
         Some(batch_sync_shared_state.clone()),
-        None,
+        drain.as_ref().map(|drain| drain.routes()),
     )
     .await;
+    if let Some(drain) = &drain {
+        drain.initialize(my_uuid.clone(), is_ready_flag.clone());
+    }
     tracing::info!("Coordination server started");
 
     // Startup barriers: un-ready sync + full mutual peer visibility
@@ -206,6 +223,9 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
         .await
         {
             tracing::error!("Failed to replay last modifications: {:?}", e);
+            if let Some(drain) = &drain {
+                drain.block("startup SNS replay failed earlier in this process");
+            }
         }
     }
 
@@ -321,6 +341,7 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
         &mut background_tasks,
         &shutdown_handler,
         sns_attributes_maps,
+        drain.clone(),
     )
     .await?;
 
@@ -334,7 +355,18 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
     .await?;
     background_tasks.check_tasks();
 
-    set_node_ready(is_ready_flag);
+    if let Some(drain) = &drain {
+        let mut cohort = verified_peers.clone();
+        cohort.insert(my_uuid.clone());
+        let drain = drain.clone();
+        let config = server_coord_config.clone();
+        background_tasks.spawn(async move { drain.coordinate(config, cohort).await });
+    }
+    if let Some(drain) = &drain {
+        drain.mark_ready();
+    } else {
+        set_node_ready(is_ready_flag);
+    }
     wait_for_others_ready(&server_coord_config, verified_peers).await?;
 
     background_tasks.check_tasks();
@@ -358,6 +390,7 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
             tx_results,
             current_batch_id_atomic.clone(),
             batch_sync_shared_state,
+            drain,
         )
         .await;
         main_finished.cancel();
@@ -954,6 +987,7 @@ async fn start_results_thread(
     task_monitor: &mut TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
     sns_attributes_maps: SnsAttributesMaps,
+    drain: Option<Arc<drain::Drain>>,
 ) -> Result<Sender<(BatchTimings, ServerJobResult)>> {
     let (tx, mut rx) = mpsc::channel::<(BatchTimings, ServerJobResult)>(32); // TODO: pick some buffer value
     let sns_client_bg = aws_clients.sns_client.clone();
@@ -968,6 +1002,10 @@ async fn start_results_thread(
     let party_id = config.party_id;
     let _result_sender_abort = task_monitor.spawn(async move {
         while let Some((batch_timings, job_result)) = rx.recv().await {
+            let publication = drain::Publication {
+                batch_id: batch_timings.batch_id,
+                batch_sha256: batch_timings.batch_hash.clone(),
+            };
             if let Err(e) = process_job_result(
                 job_result,
                 batch_timings,
@@ -989,8 +1027,18 @@ async fn start_results_thread(
             )
             .await
             {
-                tracing::error!("Error processing job result: {:?}. Exiting...", e);
+                tracing::error!("Error processing job result: {:?}", e);
+                if let Some(drain) = &drain {
+                    if drain.requested() {
+                        drain.fail("result persistence or SNS publication failed");
+                        drain.request();
+                        std::future::pending::<()>().await;
+                    }
+                }
                 exit(1);
+            }
+            if let Some(drain) = &drain {
+                drain.result_sent(publication);
             }
         }
 
@@ -1018,6 +1066,7 @@ async fn run_main_server_loop(
     tx_results: Sender<(BatchTimings, ServerJobResult)>,
     current_batch_id_atomic: Arc<AtomicU64>,
     batch_sync_shared_state: Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
+    drain: Option<Arc<drain::Drain>>,
 ) -> Result<()> {
     // --------------------------------------------------------------------------
     // ANCHOR: Start the main loop
@@ -1052,6 +1101,7 @@ async fn run_main_server_loop(
                 config.clone(),
                 iris_store.clone(),
                 shutdown_handler.clone(),
+                drain.clone(),
             );
         }
 
@@ -1078,6 +1128,7 @@ async fn run_main_server_loop(
             current_batch_id_atomic.clone(),
             iris_store.clone(),
             batch_sync_shared_state.clone(),
+            drain.clone(),
         );
 
         loop {
@@ -1175,6 +1226,7 @@ async fn run_main_server_loop(
 
             // we are done with the batch sync, so we can release the semaphore permit
             // This will allow the next batch to be received
+            let processing_batch_id = current_batch_id_atomic.load(Ordering::SeqCst);
             current_batch_id_atomic.fetch_add(1, Ordering::SeqCst);
             sem.add_permits(1);
 
@@ -1196,12 +1248,18 @@ async fn run_main_server_loop(
                 .await
                 .map_err(|e| eyre!("HawkActor processing timeout: {:?}", e))??;
             let batch_timings = BatchTimings {
-                batch_id: current_batch_id_atomic.load(Ordering::SeqCst),
-                batch_hash: hex::encode(&batch_hash[0..4]),
+                batch_id: processing_batch_id,
+                batch_hash: hex::encode(batch_hash),
                 receive_ms: batch_wait.as_millis(),
                 compute_ms: pprof_start.elapsed().as_millis(),
             };
-            tx_results.send((batch_timings, result)).await?;
+            shutdown_handler.increment_batches_pending_completion();
+            if let Some(drain) = &drain { drain.result_started(); }
+            if let Err(error) = tx_results.send((batch_timings, result)).await {
+                shutdown_handler.decrement_batches_pending_completion();
+                if let Some(drain) = &drain { drain.result_send_failed(); }
+                return Err(error.into());
+            }
 
             // If enabled, stop pprof and upload artifacts tagged with batch info
             if let Some(guard) = pprof_guard.take() {
@@ -1260,12 +1318,54 @@ async fn run_main_server_loop(
                 }
             }
 
-            shutdown_handler.increment_batches_pending_completion()
             // wrap up tracing span context
         }
     }
     .await;
 
+    if let Some(drain) = &drain {
+        if let Err(error) = &res {
+            if drain.requested() {
+                tracing::error!(?error, "CPU cell processing failed");
+                drain.fail("batch receive or processing failed");
+                drain.request();
+            }
+        }
+        if drain.requested() {
+            while !shutdown_handler.is_shutting_down() {
+                task_monitor.check_tasks();
+                if drain.ready_to_report() {
+                    let proof = tokio::time::timeout(drain.remaining_budget(), async {
+                        iris_store.reset_unpersisted_ingested_claims().await?;
+                        let watermark = iris_store.max_persisted_sequence_number().await?;
+                        let (persisted_count, persisted_sha256) = iris_store
+                            .prove_persisted_prefix(watermark.as_deref())
+                            .await?;
+                        Ok::<_, Report>(drain::Report {
+                            watermark,
+                            persisted_count,
+                            persisted_sha256,
+                            last_publication: drain.last_publication(),
+                        })
+                    })
+                    .await
+                    .map_err(|error| {
+                        eyre!("drain persisted-prefix proof deadline exceeded: {error}")
+                    })
+                    .and_then(|result| result);
+                    match proof {
+                        Ok(report) => drain.publish_report(report),
+                        Err(error) => {
+                            tracing::error!(?error, "Cannot establish drain persisted prefix");
+                            drain.fail("cannot establish a contiguous persisted prefix");
+                        }
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            return Ok(());
+        }
+    }
     match res {
         Ok(_) => {
             tracing::info!(

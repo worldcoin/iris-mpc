@@ -1146,6 +1146,7 @@ async fn server_main(config: Config) -> Result<()> {
                 config.clone(),
                 store.clone(),
                 shutdown_handler.clone(),
+                None,
             );
         }
 
@@ -1175,6 +1176,7 @@ async fn server_main(config: Config) -> Result<()> {
             current_batch_id_atomic.clone(),
             store.clone(),
             batch_sync_shared_state.clone(),
+            None,
         );
 
         loop {
