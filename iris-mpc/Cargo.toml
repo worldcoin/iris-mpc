@@ -19,6 +19,7 @@ tokio-util.workspace = true
 tracing.workspace = true
 serde_json.workspace = true
 eyre.workspace = true
+futures.workspace = true
 clap.workspace = true
 bytemuck.workspace = true
 hkdf.workspace = true
@@ -45,7 +46,6 @@ ampc-server-utils.workspace = true
 [dev-dependencies]
 ampc-actor-utils.workspace = true
 blake3.workspace = true
-futures.workspace = true
 serial_test.workspace = true
 tracing-subscriber.workspace = true
 iris-mpc-utils = { path = "../iris-mpc-utils" }

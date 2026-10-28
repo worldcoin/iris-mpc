@@ -265,6 +265,13 @@ impl Store {
         .fetch(&self.pool)
     }
 
+    /// Stream every canonical ID/version pair, including IDs added after preload.
+    /// Ordered and metadata-only; consumers validate the ID/version domain.
+    pub fn stream_all_iris_ids(&self) -> impl Stream<Item = sqlx::Result<(i64, i16)>> + '_ {
+        sqlx::query_as::<_, (i64, i16)>("SELECT id, version_id FROM irises ORDER BY id ASC")
+            .fetch(&self.pool)
+    }
+
     pub async fn get_iris_data_by_id(&self, id: i64) -> Result<DbStoredIris> {
         let iris = sqlx::query_as::<_, DbStoredIris>(
             r#"
