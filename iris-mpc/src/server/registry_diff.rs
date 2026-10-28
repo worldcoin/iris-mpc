@@ -73,7 +73,7 @@ impl CandidateRegistry {
         deadline: Instant,
     ) -> Result<RegistryDiff<'a>> {
         self.scan(
-            store.stream_all_iris_ids().boxed(),
+            store.stream_all_iris_ids(deadline).boxed(),
             attempt_id,
             watermark,
             deadline,
@@ -133,7 +133,8 @@ impl CandidateRegistry {
 /// partial output; it must not establish reconciliation readiness. Candidate
 /// mutations already applied require a new scan before readiness can be proved.
 /// Registry locks are held only during `next`, so returned changes can be applied
-/// without buffering the complete diff. Exhaustion/failure releases the DB cursor.
+/// without buffering the complete diff. Exhaustion/failure/drop closes the scan's
+/// connection; a server statement timeout bounds outstanding query cleanup.
 #[must_use]
 pub struct RegistryDiff<'a> {
     context: DiffContext,
@@ -640,6 +641,140 @@ mod tests {
         scan.deadline = Instant::now();
         assert!(scan.next().await.is_err());
         assert!(!scan.completed());
+        Ok(())
+    }
+
+    #[cfg(feature = "db_dependent")]
+    async fn wait_for_backend_exit(pool: &sqlx::PgPool, backend_pid: i32) -> Result<()> {
+        timeout_at(Instant::now() + Duration::from_secs(2), async {
+            loop {
+                let present: bool = sqlx::query_scalar(
+                    "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = $1)",
+                )
+                .bind(backend_pid)
+                .fetch_one(pool)
+                .await?;
+                if !present {
+                    return Ok::<_, sqlx::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .wrap_err("scan backend remained alive after cleanup deadline")??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "db_dependent")]
+    async fn postgres_diff_deadline_releases_backend_and_pool_while_locked() -> Result<()> {
+        use iris_mpc_common::postgres::{AccessMode, PostgresClient};
+        use sqlx::postgres::PgPoolOptions;
+
+        let url = iris_mpc_store::test_utils::test_db_url()?;
+        let schema = iris_mpc_store::test_utils::temporary_name();
+        let admin = PostgresClient::new(&url, &schema, AccessMode::ReadWrite).await?;
+        sqlx::query("CREATE TABLE irises (id bigint PRIMARY KEY, version_id smallint NOT NULL)")
+            .execute(&admin.pool)
+            .await?;
+        sqlx::query("INSERT INTO irises VALUES (1, 0), (2, 0)")
+            .execute(&admin.pool)
+            .await?;
+        // A shorter server policy must remain effective, and neither policy may
+        // leave a blocked SELECT occupying the only connection after failure.
+        for initial_timeout_ms in [0_i64, 25] {
+            let search_path = format!("\"{schema}\"");
+            let pool = PgPoolOptions::new()
+                .max_connections(1)
+                .after_connect(move |connection, _| {
+                    let search_path = search_path.clone();
+                    Box::pin(async move {
+                        sqlx::query("SELECT set_config('search_path', $1, false), set_config('statement_timeout', $2, false)")
+                            .bind(search_path)
+                            .bind(initial_timeout_ms.to_string())
+                            .execute(connection)
+                            .await?;
+                        Ok(())
+                    })
+                })
+                .connect(&url)
+                .await?;
+            let backend_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+                .fetch_one(&pool)
+                .await?;
+            let store = Store::new(&PostgresClient {
+                pool: pool.clone(),
+                schema_name: schema.clone(),
+            })
+            .await?;
+            let mut blocker = admin.pool.begin().await?;
+            sqlx::query("LOCK TABLE irises IN ACCESS EXCLUSIVE MODE")
+                .execute(&mut *blocker)
+                .await?;
+            let result: Result<()> = async {
+                let mut candidate = candidate(&[]);
+                let budget = if initial_timeout_ms == 0 { 100 } else { 500 };
+                let mut scan = candidate
+                    .differences(
+                        &store,
+                        Uuid::new_v4(),
+                        None,
+                        Instant::now() + Duration::from_millis(budget),
+                    )
+                    .await?;
+                let error = scan.next().await.expect_err("locked query must fail");
+                ensure!(!scan.completed(), "failed scan must not be complete");
+                if initial_timeout_ms != 0 {
+                    let database_error = error
+                        .downcast_ref::<sqlx::Error>()
+                        .and_then(sqlx::Error::as_database_error);
+                    ensure!(
+                        database_error.and_then(|error| error.code()).as_deref() == Some("57014"),
+                        "the shorter server timeout must cancel the statement: {error:?}"
+                    );
+                }
+                wait_for_backend_exit(&admin.pool, backend_pid).await?;
+                let restored_timeout: i64 = timeout_at(
+                    Instant::now() + Duration::from_secs(2),
+                    sqlx::query_scalar(
+                        "SELECT setting::bigint FROM pg_settings WHERE name = 'statement_timeout'",
+                    )
+                    .fetch_one(&pool),
+                )
+                .await
+                .wrap_err("scan kept the only pool slot occupied")??;
+                ensure!(
+                    restored_timeout == initial_timeout_ms,
+                    "scan timeout leaked to a later pool borrower"
+                );
+                Ok(())
+            }
+            .await;
+            blocker.rollback().await?;
+            result?;
+
+            // Cancellation between rows and successful exhaustion must release
+            // the same lease, even when no deadline has expired.
+            for exhaust in [false, true] {
+                let backend_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+                    .fetch_one(&pool)
+                    .await?;
+                let mut candidate = candidate(&[]);
+                let mut scan = candidate
+                    .differences(&store, Uuid::new_v4(), None, deadline())
+                    .await?;
+                ensure!(scan.next().await?.is_some(), "expected the first row");
+                if exhaust {
+                    collect(&mut scan).await?;
+                } else {
+                    ensure!(!scan.completed(), "partial scan cannot be complete");
+                }
+                drop(scan);
+                wait_for_backend_exit(&admin.pool, backend_pid).await?;
+            }
+            pool.close().await;
+        }
+        iris_mpc_store::test_utils::cleanup(&admin, &schema).await?;
         Ok(())
     }
 

@@ -267,9 +267,37 @@ impl Store {
 
     /// Stream every canonical ID/version pair, including IDs added after preload.
     /// Ordered and metadata-only; consumers validate the ID/version domain.
-    pub fn stream_all_iris_ids(&self) -> impl Stream<Item = sqlx::Result<(i64, i16)>> + '_ {
-        sqlx::query_as::<_, (i64, i16)>("SELECT id, version_id FROM irises ORDER BY id ASC")
-            .fetch(&self.pool)
+    /// The caller must enforce `deadline` while polling. The leased connection
+    /// closes on exhaustion/error/drop, avoiding pool cleanup draining a canceled
+    /// query. A server timeout also bounds queries blocked before socket closure
+    /// is noticed, while preserving any shorter configured statement timeout.
+    pub fn stream_all_iris_ids(
+        &self,
+        deadline: tokio::time::Instant,
+    ) -> impl Stream<Item = sqlx::Result<(i64, i16)>> + '_ {
+        async_stream::try_stream! {
+            let mut connection = self.pool.acquire().await?;
+            connection.close_on_drop();
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            // PostgreSQL interprets zero as unlimited and accepts at most i32::MAX ms.
+            let timeout_ms = remaining.as_nanos().div_ceil(1_000_000)
+                .clamp(1, i32::MAX as u128) as i64;
+            sqlx::query(
+                "SELECT set_config('statement_timeout', \
+                 LEAST(NULLIF(setting::bigint, 0), $1)::text, false) \
+                 FROM pg_settings WHERE name = 'statement_timeout'",
+            )
+            .bind(timeout_ms)
+            .execute(&mut *connection)
+            .await?;
+            let mut rows = sqlx::query_as::<_, (i64, i16)>(
+                "SELECT id, version_id FROM irises ORDER BY id ASC",
+            )
+            .fetch(&mut *connection);
+            while let Some(row) = rows.try_next().await? {
+                yield row;
+            }
+        }
     }
 
     pub async fn get_iris_data_by_id(&self, id: i64) -> Result<DbStoredIris> {
