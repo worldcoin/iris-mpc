@@ -1339,7 +1339,7 @@ async fn run_main_server_loop(
                         iris_store.reset_unpersisted_ingested_claims().await?;
                         let watermark = iris_store.max_persisted_sequence_number().await?;
                         let (persisted_count, persisted_sha256) = iris_store
-                            .drain_persisted_prefix(watermark.as_deref())
+                            .prove_persisted_prefix(watermark.as_deref())
                             .await?;
                         Ok::<_, Report>(drain::Report {
                             watermark,

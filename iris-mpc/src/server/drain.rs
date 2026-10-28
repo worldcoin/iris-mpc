@@ -235,8 +235,9 @@ impl Drain {
         self.changed.notify_waiters();
     }
 
-    /// Publish a positive offer while holding the same mutex used by `request`.
-    /// An offer cannot be retracted: a peer may already have admitted that batch.
+    /// Update the existing batch-sync advertisement under the `request` mutex.
+    /// A positive message count is an offer; record its batch ID before freezing.
+    /// It cannot be retracted: a peer may already have admitted that batch.
     pub fn publish_offer(&self, batch_id: u64, messages: u32, publish: impl FnOnce()) -> bool {
         let mut inner = self.inner.lock().unwrap();
         if inner.status.requested {

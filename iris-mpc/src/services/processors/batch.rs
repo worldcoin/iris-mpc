@@ -1954,6 +1954,223 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "db_dependent")]
+    async fn drain_receiver_finishes_common_batch_and_excludes_prefetch() -> eyre::Result<()> {
+        use super::*;
+        use ampc_server_utils::{batch_sync::batch_sync_routes, config::ServerCoordinationConfig};
+        use axum::{
+            extract::Request,
+            middleware::{from_fn, Next},
+        };
+        use base64::Engine;
+        use iris_mpc_common::postgres::{run_migrations, AccessMode, PostgresClient};
+        use std::collections::HashSet;
+        use std::sync::atomic::{AtomicBool, AtomicUsize};
+
+        let mut databases = Vec::new();
+        let mut stores = Vec::new();
+        let mut schemas = Vec::new();
+        for _ in 0..3 {
+            let schema = iris_mpc_store::test_utils::temporary_name();
+            let db = PostgresClient::new(
+                &iris_mpc_store::test_utils::test_db_url()?,
+                &schema,
+                AccessMode::ReadWrite,
+            )
+            .await?;
+            run_migrations(&db.pool, false).await?;
+            let store = Store::new(&db).await?;
+            for sequence in [100, 200] {
+                let body = serde_json::json!({
+                    "Type": "Notification", "MessageId": format!("delete-{sequence}"),
+                    "SequenceNumber": sequence.to_string(), "TopicArn": "test",
+                    "Message": serde_json::json!({"serial_id": sequence}).to_string(),
+                    "Timestamp": "test", "UnsubscribeURL": "test",
+                    "MessageAttributes": {"message_type": {"Type": "String", "Value": IDENTITY_DELETION_MESSAGE_TYPE}}
+                }).to_string();
+                store
+                    .insert_ingested_request(&sequence.to_string(), &body, true)
+                    .await?;
+            }
+            schemas.push(schema);
+            databases.push(db);
+            stores.push(store);
+        }
+
+        let drains: Vec<_> = (0..3)
+            .map(|party| {
+                let drain = Drain::new(party, Duration::from_secs(15), true);
+                drain.initialize(
+                    uuid::Uuid::new_v4().to_string(),
+                    Arc::new(AtomicBool::new(true)),
+                );
+                drain.ingest_stopped();
+                drain
+            })
+            .collect();
+        let states: Vec<_> = (0..3)
+            .map(|_| Arc::new(tokio::sync::Mutex::new(BatchSyncSharedState::default())))
+            .collect();
+        let delayed_responses = Arc::new(AtomicUsize::new(0));
+        let prefetch_requests = Arc::new(AtomicUsize::new(0));
+        let release_responses = Arc::new(Semaphore::new(0));
+        let mut tasks = Vec::new();
+        let mut ports = Vec::new();
+        for party in 0..3 {
+            let routes = batch_sync_routes(states[party].clone());
+            // Hold already-read batch 1 responses in transit so the other
+            // receivers lag while party 0 starts prefetching batch 2.
+            let delayed = delayed_responses.clone();
+            let prefetch = prefetch_requests.clone();
+            let release = release_responses.clone();
+            let routes = routes.layer(from_fn(move |request: Request, next: Next| {
+                let delayed = delayed.clone();
+                let prefetch = prefetch.clone();
+                let release = release.clone();
+                async move {
+                    let batch_one = party == 0
+                        && request.uri().path() == "/batch-sync-state"
+                        && request.uri().query() == Some("batch_id=1");
+                    if party == 1
+                        && request.uri().path() == "/batch-sync-state"
+                        && request.uri().query() == Some("batch_id=2")
+                    {
+                        prefetch.fetch_add(1, Ordering::SeqCst);
+                    }
+                    let response = next.run(request).await;
+                    if batch_one && response.status().is_success() {
+                        delayed.fetch_add(1, Ordering::SeqCst);
+                        release.acquire().await.unwrap().forget();
+                    }
+                    response
+                }
+            }));
+            let routes = routes.merge(drains[party].routes());
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            ports.push(listener.local_addr()?.port().to_string());
+            tasks.push(tokio::spawn(async move {
+                axum::serve(listener, routes).await.unwrap();
+            }));
+        }
+
+        let sdk = aws_config::SdkConfig::builder()
+            .behavior_version(aws_config::BehaviorVersion::latest())
+            .region(aws_sdk_sqs::config::Region::new("us-east-1"))
+            .credentials_provider(aws_sdk_sqs::config::SharedCredentialsProvider::new(
+                aws_sdk_sqs::config::Credentials::new("test", "test", None, None, "test"),
+            ))
+            .endpoint_url("http://127.0.0.1:1")
+            .build();
+        let keys = Arc::new(SharesEncryptionKeyPairs::from_b64_private_key_strings(
+            base64::engine::general_purpose::STANDARD.encode([0u8; 32]),
+            String::new(),
+        )?);
+        let uuids: HashSet<_> = drains
+            .iter()
+            .map(|drain| drain.status().process_uuid)
+            .collect();
+        let batch_ids: Vec<_> = (0..3).map(|_| Arc::new(AtomicU64::new(1))).collect();
+        let mut receivers = Vec::new();
+        let mut permits = Vec::new();
+        for party in 0..3 {
+            let mut coordination: ServerCoordinationConfig =
+                serde_json::from_value(serde_json::json!({}))?;
+            coordination.party_id = party;
+            coordination.node_hostnames = vec!["127.0.0.1".into(); 3];
+            coordination.healthcheck_ports = ports.clone();
+            let mut config: Config = serde_json::from_value(serde_json::json!({}))?;
+            config.party_id = party;
+            config.db_backed_ingest = true;
+            config.enable_deletion = true;
+            config.max_batch_size = 1;
+            config.batch_sync_polling_timeout_secs = 10;
+            config.server_coordination = Some(coordination.clone());
+            let drain = drains[party].clone();
+            let uuids = uuids.clone();
+            tasks.push(tokio::spawn(async move {
+                drain.coordinate(coordination, uuids).await.unwrap();
+            }));
+            let (receiver, permit) = receive_batch_stream(
+                party,
+                Client::new(&sdk),
+                SNSClient::new(&sdk),
+                S3Client::new(&sdk),
+                config,
+                keys.clone(),
+                Arc::new(ShutdownHandler::new(5)),
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+                batch_ids[party].clone(),
+                stores[party].clone(),
+                states[party].clone(),
+                Some(drains[party].clone()),
+            );
+            receivers.push(receiver);
+            permits.push(permit);
+        }
+
+        let result = tokio::time::timeout(Duration::from_secs(10), async {
+            let first = receivers[0].recv().await.unwrap()?.unwrap();
+            assert_eq!(first.sqs_sequence_numbers, vec![normalize_sns_sequence_number("100")?]);
+            assert_eq!(first.deletion_requests_indices, vec![99]);
+            while delayed_responses.load(Ordering::SeqCst) < 2 {
+                tokio::task::yield_now().await;
+            }
+            batch_ids[0].store(2, Ordering::SeqCst);
+            permits[0].add_permits(1);
+            while prefetch_requests.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+            assert_eq!(drains.iter().map(|drain| drain.status().offered_through).collect::<Vec<_>>(), vec![2, 1, 1]);
+            for drain in &drains { drain.request(); }
+            while drains.iter().any(|drain| drain.status().cut != Some(1)) {
+                tokio::task::yield_now().await;
+            }
+            assert!(receivers[0].recv().await.unwrap()?.is_none());
+            release_responses.add_permits(2);
+            for party in 1..3 {
+                let batch = receivers[party].recv().await.unwrap()?.unwrap();
+                assert_eq!(batch.sqs_sequence_numbers, first.sqs_sequence_numbers);
+                assert_eq!(batch.deletion_requests_indices, first.deletion_requests_indices);
+                batch_ids[party].store(2, Ordering::SeqCst);
+                permits[party].add_permits(1);
+                assert!(receivers[party].recv().await.unwrap()?.is_none());
+            }
+            for party in 0..3 {
+                assert!(receivers[party].recv().await.is_none());
+                assert!(!drains[party].failed());
+                assert!(drains[party].settled());
+                let claims: Vec<(String, Option<i64>)> = sqlx::query_as(
+                    "SELECT sequence_number, consumed_batch_id FROM ingested_requests ORDER BY sequence_number"
+                ).fetch_all(&databases[party].pool).await?;
+                assert_eq!(claims, vec![
+                    (normalize_sns_sequence_number("100")?, Some(1)),
+                    (normalize_sns_sequence_number("200")?, None),
+                ]);
+            }
+            Ok::<_, eyre::Error>(())
+        }).await;
+
+        for permit in permits {
+            permit.close();
+        }
+        drop(receivers);
+        for task in tasks {
+            task.abort();
+        }
+        for (db, schema) in databases.iter().zip(&schemas) {
+            iris_mpc_store::test_utils::cleanup(db, schema).await?;
+        }
+        result??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "db_dependent")]
     async fn drain_waits_for_actual_receipt_delete_after_durable_ingest() -> eyre::Result<()> {
         check_ingest_drain(false).await
     }
