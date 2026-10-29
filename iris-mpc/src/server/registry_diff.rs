@@ -106,6 +106,8 @@ impl CandidateRegistry {
         })
         .await
         .wrap_err("registry diff deadline exceeded acquiring registries")?;
+        let started = Instant::now();
+        tracing::info!(%attempt_id, candidate_process_id = %self.process_id, "registry_diff_started");
         Ok(RegistryDiff {
             context: DiffContext {
                 attempt_id,
@@ -121,8 +123,13 @@ impl CandidateRegistry {
                 canonical: None,
                 previous_db_id: 0,
                 db_ended: false,
+                rows_read: 0,
             }),
             deadline,
+            started,
+            inserted: 0,
+            changed: 0,
+            removed: 0,
         })
     }
 }
@@ -140,6 +147,10 @@ pub struct RegistryDiff<'a> {
     context: DiffContext,
     state: ScanState<'a>,
     deadline: Instant,
+    started: Instant,
+    inserted: u64,
+    changed: u64,
+    removed: u64,
 }
 
 impl RegistryDiff<'_> {
@@ -168,11 +179,55 @@ impl RegistryDiff<'_> {
                 Ok(change)
             });
         match &result {
-            Ok(None) => self.state = ScanState::Complete,
-            Err(_) => self.state = ScanState::Failed,
-            Ok(Some(_)) => {}
+            Ok(None) => {
+                self.log_outcome("registry_diff_completed", None);
+                self.state = ScanState::Complete;
+            }
+            Err(error) => {
+                self.log_outcome("registry_diff_failed", Some(error));
+                self.state = ScanState::Failed;
+            }
+            Ok(Some(RegistryChange::Inserted { .. })) => self.inserted += 1,
+            Ok(Some(RegistryChange::Changed { .. })) => self.changed += 1,
+            Ok(Some(RegistryChange::Removed { .. })) => self.removed += 1,
         }
         result
+    }
+
+    fn log_outcome(&self, event: &str, error: Option<&eyre::Report>) {
+        let ScanState::Active(cursor) = &self.state else {
+            return;
+        };
+        if let Some(error) = error {
+            tracing::warn!(
+                attempt_id = %self.context.attempt_id,
+                candidate_process_id = %self.context.candidate_process_id,
+                elapsed_ms = self.started.elapsed().as_secs_f64() * 1000.0,
+                canonical_rows_read = cursor.rows_read,
+                inserted = self.inserted,
+                changed = self.changed,
+                removed = self.removed,
+                error = ?error,
+                "{event}"
+            );
+        } else {
+            tracing::info!(
+                attempt_id = %self.context.attempt_id,
+                candidate_process_id = %self.context.candidate_process_id,
+                elapsed_ms = self.started.elapsed().as_secs_f64() * 1000.0,
+                canonical_rows_read = cursor.rows_read,
+                inserted = self.inserted,
+                changed = self.changed,
+                removed = self.removed,
+                "{event}"
+            );
+        }
+    }
+}
+
+impl Drop for RegistryDiff<'_> {
+    fn drop(&mut self) {
+        self.log_outcome("registry_diff_abandoned", None);
     }
 }
 
@@ -191,6 +246,7 @@ struct Cursor<'a> {
     canonical: Option<VectorId>,
     previous_db_id: i64,
     db_ended: bool,
+    rows_read: u64,
 }
 
 impl Cursor<'_> {
@@ -244,6 +300,7 @@ impl Cursor<'_> {
                     .wrap_err("read canonical iris metadata")?
                 {
                     Some((id, version)) => {
+                        self.rows_read += 1;
                         ensure!(
                             id > self.previous_db_id,
                             "canonical iris IDs must be positive and strictly increasing"
@@ -399,6 +456,7 @@ mod tests {
                 },
             ]
         );
+        assert_eq!((scan.inserted, scan.changed, scan.removed), (2, 2, 1));
         Ok(())
     }
 
@@ -506,6 +564,11 @@ mod tests {
         assert_eq!(scan.context().watermark(), Some(watermark.as_str()));
         assert!(scan.next().await?.is_some());
         assert_eq!(reads.load(AtomicOrdering::SeqCst), 1);
+        let ScanState::Active(cursor) = &scan.state else {
+            panic!("partial scan must remain active");
+        };
+        assert_eq!(cursor.rows_read, 1);
+        assert_eq!((scan.inserted, scan.changed, scan.removed), (1, 0, 0));
         assert!(!scan.completed());
         drop(scan);
         let _write = tokio::time::timeout(Duration::from_millis(50), registries[0].write()).await?;
@@ -527,6 +590,7 @@ mod tests {
         assert!(scan.next().await.is_err());
         assert!(!scan.completed());
         assert!(scan.next().await.is_err());
+        assert_eq!((scan.inserted, scan.changed, scan.removed), (1, 0, 0));
         let _write = tokio::time::timeout(Duration::from_millis(50), registries[0].write()).await?;
         Ok(())
     }
@@ -584,6 +648,7 @@ mod tests {
         );
         assert_eq!(scan.next().await?, None);
         assert!(scan.completed());
+        assert_eq!((scan.inserted, scan.changed, scan.removed), (0, 0, 1));
         Ok(())
     }
 
