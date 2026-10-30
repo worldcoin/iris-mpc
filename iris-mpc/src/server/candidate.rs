@@ -1,5 +1,6 @@
 //! Passive exact-scan preload. This path never enters active coordination.
 
+use super::registry_diff::CandidateRegistry;
 use super::*;
 use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
 use iris_mpc_cpu::execution::hawk_main::worker_pool_initializer::InitializedWorkers;
@@ -23,6 +24,7 @@ type Status = Arc<RwLock<CandidateStatus>>;
 // The cold-eye pool is deliberately uninitialized; this is not a serving actor.
 struct CandidatePreload {
     workers: InitializedWorkers,
+    registry: CandidateRegistry,
 }
 
 pub(super) fn validate_config(config: &Config, mode: HawkSearchMode) -> Result<()> {
@@ -93,9 +95,10 @@ async fn preload_and_wait(
     status: Status,
 ) -> Result<()> {
     let started = Instant::now();
+    let process_id = status.read().await.process_id;
     let loaded = tokio::select! {
         _ = shutdown.wait_for_shutdown() => return Ok(()),
-        result = timeout(PRELOAD_TIMEOUT, preload(config, shutdown.clone())) => {
+        result = timeout(PRELOAD_TIMEOUT, preload(config, shutdown.clone(), process_id)) => {
             result.wrap_err("candidate preload exceeded one hour").and_then(|loaded| loaded)
         }
     };
@@ -110,6 +113,7 @@ async fn preload_and_wait(
     let count = workers.workers.registries[0].read().await.size;
     {
         let mut state = status.write().await;
+        state.process_id = workers.registry.process_id();
         state.loaded_rows = count;
         state.state = "loaded";
     }
@@ -126,7 +130,11 @@ async fn preload_and_wait(
     Ok(())
 }
 
-async fn preload(config: &Config, shutdown: Arc<ShutdownHandler>) -> Result<CandidatePreload> {
+async fn preload(
+    config: &Config,
+    shutdown: Arc<ShutdownHandler>,
+    process_id: Uuid,
+) -> Result<CandidatePreload> {
     let db = config
         .database
         .as_ref()
@@ -172,7 +180,8 @@ async fn preload(config: &Config, shutdown: Arc<ShutdownHandler>) -> Result<Cand
     )
     .initialize()
     .await?;
-    Ok(CandidatePreload { workers })
+    let registry = CandidateRegistry::new(process_id, workers.registries.clone())?;
+    Ok(CandidatePreload { workers, registry })
 }
 
 #[cfg(test)]
@@ -273,7 +282,8 @@ mod tests {
         drop(second);
 
         let shutdown = Arc::new(ShutdownHandler::new(0));
-        let candidate = preload(&config, shutdown.clone()).await?;
+        let process_id = Uuid::new_v4();
+        let mut candidate = preload(&config, shutdown.clone(), process_id).await?;
         for registry in &candidate.workers.registries {
             assert_eq!(registry.read().await.get_current_version(1), Some(7));
             assert_eq!(registry.read().await.size, 1);
@@ -295,6 +305,29 @@ mod tests {
             .await
             .get_vector(&VectorId::new(1, 7))
             .is_some());
+        let frozen = Store::new(&reader).await?;
+        let attempt_id = Uuid::new_v4();
+        let mut diff = candidate
+            .registry
+            .differences(
+                &frozen,
+                attempt_id,
+                None,
+                tokio::time::Instant::now() + Duration::from_secs(5),
+            )
+            .await?;
+        assert_eq!(diff.context().candidate_process_id(), process_id);
+        assert_eq!(diff.context().attempt_id(), attempt_id);
+        assert_eq!(
+            diff.next().await?,
+            Some(super::super::registry_diff::RegistryChange::Changed {
+                loaded: VectorId::new(1, 7),
+                current: VectorId::new(1, 8),
+            })
+        );
+        assert_eq!(diff.next().await?, None);
+        assert!(diff.completed());
+        drop(diff);
         drop(candidate);
 
         let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
@@ -391,7 +424,7 @@ mod tests {
         sqlx::query("UPDATE irises SET id = 2")
             .execute(&writer.pool)
             .await?;
-        let error = preload(&config, Arc::new(ShutdownHandler::new(0)))
+        let error = preload(&config, Arc::new(ShutdownHandler::new(0)), Uuid::new_v4())
             .await
             .err()
             .unwrap();

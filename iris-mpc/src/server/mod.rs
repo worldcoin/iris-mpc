@@ -1,5 +1,6 @@
 mod candidate;
 pub mod drain;
+pub mod registry_diff;
 
 use crate::services::aws::clients::AwsClients;
 use crate::services::processors::batch::{receive_batch_stream, spawn_db_backed_ingest_task};
