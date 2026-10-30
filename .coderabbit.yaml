@@ -18,7 +18,7 @@ reviews:
       instructions: "For protocol and matching changes compare CPU/HNSW and GPU behavior where applicable. Check party synchronization, share/serial ownership, persistence versus result publication, restart/replay and bounded batching. Check shared dependency revisions before assuming linked main matches the deployed caller."
     - path: migrations/**
       instructions: "Check schema changes against old and new binaries, migration history validation, rolling upgrades, rollback and retention required by recovery."
-    - path: "{deploy/**,.github/workflows/**,Dockerfile*}"
+    - path: "{deploy/**,.github/workflows/**,**/Dockerfile*}"
       instructions: "Check stage/production targeting, permissions and secret handling, dependency/image revisions, rollout compatibility, startup/readiness behavior and rollback. Flag only risks supported by the actual configuration and deployment path."
 chat: 
   art: false
