@@ -51,6 +51,16 @@ env:
   SMPC__TLS__LEAF_CERT: "/etc/ssl/private/certificate.crt"
   SMPC__TLS__ROOT_CERTS: '["/usr/local/share/ca-certificates/ca_ampc_hnsw_party_prod_0.crt", "/usr/local/share/ca-certificates/ca_ampc_hnsw_party_prod_1.crt", "/usr/local/share/ca-certificates/ca_ampc_hnsw_party_prod_2.crt"]'
 
+nodeSelector:
+  kubernetes.io/arch: amd64
+  workload: "anon-stats-server"
+
+tolerations:
+  - key: "dedicated"
+    operator: "Equal"
+    value: "anonStatsServer"
+    effect: "NoSchedule"
+
 strategy:
   type: Recreate
 
