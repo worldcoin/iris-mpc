@@ -622,7 +622,9 @@ impl HawkActor {
             Arc::new(searcher_)
         };
 
-        let worker_pool_initializer::InitializedWorkers { pools, registries } = initialized;
+        let worker_pool_initializer::InitializedWorkers {
+            pools, registries, ..
+        } = initialized;
 
         let graph_store = graph.map(GraphMem::to_arc);
 
