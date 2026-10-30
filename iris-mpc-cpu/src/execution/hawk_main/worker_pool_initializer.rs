@@ -10,7 +10,9 @@ use crate::hawkers::aby3::aby3_store::{
     Aby3SharedIrises, Aby3Store, DistanceMode, VectorIdRegistryRef,
 };
 use crate::hawkers::shared_irises::{SharedIrises, SharedIrisesRef};
-use crate::protocol::shared_iris::{GaloisRingSharedIris, ResidentIris, ResidentLayout, Residents};
+use crate::protocol::shared_iris::{
+    ArcIris, GaloisRingSharedIris, ResidentIris, ResidentLayout, Residents,
+};
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use async_trait::async_trait;
 use eyre::Result;
@@ -28,6 +30,102 @@ pub struct InitializedWorkers {
     pub pools: BothEyes<Arc<dyn IrisWorkerPool>>,
     /// Metadata-only registries with `next_id` and `set_hash` populated.
     pub registries: BothEyes<VectorIdRegistryRef>,
+    passive: Option<PassivePools>,
+}
+
+struct PassivePools {
+    pools: BothEyes<LocalIrisWorkerPool>,
+    cold: Option<(Store, usize, usize, usize)>,
+}
+
+impl InitializedWorkers {
+    pub fn passive_resident_side(&self) -> Result<Option<usize>> {
+        let passive = self
+            .passive
+            .as_ref()
+            .ok_or_else(|| eyre::eyre!("workers are not an unreconciled passive preload"))?;
+        Ok(passive.cold.as_ref().map(|(_, side, _, _)| *side))
+    }
+
+    /// Caller exclusively owns these passive pools and has frozen canonical writers.
+    /// Only already-emitted diff entries may be applied while a diff is live.
+    pub async fn reconcile_batch(
+        &self,
+        updates: BothEyes<Vec<(VectorId, ArcIris)>>,
+        removals: &[VectorId],
+    ) -> Result<()> {
+        let passive = self
+            .passive
+            .as_ref()
+            .ok_or_else(|| eyre::eyre!("workers are not a passive preload"))?;
+        let resident_side = passive.cold.as_ref().map(|(_, side, _, _)| *side);
+        let ids = updates[resident_side.unwrap_or(LEFT)]
+            .iter()
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>();
+        for (side, updates) in updates.into_iter().enumerate() {
+            if resident_side.is_none_or(|resident| resident == side) {
+                passive.pools[side]
+                    .reconcile_resident(updates, removals)
+                    .await?;
+            }
+        }
+        for registry in &self.registries {
+            let mut registry = registry.write().await;
+            for id in removals {
+                registry.remove(id.serial_id());
+            }
+            for id in &ids {
+                registry.insert(*id, ());
+            }
+        }
+        Ok(())
+    }
+
+    /// Initialize the deferred cold eye at the frozen state, retaining its worker
+    /// threads and stores. Only the configured lookback window is reread; old
+    /// cached payloads/overlays never survive into the reconciled cold wrapper.
+    pub async fn finish_reconciliation(&mut self, deadline: tokio::time::Instant) -> Result<()> {
+        let passive = self
+            .passive
+            .take()
+            .ok_or_else(|| eyre::eyre!("workers are not a passive preload"))?;
+        // Match ordinary startup after physical tail removal, including across
+        // candidates whose preloads observed different historical maxima.
+        for registry in &self.registries {
+            let mut registry = registry.write().await;
+            let last = registry
+                .get_points()
+                .iter()
+                .rposition(Option::is_some)
+                .unwrap_or(0);
+            registry.next_id = u32::try_from(last)?
+                .checked_add(1)
+                .ok_or_else(|| eyre::eyre!("canonical serial ID exhausted"))?;
+        }
+        if let Some((store, resident_side, luc_window_capacity, lfu_cache_capacity)) = passive.cold
+        {
+            let side = 1 - resident_side;
+            let luc_window_ids = self.registries[side]
+                .read()
+                .await
+                .last_vector_ids(luc_window_capacity);
+            let cold = passive.pools[side]
+                .initialize_reconciled_cold(
+                    ColdStorageInit {
+                        store,
+                        side,
+                        luc_window_ids,
+                        luc_window_capacity,
+                        lfu_cache_capacity,
+                    },
+                    deadline,
+                )
+                .await?;
+            self.pools[side] = Arc::new(cold);
+        }
+        Ok(())
+    }
 }
 
 /// One-shot setup for the per-eye worker pools.
@@ -244,9 +342,11 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
         };
 
         let resident_side = cold_storage.as_ref().map(|(_, side, _, _)| *side);
-        if defer_cold_storage {
-            cold_storage = None;
-        }
+        let deferred_cold = if defer_cold_storage {
+            cold_storage.take()
+        } else {
+            None
+        };
         let mut cold_worker =
             if let Some((store, resident_side, luc_window_capacity, lfu_cache_capacity)) =
                 cold_storage
@@ -277,6 +377,7 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                 None
             };
 
+        let mut passive_pools = [None, None];
         let pools: BothEyes<Arc<dyn IrisWorkerPool>> = [LEFT, RIGHT].map(|side| {
             let worker = if cold_worker
                 .as_ref()
@@ -292,6 +393,9 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                     party_id,
                 )
             };
+            if defer_cold_storage {
+                passive_pools[side] = Some(worker.clone());
+            }
             Arc::new(worker) as Arc<dyn IrisWorkerPool>
         });
 
@@ -324,7 +428,15 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
             ),
         }
 
-        Ok(InitializedWorkers { pools, registries })
+        let passive = defer_cold_storage.then(|| PassivePools {
+            pools: passive_pools.map(|pool| pool.expect("passive local pools initialized")),
+            cold: deferred_cold,
+        });
+        Ok(InitializedWorkers {
+            pools,
+            registries,
+            passive,
+        })
     }
 }
 

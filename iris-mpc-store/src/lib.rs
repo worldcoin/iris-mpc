@@ -201,6 +201,42 @@ pub struct Store {
     modification_input_storage: ModificationInputStorage,
 }
 
+/// A deadline-scoped payload lease. Failure closes it; dropping it never returns
+/// unfinished database work to the shared pool.
+pub struct IrisPayloadReader {
+    connection: Option<sqlx::pool::PoolConnection<sqlx::Postgres>>,
+    deadline: tokio::time::Instant,
+}
+
+impl IrisPayloadReader {
+    pub async fn read_side(&mut self, ids: &[i64], side: usize) -> Result<Vec<DbStoredIrisEye>> {
+        let query = Store::iris_side_query(side)?;
+        let connection = self
+            .connection
+            .as_mut()
+            .ok_or_else(|| eyre!("payload reader previously failed"))?;
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let result = tokio::time::timeout_at(self.deadline, async {
+            Store::set_statement_deadline(connection, self.deadline).await?;
+            Ok::<_, eyre::Report>(
+                sqlx::query_as::<_, DbStoredIrisEye>(query)
+                    .bind(ids)
+                    .fetch_all(&mut **connection)
+                    .await?,
+            )
+        })
+        .await
+        .map_err(|_| eyre!("reconciliation payload read deadline exceeded"))
+        .and_then(|result| result);
+        if result.is_err() {
+            self.connection.take();
+        }
+        result
+    }
+}
+
 impl Store {
     pub async fn new(postgres_client: &PostgresClient) -> Result<Self> {
         tracing::info!(
@@ -276,20 +312,7 @@ impl Store {
         deadline: tokio::time::Instant,
     ) -> impl Stream<Item = sqlx::Result<(i64, i16)>> + '_ {
         async_stream::try_stream! {
-            let mut connection = self.pool.acquire().await?;
-            connection.close_on_drop();
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            // PostgreSQL interprets zero as unlimited and accepts at most i32::MAX ms.
-            let timeout_ms = remaining.as_nanos().div_ceil(1_000_000)
-                .clamp(1, i32::MAX as u128) as i64;
-            sqlx::query(
-                "SELECT set_config('statement_timeout', \
-                 LEAST(NULLIF(setting::bigint, 0), $1)::text, false) \
-                 FROM pg_settings WHERE name = 'statement_timeout'",
-            )
-            .bind(timeout_ms)
-            .execute(&mut *connection)
-            .await?;
+            let mut connection = self.deadline_connection(deadline).await?;
             let mut rows = sqlx::query_as::<_, (i64, i16)>(
                 "SELECT id, version_id FROM irises ORDER BY id ASC",
             )
@@ -297,6 +320,77 @@ impl Store {
             while let Some(row) = rows.try_next().await? {
                 yield row;
             }
+        }
+    }
+
+    async fn deadline_connection(
+        &self,
+        deadline: tokio::time::Instant,
+    ) -> sqlx::Result<sqlx::pool::PoolConnection<sqlx::Postgres>> {
+        let mut connection = self.pool.acquire().await?;
+        connection.close_on_drop();
+        Self::set_statement_deadline(&mut connection, deadline).await?;
+        Ok(connection)
+    }
+
+    async fn set_statement_deadline(
+        connection: &mut sqlx::PgConnection,
+        deadline: tokio::time::Instant,
+    ) -> sqlx::Result<()> {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        // PostgreSQL interprets zero as unlimited and accepts at most i32::MAX ms.
+        let timeout_ms = remaining
+            .as_nanos()
+            .div_ceil(1_000_000)
+            .clamp(1, i32::MAX as u128) as i64;
+        sqlx::query(
+            "SELECT set_config('statement_timeout', \
+             LEAST(NULLIF(setting::bigint, 0), $1)::text, false) \
+             FROM pg_settings WHERE name = 'statement_timeout'",
+        )
+        .bind(timeout_ms)
+        .execute(connection)
+        .await?;
+        Ok(())
+    }
+
+    /// One owned lease reused across bounded reconciliation payload batches.
+    pub async fn iris_payload_reader(
+        &self,
+        deadline: tokio::time::Instant,
+    ) -> Result<IrisPayloadReader> {
+        let connection = tokio::time::timeout_at(deadline, self.deadline_connection(deadline))
+            .await
+            .map_err(|_| eyre!("reconciliation connection deadline exceeded"))??;
+        Ok(IrisPayloadReader {
+            connection: Some(connection),
+            deadline,
+        })
+    }
+
+    /// Sparse payload reads for a bounded passive reconciliation. Session settings
+    /// stay on a close-on-drop lease, including when the caller cancels the read.
+    pub async fn get_iris_data_by_ids_for_side_before(
+        &self,
+        ids: &[i64],
+        side: usize,
+        deadline: tokio::time::Instant,
+    ) -> Result<Vec<DbStoredIrisEye>> {
+        Self::iris_side_query(side)?;
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.iris_payload_reader(deadline)
+            .await?
+            .read_side(ids, side)
+            .await
+    }
+
+    fn iris_side_query(side: usize) -> Result<&'static str> {
+        match side {
+            0 => Ok("SELECT id, version_id, left_code AS code, left_mask AS mask FROM irises WHERE id = ANY($1) ORDER BY id ASC"),
+            1 => Ok("SELECT id, version_id, right_code AS code, right_mask AS mask FROM irises WHERE id = ANY($1) ORDER BY id ASC"),
+            _ => Err(eyre!("invalid iris side {side}; expected 0 or 1")),
         }
     }
 
@@ -348,35 +442,10 @@ impl Store {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        let rows = match side {
-            0 => {
-                sqlx::query_as::<_, DbStoredIrisEye>(
-                    r#"
-                    SELECT id, version_id, left_code AS code, left_mask AS mask
-                    FROM irises
-                    WHERE id = ANY($1)
-                    ORDER BY id ASC
-                    "#,
-                )
-                .bind(ids)
-                .fetch_all(&self.pool)
-                .await?
-            }
-            1 => {
-                sqlx::query_as::<_, DbStoredIrisEye>(
-                    r#"
-                    SELECT id, version_id, right_code AS code, right_mask AS mask
-                    FROM irises
-                    WHERE id = ANY($1)
-                    ORDER BY id ASC
-                    "#,
-                )
-                .bind(ids)
-                .fetch_all(&self.pool)
-                .await?
-            }
-            _ => return Err(eyre!("invalid iris side {side}; expected 0 or 1")),
-        };
+        let rows = sqlx::query_as::<_, DbStoredIrisEye>(Self::iris_side_query(side)?)
+            .bind(ids)
+            .fetch_all(&self.pool)
+            .await?;
         Ok(rows)
     }
 
@@ -1200,6 +1269,86 @@ pub mod tests {
     // Max connections default to 100 for Postgres, but can't test at quite this level when running
     // multiple DB-related tests in parallel.
     const MAX_CONNECTIONS: u32 = 80;
+
+    #[tokio::test]
+    async fn reconciliation_payload_reader_reuses_lease_and_releases_blocked_query() -> Result<()> {
+        use std::time::Duration;
+        use tokio::time::{timeout, Instant};
+        let url = test_db_url()?;
+        let schema = temporary_name();
+        let admin = PostgresClient::new(&url, &schema, AccessMode::ReadWrite).await?;
+        sqlx::query("CREATE TABLE irises (id bigint PRIMARY KEY, version_id smallint NOT NULL, left_code bytea NOT NULL, left_mask bytea NOT NULL)").execute(&admin.pool).await?;
+        sqlx::query("INSERT INTO irises VALUES (1, 7, $1, $1)")
+            .bind(vec![0_u8; 2])
+            .execute(&admin.pool)
+            .await?;
+        let search_path = format!("\"{schema}\"");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .after_connect(move |connection, _| {
+                let search_path = search_path.clone();
+                Box::pin(async move {
+                    sqlx::query("SELECT set_config('search_path', $1, false)")
+                        .bind(search_path)
+                        .execute(connection)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect(&url)
+            .await?;
+        let store = Store::new(&PostgresClient {
+            pool: pool.clone(),
+            schema_name: schema.clone(),
+        })
+        .await?;
+        let mut reader = store
+            .iris_payload_reader(Instant::now() + Duration::from_millis(500))
+            .await?;
+        let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut **reader.connection.as_mut().unwrap())
+            .await?;
+        for _ in 0..2 {
+            let rows = reader.read_side(&[1], 0).await?;
+            assert_eq!(rows[0].vector_id(), iris_mpc_common::VectorId::new(1, 7));
+            let current: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+                .fetch_one(&mut **reader.connection.as_mut().unwrap())
+                .await?;
+            assert_eq!(pid, current);
+        }
+        let mut blocker = admin.pool.begin().await?;
+        sqlx::query("LOCK TABLE irises IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *blocker)
+            .await?;
+        assert!(reader.read_side(&[1], 0).await.is_err());
+        assert!(reader.connection.is_none());
+        timeout(Duration::from_secs(2), async {
+            loop {
+                let present: bool = sqlx::query_scalar(
+                    "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = $1)",
+                )
+                .bind(pid)
+                .fetch_one(&admin.pool)
+                .await?;
+                if !present {
+                    break Ok::<_, sqlx::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await??;
+        let setting: String = timeout(
+            Duration::from_secs(2),
+            sqlx::query_scalar("SHOW statement_timeout").fetch_one(&pool),
+        )
+        .await??;
+        assert_eq!(setting, "0");
+        assert!(reader.read_side(&[1], 0).await.is_err());
+        blocker.rollback().await?;
+        pool.close().await;
+        cleanup(&admin, &schema).await?;
+        Ok(())
+    }
 
     #[tokio::test]
     async fn persisted_prefix_detects_gaps_and_changes_beyond_the_maximum() -> Result<()> {
