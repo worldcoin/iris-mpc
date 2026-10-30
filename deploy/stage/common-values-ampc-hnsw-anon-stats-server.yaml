@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/anon-stats-server:89f8ce521774ebbfb21b1deae5d2cce00c8fcb7b@sha256:1b5c93a46e33d5d6f3f97d31924a9f13f2ba9149a7d2701001c29a2849056252"
+image: "ghcr.io/worldcoin/anon-stats-server:0c623e422cab18a8f9c4b4b03c3ba8f6e8c07d0b@sha256:42d2927afa39ca369e13057f951ec82aa4a2c2b1502e18f0ce28abed202bd4d7"
 
 environment: stage
 replicaCount: 1
@@ -17,11 +17,12 @@ env:
         name: application
   SMPC__SERVICE_PORTS: '["4000","4001","4002"]'
   SMPC__SERVER_COORDINATION__IMAGE_NAME: $(IMAGE_NAME)
+  SMPC__RESULTS_TOPIC_REGION: "eu-central-1"
   SMPC__RESULTS_TOPIC_ARN:
     valueFrom:
       secretKeyRef:
         key: SNS_RESULTS_ARN
-        name: application
+        name: iris-ampc-messaging
   SMPC__AWS__REGION: "eu-north-1"
   SMPC__SERVER_COORDINATION__HEARTBEAT_INITIAL_RETRIES: "5"
   SMPC__SERVER_COORDINATION__HTTP_QUERY_RETRY_DELAY_MS: "5000"
