@@ -3158,6 +3158,7 @@ dependencies = [
  "aws-sdk-sqs",
  "base64 0.22.1",
  "bincode",
+ "blake3",
  "bytemuck",
  "chrono",
  "clap",
