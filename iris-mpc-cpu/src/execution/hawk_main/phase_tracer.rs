@@ -122,18 +122,22 @@ pub fn flush(batch: u32) {
 // ── Phase Guard (RAII) ──────────────────────────────────────────────────────
 
 /// RAII guard that emits a 'B' (begin) event on creation and 'E' (end) on drop.
+/// When the tracer has not been initialized, `tx` is `None` and the guard is a no-op.
 pub struct PhaseGuard {
     name: &'static str,
     tid: String,
-    tx: &'static Sender<TraceEvent>,
+    tx: Option<&'static Sender<TraceEvent>>,
     pid: u32,
     start_time: Instant,
 }
 
 impl Drop for PhaseGuard {
     fn drop(&mut self) {
+        let Some(tx) = self.tx else {
+            return;
+        };
         let ts = self.start_time.elapsed().as_secs_f64() * 1e6;
-        let _ = self.tx.send(TraceEvent {
+        let _ = tx.send(TraceEvent {
             name: self.name,
             ph: 'E',
             ts,
@@ -147,7 +151,17 @@ impl Drop for PhaseGuard {
 
 /// Begin a traced phase. Returns a guard that emits the end event on drop.
 pub fn phase_begin(name: &'static str, args: Option<serde_json::Value>) -> PhaseGuard {
-    let tracer = tracer();
+    // Degrade to a no-op guard if the tracer was never initialized (e.g. when a
+    // tool other than the Hawk server is compiled with the `phase_trace` feature).
+    let Some(tracer) = TRACER.get() else {
+        return PhaseGuard {
+            name,
+            tid: String::new(),
+            tx: None,
+            pid: 0,
+            start_time: Instant::now(),
+        };
+    };
     let tid = SESSION_CTX
         .try_with(|ctx| ctx.tid())
         .unwrap_or_else(|_| "no_session".to_string());
@@ -166,7 +180,7 @@ pub fn phase_begin(name: &'static str, args: Option<serde_json::Value>) -> Phase
     PhaseGuard {
         name,
         tid,
-        tx: &tracer.tx,
+        tx: Some(&tracer.tx),
         pid: tracer.party_id,
         start_time: tracer.start_time,
     }
