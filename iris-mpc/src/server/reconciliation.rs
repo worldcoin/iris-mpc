@@ -3,9 +3,8 @@
 
 use super::registry_diff::{CandidateRegistry, RegistryChange};
 use eyre::{ensure, Result, WrapErr};
-use iris_mpc_common::VectorId;
 use iris_mpc_cpu::execution::hawk_main::worker_pool_initializer::InitializedWorkers;
-use iris_mpc_cpu::protocol::shared_iris::{ArcIris, GaloisRingSharedIris};
+use iris_mpc_cpu::protocol::shared_iris::GaloisRingSharedIris;
 use iris_mpc_store::{normalize_sns_sequence_number, Store};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -140,18 +139,17 @@ impl CandidateReconciliation {
 
     /// All canonical writers must remain frozen and A sealed until activation.
     /// Exclusively own these workers; never run serving work alongside this call.
-    /// This consumes the preload's one reconciliation attempt, including failure
-    /// or cancellation. No actor, intake, publication, or ownership is started.
+    /// Preflight rejection preserves the preload. Once asynchronous work starts,
+    /// failure or cancellation requires a fresh preload. No actor, intake,
+    /// publication, or ownership is started.
     pub async fn reconcile(
         &mut self,
         store: &Store,
         context: ReconciliationContext,
         deadline: Instant,
     ) -> Result<&ReconciliationReport> {
-        let eligible = matches!(self.state, State::Unreconciled);
-        self.invalidate();
         ensure!(
-            eligible,
+            matches!(self.state, State::Unreconciled),
             "candidate requires a fresh preload after reconciliation or invalidation"
         );
         context.validate()?;
@@ -165,6 +163,7 @@ impl CandidateReconciliation {
         );
         let started = Instant::now();
         tracing::info!(attempt_id = %context.attempt_id, candidate_process_id = %self.registry.process_id(), "candidate_reconciliation_started");
+        self.invalidate();
         let result = timeout_at(deadline, self.apply_and_verify(store, &context, deadline))
             .await
             .wrap_err("candidate reconciliation deadline exceeded")
@@ -240,41 +239,32 @@ impl CandidateReconciliation {
                 .iter()
                 .map(|id| i64::from(id.serial_id()))
                 .collect::<Vec<_>>();
-            let mut updates: [Vec<(VectorId, ArcIris)>; 2] = [Vec::new(), Vec::new()];
-            for (side, updates) in updates.iter_mut().enumerate() {
-                if resident_side.is_some_and(|resident| resident != side) {
-                    continue;
+            let rows = if ids.is_empty() {
+                Vec::new()
+            } else {
+                if reader.is_none() {
+                    reader = Some(store.iris_payload_reader(deadline).await?);
                 }
-                let rows = if ids.is_empty() {
-                    Vec::new()
-                } else {
-                    if reader.is_none() {
-                        reader = Some(store.iris_payload_reader(deadline).await?);
-                    }
-                    reader
-                        .as_mut()
-                        .expect("reader initialized")
-                        .read_side(&ids, side)
-                        .await?
-                };
+                reader
+                    .as_mut()
+                    .expect("reader initialized")
+                    .read_side(&ids, resident_side)
+                    .await?
+            };
+            ensure!(
+                rows.len() == current.len(),
+                "canonical payload missing during reconciliation"
+            );
+            let mut updates = Vec::with_capacity(rows.len());
+            for (row, expected) in rows.into_iter().zip(&current) {
                 ensure!(
-                    rows.len() == current.len(),
-                    "canonical payload missing during reconciliation"
+                    row.vector_id() == *expected,
+                    "canonical version changed during reconciliation"
                 );
-                for (row, expected) in rows.into_iter().zip(&current) {
-                    ensure!(
-                        row.vector_id() == *expected,
-                        "canonical version changed during reconciliation"
-                    );
-                    updates.push((
-                        *expected,
-                        GaloisRingSharedIris::try_from_buffers(
-                            self.party_id,
-                            row.code(),
-                            row.mask(),
-                        )?,
-                    ));
-                }
+                updates.push((
+                    *expected,
+                    GaloisRingSharedIris::try_from_buffers(self.party_id, row.code(), row.mask())?,
+                ));
             }
             self.workers.reconcile_batch(updates, &removed).await?;
             apply_duration += started.elapsed();
@@ -359,29 +349,14 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "db_dependent")]
     async fn dropping_reconciliation_invalidates_candidate_before_any_mutation() -> Result<()> {
-        use iris_mpc_common::postgres::PostgresClient;
-        use iris_mpc_cpu::execution::hawk_main::worker_pool_initializer::{
-            LocalWorkerPoolInitializer, WorkerPoolInitializer,
-        };
-        use iris_mpc_cpu::hawkers::aby3::aby3_store::DistanceMode;
-        let workers = Box::new(
-            LocalWorkerPoolInitializer::new_empty(0, DistanceMode::Simple, false)
-                .defer_cold_storage(),
-        )
-        .initialize()
-        .await?;
-        let process = Uuid::new_v4();
-        let mut candidate = CandidateReconciliation::new(0, process, workers)?;
+        let (config, db) = fixture(1).await?;
+        let mut candidate = preload(&config).await?;
         let registry = candidate.workers.registries[0].clone();
         let guard = registry.write().await;
-        let db = PostgresClient {
-            pool: sqlx::postgres::PgPoolOptions::new()
-                .connect_lazy("postgres://unused:unused@localhost/unused")?,
-            schema_name: "unused".into(),
-        };
         let store = Store::new(&db).await?;
-        let expected = context(process);
+        let expected = context(candidate.registry.process_id());
         {
             let run = candidate.reconcile(
                 &store,
@@ -397,6 +372,8 @@ mod tests {
             .reconcile(&store, expected, Instant::now() + Duration::from_secs(5))
             .await
             .is_err());
+        drop(candidate);
+        iris_mpc_store::test_utils::cleanup(&db, &config.get_gpu_db_schema()).await?;
         Ok(())
     }
 
@@ -446,8 +423,75 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "db_dependent")]
+    async fn preflight_rejection_preserves_preload_and_completed_report() -> Result<()> {
+        use ampc_anon_stats::types::Eye;
+        use iris_mpc_common::{VectorId, IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
+        for (side, resident) in [(Eye::Left, 0), (Eye::Right, 1)] {
+            let (mut config, db) = fixture(1).await?;
+            config.full_scan_side = side;
+            let mut candidate = preload(&config).await?;
+            assert_eq!(candidate.workers.passive_resident_side()?, resident);
+            let store = Store::new(&db).await?;
+            let expected = context(candidate.registry.process_id());
+            let mut invalid = expected.clone();
+            invalid.attempt_id = Uuid::nil();
+            for rejected in [invalid, context(Uuid::new_v4())] {
+                assert!(candidate
+                    .reconcile(&store, rejected, Instant::now() + Duration::from_secs(20))
+                    .await
+                    .is_err());
+            }
+            assert!(candidate
+                .reconcile(&store, expected.clone(), Instant::now())
+                .await
+                .is_err());
+            assert!(candidate.report_for(&expected).is_none());
+            sqlx::query("UPDATE irises SET version_id = 2, left_code = $1, right_code = $2")
+                .bind(bytemuck::cast_slice::<u16, u8>(&vec![11; IRIS_CODE_LENGTH]))
+                .bind(bytemuck::cast_slice::<u16, u8>(&vec![13; IRIS_CODE_LENGTH]))
+                .execute(&db.pool)
+                .await?;
+            let report = candidate
+                .reconcile(
+                    &store,
+                    expected.clone(),
+                    Instant::now() + Duration::from_secs(20),
+                )
+                .await?
+                .clone();
+            for registry in &candidate.workers.registries {
+                assert_eq!(registry.read().await.get_current_version(1), Some(2));
+            }
+            let current = GaloisRingSharedIris::try_from_buffers(
+                0,
+                &vec![if resident == 0 { 11 } else { 13 }; IRIS_CODE_LENGTH],
+                &vec![3; MASK_CODE_LENGTH],
+            )?;
+            assert_eq!(
+                candidate.workers.pools[resident]
+                    .fetch_irises(vec![VectorId::new(1, 2)])
+                    .await?[0],
+                current
+            );
+            assert!(candidate
+                .reconcile(
+                    &store,
+                    expected.clone(),
+                    Instant::now() + Duration::from_secs(20),
+                )
+                .await
+                .is_err());
+            assert_eq!(candidate.report_for(&expected), Some(&report));
+            drop(candidate);
+            iris_mpc_store::test_utils::cleanup(&db, &config.get_gpu_db_schema()).await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "db_dependent")]
     async fn reconciles_existing_pools_and_initializes_current_cold_window() -> Result<()> {
-        use iris_mpc_common::{IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
+        use iris_mpc_common::{VectorId, IRIS_CODE_LENGTH, MASK_CODE_LENGTH};
         let (config, db) = fixture(5).await?;
         let mut candidate = preload(&config).await?;
         let resident = match config.full_scan_side {
