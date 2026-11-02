@@ -220,12 +220,20 @@ impl IrisPayloadReader {
         }
         let result = tokio::time::timeout_at(self.deadline, async {
             Store::set_statement_deadline(connection, self.deadline).await?;
-            Ok::<_, eyre::Report>(
-                sqlx::query_as::<_, DbStoredIrisEye>(query)
-                    .bind(ids)
-                    .fetch_all(&mut **connection)
-                    .await?,
-            )
+            let rows = sqlx::query_as::<_, DbStoredIrisEye>(query)
+                .bind(ids)
+                .fetch_all(&mut **connection)
+                .await?;
+            for row in &rows {
+                for (field, bytes) in [("code", &row.code), ("mask", &row.mask)] {
+                    if !bytes.is_empty() {
+                        bytemuck::try_cast_slice::<u8, u16>(bytes).map_err(|error| {
+                            eyre!("invalid reconciliation {field} buffer: {error}")
+                        })?;
+                    }
+                }
+            }
+            Ok::<_, eyre::Report>(rows)
         })
         .await
         .map_err(|_| eyre!("reconciliation payload read deadline exceeded"))

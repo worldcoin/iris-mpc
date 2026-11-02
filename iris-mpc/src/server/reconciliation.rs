@@ -522,6 +522,55 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "db_dependent")]
+    async fn odd_length_payloads_fail_without_preserving_reconciliation_evidence() -> Result<()> {
+        for (corrupt, field) in [
+            ("UPDATE irises SET left_code = $1 WHERE id = 129", "code"),
+            ("UPDATE irises SET left_mask = $1 WHERE id = 129", "mask"),
+            ("UPDATE irises SET right_code = $1 WHERE id = 129", "code"),
+            ("UPDATE irises SET right_mask = $1 WHERE id = 129", "mask"),
+        ] {
+            let (config, db) = fixture(129).await?;
+            let store = Store::new(&db).await?;
+            let mut candidate = preload(&config).await?;
+            sqlx::query("UPDATE irises SET version_id = 2")
+                .execute(&db.pool)
+                .await?;
+            sqlx::query(corrupt)
+                .bind(vec![0_u8; 1])
+                .execute(&db.pool)
+                .await?;
+            let expected = context(candidate.registry.process_id());
+            let error = candidate
+                .reconcile(
+                    &store,
+                    expected.clone(),
+                    Instant::now() + Duration::from_secs(20),
+                )
+                .await
+                .expect_err("odd-length payload must be rejected");
+            assert!(error
+                .to_string()
+                .contains(&format!("invalid reconciliation {field} buffer")));
+            assert_eq!(
+                candidate.workers.registries[0]
+                    .read()
+                    .await
+                    .get_current_version(1),
+                Some(2)
+            );
+            assert!(candidate.report_for(&expected).is_none());
+            assert!(candidate
+                .reconcile(&store, expected, Instant::now() + Duration::from_secs(20))
+                .await
+                .is_err());
+            drop(candidate);
+            iris_mpc_store::test_utils::cleanup(&db, &config.get_gpu_db_schema()).await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "db_dependent")]
     async fn tail_removal_matches_fresh_preload_frontier_and_partial_failure_is_terminal(
     ) -> Result<()> {
         use iris_mpc_common::IRIS_CODE_LENGTH;
