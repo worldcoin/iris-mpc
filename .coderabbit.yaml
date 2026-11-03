@@ -2,6 +2,8 @@
 # Keep unspecified settings inherited; inspect the resolved config with @coderabbitai configuration.
 inheritance: true
 reviews: 
+  auto_approvals:
+    enabled: false
   profile: chill
   high_level_summary_in_walkthrough: true
   review_details: true
