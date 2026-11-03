@@ -38,3 +38,7 @@
 - For changes to shared APIs, queue messages, schemas or libraries, identify affected producer/consumer repositories. Reference open companion PRs as `owner/repo#123` or use an explicit branch reference `owner/repo@branch-name` when the companion code is unmerged. Links only select context for repositories already available to the reviewer.
 - State which dependency revision or contract was validated. Do not assume a linked repository's default branch matches the deployed version.
 - Keep the description short: what changed and why, ticket, relevant companion references, and validation performed. Include deployment order and rollback constraints when the change depends on coordinated releases. Say when there is no cross-repository impact; do not invent companion changes.
+
+## Human review requirement
+
+Changes to this public repository require approval from a human code owner. CodeRabbit provides review feedback; its approval does not replace human review. Keep automatic CodeRabbit approvals disabled.

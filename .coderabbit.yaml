@@ -3,6 +3,9 @@
 inheritance: true
 reviews: 
   profile: chill
+  auto_approvals:
+    enabled: false
+    allow_author_approval: false
   high_level_summary_in_walkthrough: true
   review_details: true
   sequence_diagrams: false
