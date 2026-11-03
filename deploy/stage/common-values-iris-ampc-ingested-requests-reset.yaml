@@ -2,8 +2,8 @@ image: "ghcr.io/worldcoin/retention-reaper:v0.32.12@sha256:4e6434646504c7ef09ae6
 
 environment: stage
 replicaCount: 1
-suspend: true
-schedule: "0 5 * * *"
+suspend: false
+schedule: "58 10 * * *"
 concurrencyPolicy: Forbid
 backoffLimit: 0
 
