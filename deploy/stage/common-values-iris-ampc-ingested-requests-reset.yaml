@@ -1,0 +1,29 @@
+image: "ghcr.io/worldcoin/retention-reaper:v0.32.12@sha256:4e6434646504c7ef09ae6db4f3d60dd163b712e2f9741514b28a103296cb1029"
+
+environment: stage
+replicaCount: 1
+suspend: true
+schedule: "0 5 * * *"
+concurrencyPolicy: Forbid
+backoffLimit: 0
+
+env:
+  RETENTION__ENABLED: "true"
+  RETENTION__DRY_RUN: "false"
+  RETENTION_JOBS: >-
+    [{"table":"ingested_requests","ts_column":"received_at","retention":"0 seconds",
+    "batch_size":2000,"batch_pause_ms":250}]
+
+imagePullSecrets:
+  - name: github-secret
+
+resources:
+  limits:
+    cpu: "500m"
+    memory: 256Mi
+  requests:
+    cpu: "100m"
+    memory: 128Mi
+
+nodeSelector:
+  kubernetes.io/arch: amd64
