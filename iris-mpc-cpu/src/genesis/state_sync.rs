@@ -85,6 +85,7 @@ impl SyncResult {
 impl SyncResult {
     /// Check if the common part of the config is the same across all nodes.
     pub fn check_synced_state(&self) -> Result<()> {
+        self.check_binary_hash()?;
         for state in &self.all_states {
             ensure!(
                 *state == self.my_state,
@@ -92,6 +93,19 @@ impl SyncResult {
                 summarize_sync_state(&self.my_state),
                 summarize_sync_state(state)
             );
+        }
+        Ok(())
+    }
+
+    /// Check that every node is running the same executable.
+    ///
+    /// # Errors
+    ///
+    /// If any node reports a different binary hash.
+    pub fn check_binary_hash(&self) -> Result<()> {
+        let mine = &self.my_state.common_config;
+        for state in &self.all_states {
+            mine.ensure_same_binary(&state.common_config)?;
         }
         Ok(())
     }
@@ -134,10 +148,21 @@ mod tests {
         }
     }
 
+    fn common_config_with_binary_hash(hash: &str) -> CommonConfig {
+        let mut value = serde_json::to_value(CommonConfig::default()).unwrap();
+        value["binary_hash"] = serde_json::Value::String(hash.to_owned());
+        serde_json::from_value(value).unwrap()
+    }
+
     impl SyncState {
         fn new_0(genesis_config: Config) -> Self {
             Self::new(CommonConfig::default(), genesis_config)
         }
+
+        fn new_with_binary_hash(hash: &str) -> Self {
+            Self::new(common_config_with_binary_hash(hash), Config::new_1())
+        }
+
         fn new_1() -> Self {
             Self::new_0(Config::new_1())
         }
@@ -173,6 +198,30 @@ mod tests {
             SyncState::new_2(),
         ]);
         assert!(result.check_synced_state().is_err());
+    }
+
+    #[test]
+    fn test_check_binary_hash_all_equal() {
+        let result = SyncResult::new_0(vec![
+            SyncState::new_with_binary_hash("abcdef123456"),
+            SyncState::new_with_binary_hash("abcdef123456"),
+            SyncState::new_with_binary_hash("abcdef123456"),
+        ]);
+        assert!(result.check_synced_state().is_ok());
+    }
+
+    #[test]
+    fn test_check_binary_hash_mismatch() {
+        let result = SyncResult::new_0(vec![
+            SyncState::new_with_binary_hash("abcdef123456"),
+            SyncState::new_with_binary_hash("abcdef123456"),
+            SyncState::new_with_binary_hash("999999999999"),
+        ]);
+        let err = result.check_synced_state().unwrap_err().to_string();
+        assert!(
+            err.contains("Binary mismatch"),
+            "genesis must abort with the binary-specific error, got: {err}"
+        );
     }
 
     #[test]
