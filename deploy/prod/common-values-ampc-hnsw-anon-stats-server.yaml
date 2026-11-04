@@ -1,7 +1,7 @@
-image: "ghcr.io/worldcoin/anon-stats-server:89f8ce521774ebbfb21b1deae5d2cce00c8fcb7b@sha256:1b5c93a46e33d5d6f3f97d31924a9f13f2ba9149a7d2701001c29a2849056252"
+image: "ghcr.io/worldcoin/anon-stats-server:ebff5227e9d85a403a8a0710ac87672b64745d27@sha256:f80dacaf450301f3b28b5cf171ca33da06255ee56cc10eb415ddce49cc6a2c24"
 
 environment: prod
-replicaCount: 0
+replicaCount: 1
 
 # Common environment variables shared across all anon-stats-server hnsw nodes.
 # Defined as a map so Helm deep-merges with per-node env maps.
@@ -20,8 +20,9 @@ env:
     valueFrom:
       secretKeyRef:
         key: SNS_RESULTS_ARN
-        name: application
+        name: iris-ampc-messaging
   SMPC__AWS__REGION: "eu-north-1"
+  SMPC__RESULTS_TOPIC_REGION: "eu-central-1"
   SMPC__SERVER_COORDINATION__HEARTBEAT_INITIAL_RETRIES: "5"
   SMPC__SERVER_COORDINATION__HTTP_QUERY_RETRY_DELAY_MS: "5000"
   SMPC__SERVER_COORDINATION__HEARTBEAT_INTERVAL_SECS: "3"
