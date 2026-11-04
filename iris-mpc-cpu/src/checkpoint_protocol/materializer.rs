@@ -5,7 +5,9 @@ use crate::checkpoint_protocol::{
     CheckpointMeta, CycleError, FreezeHeight, Graph, Materializer, MutationStore,
 };
 use crate::execution::hawk_main::BothEyes;
-use crate::graph_checkpoint::{download_graph, stream_download_and_deserialize_graph_pair};
+use crate::graph_checkpoint::{
+    download_graph, s3_key_exists, stream_download_and_deserialize_graph_pair,
+};
 use crate::hnsw::{graph::graph_store::GraphPg, VectorStore};
 use crate::utils::serialization::graph::{read_graph_pair, GraphFormat};
 use futures::TryStreamExt;
@@ -104,10 +106,66 @@ impl<V: VectorStore + Send + Sync> Materializer for RebuildFromCheckpoint<'_, V>
 
         let downloaded_hex = hex::encode(downloaded_hash);
         if downloaded_hex != base.blake3_hash {
-            return Err(CycleError::Fatal(format!(
-                "BLAKE3 mismatch for {}/{}: expected={} got={}",
-                self.bucket, base.s3_key, base.blake3_hash, downloaded_hex,
-            )));
+            // The row's hash does not describe the object it points at. The
+            // row is tombstoned; the object is deliberately left in place:
+            //
+            //  * the tombstone is party-local and reversible (one UPDATE flips
+            //    `is_deleted` back, and the row stays readable via
+            //    `get_genesis_graph_checkpoints_including_deleted`), so doing
+            //    it automatically forecloses nothing;
+            //  * deleting the object is neither. It is the only copy of the
+            //    evidence, and if the fault is a bad hash in the row rather
+            //    than bad bytes in S3, those bytes are still the good graph.
+            //
+            // So this is not a repair: it stops a base that no party can
+            // materialize from winning Phase 1 again, and nothing more.
+            // Whether the object is corrupt, superseded or tampered with —
+            // and whether it may be deleted — is an operator call.
+            //
+            // The tombstone also hides the row from the next cycle's check, so
+            // the mismatch is detected exactly once and later cycles go green
+            // on an older base. The counter and log below are therefore the
+            // signal to alert on, not the returned error.
+            metrics::counter!("checkpoint_base_hash_mismatch_total").increment(1);
+            let soft_deleted = match self
+                .graph_store
+                .delete_genesis_checkpoint(base.checkpoint_id)
+                .await
+            {
+                Ok(()) => {
+                    tracing::error!(
+                        checkpoint_id = base.checkpoint_id,
+                        s3_key = %base.s3_key,
+                        bucket = %self.bucket,
+                        expected = %base.blake3_hash,
+                        got = %downloaded_hex,
+                        "BLAKE3 mismatch: checkpoint row soft-deleted, s3 object retained \
+                         for inspection; operator must triage before it can be reused"
+                    );
+                    true
+                }
+                Err(e) => {
+                    tracing::error!(
+                        checkpoint_id = base.checkpoint_id,
+                        error = %e,
+                        "failed to soft-delete checkpoint after BLAKE3 mismatch"
+                    );
+                    false
+                }
+            };
+            let detail = format!(
+                "BLAKE3 mismatch for {}/{}: expected={} got={} (checkpoint_id={})",
+                self.bucket, base.s3_key, base.blake3_hash, downloaded_hex, base.checkpoint_id,
+            );
+            // Retryable only because the tombstone landed: the next cycle
+            // cannot agree on this row again, so it will converge on an older
+            // base. If the tombstone failed the row is still visible, a retry
+            // would re-agree on it and spin — that case has to stop the caller.
+            return Err(if soft_deleted {
+                CycleError::BaseRejected(format!("{detail}; row soft-deleted, retry will re-base"))
+            } else {
+                CycleError::Fatal(format!("{detail}; row could NOT be soft-deleted"))
+            });
         }
 
         // Replay WAL rows in `(base.graph_mutation_id, freeze]`. The Runner's
@@ -131,6 +189,37 @@ impl<V: VectorStore + Send + Sync> Materializer for RebuildFromCheckpoint<'_, V>
         tracing::info!(rows = applied, "materialize: WAL replay complete");
 
         Ok(graph)
+    }
+
+    async fn filter_available(
+        &self,
+        candidates: Vec<CheckpointMeta>,
+    ) -> Result<Vec<CheckpointMeta>, CycleError> {
+        let mut available = Vec::with_capacity(candidates.len());
+        for meta in candidates {
+            // Anything other than a clean "absent" answer is transient: the
+            // caller retries rather than discarding a base on a flaky probe.
+            let exists = s3_key_exists(self.s3_client, &self.bucket, &meta.s3_key)
+                .await
+                .map_err(|e| {
+                    CycleError::Transient(format!(
+                        "s3_key_exists({}/{}): {e}",
+                        self.bucket, meta.s3_key
+                    ))
+                })?;
+            if exists {
+                available.push(meta);
+            } else {
+                metrics::counter!("checkpoint_base_missing_object_total").increment(1);
+                tracing::warn!(
+                    checkpoint_id = meta.checkpoint_id,
+                    s3_key = %meta.s3_key,
+                    bucket = %self.bucket,
+                    "checkpoint row has no object in s3; excluding it from base proposals"
+                );
+            }
+        }
+        Ok(available)
     }
 }
 
