@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:v0.32.12@sha256:4d29fedde873bc94a52fc8275e91ceacd8c51fe9685e150e65cb4d9042d85334"
+image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:0c623e422cab18a8f9c4b4b03c3ba8f6e8c07d0b@sha256:c08a374202387ba5986beba125eb1fde2de10c94bdd940125001f24bafb062bf"
 
 environment: stage
 replicaCount: 1
@@ -29,16 +29,18 @@ env:
   SMPC__ANON_STATS_DATABASE__CREATE: "false"
   SMPC__ANON_STATS_DATABASE__LOAD_PARALLELISM: "8"
   SMPC__AWS__REGION: "eu-north-1"
+  SMPC__REQUESTS_QUEUE_REGION: "eu-central-1"
+  SMPC__RESULTS_TOPIC_REGION: "eu-central-1"
   SMPC__REQUESTS_QUEUE_URL:
     valueFrom:
       secretKeyRef:
         key: SQS_URL
-        name: application
+        name: iris-ampc-messaging
   SMPC__RESULTS_TOPIC_ARN:
     valueFrom:
       secretKeyRef:
         key: SNS_RESULTS_ARN
-        name: application
+        name: iris-ampc-messaging
   SMPC__PROCESSING_TIMEOUT_SECS: "120"
   SMPC__PATH: "/data/"
   SMPC__KMS_KEY_ARNS:
