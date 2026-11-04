@@ -42,3 +42,12 @@ POP4370_TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:55437/postgres 
 ```
 
 The database test uses the actual linear-scan entrypoint and worker loader with only an iris table present and no AWS/peer configuration. It checks retained versions, read-only enforcement across multiple connections, status semantics, shutdown, and startup failure.
+
+The three-party reconciliation regression uses three isolated schemas on one disposable Postgres instance:
+
+```sh
+SMPC__DATABASE__URL=postgres://postgres:postgres@127.0.0.1:55437/postgres \
+  cargo test -p iris-mpc --lib --features db_dependent three_party_reconciliation -- --test-threads=1
+```
+
+It generates deterministic, valid per-party shares, preloads all three candidates, simulates A's committed insert/update/removal writes, then freezes writes before reconciling with a common attempt, process cohorts, and watermark. It checks real report agreement, each party's own resident and cold-eye payloads (inside and outside the lookback), removed/stale IDs, and retained resident pool handles for either resident eye. A fresh cohort with one party's database version changed must fail agreement despite equal row counts. The cold wrapper is intentionally replaced during reconciliation; its private underlying worker handle is not asserted here. This exercises the local reconciliation primitive; serving status/passivity remains covered by the startup check above. Authenticated peer exchange, live A processes, writer fencing, and activation are outside this fixture.

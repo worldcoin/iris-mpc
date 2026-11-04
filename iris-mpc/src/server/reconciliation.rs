@@ -14,6 +14,9 @@ use uuid::Uuid;
 // Bound transient share payloads independently of total population or delta size.
 const APPLY_BATCH: usize = 128;
 
+#[cfg(all(test, feature = "db_dependent"))]
+mod three_party_tests;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReconciliationContext {
     attempt_id: Uuid,
