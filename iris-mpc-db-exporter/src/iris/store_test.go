@@ -69,3 +69,44 @@ func TestReadFailures(t *testing.T) {
 		}
 	}
 }
+
+func TestManagedWritesFailBeforeFirstEffect(t *testing.T) {
+	for _, method := range []string{"insert", "create", "drop"} {
+		for _, failure := range []string{"managed", "lookup failure"} {
+			t.Run(method+"/"+failure, func(t *testing.T) {
+				db, mock, err := sqlmock.New()
+				require.NoError(t, err)
+				store := &Store{db: db, schema: "canonical"}
+				lookup := mock.ExpectQuery("SELECT EXISTS").WithArgs("canonical")
+				if failure == "managed" {
+					lookup.WillReturnRows(sqlmock.NewRows([]string{"managed"}).AddRow(true))
+				} else {
+					lookup.WillReturnError(errors.New("database unavailable"))
+				}
+				switch method {
+				case "insert":
+					err = store.InsertIris(context.Background(), StoredIris{})
+				case "create":
+					err = store.CreateTable(context.Background())
+				case "drop":
+					err = store.DropTables(context.Background())
+				}
+				require.Error(t, err)
+				require.NoError(t, mock.ExpectationsWereMet())
+				mock.ExpectClose()
+				require.NoError(t, db.Close())
+			})
+		}
+	}
+}
+
+func TestTruncatedSchemaCannotBypassOwnershipProbe(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	for _, schema := range []string{"", "canonical\x00suffix", string(make([]byte, 64))} {
+		require.Error(t, rejectManagedWrite(context.Background(), db, schema))
+	}
+	require.NoError(t, mock.ExpectationsWereMet())
+	mock.ExpectClose()
+	require.NoError(t, db.Close())
+}

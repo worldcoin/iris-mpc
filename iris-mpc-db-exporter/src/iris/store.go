@@ -4,14 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
+	"time"
 
+	"github.com/lib/pq"
 	"go.uber.org/zap"
 	"gopkg.in/DataDog/dd-trace-go.v1/ddtrace/tracer"
 
 	"github.com/worldcoin/iris-mpc-db-exporter/src/config"
 	"github.com/worldcoin/iris-mpc-db-exporter/src/o11y"
-
-	_ "github.com/lib/pq"
 )
 
 const (
@@ -38,7 +39,7 @@ type Store struct {
 }
 
 func storedIrisesByRangeQuery(schema string) string {
-	return fmt.Sprintf(`SELECT id, last_modified_at, left_code, left_mask, right_code, right_mask, version_id FROM "%s".irises WHERE id >= $1 AND id <= $2 ORDER BY id ASC;`, schema)
+	return fmt.Sprintf(`SELECT id, last_modified_at, left_code, left_mask, right_code, right_mask, version_id FROM %s.irises WHERE id >= $1 AND id <= $2 ORDER BY id ASC;`, pq.QuoteIdentifier(schema))
 }
 
 func NewStore(ctx context.Context, db *sql.DB, config config.Config) *Store {
@@ -52,8 +53,12 @@ func NewStore(ctx context.Context, db *sql.DB, config config.Config) *Store {
 	// create schema if not exists - used for db populate in local environment
 	o11y.S(ctx).Infof("ENV: %s", config.Environment)
 	if config.Environment == "local" || config.Environment == "CI" {
+		if err := rejectManagedWrite(ctx, db, schema); err != nil {
+			o11y.S(ctx).With(zap.Error(err)).Fatal("Database ownership guard rejected schema creation")
+			return nil
+		}
 		o11y.S(ctx).Infof("Creating schema %s if not exists in local environment", schema)
-		createSchemaIfNotExistsCmd := fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS \"%s\";", schema)
+		createSchemaIfNotExistsCmd := fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s;", pq.QuoteIdentifier(schema))
 		_, err := db.Exec(createSchemaIfNotExistsCmd)
 		if err != nil {
 			o11y.S(ctx).With(zap.Error(err)).Fatalf("Failed to call create schema %s if not exists: %v", schema, err)
@@ -63,11 +68,30 @@ func NewStore(ctx context.Context, db *sql.DB, config config.Config) *Store {
 	return &Store{db: db, schema: schema}
 }
 
+// An authority marker is permanent: local flags and populate mode cannot opt out.
+func rejectManagedWrite(ctx context.Context, db *sql.DB, schema string) error {
+	// PostgreSQL truncates identifiers to 63 bytes; probe and write must target the same schema.
+	if len(schema) == 0 || len(schema) > 63 || strings.ContainsRune(schema, 0) {
+		return fmt.Errorf("invalid canonical schema identifier")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var managed bool
+	err := db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = 'cpu_cell_authority')", schema).Scan(&managed)
+	if err != nil {
+		return fmt.Errorf("check CPU-cell authority: %w", err)
+	}
+	if managed {
+		return fmt.Errorf("managed CPU-cell schema rejects exporter writes")
+	}
+	return nil
+}
+
 func (s *Store) GetCount(ctx context.Context) (int, error) {
 	span, ctx := tracer.StartSpanFromContext(ctx, "pgsql.get_count")
 	defer span.Finish()
 
-	query := fmt.Sprintf(`SELECT count(*) FROM "%s".irises;`, s.schema)
+	query := fmt.Sprintf(`SELECT count(*) FROM %s.irises;`, pq.QuoteIdentifier(s.schema))
 	rows, err := s.db.Query(query)
 
 	if err != nil {
@@ -161,7 +185,7 @@ func (s *Store) GetStoredIrisesOlderThanByRange(ctx context.Context, lastModifie
 	span.SetTag("startIndex", startIndex)
 	span.SetTag("endIndex", endIndex)
 
-	query := fmt.Sprintf(`SELECT id, last_modified_at, left_code, left_mask, right_code, right_mask, version_id FROM "%s".irises WHERE (id >= $1 AND id <= $2 AND last_modified_at < $3);`, s.schema)
+	query := fmt.Sprintf(`SELECT id, last_modified_at, left_code, left_mask, right_code, right_mask, version_id FROM %s.irises WHERE (id >= $1 AND id <= $2 AND last_modified_at < $3);`, pq.QuoteIdentifier(s.schema))
 	rows, err := s.db.Query(query, startIndex, endIndex, lastModifiedAt)
 	if err != nil {
 		return nil, err
@@ -186,11 +210,14 @@ func (s *Store) GetStoredIrisesOlderThanByRange(ctx context.Context, lastModifie
 }
 
 func (s *Store) InsertIris(ctx context.Context, iris StoredIris) error {
+	if err := rejectManagedWrite(ctx, s.db, s.schema); err != nil {
+		return err
+	}
 	span, ctx := tracer.StartSpanFromContext(ctx, "pgsql.insert_stored_iris")
 	defer span.Finish()
 
 	// Prepare the SQL query
-	query := fmt.Sprintf(`INSERT INTO "%s".irises (left_code, left_mask, right_code, right_mask, version_id) VALUES ($1, $2, $3, $4, $5);`, s.schema)
+	query := fmt.Sprintf(`INSERT INTO %s.irises (left_code, left_mask, right_code, right_mask, version_id) VALUES ($1, $2, $3, $4, $5);`, pq.QuoteIdentifier(s.schema))
 
 	// Execute the query
 	_, err := s.db.ExecContext(ctx, query, iris.LeftCode, iris.LeftMask, iris.RightCode, iris.RightMask, iris.VersionID)
@@ -203,11 +230,14 @@ func (s *Store) InsertIris(ctx context.Context, iris StoredIris) error {
 }
 
 func (s *Store) CreateTable(ctx context.Context) error {
+	if err := rejectManagedWrite(ctx, s.db, s.schema); err != nil {
+		return err
+	}
 	span, ctx := tracer.StartSpanFromContext(ctx, "pgsql.create_table")
 	defer span.Finish()
 
 	query := fmt.Sprintf(`
-    CREATE TABLE IF NOT EXISTS "%s".irises (
+    CREATE TABLE IF NOT EXISTS %s.irises (
         id BIGINT GENERATED BY DEFAULT AS IDENTITY (START WITH 1 MINVALUE 1) PRIMARY KEY,
         last_modified_at BIGINT DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT,
         left_code BYTEA,
@@ -215,7 +245,7 @@ func (s *Store) CreateTable(ctx context.Context) error {
         right_code BYTEA,
         right_mask BYTEA,
 	    version_id SMALLINT DEFAULT 0 CHECK (version_id >= 0)
-    );`, s.schema)
+    );`, pq.QuoteIdentifier(s.schema))
 
 	_, err := s.db.ExecContext(ctx, query)
 	if err != nil {
@@ -226,10 +256,13 @@ func (s *Store) CreateTable(ctx context.Context) error {
 }
 
 func (s *Store) DropTables(ctx context.Context) error {
+	if err := rejectManagedWrite(ctx, s.db, s.schema); err != nil {
+		return err
+	}
 	span, ctx := tracer.StartSpanFromContext(ctx, "pgsql.drop_tables")
 	defer span.Finish()
 
-	query := fmt.Sprintf(`DROP TABLE IF EXISTS "%s".irises;`, s.schema)
+	query := fmt.Sprintf(`DROP TABLE IF EXISTS %s.irises;`, pq.QuoteIdentifier(s.schema))
 
 	_, err := s.db.ExecContext(ctx, query)
 	if err != nil {
