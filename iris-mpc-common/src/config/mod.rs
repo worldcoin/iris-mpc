@@ -34,6 +34,19 @@ pub enum StartupMode {
     Candidate,
 }
 
+/// Deployment identity only. Each boot generates its own UUID and secret.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CpuCellConfig {
+    pub incarnation: String,
+    pub generation: String,
+    pub slot: String,
+    pub image: String,
+    pub schema_version: String,
+    pub protocol: String,
+    pub configuration: String,
+}
+
 fn default_cpu_drain_timeout_secs() -> u64 {
     300
 }
@@ -46,6 +59,9 @@ fn default_candidate_status_port() -> u16 {
 // to all lower case. ex: SMPC__SCHEMA_NAME -> schema_name.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default)]
+    pub cpu_cell: Option<CpuCellConfig>,
+
     /// Passive preloading is supported only by the CPU linear-scan service.
     #[serde(default)]
     pub startup_mode: StartupMode,
@@ -853,6 +869,7 @@ impl From<Config> for CommonConfig {
         // This is destructured here intentionally to cause a compile error if
         // any of the fields are added to the struct without being considered if they should be in the common config hash or not.
         let Config {
+            cpu_cell: _,     // local authority identity is checked by the database
             startup_mode: _, // candidate processes never join active coordination
             candidate_status_port: _,
             cpu_drain_timeout_secs: _, // local drain deadline does not change MPC computation

@@ -110,6 +110,23 @@ pub struct Drain {
     changed: Notify,
     ready: Mutex<Option<Arc<AtomicBool>>>,
     timeout: Duration,
+    ownership: Mutex<Option<Arc<super::ManagedStartup>>>,
+    durable_sealed: std::sync::atomic::AtomicBool,
+}
+
+// A canceled SQL future cannot tell us whether the seal committed.
+struct PendingSeal<'a> {
+    drain: &'a Drain,
+    completed: bool,
+}
+
+impl Drop for PendingSeal<'_> {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.drain
+                .fail("durable source seal interrupted; outcome unknown");
+        }
+    }
 }
 
 impl Drain {
@@ -140,6 +157,8 @@ impl Drain {
             changed: Notify::new(),
             ready: Mutex::new(None),
             timeout,
+            ownership: Mutex::new(None),
+            durable_sealed: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -159,7 +178,43 @@ impl Drain {
         *self.ready.lock().unwrap() = Some(ready);
     }
 
+    pub(super) fn require_durable_seal(&self, ownership: Arc<super::ManagedStartup>) {
+        *self.ownership.lock().unwrap() = Some(ownership);
+    }
+
+    /// Persist the exact approved attempt before publishing any drain evidence.
+    pub async fn request_managed(&self, attempt: &str) -> Result<()> {
+        let status = self.status();
+        eyre::ensure!(
+            status.error.is_none() && status.blocked_reason.is_none(),
+            "managed source is not drain-eligible"
+        );
+        let owner = self
+            .ownership
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| eyre::eyre!("managed drain requires a bound process"))?;
+        let mut pending = PendingSeal {
+            drain: self,
+            completed: false,
+        };
+        if let Err(error) = owner.authority.seal_source(&owner.binding, attempt).await {
+            self.fail("durable source seal failed");
+            pending.completed = true;
+            return Err(error);
+        }
+        self.durable_sealed.store(true, Ordering::SeqCst);
+        self.request();
+        pending.completed = true;
+        Ok(())
+    }
+
     pub fn request(&self) {
+        if self.ownership.lock().unwrap().is_some() && !self.durable_sealed.load(Ordering::SeqCst) {
+            self.fail("managed drain requires a durable source seal");
+            return;
+        }
         let mut inner = self.inner.lock().unwrap();
         if inner.status.requested {
             return;
@@ -328,6 +383,10 @@ impl Drain {
         self.inner.lock().unwrap().last_publication.clone()
     }
     pub fn publish_report(&self, report: Report) {
+        if self.ownership.lock().unwrap().is_some() && !self.durable_sealed.load(Ordering::SeqCst) {
+            self.fail("cannot publish managed drain proof without durable seal");
+            return;
+        }
         let mut inner = self.inner.lock().unwrap();
         if inner.status.error.is_none() {
             inner.status.report = Some(report);
@@ -548,6 +607,65 @@ impl Drain {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn managed_drain_rejects_direct_request_and_failed_durable_seal() -> Result<()> {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")?;
+        pool.close().await;
+        let ownership = Arc::new(super::super::ManagedStartup {
+            authority: iris_mpc_store::cpu_cell::CpuCellAuthority::new(pool, "canonical"),
+            binding: iris_mpc_store::cpu_cell::ProcessBinding {
+                incarnation: uuid::Uuid::new_v4().to_string(),
+                generation: uuid::Uuid::new_v4().to_string(),
+                process_id: uuid::Uuid::new_v4().to_string(),
+                secret: vec![1; 32],
+            },
+        });
+        let direct = Drain::new(0, Duration::from_secs(1), true);
+        direct.require_durable_seal(ownership.clone());
+        direct.request();
+        direct.publish_report(proof("100", 1));
+        assert!(direct.failed());
+        assert!(direct.status().report.is_none());
+        let managed = Drain::new(0, Duration::from_secs(1), true);
+        managed.require_durable_seal(ownership);
+        assert!(managed
+            .request_managed(&uuid::Uuid::new_v4().to_string())
+            .await
+            .is_err());
+        managed.publish_report(proof("100", 1));
+        assert!(managed.failed());
+        assert!(managed.status().report.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelling_pending_managed_seal_closes_admission() -> Result<()> {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")?;
+        let drain = Drain::new(0, Duration::from_secs(1), true);
+        drain.require_durable_seal(Arc::new(super::super::ManagedStartup {
+            authority: iris_mpc_store::cpu_cell::CpuCellAuthority::new(pool.clone(), "canonical"),
+            binding: iris_mpc_store::cpu_cell::ProcessBinding {
+                incarnation: uuid::Uuid::new_v4().to_string(),
+                generation: uuid::Uuid::new_v4().to_string(),
+                process_id: uuid::Uuid::new_v4().to_string(),
+                secret: vec![1; 32],
+            },
+        }));
+        let attempt = uuid::Uuid::new_v4().to_string();
+        let mut request = Box::pin(drain.request_managed(&attempt));
+        assert!(futures::poll!(&mut request).is_pending());
+        drop(request);
+        assert!(drain.requested());
+        assert!(drain.failed());
+        assert!(!drain.publish_offer(1, 1, || panic!("admission must stay closed")));
+        drain.publish_report(proof("100", 1));
+        assert!(drain.status().report.is_none());
+        pool.close().await;
+        Ok(())
+    }
 
     #[test]
     fn status_preserves_phase_wire_values_and_rejects_unknown_phases() {

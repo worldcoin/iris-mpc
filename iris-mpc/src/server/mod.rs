@@ -24,7 +24,7 @@ use ampc_server_utils::batch_sync::{CURRENT_BATCH_SHA, CURRENT_BATCH_VALID_ENTRI
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use ampc_server_utils::{
     delete_messages_until_sequence_num, get_next_sns_seq_num, get_others_sync_state,
-    init_heartbeat_task, set_node_ready, start_coordination_server_with_extra_routes,
+    init_heartbeat_task, set_node_ready, start_coordination_server_with_extra_routes_and_uuid,
     wait_for_others_ready, wait_for_startup_barriers, BatchSyncSharedState, TaskMonitor,
 };
 use chrono::Utc;
@@ -41,7 +41,9 @@ use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
 use iris_mpc_common::helpers::sqs_s3_helper::upload_file_to_s3;
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::job::JobSubmissionHandle;
-use iris_mpc_common::postgres::{run_migrations, AccessMode, PostgresClient};
+use iris_mpc_common::postgres::{
+    is_cpu_cell_managed, run_migrations, validate_migrations, AccessMode, PostgresClient,
+};
 use iris_mpc_cpu::checkpoint_protocol::runner::SidecarConfigWrapper;
 use iris_mpc_cpu::execution::hawk_main::iris_worker::IrisWorkerPool;
 use iris_mpc_cpu::execution::hawk_main::worker_pool_initializer::{
@@ -53,9 +55,11 @@ use iris_mpc_cpu::execution::hawk_main::{
 };
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
+use iris_mpc_store::cpu_cell::{CpuCellAuthority, GenerationIdentity, ProcessBinding};
 use iris_mpc_store::Store;
 use pprof::protos::Message;
 use pprof::ProfilerGuardBuilder;
+use rand::RngCore;
 use std::collections::HashMap;
 use std::process::exit;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -65,6 +69,7 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::RwLock;
 use tokio::time::timeout;
+use uuid::Uuid;
 
 const RNG_SEED_INIT_DB: u64 = 42;
 pub const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
@@ -124,7 +129,10 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
         );
     }
 
-    let (iris_store, graph_store) = prepare_stores(&config, search_mode).await?;
+    let process_id = Uuid::new_v4();
+    let ownership = initialize_ownership(&config, search_mode, process_id).await?;
+    let (iris_store, graph_store) =
+        prepare_stores_with_owner(&config, search_mode, ownership.as_deref()).await?;
 
     let aws_clients = init_aws_services(&config).await?;
     let shares_encryption_key_pair =
@@ -171,19 +179,24 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
             Duration::from_secs(config.cpu_drain_timeout_secs),
             config.db_backed_ingest,
         );
+        if let Some(ownership) = &ownership {
+            drain.require_durable_seal(ownership.clone());
+        }
         Some(drain)
     } else {
         None
     };
-    let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server_with_extra_routes(
-        &server_coord_config,
-        &mut background_tasks,
-        &shutdown_handler,
-        &my_state,
-        Some(batch_sync_shared_state.clone()),
-        drain.as_ref().map(|drain| drain.routes()),
-    )
-    .await;
+    let (is_ready_flag, verified_peers, my_uuid) =
+        start_coordination_server_with_extra_routes_and_uuid(
+            &server_coord_config,
+            &mut background_tasks,
+            &shutdown_handler,
+            &my_state,
+            Some(batch_sync_shared_state.clone()),
+            drain.as_ref().map(|drain| drain.routes()),
+            process_id,
+        )
+        .await;
     if let Some(drain) = &drain {
         drain.initialize(my_uuid.clone(), is_ready_flag.clone());
     }
@@ -536,6 +549,85 @@ async fn prepare_stores(
     config: &Config,
     search_mode: HawkSearchMode,
 ) -> Result<(Store, GraphPg<Aby3Store<HawkOps>>), Report> {
+    prepare_stores_with_owner(config, search_mode, None).await
+}
+
+pub(super) struct ManagedStartup {
+    authority: CpuCellAuthority,
+    binding: ProcessBinding,
+}
+
+/// This gate precedes schema creation, migration, recovery and external effects.
+async fn initialize_ownership(
+    config: &Config,
+    search_mode: HawkSearchMode,
+    process_id: Uuid,
+) -> Result<Option<Arc<ManagedStartup>>> {
+    if config.cpu_cell.is_some() && search_mode != HawkSearchMode::LinearScan {
+        bail!("CPU-cell ownership is supported only by CPU linear scan");
+    }
+    let (schema, db) = match search_mode {
+        HawkSearchMode::Hnsw => (config.get_cpu_db_schema(), config.cpu_database.as_ref()),
+        HawkSearchMode::LinearScan => (config.get_gpu_db_schema(), config.database.as_ref()),
+    };
+    let db = db.ok_or_else(|| eyre!("missing database for CPU-cell authority check"))?;
+    let control = PostgresClient::new_control(&db.url, &schema).await?;
+    if !is_cpu_cell_managed(&control.pool, &schema).await? {
+        control.pool.close().await;
+        if config.cpu_cell.is_some() {
+            bail!("CPU-cell configuration requires a provisioned authority");
+        }
+        return Ok(None);
+    }
+    let identity = config
+        .cpu_cell
+        .as_ref()
+        .ok_or_else(|| eyre!("managed CPU-cell schema requires cpu_cell configuration"))?;
+    if search_mode != HawkSearchMode::LinearScan
+        || config.fake_db_size > 0
+        || config.init_db_size > 0
+        || config.clear_db_before_init
+        || !config.db_backed_ingest
+        || config.disable_persistence
+    {
+        bail!("managed CPU-cell requires persistent exact scan with DB-backed intake and no seed/clear operations");
+    }
+    Uuid::parse_str(&identity.incarnation).wrap_err("invalid CPU-cell incarnation")?;
+    Uuid::parse_str(&identity.generation).wrap_err("invalid CPU-cell generation")?;
+    let mut secret = vec![0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut secret);
+    let binding = ProcessBinding {
+        incarnation: identity.incarnation.clone(),
+        generation: identity.generation.clone(),
+        process_id: process_id.to_string(),
+        secret,
+    };
+    let authority = CpuCellAuthority::new(control.pool, &schema);
+    authority
+        .bind_process(
+            &binding,
+            &GenerationIdentity {
+                slot: identity.slot.clone(),
+                image: identity.image.clone(),
+                schema_version: identity.schema_version.clone(),
+                protocol: identity.protocol.clone(),
+                configuration: identity.configuration.clone(),
+            },
+        )
+        .await?;
+    if config.startup_mode == StartupMode::Candidate {
+        authority.assert_candidate(&binding).await?;
+    } else {
+        authority.assert_owner(&binding).await?;
+    }
+    Ok(Some(Arc::new(ManagedStartup { authority, binding })))
+}
+
+async fn prepare_stores_with_owner(
+    config: &Config,
+    search_mode: HawkSearchMode,
+    ownership: Option<&ManagedStartup>,
+) -> Result<(Store, GraphPg<Aby3Store<HawkOps>>), Report> {
     let (schema_name, db_config) = match search_mode {
         HawkSearchMode::Hnsw => (
             config.get_cpu_db_schema(),
@@ -554,13 +646,25 @@ async fn prepare_stores(
                 .ok_or(eyre!("Missing GPU-compatible database config"))?,
         ),
     };
-    let hawk_postgres_client =
-        PostgresClient::new(&db_config.url, &schema_name, AccessMode::ReadWrite).await?;
-    run_migrations(
-        &hawk_postgres_client.pool,
-        db_config.ignore_missing_migrations,
-    )
-    .await?;
+    let hawk_postgres_client = if let Some(owner) = ownership {
+        let binding = &owner.binding;
+        let client = PostgresClient::new_owned(
+            &db_config.url,
+            &schema_name,
+            &binding.incarnation,
+            &binding.generation,
+            &binding.process_id,
+            &binding.secret,
+        )
+        .await?;
+        validate_migrations(&client.pool, db_config.ignore_missing_migrations).await?;
+        client
+    } else {
+        let client =
+            PostgresClient::new(&db_config.url, &schema_name, AccessMode::ReadWrite).await?;
+        run_migrations(&client.pool, db_config.ignore_missing_migrations).await?;
+        client
+    };
 
     let iris_store = Store::new(&hawk_postgres_client).await?;
     let graph_store = GraphStore::new(&hawk_postgres_client).await?;
@@ -1396,6 +1500,66 @@ async fn run_main_server_loop(
 #[cfg(test)]
 mod config_tests {
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires POP4453_TEST_DATABASE_URL pointing to disposable PostgreSQL"]
+    async fn startup_authority_denial_precedes_first_canonical_effect() -> Result<()> {
+        use sqlx::Executor;
+        let url = std::env::var("POP4453_TEST_DATABASE_URL")?;
+        let schema_prefix = format!("startup_{}", Uuid::new_v4().simple());
+        let mut config: Config = serde_json::from_value(serde_json::json!({
+            "schema_name": schema_prefix,
+            "max_batch_size": 1,
+            "disable_persistence": false,
+            "full_scan_side_switching_enabled": false,
+            "enable_s3_importer": false,
+            "hawk_numa": false,
+            "luc_enabled": true,
+            "luc_lookback_records": 10,
+            "db_backed_ingest": true,
+            "enable_modifications_sync": true,
+            "database": {"url": url, "load_parallelism": 2},
+            "cpu_cell": {"incarnation": Uuid::new_v4().to_string(), "generation": Uuid::new_v4().to_string(), "slot": "a", "image": "immutable-image", "schema_version": "1", "protocol": "1", "configuration": "config-id"}
+        }))?;
+        let schema = config.get_gpu_db_schema();
+        let admin = sqlx::PgPool::connect(&url).await?;
+        admin.execute(format!("CREATE SCHEMA {schema}; CREATE TABLE {schema}.cpu_cell_authority (id int); CREATE FUNCTION {schema}.cpu_cell_bind_process(uuid,uuid,uuid,bytea,text,text,text,text,text) RETURNS void LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'startup first-effect sentinel rejected ownership'; END $$;").as_str()).await?;
+        // No canonical tables or migration history exist. Reaching live startup,
+        // migrations, claim recovery, or AWS initialization would change this error.
+        for mode in [StartupMode::Active, StartupMode::Candidate] {
+            config.startup_mode = mode;
+            let error = linear_scan_server_main(config.clone()).await.unwrap_err();
+            assert!(
+                format!("{error:?}").contains("startup first-effect sentinel"),
+                "{error:?}"
+            );
+        }
+        config.cpu_cell = None;
+        let error = linear_scan_server_main(config).await.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("requires cpu_cell configuration"));
+        let tables: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relkind='r'").bind(&schema).fetch_one(&admin).await?;
+        assert_eq!(
+            tables, 1,
+            "denied startup must not create migration or canonical tables"
+        );
+        admin
+            .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+            .await?;
+        admin.close().await;
+        Ok(())
+    }
+
+    #[test]
+    fn cpu_cell_configuration_cannot_supply_process_credentials() {
+        let mut value = serde_json::json!({"incarnation":"i", "generation":"g", "slot":"a", "image":"img", "schema_version":"s", "protocol":"p", "configuration":"c"});
+        assert!(
+            serde_json::from_value::<iris_mpc_common::config::CpuCellConfig>(value.clone()).is_ok()
+        );
+        value["secret"] = serde_json::json!("configured-secret");
+        assert!(serde_json::from_value::<iris_mpc_common::config::CpuCellConfig>(value).is_err());
+    }
 
     #[test]
     fn linear_scan_requires_persistence() {
