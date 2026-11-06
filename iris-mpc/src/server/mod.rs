@@ -1,5 +1,6 @@
 mod candidate;
 pub mod drain;
+pub mod reconciliation;
 pub mod registry_diff;
 
 use crate::services::aws::clients::AwsClients;
