@@ -15,6 +15,7 @@ reason = "metrics crate uses a global recorder - multiple versions may break met
 [advisories]
 version = 2
 ignore = [
+    { id = "RUSTSEC-2026-0441", reason = "pin-utils is an unmaintained transitive AWS SDK dependency; remove this exception when the AWS dependency chain no longer requires it." },
     { id = "RUSTSEC-2024-0436", reason = "deep subdependency from several aws and sqlx crates" },
     # rustls-pemfile is required by reqwest and tonic, we will switch once they do
     { id = "RUSTSEC-2025-0134", reason = "No mature alternative available yet" },
