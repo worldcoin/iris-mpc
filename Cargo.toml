@@ -37,7 +37,7 @@ aws-sdk-kms = { version = "1.115.0", default-features = false, features = ["defa
 aws-sdk-rds = { version = "1.144.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-sns = { version = "1.108.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-sqs = { version = "1.106.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
-aws-sdk-s3 = { version = "1.142.0", default-features = false, features = ["http-1x", "default-https-client", "rt-tokio"] }
+aws-sdk-s3 = { version = "1.144.0", default-features = false, features = ["http-1x", "default-https-client", "rt-tokio"] }
 aws-sdk-secretsmanager = { version = "1.112.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 async-trait = "0.1.83"
 axum = "0.7"
