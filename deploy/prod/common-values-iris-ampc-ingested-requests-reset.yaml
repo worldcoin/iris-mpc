@@ -3,7 +3,7 @@ image: "ghcr.io/worldcoin/retention-reaper:v0.32.12@sha256:4e6434646504c7ef09ae6
 environment: prod
 replicaCount: 1
 suspend: false
-schedule: "0 0 31 2 *"
+schedule: "42 11 * * *"
 concurrencyPolicy: Forbid
 backoffLimit: 0
 
