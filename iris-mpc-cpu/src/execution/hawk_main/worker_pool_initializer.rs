@@ -10,7 +10,9 @@ use crate::hawkers::aby3::aby3_store::{
     Aby3SharedIrises, Aby3Store, DistanceMode, VectorIdRegistryRef,
 };
 use crate::hawkers::shared_irises::{SharedIrises, SharedIrisesRef};
-use crate::protocol::shared_iris::{GaloisRingSharedIris, ResidentIris, ResidentLayout, Residents};
+use crate::protocol::shared_iris::{
+    ArcIris, GaloisRingSharedIris, ResidentIris, ResidentLayout, Residents,
+};
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use async_trait::async_trait;
 use eyre::Result;
@@ -28,6 +30,93 @@ pub struct InitializedWorkers {
     pub pools: BothEyes<Arc<dyn IrisWorkerPool>>,
     /// Metadata-only registries with `next_id` and `set_hash` populated.
     pub registries: BothEyes<VectorIdRegistryRef>,
+    passive: Option<PassivePools>,
+}
+
+struct PassivePools {
+    pools: BothEyes<LocalIrisWorkerPool>,
+    cold: (Store, usize, usize, usize),
+}
+
+impl InitializedWorkers {
+    pub fn passive_resident_side(&self) -> Result<usize> {
+        let passive = self
+            .passive
+            .as_ref()
+            .ok_or_else(|| eyre::eyre!("workers are not an unreconciled passive preload"))?;
+        Ok(passive.cold.1)
+    }
+
+    /// Caller exclusively owns these passive pools and has frozen canonical writers.
+    /// Only already-emitted diff entries may be applied while a diff is live.
+    pub async fn reconcile_batch(
+        &self,
+        updates: Vec<(VectorId, ArcIris)>,
+        removals: &[VectorId],
+    ) -> Result<()> {
+        let passive = self
+            .passive
+            .as_ref()
+            .ok_or_else(|| eyre::eyre!("workers are not a passive preload"))?;
+        let resident_side = passive.cold.1;
+        let ids = updates.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+        passive.pools[resident_side]
+            .reconcile_resident(updates, removals)
+            .await?;
+        for registry in &self.registries {
+            let mut registry = registry.write().await;
+            for id in removals {
+                registry.remove(id.serial_id());
+            }
+            for id in &ids {
+                registry.insert(*id, ());
+            }
+        }
+        Ok(())
+    }
+
+    /// Initialize the deferred cold eye at the frozen state, retaining its worker
+    /// threads and stores. Only the configured lookback window is reread; old
+    /// cached payloads/overlays never survive into the reconciled cold wrapper.
+    pub async fn finish_reconciliation(&mut self, deadline: tokio::time::Instant) -> Result<()> {
+        let passive = self
+            .passive
+            .take()
+            .ok_or_else(|| eyre::eyre!("workers are not a passive preload"))?;
+        // Match ordinary startup after physical tail removal, including across
+        // candidates whose preloads observed different historical maxima.
+        for registry in &self.registries {
+            let mut registry = registry.write().await;
+            let last = registry
+                .get_points()
+                .iter()
+                .rposition(Option::is_some)
+                .unwrap_or(0);
+            registry.next_id = u32::try_from(last)?
+                .checked_add(1)
+                .ok_or_else(|| eyre::eyre!("canonical serial ID exhausted"))?;
+        }
+        let (store, resident_side, luc_window_capacity, lfu_cache_capacity) = passive.cold;
+        let side = 1 - resident_side;
+        let luc_window_ids = self.registries[side]
+            .read()
+            .await
+            .last_vector_ids(luc_window_capacity);
+        let cold = passive.pools[side]
+            .initialize_reconciled_cold(
+                ColdStorageInit {
+                    store,
+                    side,
+                    luc_window_ids,
+                    luc_window_capacity,
+                    lfu_cache_capacity,
+                },
+                deadline,
+            )
+            .await?;
+        self.pools[side] = Arc::new(cold);
+        Ok(())
+    }
 }
 
 /// One-shot setup for the per-eye worker pools.
@@ -83,8 +172,8 @@ impl LocalWorkerPoolInitializer {
         }
     }
 
-    /// Keep passive preloads local. The cold-eye cache must be initialized
-    /// after reconciliation; rereading it while the active cell writes can
+    /// Requires a database preload with one resident eye. Initialize the cold-eye
+    /// cache after reconciliation; rereading it while the active cell writes can
     /// otherwise disagree with versions captured by the resident-eye loader.
     pub fn defer_cold_storage(mut self) -> Self {
         self.defer_cold_storage = true;
@@ -141,6 +230,13 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
             layout,
             defer_cold_storage,
         } = *self;
+
+        eyre::ensure!(
+            !defer_cold_storage
+                || matches!(&mode, LocalInitMode::LoadFromDb(params)
+                    if params.resident_side.is_some_and(|side| side < 2)),
+            "deferred cold storage requires a database preload with one resident eye"
+        );
 
         // Each eye's store builds its residents in the configured layout; a
         // grouped layout gives each eye its own arena.
@@ -244,9 +340,11 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
         };
 
         let resident_side = cold_storage.as_ref().map(|(_, side, _, _)| *side);
-        if defer_cold_storage {
-            cold_storage = None;
-        }
+        let deferred_cold = if defer_cold_storage {
+            cold_storage.take()
+        } else {
+            None
+        };
         let mut cold_worker =
             if let Some((store, resident_side, luc_window_capacity, lfu_cache_capacity)) =
                 cold_storage
@@ -277,6 +375,7 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                 None
             };
 
+        let mut passive_pools = [None, None];
         let pools: BothEyes<Arc<dyn IrisWorkerPool>> = [LEFT, RIGHT].map(|side| {
             let worker = if cold_worker
                 .as_ref()
@@ -292,6 +391,9 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
                     party_id,
                 )
             };
+            if defer_cold_storage {
+                passive_pools[side] = Some(worker.clone());
+            }
             Arc::new(worker) as Arc<dyn IrisWorkerPool>
         });
 
@@ -324,7 +426,15 @@ impl WorkerPoolInitializer for LocalWorkerPoolInitializer {
             ),
         }
 
-        Ok(InitializedWorkers { pools, registries })
+        let passive = deferred_cold.map(|cold| PassivePools {
+            pools: passive_pools.map(|pool| pool.expect("passive local pools initialized")),
+            cold,
+        });
+        Ok(InitializedWorkers {
+            pools,
+            registries,
+            passive,
+        })
     }
 }
 
@@ -392,6 +502,46 @@ impl InMemoryStore for FanoutLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn deferred_cold_storage_rejects_preloads_without_one_resident_eye() -> Result<()> {
+        let initializer = LocalWorkerPoolInitializer::new_empty(0, DistanceMode::Simple, false);
+        let error = Box::new(initializer.defer_cold_storage())
+            .initialize()
+            .await
+            .err()
+            .expect("empty preload has no cold-eye configuration");
+        assert!(error.to_string().contains("one resident eye"));
+        let store = Store::new(&iris_mpc_common::postgres::PostgresClient {
+            pool: sqlx::postgres::PgPoolOptions::new()
+                .connect_lazy("postgres://unused:unused@localhost/unused")?,
+            schema_name: "unused".into(),
+        })
+        .await?;
+        for resident_side in [None, Some(2)] {
+            let initializer = LocalWorkerPoolInitializer::new_load_from_db(
+                0,
+                DistanceMode::Simple,
+                false,
+                DbLoadParams {
+                    store: store.clone(),
+                    config: Arc::new(serde_json::from_value(serde_json::json!({}))?),
+                    max_serial_id: 0,
+                    parallelism: 1,
+                    s3_max_serial_id: None,
+                    shutdown_handler: Arc::new(ShutdownHandler::new(0)),
+                    resident_side,
+                },
+            );
+            let error = Box::new(initializer.defer_cold_storage())
+                .initialize()
+                .await
+                .err()
+                .expect("invalid cold-eye configuration must fail before loading");
+            assert!(error.to_string().contains("one resident eye"));
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     async fn single_eye_loader_does_not_materialize_cold_eye() -> Result<()> {
