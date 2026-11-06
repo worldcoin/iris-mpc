@@ -1,9 +1,8 @@
 //! Passive exact-scan preload. This path never enters active coordination.
 
-use super::registry_diff::CandidateRegistry;
+use super::reconciliation::CandidateReconciliation;
 use super::*;
 use axum::{extract::State, http::StatusCode, routing::get, Json, Router};
-use iris_mpc_cpu::execution::hawk_main::worker_pool_initializer::InitializedWorkers;
 use serde::Serialize;
 use tokio::net::TcpListener;
 use uuid::Uuid;
@@ -22,10 +21,7 @@ struct CandidateStatus {
 type Status = Arc<RwLock<CandidateStatus>>;
 
 // The cold-eye pool is deliberately uninitialized; this is not a serving actor.
-struct CandidatePreload {
-    workers: InitializedWorkers,
-    registry: CandidateRegistry,
-}
+type CandidatePreload = CandidateReconciliation;
 
 pub(super) fn validate_config(config: &Config, mode: HawkSearchMode) -> Result<()> {
     if mode != HawkSearchMode::LinearScan {
@@ -130,7 +126,7 @@ async fn preload_and_wait(
     Ok(())
 }
 
-async fn preload(
+pub(super) async fn preload(
     config: &Config,
     shutdown: Arc<ShutdownHandler>,
     process_id: Uuid,
@@ -180,8 +176,7 @@ async fn preload(
     )
     .initialize()
     .await?;
-    let registry = CandidateRegistry::new(process_id, workers.registries.clone())?;
-    Ok(CandidatePreload { workers, registry })
+    CandidateReconciliation::new(config.party_id, process_id, workers)
 }
 
 #[cfg(test)]
