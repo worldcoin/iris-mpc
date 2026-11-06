@@ -61,45 +61,28 @@ The architecture of both the GPU and CPU client implementations is based on the 
 
 This security model forms the baseline of the implementation, and any attacks or exploits which can succeed under these fairly strong assumptions should be considered meaningful vulnurabilities.  Attacks or exploits which require weakening of these assumptions to be viable are not considered critical.  However, the codebase does incorporate some mechanisms targeting "defense in depth", providing redundant protections or limited protections under weaker adversarial assumptions, so reports of such attacks are welcome and may be acted on if the costs of mitigation to performance and codebase complexity are acceptable.
 
-### Production key registry (`keys.json`)
+### Public key registries
 
-`keys.json` lists the participating organizations and their public key locations. Entries are grouped under `iris.parties`, which must contain exactly one entry for each of `fau`, `berkeley-university`, and `kaist-university`. Array order is unrestricted; empty, missing, duplicate, and unknown parties are rejected.
+`keys.json` contains production keys; `keys-staging.json` contains staging keys. Each registry's `iris.parties` array contains exactly one entry per party: `fau` → share 0, `berkeley-university` → share 1, `kaist-university` → share 2. Array order does not matter.
 
-| Field | Type | Description |
-|---|---|---|
-| `slu` | String | Exactly one of `fau`, `berkeley-university`, or `kaist-university`. |
-| `pub` | String or array of strings | URL of the party’s public key, or multiple URLs providing mirrors of the same key. |
-| `chk` | String | Expected checksum as `sha256:<64 hex digits>` or `sha512:<128 hex digits>`. Hex digits are case-insensitive. |
+| Field | Value |
+|---|---|
+| `slu` | Party identifier above. |
+| `key_b64` | Canonical padded standard base64 encoding of a 32-byte public key, without whitespace. |
+| `pub` | HTTP(S) URL or nonempty URL array; every endpoint must serve exactly the `key_b64` text. Credentials and fragments are forbidden. |
+| `chk` | `sha256:<64 hex digits>` or `sha512:<128 hex digits>`; hex is case-insensitive. Hash the ASCII base64 text, without JSON quotes or a newline, not the decoded key bytes. |
 
-Every URL in `pub` must serve the same public key bytes, and URL arrays must be nonempty. Consumers should verify the downloaded key against `chk` before using it. Checksums cover the entire downloaded file without normalization. After checksum verification, CI requires canonical standard base64 encoding of exactly 32 bytes, matching Oxide's decoder. Whitespace (including a trailing newline), missing or excess padding, URL-safe base64 characters, and nonzero unused padding bits are rejected. URLs must use HTTP or HTTPS, have a host, and contain neither credentials nor fragments (`#...`).
+Retain `pub` and `chk` for older clients.
 
-For example, a FAU party entry has this shape:
+CI validates production only. Every mirror must pass; download failures also fail validation. Downloads have a 30-second timeout and 1 MiB limit. This repository's raw GitHub URLs targeting `main` use checkout files, which must not contain symlinks. Configure `Validate public key registry` as a required status check to enforce the gate.
 
-```json
-{
-  "slu": "fau",
-  "pub": [
-    "https://pki-smpc.worldcoin.org/public-key-0"
-  ],
-  "chk": "sha256:613696db7be07adb5ccb06d50b12a3cb96914346d6f3a050669844c89542b372"
-}
+For production rotation, coordinate publication of the same new key to every remote source in `pub` (including `pki-smpc.worldcoin.org`) with a PR updating `certs/party-N.pub`, `key_b64`, and `chk`. Calculate SHA-256 with `shasum -a 256 certs/party-N.pub` and prefix the digest with `sha256:`. Refresh staging snapshots as needed; CI does not check them.
+
+Validate production against the checkout:
+
+```sh
+python3 scripts/check-key-checksums.py keys.json --repository worldcoin/iris-mpc --repo-root .
 ```
-
-The `Check public key checksums` GitHub workflow reports a `Validate public key registry` check for every pull request and push to `main`. It runs the validator tests and key validation when changes touch `keys.json`, `certs/**`, `scripts/check-key-checksums.py`, `scripts/tests/test_check_key_checksums.py`, or `.github/workflows/check-key-checksums.yaml`. Unrelated changes pass without downloading keys. If the previous commit is unavailable, validation runs conservatively. This internal change detection allows the check to be required without leaving unrelated PRs waiting on a workflow skipped by path filters.
-
-Validation checks **every** URL, including every mirror, and fails on malformed entries or keys, unsupported algorithms, missing files, download errors, or checksum mismatches. Downloads have a 30-second timeout and all keys have a 1 MiB size limit. A mirror outage fails CI even if another mirror works. Oxide intentionally fails closed on invalid published manifests, so this gate must catch incompatible registry changes before merge. Repository administrators must separately make `Validate public key registry` a required status check to enforce that gate; adding the workflow alone does not enforce it.
-
-For keys stored in this repository, use a URL such as `https://raw.githubusercontent.com/worldcoin/iris-mpc/refs/heads/main/certs/party.pub`. CI verifies these URLs against the corresponding file in its checkout, so a PR can add or update both the key and its checksum before the key is available on `main`. The shorter `/worldcoin/iris-mpc/main/certs/party.pub` form also works. Missing checkout files fail validation without falling back to the published version. URLs for other repositories or refs, and external mirrors, are downloaded normally. This checks the proposed repository contents; it does not check availability of the raw GitHub URL. Changes to certificate files alone also trigger validation, so update their checksums in `keys.json` in the same change.
-
-Only SHA-256 and SHA-512 are supported.
-
-Repository-hosted key paths must not contain symlinks, including in parent directories, because GitHub raw URLs do not serve the dereferenced checkout contents.
-
-Raw GitHub hostname matching is case-insensitive and accepts an explicit default port (`:443` for HTTPS or `:80` for HTTP). When checkout validation is enabled, raw GitHub URLs with credentials or non-default ports are rejected.
-
-Run the same validation locally with `python3 scripts/check-key-checksums.py keys.json`. To generate a checksum, run `sha256sum key.pub` or `sha512sum key.pub` (on macOS, `shasum -a 256 key.pub` or `shasum -a 512 key.pub`). Prefix the resulting hex digest with `sha256:` or `sha512:`.
-
-To also validate repository-hosted keys against your local checkout, run `python3 scripts/check-key-checksums.py keys.json --repository worldcoin/iris-mpc --repo-root .`.
 
 ## GPU Implementation
 
