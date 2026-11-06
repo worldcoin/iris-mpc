@@ -1907,6 +1907,57 @@ impl LocalIrisWorkerPool {
         }
     }
 
+    /// Apply canonical payloads directly while the pool is passive and exclusively
+    /// owned. No queued mutation can outlive cancellation of this future.
+    pub(crate) async fn reconcile_resident(
+        &self,
+        updates: Vec<(VectorId, ArcIris)>,
+        removals: &[VectorId],
+    ) -> Result<()> {
+        eyre::ensure!(
+            self.cold_storage.is_none(),
+            "reconciliation requires a passive resident pool"
+        );
+        let updates = updates
+            .into_iter()
+            .map(|(id, iris)| (id, self.residents.resident(id, iris)))
+            .collect::<Vec<_>>();
+        let mut store = self.iris_store.write().await;
+        for id in removals {
+            store.remove(id.serial_id());
+        }
+        for (id, iris) in updates {
+            store.insert(id, iris);
+        }
+        self.query_cache.write().unwrap().clear();
+        Ok(())
+    }
+
+    pub(crate) async fn initialize_reconciled_cold(
+        &self,
+        init: ColdStorageInit,
+        deadline: tokio::time::Instant,
+    ) -> Result<Self> {
+        let result = Self::new_cold_inner(
+            self.inner.clone(),
+            self.iris_store.clone(),
+            self.residents.clone(),
+            self.mode,
+            self.party_id,
+            init,
+            Some(deadline),
+        )
+        .await?;
+        // The old preload lookback is now superseded by the exact-version cache.
+        let mut store = self.iris_store.write().await;
+        *store = crate::hawkers::shared_irises::SharedIrises::new(
+            HashMap::new(),
+            store.empty_iris.clone(),
+        );
+        self.query_cache.write().unwrap().clear();
+        Ok(result)
+    }
+
     /// Construct the non-resident eye of a linear-scan actor. Its complete
     /// iris column remains in Postgres. The current LUC window is retained in
     /// memory; frequently used older candidates enter a bounded TinyLFU cache.
@@ -1920,6 +1971,18 @@ impl LocalIrisWorkerPool {
         party_id: usize,
         init: ColdStorageInit,
     ) -> Result<Self> {
+        Self::new_cold_inner(inner, iris_store, residents, mode, party_id, init, None).await
+    }
+
+    async fn new_cold_inner(
+        inner: IrisPoolHandle,
+        iris_store: SharedIrisesRef<ResidentIris>,
+        residents: Residents,
+        mode: DistanceMode,
+        party_id: usize,
+        init: ColdStorageInit,
+        deadline: Option<tokio::time::Instant>,
+    ) -> Result<Self> {
         let ColdStorageInit {
             store,
             side,
@@ -1931,7 +1994,14 @@ impl LocalIrisWorkerPool {
             .iter()
             .map(|id| id.serial_id() as i64)
             .collect_vec();
-        let rows = store.get_iris_data_by_ids_for_side(&db_ids, side).await?;
+        let rows = match deadline {
+            Some(deadline) => {
+                store
+                    .get_iris_data_by_ids_for_side_before(&db_ids, side, deadline)
+                    .await?
+            }
+            None => store.get_iris_data_by_ids_for_side(&db_ids, side).await?,
+        };
         let mut cached = Vec::with_capacity(rows.len());
         for row in rows {
             let vector_id = row.vector_id();
@@ -2704,6 +2774,62 @@ mod tests {
     use crate::hawkers::shared_irises::SharedIrises;
 
     const TEST_TARGETS: usize = 513;
+
+    #[tokio::test]
+    async fn reconciled_cold_wrapper_discards_all_old_cache_layers() -> Result<()> {
+        let store = Store::new(&iris_mpc_common::postgres::PostgresClient {
+            pool: sqlx::postgres::PgPoolOptions::new()
+                .connect_lazy("postgres://unused:unused@localhost/unused")?,
+            schema_name: "unused".into(),
+        })
+        .await?;
+        let residents = Residents::new(ResidentLayout::U16, 0);
+        let storage = residents
+            .build_store(crate::hawkers::aby3::aby3_store::Aby3Store::<
+                crate::execution::hawk_main::HawkOps,
+            >::new_storage(None))
+            .to_arc();
+        let inner = init_workers(1, storage.clone(), false, residents.clone());
+        let make_init = || ColdStorageInit {
+            store: store.clone(),
+            side: 1,
+            luc_window_ids: vec![],
+            luc_window_capacity: 4,
+            lfu_cache_capacity: 4,
+        };
+        let old = LocalIrisWorkerPool::new_cold(
+            inner,
+            storage,
+            residents,
+            DistanceMode::Simple,
+            0,
+            make_init(),
+        )
+        .await?;
+        let id = VectorId::new(3, 1);
+        let iris = Arc::new(GaloisRingSharedIris::default_for_party(0));
+        {
+            let mut state = old.cold_storage.as_ref().unwrap().state.write().await;
+            state.luc_cache.apply_mutation(id, iris.clone());
+            state.lfu_cache.insert(id, iris.clone());
+            state.pending_mutations.push(id, iris.clone());
+            state.prefetched.insert(id, PrefetchEntry::Ready(iris));
+            assert!(state.mutation_or_luc_iris(&id).is_some());
+        }
+        let new = old
+            .initialize_reconciled_cold(
+                make_init(),
+                tokio::time::Instant::now() + std::time::Duration::from_secs(5),
+            )
+            .await?;
+        let state = new.cold_storage.as_ref().unwrap().state.read().await;
+        assert!(state.mutation_or_luc_iris(&id).is_none());
+        assert!(state.lfu_cache.get(&id).is_none());
+        assert!(state.prefetched.is_empty());
+        assert!(state.pending_mutations.entries.is_empty());
+        assert!(new.iris_store.read().await.get_vector(&id).is_none());
+        Ok(())
+    }
 
     #[test]
     fn rolling_luc_cache_tracks_versions_and_evicts_old_serials() {
