@@ -224,7 +224,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires POP4370_TEST_DATABASE_URL pointing to disposable Postgres"]
+    #[ignore = "requires CPU_CELL_TEST_DATABASE_URL pointing to disposable Postgres"]
     async fn candidate_preloads_read_only_and_never_enters_live_startup() -> Result<()> {
         tokio::task::LocalSet::new()
             .run_until(check_candidate_startup())
@@ -235,7 +235,7 @@ mod tests {
         let mut config = config();
         config.schema_name = format!("candidate_{}", Uuid::new_v4().simple());
         config.database = Some(DbConfig {
-            url: std::env::var("POP4370_TEST_DATABASE_URL")?,
+            url: std::env::var("CPU_CELL_TEST_DATABASE_URL")?,
             load_parallelism: 2,
             ..Default::default()
         });

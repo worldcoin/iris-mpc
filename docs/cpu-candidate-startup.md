@@ -37,7 +37,7 @@ Cold-eye caches are deliberately deferred: rereading their versions while A writ
 Against a disposable Postgres instance:
 
 ```sh
-POP4370_TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:55437/postgres \
+CPU_CELL_TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:55437/postgres \
   cargo test -p iris-mpc --lib candidate -- --include-ignored
 ```
 

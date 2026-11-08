@@ -68,7 +68,7 @@ func NewStore(ctx context.Context, db *sql.DB, config config.Config) *Store {
 	return &Store{db: db, schema: schema}
 }
 
-// A handoff marker is permanent: local flags and populate mode cannot opt out.
+// Recorded handoff history fences writes even after a handoff completes.
 func rejectManagedWrite(ctx context.Context, db *sql.DB, schema string) error {
 	// PostgreSQL truncates identifiers to 63 bytes; probe and write must target the same schema.
 	if len(schema) == 0 || len(schema) > 63 || strings.ContainsRune(schema, 0) {
@@ -80,6 +80,12 @@ func rejectManagedWrite(ctx context.Context, db *sql.DB, schema string) error {
 	err := db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = 'cpu_cell_handoffs')", schema).Scan(&managed)
 	if err != nil {
 		return fmt.Errorf("check CPU handoff: %w", err)
+	}
+	if managed {
+		query := fmt.Sprintf("SELECT EXISTS (SELECT 1 FROM %s.cpu_cell_handoffs)", pq.QuoteIdentifier(schema))
+		if err := db.QueryRowContext(ctx, query).Scan(&managed); err != nil {
+			return fmt.Errorf("check CPU handoff history: %w", err)
+		}
 	}
 	if managed {
 		return fmt.Errorf("managed CPU-cell schema rejects exporter writes")

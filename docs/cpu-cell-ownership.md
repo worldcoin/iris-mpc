@@ -38,17 +38,19 @@ The database report remains readable after A exits. Future coordination reuses
 the existing full drain and reconciliation comparisons; equality of maximum
 request sequence numbers alone does not establish matching work.
 
-## Installation and startup
+## Migrations and startup
 
-Install explicitly in the canonical schema with the existing deployment tools.
-This table is not installed by ordinary server startup. The example reads
-`CPU_CELL_DATABASE_URL` from the environment:
+The [versioned SQLx migration](../migrations/20261108000000_cpu_cell_handoffs.up.sql)
+creates the handoff table through the existing migration path. An empty table leaves ordinary
+startup, migrations and exporter writes unchanged. Deploying this foundation
+does not start a handoff or require an operator to access production Postgres.
 
-```sh
-cargo run -p iris-mpc-store --example cpu_cell_admin -- install SCHEMA
-cargo run -p iris-mpc-store --example cpu_cell_admin -- request SCHEMA HANDOFF_ID SOURCE_DEPLOYMENT_ID DESTINATION_DEPLOYMENT_ID
-cargo run -p iris-mpc-store --example cpu_cell_admin -- status SCHEMA HANDOFF_ID
-```
+The runtime coordinator in POP-4454 will record the intended handoff from
+deployment configuration, using the service's existing database connection.
+POP-4377 supplies that configuration through the existing party-owned deployment
+workflow. This PR provides the store API and startup/drain guards; it does not
+yet call the request API automatically or enable promotion. There is no admin
+example or separate SQL installation step.
 
 IDs are UUIDs. Set `SMPC__CPU_CELL__DEPLOYMENT_ID` on each participating CPU
 linear-scan deployment. The candidate still uses `SMPC__STARTUP_MODE=candidate`.
@@ -59,22 +61,28 @@ processes for the same slot may not. If a node is unreachable, fence the old
 process before starting its replacement: force-deleting its Pod does not prove
 it stopped. Supporting same-slot overlap would require a different contract.
 
-The table's presence requires deployment-aware startup. Missing configuration,
-an empty table or an invalid phase blocks active startup. Active source startup
+Any recorded handoff history requires deployment-aware startup. Missing
+configuration or an invalid phase blocks active startup. Active source startup
 is allowed only for the current requested handoff; after drain-start it is
 blocked before migrations, claim recovery, replay or intake. Existing source
 connections can settle admitted work. Candidates remain passive; a database row
 cannot restore lost resident readiness after a process restart.
 
-Managed schemas validate existing migrations without running DDL. Alternate
-writers and the standalone migrator cannot bypass the managed-schema guard.
-Schemas without the handoff table retain existing startup behavior.
+Once history exists, serving processes validate existing migrations without
+running DDL; alternate runtime writers are rejected. The standalone migrator
+keeps its established deployment role. Compatible schema changes must finish
+before candidate preload; schema validation does not serialize a concurrent
+deployment migration.
 
-Install only with legacy writers stopped and compatible schema changes already
-applied. Installing the table changes restart behavior immediately. Do not
-install it in a serving environment until the complete handoff and recovery
-paths have been verified. No role provisioning, process secrets or dynamic
-write-permission changes are part of this feature.
+Before recording the first handoff, the coordinator/deployment integration must
+ensure all participating processes use the handoff-aware runtime and ordinary
+alternate writers are stopped. A new row cannot revoke an already-open legacy
+connection. Keep automatic handoff disabled until that integration and recovery
+are tested. No role provisioning or process secrets are needed.
+
+The down migration can remove an unused table, but refuses to delete handoff
+history because that would remove the restart guards. All handoff tests use
+`CPU_CELL_TEST_DATABASE_URL` pointing to disposable PostgreSQL.
 
 ## Interrupted handoff
 

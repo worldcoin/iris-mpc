@@ -18,13 +18,15 @@ impl Fixture {
         let url = std::env::var("CPU_CELL_TEST_DATABASE_URL")
             .wrap_err("CPU_CELL_TEST_DATABASE_URL must identify disposable PostgreSQL")?;
         let schema = format!("handoff_{:x}", rand::random::<u64>());
+        let client = PostgresClient::new(
+            &url,
+            &schema,
+            iris_mpc_common::postgres::AccessMode::ReadWrite,
+        )
+        .await?;
+        iris_mpc_common::postgres::run_migrations(&client.pool, false).await?;
+        client.pool.close().await;
         let client = PostgresClient::new_control(&url, &schema).await?;
-        let mut tx = client.pool.begin().await?;
-        tx.execute(format!("CREATE SCHEMA {schema}; SET LOCAL search_path TO {schema}").as_str())
-            .await?;
-        tx.execute(include_str!("../../scripts/cpu-cell-ownership.sql"))
-            .await?;
-        tx.commit().await?;
         Ok(Self {
             url,
             schema: schema.clone(),

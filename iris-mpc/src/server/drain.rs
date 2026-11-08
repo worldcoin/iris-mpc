@@ -663,13 +663,15 @@ mod tests {
         use sqlx::Executor;
         let url = std::env::var("CPU_CELL_TEST_DATABASE_URL")?;
         let schema = format!("drain_{}", uuid::Uuid::new_v4().simple());
+        let client = PostgresClient::new(
+            &url,
+            &schema,
+            iris_mpc_common::postgres::AccessMode::ReadWrite,
+        )
+        .await?;
+        iris_mpc_common::postgres::run_migrations(&client.pool, false).await?;
+        client.pool.close().await;
         let client = PostgresClient::new_control(&url, &schema).await?;
-        let mut tx = client.pool.begin().await?;
-        tx.execute(format!("CREATE SCHEMA {schema}; SET LOCAL search_path TO {schema}").as_str())
-            .await?;
-        tx.execute(include_str!("../../../scripts/cpu-cell-ownership.sql"))
-            .await?;
-        tx.commit().await?;
         let handoffs = CpuCellHandoffs::new(client.pool.clone(), &schema)?;
         let id = uuid::Uuid::new_v4();
         let source = uuid::Uuid::new_v4();

@@ -79,7 +79,8 @@ func TestManagedWritesFailBeforeFirstEffect(t *testing.T) {
 				store := &Store{db: db, schema: "canonical"}
 				lookup := mock.ExpectQuery("SELECT EXISTS").WithArgs("canonical")
 				if failure == "managed" {
-					lookup.WillReturnRows(sqlmock.NewRows([]string{"managed"}).AddRow(true))
+					lookup.WillReturnRows(sqlmock.NewRows([]string{"installed"}).AddRow(true))
+					mock.ExpectQuery("SELECT EXISTS").WillReturnRows(sqlmock.NewRows([]string{"managed"}).AddRow(true))
 				} else {
 					lookup.WillReturnError(errors.New("database unavailable"))
 				}
@@ -109,4 +110,31 @@ func TestTruncatedSchemaCannotBypassOwnershipProbe(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 	mock.ExpectClose()
 	require.NoError(t, db.Close())
+}
+
+func TestHandoffWriteGuardIgnoresEmptyHistory(t *testing.T) {
+	for _, state := range []string{"absent", "empty", "recorded", "history lookup failure"} {
+		t.Run(state, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			mock.ExpectQuery("SELECT EXISTS").WithArgs("canonical").WillReturnRows(sqlmock.NewRows([]string{"installed"}).AddRow(state != "absent"))
+			if state != "absent" {
+				query := mock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM "canonical".cpu_cell_handoffs\)`)
+				if state == "history lookup failure" {
+					query.WillReturnError(errors.New("history unavailable"))
+				} else {
+					query.WillReturnRows(sqlmock.NewRows([]string{"managed"}).AddRow(state == "recorded"))
+				}
+			}
+			err = rejectManagedWrite(context.Background(), db, "canonical")
+			if state == "absent" || state == "empty" {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err)
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
+			mock.ExpectClose()
+			require.NoError(t, db.Close())
+		})
+	}
 }

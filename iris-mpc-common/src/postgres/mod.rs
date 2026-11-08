@@ -47,8 +47,16 @@ fn sql_switch_schema(schema: &str, mode: AccessMode) -> Result<String> {
 }
 
 async fn managed_connection(conn: &mut PgConnection, schema: &str) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname='cpu_cell_handoffs')")
-        .bind(schema).fetch_one(conn).await
+    let installed: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname='cpu_cell_handoffs')")
+        .bind(schema).fetch_one(&mut *conn).await?;
+    if !installed {
+        return Ok(false);
+    }
+    sqlx::query_scalar(&format!(
+        "SELECT EXISTS (SELECT 1 FROM \"{schema}\".cpu_cell_handoffs)"
+    ))
+    .fetch_one(conn)
+    .await
 }
 
 pub async fn is_cpu_cell_managed(pool: &PgPool, schema: &str) -> Result<bool> {
@@ -202,7 +210,7 @@ pub async fn run_migrations(pool: &PgPool, ignore_missing_migrations: bool) -> R
         .fetch_one(pool)
         .await?;
     if is_cpu_cell_managed(pool, &schema).await? {
-        bail!("managed CPU-cell schema requires separately provisioned migrations");
+        bail!("CPU handoff history requires migrations through the deployment migrator");
     }
     sqlx::migrate!("./../migrations")
         .set_ignore_missing(ignore_missing_migrations)
@@ -257,11 +265,10 @@ pub async fn validate_migrations(pool: &PgPool, ignore_missing: bool) -> Result<
 mod tests {
     use super::*;
     #[tokio::test]
-    #[ignore = "requires POP4453_TEST_DATABASE_URL pointing to disposable PostgreSQL"]
+    #[ignore = "requires CPU_CELL_TEST_DATABASE_URL pointing to disposable PostgreSQL"]
     async fn managed_migration_validation_checks_history_without_ddl() -> Result<()> {
-        let url = std::env::var("POP4453_TEST_DATABASE_URL")?;
+        let url = std::env::var("CPU_CELL_TEST_DATABASE_URL")?;
         let schema = format!("history_{}", uuid::Uuid::new_v4().simple());
-        // Provisioning credentials remain usable after the authority is installed.
         let search_path = format!("SET search_path TO {schema}");
         let pool = PgPoolOptions::new()
             .max_connections(1)
@@ -280,28 +287,12 @@ mod tests {
             pool,
             schema_name: schema.clone(),
         };
-        client
-            .pool
-            .execute("CREATE TABLE cpu_cell_handoffs (id int)")
-            .await?;
-        assert!(run_migrations(&client.pool, false).await.is_err());
         assert!(validate_migrations(&client.pool, false).await.is_err());
         let absent: bool = sqlx::query_scalar("SELECT to_regclass('_sqlx_migrations') IS NULL")
             .fetch_one(&client.pool)
             .await?;
         assert!(absent, "validation must not create migration history");
-        client.pool.execute("CREATE TABLE _sqlx_migrations(version bigint PRIMARY KEY, success boolean, checksum bytea)").await?;
-        let migrator = sqlx::migrate!("./../migrations");
-        for migration in migrator
-            .iter()
-            .filter(|migration| migration.migration_type.is_up_migration())
-        {
-            sqlx::query("INSERT INTO _sqlx_migrations VALUES($1,true,$2)")
-                .bind(migration.version)
-                .bind(migration.checksum.as_ref())
-                .execute(&client.pool)
-                .await?;
-        }
+        run_migrations(&client.pool, false).await?;
         validate_migrations(&client.pool, false).await?;
         client.pool.execute("UPDATE _sqlx_migrations SET checksum='bad'::bytea WHERE version=(SELECT min(version) FROM _sqlx_migrations)").await?;
         assert!(validate_migrations(&client.pool, false).await.is_err());
@@ -310,6 +301,56 @@ mod tests {
             validate_migrations(&client.pool, true).await.is_err(),
             "ignore_missing must not permit pending local migrations"
         );
+        client
+            .pool
+            .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+            .await?;
+        client.pool.close().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires CPU_CELL_TEST_DATABASE_URL pointing to disposable PostgreSQL"]
+    async fn handoff_migration_is_inert_until_requested_and_retains_history() -> Result<()> {
+        let url = std::env::var("CPU_CELL_TEST_DATABASE_URL")?;
+        let schema = format!("upgrade_{}", uuid::Uuid::new_v4().simple());
+        let client = PostgresClient::new(&url, &schema, AccessMode::ReadWrite).await?;
+        let migrator = sqlx::migrate!("./../migrations");
+        run_migrations(&client.pool, false).await?;
+        // Roll back the empty addition, then upgrade an existing canonical schema.
+        migrator.undo(&client.pool, 20260724000000).await?;
+        let absent: bool = sqlx::query_scalar("SELECT to_regclass('cpu_cell_handoffs') IS NULL")
+            .fetch_one(&client.pool)
+            .await?;
+        assert!(absent);
+        run_migrations(&client.pool, false).await?;
+        run_migrations(&client.pool, false).await?;
+        validate_migrations(&client.pool, false).await?;
+        assert!(!is_cpu_cell_managed(&client.pool, &schema).await?);
+        let ordinary = PostgresClient::new(&url, &schema, AccessMode::ReadWrite).await?;
+        run_migrations(&ordinary.pool, false).await?;
+        ordinary.pool.close().await;
+        sqlx::query(
+            "INSERT INTO cpu_cell_handoffs (handoff_id, source, destination) VALUES ($1,$2,$3)",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind(uuid::Uuid::new_v4())
+        .bind(uuid::Uuid::new_v4())
+        .execute(&client.pool)
+        .await?;
+        assert!(is_cpu_cell_managed(&client.pool, &schema).await?);
+        assert!(PostgresClient::new(&url, &schema, AccessMode::ReadWrite)
+            .await
+            .is_err());
+        assert!(run_migrations(&client.pool, false).await.is_err());
+        // The established deployment migrator remains usable with recorded history.
+        migrator.run(&client.pool).await?;
+        assert!(migrator.undo(&client.pool, 20260724000000).await.is_err());
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM cpu_cell_handoffs")
+            .fetch_one(&client.pool)
+            .await?;
+        assert_eq!(count, 1);
+        validate_migrations(&client.pool, false).await?;
         client
             .pool
             .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())

@@ -1,5 +1,3 @@
--- Install in the canonical schema before enabling CPU handoff. The table's
--- presence makes startup require an explicit deployment identity.
 CREATE TABLE cpu_cell_handoffs (
     sequence bigint GENERATED ALWAYS AS IDENTITY UNIQUE,
     handoff_id uuid PRIMARY KEY,
