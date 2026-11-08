@@ -53,6 +53,12 @@ cargo run -p iris-mpc-store --example cpu_cell_admin -- status SCHEMA HANDOFF_ID
 IDs are UUIDs. Set `SMPC__CPU_CELL__DEPLOYMENT_ID` on each participating CPU
 linear-scan deployment. The candidate still uses `SMPC__STARTUP_MODE=candidate`.
 
+Run one live process per party per slot and stop it before replacing it, as in
+the existing single-replica `Recreate` deployment. A and B may overlap; two
+processes for the same slot may not. If a node is unreachable, fence the old
+process before starting its replacement: force-deleting its Pod does not prove
+it stopped. Supporting same-slot overlap would require a different contract.
+
 The table's presence requires deployment-aware startup. Missing configuration,
 an empty table or an invalid phase blocks active startup. Active source startup
 is allowed only for the current requested handoff; after drain-start it is
