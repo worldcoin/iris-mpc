@@ -1,142 +1,85 @@
-# Party-local CPU-cell ownership
+# CPU handoff record
 
-Each party keeps its own authority in its existing canonical PostgreSQL schema.
-The `cpu_cell_*` tables record deployment intent, serving generations, exact
-process cohorts, seals, retirements, and recovery. An attempt is a handoff;
-a generation is a deployment of slot `a` or `b`. Reusing a slot requires a new
-generation and a new database login.
+A and B share one party's Postgres. The handoff table records local progress;
+existing peer coordination establishes agreement across the three parties.
+This is a planned handoff between cooperating binaries using existing database
+and network access controls.
 
-This implements the local authority and startup guards for POP-4453. Keep
-handoff disabled until authenticated cross-party coordination (POP-4454),
-activation (POP-4376), and party-owned provisioning (POP-4377) are integrated.
-The administrative intent operation alone does not trigger a handoff.
+The local foundation does not enable automatic promotion. Coordination and
+serving activation are [POP-4454](https://linear.app/worldcoin/issue/POP-4454) and
+[POP-4376](https://linear.app/worldcoin/issue/POP-4376); deployment wiring and
+cold recovery are [POP-4377](https://linear.app/worldcoin/issue/POP-4377) and
+[POP-4378](https://linear.app/worldcoin/issue/POP-4378).
 
-## Permissions and process identity
+## Record and transitions
 
-| Principal | Responsibility |
+`cpu_cell_handoffs` has one row per handoff: its ID, source/destination deployment
+IDs, phase, current source/candidate process IDs and the completed drain report.
+Deployment IDs are unique releases, not reusable A/B slot labels. Retain history.
+
+| Local phase | Meaning |
 | --- | --- |
-| Provisioner | Install schema/migrations and bootstrap control objects before runtime enablement |
-| NOLOGIN authority owner | Own control objects and constrained `SECURITY DEFINER` functions |
-| Intent login | Register immutable deployments and approve source/destination pairs |
-| Recovery login | Supersede old authority and establish a fresh owner after external fencing |
-| Generation login | Bind one process lifetime and invoke only permitted runtime transitions |
+| `requested` | Deployment selected the destination; A may still serve. |
+| `draining` | A recorded drain-start. Its current process can finish admitted work; a restarted A cannot start serving. |
+| `drained` | A persisted the existing agreed report after all admitted effects settled. A remains stopped. |
+| `activated` | B recorded its local transition. Peer agreement and the current-process barrier are still required before serving. |
 
-The provisioner creates dedicated roles. Runtime and administrative logins must
-have no role memberships, ownership, elevated PostgreSQL attributes, or canonical
-write/DDL grants. Candidates receive canonical `SELECT` permissions, with no
-canonical writes even if they disable the session's read-only setting.
+The small store API uses ordinary SQL transactions. Exact retries preserve the
+record; conflicting identities, evidence or transitions fail. Only one handoff
+can be unfinished. A later handoff must start from the previous destination and
+use a fresh destination deployment ID.
 
-Every boot generates a fresh UUID and random 32-byte secret in memory. The
-database stores only the secret's SHA-256 digest. Binding checks the authenticated
-generation login, UUID, secret, and approved deployment identity. The coordination
-health endpoint uses the same UUID. A restart cannot reuse a generation's binding;
-it requires explicit recovery with a fresh generation/login. Never persist or log
-the process secret.
+Drain initiation persists `draining` before allowing the drain operation. A
+canceled or failed database operation leaves admission closed because commit
+may have occurred. Completion is stored after the drain reaches the all-party
+agreed `Paused` state, not merely after local work finishes.
 
-These secrets protect control operations. Canonical DML grants belong to the
-generation login, so they do not fence malicious code holding that credential.
-The database also cannot attest that a running image matches its configured
-digest. Deployment integrity and credential isolation remain party-owned.
+The database report remains readable after A exits. Future coordination reuses
+the existing full drain and reconciliation comparisons; equality of maximum
+request sequence numbers alone does not establish matching work.
 
-## Handoff ordering
+## Installation and startup
 
-1. The intent login approves immutable source/destination identities and whether
-   automatic handoff is permitted. Schema/protocol/configuration compatibility
-   labels must match exactly; the database does not infer version compatibility.
-2. B binds its process and preloads with read-only permissions. Only successful
-   preload records B as loaded. The source freezes the exact three A and three B
-   process UUIDs into one attempt.
-3. A persists its admission seal before requesting the in-process drain. The
-   original process retains write access to settle admitted work, including on
-   replacement database connections. A fresh startup rejects the seal.
-4. B records the reconciled frontier and proof digest. A independently submits
-   the matching settled proof to retire durably. Retirement revokes its canonical
-   DML privileges; the migration ledger remains read-only even for an owner.
-5. The bound source records a retirement certificate only after the future
-   coordinator authenticates matching durable retirement evidence from all three
-   parties. The local SQL operation cannot authenticate remote peers itself.
-6. Only the frozen B process can acquire ownership with the matching proof.
-   Actual serving must also pass the future exact-process activation barrier.
-
-The authority row serializes transitions. Conflicting attempts, stale process
-bindings, changed proofs, and superseded attempts fail. An empty persisted
-frontier is represented by `None`, independently of the required proof digest.
-Completed attempts and retired generations remain recorded across later slot
-reuse. There is no timeout takeover, warm resume, or separate COMMIT/ABORT vote.
-There is no cancellation endpoint in this scope; a future cancellation protocol
-must invalidate delayed seal requests and account for a seal at another party.
-
-## Installation and recovery
-
-`iris-mpc-store/examples/cpu_cell_admin.rs` is the administrative entrypoint.
-It takes the connection from `CPU_CELL_DATABASE_URL`, never a command-line
-credential. Use the separate principal appropriate to each operation:
+Install explicitly in the canonical schema with the existing deployment tools.
+This table is not installed by ordinary server startup. The example reads
+`CPU_CELL_DATABASE_URL` from the environment:
 
 ```sh
-cargo run --locked -p iris-mpc-store --example cpu_cell_admin -- COMMAND ARGS...
+cargo run -p iris-mpc-store --example cpu_cell_admin -- install SCHEMA
+cargo run -p iris-mpc-store --example cpu_cell_admin -- request SCHEMA HANDOFF_ID SOURCE_DEPLOYMENT_ID DESTINATION_DEPLOYMENT_ID
+cargo run -p iris-mpc-store --example cpu_cell_admin -- status SCHEMA HANDOFF_ID
 ```
 
-The supported argument shapes are:
+IDs are UUIDs. Set `SMPC__CPU_CELL__DEPLOYMENT_ID` on each participating CPU
+linear-scan deployment. The candidate still uses `SMPC__STARTUP_MODE=candidate`.
 
-```text
-bootstrap SCHEMA OWNER INCARNATION PARTY INTENT_LOGIN RECOVERY_LOGIN
-register SCHEMA INCARNATION GENERATION LOGIN SLOT IMAGE_DIGEST SCHEMA_VERSION PROTOCOL CONFIGURATION
-intent SCHEMA INCARNATION INTENT SOURCE DESTINATION AUTOMATIC_BOOL
-status SCHEMA
-begin-recovery SCHEMA INCARNATION RECOVERY EXPECTED_REVISION
-finish-recovery SCHEMA INCARNATION RECOVERY FRESH_GENERATION EXTERNAL_FENCING_ACK NEW_INCARNATION
-```
+The table's presence requires deployment-aware startup. Missing configuration,
+an empty table or an invalid phase blocks active startup. Active source startup
+is allowed only for the current requested handoff; after drain-start it is
+blocked before migrations, claim recovery, replay or intake. Existing source
+connections can settle admitted work. Candidates remain passive; a database row
+cannot restore lost resident readiness after a process restart.
 
-Use `status` under the intent/recovery login to read the current incarnation,
-revision, owner, attempt, and recovery state without exposing process secrets.
-`begin-recovery` compares the observed revision atomically; a stale command
-cannot seal a later owner. If completion is uncertain, read status before retrying.
+Managed schemas validate existing migrations without running DDL. Alternate
+writers and the standalone migrator cannot bypass the managed-schema guard.
+Schemas without the handoff table retain existing startup behavior.
 
-Before first installation, stop or externally fence all legacy processes and
-alternate writers, provision the canonical schema and application migrations,
-then create the dedicated NOLOGIN owner and intent/recovery/runtime logins.
-The provisioner must be able to grant canonical privileges and `SET ROLE` to
-the authority owner. `bootstrap` installs atomically and cannot reset an existing
-authority. It starts blocked, with no owner.
+Install only with legacy writers stopped and compatible schema changes already
+applied. Installing the table changes restart behavior immediately. Do not
+install it in a serving environment until the complete handoff and recovery
+paths have been verified. No role provisioning, process secrets or dynamic
+write-permission changes are part of this feature.
 
-Register the initial generation, begin recovery using current authority state,
-and finish only after verifying external fencing. Then start the generation
-with matching `cpu_cell` configuration: `incarnation`, `generation`, `slot`,
-`image` (`sha256:` plus 64 lowercase hex characters), `schema_version`,
-`protocol`, and `configuration`. These identity labels must come from trusted
-deployment configuration. Managed startup requires DB-backed intake and
-pre-provisioned migrations; seed/clear operations are rejected.
+## Interrupted handoff
 
-For an ordinary crash, begin recovery first to supersede any pending activation
-and revoke old generations' DML. Settle or externally fence every possible old
-A/B owner, including in-flight external effects. Register a fresh generation and
-credential, then finish recovery with the external fencing acknowledgment. Keep
-the old seals and retirement history. Recovery has no automatic lease expiry.
+Failed preload leaves A serving. After drain-start, mismatched/missing reports,
+process replacement or uncertain effects stop progress. No timeout resumes A.
+A fresh B cannot inherit its predecessor's reconciliation or activation.
 
-After database restore, quarantine the restored database before starting any
-runtime. Old rows cannot detect that their own history was rolled back. Fence
-old processes and credentials externally, and finish recovery with a fresh
-externally tracked incarnation; update all participating deployment identities.
-An acknowledgment records that an operator verified fencing; it does not perform
-or prove fencing. An already-issued SNS/SQS call cannot be canceled by a database
-transaction.
-
-The permanent authority marker makes legacy constructors and alternate write
-paths reject a managed schema before migrations, seeding, claim reset, replay,
-or intake. Removing `cpu_cell` configuration does not opt out. Database lookup
-errors fail startup. Previously running or older binaries still require external
-fencing before bootstrap; catalog checks do not revoke their existing sessions.
-
-## Validation and cost
-
-The existing PostgreSQL CI service runs the role-backed ownership tests and an
-explicit startup-guard step, including the tests normally ignored without a
-database. They cover credential permissions, process replacement, concurrent
-acquisition, sealed settlement, retirement, repeated slot reuse, and recovery.
-
-Authority checks occur at startup, connection creation, and handoff/recovery
-transitions, not on each iris comparison. Control pools are bounded and use
-statement/lock deadlines. Transitions serialize on one party-local row; grant
-changes scale with schema objects rather than gallery size. Read-only startup
-validates migration history without running DDL. Exporter write helpers perform
-a bounded authority lookup before writing; read/export paths remain unchanged.
+The local foundation deliberately blocks active restarts after activation too;
+normal serving-crash handling is part of the cold-recovery integration. Before
+enabling handoff, test a party-owned cold-restart procedure that stops/fences old
+processes, settles outstanding effects and reloads canonical state. Do not clear
+handoff records or remove configuration while an old process may still act.
+Database restore and slot reuse need the same operating discipline. This table
+cannot cancel an SNS/SQS request already in flight or detect restored history.

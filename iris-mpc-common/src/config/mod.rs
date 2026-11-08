@@ -34,17 +34,11 @@ pub enum StartupMode {
     Candidate,
 }
 
-/// Deployment identity only. Each boot generates its own UUID and secret.
+/// Immutable deployment identity; A/B slot names are reused across releases.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CpuCellConfig {
-    pub incarnation: String,
-    pub generation: String,
-    pub slot: String,
-    pub image: String,
-    pub schema_version: String,
-    pub protocol: String,
-    pub configuration: String,
+    pub deployment_id: String,
 }
 
 fn default_cpu_drain_timeout_secs() -> u64 {
@@ -869,7 +863,7 @@ impl From<Config> for CommonConfig {
         // This is destructured here intentionally to cause a compile error if
         // any of the fields are added to the struct without being considered if they should be in the common config hash or not.
         let Config {
-            cpu_cell: _,     // local authority identity is checked by the database
+            cpu_cell: _,     // deployment identity is checked against local handoff history
             startup_mode: _, // candidate processes never join active coordination
             candidate_status_port: _,
             cpu_drain_timeout_secs: _, // local drain deadline does not change MPC computation

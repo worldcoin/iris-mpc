@@ -54,7 +54,7 @@ func NewStore(ctx context.Context, db *sql.DB, config config.Config) *Store {
 	o11y.S(ctx).Infof("ENV: %s", config.Environment)
 	if config.Environment == "local" || config.Environment == "CI" {
 		if err := rejectManagedWrite(ctx, db, schema); err != nil {
-			o11y.S(ctx).With(zap.Error(err)).Fatal("Database ownership guard rejected schema creation")
+			o11y.S(ctx).With(zap.Error(err)).Fatal("Database handoff guard rejected schema creation")
 			return nil
 		}
 		o11y.S(ctx).Infof("Creating schema %s if not exists in local environment", schema)
@@ -68,7 +68,7 @@ func NewStore(ctx context.Context, db *sql.DB, config config.Config) *Store {
 	return &Store{db: db, schema: schema}
 }
 
-// An authority marker is permanent: local flags and populate mode cannot opt out.
+// A handoff marker is permanent: local flags and populate mode cannot opt out.
 func rejectManagedWrite(ctx context.Context, db *sql.DB, schema string) error {
 	// PostgreSQL truncates identifiers to 63 bytes; probe and write must target the same schema.
 	if len(schema) == 0 || len(schema) > 63 || strings.ContainsRune(schema, 0) {
@@ -77,9 +77,9 @@ func rejectManagedWrite(ctx context.Context, db *sql.DB, schema string) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	var managed bool
-	err := db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = 'cpu_cell_authority')", schema).Scan(&managed)
+	err := db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = $1 AND c.relname = 'cpu_cell_handoffs')", schema).Scan(&managed)
 	if err != nil {
-		return fmt.Errorf("check CPU-cell authority: %w", err)
+		return fmt.Errorf("check CPU handoff: %w", err)
 	}
 	if managed {
 		return fmt.Errorf("managed CPU-cell schema rejects exporter writes")

@@ -110,8 +110,9 @@ pub struct Drain {
     changed: Notify,
     ready: Mutex<Option<Arc<AtomicBool>>>,
     timeout: Duration,
-    ownership: Mutex<Option<Arc<super::ManagedStartup>>>,
+    handoff: Mutex<Option<Arc<super::ManagedHandoff>>>,
     durable_sealed: std::sync::atomic::AtomicBool,
+    handoff_id: Mutex<Option<uuid::Uuid>>,
 }
 
 // A canceled SQL future cannot tell us whether the seal committed.
@@ -157,8 +158,9 @@ impl Drain {
             changed: Notify::new(),
             ready: Mutex::new(None),
             timeout,
-            ownership: Mutex::new(None),
+            handoff: Mutex::new(None),
             durable_sealed: std::sync::atomic::AtomicBool::new(false),
+            handoff_id: Mutex::new(None),
         })
     }
 
@@ -178,19 +180,23 @@ impl Drain {
         *self.ready.lock().unwrap() = Some(ready);
     }
 
-    pub(super) fn require_durable_seal(&self, ownership: Arc<super::ManagedStartup>) {
-        *self.ownership.lock().unwrap() = Some(ownership);
+    pub(super) fn require_durable_seal(&self, handoff: Arc<super::ManagedHandoff>) {
+        *self.handoff.lock().unwrap() = Some(handoff);
     }
 
     /// Persist the exact approved attempt before publishing any drain evidence.
-    pub async fn request_managed(&self, attempt: &str) -> Result<()> {
+    pub async fn request_managed(
+        &self,
+        handoff_id: uuid::Uuid,
+        candidates: &[uuid::Uuid; 3],
+    ) -> Result<()> {
         let status = self.status();
         eyre::ensure!(
             status.error.is_none() && status.blocked_reason.is_none(),
             "managed source is not drain-eligible"
         );
-        let owner = self
-            .ownership
+        let handoff = self
+            .handoff
             .lock()
             .unwrap()
             .clone()
@@ -199,19 +205,53 @@ impl Drain {
             drain: self,
             completed: false,
         };
-        if let Err(error) = owner.authority.seal_source(&owner.binding, attempt).await {
+        let process = uuid::Uuid::parse_str(&status.process_uuid)?;
+        if let Err(error) = handoff
+            .handoffs
+            .start_drain(handoff_id, handoff.deployment, process, candidates)
+            .await
+        {
             self.fail("durable source seal failed");
             pending.completed = true;
             return Err(error);
         }
+        *self.handoff_id.lock().unwrap() = Some(handoff_id);
         self.durable_sealed.store(true, Ordering::SeqCst);
         self.request();
         pending.completed = true;
         Ok(())
     }
 
+    /// Called only after peer agreement reaches Paused. A failed/uncertain write
+    /// leaves admission closed and is never interpreted as handoff completion.
+    pub async fn persist_completion(&self) -> Result<()> {
+        let handoff = self.handoff.lock().unwrap().clone();
+        let Some(handoff) = handoff else {
+            return Ok(());
+        };
+        let id = *self.handoff_id.lock().unwrap();
+        let status = self.status();
+        eyre::ensure!(
+            status.phase == Phase::Paused && status.error.is_none(),
+            "drain has not reached all-party agreement"
+        );
+        let id = id.ok_or_else(|| eyre::eyre!("missing durable handoff ID"))?;
+        let report = status
+            .report
+            .ok_or_else(|| eyre::eyre!("missing agreed drain report"))?;
+        handoff
+            .handoffs
+            .complete_drain(
+                id,
+                handoff.deployment,
+                uuid::Uuid::parse_str(&status.process_uuid)?,
+                &serde_json::to_value(report)?,
+            )
+            .await
+    }
+
     pub fn request(&self) {
-        if self.ownership.lock().unwrap().is_some() && !self.durable_sealed.load(Ordering::SeqCst) {
+        if self.handoff.lock().unwrap().is_some() && !self.durable_sealed.load(Ordering::SeqCst) {
             self.fail("managed drain requires a durable source seal");
             return;
         }
@@ -383,7 +423,7 @@ impl Drain {
         self.inner.lock().unwrap().last_publication.clone()
     }
     pub fn publish_report(&self, report: Report) {
-        if self.ownership.lock().unwrap().is_some() && !self.durable_sealed.load(Ordering::SeqCst) {
+        if self.handoff.lock().unwrap().is_some() && !self.durable_sealed.load(Ordering::SeqCst) {
             self.fail("cannot publish managed drain proof without durable seal");
             return;
         }
@@ -608,35 +648,83 @@ impl Drain {
 mod tests {
     use super::*;
 
+    fn managed(pool: sqlx::PgPool) -> Arc<super::super::ManagedHandoff> {
+        Arc::new(super::super::ManagedHandoff {
+            handoffs: iris_mpc_store::cpu_cell::CpuCellHandoffs::new(pool, "canonical").unwrap(),
+            deployment: uuid::Uuid::new_v4(),
+        })
+    }
+
+    #[cfg(feature = "db_dependent")]
     #[tokio::test]
-    async fn managed_drain_rejects_direct_request_and_failed_durable_seal() -> Result<()> {
+    async fn managed_drain_persists_only_agreed_completion() -> Result<()> {
+        use iris_mpc_common::postgres::{check_handoff_startup, PostgresClient};
+        use iris_mpc_store::cpu_cell::{CpuCellHandoffs, HandoffPhase};
+        use sqlx::Executor;
+        let url = std::env::var("CPU_CELL_TEST_DATABASE_URL")?;
+        let schema = format!("drain_{}", uuid::Uuid::new_v4().simple());
+        let client = PostgresClient::new_control(&url, &schema).await?;
+        let mut tx = client.pool.begin().await?;
+        tx.execute(format!("CREATE SCHEMA {schema}; SET LOCAL search_path TO {schema}").as_str())
+            .await?;
+        tx.execute(include_str!("../../../scripts/cpu-cell-ownership.sql"))
+            .await?;
+        tx.commit().await?;
+        let handoffs = CpuCellHandoffs::new(client.pool.clone(), &schema)?;
+        let id = uuid::Uuid::new_v4();
+        let source = uuid::Uuid::new_v4();
+        let destination = uuid::Uuid::new_v4();
+        let process = uuid::Uuid::new_v4();
+        let candidates = std::array::from_fn(|_| uuid::Uuid::new_v4());
+        handoffs.request(id, source, destination).await?;
+        let drain = Drain::new(0, Duration::from_secs(30), true);
+        drain.initialize(process.to_string(), Arc::new(AtomicBool::new(true)));
+        drain.require_durable_seal(Arc::new(super::super::ManagedHandoff {
+            handoffs: handoffs.clone(),
+            deployment: source,
+        }));
+        drain.request_managed(id, &candidates).await?;
+        assert_eq!(handoffs.get(id).await?.phase, HandoffPhase::Draining);
+        let report = proof("100", 1);
+        drain.publish_report(report.clone());
+        assert_eq!(drain.status().phase, Phase::Quiescent);
+        assert!(drain.persist_completion().await.is_err());
+        assert!(handoffs.get(id).await?.drain_report.is_none());
+        // Peer agreement is tested separately; exercise its Paused output here.
+        drain.inner.lock().unwrap().status.phase = Phase::Paused;
+        drain.persist_completion().await?;
+        let completed = handoffs.get(id).await?;
+        assert_eq!(completed.phase, HandoffPhase::Drained);
+        assert_eq!(completed.source_process, Some(process));
+        assert_eq!(completed.candidate_processes, Some(candidates.to_vec()));
+        assert_eq!(completed.drain_report, Some(serde_json::to_value(report)?));
+        drain.persist_completion().await?;
+        assert_eq!(handoffs.get(id).await?, completed);
+        assert!(
+            check_handoff_startup(&client.pool, &schema, &source.to_string(), false)
+                .await
+                .is_err()
+        );
+        client
+            .pool
+            .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+            .await?;
+        client.pool.close().await;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn managed_drain_rejects_unpersisted_request_and_completion() -> Result<()> {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")?;
         pool.close().await;
-        let ownership = Arc::new(super::super::ManagedStartup {
-            authority: iris_mpc_store::cpu_cell::CpuCellAuthority::new(pool, "canonical"),
-            binding: iris_mpc_store::cpu_cell::ProcessBinding {
-                incarnation: uuid::Uuid::new_v4().to_string(),
-                generation: uuid::Uuid::new_v4().to_string(),
-                process_id: uuid::Uuid::new_v4().to_string(),
-                secret: vec![1; 32],
-            },
-        });
-        let direct = Drain::new(0, Duration::from_secs(1), true);
-        direct.require_durable_seal(ownership.clone());
-        direct.request();
-        direct.publish_report(proof("100", 1));
-        assert!(direct.failed());
-        assert!(direct.status().report.is_none());
-        let managed = Drain::new(0, Duration::from_secs(1), true);
-        managed.require_durable_seal(ownership);
-        assert!(managed
-            .request_managed(&uuid::Uuid::new_v4().to_string())
-            .await
-            .is_err());
-        managed.publish_report(proof("100", 1));
-        assert!(managed.failed());
-        assert!(managed.status().report.is_none());
+        let drain = Drain::new(0, Duration::from_secs(1), true);
+        drain.require_durable_seal(managed(pool));
+        assert!(drain.persist_completion().await.is_err());
+        drain.request();
+        drain.publish_report(proof("100", 1));
+        assert!(drain.failed());
+        assert!(drain.status().report.is_none());
         Ok(())
     }
 
@@ -645,24 +733,18 @@ mod tests {
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")?;
         let drain = Drain::new(0, Duration::from_secs(1), true);
-        drain.require_durable_seal(Arc::new(super::super::ManagedStartup {
-            authority: iris_mpc_store::cpu_cell::CpuCellAuthority::new(pool.clone(), "canonical"),
-            binding: iris_mpc_store::cpu_cell::ProcessBinding {
-                incarnation: uuid::Uuid::new_v4().to_string(),
-                generation: uuid::Uuid::new_v4().to_string(),
-                process_id: uuid::Uuid::new_v4().to_string(),
-                secret: vec![1; 32],
-            },
-        }));
-        let attempt = uuid::Uuid::new_v4().to_string();
-        let mut request = Box::pin(drain.request_managed(&attempt));
+        drain.initialize(
+            uuid::Uuid::new_v4().to_string(),
+            Arc::new(AtomicBool::new(true)),
+        );
+        drain.require_durable_seal(managed(pool.clone()));
+        let candidates = std::array::from_fn(|_| uuid::Uuid::new_v4());
+        let mut request = Box::pin(drain.request_managed(uuid::Uuid::new_v4(), &candidates));
         assert!(futures::poll!(&mut request).is_pending());
         drop(request);
         assert!(drain.requested());
         assert!(drain.failed());
         assert!(!drain.publish_offer(1, 1, || panic!("admission must stay closed")));
-        drain.publish_report(proof("100", 1));
-        assert!(drain.status().report.is_none());
         pool.close().await;
         Ok(())
     }

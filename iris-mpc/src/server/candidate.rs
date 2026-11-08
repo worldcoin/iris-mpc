@@ -65,11 +65,10 @@ fn routes(status: Status) -> Router {
 }
 
 pub(super) async fn run(config: Config, shutdown: Arc<ShutdownHandler>) -> Result<()> {
-    let process_id = Uuid::new_v4();
-    let ownership = initialize_ownership(&config, HawkSearchMode::LinearScan, process_id).await?;
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, config.candidate_status_port))
         .await
         .wrap_err("bind candidate operator status")?;
+    let process_id = Uuid::new_v4();
     let status = Arc::new(RwLock::new(CandidateStatus {
         process_id,
         party_id: config.party_id,
@@ -82,7 +81,7 @@ pub(super) async fn run(config: Config, shutdown: Arc<ShutdownHandler>) -> Resul
     let status_server = axum::serve(listener, routes(status.clone()));
     tokio::select! {
         result = status_server => result.wrap_err("candidate status server stopped"),
-        result = preload_and_wait(&config, shutdown, status, ownership) => result,
+        result = preload_and_wait(&config, shutdown, status) => result,
     }
 }
 
@@ -90,13 +89,12 @@ async fn preload_and_wait(
     config: &Config,
     shutdown: Arc<ShutdownHandler>,
     status: Status,
-    ownership: Option<Arc<ManagedStartup>>,
 ) -> Result<()> {
     let started = Instant::now();
     let process_id = status.read().await.process_id;
     let loaded = tokio::select! {
         _ = shutdown.wait_for_shutdown() => return Ok(()),
-        result = timeout(PRELOAD_TIMEOUT, preload_with_owner(config, shutdown.clone(), process_id, ownership.as_deref())) => {
+        result = timeout(PRELOAD_TIMEOUT, preload(config, shutdown.clone(), process_id)) => {
             result.wrap_err("candidate preload exceeded one hour").and_then(|loaded| loaded)
         }
     };
@@ -108,13 +106,6 @@ async fn preload_and_wait(
             return Err(error);
         }
     };
-    if let Some(owner) = &ownership {
-        if let Err(error) = owner.authority.mark_loaded(&owner.binding).await {
-            status.write().await.state = "failed";
-            tracing::error!(state = "failed", error = ?error, "Cannot record managed candidate preload");
-            return Err(error);
-        }
-    }
     let count = workers.workers.registries[0].read().await.size;
     {
         let mut state = status.write().await;
@@ -135,22 +126,12 @@ async fn preload_and_wait(
     Ok(())
 }
 
-#[cfg(test)]
 pub(super) async fn preload(
     config: &Config,
     shutdown: Arc<ShutdownHandler>,
     process_id: Uuid,
 ) -> Result<CandidatePreload> {
-    let ownership = initialize_ownership(config, HawkSearchMode::LinearScan, process_id).await?;
-    preload_with_owner(config, shutdown, process_id, ownership.as_deref()).await
-}
-
-async fn preload_with_owner(
-    config: &Config,
-    shutdown: Arc<ShutdownHandler>,
-    process_id: Uuid,
-    ownership: Option<&ManagedStartup>,
-) -> Result<CandidatePreload> {
+    let handoff = initialize_handoff(config, HawkSearchMode::LinearScan).await?;
     let db = config
         .database
         .as_ref()
@@ -162,7 +143,7 @@ async fn preload_with_owner(
     )
     .await
     .wrap_err("connect candidate read-only database")?;
-    if ownership.is_some() {
+    if handoff.is_some() {
         validate_migrations(&postgres.pool, db.ignore_missing_migrations).await?;
     }
     let store = Store::new(&postgres).await?;
