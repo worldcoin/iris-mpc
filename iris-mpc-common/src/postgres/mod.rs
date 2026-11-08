@@ -111,7 +111,6 @@ impl PostgresClient {
         let schema_name = schema.to_owned();
         let pool = PgPoolOptions::new()
             .max_connections(MAX_CONNECTIONS)
-            .acquire_timeout(HANDOFF_TIMEOUT)
             .after_connect(move |conn, _| {
                 let sql = connect_sql.clone();
                 let schema = schema_name.clone();
@@ -166,7 +165,6 @@ impl PostgresClient {
         let check = format!("SELECT COALESCE((SELECT source=$1 AND phase IN ('requested','draining') FROM \"{schema}\".cpu_cell_handoffs ORDER BY sequence DESC LIMIT 1), false)");
         let pool = PgPoolOptions::new()
             .max_connections(MAX_CONNECTIONS)
-            .acquire_timeout(HANDOFF_TIMEOUT)
             .after_connect(move |conn, _| {
                 let sql = sql.clone();
                 let check = check.clone();
