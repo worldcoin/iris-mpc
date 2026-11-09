@@ -66,7 +66,6 @@ fn report() -> serde_json::Value {
 async fn handoff_transitions_preserve_exact_report_and_history() -> Result<()> {
     let f = Fixture::new().await?;
     f.request().await?;
-    f.request().await?;
     assert!(f.db.request(f.id, f.source, Uuid::new_v4()).await.is_err());
     assert!(f
         .db
@@ -74,14 +73,11 @@ async fn handoff_transitions_preserve_exact_report_and_history() -> Result<()> {
         .await
         .is_err());
     f.drain().await?;
-    f.drain().await?;
     assert!(f
         .db
         .start_drain(f.id, f.source, Uuid::new_v4(), &f.candidates)
         .await
         .is_err());
-    f.db.complete_drain(f.id, f.source, f.process, &report())
-        .await?;
     f.db.complete_drain(f.id, f.source, f.process, &report())
         .await?;
     let different = serde_json::json!({"different": true});

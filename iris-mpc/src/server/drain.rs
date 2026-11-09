@@ -645,7 +645,7 @@ impl Drain {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     fn managed(pool: sqlx::PgPool) -> Arc<super::super::ManagedHandoff> {
@@ -653,66 +653,6 @@ mod tests {
             handoffs: iris_mpc_store::cpu_cell::CpuCellHandoffs::new(pool, "canonical").unwrap(),
             deployment: uuid::Uuid::new_v4(),
         })
-    }
-
-    #[cfg(feature = "db_dependent")]
-    #[tokio::test]
-    async fn managed_drain_persists_only_agreed_completion() -> Result<()> {
-        use iris_mpc_common::postgres::{check_handoff_startup, PostgresClient};
-        use iris_mpc_store::cpu_cell::{CpuCellHandoffs, HandoffPhase};
-        use sqlx::Executor;
-        let url = std::env::var("CPU_CELL_TEST_DATABASE_URL")?;
-        let schema = format!("drain_{}", uuid::Uuid::new_v4().simple());
-        let client = PostgresClient::new(
-            &url,
-            &schema,
-            iris_mpc_common::postgres::AccessMode::ReadWrite,
-        )
-        .await?;
-        iris_mpc_common::postgres::run_migrations(&client.pool, false).await?;
-        client.pool.close().await;
-        let client = PostgresClient::new_control(&url, &schema).await?;
-        let handoffs = CpuCellHandoffs::new(client.pool.clone(), &schema)?;
-        let id = uuid::Uuid::new_v4();
-        let source = uuid::Uuid::new_v4();
-        let destination = uuid::Uuid::new_v4();
-        let process = uuid::Uuid::new_v4();
-        let candidates = std::array::from_fn(|_| uuid::Uuid::new_v4());
-        handoffs.request(id, source, destination).await?;
-        let drain = Drain::new(0, Duration::from_secs(30), true);
-        drain.initialize(process.to_string(), Arc::new(AtomicBool::new(true)));
-        drain.require_durable_seal(Arc::new(super::super::ManagedHandoff {
-            handoffs: handoffs.clone(),
-            deployment: source,
-        }));
-        drain.request_managed(id, &candidates).await?;
-        assert_eq!(handoffs.get(id).await?.phase, HandoffPhase::Draining);
-        let report = proof("100", 1);
-        drain.publish_report(report.clone());
-        assert_eq!(drain.status().phase, Phase::Quiescent);
-        assert!(drain.persist_completion().await.is_err());
-        assert!(handoffs.get(id).await?.drain_report.is_none());
-        // Peer agreement is tested separately; exercise its Paused output here.
-        drain.inner.lock().unwrap().status.phase = Phase::Paused;
-        drain.persist_completion().await?;
-        let completed = handoffs.get(id).await?;
-        assert_eq!(completed.phase, HandoffPhase::Drained);
-        assert_eq!(completed.source_process, Some(process));
-        assert_eq!(completed.candidate_processes, Some(candidates.to_vec()));
-        assert_eq!(completed.drain_report, Some(serde_json::to_value(report)?));
-        drain.persist_completion().await?;
-        assert_eq!(handoffs.get(id).await?, completed);
-        assert!(
-            check_handoff_startup(&client.pool, &schema, &source.to_string(), false)
-                .await
-                .is_err()
-        );
-        client
-            .pool
-            .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
-            .await?;
-        client.pool.close().await;
-        Ok(())
     }
 
     #[tokio::test]
@@ -817,7 +757,9 @@ mod tests {
         assert!(drain.status().report.is_none());
         assert_eq!(drain.status().phase, Phase::Failed);
     }
-    async fn cohort(timeout: Duration) -> (Vec<Arc<Drain>>, Vec<tokio::task::JoinHandle<()>>) {
+    pub(crate) async fn cohort(
+        timeout: Duration,
+    ) -> (Vec<Arc<Drain>>, Vec<tokio::task::JoinHandle<()>>) {
         let drains: Vec<_> = (0..3)
             .map(|party| Drain::new(party, timeout, true))
             .collect();
@@ -853,7 +795,7 @@ mod tests {
         }
         (drains, tasks)
     }
-    async fn until(mut predicate: impl FnMut() -> bool) {
+    pub(crate) async fn until(mut predicate: impl FnMut() -> bool) {
         tokio::time::timeout(Duration::from_secs(5), async {
             while !predicate() {
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -871,38 +813,6 @@ mod tests {
                 batch_id: cut,
                 batch_sha256: "ab".repeat(32),
             }),
-        }
-    }
-    #[tokio::test]
-    async fn idle_drain_waits_for_cut_before_reporting() {
-        let (drains, tasks) = cohort(Duration::from_secs(4)).await;
-        for drain in &drains {
-            drain.request();
-            drain.ingest_stopped();
-            drain.receiver_stopped();
-            assert!(drain.settled());
-            assert_eq!(drain.status().cut, None);
-            assert!(!drain.ready_to_report());
-        }
-        until(|| drains.iter().all(|drain| drain.ready_to_report())).await;
-        for drain in &drains {
-            assert_eq!(drain.status().cut, Some(0));
-            drain.publish_report(Report {
-                watermark: None,
-                persisted_count: 0,
-                persisted_sha256: "ab".repeat(32),
-                last_publication: None,
-            });
-            assert!(!drain.ready_to_report());
-        }
-        until(|| {
-            drains
-                .iter()
-                .all(|drain| drain.status().phase == Phase::Paused)
-        })
-        .await;
-        for task in tasks {
-            task.abort();
         }
     }
     #[tokio::test]

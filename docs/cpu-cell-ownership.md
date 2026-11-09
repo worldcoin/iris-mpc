@@ -40,7 +40,7 @@ request sequence numbers alone does not establish matching work.
 
 ## Migrations and startup
 
-The [versioned SQLx migration](../migrations/20261108000000_cpu_cell_handoffs.up.sql)
+The [forward-only SQLx migration](../migrations/20261108000000_cpu_cell_handoffs.sql)
 creates the handoff table through the existing migration path. An empty table leaves ordinary
 startup, migrations and exporter writes unchanged. Deploying this foundation
 does not start a handoff or require an operator to access production Postgres.
@@ -80,9 +80,9 @@ alternate writers are stopped. A new row cannot revoke an already-open legacy
 connection. Keep automatic handoff disabled until that integration and recovery
 are tested. No role provisioning or process secrets are needed.
 
-The down migration can remove an unused table, but refuses to delete handoff
-history because that would remove the restart guards. All handoff tests use
-`CPU_CELL_TEST_DATABASE_URL` pointing to disposable PostgreSQL.
+The deployment migrator applies migrations forward; this migration has no down
+operation. Retain handoff history because startup uses it to keep retired
+deployments stopped.
 
 ## Interrupted handoff
 

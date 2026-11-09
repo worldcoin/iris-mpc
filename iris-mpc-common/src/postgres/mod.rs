@@ -317,13 +317,6 @@ mod tests {
         let client = PostgresClient::new(&url, &schema, AccessMode::ReadWrite).await?;
         let migrator = sqlx::migrate!("./../migrations");
         run_migrations(&client.pool, false).await?;
-        // Roll back the empty addition, then upgrade an existing canonical schema.
-        migrator.undo(&client.pool, 20260724000000).await?;
-        let absent: bool = sqlx::query_scalar("SELECT to_regclass('cpu_cell_handoffs') IS NULL")
-            .fetch_one(&client.pool)
-            .await?;
-        assert!(absent);
-        run_migrations(&client.pool, false).await?;
         run_migrations(&client.pool, false).await?;
         validate_migrations(&client.pool, false).await?;
         assert!(!is_cpu_cell_managed(&client.pool, &schema).await?);
@@ -345,7 +338,6 @@ mod tests {
         assert!(run_migrations(&client.pool, false).await.is_err());
         // The established deployment migrator remains usable with recorded history.
         migrator.run(&client.pool).await?;
-        assert!(migrator.undo(&client.pool, 20260724000000).await.is_err());
         let count: i64 = sqlx::query_scalar("SELECT count(*) FROM cpu_cell_handoffs")
             .fetch_one(&client.pool)
             .await?;
