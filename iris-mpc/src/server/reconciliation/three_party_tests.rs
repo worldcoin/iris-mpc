@@ -113,9 +113,12 @@ async fn drain_and_reload_handoff(parties: &[Party]) -> Result<ReconciliationCon
     let mut controls = Vec::new();
     for (i, (party, drain)) in parties.iter().zip(&drains).enumerate() {
         let schema = party.config.get_gpu_db_schema();
-        let control =
-            PostgresClient::new_control(&party.config.database.as_ref().unwrap().url, &schema)
-                .await?;
+        let control = PostgresClient::new(
+            &party.config.database.as_ref().unwrap().url,
+            &schema,
+            AccessMode::ExistingSchema,
+        )
+        .await?;
         let handoffs = CpuCellHandoffs::new(control.pool.clone(), &schema)?;
         // Represent already committed intake; actual SQS/SNS workers are not run here.
         for sequence in ["10", "42"] {
@@ -174,9 +177,12 @@ async fn drain_and_reload_handoff(parties: &[Party]) -> Result<ReconciliationCon
         drain.persist_completion().await?;
         assert_eq!(handoffs.get(id).await?, completed);
         control.pool.close().await;
-        let reopened =
-            PostgresClient::new_control(&party.config.database.as_ref().unwrap().url, &schema)
-                .await?;
+        let reopened = PostgresClient::new(
+            &party.config.database.as_ref().unwrap().url,
+            &schema,
+            AccessMode::ExistingSchema,
+        )
+        .await?;
         let saved = CpuCellHandoffs::new(reopened.pool.clone(), &schema)?
             .get(id)
             .await?;

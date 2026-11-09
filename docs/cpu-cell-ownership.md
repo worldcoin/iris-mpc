@@ -42,7 +42,7 @@ request sequence numbers alone does not establish matching work.
 
 The [forward-only SQLx migration](../migrations/20261108000000_cpu_cell_handoffs.sql)
 creates the handoff table through the existing migration path. An empty table leaves ordinary
-startup, migrations and exporter writes unchanged. Deploying this foundation
+startup and migrations unchanged. Deploying this foundation
 does not start a handoff or require an operator to access production Postgres.
 
 The runtime coordinator in POP-4454 will record the intended handoff from
@@ -64,15 +64,17 @@ it stopped. Supporting same-slot overlap would require a different contract.
 Any recorded handoff history requires deployment-aware startup. Missing
 configuration or an invalid phase blocks active startup. Active source startup
 is allowed only for the current requested handoff; after drain-start it is
-blocked before migrations, claim recovery, replay or intake. Existing source
+blocked after migrations and before claim recovery, replay or intake. Existing source
 connections can settle admitted work. Candidates remain passive; a database row
 cannot restore lost resident readiness after a process restart.
 
-Once history exists, serving processes validate existing migrations without
-running DDL; alternate runtime writers are rejected. The standalone migrator
-keeps its established deployment role. Compatible schema changes must finish
-before candidate preload; schema validation does not serialize a concurrent
-deployment migration.
+Both active and candidate startup run the ordinary SQLx migrator before reading
+handoff history. Already-applied migrations are not reapplied. A newer release
+may contain pending migrations; they must be compatible with A continuing to
+serve. Migration errors prevent startup. B then opens read-only connections for
+preload. Freeze further schema changes until handoff finishes; incompatible
+changes require a coordinated cold deployment. The standalone migrator remains
+available through the existing deployment workflow.
 
 Before recording the first handoff, the coordinator/deployment integration must
 ensure all participating processes use the handoff-aware runtime and ordinary

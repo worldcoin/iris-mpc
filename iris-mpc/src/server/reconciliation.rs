@@ -402,9 +402,9 @@ mod tests {
         }))?;
         let db =
             PostgresClient::new(&url, &config.get_gpu_db_schema(), AccessMode::ReadWrite).await?;
-        sqlx::query("CREATE TABLE irises (id bigint PRIMARY KEY, version_id smallint NOT NULL, left_code bytea NOT NULL, left_mask bytea NOT NULL, right_code bytea NOT NULL, right_mask bytea NOT NULL)").execute(&db.pool).await?;
+        iris_mpc_common::postgres::run_migrations(&db.pool, false).await?;
         sqlx::query(
-            "INSERT INTO irises SELECT id, 1, $1, $2, $1, $2 FROM generate_series(1, $3) AS id",
+            "INSERT INTO irises (id, version_id, left_code, left_mask, right_code, right_mask) SELECT id, 1, $1, $2, $1, $2 FROM generate_series(1, $3) AS id",
         )
         .bind(bytemuck::cast_slice::<u16, u8>(&vec![7; IRIS_CODE_LENGTH]))
         .bind(bytemuck::cast_slice::<u16, u8>(&vec![3; MASK_CODE_LENGTH]))
@@ -449,11 +449,14 @@ mod tests {
                 .await
                 .is_err());
             assert!(candidate.report_for(&expected).is_none());
+            let mut tx = db.pool.begin().await?;
+            let mut explicit = iris_mpc_store::ExplicitVersionToken::enable(&mut tx).await?;
             sqlx::query("UPDATE irises SET version_id = 2, left_code = $1, right_code = $2")
                 .bind(bytemuck::cast_slice::<u16, u8>(&vec![11; IRIS_CODE_LENGTH]))
                 .bind(bytemuck::cast_slice::<u16, u8>(&vec![13; IRIS_CODE_LENGTH]))
-                .execute(&db.pool)
+                .execute(&mut **explicit.tx())
                 .await?;
+            tx.commit().await?;
             let report = candidate
                 .reconcile(
                     &store,
@@ -502,19 +505,19 @@ mod tests {
             ampc_anon_stats::types::Eye::Right => 1,
         };
         let resident_pool = candidate.workers.pools[resident].clone();
-        sqlx::query("UPDATE irises SET version_id = 2 WHERE id = 4")
-            .execute(&db.pool)
-            .await?;
+        let mut tx = db.pool.begin().await?;
+        let mut explicit = iris_mpc_store::ExplicitVersionToken::enable(&mut tx).await?;
         sqlx::query(
             "UPDATE irises SET version_id = 9, left_code = $1, right_code = $1 WHERE id = 4",
         )
         .bind(bytemuck::cast_slice::<u16, u8>(&vec![11; IRIS_CODE_LENGTH]))
-        .execute(&db.pool)
+        .execute(&mut **explicit.tx())
         .await?;
+        tx.commit().await?;
         sqlx::query("DELETE FROM irises WHERE id IN (2, 5)")
             .execute(&db.pool)
             .await?;
-        sqlx::query("INSERT INTO irises VALUES (6, 0, $1, $2, $1, $2)")
+        sqlx::query("INSERT INTO irises (id, version_id, left_code, left_mask, right_code, right_mask) VALUES (6, 0, $1, $2, $1, $2)")
             .bind(bytemuck::cast_slice::<u16, u8>(&vec![13; IRIS_CODE_LENGTH]))
             .bind(bytemuck::cast_slice::<u16, u8>(&vec![3; MASK_CODE_LENGTH]))
             .execute(&db.pool)
@@ -579,9 +582,12 @@ mod tests {
             let (config, db) = fixture(129).await?;
             let store = Store::new(&db).await?;
             let mut candidate = preload(&config).await?;
+            let mut tx = db.pool.begin().await?;
+            let mut explicit = iris_mpc_store::ExplicitVersionToken::enable(&mut tx).await?;
             sqlx::query("UPDATE irises SET version_id = 2")
-                .execute(&db.pool)
+                .execute(&mut **explicit.tx())
                 .await?;
+            tx.commit().await?;
             sqlx::query(corrupt)
                 .bind(vec![0_u8; 1])
                 .execute(&db.pool)
@@ -624,9 +630,12 @@ mod tests {
         let (config, db) = fixture(129).await?;
         let store = Store::new(&db).await?;
         let mut failed = preload(&config).await?;
+        let mut tx = db.pool.begin().await?;
+        let mut explicit = iris_mpc_store::ExplicitVersionToken::enable(&mut tx).await?;
         sqlx::query("UPDATE irises SET version_id = 2")
-            .execute(&db.pool)
+            .execute(&mut **explicit.tx())
             .await?;
+        tx.commit().await?;
         sqlx::query("UPDATE irises SET left_code = $1, right_code = $1 WHERE id = 129")
             .bind(vec![0_u8; 2])
             .execute(&db.pool)

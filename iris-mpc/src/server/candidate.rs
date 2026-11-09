@@ -131,11 +131,15 @@ pub(super) async fn preload(
     shutdown: Arc<ShutdownHandler>,
     process_id: Uuid,
 ) -> Result<CandidatePreload> {
-    let handoff = initialize_handoff(config, HawkSearchMode::LinearScan).await?;
     let db = config
         .database
         .as_ref()
         .ok_or_else(|| eyre!("candidate requires database"))?;
+    let migration =
+        PostgresClient::new(&db.url, &config.get_gpu_db_schema(), AccessMode::ReadWrite).await?;
+    run_migrations(&migration.pool, db.ignore_missing_migrations).await?;
+    initialize_handoff(config, HawkSearchMode::LinearScan, &migration.pool).await?;
+    migration.pool.close().await;
     let postgres = PostgresClient::new(
         &db.url,
         &config.get_gpu_db_schema(),
@@ -143,9 +147,6 @@ pub(super) async fn preload(
     )
     .await
     .wrap_err("connect candidate read-only database")?;
-    if handoff.is_some() {
-        validate_migrations(&postgres.pool, db.ignore_missing_migrations).await?;
-    }
     let store = Store::new(&postgres).await?;
     // The shared loader requires dense serial IDs. Fail explicitly rather
     // than letting COUNT(*) silently truncate an unexpected sparse database.
@@ -246,12 +247,15 @@ mod tests {
             AccessMode::ReadWrite,
         )
         .await?;
-        // Only the share table exists: migrations, claim resets, replay or
-        // graph initialization would fail. AWS/peer config is absent too.
-        writer.pool.execute("CREATE TABLE irises (id bigint PRIMARY KEY, version_id smallint NOT NULL, left_code bytea NOT NULL, left_mask bytea NOT NULL, right_code bytea NOT NULL, right_mask bytea NOT NULL)").await?;
+        // B applies migrations even when it is the first process on this schema.
+        let empty = preload(&config, Arc::new(ShutdownHandler::new(0)), Uuid::new_v4()).await?;
+        assert_eq!(empty.workers.registries[0].read().await.size, 0);
+        drop(empty);
+        sqlx::query("INSERT INTO ingested_requests (sequence_number, message_body, consumed_batch_id) VALUES ($1, 'claimed fixture request', 17)")
+            .bind(iris_mpc_store::normalize_sns_sequence_number("42")?).execute(&writer.pool).await?;
         let code = vec![0_u8; IRIS_CODE_LENGTH * 2];
         let mask = vec![0_u8; MASK_CODE_LENGTH * 2];
-        sqlx::query("INSERT INTO irises VALUES (1, 7, $1, $2, $1, $2)")
+        sqlx::query("INSERT INTO irises (id, version_id, left_code, left_mask, right_code, right_mask) VALUES (1, 7, $1, $2, $1, $2)")
             .bind(&code)
             .bind(&mask)
             .execute(&writer.pool)
@@ -289,9 +293,12 @@ mod tests {
         }
         // A continues writing. Candidate retains the versions it actually
         // observed, without trying to refresh its cold cache from live state.
+        let mut tx = writer.pool.begin().await?;
+        let mut explicit = iris_mpc_store::ExplicitVersionToken::enable(&mut tx).await?;
         sqlx::query("UPDATE irises SET version_id = 8 WHERE id = 1")
-            .execute(&writer.pool)
+            .execute(&mut **explicit.tx())
             .await?;
+        tx.commit().await?;
         assert_eq!(
             candidate.workers.registries[0]
                 .read()
@@ -412,6 +419,15 @@ mod tests {
             .fetch_one(&writer.pool)
             .await?;
         assert_eq!(version.0, 8);
+        let claim: (Option<i64>, bool) =
+            sqlx::query_as("SELECT consumed_batch_id, persisted_at IS NULL FROM ingested_requests")
+                .fetch_one(&writer.pool)
+                .await?;
+        assert_eq!(
+            claim,
+            (Some(17), true),
+            "candidate must not reset or consume existing claims"
+        );
         task.abort();
         assert!(task.await.unwrap_err().is_cancelled());
 

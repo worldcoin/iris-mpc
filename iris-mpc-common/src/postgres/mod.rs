@@ -1,5 +1,5 @@
 use eyre::{bail, eyre, Result, WrapErr};
-use sqlx::{postgres::PgPoolOptions, Executor, PgConnection, PgPool};
+use sqlx::{postgres::PgPoolOptions, Executor, PgPool};
 use std::time::Duration;
 
 const MAX_CONNECTIONS: u32 = 100;
@@ -46,31 +46,21 @@ fn sql_switch_schema(schema: &str, mode: AccessMode) -> Result<String> {
     })
 }
 
-async fn managed_connection(conn: &mut PgConnection, schema: &str) -> Result<bool, sqlx::Error> {
-    let installed: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname='cpu_cell_handoffs')")
-        .bind(schema).fetch_one(&mut *conn).await?;
-    if !installed {
-        return Ok(false);
-    }
-    sqlx::query_scalar(&format!(
-        "SELECT EXISTS (SELECT 1 FROM \"{schema}\".cpu_cell_handoffs)"
-    ))
-    .fetch_one(conn)
-    .await
-}
-
 pub async fn is_cpu_cell_managed(pool: &PgPool, schema: &str) -> Result<bool> {
     sanitize_identifier(schema)?;
-    tokio::time::timeout(HANDOFF_TIMEOUT, async {
-        let mut conn = pool.acquire().await?;
-        managed_connection(&mut conn, schema).await
-    })
+    tokio::time::timeout(
+        HANDOFF_TIMEOUT,
+        sqlx::query_scalar(&format!(
+            "SELECT EXISTS (SELECT 1 FROM \"{schema}\".cpu_cell_handoffs)"
+        ))
+        .fetch_one(pool),
+    )
     .await
     .wrap_err("CPU handoff lookup timed out")?
     .map_err(Into::into)
 }
 
-/// Check before migrations, replay, queue access or canonical writes. A recorded
+/// Check after migrations, before replay, queue access or operational writes. A recorded
 /// activation cannot authorize a fresh process with none of B's resident state.
 /// Locking the row waits for an old process's in-flight drain commit before
 /// deciding whether its replacement can start.
@@ -110,90 +100,13 @@ pub async fn check_handoff_startup(
 impl PostgresClient {
     pub async fn new(url: &str, schema: &str, mode: AccessMode) -> Result<Self> {
         let connect_sql = sql_switch_schema(schema, mode)?;
-        let control = Self::new_control(url, schema).await?;
-        if is_cpu_cell_managed(&control.pool, schema).await? && mode != AccessMode::EnforcedReadOnly
-        {
-            bail!("CPU handoff schema requires deployment-aware startup");
-        }
-        control.pool.close().await;
-        let schema_name = schema.to_owned();
         let pool = PgPoolOptions::new()
             .max_connections(MAX_CONNECTIONS)
             .after_connect(move |conn, _| {
                 let sql = connect_sql.clone();
-                let schema = schema_name.clone();
                 Box::pin(async move {
-                    tokio::time::timeout(HANDOFF_TIMEOUT, async {
-                        if mode != AccessMode::EnforcedReadOnly
-                            && managed_connection(conn, &schema).await?
-                        {
-                            return Err(sqlx::Error::Protocol(
-                                "CPU handoff schema requires deployment-aware startup".into(),
-                            ));
-                        }
-                        conn.execute(sql.as_str()).await?;
-                        Ok(())
-                    })
-                    .await
-                    .map_err(|_| {
-                        sqlx::Error::Protocol("CPU handoff startup guard timed out".into())
-                    })?
-                })
-            })
-            .connect(url)
-            .await?;
-        Ok(Self {
-            pool,
-            schema_name: schema.to_owned(),
-        })
-    }
-
-    /// A small pool for ordinary handoff SQL; never creates schemas or runs migrations.
-    pub async fn new_control(url: &str, schema: &str) -> Result<Self> {
-        sanitize_identifier(schema)?;
-        let pool = PgPoolOptions::new().max_connections(2).acquire_timeout(HANDOFF_TIMEOUT)
-            .after_connect(|conn, _| Box::pin(async move {
-                conn.execute("SET statement_timeout='5s'; SET lock_timeout='2s'; SET search_path TO pg_catalog;").await?;
-                Ok(())
-            })).connect(url).await?;
-        Ok(Self {
-            pool,
-            schema_name: schema.to_owned(),
-        })
-    }
-
-    /// The original A can reconnect to settle admitted work while draining.
-    /// New processes must first pass the stricter requested-phase startup check.
-    pub async fn new_handoff_source(url: &str, schema: &str, deployment: &str) -> Result<Self> {
-        let control = Self::new_control(url, schema).await?;
-        check_handoff_startup(&control.pool, schema, deployment, false).await?;
-        control.pool.close().await;
-        let deployment = uuid::Uuid::parse_str(deployment)?;
-        let sql = sql_switch_schema(schema, AccessMode::ExistingSchema)?;
-        let check = format!("SELECT COALESCE((SELECT source=$1 AND phase IN ('requested','draining') FROM \"{schema}\".cpu_cell_handoffs ORDER BY sequence DESC LIMIT 1), false)");
-        let pool = PgPoolOptions::new()
-            .max_connections(MAX_CONNECTIONS)
-            .after_connect(move |conn, _| {
-                let sql = sql.clone();
-                let check = check.clone();
-                Box::pin(async move {
-                    tokio::time::timeout(HANDOFF_TIMEOUT, async {
-                        let allowed: bool = sqlx::query_scalar(&check)
-                            .bind(deployment)
-                            .fetch_one(&mut *conn)
-                            .await?;
-                        if !allowed {
-                            return Err(sqlx::Error::Protocol(
-                                "CPU source has completed its handoff".into(),
-                            ));
-                        }
-                        conn.execute(sql.as_str()).await?;
-                        Ok(())
-                    })
-                    .await
-                    .map_err(|_| {
-                        sqlx::Error::Protocol("CPU handoff reconnect check timed out".into())
-                    })?
+                    conn.execute(sql.as_str()).await?;
+                    Ok(())
                 })
             })
             .connect(url)
@@ -206,58 +119,10 @@ impl PostgresClient {
 }
 
 pub async fn run_migrations(pool: &PgPool, ignore_missing_migrations: bool) -> Result<()> {
-    let schema: String = sqlx::query_scalar("SELECT current_schema()")
-        .fetch_one(pool)
-        .await?;
-    if is_cpu_cell_managed(pool, &schema).await? {
-        bail!("CPU handoff history requires migrations through the deployment migrator");
-    }
     sqlx::migrate!("./../migrations")
         .set_ignore_missing(ignore_missing_migrations)
         .run(pool)
         .await?;
-    Ok(())
-}
-
-/// Validate preprovisioned history without sqlx's migration-table creation or
-/// advisory locking. All local migrations must already be applied unchanged.
-pub async fn validate_migrations(pool: &PgPool, ignore_missing: bool) -> Result<()> {
-    let applied: Vec<(i64, bool, Vec<u8>)> = tokio::time::timeout(
-        HANDOFF_TIMEOUT,
-        sqlx::query_as("SELECT version, success, checksum FROM _sqlx_migrations ORDER BY version")
-            .fetch_all(pool),
-    )
-    .await
-    .wrap_err("CPU-cell migration validation timed out")??;
-    let migrator = sqlx::migrate!("./../migrations");
-    for (version, success, checksum) in &applied {
-        if !success {
-            bail!("CPU-cell schema has failed migration {version}");
-        }
-        match migrator.iter().find(|migration| {
-            migration.version == *version && migration.migration_type.is_up_migration()
-        }) {
-            Some(migration) if migration.checksum.as_ref() != checksum.as_slice() => {
-                bail!("CPU-cell migration checksum mismatch at {version}")
-            }
-            None if !ignore_missing => bail!("CPU-cell unknown applied migration {version}"),
-            _ => {}
-        }
-    }
-    for migration in migrator
-        .iter()
-        .filter(|migration| migration.migration_type.is_up_migration())
-    {
-        if !applied
-            .iter()
-            .any(|(version, _, _)| *version == migration.version)
-        {
-            bail!(
-                "CPU-cell schema requires deployment migration {} before startup",
-                migration.version
-            );
-        }
-    }
     Ok(())
 }
 
@@ -266,59 +131,12 @@ mod tests {
     use super::*;
     #[tokio::test]
     #[ignore = "requires CPU_CELL_TEST_DATABASE_URL pointing to disposable PostgreSQL"]
-    async fn managed_migration_validation_checks_history_without_ddl() -> Result<()> {
-        let url = std::env::var("CPU_CELL_TEST_DATABASE_URL")?;
-        let schema = format!("history_{}", uuid::Uuid::new_v4().simple());
-        let search_path = format!("SET search_path TO {schema}");
-        let pool = PgPoolOptions::new()
-            .max_connections(1)
-            .after_connect(move |conn, _| {
-                let sql = search_path.clone();
-                Box::pin(async move {
-                    conn.execute(sql.as_str()).await?;
-                    Ok(())
-                })
-            })
-            .connect(&url)
-            .await?;
-        pool.execute(format!("CREATE SCHEMA {schema}").as_str())
-            .await?;
-        let client = PostgresClient {
-            pool,
-            schema_name: schema.clone(),
-        };
-        assert!(validate_migrations(&client.pool, false).await.is_err());
-        let absent: bool = sqlx::query_scalar("SELECT to_regclass('_sqlx_migrations') IS NULL")
-            .fetch_one(&client.pool)
-            .await?;
-        assert!(absent, "validation must not create migration history");
-        run_migrations(&client.pool, false).await?;
-        validate_migrations(&client.pool, false).await?;
-        client.pool.execute("UPDATE _sqlx_migrations SET checksum='bad'::bytea WHERE version=(SELECT min(version) FROM _sqlx_migrations)").await?;
-        assert!(validate_migrations(&client.pool, false).await.is_err());
-        client.pool.execute("DELETE FROM _sqlx_migrations WHERE version=(SELECT min(version) FROM _sqlx_migrations)").await?;
-        assert!(
-            validate_migrations(&client.pool, true).await.is_err(),
-            "ignore_missing must not permit pending local migrations"
-        );
-        client
-            .pool
-            .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
-            .await?;
-        client.pool.close().await;
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[ignore = "requires CPU_CELL_TEST_DATABASE_URL pointing to disposable PostgreSQL"]
     async fn handoff_migration_is_inert_until_requested_and_retains_history() -> Result<()> {
         let url = std::env::var("CPU_CELL_TEST_DATABASE_URL")?;
         let schema = format!("upgrade_{}", uuid::Uuid::new_v4().simple());
         let client = PostgresClient::new(&url, &schema, AccessMode::ReadWrite).await?;
-        let migrator = sqlx::migrate!("./../migrations");
         run_migrations(&client.pool, false).await?;
         run_migrations(&client.pool, false).await?;
-        validate_migrations(&client.pool, false).await?;
         assert!(!is_cpu_cell_managed(&client.pool, &schema).await?);
         let ordinary = PostgresClient::new(&url, &schema, AccessMode::ReadWrite).await?;
         run_migrations(&ordinary.pool, false).await?;
@@ -332,17 +150,13 @@ mod tests {
         .execute(&client.pool)
         .await?;
         assert!(is_cpu_cell_managed(&client.pool, &schema).await?);
-        assert!(PostgresClient::new(&url, &schema, AccessMode::ReadWrite)
-            .await
-            .is_err());
-        assert!(run_migrations(&client.pool, false).await.is_err());
-        // The established deployment migrator remains usable with recorded history.
-        migrator.run(&client.pool).await?;
+        let ordinary = PostgresClient::new(&url, &schema, AccessMode::ReadWrite).await?;
+        run_migrations(&ordinary.pool, false).await?;
+        ordinary.pool.close().await;
         let count: i64 = sqlx::query_scalar("SELECT count(*) FROM cpu_cell_handoffs")
             .fetch_one(&client.pool)
             .await?;
         assert_eq!(count, 1);
-        validate_migrations(&client.pool, false).await?;
         client
             .pool
             .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())

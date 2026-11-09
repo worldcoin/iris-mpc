@@ -26,7 +26,7 @@ impl Fixture {
         .await?;
         iris_mpc_common::postgres::run_migrations(&client.pool, false).await?;
         client.pool.close().await;
-        let client = PostgresClient::new_control(&url, &schema).await?;
+        let client = PostgresClient::new(&url, &schema, AccessMode::ExistingSchema).await?;
         Ok(Self {
             url,
             schema: schema.clone(),
@@ -148,7 +148,7 @@ async fn competing_deployments_and_drain_calls_do_not_both_win() -> Result<()> {
 }
 
 #[tokio::test]
-async fn startup_denies_restarted_source_and_unconfigured_writers() -> Result<()> {
+async fn startup_denies_restarted_source_but_keeps_existing_connections_usable() -> Result<()> {
     let f = Fixture::new().await?;
     assert!(
         check_handoff_startup(&f.db.pool, &f.schema, &f.source.to_string(), false)
@@ -168,9 +168,6 @@ async fn startup_denies_restarted_source_and_unconfigured_writers() -> Result<()
             .await
             .is_err()
     );
-    for mode in [AccessMode::ReadWrite, AccessMode::ExistingSchema] {
-        assert!(PostgresClient::new(&f.url, &f.schema, mode).await.is_err());
-    }
     let candidate = PostgresClient::new(&f.url, &f.schema, AccessMode::EnforcedReadOnly).await?;
     assert!(candidate
         .pool
@@ -178,11 +175,10 @@ async fn startup_denies_restarted_source_and_unconfigured_writers() -> Result<()
         .await
         .is_err());
     candidate.pool.close().await;
-    let source =
-        PostgresClient::new_handoff_source(&f.url, &f.schema, &f.source.to_string()).await?;
+    let source = PostgresClient::new(&f.url, &f.schema, AccessMode::ReadWrite).await?;
     f.drain().await?;
     assert!(
-        PostgresClient::new_handoff_source(&f.url, &f.schema, &f.source.to_string())
+        check_handoff_startup(&source.pool, &f.schema, &f.source.to_string(), false)
             .await
             .is_err()
     );

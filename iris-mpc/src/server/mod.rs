@@ -42,8 +42,7 @@ use iris_mpc_common::helpers::sqs_s3_helper::upload_file_to_s3;
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::job::JobSubmissionHandle;
 use iris_mpc_common::postgres::{
-    check_handoff_startup, is_cpu_cell_managed, run_migrations, validate_migrations, AccessMode,
-    PostgresClient,
+    check_handoff_startup, is_cpu_cell_managed, run_migrations, AccessMode, PostgresClient,
 };
 use iris_mpc_cpu::checkpoint_protocol::runner::SidecarConfigWrapper;
 use iris_mpc_cpu::execution::hawk_main::iris_worker::IrisWorkerPool;
@@ -129,8 +128,8 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
         );
     }
 
-    let handoff = initialize_handoff(&config, search_mode).await?;
-    let (iris_store, graph_store) = prepare_stores(&config, search_mode, handoff.is_some()).await?;
+    let (iris_store, graph_store) = prepare_stores(&config, search_mode).await?;
+    let handoff = initialize_handoff(&config, search_mode, &iris_store.pool).await?;
 
     let aws_clients = init_aws_services(&config).await?;
     let shares_encryption_key_pair =
@@ -435,7 +434,7 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
                 .wrap_err("failed to create AWS clients")?;
             // the sidecar needs its own graph store and this function transforms config to the
             // appropriate schema name when creating the pg client
-            let (_iris_store, graph_store) = prepare_stores(&config, HawkSearchMode::Hnsw, false)
+            let (_iris_store, graph_store) = prepare_stores(&config, HawkSearchMode::Hnsw)
                 .await
                 .wrap_err("failed to prepare stores")?;
             let network_args = NetworkHandleArgs {
@@ -547,18 +546,16 @@ pub(super) struct ManagedHandoff {
 async fn initialize_handoff(
     config: &Config,
     search_mode: HawkSearchMode,
+    pool: &sqlx::PgPool,
 ) -> Result<Option<Arc<ManagedHandoff>>> {
     if config.cpu_cell.is_some() && search_mode != HawkSearchMode::LinearScan {
         bail!("CPU handoff is supported only by linear scan");
     }
-    let (schema, db) = match search_mode {
-        HawkSearchMode::Hnsw => (config.get_cpu_db_schema(), config.cpu_database.as_ref()),
-        HawkSearchMode::LinearScan => (config.get_gpu_db_schema(), config.database.as_ref()),
+    let schema = match search_mode {
+        HawkSearchMode::Hnsw => config.get_cpu_db_schema(),
+        HawkSearchMode::LinearScan => config.get_gpu_db_schema(),
     };
-    let db = db.ok_or_else(|| eyre!("missing database for CPU handoff check"))?;
-    let control = PostgresClient::new_control(&db.url, &schema).await?;
-    if !is_cpu_cell_managed(&control.pool, &schema).await? {
-        control.pool.close().await;
+    if !is_cpu_cell_managed(pool, &schema).await? {
         return Ok(None);
     }
     let identity = config
@@ -575,14 +572,14 @@ async fn initialize_handoff(
         bail!("CPU handoff requires persistent linear scan, DB-backed intake and no seed/clear operations");
     }
     check_handoff_startup(
-        &control.pool,
+        pool,
         &schema,
         &identity.deployment_id,
         config.startup_mode == StartupMode::Candidate,
     )
     .await?;
     Ok(Some(Arc::new(ManagedHandoff {
-        handoffs: CpuCellHandoffs::new(control.pool, &schema)?,
+        handoffs: CpuCellHandoffs::new(pool.clone(), &schema)?,
         deployment: Uuid::parse_str(&identity.deployment_id)?,
     })))
 }
@@ -592,7 +589,6 @@ async fn initialize_handoff(
 async fn prepare_stores(
     config: &Config,
     search_mode: HawkSearchMode,
-    managed_handoff: bool,
 ) -> Result<(Store, GraphPg<Aby3Store<HawkOps>>), Report> {
     let (schema_name, db_config) = match search_mode {
         HawkSearchMode::Hnsw => (
@@ -612,25 +608,13 @@ async fn prepare_stores(
                 .ok_or(eyre!("Missing GPU-compatible database config"))?,
         ),
     };
-    let hawk_postgres_client = if managed_handoff {
-        let identity = config
-            .cpu_cell
-            .as_ref()
-            .ok_or_else(|| eyre!("CPU handoff requires deployment identity"))?;
-        let client = PostgresClient::new_handoff_source(
-            &db_config.url,
-            &schema_name,
-            &identity.deployment_id,
-        )
-        .await?;
-        validate_migrations(&client.pool, db_config.ignore_missing_migrations).await?;
-        client
-    } else {
-        let client =
-            PostgresClient::new(&db_config.url, &schema_name, AccessMode::ReadWrite).await?;
-        run_migrations(&client.pool, db_config.ignore_missing_migrations).await?;
-        client
-    };
+    let hawk_postgres_client =
+        PostgresClient::new(&db_config.url, &schema_name, AccessMode::ReadWrite).await?;
+    run_migrations(
+        &hawk_postgres_client.pool,
+        db_config.ignore_missing_migrations,
+    )
+    .await?;
 
     let iris_store = Store::new(&hawk_postgres_client).await?;
     let graph_store = GraphStore::new(&hawk_postgres_client).await?;
@@ -1477,7 +1461,7 @@ mod config_tests {
 
     #[tokio::test]
     #[ignore = "requires CPU_CELL_TEST_DATABASE_URL pointing to disposable PostgreSQL"]
-    async fn startup_handoff_denial_precedes_first_canonical_effect() -> Result<()> {
+    async fn startup_handoff_denial_precedes_operational_effects() -> Result<()> {
         use sqlx::Executor;
         let url = std::env::var("CPU_CELL_TEST_DATABASE_URL")?;
         let mut config: Config = serde_json::from_value(serde_json::json!({
@@ -1493,19 +1477,31 @@ mod config_tests {
         let client = PostgresClient::new(&url, &schema, AccessMode::ReadWrite).await?;
         run_migrations(&client.pool, false).await?;
         let admin = client.pool;
-        assert!(initialize_handoff(&config, HawkSearchMode::LinearScan)
-            .await?
-            .is_none());
-        prepare_stores(&config, HawkSearchMode::LinearScan, false).await?;
+        assert!(
+            initialize_handoff(&config, HawkSearchMode::LinearScan, &admin)
+                .await?
+                .is_none()
+        );
+        prepare_stores(&config, HawkSearchMode::LinearScan).await?;
         let identity = config.cpu_cell.take();
-        assert!(initialize_handoff(&config, HawkSearchMode::LinearScan)
-            .await?
-            .is_none());
-        prepare_stores(&config, HawkSearchMode::LinearScan, false).await?;
+        assert!(
+            initialize_handoff(&config, HawkSearchMode::LinearScan, &admin)
+                .await?
+                .is_none()
+        );
+        prepare_stores(&config, HawkSearchMode::LinearScan).await?;
         config.cpu_cell = identity;
         let handoffs = CpuCellHandoffs::new(admin.clone(), &schema)?;
+        let id = Uuid::new_v4();
+        let source = Uuid::parse_str(&config.cpu_cell.as_ref().unwrap().deployment_id)?;
+        handoffs.request(id, source, Uuid::new_v4()).await?;
         handoffs
-            .request(Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4())
+            .start_drain(
+                id,
+                source,
+                Uuid::new_v4(),
+                &std::array::from_fn(|_| Uuid::new_v4()),
+            )
             .await?;
         let tables_before: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relkind='r'").bind(&schema).fetch_one(&admin).await?;
         for mode in [StartupMode::Active, StartupMode::Candidate] {
