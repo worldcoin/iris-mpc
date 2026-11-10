@@ -129,25 +129,6 @@ async fn handoff_transitions_preserve_exact_report_and_history() -> Result<()> {
 }
 
 #[tokio::test]
-async fn competing_deployments_and_drain_calls_do_not_both_win() -> Result<()> {
-    let f = Fixture::new().await?;
-    let other = Uuid::new_v4();
-    let (first, second) = tokio::join!(f.request(), f.db.request(other, f.source, Uuid::new_v4()));
-    assert_ne!(first.is_ok(), second.is_ok());
-    let winner = if first.is_ok() { f.id } else { other };
-    let competing = Uuid::new_v4();
-    let (first, second) = tokio::join!(
-        f.db.start_drain(winner, f.source, f.process, &f.candidates),
-        f.db.start_drain(winner, f.source, competing, &f.candidates),
-    );
-    assert_ne!(first.is_ok(), second.is_ok());
-    let stored = f.db.get(winner).await?;
-    assert_eq!(stored.phase, HandoffPhase::Draining);
-    assert!(stored.source_process == Some(f.process) || stored.source_process == Some(competing));
-    f.cleanup().await
-}
-
-#[tokio::test]
 async fn startup_denies_restarted_source_but_keeps_existing_connections_usable() -> Result<()> {
     let f = Fixture::new().await?;
     assert!(

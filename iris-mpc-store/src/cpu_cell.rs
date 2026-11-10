@@ -49,20 +49,11 @@ impl CpuCellHandoffs {
         })
     }
 
-    // Serialize only this small control table, never the canonical data scan.
     async fn transaction(&self) -> Result<Transaction<'_, Postgres>> {
-        let mut tx = tokio::time::timeout(Duration::from_secs(5), self.pool.begin())
-            .await
-            .wrap_err("opening handoff transaction timed out")??;
+        let mut tx = self.pool.begin().await?;
         sqlx::raw_sql("SET LOCAL lock_timeout = '2s'; SET LOCAL statement_timeout = '5s'")
             .execute(&mut *tx)
             .await?;
-        sqlx::query(&format!(
-            "LOCK TABLE {} IN SHARE ROW EXCLUSIVE MODE",
-            self.table
-        ))
-        .execute(&mut *tx)
-        .await?;
         Ok(tx)
     }
 
@@ -87,6 +78,12 @@ impl CpuCellHandoffs {
                 "handoff requires distinct non-nil deployment identities"
             );
             let mut tx = self.transaction().await?;
+            sqlx::query(&format!(
+                "LOCK TABLE {} IN SHARE ROW EXCLUSIVE MODE",
+                self.table
+            ))
+            .execute(&mut *tx)
+            .await?;
             let previous: Option<Handoff> =
                 sqlx::query_as(&format!("SELECT * FROM {} WHERE handoff_id=$1", self.table))
                     .bind(id)
@@ -204,6 +201,12 @@ impl CpuCellHandoffs {
     ) -> Result<()> {
         tokio::time::timeout(Duration::from_secs(10), async {
         let mut tx = self.transaction().await?;
+        sqlx::query(&format!(
+            "LOCK TABLE {} IN SHARE ROW EXCLUSIVE MODE",
+            self.table
+        ))
+        .execute(&mut *tx)
+        .await?;
         let latest: Option<Uuid> = sqlx::query_scalar(&format!(
             "SELECT handoff_id FROM {} ORDER BY sequence DESC LIMIT 1",
             self.table

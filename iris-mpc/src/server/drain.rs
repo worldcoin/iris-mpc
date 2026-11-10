@@ -111,7 +111,6 @@ pub struct Drain {
     ready: Mutex<Option<Arc<AtomicBool>>>,
     timeout: Duration,
     handoff: Mutex<Option<Arc<super::ManagedHandoff>>>,
-    durable_sealed: std::sync::atomic::AtomicBool,
     handoff_id: Mutex<Option<uuid::Uuid>>,
 }
 
@@ -159,7 +158,6 @@ impl Drain {
             ready: Mutex::new(None),
             timeout,
             handoff: Mutex::new(None),
-            durable_sealed: std::sync::atomic::AtomicBool::new(false),
             handoff_id: Mutex::new(None),
         })
     }
@@ -216,7 +214,6 @@ impl Drain {
             return Err(error);
         }
         *self.handoff_id.lock().unwrap() = Some(handoff_id);
-        self.durable_sealed.store(true, Ordering::SeqCst);
         self.request();
         pending.completed = true;
         Ok(())
@@ -251,7 +248,7 @@ impl Drain {
     }
 
     pub fn request(&self) {
-        if self.handoff.lock().unwrap().is_some() && !self.durable_sealed.load(Ordering::SeqCst) {
+        if self.handoff.lock().unwrap().is_some() && self.handoff_id.lock().unwrap().is_none() {
             self.fail("managed drain requires a durable source seal");
             return;
         }
@@ -423,7 +420,7 @@ impl Drain {
         self.inner.lock().unwrap().last_publication.clone()
     }
     pub fn publish_report(&self, report: Report) {
-        if self.handoff.lock().unwrap().is_some() && !self.durable_sealed.load(Ordering::SeqCst) {
+        if self.handoff.lock().unwrap().is_some() && self.handoff_id.lock().unwrap().is_none() {
             self.fail("cannot publish managed drain proof without durable seal");
             return;
         }
