@@ -42,7 +42,6 @@ use iris_mpc_common::{
         aws::{SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME},
         inmemory_store::InMemoryStore,
         key_pair::SharesEncryptionKeyPairs,
-        sha256::sha256_bytes,
         smpc_request::{
             decrypt_iris_share, get_iris_data_by_party_id, validate_iris_share,
             CircuitBreakerRequest, IdentityDeletionRequest, IdentityMatchCheckRequest,
@@ -1192,7 +1191,7 @@ async fn server_main(config: Config) -> Result<()> {
                 Some(Ok(Some(batch))) => batch,
             };
 
-            let batch_hash = sha256_bytes(batch.sns_message_ids.join(""));
+            let batch_hash = batch.agreement_hash();
             let batch_valid_entries = batch.valid_entries.clone();
             *CURRENT_BATCH_SHA
                 .lock()
