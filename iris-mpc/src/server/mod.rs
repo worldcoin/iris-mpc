@@ -195,6 +195,14 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
     let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
 
+    // Full-fleet restarts rebuild every SyncState snapshot after its party's
+    // last commit. Solo restarts would require live DB frontier reads instead.
+    let fleet_frontier = if config.db_backed_ingest {
+        sync_result.max_persisted_sequence_number()
+    } else {
+        None
+    };
+
     // Handle modifications sync
     if config.enable_modifications_sync {
         let mut tx = sync_modifications(
@@ -211,7 +219,23 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
         if search_mode == HawkSearchMode::Hnsw {
             sync_graph_mutations(&sync_result, &graph_store, &mut tx).await?;
         }
+        let marked = if let Some(frontier) = &fleet_frontier {
+            iris_store
+                .mark_ingested_requests_persisted_up_to_tx(&mut tx, frontier)
+                .await
+                .wrap_err("failed to skip-ahead ingested rows to fleet frontier")?
+        } else {
+            0
+        };
         tx.commit().await?;
+        if marked > 0 {
+            tracing::warn!(
+                frontier = ?fleet_frontier,
+                "Skip-ahead: marked {} ingested row(s) persisted with recovered modification effects",
+                marked
+            );
+            metrics::counter!("db_ingest_frontier_skip_ahead").increment(marked);
+        }
     }
 
     if config.enable_modifications_replay {
@@ -232,43 +256,8 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
     }
 
     if config.db_backed_ingest {
-        // Two-step boot recovery, the DB analog of the SQS queue trim:
-        //
-        // Step 1 — skip-ahead to the fleet's persisted frontier. Rows at or
-        // below max(peers' persisted sequence numbers) belong to batches that
-        // completed on at least one peer: their effects reached this party via
-        // the modifications roll-forward above, and peers will never co-form
-        // them again. Releasing them instead (the naive local decision) would
-        // make this party re-form rows the peers moved past — a permanent
-        // batch divergence. Locally, "claimed but unpersisted from a crashed
-        // symmetric batch" and "claimed but unpersisted because only MY commit
-        // failed" are indistinguishable; only the peers' frontier tells them
-        // apart.
-        //
-        // SAFETY DEPENDENCY: peers serve their SyncState from a snapshot taken
-        // at THEIR boot, so an exchanged frontier can under-report persists
-        // made after that peer booted. This is sound today only because the
-        // startup unready-gate + heartbeat teardown force full-fleet restarts
-        // (every frontier is rebuilt after its party's last commit). If
-        // coordination is ever relaxed to allow solo restarts, this exchange
-        // must move to a live DB read in the sync endpoint.
-        let fleet_frontier = sync_result.max_persisted_sequence_number();
-        if let Some(frontier) = &fleet_frontier {
-            let marked = iris_store
-                .mark_ingested_requests_persisted_up_to(frontier)
-                .await
-                .wrap_err("failed to skip-ahead ingested rows to fleet frontier")?;
-            if marked > 0 {
-                tracing::warn!(
-                    "Skip-ahead: marked {} ingested row(s) persisted up to fleet frontier {} (completed on a peer; effects arrived via modifications sync)",
-                    marked,
-                    frontier
-                );
-                metrics::counter!("db_ingest_frontier_skip_ahead").increment(marked);
-            }
-        }
-
-        // Step 2 — release remaining unpersisted claims (all above the fleet
+        // Recovery committed the fleet frontier and its effects together.
+        // Release remaining unpersisted claims (all above the fleet
         // frontier = no party persisted them = the symmetric-crash case).
         // Deterministic re-formation picks them up identically everywhere.
         let released = iris_store
@@ -713,7 +702,7 @@ async fn build_sync_state(
     let common_config = CommonConfig::from(config.clone());
 
     let max_persisted_sequence_number = if config.db_backed_ingest {
-        store.max_persisted_sequence_number().await?
+        store.reconcile_completed_ingested_sequence_number().await?
     } else {
         None
     };

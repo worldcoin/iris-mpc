@@ -919,19 +919,7 @@ WHERE id = $1;
                 "ingested request sequence number is not normalized"
             );
         }
-        let Json(completed): Json<Option<String>> = sqlx::query_scalar(
-            r#"
-            SELECT "value" FROM persistent_state
-            WHERE domain = $1 AND "key" = $2
-            FOR UPDATE
-            "#,
-        )
-        .bind(INGEST_STATE_DOMAIN)
-        .bind(COMPLETED_SEQUENCE_NUMBER_KEY)
-        .fetch_one(tx.deref_mut())
-        .await
-        .wrap_err("failed to lock ingested request completion watermark")?;
-        let completed = validate_completed_sequence_number(completed)?;
+        let completed = Self::lock_completed_ingested_sequence_number_tx(tx).await?;
 
         let persisted: Vec<String> = sqlx::query_scalar(
             r#"
@@ -946,29 +934,17 @@ WHERE id = $1;
         .fetch_all(tx.deref_mut())
         .await?;
 
-        if let Some(candidate) = persisted.iter().max() {
-            if completed
-                .as_ref()
-                .is_none_or(|completed| candidate > completed)
-            {
-                sqlx::query(
-                    r#"
-                    UPDATE persistent_state SET "value" = $1
-                    WHERE domain = $2 AND "key" = $3
-                    "#,
-                )
-                .bind(Json(candidate))
-                .bind(INGEST_STATE_DOMAIN)
-                .bind(COMPLETED_SEQUENCE_NUMBER_KEY)
-                .execute(tx.deref_mut())
-                .await?;
-            }
-        }
+        Self::advance_completed_ingested_sequence_number_tx(
+            tx,
+            completed.as_deref(),
+            persisted.iter().max().map(String::as_str),
+        )
+        .await?;
 
         Ok(persisted.len() as u64)
     }
 
-    /// Highest sequence committed by batch persistence, independent of retained journal rows.
+    /// Highest durably completed sequence, independent of retained journal rows.
     pub async fn completed_ingested_sequence_number(&self) -> Result<Option<String>> {
         let Json(completed): Json<Option<String>> = sqlx::query_scalar(
             r#"
@@ -984,9 +960,71 @@ WHERE id = $1;
         validate_completed_sequence_number(completed)
     }
 
-    /// This party's persisted watermark: the highest sequence number with a
-    /// persist mark. Exchanged via SyncState for startup recovery. Drain also
-    /// checks the persisted request set with `prove_persisted_prefix`.
+    /// Reconcile writes from older processes before advertising startup progress.
+    pub async fn reconcile_completed_ingested_sequence_number(&self) -> Result<Option<String>> {
+        let mut tx = self.tx().await?;
+        let completed = Self::lock_completed_ingested_sequence_number_tx(&mut tx).await?;
+        let retained: (Option<String>,) = sqlx::query_as(
+            "SELECT MAX(sequence_number) FROM ingested_requests WHERE persisted_at IS NOT NULL",
+        )
+        .fetch_one(tx.deref_mut())
+        .await?;
+        let retained = validate_completed_sequence_number(retained.0)?;
+        let reconciled = completed.clone().max(retained);
+        Self::advance_completed_ingested_sequence_number_tx(
+            &mut tx,
+            completed.as_deref(),
+            reconciled.as_deref(),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(reconciled)
+    }
+
+    async fn lock_completed_ingested_sequence_number_tx(
+        tx: &mut Transaction<'_, Postgres>,
+    ) -> Result<Option<String>> {
+        let Json(completed): Json<Option<String>> = sqlx::query_scalar(
+            r#"
+            SELECT "value" FROM persistent_state
+            WHERE domain = $1 AND "key" = $2
+            FOR UPDATE
+            "#,
+        )
+        .bind(INGEST_STATE_DOMAIN)
+        .bind(COMPLETED_SEQUENCE_NUMBER_KEY)
+        .fetch_one(tx.deref_mut())
+        .await
+        .wrap_err("failed to lock ingested request completion watermark")?;
+        validate_completed_sequence_number(completed)
+    }
+
+    async fn advance_completed_ingested_sequence_number_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        completed: Option<&str>,
+        candidate: Option<&str>,
+    ) -> Result<()> {
+        if let Some(candidate) = candidate {
+            if completed.is_none_or(|completed| candidate > completed) {
+                sqlx::query(
+                    r#"
+                    UPDATE persistent_state SET "value" = $1
+                    WHERE domain = $2 AND "key" = $3
+                    "#,
+                )
+                .bind(Json(candidate))
+                .bind(INGEST_STATE_DOMAIN)
+                .bind(COMPLETED_SEQUENCE_NUMBER_KEY)
+                .execute(tx.deref_mut())
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Highest persisted sequence still retained in the journal. Drain checks
+    /// that retained request set with `prove_persisted_prefix`; durable progress
+    /// can be higher after journal rows have been removed.
     pub async fn max_persisted_sequence_number(&self) -> Result<Option<String>> {
         let row: (Option<String>,) = sqlx::query_as(
             r#"
@@ -1042,6 +1080,22 @@ WHERE id = $1;
     /// via the modifications roll-forward, and re-forming it locally would
     /// diverge the batches (peers will never co-form it). Returns rows affected.
     pub async fn mark_ingested_requests_persisted_up_to(&self, frontier: &str) -> Result<u64> {
+        let mut tx = self.tx().await?;
+        let marked = self
+            .mark_ingested_requests_persisted_up_to_tx(&mut tx, frontier)
+            .await?;
+        tx.commit().await?;
+        Ok(marked)
+    }
+
+    /// Apply the recovered journal frontier atomically with its modification effects.
+    pub async fn mark_ingested_requests_persisted_up_to_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        frontier: &str,
+    ) -> Result<u64> {
+        validate_completed_sequence_number(Some(frontier.to_owned()))?;
+        let completed = Self::lock_completed_ingested_sequence_number_tx(tx).await?;
         let result = sqlx::query(
             r#"
             UPDATE ingested_requests
@@ -1051,7 +1105,13 @@ WHERE id = $1;
             "#,
         )
         .bind(frontier)
-        .execute(&self.pool)
+        .execute(tx.deref_mut())
+        .await?;
+        Self::advance_completed_ingested_sequence_number_tx(
+            tx,
+            completed.as_deref(),
+            Some(frontier),
+        )
         .await?;
 
         Ok(result.rows_affected())
@@ -1764,6 +1824,157 @@ pub mod tests {
     }
 
     #[tokio::test]
+    async fn test_ingested_completion_reconciles_legacy_progress() -> Result<()> {
+        let schema_name = temporary_name();
+        let client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        run_migrations(&client.pool, false).await?;
+        let store = Store::new(&client).await?;
+        assert_eq!(
+            store.reconcile_completed_ingested_sequence_number().await?,
+            None
+        );
+        for sequence in ["120", "150"] {
+            store
+                .insert_ingested_request(sequence, "body", true)
+                .await?;
+        }
+        let lower = normalize_sns_sequence_number("120")?;
+        let higher = normalize_sns_sequence_number("150")?;
+        let mut tx = store.tx().await?;
+        store
+            .mark_ingested_requests_persisted_tx(&mut tx, std::slice::from_ref(&lower))
+            .await?;
+        tx.commit().await?;
+        sqlx::query("UPDATE ingested_requests SET persisted_at = now() WHERE sequence_number = $1")
+            .bind(&higher)
+            .execute(&client.pool)
+            .await?;
+        assert_eq!(
+            store.completed_ingested_sequence_number().await?,
+            Some(lower)
+        );
+        assert_eq!(
+            store.reconcile_completed_ingested_sequence_number().await?,
+            Some(higher.clone())
+        );
+        sqlx::query("DELETE FROM ingested_requests WHERE sequence_number = $1")
+            .bind(&higher)
+            .execute(&client.pool)
+            .await?;
+        assert_eq!(
+            store.reconcile_completed_ingested_sequence_number().await?,
+            Some(higher.clone())
+        );
+        sqlx::query("DELETE FROM ingested_requests")
+            .execute(&client.pool)
+            .await?;
+        assert_eq!(
+            store.reconcile_completed_ingested_sequence_number().await?,
+            Some(higher.clone())
+        );
+        sqlx::query("INSERT INTO ingested_requests (sequence_number, message_body, persisted_at) VALUES ($1, 'body', now())")
+            .bind("x".repeat(SNS_SEQUENCE_NUMBER_WIDTH)).execute(&client.pool).await?;
+        assert!(store
+            .reconcile_completed_ingested_sequence_number()
+            .await
+            .is_err());
+        assert_eq!(
+            store.completed_ingested_sequence_number().await?,
+            Some(higher)
+        );
+        cleanup(&client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ingested_completion_recovery_is_atomic() -> Result<()> {
+        let schema_name = temporary_name();
+        let client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        run_migrations(&client.pool, false).await?;
+        let store = Store::new(&client).await?;
+        for sequence in ["120", "130", "140"] {
+            store
+                .insert_ingested_request(sequence, "body", true)
+                .await?;
+        }
+        let lower = normalize_sns_sequence_number("120")?;
+        let frontier = normalize_sns_sequence_number("150")?;
+        let mut tx = store.tx().await?;
+        store
+            .mark_ingested_requests_persisted_tx(&mut tx, std::slice::from_ref(&lower))
+            .await?;
+        tx.commit().await?;
+
+        for commit in [false, true] {
+            let mut tx = store.tx().await?;
+            sqlx::query("INSERT INTO modifications (id, serial_id, request_type, status, persisted) VALUES (1, 1, $1, 'COMPLETED', true)")
+                .bind(UNIQUENESS_MESSAGE_TYPE).execute(tx.deref_mut()).await?;
+            assert_eq!(
+                store
+                    .mark_ingested_requests_persisted_up_to_tx(&mut tx, &frontier)
+                    .await?,
+                2
+            );
+            assert_eq!(
+                store.completed_ingested_sequence_number().await?,
+                Some(lower.clone())
+            );
+            if commit {
+                tx.commit().await?;
+                assert_eq!(
+                    store.completed_ingested_sequence_number().await?,
+                    Some(frontier.clone())
+                );
+            } else {
+                tx.rollback().await?;
+                assert_eq!(
+                    store.completed_ingested_sequence_number().await?,
+                    Some(lower.clone())
+                );
+                assert_eq!(
+                    store.max_persisted_sequence_number().await?,
+                    Some(lower.clone())
+                );
+            }
+            let modifications: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM modifications")
+                .fetch_one(&client.pool)
+                .await?;
+            assert_eq!(modifications, i64::from(commit));
+        }
+
+        sqlx::query("DELETE FROM ingested_requests")
+            .execute(&client.pool)
+            .await?;
+        let next = normalize_sns_sequence_number("200")?;
+        assert_eq!(
+            store.mark_ingested_requests_persisted_up_to(&next).await?,
+            0
+        );
+        assert_eq!(
+            store.completed_ingested_sequence_number().await?,
+            Some(next.clone())
+        );
+        assert_eq!(
+            store.mark_ingested_requests_persisted_up_to(&lower).await?,
+            0
+        );
+        assert_eq!(
+            store.completed_ingested_sequence_number().await?,
+            Some(next)
+        );
+        assert!(store
+            .mark_ingested_requests_persisted_up_to("200")
+            .await
+            .is_err());
+        cleanup(&client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_ingested_completion_watermark_rejects_invalid_state_and_keys() -> Result<()> {
         let schema_name = temporary_name();
         let client =
@@ -1782,6 +1993,14 @@ pub mod tests {
             sqlx::query("UPDATE persistent_state SET \"value\" = $1::jsonb WHERE domain = 'db_ingest' AND \"key\" = 'completed_sequence_number'")
                 .bind(invalid).execute(&client.pool).await?;
             assert!(store.completed_ingested_sequence_number().await.is_err());
+            assert!(store
+                .reconcile_completed_ingested_sequence_number()
+                .await
+                .is_err());
+            assert!(store
+                .mark_ingested_requests_persisted_up_to(&sequence)
+                .await
+                .is_err());
             let mut tx = store.tx().await?;
             assert!(store
                 .mark_ingested_requests_persisted_tx(&mut tx, std::slice::from_ref(&sequence))
@@ -1802,6 +2021,14 @@ pub mod tests {
         sqlx::query("DELETE FROM persistent_state WHERE domain = 'db_ingest' AND \"key\" = 'completed_sequence_number'")
             .execute(&client.pool).await?;
         assert!(store.completed_ingested_sequence_number().await.is_err());
+        assert!(store
+            .reconcile_completed_ingested_sequence_number()
+            .await
+            .is_err());
+        assert!(store
+            .mark_ingested_requests_persisted_up_to(&sequence)
+            .await
+            .is_err());
         let mut tx = store.tx().await?;
         assert!(store
             .mark_ingested_requests_persisted_tx(&mut tx, &[sequence])
