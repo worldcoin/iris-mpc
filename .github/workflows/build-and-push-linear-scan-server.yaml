@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - test-alkali-change
+      - carlomazzaferro/pop-4397-stage-test
   release:
     types:
       - published
@@ -21,6 +22,7 @@ env:
 
 jobs:
   docker:
+    if: github.ref != 'refs/heads/carlomazzaferro/pop-4397-stage-test'
     name: Build and push arm64 image
     timeout-minutes: 40
     runs-on:
@@ -111,9 +113,11 @@ jobs:
           {
             echo "tags<<EOF"
             echo "${REGISTRY}/${IMAGE_NAME_AMD64}:${GITHUB_SHA}"
-            echo "${REGISTRY}/${IMAGE_NAME_AMD64}:latest"
-            if [ -n "${RELEASE_TAG_NAME}" ]; then
-              echo "${REGISTRY}/${IMAGE_NAME_AMD64}:${RELEASE_TAG_NAME}"
+            if [ "${GITHUB_REF}" != "refs/heads/carlomazzaferro/pop-4397-stage-test" ]; then
+              echo "${REGISTRY}/${IMAGE_NAME_AMD64}:latest"
+              if [ -n "${RELEASE_TAG_NAME}" ]; then
+                echo "${REGISTRY}/${IMAGE_NAME_AMD64}:${RELEASE_TAG_NAME}"
+              fi
             fi
             echo "EOF"
           } >> "${GITHUB_OUTPUT}"
