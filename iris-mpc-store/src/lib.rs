@@ -1,3 +1,5 @@
+pub mod cpu_cell;
+
 pub mod loader;
 mod s3_importer;
 

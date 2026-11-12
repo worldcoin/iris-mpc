@@ -11,7 +11,7 @@ SMPC__CANDIDATE_STATUS_PORT=3090
 
 `startup_mode` defaults to `active`, preserving coordinated startup. The HNSW entrypoint rejects candidate mode. Candidate mode rejects seeding/clearing, fake data, invalid party/loading settings, and unsupported CPU scan settings.
 
-The candidate opens existing Postgres tables with read-only transactions on every pooled connection. It preloads the configured resident eye using the exact-scan worker layout and retains row IDs and observed versions. It runs no migrations, coordination, MPC network, queue reads, claim resets, modification/result replay, or live execution. S3 loading is outside this first implementation.
+The candidate runs the ordinary SQLx migrator, checks handoff history, then opens Postgres with read-only transactions on every preload connection. Already-applied migrations are not reapplied; pending migrations must be compatible with A serving. It preloads the configured resident eye using the exact-scan worker layout and retains row IDs and observed versions. It runs no coordination, MPC network, queue reads, claim resets, modification/result replay, or live execution. S3 loading is outside this first implementation.
 
 ## Operator status
 
@@ -37,17 +37,17 @@ Cold-eye caches are deliberately deferred: rereading their versions while A writ
 Against a disposable Postgres instance:
 
 ```sh
-POP4370_TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:55437/postgres \
+CPU_CELL_TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:55437/postgres \
   cargo test -p iris-mpc --lib candidate -- --include-ignored
 ```
 
-The database test uses the actual linear-scan entrypoint and worker loader with only an iris table present and no AWS/peer configuration. It checks retained versions, read-only enforcement across multiple connections, status semantics, shutdown, and startup failure.
+The database test uses the actual linear-scan entrypoint, normal migrations and worker loader without AWS/peer configuration. It checks retained versions, read-only preload connections, status semantics, shutdown, and startup failure.
 
 The three-party reconciliation regression uses three isolated schemas on one disposable Postgres instance:
 
 ```sh
-SMPC__DATABASE__URL=postgres://postgres:postgres@127.0.0.1:55437/postgres \
+CPU_CELL_TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:55437/postgres \
   cargo test -p iris-mpc --lib --features db_dependent three_party_reconciliation -- --test-threads=1
 ```
 
-It generates deterministic, valid per-party shares, preloads all three candidates, simulates A's committed insert/update/removal writes, then freezes writes before reconciling with a common attempt, process cohorts, and watermark. It checks real report agreement, each party's own resident and cold-eye payloads (inside and outside the lookback), removed/stale IDs, and retained resident pool handles for either resident eye. A fresh cohort with one party's database version changed must fail agreement despite equal row counts. The cold wrapper is intentionally replaced during reconciliation; its private underlying worker handle is not asserted here. This exercises the local reconciliation primitive; serving status/passivity remains covered by the startup check above. Authenticated peer exchange, live A processes, writer fencing, and activation are outside this fixture.
+It generates valid per-party shares, preloads three candidates, and simulates A's committed insert/update/removal writes. Three drain coordinators agree over local HTTP, persist completion, then reopen their PostgreSQL connections. The saved reports supply the reconciliation context. The test checks exact retries, old A restart rejection, each party's resident and cold-eye payloads, removed/stale IDs, and retained resident pools for either resident eye. A separate case changes one party's database version and rejects agreement despite equal row counts. The cold wrapper is replaced during reconciliation; its private worker handle is not asserted. This is an idle drain with no newly admitted batch; real SQS/SNS workers, authenticated peer exchange and serving activation are outside the fixture. Passive entrypoint behavior and admitted-batch publication conditions retain separate tests.
