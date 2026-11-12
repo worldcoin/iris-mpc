@@ -8,13 +8,12 @@ set -euo pipefail
 # by request position and then by party id, and written as canonical JSON.
 #
 # Usage:
-#   scripts/run-native-ground-truth.sh gpu OUTPUT.json [REQUEST_COUNT]
 #   scripts/run-native-ground-truth.sh linear-scan OUTPUT.json [REQUEST_COUNT]
-#   scripts/run-native-ground-truth.sh compare GPU.json CPU.json
+#   scripts/run-native-ground-truth.sh compare BEFORE.json AFTER.json
 #
 # Set GROUND_TRUTH_INITIAL_DB_SIZE to seed each party database with the same
 # deterministic MPC shares before starting the request sequence. For example,
-# 40000 exceeds both the CPU (4096) and GPU (32768) scan chunk sizes.
+# 40000 exceeds the CPU scan chunk size (4096).
 #
 # Required commands: cargo, curl, Python 3.10+, initdb, pg_ctl, createdb.
 # Set MOTO_PYTHON_BIN to a Python interpreter containing moto and boto3.
@@ -50,8 +49,8 @@ right_records = right.get("records", [])
 for index, (left_record, right_record) in enumerate(zip(left_records, right_records)):
     if left_record != right_record:
         print(f"GROUND_TRUTH_MISMATCH first_record={index}", file=sys.stderr)
-        print("GPU/left:", json.dumps(left_record, sort_keys=True), file=sys.stderr)
-        print("CPU/right:", json.dumps(right_record, sort_keys=True), file=sys.stderr)
+        print("Before/left:", json.dumps(left_record, sort_keys=True), file=sys.stderr)
+        print("After/right:", json.dumps(right_record, sort_keys=True), file=sys.stderr)
         break
 else:
     print(
@@ -74,7 +73,6 @@ OUTPUT_PATH=$2
 REQUEST_COUNT=${3:-100}
 INITIAL_DB_SIZE=${GROUND_TRUTH_INITIAL_DB_SIZE:-0}
 case "$MODE" in
-    gpu) SERVER_BINARY=iris-mpc-gpu ;;
     linear-scan) SERVER_BINARY=iris-mpc-linear-scan ;;
     *) usage ;;
 esac
@@ -317,14 +315,8 @@ PY
 
 cd "$PROJECT_ROOT"
 if [[ ${GROUND_TRUTH_SKIP_BUILD:-0} != 1 ]]; then
-    if [[ "$MODE" == gpu ]]; then
-        cargo build --release -p iris-mpc-bins \
-            --bin iris-mpc-gpu --bin key-manager --bin service-client \
-            --features gpu-reference
-    else
-        cargo build --release -p iris-mpc-bins \
-            --bin iris-mpc-linear-scan --bin key-manager --bin service-client
-    fi
+    cargo build --release -p iris-mpc-bins \
+        --bin iris-mpc-linear-scan --bin key-manager --bin service-client
 fi
 
 export AWS_ACCESS_KEY_ID=test
@@ -351,19 +343,7 @@ NODE_HOSTNAMES='["127.0.0.1","127.0.0.1","127.0.0.1"]'
 SERVICE_PORTS='["14000","14001","14002"]'
 HEALTH_PORTS='["13000","13001","13002"]'
 KMS_ARNS='["unused-0","unused-1","unused-2"]'
-if [[ "$MODE" == gpu ]]; then
-    # The GPU actor preallocates its phase-2 buffers in groups of 64. The
-    # client still submits exactly one request and waits for its response
-    # before submitting the next, so every observed processing batch is one.
-    SERVER_MAX_BATCH_SIZE=64
-    NCCL_HOST=${GROUND_TRUTH_NCCL_HOST:-$(hostname -I | awk '{print $1}')}
-    [[ -n "$NCCL_HOST" ]] || {
-        echo "Could not determine a non-loopback NCCL bootstrap address" >&2
-        exit 1
-    }
-else
-    SERVER_MAX_BATCH_SIZE=1
-fi
+SERVER_MAX_BATCH_SIZE=1
 
 for party in 0 1 2; do
     (
@@ -416,25 +396,6 @@ for party in 0 1 2; do
         export SMPC__SERVER_COORDINATION__HEARTBEAT_INTERVAL_SECS=1
         export SMPC__SERVER_COORDINATION__HEARTBEAT_INITIAL_RETRIES=120
         export SMPC__HAWK_SERVER_HEALTHCHECK_PORT="1300${party}"
-        if [[ "$MODE" == gpu ]]; then
-            export CUDA_VISIBLE_DEVICES=$party
-            # All three production GPU server processes are colocated for this
-            # test. NCCL still spans the three parties, so give every process
-            # the same loopback bootstrap address while keeping it separate
-            # from the application MPC ports.
-            # NCCL does not reliably establish a multi-process communicator
-            # through loopback; use the host's routable interface even though
-            # all three ranks are colocated.
-            export NCCL_COMM_ID="${NCCL_HOST}:15000"
-            # A colocated process sees only its assigned GPU. Force NCCL onto
-            # the socket path used by the multi-host production deployment;
-            # CUDA IPC/P2P discovery across those isolated visibility masks can
-            # otherwise initialize successfully and then hang on a collective.
-            export NCCL_NET=Socket
-            export NCCL_SOCKET_IFNAME=${GROUND_TRUTH_NCCL_INTERFACE:-eth0}
-            export NCCL_P2P_DISABLE=1
-            export NCCL_SHM_DISABLE=1
-        fi
         exec "$PROJECT_ROOT/target/release/$SERVER_BINARY"
     ) >"$RUN_ROOT/server-${party}.log" 2>&1 &
     PIDS+=("$!")

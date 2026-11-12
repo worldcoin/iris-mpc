@@ -153,25 +153,6 @@ type PartialDistancesMap = BTreeMap<
     ),
 >;
 
-/// Test-only snapshot of the distance bundles retained for anonymized statistics.
-///
-/// The GPU parity test reconstructs these replicated shares across all three
-/// parties and compares them with the GPU actor's retained bundles.
-#[cfg(feature = "gpu-parity")]
-#[derive(Debug, Clone)]
-pub struct AnonStatsParityEntry {
-    pub match_id: i64,
-    pub operation: AnonStatsOperation,
-    pub distances: Vec<Aby3DistanceRef<<HawkOps as DistanceOps>::Ring>>,
-}
-
-#[cfg(feature = "gpu-parity")]
-#[derive(Debug, Clone)]
-pub struct AnonStatsParityBatch {
-    pub orientation: AnonStatsOrientation,
-    pub eyes: [Vec<AnonStatsParityEntry>; 2],
-}
-
 pub(crate) mod amx_scan_pool;
 mod identity_update;
 pub mod insert;
@@ -380,9 +361,6 @@ pub struct HawkActor {
     /// Store for persisting detailed anonymized statistics.
     anon_stats_store: Option<AnonStatsStore>,
 
-    #[cfg(feature = "gpu-parity")]
-    anon_stats_parity_tx: Option<mpsc::UnboundedSender<AnonStatsParityBatch>>,
-
     // ---- Networking ----
     /// Handle for managing network connections and creating MPC sessions with peers.
     networking: Box<dyn NetworkHandle>,
@@ -419,7 +397,6 @@ impl TryFrom<usize> for StoreId {
 /// Orientation enum to indicate the orientation of the iris code during the batch processing.
 /// Normal: Normal orientation of the iris code.
 /// Mirror: Mirrored orientation of the iris code: Used to detect full-face mirror attacks.
-/// TODO: Merge with the same in iris-mpc-gpu.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Orientation {
@@ -427,7 +404,6 @@ pub enum Orientation {
     Mirror = 1,
 }
 
-// TODO: Merge with the same in iris-mpc-gpu.
 /// The index in `ServerJobResult::merged_results` which means "no matches and no insertions".
 const NON_MATCH_ID: u32 = u32::MAX;
 
@@ -637,8 +613,6 @@ impl HawkActor {
             registry: registries,
             graph_store,
             anon_stats_store: None,
-            #[cfg(feature = "gpu-parity")]
-            anon_stats_parity_tx: None,
             networking,
             party_id,
             error_ct: CancellationToken::new(),
@@ -798,14 +772,6 @@ impl HawkActor {
 
     pub fn set_anon_stats_store(&mut self, store: Option<AnonStatsStore>) {
         self.anon_stats_store = store;
-    }
-
-    #[cfg(feature = "gpu-parity")]
-    pub fn set_anon_stats_parity_capture(
-        &mut self,
-        tx: mpsc::UnboundedSender<AnonStatsParityBatch>,
-    ) {
-        self.anon_stats_parity_tx = Some(tx);
     }
 
     /// Replaces the network handle used by this actor to create MPC sessions.
@@ -1079,26 +1045,6 @@ impl HawkActor {
             per_side_distances[side] = partial_distances.clone();
             self.persist_cached_distances(side, anon_orientation, partial_distances)
                 .await?;
-        }
-
-        #[cfg(feature = "gpu-parity")]
-        if let Some(tx) = &self.anon_stats_parity_tx {
-            let eyes = per_side_distances.each_ref().map(|distances| {
-                distances
-                    .iter()
-                    .map(
-                        |(&match_id, &(operation, ref shares))| AnonStatsParityEntry {
-                            match_id,
-                            operation,
-                            distances: shares.clone(),
-                        },
-                    )
-                    .collect()
-            });
-            let _ = tx.send(AnonStatsParityBatch {
-                orientation: anon_orientation,
-                eyes,
-            });
         }
 
         // Persist 2D distances (combined left + right)

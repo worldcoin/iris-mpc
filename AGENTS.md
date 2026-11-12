@@ -1,7 +1,7 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- Root `Cargo.toml` wires `iris-mpc/` (service entrypoints), `iris-mpc-common/` (shared types), `iris-mpc-cpu/` (HNSW stack), `iris-mpc-gpu/` (CUDA stack), and `iris-mpc-store/` (persistence).
+- Root `Cargo.toml` wires `iris-mpc/` (service entrypoints), `iris-mpc-common/` (shared types), `iris-mpc-cpu/` (CPU linear-scan and HNSW engine), and `iris-mpc-store/` (persistence).
 - Tooling lives in `iris-mpc-utils/` and `iris-mpc-upgrade*/`; bindings in `iris-mpc-py/`; ops assets land in `scripts/`, `deploy/`, `migrations/`, `certs/`.
 - Each crate keeps integration coverage in `tests/` beside the code under test.
 
@@ -13,8 +13,8 @@
 
 ## MPC Implementation Scope
 - The CPU implementation is the maintained path: `iris-mpc/src/server/mod.rs` and `iris-mpc-cpu/`.
-- The GPU implementation is deprecated and scheduled for complete removal. Do not modify GPU-specific code, including `iris-mpc-gpu/` and the GPU server under `iris-mpc-bins/bin/iris-mpc/`.
-- Implement features, fixes and protocol changes for CPU only. CPU/GPU protocol parity is not required; do not port changes to GPU to preserve parity.
+- The GPU implementation has been removed. Preserve the CPU linear-scan and HNSW paths.
+- Legacy database settings and wire/storage formats remain compatibility contracts; see `docs/gpu-retirement.md` before renaming or removing them.
 
 ## Coding Style & Naming Conventions
 - Format with `cargo fmt`; `rustfmt.toml` targets Rust 2021 with 4-space indents and field init shorthand.
@@ -23,8 +23,8 @@
 
 ## Testing Guidelines
 - Co-locate unit tests with implementation and keep scenario tests under `*/tests/`, named after their domain (e.g., `store_connection.rs`).
-- Use deterministic RNG seeds in property tests and gate CUDA-sensitive cases behind opt-in features.
-- Validate changes against the maintained CPU paths; GPU protocol parity and GPU-specific tests are not required.
+- Use deterministic RNG seeds in property tests.
+- Validate changes against the maintained CPU paths, including CPU linear scan and HNSW.
 
 ## Commit & Pull Request Guidelines
 - Follow git history: imperative, present-tense subjects, optional ticket tags (e.g., `[POP-2993]`), and mention PR numbers when merging.
