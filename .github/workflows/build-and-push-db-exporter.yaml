@@ -7,6 +7,7 @@ on:
   push:
     branches:
       - "chore/rename-export-image"
+      - "carlomazzaferro/pop-4453-stage-exporter-build"
 
 concurrency:
   group: "${{ github.workflow }} @ ${{ github.event.pull_request.head.label || github.head_ref || github.ref }}"
@@ -20,6 +21,7 @@ env:
 
 jobs:
   docker:
+    timeout-minutes: 30
     runs-on:
       group: arc-public-4xlarge-amd64-runner
     permissions:
@@ -55,7 +57,7 @@ jobs:
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+            ${{ github.event_name == 'release' && format('{0}/{1}:latest', env.REGISTRY, env.IMAGE_NAME) || '' }}
             ${{ github.event_name == 'release' && format('{0}/{1}:{2}', env.REGISTRY, env.IMAGE_NAME, github.event.release.tag_name) || '' }}
           platforms: linux/amd64
           cache-from: type=gha
