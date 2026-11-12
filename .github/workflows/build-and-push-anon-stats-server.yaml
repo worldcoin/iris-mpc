@@ -3,6 +3,7 @@ name: Build and push image for anon-stats-server
 on:
   push:
     branches:
+      - "carlomazzaferro/pop-4397-stage-verify"
       - main
       - "feat/e2e-anon-stats-server" # will be reverted in a follow-up
     paths:
@@ -73,11 +74,11 @@ jobs:
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-            ${{ (github.ref == 'refs/heads/main' || github.event_name == 'release') && format('{0}/{1}:latest', env.REGISTRY, env.IMAGE_NAME) || '' }}
+            ${{ github.ref != 'refs/heads/carlomazzaferro/pop-4397-stage-verify' && (github.ref == 'refs/heads/main' || github.event_name == 'release') && format('{0}/{1}:latest', env.REGISTRY, env.IMAGE_NAME) || '' }}
             ${{ secrets.AWS_ECR_ANON_STATS_SERVER }}:${{ github.sha }}
-            ${{ (github.ref == 'refs/heads/main' || github.event_name == 'release') && format('{0}:latest', secrets.AWS_ECR_ANON_STATS_SERVER) || '' }}
-            ${{ github.event.release.tag_name && format('{0}/{1}:{2}', env.REGISTRY, env.IMAGE_NAME, github.event.release.tag_name) || '' }}
-            ${{ github.event.release.tag_name && format('{0}:{1}', secrets.AWS_ECR_ANON_STATS_SERVER, github.event.release.tag_name) || '' }}
+            ${{ github.ref != 'refs/heads/carlomazzaferro/pop-4397-stage-verify' && (github.ref == 'refs/heads/main' || github.event_name == 'release') && format('{0}:latest', secrets.AWS_ECR_ANON_STATS_SERVER) || '' }}
+            ${{ github.ref != 'refs/heads/carlomazzaferro/pop-4397-stage-verify' && github.event.release.tag_name && format('{0}/{1}:{2}', env.REGISTRY, env.IMAGE_NAME, github.event.release.tag_name) || '' }}
+            ${{ github.ref != 'refs/heads/carlomazzaferro/pop-4397-stage-verify' && github.event.release.tag_name && format('{0}:{1}', secrets.AWS_ECR_ANON_STATS_SERVER, github.event.release.tag_name) || '' }}
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max

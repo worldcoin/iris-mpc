@@ -6,6 +6,7 @@ on:
       - "published"
   push:
     branches:
+      - "carlomazzaferro/pop-4397-stage-verify"
       - "chore/rename-export-image"
 
 concurrency:
@@ -20,6 +21,7 @@ env:
 
 jobs:
   docker:
+    timeout-minutes: 30
     runs-on:
       group: arc-public-4xlarge-amd64-runner
     permissions:
@@ -55,8 +57,8 @@ jobs:
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ github.event_name == 'release' && format('{0}/{1}:{2}', env.REGISTRY, env.IMAGE_NAME, github.event.release.tag_name) || '' }}
+            ${{ github.ref != 'refs/heads/carlomazzaferro/pop-4397-stage-verify' && format('{0}/{1}:latest', env.REGISTRY, env.IMAGE_NAME) || '' }}
+            ${{ github.ref != 'refs/heads/carlomazzaferro/pop-4397-stage-verify' && github.event_name == 'release' && format('{0}/{1}:{2}', env.REGISTRY, env.IMAGE_NAME, github.event.release.tag_name) || '' }}
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max

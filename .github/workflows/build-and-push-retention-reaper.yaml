@@ -6,6 +6,7 @@ name: Build and push image for retention-reaper
 on:
   push:
     branches:
+      - "carlomazzaferro/pop-4397-stage-verify"
       - main
     paths:
       - Dockerfile.retention-reaper
@@ -59,8 +60,8 @@ jobs:
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ github.event.release.tag_name && format('{0}/{1}:{2}', env.REGISTRY, env.IMAGE_NAME, github.event.release.tag_name) || '' }}
+            ${{ github.ref != 'refs/heads/carlomazzaferro/pop-4397-stage-verify' && format('{0}/{1}:latest', env.REGISTRY, env.IMAGE_NAME) || '' }}
+            ${{ github.ref != 'refs/heads/carlomazzaferro/pop-4397-stage-verify' && github.event.release.tag_name && format('{0}/{1}:{2}', env.REGISTRY, env.IMAGE_NAME, github.event.release.tag_name) || '' }}
           platforms: linux/amd64
           cache-from: type=gha
           cache-to: type=gha,mode=max

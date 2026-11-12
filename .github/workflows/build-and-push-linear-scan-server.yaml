@@ -3,6 +3,7 @@ name: Build and push image for iris-mpc-linear-scan
 on:
   push:
     branches:
+      - "carlomazzaferro/pop-4397-stage-verify"
       - main
       - test-alkali-change
   release:
@@ -21,6 +22,7 @@ env:
 
 jobs:
   docker:
+    if: github.ref != 'refs/heads/carlomazzaferro/pop-4397-stage-verify'
     name: Build and push arm64 image
     timeout-minutes: 40
     runs-on:
@@ -111,9 +113,11 @@ jobs:
           {
             echo "tags<<EOF"
             echo "${REGISTRY}/${IMAGE_NAME_AMD64}:${GITHUB_SHA}"
-            echo "${REGISTRY}/${IMAGE_NAME_AMD64}:latest"
-            if [ -n "${RELEASE_TAG_NAME}" ]; then
-              echo "${REGISTRY}/${IMAGE_NAME_AMD64}:${RELEASE_TAG_NAME}"
+            if [ "${GITHUB_REF}" != "refs/heads/carlomazzaferro/pop-4397-stage-verify" ]; then
+              echo "${REGISTRY}/${IMAGE_NAME_AMD64}:latest"
+              if [ -n "${RELEASE_TAG_NAME}" ]; then
+                echo "${REGISTRY}/${IMAGE_NAME_AMD64}:${RELEASE_TAG_NAME}"
+              fi
             fi
             echo "EOF"
           } >> "${GITHUB_OUTPUT}"
