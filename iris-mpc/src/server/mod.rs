@@ -31,7 +31,6 @@ use chrono::Utc;
 use eyre::{bail, eyre, Report, Result, WrapErr};
 use iris_mpc_common::config::{CommonConfig, Config, StartupMode};
 use iris_mpc_common::helpers::key_pair::SharesEncryptionKeyPairs;
-use iris_mpc_common::helpers::sha256::sha256_bytes;
 use iris_mpc_common::helpers::smpc_request::{
     IDENTITY_DELETION_MESSAGE_TYPE, REAUTH_MESSAGE_TYPE, RECOVERY_CHECK_MESSAGE_TYPE,
     RECOVERY_UPDATE_MESSAGE_TYPE, RESET_CHECK_MESSAGE_TYPE, RESET_UPDATE_MESSAGE_TYPE,
@@ -1137,7 +1136,7 @@ async fn run_main_server_loop(
             };
             tracing::info!("SNS message IDs: {:?}", batch.sns_message_ids);
 
-            let batch_hash = sha256_bytes(batch.sns_message_ids.join(""));
+            let batch_hash = batch.agreement_hash();
             let batch_valid_entries = batch.valid_entries.clone();
             *CURRENT_BATCH_SHA
                 .lock()
