@@ -34,9 +34,10 @@ canceled or failed database operation leaves admission closed because commit
 may have occurred. Completion is stored after the drain reaches the all-party
 agreed `Paused` state, not merely after local work finishes.
 
-The database report remains readable after A exits. Future coordination reuses
-the existing full drain and reconciliation comparisons; equality of maximum
-request sequence numbers alone does not establish matching work.
+The database report remains readable after A exits. The drain compares durable
+completed watermarks and final publications, independent of retained request
+history. Future coordination reuses that agreement and the existing candidate
+reconciliation checks.
 
 ## Migrations and startup
 

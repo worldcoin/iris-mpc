@@ -59,7 +59,7 @@ impl Fixture {
 }
 
 fn report() -> serde_json::Value {
-    serde_json::json!({"watermark": null, "persisted_count": 0, "persisted_sha256": "0".repeat(64), "last_publication": null})
+    serde_json::json!({"watermark": null, "last_publication": null})
 }
 
 #[tokio::test]
@@ -69,7 +69,7 @@ async fn handoff_transitions_preserve_exact_report_and_history() -> Result<()> {
     assert!(f.db.request(f.id, f.source, Uuid::new_v4()).await.is_err());
     assert!(f
         .db
-        .complete_drain(f.id, f.source, f.process, &report())
+        .record_drain_completion(f.id, f.source, f.process, &report())
         .await
         .is_err());
     f.drain().await?;
@@ -78,12 +78,12 @@ async fn handoff_transitions_preserve_exact_report_and_history() -> Result<()> {
         .record_drain_start(f.id, f.source, Uuid::new_v4(), &f.candidates)
         .await
         .is_err());
-    f.db.complete_drain(f.id, f.source, f.process, &report())
+    f.db.record_drain_completion(f.id, f.source, f.process, &report())
         .await?;
     let different = serde_json::json!({"different": true});
     assert!(f
         .db
-        .complete_drain(f.id, f.source, f.process, &different)
+        .record_drain_completion(f.id, f.source, f.process, &different)
         .await
         .is_err());
     assert!(f
@@ -102,7 +102,7 @@ async fn handoff_transitions_preserve_exact_report_and_history() -> Result<()> {
         .await?;
     f.db.activate(f.id, f.destination, &f.candidates, &report())
         .await?;
-    f.db.complete_drain(f.id, f.source, f.process, &report())
+    f.db.record_drain_completion(f.id, f.source, f.process, &report())
         .await?;
     assert_eq!(f.db.get(f.id).await?.phase, HandoffPhase::Activated);
     // Swapping slots uses a fresh deployment identity, never a previous release.
@@ -156,7 +156,7 @@ async fn startup_denies_restarted_source_but_keeps_existing_connections_usable()
         1
     );
     source.pool.close().await;
-    f.db.complete_drain(f.id, f.source, f.process, &report())
+    f.db.record_drain_completion(f.id, f.source, f.process, &report())
         .await?;
     f.db.check_startup(f.destination, true).await?;
     f.db.activate(f.id, f.destination, &f.candidates, &report())

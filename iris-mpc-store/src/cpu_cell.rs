@@ -208,7 +208,7 @@ impl CpuCellHandoffs {
 
     /// The caller supplies the existing agreed drain report only after all
     /// admitted effects have settled. Exact retries preserve the original proof.
-    pub async fn complete_drain(
+    pub async fn record_drain_completion(
         &self,
         id: Uuid,
         source: Uuid,
@@ -229,7 +229,7 @@ impl CpuCellHandoffs {
         );
         tx.commit().await?;
         Ok(())
-        }).await.wrap_err("CPU handoff complete_drain timed out; inspect durable state before retry")?
+        }).await.wrap_err("CPU handoff record_drain_completion timed out; inspect durable state before retry")?
     }
 
     /// Local activation bookkeeping. The caller must first validate all peers'

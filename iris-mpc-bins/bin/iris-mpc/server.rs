@@ -42,7 +42,6 @@ use iris_mpc_common::{
         aws::{SPAN_ID_MESSAGE_ATTRIBUTE_NAME, TRACE_ID_MESSAGE_ATTRIBUTE_NAME},
         inmemory_store::InMemoryStore,
         key_pair::SharesEncryptionKeyPairs,
-        sha256::sha256_bytes,
         smpc_request::{
             decrypt_iris_share, get_iris_data_by_party_id, validate_iris_share,
             CircuitBreakerRequest, IdentityDeletionRequest, IdentityMatchCheckRequest,
@@ -303,7 +302,7 @@ async fn server_main(config: Config) -> Result<()> {
         common_config: CommonConfig::from(config.clone()),
         graph_mutation_bytes: vec![],
         max_persisted_sequence_number: if config.db_backed_ingest {
-            store.max_persisted_sequence_number().await?
+            store.reconcile_completed_ingested_sequence_number().await?
         } else {
             None
         },
@@ -367,8 +366,8 @@ async fn server_main(config: Config) -> Result<()> {
     let chacha_seeds = initialize_chacha_seeds(&config, &dh_nonces).await?;
 
     // Fleet persisted frontier for boot recovery (computed here because
-    // sync_modifications below consumes sync_result). See the hawk main for
-    // the full skip-ahead rationale + the boot-snapshot SAFETY DEPENDENCY.
+    // sync_modifications below consumes sync_result). Full-fleet restarts rebuild
+    // every snapshot after its party's last commit; solo restarts need live DB reads.
     let fleet_frontier = if config.db_backed_ingest {
         sync_result.max_persisted_sequence_number()
     } else {
@@ -397,7 +396,7 @@ async fn server_main(config: Config) -> Result<()> {
 
     // Handle modifications sync
     if config.enable_modifications_sync {
-        let tx = sync_modifications(
+        let mut tx = sync_modifications(
             &config,
             &store,
             &aws_clients,
@@ -405,7 +404,23 @@ async fn server_main(config: Config) -> Result<()> {
             sync_result,
         )
         .await?;
+        let marked = if let Some(frontier) = &fleet_frontier {
+            store
+                .mark_ingested_requests_persisted_up_to_tx(&mut tx, frontier)
+                .await
+                .context("failed to skip-ahead ingested rows to fleet frontier")?
+        } else {
+            0
+        };
         tx.commit().await?;
+        if marked > 0 {
+            tracing::warn!(
+                frontier = ?fleet_frontier,
+                "Skip-ahead: marked {} ingested row(s) persisted with recovered modification effects",
+                marked
+            );
+            metrics::counter!("db_ingest_frontier_skip_ahead").increment(marked);
+        }
     }
 
     if config.enable_modifications_replay {
@@ -423,25 +438,8 @@ async fn server_main(config: Config) -> Result<()> {
     }
 
     if config.db_backed_ingest {
-        // Two-step boot recovery — mirror of the hawk main (see its comments
-        // for the full C2/asymmetric-commit rationale).
-        // Step 1: skip-ahead to the fleet's persisted frontier (rows completed
-        // on a peer; effects arrived via the modifications sync above).
-        if let Some(frontier) = &fleet_frontier {
-            let marked = store
-                .mark_ingested_requests_persisted_up_to(frontier)
-                .await
-                .context("failed to skip-ahead ingested rows to fleet frontier")?;
-            if marked > 0 {
-                tracing::warn!(
-                    "Skip-ahead: marked {} ingested row(s) persisted up to fleet frontier {} (completed on a peer; effects arrived via modifications sync)",
-                    marked,
-                    frontier
-                );
-                metrics::counter!("db_ingest_frontier_skip_ahead").increment(marked);
-            }
-        }
-        // Step 2: release remaining unpersisted claims (symmetric-crash case;
+        // Recovery committed the fleet frontier and its effects together.
+        // Release remaining unpersisted claims (symmetric-crash case;
         // deterministic re-formation picks them up identically everywhere).
         let released = store
             .reset_unpersisted_ingested_claims()
@@ -1193,7 +1191,7 @@ async fn server_main(config: Config) -> Result<()> {
                 Some(Ok(Some(batch))) => batch,
             };
 
-            let batch_hash = sha256_bytes(batch.sns_message_ids.join(""));
+            let batch_hash = batch.agreement_hash();
             let batch_valid_entries = batch.valid_entries.clone();
             *CURRENT_BATCH_SHA
                 .lock()

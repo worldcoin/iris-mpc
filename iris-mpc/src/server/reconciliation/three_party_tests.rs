@@ -121,10 +121,21 @@ async fn drain_and_reload_handoff(parties: &[Party]) -> Result<ReconciliationCon
         .await?;
         let handoffs = CpuCellHandoffs::new(control.pool.clone(), &schema)?;
         // Represent already committed intake; actual SQS/SNS workers are not run here.
-        for sequence in ["10", "42"] {
-            sqlx::query("INSERT INTO ingested_requests (sequence_number, message_body, is_valid, persisted_at) VALUES ($1, 'settled fixture request', true, now())")
-                .bind(normalize_sns_sequence_number(sequence)?).execute(&party.writer.pool).await?;
+        let store = Store::new(&party.writer).await?;
+        let sequences = [
+            normalize_sns_sequence_number("10")?,
+            normalize_sns_sequence_number("42")?,
+        ];
+        for sequence in &sequences {
+            store
+                .insert_ingested_request(sequence, "settled fixture request", true)
+                .await?;
         }
+        let mut tx = store.tx().await?;
+        store
+            .mark_ingested_requests_persisted_tx(&mut tx, &sequences)
+            .await?;
+        tx.commit().await?;
         handoffs.request(id, source, destination).await?;
         handoffs.request(id, source, destination).await?;
         drain.require_durable_seal(Arc::new(ManagedHandoff {
@@ -146,13 +157,9 @@ async fn drain_and_reload_handoff(parties: &[Party]) -> Result<ReconciliationCon
     for (i, (party, drain)) in parties.iter().zip(&drains).enumerate() {
         assert_eq!(drain.status().cut, Some(0));
         let store = Store::new(&party.writer).await?;
-        let watermark = store.max_persisted_sequence_number().await?;
-        let (persisted_count, persisted_sha256) =
-            store.prove_persisted_prefix(watermark.as_deref()).await?;
+        let watermark = store.drain_completed_ingested_sequence_number().await?;
         drain.publish_report(drain::Report {
             watermark,
-            persisted_count,
-            persisted_sha256,
             last_publication: None,
         });
         assert!(!drain.ready_to_report());
@@ -206,7 +213,10 @@ async fn drain_and_reload_handoff(parties: &[Party]) -> Result<ReconciliationCon
         task.abort();
     }
     assert!(reports.iter().all(|report| report == &reports[0]));
-    assert_eq!(reports[0].persisted_count, 2);
+    assert_eq!(
+        reports[0].watermark,
+        Some(normalize_sns_sequence_number("42")?)
+    );
     ReconciliationContext::new(
         records[0].handoff_id,
         std::array::from_fn(|i| records[i].source_process.unwrap()),

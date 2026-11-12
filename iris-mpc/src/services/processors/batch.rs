@@ -1954,6 +1954,97 @@ mod tests {
 
     #[tokio::test]
     #[cfg(feature = "db_dependent")]
+    async fn agreement_hash_includes_claimed_poison_rows() -> eyre::Result<()> {
+        use super::*;
+        use base64::Engine;
+        use iris_mpc_common::postgres::{run_migrations, AccessMode, PostgresClient};
+
+        let schema = iris_mpc_store::test_utils::temporary_name();
+        let db = PostgresClient::new(
+            &iris_mpc_store::test_utils::test_db_url()?,
+            &schema,
+            AccessMode::ReadWrite,
+        )
+        .await?;
+        run_migrations(&db.pool, false).await?;
+        let store = Store::new(&db).await?;
+        for (sequence, message_id, message_type) in [
+            (100, "poison", "unsupported"),
+            (200, "accepted", IDENTITY_DELETION_MESSAGE_TYPE),
+        ] {
+            let body = serde_json::json!({
+                "Type": "Notification", "MessageId": message_id,
+                "SequenceNumber": sequence.to_string(), "TopicArn": "test",
+                "Message": serde_json::json!({"serial_id": 200}).to_string(),
+                "Timestamp": "test", "UnsubscribeURL": "test",
+                "MessageAttributes": {"message_type": {"Type": "String", "Value": message_type}}
+            })
+            .to_string();
+            // Legacy valid rows can still be rejected during batch formation.
+            store
+                .insert_ingested_request(&sequence.to_string(), &body, true)
+                .await?;
+        }
+
+        let sdk = aws_config::SdkConfig::builder()
+            .behavior_version(aws_config::BehaviorVersion::latest())
+            .region(aws_sdk_sqs::config::Region::new("us-east-1"))
+            .credentials_provider(aws_sdk_sqs::config::SharedCredentialsProvider::new(
+                aws_sdk_sqs::config::Credentials::new("test", "test", None, None, "test"),
+            ))
+            .endpoint_url("http://127.0.0.1:1")
+            .build();
+        let client = Client::new(&sdk);
+        let sns_client = SNSClient::new(&sdk);
+        let s3_client = S3Client::new(&sdk);
+        let keys = Arc::new(SharesEncryptionKeyPairs::from_b64_private_key_strings(
+            base64::engine::general_purpose::STANDARD.encode([0u8; 32]),
+            String::new(),
+        )?);
+        let mut config: Config = serde_json::from_value(serde_json::json!({}))?;
+        config.db_backed_ingest = true;
+        config.enable_deletion = true;
+        let shutdown = ShutdownHandler::new(5);
+        let attributes = HashMap::new();
+        let mut processor = BatchProcessor::new(
+            0,
+            &client,
+            &sns_client,
+            &s3_client,
+            &config,
+            keys,
+            &shutdown,
+            &attributes,
+            &attributes,
+            &attributes,
+            &attributes,
+            &attributes,
+            &attributes,
+            &attributes,
+            Arc::new(AtomicU64::new(1)),
+            &store,
+            Arc::new(tokio::sync::Mutex::new(BatchSyncSharedState::default())),
+        );
+        processor.process_pending_ingested_requests(2).await?;
+        let mut batch = processor.batch_query;
+        assert_eq!(batch.sns_message_ids, vec!["accepted"]);
+        assert_eq!(
+            batch.sqs_sequence_numbers,
+            vec![
+                normalize_sns_sequence_number("100")?,
+                normalize_sns_sequence_number("200")?,
+            ]
+        );
+        assert_eq!(store.count_pending_ingested_requests().await?, 0);
+        let with_poison = batch.agreement_hash();
+        batch.sqs_sequence_numbers.remove(0);
+        assert_ne!(with_poison, batch.agreement_hash());
+        iris_mpc_store::test_utils::cleanup(&db, &schema).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "db_dependent")]
     async fn drain_receiver_finishes_common_batch_and_excludes_prefetch() -> eyre::Result<()> {
         use super::*;
         use ampc_server_utils::{batch_sync::batch_sync_routes, config::ServerCoordinationConfig};
