@@ -8,7 +8,7 @@ use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use iris_mpc_common::{
     config::Config,
     iris_db::iris::IrisCode,
-    postgres::{check_handoff_startup, run_migrations, AccessMode, PostgresClient},
+    postgres::{run_migrations, AccessMode, PostgresClient},
     VectorId,
 };
 use iris_mpc_store::cpu_cell::{CpuCellHandoffs, HandoffPhase};
@@ -183,9 +183,8 @@ async fn drain_and_reload_handoff(parties: &[Party]) -> Result<ReconciliationCon
             AccessMode::ExistingSchema,
         )
         .await?;
-        let saved = CpuCellHandoffs::new(reopened.pool.clone(), &schema)?
-            .get(id)
-            .await?;
+        let reopened_handoffs = CpuCellHandoffs::new(reopened.pool.clone(), &schema)?;
+        let saved = reopened_handoffs.get(id).await?;
         assert_eq!(saved, completed);
         assert_eq!(saved.phase, HandoffPhase::Drained);
         assert_eq!(
@@ -193,11 +192,10 @@ async fn drain_and_reload_handoff(parties: &[Party]) -> Result<ReconciliationCon
             Some(Uuid::parse_str(&drain.status().process_uuid)?)
         );
         assert_eq!(saved.candidate_processes, Some(candidates.to_vec()));
-        assert!(
-            check_handoff_startup(&reopened.pool, &schema, &source.to_string(), false)
-                .await
-                .is_err()
-        );
+        assert!(reopened_handoffs
+            .check_startup(source, false)
+            .await
+            .is_err());
         let report: drain::Report = serde_json::from_value(saved.drain_report.clone().unwrap())?;
         assert_eq!(drain.status().report.as_ref(), Some(&report));
         records.push(saved);

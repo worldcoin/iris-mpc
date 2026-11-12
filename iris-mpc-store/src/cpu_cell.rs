@@ -49,6 +49,48 @@ impl CpuCellHandoffs {
         })
     }
 
+    pub async fn is_managed(&self) -> Result<bool> {
+        tokio::time::timeout(
+            Duration::from_secs(10),
+            sqlx::query_scalar(&format!("SELECT EXISTS (SELECT 1 FROM {})", self.table))
+                .fetch_one(&self.pool),
+        )
+        .await
+        .wrap_err("CPU handoff lookup timed out")?
+        .map_err(Into::into)
+    }
+
+    /// Check after migrations, before replay, queue access or operational writes. A recorded
+    /// activation cannot authorize a fresh process with none of B's resident state.
+    /// Locking the row waits for an old process's in-flight drain commit before
+    /// deciding whether its replacement can start.
+    pub async fn check_startup(&self, deployment: Uuid, candidate: bool) -> Result<()> {
+        let lock = if candidate { "" } else { "FOR SHARE" };
+        let current: Option<(Uuid, Uuid, HandoffPhase)> = tokio::time::timeout(
+            Duration::from_secs(10),
+            sqlx::query_as(&format!(
+                "SELECT source, destination, phase FROM {} ORDER BY sequence DESC LIMIT 1 {lock}",
+                self.table
+            ))
+            .fetch_optional(&self.pool),
+        )
+        .await
+        .wrap_err("CPU handoff startup check timed out")??;
+        let allowed = current.is_some_and(|(source, destination, phase)| {
+            if candidate {
+                destination == deployment
+                    && matches!(
+                        phase,
+                        HandoffPhase::Requested | HandoffPhase::Draining | HandoffPhase::Drained
+                    )
+            } else {
+                source == deployment && phase == HandoffPhase::Requested
+            }
+        });
+        ensure!(allowed, "CPU deployment cannot start in this handoff phase; coordinated cold recovery is required after an interrupted handoff");
+        Ok(())
+    }
+
     async fn transaction(&self) -> Result<Transaction<'_, Postgres>> {
         let mut tx = self.pool.begin().await?;
         sqlx::raw_sql("SET LOCAL lock_timeout = '2s'; SET LOCAL statement_timeout = '5s'")
@@ -133,7 +175,7 @@ impl CpuCellHandoffs {
         .wrap_err("CPU handoff request timed out; inspect durable state before retry")?
     }
 
-    pub async fn start_drain(
+    pub async fn record_drain_start(
         &self,
         id: Uuid,
         source: Uuid,
@@ -161,7 +203,7 @@ impl CpuCellHandoffs {
         );
         tx.commit().await?;
         Ok(())
-        }).await.wrap_err("CPU handoff start_drain timed out; inspect durable state before retry")?
+        }).await.wrap_err("CPU handoff record_drain_start timed out; inspect durable state before retry")?
     }
 
     /// The caller supplies the existing agreed drain report only after all

@@ -206,7 +206,7 @@ impl Drain {
         let process = uuid::Uuid::parse_str(&status.process_uuid)?;
         if let Err(error) = handoff
             .handoffs
-            .start_drain(handoff_id, handoff.deployment, process, candidates)
+            .record_drain_start(handoff_id, handoff.deployment, process, candidates)
             .await
         {
             self.fail("durable source seal failed");

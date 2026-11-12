@@ -1,6 +1,6 @@
 use super::*;
-use iris_mpc_common::postgres::{check_handoff_startup, AccessMode, PostgresClient};
-use sqlx::Executor;
+use iris_mpc_common::postgres::{run_migrations, AccessMode, PostgresClient};
+use sqlx::{postgres::PgPoolOptions, Executor};
 
 struct Fixture {
     url: String,
@@ -45,7 +45,7 @@ impl Fixture {
     }
     async fn drain(&self) -> Result<()> {
         self.db
-            .start_drain(self.id, self.source, self.process, &self.candidates)
+            .record_drain_start(self.id, self.source, self.process, &self.candidates)
             .await
     }
     async fn cleanup(self) -> Result<()> {
@@ -75,7 +75,7 @@ async fn handoff_transitions_preserve_exact_report_and_history() -> Result<()> {
     f.drain().await?;
     assert!(f
         .db
-        .start_drain(f.id, f.source, Uuid::new_v4(), &f.candidates)
+        .record_drain_start(f.id, f.source, Uuid::new_v4(), &f.candidates)
         .await
         .is_err());
     f.db.complete_drain(f.id, f.source, f.process, &report())
@@ -120,35 +120,19 @@ async fn handoff_transitions_preserve_exact_report_and_history() -> Result<()> {
         .is_err());
     f.request().await?; // An old deployment retry cannot reset the table.
     assert_eq!(f.db.get(f.id).await?.drain_report, Some(report()));
-    assert!(
-        check_handoff_startup(&f.db.pool, &f.schema, &f.source.to_string(), false)
-            .await
-            .is_err()
-    );
+    assert!(f.db.check_startup(f.source, false).await.is_err());
     f.cleanup().await
 }
 
 #[tokio::test]
 async fn startup_denies_restarted_source_but_keeps_existing_connections_usable() -> Result<()> {
     let f = Fixture::new().await?;
-    assert!(
-        check_handoff_startup(&f.db.pool, &f.schema, &f.source.to_string(), false)
-            .await
-            .is_err()
-    );
+    assert!(f.db.check_startup(f.source, false).await.is_err());
     f.request().await?;
-    check_handoff_startup(&f.db.pool, &f.schema, &f.source.to_string(), false).await?;
-    check_handoff_startup(&f.db.pool, &f.schema, &f.destination.to_string(), true).await?;
-    assert!(
-        check_handoff_startup(&f.db.pool, &f.schema, &f.destination.to_string(), false)
-            .await
-            .is_err()
-    );
-    assert!(
-        check_handoff_startup(&f.db.pool, &f.schema, &Uuid::new_v4().to_string(), true)
-            .await
-            .is_err()
-    );
+    f.db.check_startup(f.source, false).await?;
+    f.db.check_startup(f.destination, true).await?;
+    assert!(f.db.check_startup(f.destination, false).await.is_err());
+    assert!(f.db.check_startup(Uuid::new_v4(), true).await.is_err());
     let candidate = PostgresClient::new(&f.url, &f.schema, AccessMode::EnforcedReadOnly).await?;
     assert!(candidate
         .pool
@@ -158,11 +142,10 @@ async fn startup_denies_restarted_source_but_keeps_existing_connections_usable()
     candidate.pool.close().await;
     let source = PostgresClient::new(&f.url, &f.schema, AccessMode::ReadWrite).await?;
     f.drain().await?;
-    assert!(
-        check_handoff_startup(&source.pool, &f.schema, &f.source.to_string(), false)
-            .await
-            .is_err()
-    );
+    assert!(CpuCellHandoffs::new(source.pool.clone(), &f.schema)?
+        .check_startup(f.source, false)
+        .await
+        .is_err());
     // Existing A may open a replacement connection while settling its drain.
     let connection = source.pool.acquire().await?;
     connection.close().await?;
@@ -175,19 +158,11 @@ async fn startup_denies_restarted_source_but_keeps_existing_connections_usable()
     source.pool.close().await;
     f.db.complete_drain(f.id, f.source, f.process, &report())
         .await?;
-    check_handoff_startup(&f.db.pool, &f.schema, &f.destination.to_string(), true).await?;
+    f.db.check_startup(f.destination, true).await?;
     f.db.activate(f.id, f.destination, &f.candidates, &report())
         .await?;
-    assert!(
-        check_handoff_startup(&f.db.pool, &f.schema, &f.destination.to_string(), true)
-            .await
-            .is_err()
-    );
-    assert!(
-        check_handoff_startup(&f.db.pool, &f.schema, &f.destination.to_string(), false)
-            .await
-            .is_err()
-    );
+    assert!(f.db.check_startup(f.destination, true).await.is_err());
+    assert!(f.db.check_startup(f.destination, false).await.is_err());
     f.cleanup().await
 }
 
@@ -198,11 +173,9 @@ async fn startup_waits_for_inflight_drain_commit() -> Result<()> {
     let mut tx = f.db.pool.begin().await?;
     sqlx::query(&format!("UPDATE {} SET phase='draining', source_process=$1, candidate_processes=$2 WHERE handoff_id=$3", f.db.table))
         .bind(f.process).bind(f.candidates.as_slice()).bind(f.id).execute(&mut *tx).await?;
-    let pool = f.db.pool.clone();
-    let schema = f.schema.clone();
-    let source = f.source.to_string();
-    let check =
-        tokio::spawn(async move { check_handoff_startup(&pool, &schema, &source, false).await });
+    let handoffs = f.db.clone();
+    let source = f.source;
+    let check = tokio::spawn(async move { handoffs.check_startup(source, false).await });
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(
         !check.is_finished(),
@@ -214,4 +187,58 @@ async fn startup_waits_for_inflight_drain_commit() -> Result<()> {
         "committed drain must deny replacement startup"
     );
     f.cleanup().await
+}
+
+#[tokio::test]
+async fn handoff_migration_is_inert_until_requested_and_retains_history() -> Result<()> {
+    let url = std::env::var("CPU_CELL_TEST_DATABASE_URL")?;
+    let schema = format!("upgrade_{}", uuid::Uuid::new_v4().simple());
+    let client = PostgresClient::new(&url, &schema, AccessMode::ReadWrite).await?;
+    let handoffs = CpuCellHandoffs::new(client.pool.clone(), &schema)?;
+    run_migrations(&client.pool, false).await?;
+    run_migrations(&client.pool, false).await?;
+    assert!(!handoffs.is_managed().await?);
+    let ordinary = PostgresClient::new(&url, &schema, AccessMode::ReadWrite).await?;
+    run_migrations(&ordinary.pool, false).await?;
+    ordinary.pool.close().await;
+    sqlx::query(
+        "INSERT INTO cpu_cell_handoffs (handoff_id, source, destination) VALUES ($1,$2,$3)",
+    )
+    .bind(uuid::Uuid::new_v4())
+    .bind(uuid::Uuid::new_v4())
+    .bind(uuid::Uuid::new_v4())
+    .execute(&client.pool)
+    .await?;
+    assert!(handoffs.is_managed().await?);
+    let ordinary = PostgresClient::new(&url, &schema, AccessMode::ReadWrite).await?;
+    run_migrations(&ordinary.pool, false).await?;
+    ordinary.pool.close().await;
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM cpu_cell_handoffs")
+        .fetch_one(&client.pool)
+        .await?;
+    assert_eq!(count, 1);
+    client
+        .pool
+        .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+        .await?;
+    client.pool.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn handoff_lookup_failure_is_not_legacy_mode() -> Result<()> {
+    let pool = PgPoolOptions::new().connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")?;
+    pool.close().await;
+    assert!(CpuCellHandoffs::new(pool, "canonical")?
+        .is_managed()
+        .await
+        .is_err());
+    assert!(PostgresClient::new(
+        "postgres://unused:unused@127.0.0.1:1/unused",
+        "canonical",
+        AccessMode::ReadWrite
+    )
+    .await
+    .is_err());
+    Ok(())
 }

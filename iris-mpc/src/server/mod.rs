@@ -41,9 +41,7 @@ use iris_mpc_common::helpers::smpc_response::create_message_type_attribute_map;
 use iris_mpc_common::helpers::sqs_s3_helper::upload_file_to_s3;
 use iris_mpc_common::helpers::sync::{SyncResult, SyncState};
 use iris_mpc_common::job::JobSubmissionHandle;
-use iris_mpc_common::postgres::{
-    check_handoff_startup, is_cpu_cell_managed, run_migrations, AccessMode, PostgresClient,
-};
+use iris_mpc_common::postgres::{run_migrations, AccessMode, PostgresClient};
 use iris_mpc_cpu::checkpoint_protocol::runner::SidecarConfigWrapper;
 use iris_mpc_cpu::execution::hawk_main::iris_worker::IrisWorkerPool;
 use iris_mpc_cpu::execution::hawk_main::worker_pool_initializer::{
@@ -555,7 +553,8 @@ async fn initialize_handoff(
         HawkSearchMode::Hnsw => config.get_cpu_db_schema(),
         HawkSearchMode::LinearScan => config.get_gpu_db_schema(),
     };
-    if !is_cpu_cell_managed(pool, &schema).await? {
+    let handoffs = CpuCellHandoffs::new(pool.clone(), &schema)?;
+    if !handoffs.is_managed().await? {
         return Ok(None);
     }
     let identity = config
@@ -571,16 +570,14 @@ async fn initialize_handoff(
     {
         bail!("CPU handoff requires persistent linear scan, DB-backed intake and no seed/clear operations");
     }
-    check_handoff_startup(
-        pool,
-        &schema,
-        &identity.deployment_id,
-        config.startup_mode == StartupMode::Candidate,
-    )
-    .await?;
+    let deployment =
+        Uuid::parse_str(&identity.deployment_id).wrap_err("invalid CPU deployment UUID")?;
+    handoffs
+        .check_startup(deployment, config.startup_mode == StartupMode::Candidate)
+        .await?;
     Ok(Some(Arc::new(ManagedHandoff {
-        handoffs: CpuCellHandoffs::new(pool.clone(), &schema)?,
-        deployment: Uuid::parse_str(&identity.deployment_id)?,
+        handoffs,
+        deployment,
     })))
 }
 
@@ -1496,7 +1493,7 @@ mod config_tests {
         let source = Uuid::parse_str(&config.cpu_cell.as_ref().unwrap().deployment_id)?;
         handoffs.request(id, source, Uuid::new_v4()).await?;
         handoffs
-            .start_drain(
+            .record_drain_start(
                 id,
                 source,
                 Uuid::new_v4(),
