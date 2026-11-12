@@ -23,10 +23,17 @@ pub struct Publication {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Report {
+    // A missing watermark must not deserialize as explicitly empty progress.
+    #[serde(deserialize_with = "deserialize_watermark")]
     pub watermark: Option<String>,
-    pub persisted_count: u64,
-    pub persisted_sha256: String,
     pub last_publication: Option<Publication>,
+}
+
+fn deserialize_watermark<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,18 +79,10 @@ async fn read_status(mut response: reqwest::Response) -> Result<Status> {
     if let Some(report) = &status.report {
         let valid_sha =
             |sha: &str| sha.len() == 64 && sha.bytes().all(|byte| byte.is_ascii_hexdigit());
-        eyre::ensure!(
-            valid_sha(&report.persisted_sha256),
-            "invalid persisted SHA256"
-        );
-        eyre::ensure!(
-            report.persisted_count == 0 || report.watermark.is_some(),
-            "missing persisted watermark"
-        );
         if let Some(watermark) = &report.watermark {
             eyre::ensure!(
                 iris_mpc_store::normalize_sns_sequence_number(watermark)? == *watermark,
-                "invalid persisted watermark"
+                "invalid completed watermark"
             );
         }
         if let Some(publication) = &report.last_publication {
@@ -110,6 +109,23 @@ pub struct Drain {
     changed: Notify,
     ready: Mutex<Option<Arc<AtomicBool>>>,
     timeout: Duration,
+    handoff: Mutex<Option<Arc<super::ManagedHandoff>>>,
+    handoff_id: Mutex<Option<uuid::Uuid>>,
+}
+
+// A canceled SQL future cannot tell us whether the seal committed.
+struct PendingSeal<'a> {
+    drain: &'a Drain,
+    completed: bool,
+}
+
+impl Drop for PendingSeal<'_> {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.drain
+                .fail("durable source seal interrupted; outcome unknown");
+        }
+    }
 }
 
 impl Drain {
@@ -140,6 +156,8 @@ impl Drain {
             changed: Notify::new(),
             ready: Mutex::new(None),
             timeout,
+            handoff: Mutex::new(None),
+            handoff_id: Mutex::new(None),
         })
     }
 
@@ -159,7 +177,80 @@ impl Drain {
         *self.ready.lock().unwrap() = Some(ready);
     }
 
+    pub(super) fn require_durable_seal(&self, handoff: Arc<super::ManagedHandoff>) {
+        *self.handoff.lock().unwrap() = Some(handoff);
+    }
+
+    /// Persist the exact approved attempt before publishing any drain evidence.
+    pub async fn request_managed(
+        &self,
+        handoff_id: uuid::Uuid,
+        candidates: &[uuid::Uuid; 3],
+    ) -> Result<()> {
+        let status = self.status();
+        eyre::ensure!(
+            status.error.is_none() && status.blocked_reason.is_none(),
+            "managed source is not drain-eligible"
+        );
+        let handoff = self
+            .handoff
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| eyre::eyre!("managed drain requires a bound process"))?;
+        let mut pending = PendingSeal {
+            drain: self,
+            completed: false,
+        };
+        let process = uuid::Uuid::parse_str(&status.process_uuid)?;
+        if let Err(error) = handoff
+            .handoffs
+            .record_drain_start(handoff_id, handoff.deployment, process, candidates)
+            .await
+        {
+            self.fail("durable source seal failed");
+            pending.completed = true;
+            return Err(error);
+        }
+        *self.handoff_id.lock().unwrap() = Some(handoff_id);
+        self.request();
+        pending.completed = true;
+        Ok(())
+    }
+
+    /// Called only after peer agreement reaches Paused. A failed/uncertain write
+    /// leaves admission closed and is never interpreted as handoff completion.
+    pub async fn persist_completion(&self) -> Result<()> {
+        let handoff = self.handoff.lock().unwrap().clone();
+        let Some(handoff) = handoff else {
+            return Ok(());
+        };
+        let id = *self.handoff_id.lock().unwrap();
+        let status = self.status();
+        eyre::ensure!(
+            status.phase == Phase::Paused && status.error.is_none(),
+            "drain has not reached all-party agreement"
+        );
+        let id = id.ok_or_else(|| eyre::eyre!("missing durable handoff ID"))?;
+        let report = status
+            .report
+            .ok_or_else(|| eyre::eyre!("missing agreed drain report"))?;
+        handoff
+            .handoffs
+            .record_drain_completion(
+                id,
+                handoff.deployment,
+                uuid::Uuid::parse_str(&status.process_uuid)?,
+                &serde_json::to_value(report)?,
+            )
+            .await
+    }
+
     pub fn request(&self) {
+        if self.handoff.lock().unwrap().is_some() && self.handoff_id.lock().unwrap().is_none() {
+            self.fail("managed drain requires a durable source seal");
+            return;
+        }
         let mut inner = self.inner.lock().unwrap();
         if inner.status.requested {
             return;
@@ -328,6 +419,10 @@ impl Drain {
         self.inner.lock().unwrap().last_publication.clone()
     }
     pub fn publish_report(&self, report: Report) {
+        if self.handoff.lock().unwrap().is_some() && self.handoff_id.lock().unwrap().is_none() {
+            self.fail("cannot publish managed drain proof without durable seal");
+            return;
+        }
         let mut inner = self.inner.lock().unwrap();
         if inner.status.error.is_none() {
             inner.status.report = Some(report);
@@ -336,7 +431,7 @@ impl Drain {
             tracing::info!(
                 party_id = inner.status.party_id,
                 cut = inner.status.cut,
-                "CPU cell workers settled; comparing persisted prefix"
+                "CPU cell workers settled; comparing completion watermarks"
             );
         }
     }
@@ -414,8 +509,13 @@ impl Drain {
                         {
                             statuses.push(status)
                         }
-                        _ => {
+                        Ok(_) => {
                             self.fail("invalid party or current process identity in drain report");
+                            break;
+                        }
+                        Err(error) => {
+                            tracing::warn!(party, %error, "Invalid peer drain status");
+                            self.fail("invalid peer drain status: incompatible report schema or malformed payload");
                             break;
                         }
                     },
@@ -499,7 +599,7 @@ impl Drain {
                     .map(|status| status.report.as_ref().unwrap())
                     .collect();
                 if reports.iter().any(|report| *report != reports[0]) {
-                    self.fail("persisted prefix or final publication differs across parties");
+                    self.fail("completed watermark or final publication differs across parties");
                     continue;
                 }
                 let valid_publication = match &reports[0].last_publication {
@@ -546,8 +646,99 @@ impl Drain {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
+
+    fn managed(pool: sqlx::PgPool) -> Arc<super::super::ManagedHandoff> {
+        Arc::new(super::super::ManagedHandoff {
+            handoffs: iris_mpc_store::cpu_cell::CpuCellHandoffs::new(pool, "canonical").unwrap(),
+            deployment: uuid::Uuid::new_v4(),
+        })
+    }
+
+    #[tokio::test]
+    async fn managed_drain_rejects_unpersisted_request_and_completion() -> Result<()> {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")?;
+        pool.close().await;
+        let drain = Drain::new(0, Duration::from_secs(1), true);
+        drain.require_durable_seal(managed(pool));
+        assert!(drain.persist_completion().await.is_err());
+        drain.request();
+        drain.publish_report(proof("100", 1));
+        assert!(drain.failed());
+        assert!(drain.status().report.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelling_pending_managed_seal_closes_admission() -> Result<()> {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")?;
+        let drain = Drain::new(0, Duration::from_secs(1), true);
+        drain.initialize(
+            uuid::Uuid::new_v4().to_string(),
+            Arc::new(AtomicBool::new(true)),
+        );
+        drain.require_durable_seal(managed(pool.clone()));
+        let candidates = std::array::from_fn(|_| uuid::Uuid::new_v4());
+        let mut request = Box::pin(drain.request_managed(uuid::Uuid::new_v4(), &candidates));
+        assert!(futures::poll!(&mut request).is_pending());
+        drop(request);
+        assert!(drain.requested());
+        assert!(drain.failed());
+        assert!(!drain.publish_offer(1, 1, || panic!("admission must stay closed")));
+        pool.close().await;
+        Ok(())
+    }
+
+    #[test]
+    fn report_requires_an_explicit_nullable_watermark() {
+        let empty = serde_json::json!({"watermark": null, "last_publication": null});
+        assert_eq!(
+            serde_json::from_value::<Report>(empty.clone()).unwrap(),
+            Report {
+                watermark: None,
+                last_publication: None,
+            }
+        );
+        let mut missing = empty.clone();
+        missing.as_object_mut().unwrap().remove("watermark");
+        assert!(serde_json::from_value::<Report>(missing).is_err());
+        let mut malformed = empty;
+        malformed["watermark"] = serde_json::json!(42);
+        assert!(serde_json::from_value::<Report>(malformed).is_err());
+    }
+
+    #[test]
+    fn retained_prefix_and_completed_watermark_reports_reject_each_other() {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct LegacyReport {
+            watermark: Option<String>,
+            persisted_count: u64,
+            persisted_sha256: String,
+            last_publication: Option<Publication>,
+        }
+        let legacy = serde_json::json!({
+            "watermark": null,
+            "persisted_count": 0,
+            "persisted_sha256": "ab".repeat(32),
+            "last_publication": null,
+        });
+        let parsed = serde_json::from_value::<LegacyReport>(legacy.clone()).unwrap();
+        assert_eq!(parsed.watermark, None);
+        assert_eq!(parsed.persisted_count, 0);
+        assert_eq!(parsed.persisted_sha256, "ab".repeat(32));
+        assert_eq!(parsed.last_publication, None);
+        assert!(serde_json::from_value::<Report>(legacy).is_err());
+        let current = serde_json::to_value(Report {
+            watermark: None,
+            last_publication: None,
+        })
+        .unwrap();
+        assert!(serde_json::from_value::<LegacyReport>(current).is_err());
+    }
 
     #[test]
     fn status_preserves_phase_wire_values_and_rejects_unknown_phases() {
@@ -608,14 +799,14 @@ mod tests {
         drain.fail("ambiguous SNS publication");
         drain.publish_report(Report {
             watermark: None,
-            persisted_count: 0,
-            persisted_sha256: "ab".repeat(32),
             last_publication: None,
         });
         assert!(drain.status().report.is_none());
         assert_eq!(drain.status().phase, Phase::Failed);
     }
-    async fn cohort(timeout: Duration) -> (Vec<Arc<Drain>>, Vec<tokio::task::JoinHandle<()>>) {
+    pub(crate) async fn cohort(
+        timeout: Duration,
+    ) -> (Vec<Arc<Drain>>, Vec<tokio::task::JoinHandle<()>>) {
         let drains: Vec<_> = (0..3)
             .map(|party| Drain::new(party, timeout, true))
             .collect();
@@ -651,7 +842,7 @@ mod tests {
         }
         (drains, tasks)
     }
-    async fn until(mut predicate: impl FnMut() -> bool) {
+    pub(crate) async fn until(mut predicate: impl FnMut() -> bool) {
         tokio::time::timeout(Duration::from_secs(5), async {
             while !predicate() {
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -663,8 +854,6 @@ mod tests {
     fn proof(watermark: &str, cut: u64) -> Report {
         Report {
             watermark: Some(iris_mpc_store::normalize_sns_sequence_number(watermark).unwrap()),
-            persisted_count: 2,
-            persisted_sha256: "cd".repeat(32),
             last_publication: Some(Publication {
                 batch_id: cut,
                 batch_sha256: "ab".repeat(32),
@@ -672,26 +861,20 @@ mod tests {
         }
     }
     #[tokio::test]
-    async fn idle_drain_waits_for_cut_before_reporting() {
+    async fn idle_drain_can_agree_on_historical_completed_progress() {
         let (drains, tasks) = cohort(Duration::from_secs(4)).await;
         for drain in &drains {
             drain.request();
             drain.ingest_stopped();
             drain.receiver_stopped();
-            assert!(drain.settled());
-            assert_eq!(drain.status().cut, None);
-            assert!(!drain.ready_to_report());
         }
         until(|| drains.iter().all(|drain| drain.ready_to_report())).await;
         for drain in &drains {
             assert_eq!(drain.status().cut, Some(0));
             drain.publish_report(Report {
-                watermark: None,
-                persisted_count: 0,
-                persisted_sha256: "ab".repeat(32),
+                watermark: Some(iris_mpc_store::normalize_sns_sequence_number("100").unwrap()),
                 last_publication: None,
             });
-            assert!(!drain.ready_to_report());
         }
         until(|| {
             drains
@@ -746,6 +929,21 @@ mod tests {
         }
     }
     #[tokio::test]
+    async fn restarted_peer_identity_fails_the_whole_cohort() {
+        let (drains, tasks) = cohort(Duration::from_secs(4)).await;
+        for drain in &drains {
+            drain.publish_offer(1, 1, || {});
+            drain.request();
+        }
+        until(|| drains.iter().all(|drain| drain.status().cut == Some(1))).await;
+        drains[1].inner.lock().unwrap().status.process_uuid = uuid::Uuid::new_v4().to_string();
+        until(|| drains.iter().all(|drain| drain.failed())).await;
+        assert!(drains.iter().all(|drain| drain.status().report.is_none()));
+        for task in tasks {
+            task.abort();
+        }
+    }
+    #[tokio::test]
     async fn missing_peer_authorization_times_out_without_cancelling_inflight_work() {
         let (drains, tasks) = cohort(Duration::from_millis(200)).await;
         drains[0].result_started();
@@ -762,7 +960,7 @@ mod tests {
         }
     }
     #[tokio::test]
-    async fn matching_maxima_do_not_hide_different_prefixes_or_stale_publication() {
+    async fn matching_watermarks_do_not_hide_different_or_stale_publication() {
         for stale_publication in [false, true] {
             let (drains, tasks) = cohort(Duration::from_secs(4)).await;
             for drain in &drains {
@@ -778,7 +976,7 @@ mod tests {
                     drain.publish_report(mismatched.clone());
                 }
             } else {
-                mismatched.persisted_sha256 = "ef".repeat(32);
+                mismatched.last_publication.as_mut().unwrap().batch_sha256 = "ef".repeat(32);
                 drains[0].publish_report(mismatched);
                 drains[1].publish_report(proof("100", 4));
                 drains[2].publish_report(proof("100", 4));

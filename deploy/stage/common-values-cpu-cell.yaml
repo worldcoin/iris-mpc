@@ -1,7 +1,7 @@
 # Applied after the existing common and per-party ampc-hnsw values.
 # Slots start disabled and passive; promotion is a separate operation.
 replicaCount: 0
-image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:6d02c230f49b93b6be7f88a97e83fdb48673a059@sha256:afb5eb5be7b0cfffc6b4d356b65449f45218e5da4c7b4e4053ac062f6d254fa2"
+image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:5458a567a6b2b6a60e070e8e71486a66a9f10b72@sha256:e3212edbae39f244d0dd19baee149af6805fc2ce7ecca94aae49f94005abf293"
 
 serviceAccount:
   create: false

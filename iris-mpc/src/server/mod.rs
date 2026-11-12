@@ -52,6 +52,7 @@ use iris_mpc_cpu::execution::hawk_main::{
 };
 use iris_mpc_cpu::hawkers::aby3::aby3_store::Aby3Store;
 use iris_mpc_cpu::hnsw::graph::graph_store::GraphPg;
+use iris_mpc_store::cpu_cell::CpuCellHandoffs;
 use iris_mpc_store::Store;
 use pprof::protos::Message;
 use pprof::ProfilerGuardBuilder;
@@ -64,6 +65,7 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::RwLock;
 use tokio::time::timeout;
+use uuid::Uuid;
 
 const RNG_SEED_INIT_DB: u64 = 42;
 pub const SQS_POLLING_INTERVAL: Duration = Duration::from_secs(1);
@@ -124,6 +126,7 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
     }
 
     let (iris_store, graph_store) = prepare_stores(&config, search_mode).await?;
+    let handoff = initialize_handoff(&config, search_mode, &iris_store.pool).await?;
 
     let aws_clients = init_aws_services(&config).await?;
     let shares_encryption_key_pair =
@@ -170,6 +173,9 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
             Duration::from_secs(config.cpu_drain_timeout_secs),
             config.db_backed_ingest,
         );
+        if let Some(handoff) = handoff {
+            drain.require_durable_seal(handoff);
+        }
         Some(drain)
     } else {
         None
@@ -516,6 +522,51 @@ fn validate_full_scan_side_switching(
         );
     }
     Ok(())
+}
+
+pub(super) struct ManagedHandoff {
+    handoffs: CpuCellHandoffs,
+    deployment: Uuid,
+}
+
+async fn initialize_handoff(
+    config: &Config,
+    search_mode: HawkSearchMode,
+    pool: &sqlx::PgPool,
+) -> Result<Option<Arc<ManagedHandoff>>> {
+    if config.cpu_cell.is_some() && search_mode != HawkSearchMode::LinearScan {
+        bail!("CPU handoff is supported only by linear scan");
+    }
+    let schema = match search_mode {
+        HawkSearchMode::Hnsw => config.get_cpu_db_schema(),
+        HawkSearchMode::LinearScan => config.get_gpu_db_schema(),
+    };
+    let handoffs = CpuCellHandoffs::new(pool.clone(), &schema)?;
+    if !handoffs.is_managed().await? {
+        return Ok(None);
+    }
+    let identity = config
+        .cpu_cell
+        .as_ref()
+        .ok_or_else(|| eyre!("CPU handoff schema requires cpu_cell configuration"))?;
+    if search_mode != HawkSearchMode::LinearScan
+        || config.fake_db_size > 0
+        || config.init_db_size > 0
+        || config.clear_db_before_init
+        || !config.db_backed_ingest
+        || config.disable_persistence
+    {
+        bail!("CPU handoff requires persistent linear scan, DB-backed intake and no seed/clear operations");
+    }
+    let deployment =
+        Uuid::parse_str(&identity.deployment_id).wrap_err("invalid CPU deployment UUID")?;
+    handoffs
+        .check_startup(deployment, config.startup_mode == StartupMode::Candidate)
+        .await?;
+    Ok(Some(Arc::new(ManagedHandoff {
+        handoffs,
+        deployment,
+    })))
 }
 
 /// Returns initialized PostgreSQL clients for interacting
@@ -1322,34 +1373,41 @@ async fn run_main_server_loop(
             }
         }
         if drain.requested() {
+            let mut completion_persisted = false;
             while !shutdown_handler.is_shutting_down() {
                 task_monitor.check_tasks();
                 if drain.ready_to_report() {
                     let proof = tokio::time::timeout(drain.remaining_budget(), async {
                         iris_store.reset_unpersisted_ingested_claims().await?;
-                        let watermark = iris_store.max_persisted_sequence_number().await?;
-                        let (persisted_count, persisted_sha256) = iris_store
-                            .prove_persisted_prefix(watermark.as_deref())
+                        let watermark = iris_store
+                            .drain_completed_ingested_sequence_number()
                             .await?;
                         Ok::<_, Report>(drain::Report {
                             watermark,
-                            persisted_count,
-                            persisted_sha256,
                             last_publication: drain.last_publication(),
                         })
                     })
                     .await
                     .map_err(|error| {
-                        eyre!("drain persisted-prefix proof deadline exceeded: {error}")
+                        eyre!("drain completed-watermark check deadline exceeded: {error}")
                     })
                     .and_then(|result| result);
                     match proof {
                         Ok(report) => drain.publish_report(report),
                         Err(error) => {
-                            tracing::error!(?error, "Cannot establish drain persisted prefix");
-                            drain.fail("cannot establish a contiguous persisted prefix");
+                            tracing::error!(?error, "Cannot establish drain completed watermark");
+                            drain.fail(
+                                "cannot establish completed watermark without unresolved requests",
+                            );
                         }
                     }
+                }
+                if !completion_persisted && drain.status().phase == drain::Phase::Paused {
+                    if let Err(error) = drain.persist_completion().await {
+                        drain.fail("cannot persist completed handoff drain");
+                        return Err(error.wrap_err("persist agreed CPU drain completion"));
+                    }
+                    completion_persisted = true;
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
@@ -1384,6 +1442,76 @@ async fn run_main_server_loop(
 #[cfg(test)]
 mod config_tests {
     use super::*;
+
+    #[tokio::test]
+    #[ignore = "requires CPU_CELL_TEST_DATABASE_URL pointing to disposable PostgreSQL"]
+    async fn startup_handoff_denial_precedes_operational_effects() -> Result<()> {
+        use sqlx::Executor;
+        let url = std::env::var("CPU_CELL_TEST_DATABASE_URL")?;
+        let mut config: Config = serde_json::from_value(serde_json::json!({
+            "schema_name": format!("startup_{}", Uuid::new_v4().simple()),
+            "max_batch_size": 1, "disable_persistence": false,
+            "full_scan_side_switching_enabled": false, "enable_s3_importer": false,
+            "hawk_numa": false, "luc_enabled": true, "luc_lookback_records": 10,
+            "db_backed_ingest": true, "enable_modifications_sync": true,
+            "database": {"url": url, "load_parallelism": 2},
+            "cpu_cell": {"deployment_id": Uuid::new_v4().to_string()}
+        }))?;
+        let schema = config.get_gpu_db_schema();
+        let client = PostgresClient::new(&url, &schema, AccessMode::ReadWrite).await?;
+        run_migrations(&client.pool, false).await?;
+        let admin = client.pool;
+        assert!(
+            initialize_handoff(&config, HawkSearchMode::LinearScan, &admin)
+                .await?
+                .is_none()
+        );
+        prepare_stores(&config, HawkSearchMode::LinearScan).await?;
+        let identity = config.cpu_cell.take();
+        assert!(
+            initialize_handoff(&config, HawkSearchMode::LinearScan, &admin)
+                .await?
+                .is_none()
+        );
+        prepare_stores(&config, HawkSearchMode::LinearScan).await?;
+        config.cpu_cell = identity;
+        let handoffs = CpuCellHandoffs::new(admin.clone(), &schema)?;
+        let id = Uuid::new_v4();
+        let source = Uuid::parse_str(&config.cpu_cell.as_ref().unwrap().deployment_id)?;
+        handoffs.request(id, source, Uuid::new_v4()).await?;
+        handoffs
+            .record_drain_start(
+                id,
+                source,
+                Uuid::new_v4(),
+                &std::array::from_fn(|_| Uuid::new_v4()),
+            )
+            .await?;
+        let tables_before: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relkind='r'").bind(&schema).fetch_one(&admin).await?;
+        for mode in [StartupMode::Active, StartupMode::Candidate] {
+            config.startup_mode = mode;
+            let error = linear_scan_server_main(config.clone()).await.unwrap_err();
+            assert!(
+                format!("{error:?}").contains("cannot start in this handoff phase"),
+                "{error:?}"
+            );
+        }
+        config.cpu_cell = None;
+        let error = linear_scan_server_main(config).await.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("requires cpu_cell configuration"));
+        let tables: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relkind='r'").bind(&schema).fetch_one(&admin).await?;
+        assert_eq!(
+            tables, tables_before,
+            "startup denial must not change canonical tables"
+        );
+        admin
+            .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
+            .await?;
+        admin.close().await;
+        Ok(())
+    }
 
     #[test]
     fn linear_scan_requires_persistence() {

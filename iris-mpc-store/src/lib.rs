@@ -1,3 +1,5 @@
+pub mod cpu_cell;
+
 pub mod loader;
 mod s3_importer;
 
@@ -960,6 +962,24 @@ WHERE id = $1;
         validate_completed_sequence_number(completed)
     }
 
+    /// Read durable progress after drain has settled all writers, rejecting any
+    /// unresolved valid request at or below that completed sequence.
+    pub async fn drain_completed_ingested_sequence_number(&self) -> Result<Option<String>> {
+        let completed = self.completed_ingested_sequence_number().await?;
+        let unresolved: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM ingested_requests WHERE sequence_number <= $1 AND persisted_at IS NULL AND is_valid IS NOT FALSE)",
+        )
+        .bind(completed.as_deref())
+        .fetch_one(&self.pool)
+        .await
+        .wrap_err("failed to check unresolved ingested requests during drain")?;
+        ensure!(
+            !unresolved,
+            "unresolved valid ingested rows at or below completed watermark"
+        );
+        Ok(completed)
+    }
+
     /// Reconcile writes from older processes before advertising startup progress.
     pub async fn reconcile_completed_ingested_sequence_number(&self) -> Result<Option<String>> {
         let mut tx = self.tx().await?;
@@ -1022,8 +1042,7 @@ WHERE id = $1;
         Ok(())
     }
 
-    /// Highest persisted sequence still retained in the journal. Drain checks
-    /// that retained request set with `prove_persisted_prefix`; durable progress
+    /// Highest persisted sequence still retained in the journal. Durable progress
     /// can be higher after journal rows have been removed.
     pub async fn max_persisted_sequence_number(&self) -> Result<Option<String>> {
         let row: (Option<String>,) = sqlx::query_as(
@@ -1487,6 +1506,114 @@ pub mod tests {
         blocker.rollback().await?;
         pool.close().await;
         cleanup(&admin, &schema).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drain_completed_watermark_is_independent_of_retained_history() -> Result<()> {
+        let schema_name = temporary_name();
+        let client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        run_migrations(&client.pool, false).await?;
+        let store = Store::new(&client).await?;
+        assert_eq!(
+            store.drain_completed_ingested_sequence_number().await?,
+            None
+        );
+        let sequences = [
+            normalize_sns_sequence_number("10")?,
+            normalize_sns_sequence_number("100")?,
+        ];
+        for sequence in &sequences {
+            store
+                .insert_ingested_request(sequence, "body", true)
+                .await?;
+        }
+        let mut tx = store.tx().await?;
+        store
+            .mark_ingested_requests_persisted_tx(&mut tx, &sequences)
+            .await?;
+        tx.commit().await?;
+        let completed = store.drain_completed_ingested_sequence_number().await?;
+        assert_eq!(completed, Some(sequences[1].clone()));
+
+        sqlx::query("DELETE FROM ingested_requests WHERE sequence_number = $1")
+            .bind(&sequences[1])
+            .execute(&client.pool)
+            .await?;
+        assert_eq!(
+            store.max_persisted_sequence_number().await?,
+            Some(sequences[0].clone())
+        );
+        assert_eq!(
+            store.drain_completed_ingested_sequence_number().await?,
+            completed
+        );
+        sqlx::query("DELETE FROM ingested_requests")
+            .execute(&client.pool)
+            .await?;
+        assert_eq!(store.max_persisted_sequence_number().await?, None);
+        assert_eq!(
+            store.drain_completed_ingested_sequence_number().await?,
+            completed
+        );
+        cleanup(&client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drain_completed_watermark_rejects_only_unresolved_valid_rows_within_cut() -> Result<()>
+    {
+        let schema_name = temporary_name();
+        let client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        run_migrations(&client.pool, false).await?;
+        let store = Store::new(&client).await?;
+        store.insert_ingested_request("100", "body", true).await?;
+        let completed = normalize_sns_sequence_number("100")?;
+        let mut tx = store.tx().await?;
+        store
+            .mark_ingested_requests_persisted_tx(&mut tx, std::slice::from_ref(&completed))
+            .await?;
+        tx.commit().await?;
+        store.insert_ingested_request("200", "body", true).await?;
+        store.insert_ingested_request("50", "body", false).await?;
+        assert_eq!(
+            store.drain_completed_ingested_sequence_number().await?,
+            Some(completed.clone())
+        );
+
+        let unresolved = normalize_sns_sequence_number("50")?;
+        for is_valid in [Some(true), None] {
+            sqlx::query("UPDATE ingested_requests SET is_valid = $1 WHERE sequence_number = $2")
+                .bind(is_valid)
+                .bind(&unresolved)
+                .execute(&client.pool)
+                .await?;
+            assert!(store
+                .drain_completed_ingested_sequence_number()
+                .await
+                .is_err());
+        }
+        sqlx::query("UPDATE ingested_requests SET is_valid = false WHERE sequence_number = $1")
+            .bind(&unresolved)
+            .execute(&client.pool)
+            .await?;
+        assert_eq!(
+            store.drain_completed_ingested_sequence_number().await?,
+            Some(completed.clone())
+        );
+        sqlx::query("UPDATE ingested_requests SET persisted_at = NULL WHERE sequence_number = $1")
+            .bind(&completed)
+            .execute(&client.pool)
+            .await?;
+        assert!(store
+            .drain_completed_ingested_sequence_number()
+            .await
+            .is_err());
+        cleanup(&client, &schema_name).await?;
         Ok(())
     }
 
@@ -1994,6 +2121,10 @@ pub mod tests {
                 .bind(invalid).execute(&client.pool).await?;
             assert!(store.completed_ingested_sequence_number().await.is_err());
             assert!(store
+                .drain_completed_ingested_sequence_number()
+                .await
+                .is_err());
+            assert!(store
                 .reconcile_completed_ingested_sequence_number()
                 .await
                 .is_err());
@@ -2021,6 +2152,10 @@ pub mod tests {
         sqlx::query("DELETE FROM persistent_state WHERE domain = 'db_ingest' AND \"key\" = 'completed_sequence_number'")
             .execute(&client.pool).await?;
         assert!(store.completed_ingested_sequence_number().await.is_err());
+        assert!(store
+            .drain_completed_ingested_sequence_number()
+            .await
+            .is_err());
         assert!(store
             .reconcile_completed_ingested_sequence_number()
             .await
