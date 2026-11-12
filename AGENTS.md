@@ -11,11 +11,10 @@
 - `just lint` runs `cargo fmt`, `cargo clippy`, and `cargo doc`; keep a clean slate before pushing.
 - `just dev-pg-up` / `just dev-pg-down` control the Postgres instance used by HNSW.
 
-## MPC Implementations: GPU vs HNSW
-- GPU path (`iris-mpc-bins/bin/iris-mpc/server.rs`, `iris-mpc-gpu/src/server/actor.rs`) preloads shares into CUDA `ShareDB` slices, scans distances via cuBLAS GEMM, coordinates multi-GPU batches with NCCL, and shapes device inputs through `PreprocessedBatchQuery`.
-- HNSW path (`iris-mpc/src/server/mod.rs`, `iris-mpc-cpu/src/execution/hawk_main.rs`) steers ABY3 sessions with `HawkActor` and drives `HnswSearcher` lookups backed by the Postgres `GraphPg` store.
-- Matching differs: GPU thresholds every candidate chunk with `DistanceComparator`; HNSW narrows neighbors (`search_to_insert`, `match_count`) then rechecks via ABY3 distance MPC in `is_match_batch.rs`.
-- State updates differ: GPU reloads device slices from `load_iris_db` and streams OR-policy masks, while HNSW derives insertion layers from a shared PRF and persists edges through `ConnectPlanV`.
+## MPC Implementation Scope
+- The CPU implementation is the maintained path: `iris-mpc/src/server/mod.rs` and `iris-mpc-cpu/`.
+- The GPU implementation is deprecated and scheduled for complete removal. Do not modify GPU-specific code, including `iris-mpc-gpu/` and the GPU server under `iris-mpc-bins/bin/iris-mpc/`.
+- Implement features, fixes and protocol changes for CPU only. CPU/GPU protocol parity is not required; do not port changes to GPU to preserve parity.
 
 ## Coding Style & Naming Conventions
 - Format with `cargo fmt`; `rustfmt.toml` targets Rust 2021 with 4-space indents and field init shorthand.
@@ -25,7 +24,7 @@
 ## Testing Guidelines
 - Co-locate unit tests with implementation and keep scenario tests under `*/tests/`, named after their domain (e.g., `store_connection.rs`).
 - Use deterministic RNG seeds in property tests and gate CUDA-sensitive cases behind opt-in features.
-- Preserve CPU/GPU parity for protocol changes; run `cargo test --features gpu` for CUDA paths.
+- Validate changes against the maintained CPU paths; GPU protocol parity and GPU-specific tests are not required.
 
 ## Commit & Pull Request Guidelines
 - Follow git history: imperative, present-tense subjects, optional ticket tags (e.g., `[POP-2993]`), and mention PR numbers when merging.
