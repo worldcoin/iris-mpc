@@ -1327,27 +1327,26 @@ async fn run_main_server_loop(
                 if drain.ready_to_report() {
                     let proof = tokio::time::timeout(drain.remaining_budget(), async {
                         iris_store.reset_unpersisted_ingested_claims().await?;
-                        let watermark = iris_store.max_persisted_sequence_number().await?;
-                        let (persisted_count, persisted_sha256) = iris_store
-                            .prove_persisted_prefix(watermark.as_deref())
+                        let watermark = iris_store
+                            .drain_completed_ingested_sequence_number()
                             .await?;
                         Ok::<_, Report>(drain::Report {
                             watermark,
-                            persisted_count,
-                            persisted_sha256,
                             last_publication: drain.last_publication(),
                         })
                     })
                     .await
                     .map_err(|error| {
-                        eyre!("drain persisted-prefix proof deadline exceeded: {error}")
+                        eyre!("drain completed-watermark check deadline exceeded: {error}")
                     })
                     .and_then(|result| result);
                     match proof {
                         Ok(report) => drain.publish_report(report),
                         Err(error) => {
-                            tracing::error!(?error, "Cannot establish drain persisted prefix");
-                            drain.fail("cannot establish a contiguous persisted prefix");
+                            tracing::error!(?error, "Cannot establish drain completed watermark");
+                            drain.fail(
+                                "cannot establish completed watermark without unresolved requests",
+                            );
                         }
                     }
                 }
