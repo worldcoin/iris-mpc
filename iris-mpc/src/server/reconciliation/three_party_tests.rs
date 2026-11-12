@@ -1,5 +1,6 @@
 use super::super::{
     drain::{self, Phase},
+    handoff::Coordinator,
     ManagedHandoff,
 };
 use super::*;
@@ -106,10 +107,87 @@ fn common_context(parties: &[Party]) -> Result<ReconciliationContext> {
     )
 }
 
-async fn drain_and_reload_handoff(parties: &[Party]) -> Result<ReconciliationContext> {
+async fn drain_and_reload_handoff(parties: &mut [Party]) -> Result<ReconciliationContext> {
     let (drains, tasks) = drain::tests::cohort(Duration::from_secs(30)).await;
     let (id, source, destination) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
-    let candidates = std::array::from_fn(|i| parties[i].candidate.registry.process_id());
+    let candidates: [Uuid; 3] = std::array::from_fn(|i| parties[i].candidate.registry.process_id());
+    let mut source_listeners = Vec::new();
+    let mut candidate_listeners = Vec::new();
+    for _ in 0..3 {
+        source_listeners.push(tokio::net::TcpListener::bind("127.0.0.1:0").await?);
+        candidate_listeners.push(tokio::net::TcpListener::bind("127.0.0.1:0").await?);
+    }
+    let source_urls: [String; 3] = std::array::from_fn(|i| {
+        format!(
+            "http://{}/handoff-status",
+            source_listeners[i].local_addr().unwrap()
+        )
+    });
+    let candidate_urls: [String; 3] = std::array::from_fn(|i| {
+        format!(
+            "http://{}/handoff-status",
+            candidate_listeners[i].local_addr().unwrap()
+        )
+    });
+    let mut source_coordinators = Vec::new();
+    let mut candidate_coordinators = Vec::new();
+    let mut source_tasks = Vec::new();
+    let mut candidate_tasks = Vec::new();
+    for (i, ((party, source_listener), candidate_listener)) in parties
+        .iter()
+        .zip(source_listeners)
+        .zip(candidate_listeners)
+        .enumerate()
+    {
+        let mut config = party.config.clone();
+        // Isolated test schemas represent the same logical database in each party.
+        config.schema_name = "coordinator_fixture".into();
+        config.startup_mode = iris_mpc_common::config::StartupMode::Active;
+        config.db_backed_ingest = true;
+        let mut peers: ampc_server_utils::config::ServerCoordinationConfig =
+            serde_json::from_value(serde_json::json!({}))?;
+        peers.party_id = i;
+        peers.node_hostnames = vec!["127.0.0.1".into(); 3];
+        peers.healthcheck_ports = source_urls
+            .iter()
+            .map(|url| {
+                reqwest::Url::parse(url)
+                    .unwrap()
+                    .port()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        config.server_coordination = Some(peers);
+        config.cpu_cell = Some(serde_json::from_value(
+            serde_json::json!({"deployment_id": source, "candidate_status_urls": candidate_urls}),
+        )?);
+        let source_coordinator = Coordinator::new(
+            &config,
+            Uuid::parse_str(&drains[i].status().process_uuid)?,
+            Some(drains[i].clone()),
+        )?
+        .unwrap();
+        source_coordinator
+            .mark_ready(Uuid::parse_str(&drains[i].status().process_uuid)?)
+            .await;
+        let router = source_coordinator.routes();
+        source_tasks.push(tokio::spawn(async move {
+            axum::serve(source_listener, router).await.unwrap();
+        }));
+        source_coordinators.push(source_coordinator);
+        config.startup_mode = iris_mpc_common::config::StartupMode::Candidate;
+        config.cpu_cell = Some(serde_json::from_value(
+            serde_json::json!({"deployment_id": destination, "candidate_status_urls": candidate_urls,
+            "handoff": {"id": id, "source_deployment_id": source, "source_status_urls": source_urls}}),
+        )?);
+        let candidate_coordinator = Coordinator::new(&config, candidates[i], None)?.unwrap();
+        let router = candidate_coordinator.routes();
+        candidate_tasks.push(tokio::spawn(async move {
+            axum::serve(candidate_listener, router).await.unwrap();
+        }));
+        candidate_coordinators.push(candidate_coordinator);
+    }
     let mut controls = Vec::new();
     for (i, (party, drain)) in parties.iter().zip(&drains).enumerate() {
         let schema = party.config.get_gpu_db_schema();
@@ -136,14 +214,33 @@ async fn drain_and_reload_handoff(parties: &[Party]) -> Result<ReconciliationCon
             .mark_ingested_requests_persisted_tx(&mut tx, &sequences)
             .await?;
         tx.commit().await?;
-        handoffs.request(id, source, destination).await?;
-        handoffs.request(id, source, destination).await?;
+        // Completed journal retention differs; pending work above C survives the handoff.
+        sqlx::query("DELETE FROM ingested_requests WHERE persisted_at IS NOT NULL AND ($1 = 2 OR ($1 = 1 AND sequence_number = $2))")
+            .bind(i as i32).bind(&sequences[0]).execute(&party.writer.pool).await?;
+        store
+            .insert_ingested_request(
+                &normalize_sns_sequence_number("100")?,
+                "pending fixture request",
+                true,
+            )
+            .await?;
+        candidate_coordinators[i]
+            .prepare_candidate(&handoffs)
+            .await?;
+        handoffs.check_startup(destination, true).await?;
         drain.require_durable_seal(Arc::new(ManagedHandoff {
-            handoffs,
+            handoffs: handoffs.clone(),
             deployment: source,
         }));
-        drain.request_managed(id, &candidates).await?;
-        drain.request_managed(id, &candidates).await?;
+        let coordinator = source_coordinators[i].clone();
+        source_tasks.push(tokio::spawn(async move {
+            coordinator
+                .run_source(handoffs, Arc::new(ShutdownHandler::new(0)))
+                .await;
+        }));
+        if i < 2 {
+            candidate_coordinators[i].mark_ready(candidates[i]).await;
+        }
         drain.ingest_stopped();
         drain.receiver_stopped();
         assert!(drain.settled());
@@ -153,6 +250,12 @@ async fn drain_and_reload_handoff(parties: &[Party]) -> Result<ReconciliationCon
         }
         controls.push(control);
     }
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    assert!(
+        drains.iter().all(|drain| !drain.requested()),
+        "a still-loading candidate must leave A serving"
+    );
+    candidate_coordinators[2].mark_ready(candidates[2]).await;
     drain::tests::until(|| drains.iter().all(|drain| drain.ready_to_report())).await;
     for (i, (party, drain)) in parties.iter().zip(&drains).enumerate() {
         assert_eq!(drain.status().cut, Some(0));
@@ -209,7 +312,44 @@ async fn drain_and_reload_handoff(parties: &[Party]) -> Result<ReconciliationCon
         reports.push(report);
         reopened.pool.close().await;
     }
-    for task in tasks {
+    for task in tasks.into_iter().chain(source_tasks) {
+        task.abort();
+    }
+    // A no longer serves any endpoint. B finishes using only durable records and current B peers.
+    let contexts =
+        futures::future::try_join_all(parties.iter_mut().zip(&candidate_coordinators).map(
+            |(party, coordinator)| async move {
+                let reader = PostgresClient::new(
+                    &party.config.database.as_ref().unwrap().url,
+                    &party.config.get_gpu_db_schema(),
+                    AccessMode::EnforcedReadOnly,
+                )
+                .await?;
+                let handoffs =
+                    CpuCellHandoffs::new(reader.pool.clone(), &party.config.get_gpu_db_schema())?;
+                let store = Store::new(&reader).await?;
+                let context = coordinator
+                    .reconcile_candidate(
+                        &handoffs,
+                        &store,
+                        &mut party.candidate,
+                        Duration::from_secs(30),
+                    )
+                    .await?;
+                let pending: bool = sqlx::query_scalar(
+                    "SELECT persisted_at IS NULL FROM ingested_requests WHERE sequence_number=$1",
+                )
+                .bind(normalize_sns_sequence_number("100")?)
+                .fetch_one(&reader.pool)
+                .await?;
+                assert!(pending, "handoff must preserve pending-above-C work");
+                reader.pool.close().await;
+                Ok::<_, eyre::Report>(context)
+            },
+        ))
+        .await?;
+    assert!(contexts.iter().all(|context| context == &contexts[0]));
+    for task in candidate_tasks {
         task.abort();
     }
     assert!(reports.iter().all(|report| report == &reports[0]));
@@ -217,7 +357,7 @@ async fn drain_and_reload_handoff(parties: &[Party]) -> Result<ReconciliationCon
         reports[0].watermark,
         Some(normalize_sns_sequence_number("42")?)
     );
-    ReconciliationContext::new(
+    let expected = ReconciliationContext::new(
         records[0].handoff_id,
         std::array::from_fn(|i| records[i].source_process.unwrap()),
         records[0]
@@ -227,7 +367,9 @@ async fn drain_and_reload_handoff(parties: &[Party]) -> Result<ReconciliationCon
             .try_into()
             .unwrap(),
         reports[0].watermark.clone(),
-    )
+    )?;
+    assert_eq!(contexts[0], expected);
+    Ok(expected)
 }
 
 async fn reconcile_parties(
@@ -311,8 +453,9 @@ async fn three_party_reconciliation_agrees_and_preserves_each_partys_payloads() 
         expected.push(inserted);
 
         // Queue intake/publication are outside this fixture; its simulated writers stop here.
-        let context = drain_and_reload_handoff(&parties).await?;
-        let reports = reconcile_parties(&mut parties, &context).await?;
+        let context = drain_and_reload_handoff(&mut parties).await?;
+        let reports: [ReconciliationReport; 3] =
+            std::array::from_fn(|i| parties[i].candidate.report_for(&context).unwrap().clone());
         ReconciliationReport::verify_agreement(&context, &reports)?;
         for (party_id, party) in parties.iter().enumerate() {
             let candidate = &party.candidate;

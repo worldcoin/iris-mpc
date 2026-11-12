@@ -5,9 +5,8 @@ existing peer coordination establishes agreement across the three parties.
 This is a planned handoff between cooperating binaries using existing database
 and network access controls.
 
-The local foundation does not enable automatic promotion. Coordination and
-serving activation are [POP-4454](https://linear.app/worldcoin/issue/POP-4454) and
-[POP-4376](https://linear.app/worldcoin/issue/POP-4376); deployment wiring and
+The runtime coordinates drain and candidate reconciliation automatically when
+configured. Serving activation remains [POP-4376](https://linear.app/worldcoin/issue/POP-4376); deployment wiring and
 cold recovery are [POP-4377](https://linear.app/worldcoin/issue/POP-4377) and
 [POP-4378](https://linear.app/worldcoin/issue/POP-4378).
 
@@ -36,21 +35,23 @@ agreed `Paused` state, not merely after local work finishes.
 
 The database report remains readable after A exits. The drain compares durable
 completed watermarks and final publications, independent of retained request
-history. Future coordination reuses that agreement and the existing candidate
-reconciliation checks.
+history. Each B reads its local record, exchanges it with the current B peers,
+and reconciles its retained workers at the agreed watermark. A need not remain
+alive for this exchange. Matching canonical iris metadata reports leave B
+reconciled and passive.
 
 ## Migrations and startup
 
 The [forward-only SQLx migration](../migrations/20261108000000_cpu_cell_handoffs.sql)
-creates the handoff table through the existing migration path. An empty table leaves ordinary
-startup and migrations unchanged. Deploying this foundation
-does not start a handoff or require an operator to access production Postgres.
+creates the handoff table through the existing migration path. With no CPU cell
+configuration, an empty table preserves ordinary startup. Configured A binds its
+managed drain before the first request exists. Migrations alone do not start a
+handoff or require an operator to access production Postgres.
 
-The runtime coordinator in POP-4454 will record the intended handoff from
+The runtime coordinator records the intended handoff from
 deployment configuration, using the service's existing database connection.
 POP-4377 supplies that configuration through the existing party-owned deployment
-workflow. This PR provides the store API and startup/drain guards; it does not
-yet call the request API automatically or enable promotion. There is no admin
+workflow. There is no admin
 example or separate SQL installation step.
 
 IDs are UUIDs. Set `SMPC__CPU_CELL__DEPLOYMENT_ID` on each participating CPU
@@ -77,11 +78,43 @@ preload. Freeze further schema changes until handoff finishes; incompatible
 changes require a coordinated cold deployment. The standalone migrator remains
 available through the existing deployment workflow.
 
-Before recording the first handoff, the coordinator/deployment integration must
-ensure all participating processes use the handoff-aware runtime and ordinary
-alternate writers are stopped. A new row cannot revoke an already-open legacy
-connection. Keep automatic handoff disabled until that integration and recovery
-are tested. No role provisioning or process secrets are needed.
+Before recording a request, B verifies all three current A processes expose the
+compatible handoff protocol and are serving without a drain already requested.
+Each A then waits for all B preloads and the same six-process cohort before
+initiating its managed drain once. A request alone does not stop intake.
+Deployment must also stop ordinary alternate writers: a row cannot revoke an
+already-open legacy connection. Keep automatic handoff disabled until deployment
+and cold recovery are tested.
+
+## Runtime configuration
+
+Omitting `SMPC__CPU_CELL__CANDIDATE_STATUS_URLS` keeps automatic handoff disabled.
+On all participating A and B processes set that variable to a JSON array of
+three fixed B `/handoff-status` URLs, indexed by party. A uses its existing
+`server_coordination` hostnames and healthcheck ports for A status exchange.
+On B additionally set:
+
+```sh
+SMPC__CPU_CELL__HANDOFF__ID=<fresh-handoff-uuid>
+SMPC__CPU_CELL__HANDOFF__SOURCE_DEPLOYMENT_ID=<current-A-deployment-uuid>
+SMPC__CPU_CELL__HANDOFF__SOURCE_STATUS_URLS='["http://a0:8080/handoff-status","http://a1:8080/handoff-status","http://a2:8080/handoff-status"]'
+```
+
+The destination is B's `SMPC__CPU_CELL__DEPLOYMENT_ID`. Configure DB-backed intake
+and a positive `SMPC__CPU_DRAIN_TIMEOUT_SECS`. B's first request precedes its
+startup history check, including after a previous handoff was activated.
+Preload/preflight can wait up to an hour; the drain/reconciliation budget starts
+after all B processes finish preload. Preflight failures leave A serving;
+uncertain seal attempts and failures after drain-start never resume it.
+
+The opt-in adds a read-only `/handoff-status` route on A's existing coordination
+listener and binds B's candidate status listener to all interfaces. Fixed URLs,
+bounded responses and process UUIDs do **not** authenticate peers. Production
+must restrict these listeners to the intended party processes using its existing
+network/access controls; do not publish them as serving endpoints. Common
+configuration must match within each cell. A and B may have different serving
+settings, but their protocol and forward-only schema changes must be compatible
+and reviewed together. This configuration enables no serving activation.
 
 The deployment migrator applies migrations forward; this migration has no down
 operation. Retain handoff history because startup uses it to keep retired

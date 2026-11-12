@@ -39,6 +39,44 @@ pub enum StartupMode {
 #[serde(deny_unknown_fields)]
 pub struct CpuCellConfig {
     pub deployment_id: String,
+    /// Fixed /handoff-status URLs indexed by party. Omit to disable runtime handoff.
+    #[serde(default, deserialize_with = "deserialize_optional_peer_urls")]
+    pub candidate_status_urls: Option<[String; 3]>,
+    /// Supplied only to the destination candidate by its deployment configuration.
+    #[serde(default)]
+    pub handoff: Option<CpuCellHandoffConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CpuCellHandoffConfig {
+    pub id: String,
+    pub source_deployment_id: String,
+    #[serde(deserialize_with = "deserialize_peer_urls")]
+    pub source_status_urls: [String; 3],
+}
+
+fn deserialize_peer_urls<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<[String; 3], D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Urls {
+        Json(String),
+        Array([String; 3]),
+    }
+    match Urls::deserialize(deserializer)? {
+        Urls::Json(value) => serde_json::from_str(&value).map_err(serde::de::Error::custom),
+        Urls::Array(value) => Ok(value),
+    }
+}
+
+fn deserialize_optional_peer_urls<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<[String; 3]>, D::Error> {
+    #[derive(Deserialize)]
+    struct Urls(#[serde(deserialize_with = "deserialize_peer_urls")] [String; 3]);
+    Option::<Urls>::deserialize(deserializer).map(|value| value.map(|urls| urls.0))
 }
 
 fn default_cpu_drain_timeout_secs() -> u64 {
@@ -60,7 +98,7 @@ pub struct Config {
     #[serde(default)]
     pub startup_mode: StartupMode,
 
-    /// Operator status, bound to loopback only in candidate mode.
+    /// Candidate status port; loopback unless runtime handoff is explicitly configured.
     #[serde(default = "default_candidate_status_port")]
     pub candidate_status_port: u16,
 
@@ -1031,6 +1069,40 @@ impl From<Config> for CommonConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cpu_cell_peer_urls_load_from_gitops_environment() {
+        let prefix = "CPU_CELL_CONFIG_TEST";
+        let urls = r#"["http://a:3090/handoff-status","http://b:3090/handoff-status","http://c:3090/handoff-status"]"#;
+        let values = [
+            (
+                "CPU_CELL__DEPLOYMENT_ID",
+                "00000000-0000-0000-0000-000000000001",
+            ),
+            ("CPU_CELL__CANDIDATE_STATUS_URLS", urls),
+            (
+                "CPU_CELL__HANDOFF__ID",
+                "00000000-0000-0000-0000-000000000002",
+            ),
+            (
+                "CPU_CELL__HANDOFF__SOURCE_DEPLOYMENT_ID",
+                "00000000-0000-0000-0000-000000000003",
+            ),
+            ("CPU_CELL__HANDOFF__SOURCE_STATUS_URLS", urls),
+        ];
+        for (key, value) in values {
+            std::env::set_var(format!("{prefix}__{key}"), value);
+        }
+        let config = Config::load_config(prefix);
+        for (key, _) in values {
+            std::env::remove_var(format!("{prefix}__{key}"));
+        }
+        let cell = config.unwrap().cpu_cell.unwrap();
+        assert_eq!(
+            cell.candidate_status_urls.unwrap(),
+            cell.handoff.unwrap().source_status_urls
+        );
+    }
 
     #[test]
     fn messaging_regions_are_optional_local_transport_settings() {

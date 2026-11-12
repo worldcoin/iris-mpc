@@ -1,5 +1,5 @@
-//! Passive reconciliation evidence. Ownership and authenticated peer exchange are
-//! enforced by the handoff coordinator, not by this local primitive.
+//! Passive reconciliation evidence. The handoff coordinator binds current
+//! processes under the existing peer-network access controls.
 
 use super::registry_diff::{CandidateRegistry, RegistryChange};
 use eyre::{ensure, Result, WrapErr};
@@ -77,7 +77,7 @@ pub struct ReconciliationReport {
 }
 
 impl ReconciliationReport {
-    /// Reports must come from authenticated parties and be indexed by party.
+    /// The caller must supply reports from trusted parties, indexed by party.
     /// Agreement is evidence for this frozen context, never permission to serve.
     pub fn verify_agreement(expected: &ReconciliationContext, reports: &[Self; 3]) -> Result<()> {
         expected.validate()?;

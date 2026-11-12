@@ -93,10 +93,27 @@ impl CpuCellHandoffs {
 
     async fn transaction(&self) -> Result<Transaction<'_, Postgres>> {
         let mut tx = self.pool.begin().await?;
-        sqlx::raw_sql("SET LOCAL lock_timeout = '2s'; SET LOCAL statement_timeout = '5s'")
+        sqlx::query("SET LOCAL lock_timeout = '2s'")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("SET LOCAL statement_timeout = '5s'")
             .execute(&mut *tx)
             .await?;
         Ok(tx)
+    }
+
+    pub async fn latest(&self) -> Result<Option<Handoff>> {
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            sqlx::query_as(&format!(
+                "SELECT * FROM {} ORDER BY sequence DESC LIMIT 1",
+                self.table
+            ))
+            .fetch_optional(&self.pool),
+        )
+        .await
+        .wrap_err("reading latest handoff timed out")?
+        .map_err(Into::into)
     }
 
     pub async fn get(&self, id: Uuid) -> Result<Handoff> {
@@ -196,7 +213,7 @@ impl CpuCellHandoffs {
                  SET phase='draining', source_process=$3, candidate_processes=$4
                  WHERE handoff_id=$1 AND source=$2
                    AND (phase='requested' OR (phase='draining' AND source_process=$3 AND candidate_processes=$4))", self.table))
-            .bind(id).bind(source).bind(process).bind(candidates.as_slice()).execute(&mut *tx).await?;
+            .bind(id).bind(source).bind(process).bind(candidates.to_vec()).execute(&mut *tx).await?;
         ensure!(
             result.rows_affected() == 1,
             "handoff is not awaiting this source's drain"
