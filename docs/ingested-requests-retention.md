@@ -8,6 +8,9 @@ Admission normalizes the SNS envelope sequence number and locks C with
 Completion and startup recovery take `FOR UPDATE` on C before journal writes,
 so admission cannot insert using a stale checkpoint. SQS receipt deletion
 follows successful commit.
+Admission has a 30-second overall deadline and a transaction-local statement
+timeout that preserves any shorter database limit. Timeout leaves the receipt
+unacknowledged and follows the existing ingest error path.
 
 - Above C, admission preserves primary-key deduplication.
 - At or below C, a retained key confirms an existing journal delivery and is
