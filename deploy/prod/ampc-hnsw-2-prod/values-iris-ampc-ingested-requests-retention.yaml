@@ -1,0 +1,23 @@
+env:
+  RUST_LOG: "info"
+  RETENTION__DB_SCHEMA: "SMPC_rerand_genesis_restored_v2_prod_2"
+  RETENTION__PARTY: "2"
+  RETENTION__SERVICE__SERVICE_NAME: "retention-reaper-ingested-requests-steady-2"
+  RETENTION__SERVICE__METRICS__PORT: "8125"
+  RETENTION__SERVICE__METRICS__QUEUE_SIZE: "5000"
+  RETENTION__SERVICE__METRICS__BUFFER_SIZE: "256"
+  RETENTION__SERVICE__METRICS__PREFIX: "retention-reaper-ingested-requests-steady-2"
+  RETENTION__DB_URL:
+    valueFrom:
+      secretKeyRef:
+        name: application
+        key: DATABASE_AURORA_HNSW_URL
+  RETENTION__SERVICE__METRICS__HOST:
+    valueFrom:
+      fieldRef:
+        fieldPath: status.hostIP
+
+attachSecurityGroupPolicy:
+  enabled: true
+  groupIds:
+    - sg-031140954c05d1255

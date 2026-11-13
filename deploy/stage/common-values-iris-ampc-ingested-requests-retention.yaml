@@ -1,0 +1,42 @@
+# Provisional 30-day policy; activation requires POP-4496 approval and POP-4534 validation.
+image: "ghcr.io/worldcoin/retention-reaper:530e70eb253b1787dc4bfeddbf70d427018298e4@sha256:3bddbd9e9e3e9ceb501a62d8031ced9ead2a48c2ffae05826e11b9e94e080909"
+environment: stage
+suspend: true
+schedule: "30 4 * * *"
+concurrencyPolicy: Forbid
+backoffLimit: 0
+restartPolicy: Never
+# common-cronjob 1.11.0 has no Job deadline field; bound the active process instead.
+command: ["/usr/bin/timeout", "--signal=TERM", "--kill-after=30s", "1800s", "/bin/retention-reaper"]
+
+env:
+  RETENTION__ENABLED: "true"
+  RETENTION__DRY_RUN: "true"
+  RETENTION__STATEMENT_TIMEOUT_SECS: "30"
+  RETENTION_JOBS: >-
+    [{"table":"ingested_requests",
+    "ts_column":"persisted_at",
+    "retention":"30 days",
+    "guard":"persisted_at IS NOT NULL
+    AND is_valid IS TRUE
+    AND sequence_number ~ '^[0-9]{40}$'
+    AND sequence_number COLLATE \"C\" <= (SELECT CASE WHEN jsonb_typeof(\"value\") = 'string'
+    AND (\"value\" #>> '{}') ~ '^[0-9]{40}$'
+    AND (\"value\" #>> '{}') COLLATE \"C\" <= '0340282366920938463463374607431768211455' THEN \"value\" #>> '{}' END FROM persistent_state WHERE domain = 'db_ingest'
+    AND \"key\" = 'completed_sequence_number') COLLATE \"C\"",
+    "batch_size":2000,
+    "batch_pause_ms":250}]
+
+imagePullSecrets:
+  - name: github-secret
+
+resources:
+  limits:
+    cpu: "500m"
+    memory: 256Mi
+  requests:
+    cpu: "100m"
+    memory: 128Mi
+
+nodeSelector:
+  kubernetes.io/arch: amd64

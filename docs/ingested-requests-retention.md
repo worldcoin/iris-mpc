@@ -45,3 +45,33 @@ Deploy guarded admission to every writer before enabling journal deletion.
 After keys have been deleted, rolling back to unguarded admission can reprocess
 old requests; disabling further cleanup does not restore those keys.
 This change does not enable retention jobs.
+
+## Prepared steady-state jobs
+
+`iris-ampc-ingested-requests-retention` has separate stage/prod common values
+and per-party values on the `ampc-hnsw` clusters. Both environments start
+suspended and with `RETENTION__DRY_RUN=true`; the existing reset jobs stay
+suspended. Registration belongs in the corresponding cluster-apps catalogs,
+using `common-cronjob` 1.11.0 in namespace `ampc-hnsw`.
+
+The provisional grace is **30 days since `persisted_at`**, not receipt time.
+Only persisted rows with `is_valid IS TRUE`, a normalized 40-digit sequence,
+and sequence ≤ the local durable C qualify. Invalid or NULL validity and
+malformed/NULL sequences are retained for investigation. C must be a JSON
+string containing a normalized sequence within the u128 range; absent, NULL,
+or malformed C retains every row. Comparisons use fixed-width text with C
+collation and no numeric casts. The only target is `ingested_requests`;
+`cpu_cell_handoffs` is preserved.
+
+The daily 04:30 UTC schedule forbids overlap, uses 2,000-row batches with 250 ms
+pauses, and caps SQL statements at 30 seconds. The chart has no Job deadline
+field: verified image-provided GNU `timeout` sends TERM after 1,800 seconds and
+KILL after another 30 seconds. `restartPolicy: Never` and `backoffLimit: 0`
+prevent retries. Scheduling/image-pull delays are not covered by this process
+bound; a Pending job can block the next run under `Forbid` and needs operator
+attention. Disabling future runs does not cancel an existing Job.
+
+This is configuration preparation, not approval to activate. POP-4496 must
+approve grace and invalid-row policy; POP-4534 must validate guarded admission,
+queue ordering/replay constraints, all-party dry-run eligibility, resource
+impact, and monitoring before any unsuspend or destructive-mode change.
