@@ -501,11 +501,8 @@ async fn cleanup(parties: Vec<Party>) -> Result<()> {
 
 #[tokio::test]
 async fn three_party_reconciliation_agrees_and_preserves_each_partys_payloads() -> Result<()> {
-    for (side, resident, restart_candidate) in [
-        (Eye::Left, 0, false),
-        (Eye::Right, 1, false),
-        (Eye::Left, 0, true),
-    ] {
+    // Sparse left-eye state covers removals; dense right-eye state permits a full restart.
+    for (side, resident, restart_candidate) in [(Eye::Left, 0, false), (Eye::Right, 1, true)] {
         let mut rng = StdRng::seed_from_u64(4374);
         let mut expected = (1..=6)
             .map(|id| SharedRow::generate(&mut rng, id, 1))

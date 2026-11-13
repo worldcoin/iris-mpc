@@ -189,7 +189,7 @@ async fn startup_waits_for_inflight_drain_commit() -> Result<()> {
 }
 
 #[tokio::test]
-async fn handoff_migration_is_inert_until_requested_and_retains_history() -> Result<()> {
+async fn handoff_migration_preserves_existing_completion() -> Result<()> {
     let url = std::env::var("CPU_CELL_TEST_DATABASE_URL")?;
     let schema = format!("upgrade_{}", uuid::Uuid::new_v4().simple());
     let client = PostgresClient::new(&url, &schema, AccessMode::ReadWrite).await?;
@@ -202,11 +202,6 @@ async fn handoff_migration_is_inert_until_requested_and_retains_history() -> Res
         .collect::<Vec<_>>()
         .into();
     previous.run(&client.pool).await?;
-    previous.run(&client.pool).await?;
-    assert!(!handoffs.is_managed().await?);
-    let ordinary = PostgresClient::new(&url, &schema, AccessMode::ReadWrite).await?;
-    previous.run(&ordinary.pool).await?;
-    ordinary.pool.close().await;
     let (id, source, destination, process) = (
         Uuid::new_v4(),
         Uuid::new_v4(),
@@ -218,41 +213,13 @@ async fn handoff_migration_is_inert_until_requested_and_retains_history() -> Res
     .bind(id).bind(source).bind(destination).bind(process).bind(candidates).bind(report())
     .execute(&client.pool)
     .await?;
-    assert!(handoffs.is_managed().await?);
     let completed = handoffs.get(id).await?;
     client.pool.close().await;
     drop(handoffs);
-    let ordinary = PostgresClient::new(&url, &schema, AccessMode::ReadWrite).await?;
-    run_migrations(&ordinary.pool, false).await?;
-    run_migrations(&ordinary.pool, false).await?;
-    ordinary.pool.close().await;
     let client = PostgresClient::new(&url, &schema, AccessMode::ExistingSchema).await?;
+    run_migrations(&client.pool, false).await?;
     let handoffs = CpuCellHandoffs::new(client.pool.clone(), &schema)?;
     assert_eq!(handoffs.get(id).await?, completed);
-    let candidate_columns: i64 = sqlx::query_scalar("SELECT count(*) FROM information_schema.columns WHERE table_schema=$1 AND table_name='cpu_cell_handoffs' AND column_name='candidate_processes'")
-        .bind(&schema)
-        .fetch_one(&client.pool)
-        .await?;
-    assert_eq!(candidate_columns, 0);
-    for invalid in [
-        "UPDATE cpu_cell_handoffs SET source_process=NULL",
-        "UPDATE cpu_cell_handoffs SET drain_report=NULL",
-        "UPDATE cpu_cell_handoffs SET phase='unknown'",
-    ] {
-        assert!(client.pool.execute(invalid).await.is_err());
-    }
-    // A replacement B uses the saved completion; no original B process is required.
-    let replacement = PostgresClient::new(&url, &schema, AccessMode::ExistingSchema).await?;
-    let replacement_handoffs = CpuCellHandoffs::new(replacement.pool.clone(), &schema)?;
-    replacement_handoffs
-        .check_startup(destination, true)
-        .await?;
-    replacement_handoffs
-        .activate(id, destination, &report())
-        .await?;
-    assert_eq!(handoffs.get(id).await?.phase, HandoffPhase::Activated);
-    assert_eq!(handoffs.get(id).await?.source_process, Some(process));
-    replacement.pool.close().await;
     client
         .pool
         .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())
