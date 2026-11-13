@@ -10,7 +10,6 @@ struct Fixture {
     source: Uuid,
     destination: Uuid,
     process: Uuid,
-    candidates: [Uuid; 3],
 }
 
 impl Fixture {
@@ -35,7 +34,6 @@ impl Fixture {
             source: Uuid::new_v4(),
             destination: Uuid::new_v4(),
             process: Uuid::new_v4(),
-            candidates: std::array::from_fn(|_| Uuid::new_v4()),
         })
     }
     async fn request(&self) -> Result<()> {
@@ -45,7 +43,7 @@ impl Fixture {
     }
     async fn drain(&self) -> Result<()> {
         self.db
-            .record_drain_start(self.id, self.source, self.process, &self.candidates)
+            .record_drain_start(self.id, self.source, self.process)
             .await
     }
     async fn cleanup(self) -> Result<()> {
@@ -76,7 +74,12 @@ async fn handoff_transitions_preserve_exact_report_and_history() -> Result<()> {
     assert!(f.db.check_startup(f.destination, false).await.is_err());
     assert!(f
         .db
-        .record_drain_start(f.id, f.source, Uuid::new_v4(), &f.candidates)
+        .record_drain_start(f.id, f.source, Uuid::new_v4())
+        .await
+        .is_err());
+    assert!(f
+        .db
+        .record_drain_completion(f.id, f.source, Uuid::new_v4(), &report())
         .await
         .is_err());
     f.db.record_drain_completion(f.id, f.source, f.process, &report())
@@ -89,20 +92,11 @@ async fn handoff_transitions_preserve_exact_report_and_history() -> Result<()> {
         .is_err());
     assert!(f
         .db
-        .activate(f.id, f.destination, &f.candidates, &different)
+        .activate(f.id, f.destination, &different)
         .await
         .is_err());
-    let mut replaced = f.candidates;
-    replaced[0] = Uuid::new_v4();
-    assert!(f
-        .db
-        .activate(f.id, f.destination, &replaced, &report())
-        .await
-        .is_err());
-    f.db.activate(f.id, f.destination, &f.candidates, &report())
-        .await?;
-    f.db.activate(f.id, f.destination, &f.candidates, &report())
-        .await?;
+    f.db.activate(f.id, f.destination, &report()).await?;
+    f.db.activate(f.id, f.destination, &report()).await?;
     f.db.record_drain_completion(f.id, f.source, f.process, &report())
         .await?;
     assert_eq!(f.db.get(f.id).await?.phase, HandoffPhase::Activated);
@@ -114,11 +108,7 @@ async fn handoff_transitions_preserve_exact_report_and_history() -> Result<()> {
         .is_err());
     f.db.request(Uuid::new_v4(), f.destination, Uuid::new_v4())
         .await?;
-    assert!(f
-        .db
-        .activate(f.id, f.destination, &f.candidates, &report())
-        .await
-        .is_err());
+    assert!(f.db.activate(f.id, f.destination, &report()).await.is_err());
     f.request().await?; // An old deployment retry cannot reset the table.
     assert_eq!(f.db.get(f.id).await?.drain_report, Some(report()));
     assert!(f.db.check_startup(f.source, false).await.is_err());
@@ -161,8 +151,7 @@ async fn startup_denies_restarted_source_but_keeps_existing_connections_usable()
         .await?;
     f.db.check_startup(f.destination, true).await?;
     assert!(f.db.check_startup(f.destination, false).await.is_err());
-    f.db.activate(f.id, f.destination, &f.candidates, &report())
-        .await?;
+    f.db.activate(f.id, f.destination, &report()).await?;
     assert!(f.db.check_startup(f.destination, true).await.is_err());
     f.db.check_startup(f.destination, false).await?;
     assert!(f.db.check_startup(f.source, false).await.is_err());
@@ -175,8 +164,14 @@ async fn startup_waits_for_inflight_drain_commit() -> Result<()> {
     let f = Fixture::new().await?;
     f.request().await?;
     let mut tx = f.db.pool.begin().await?;
-    sqlx::query(&format!("UPDATE {} SET phase='draining', source_process=$1, candidate_processes=$2 WHERE handoff_id=$3", f.db.table))
-        .bind(f.process).bind(f.candidates.as_slice()).bind(f.id).execute(&mut *tx).await?;
+    sqlx::query(&format!(
+        "UPDATE {} SET phase='draining', source_process=$1 WHERE handoff_id=$2",
+        f.db.table
+    ))
+    .bind(f.process)
+    .bind(f.id)
+    .execute(&mut *tx)
+    .await?;
     let handoffs = f.db.clone();
     let source = f.source;
     let check = tokio::spawn(async move { handoffs.check_startup(source, false).await });
@@ -199,28 +194,65 @@ async fn handoff_migration_is_inert_until_requested_and_retains_history() -> Res
     let schema = format!("upgrade_{}", uuid::Uuid::new_v4().simple());
     let client = PostgresClient::new(&url, &schema, AccessMode::ReadWrite).await?;
     let handoffs = CpuCellHandoffs::new(client.pool.clone(), &schema)?;
-    run_migrations(&client.pool, false).await?;
-    run_migrations(&client.pool, false).await?;
+    let mut previous = sqlx::migrate!("./../migrations");
+    previous.migrations = previous
+        .iter()
+        .filter(|migration| migration.version < 20261113000000)
+        .cloned()
+        .collect::<Vec<_>>()
+        .into();
+    previous.run(&client.pool).await?;
+    previous.run(&client.pool).await?;
     assert!(!handoffs.is_managed().await?);
     let ordinary = PostgresClient::new(&url, &schema, AccessMode::ReadWrite).await?;
-    run_migrations(&ordinary.pool, false).await?;
+    previous.run(&ordinary.pool).await?;
     ordinary.pool.close().await;
-    sqlx::query(
-        "INSERT INTO cpu_cell_handoffs (handoff_id, source, destination) VALUES ($1,$2,$3)",
-    )
-    .bind(uuid::Uuid::new_v4())
-    .bind(uuid::Uuid::new_v4())
-    .bind(uuid::Uuid::new_v4())
+    let (id, source, destination, process) = (
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+        Uuid::new_v4(),
+    );
+    let candidates: Vec<_> = (0..3).map(|_| Uuid::new_v4()).collect();
+    sqlx::query("INSERT INTO cpu_cell_handoffs (handoff_id, source, destination, phase, source_process, candidate_processes, drain_report) VALUES ($1,$2,$3,'drained',$4,$5,$6)")
+    .bind(id).bind(source).bind(destination).bind(process).bind(candidates).bind(report())
     .execute(&client.pool)
     .await?;
     assert!(handoffs.is_managed().await?);
+    let completed = handoffs.get(id).await?;
+    client.pool.close().await;
+    drop(handoffs);
     let ordinary = PostgresClient::new(&url, &schema, AccessMode::ReadWrite).await?;
     run_migrations(&ordinary.pool, false).await?;
+    run_migrations(&ordinary.pool, false).await?;
     ordinary.pool.close().await;
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM cpu_cell_handoffs")
+    let client = PostgresClient::new(&url, &schema, AccessMode::ExistingSchema).await?;
+    let handoffs = CpuCellHandoffs::new(client.pool.clone(), &schema)?;
+    assert_eq!(handoffs.get(id).await?, completed);
+    let candidate_columns: i64 = sqlx::query_scalar("SELECT count(*) FROM information_schema.columns WHERE table_schema=$1 AND table_name='cpu_cell_handoffs' AND column_name='candidate_processes'")
+        .bind(&schema)
         .fetch_one(&client.pool)
         .await?;
-    assert_eq!(count, 1);
+    assert_eq!(candidate_columns, 0);
+    for invalid in [
+        "UPDATE cpu_cell_handoffs SET source_process=NULL",
+        "UPDATE cpu_cell_handoffs SET drain_report=NULL",
+        "UPDATE cpu_cell_handoffs SET phase='unknown'",
+    ] {
+        assert!(client.pool.execute(invalid).await.is_err());
+    }
+    // A replacement B uses the saved completion; no original B process is required.
+    let replacement = PostgresClient::new(&url, &schema, AccessMode::ExistingSchema).await?;
+    let replacement_handoffs = CpuCellHandoffs::new(replacement.pool.clone(), &schema)?;
+    replacement_handoffs
+        .check_startup(destination, true)
+        .await?;
+    replacement_handoffs
+        .activate(id, destination, &report())
+        .await?;
+    assert_eq!(handoffs.get(id).await?.phase, HandoffPhase::Activated);
+    assert_eq!(handoffs.get(id).await?.source_process, Some(process));
+    replacement.pool.close().await;
     client
         .pool
         .execute(format!("DROP SCHEMA {schema} CASCADE").as_str())

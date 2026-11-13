@@ -179,7 +179,7 @@ pub(super) async fn preload(
     preload_with_coordinator(config, shutdown, process_id, None).await
 }
 
-async fn preload_with_coordinator(
+pub(super) async fn preload_with_coordinator(
     config: &Config,
     shutdown: Arc<ShutdownHandler>,
     process_id: Uuid,

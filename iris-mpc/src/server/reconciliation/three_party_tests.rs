@@ -98,17 +98,13 @@ async fn preload_parties(rows: &[SharedRow], side: Eye) -> Result<Vec<Party>> {
     Ok(parties)
 }
 
-fn common_context(parties: &[Party]) -> Result<ReconciliationContext> {
-    ReconciliationContext::new(
-        Uuid::new_v4(),
-        std::array::from_fn(|_| Uuid::new_v4()),
-        std::array::from_fn(|party| parties[party].candidate.registry.process_id()),
-        Some(normalize_sns_sequence_number("42")?),
-    )
+fn common_context() -> Result<ReconciliationContext> {
+    ReconciliationContext::new(Uuid::new_v4(), Some(normalize_sns_sequence_number("42")?))
 }
 
 async fn coordinate_drain_and_reconcile_candidates(
-    parties: &mut [Party],
+    parties: &mut Vec<Party>,
+    restart_candidate: bool,
 ) -> Result<ReconciliationContext> {
     let (drains, tasks) = drain::tests::cohort(Duration::from_secs(30)).await;
     let (id, source, destination) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
@@ -119,6 +115,7 @@ async fn coordinate_drain_and_reconcile_candidates(
         source_listeners.push(tokio::net::TcpListener::bind("127.0.0.1:0").await?);
         candidate_listeners.push(tokio::net::TcpListener::bind("127.0.0.1:0").await?);
     }
+    let replacement_address = candidate_listeners[2].local_addr()?;
     let source_urls: [String; 3] = std::array::from_fn(|i| {
         format!(
             "http://{}/handoff-status",
@@ -133,6 +130,7 @@ async fn coordinate_drain_and_reconcile_candidates(
     });
     let mut source_coordinators = Vec::new();
     let mut candidate_coordinators = Vec::new();
+    let mut candidate_configs = Vec::new();
     let mut source_tasks = Vec::new();
     let mut candidate_tasks = Vec::new();
     for (i, ((party, source_listener), candidate_listener)) in parties
@@ -189,6 +187,7 @@ async fn coordinate_drain_and_reconcile_candidates(
             axum::serve(candidate_listener, router).await.unwrap();
         }));
         candidate_coordinators.push(candidate_coordinator);
+        candidate_configs.push(config);
     }
     let mut controls = Vec::new();
     let mut source_handoffs = Vec::new();
@@ -255,14 +254,6 @@ async fn coordinate_drain_and_reconcile_candidates(
         candidates[2],
     )
     .await?;
-    // The acknowledgement regression has already initiated source 0's drain.
-    for (coordinator, handoffs) in source_coordinators.into_iter().zip(source_handoffs).skip(1) {
-        source_tasks.push(tokio::spawn(async move {
-            coordinator
-                .run_source(handoffs, Arc::new(ShutdownHandler::new(0)))
-                .await;
-        }));
-    }
     drain::tests::until(|| drains.iter().all(|drain| drain.ready_to_report())).await;
     for (i, (party, drain)) in parties.iter().zip(&drains).enumerate() {
         assert_eq!(drain.status().cut, Some(0));
@@ -308,7 +299,6 @@ async fn coordinate_drain_and_reconcile_candidates(
             saved.source_process,
             Some(Uuid::parse_str(&drain.status().process_uuid)?)
         );
-        assert_eq!(saved.candidate_processes, Some(candidates.to_vec()));
         assert!(reopened_handoffs
             .check_startup(source, false)
             .await
@@ -385,25 +375,90 @@ async fn coordinate_drain_and_reconcile_candidates(
     let contexts = contexts?;
     assert!(started.elapsed() >= Duration::from_secs(9));
     assert!(contexts.iter().all(|context| context == &contexts[0]));
-    for task in candidate_tasks {
+    if restart_candidate {
+        let task = candidate_tasks.pop().unwrap();
         task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        drop(candidate_coordinators.pop().unwrap());
+        let Party {
+            config,
+            writer,
+            candidate,
+        } = parties.pop().unwrap();
+        let old_process = candidate.registry.process_id();
+        assert!(candidate.report_for(&contexts[2]).is_some());
+        drop(candidate);
+
+        let process = Uuid::new_v4();
+        let coordinator = Coordinator::new(&candidate_configs[2], process, None)?.unwrap();
+        let listener = tokio::net::TcpListener::bind(replacement_address).await?;
+        let router = coordinator.routes();
+        candidate_tasks.push(tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        }));
+        let status: serde_json::Value = client.get(&candidate_urls[2]).send().await?.json().await?;
+        assert_eq!(status["ready"], false);
+        assert!(status["completion"].is_null());
+        assert!(status["reconciliation"].is_null());
+
+        // Full startup reloads this party while A is gone and B0/B1 retain their reports.
+        let mut restart_config = candidate_configs[2].clone();
+        restart_config.schema_name = config.schema_name.clone();
+        let mut candidate = super::super::candidate::preload_with_coordinator(
+            &restart_config,
+            Arc::new(ShutdownHandler::new(0)),
+            process,
+            Some(&coordinator),
+        )
+        .await?;
+        assert_ne!(candidate.registry.process_id(), old_process);
+        assert!(candidate.report_for(&contexts[2]).is_none());
+        let reader = PostgresClient::new(
+            &config.database.as_ref().unwrap().url,
+            &config.get_gpu_db_schema(),
+            AccessMode::EnforcedReadOnly,
+        )
+        .await?;
+        let store = Store::new(&reader).await?;
+        let handoffs = CpuCellHandoffs::new(reader.pool.clone(), &config.get_gpu_db_schema())?;
+        coordinator.mark_ready(process).await;
+        let context = coordinator
+            .reconcile_candidate(&handoffs, &store, &mut candidate, Duration::from_secs(8))
+            .await?;
+        assert_eq!(context, contexts[2]);
+        assert_eq!(
+            candidate.report_for(&context).unwrap().process_id(),
+            process
+        );
+        let pending: bool = sqlx::query_scalar(
+            "SELECT persisted_at IS NULL FROM ingested_requests WHERE sequence_number=$1",
+        )
+        .bind(normalize_sns_sequence_number("100")?)
+        .fetch_one(&reader.pool)
+        .await?;
+        assert!(
+            pending,
+            "candidate restart must preserve pending-above-C work"
+        );
+        reader.pool.close().await;
+        parties.push(Party {
+            config,
+            writer,
+            candidate,
+        });
+    }
+    for task in &candidate_tasks {
+        task.abort();
+    }
+    for task in candidate_tasks {
+        assert!(task.await.unwrap_err().is_cancelled());
     }
     assert!(reports.iter().all(|report| report == &reports[0]));
     assert_eq!(
         reports[0].watermark,
         Some(normalize_sns_sequence_number("42")?)
     );
-    let expected = ReconciliationContext::new(
-        records[0].handoff_id,
-        std::array::from_fn(|i| records[i].source_process.unwrap()),
-        records[0]
-            .candidate_processes
-            .clone()
-            .unwrap()
-            .try_into()
-            .unwrap(),
-        reports[0].watermark.clone(),
-    )?;
+    let expected = ReconciliationContext::new(records[0].handoff_id, reports[0].watermark.clone())?;
     assert_eq!(contexts[0], expected);
     Ok(expected)
 }
@@ -446,7 +501,11 @@ async fn cleanup(parties: Vec<Party>) -> Result<()> {
 
 #[tokio::test]
 async fn three_party_reconciliation_agrees_and_preserves_each_partys_payloads() -> Result<()> {
-    for (side, resident) in [(Eye::Left, 0), (Eye::Right, 1)] {
+    for (side, resident, restart_candidate) in [
+        (Eye::Left, 0, false),
+        (Eye::Right, 1, false),
+        (Eye::Left, 0, true),
+    ] {
         let mut rng = StdRng::seed_from_u64(4374);
         let mut expected = (1..=6)
             .map(|id| SharedRow::generate(&mut rng, id, 1))
@@ -474,9 +533,11 @@ async fn three_party_reconciliation_agrees_and_preserves_each_partys_payloads() 
         }
         let inserted = SharedRow::generate(&mut rng, 7, 0);
         for (party_id, party) in parties.iter().enumerate() {
-            sqlx::query("DELETE FROM irises WHERE id IN (2, 6)")
-                .execute(&party.writer.pool)
-                .await?;
+            if !restart_candidate {
+                sqlx::query("DELETE FROM irises WHERE id IN (2, 6)")
+                    .execute(&party.writer.pool)
+                    .await?;
+            }
             inserted.write(&party.writer, party_id).await?;
             for registry in &party.candidate.workers.registries {
                 let registry = registry.read().await;
@@ -485,11 +546,14 @@ async fn three_party_reconciliation_agrees_and_preserves_each_partys_payloads() 
                 assert_eq!(registry.get_current_version(7), None);
             }
         }
-        expected.retain(|row| ![2, 6].contains(&row.id.serial_id()));
+        if !restart_candidate {
+            expected.retain(|row| ![2, 6].contains(&row.id.serial_id()));
+        }
         expected.push(inserted);
 
         // Queue intake/publication are outside this fixture; its simulated writers stop here.
-        let context = coordinate_drain_and_reconcile_candidates(&mut parties).await?;
+        let context =
+            coordinate_drain_and_reconcile_candidates(&mut parties, restart_candidate).await?;
         let reports: [ReconciliationReport; 3] =
             std::array::from_fn(|i| parties[i].candidate.report_for(&context).unwrap().clone());
         ReconciliationReport::verify_agreement(&context, &reports)?;
@@ -497,10 +561,13 @@ async fn three_party_reconciliation_agrees_and_preserves_each_partys_payloads() 
             let candidate = &party.candidate;
             assert_eq!(candidate.report_for(&context), Some(&reports[party_id]));
             assert_eq!(reports[party_id].registry_count, expected.len() as u64);
-            assert!(Arc::ptr_eq(
-                &resident_pools[party_id],
-                &candidate.workers.pools[resident]
-            ));
+            assert_eq!(
+                Arc::ptr_eq(
+                    &resident_pools[party_id],
+                    &candidate.workers.pools[resident]
+                ),
+                !restart_candidate || party_id != 2,
+            );
             for registry in &candidate.workers.registries {
                 let registry = registry.read().await;
                 assert_eq!(registry.size, expected.len());
@@ -511,11 +578,13 @@ async fn three_party_reconciliation_agrees_and_preserves_each_partys_payloads() 
                         Some(row.id.version_id())
                     );
                 }
-                for removed in [2, 6] {
-                    assert_eq!(registry.get_current_version(removed), None);
+                if !restart_candidate {
+                    for removed in [2, 6] {
+                        assert_eq!(registry.get_current_version(removed), None);
+                    }
                 }
             }
-            // The cold LUC contains 5 and 7; older rows exercise sparse DB reads.
+            // Rows outside the cold LUC exercise database reads.
             for (eye, pool) in candidate.workers.pools.iter().enumerate() {
                 let fetched = pool
                     .fetch_irises(expected.iter().map(|row| row.id).collect())
@@ -525,26 +594,30 @@ async fn three_party_reconciliation_agrees_and_preserves_each_partys_payloads() 
                     assert_eq!(actual.as_ref(), &row.eyes[eye][party_id]);
                 }
             }
-            for stale in [
+            let mut stale_ids = vec![
                 VectorId::new(1, 1),
                 VectorId::new(4, 1),
                 VectorId::new(5, 1),
-                VectorId::new(2, 1),
-                VectorId::new(6, 1),
-            ] {
+            ];
+            if !restart_candidate {
+                stale_ids.extend([VectorId::new(2, 1), VectorId::new(6, 1)]);
+            }
+            for stale in stale_ids {
                 assert!(candidate.workers.pools[1 - resident]
                     .fetch_irises(vec![stale])
                     .await
                     .is_err());
             }
-            let empty = resident_pools[party_id]
-                .fetch_irises(vec![VectorId::new(8, 0)])
-                .await?;
-            for removed in [2, 6] {
-                let fetched = resident_pools[party_id]
-                    .fetch_irises(vec![VectorId::new(removed, 1)])
+            if !restart_candidate {
+                let empty = resident_pools[party_id]
+                    .fetch_irises(vec![VectorId::new(8, 0)])
                     .await?;
-                assert_eq!(fetched[0], empty[0]);
+                for removed in [2, 6] {
+                    let fetched = resident_pools[party_id]
+                        .fetch_irises(vec![VectorId::new(removed, 1)])
+                        .await?;
+                    assert_eq!(fetched[0], empty[0]);
+                }
             }
         }
         cleanup(parties).await?;
@@ -563,7 +636,7 @@ async fn three_party_reconciliation_rejects_real_divergent_metadata() -> Result<
     SharedRow::generate(&mut rng, 1, 2)
         .write(&parties[2].writer, 2)
         .await?;
-    let context = common_context(&parties)?;
+    let context = common_context()?;
     let reports = reconcile_parties(&mut parties, &context).await?;
     assert!(reports.iter().all(|report| report.registry_count == 3));
     assert_eq!(reports[0].registry_digest, reports[1].registry_digest);

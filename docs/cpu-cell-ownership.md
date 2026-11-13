@@ -13,7 +13,7 @@ cold recovery are [POP-4377](https://linear.app/worldcoin/issue/POP-4377) and
 ## Record and transitions
 
 `cpu_cell_handoffs` has one row per handoff: its ID, source/destination deployment
-IDs, phase, current source/candidate process IDs and the completed drain report.
+IDs, phase, the draining source process ID and the completed drain report.
 Deployment IDs are unique releases, not reusable A/B slot labels. Retain history.
 
 | Local phase | Meaning |
@@ -48,6 +48,15 @@ configuration, an empty table preserves ordinary startup. Configured A binds its
 managed drain before the first request exists. Migrations alone do not start a
 handoff or require an operator to access production Postgres.
 
+The [follow-up migration](../migrations/20261113000000_cpu_cell_remove_candidate_processes.sql)
+removes the original candidate-process binding while preserving progress and
+completion. Handoff protocol 2 accompanies this schema change. Stop old
+participating binaries and use a coordinated cold upgrade with no handoff in
+flight before applying it: protocol 1 binaries still reference the removed
+column, and startup migrations run before peer compatibility checks. Enable
+warm handoff only after every party runs the compatible release. Downgrading
+to the old handoff implementation after this migration is unsupported.
+
 The runtime coordinator records the intended handoff from
 deployment configuration, using the service's existing database connection.
 POP-4377 supplies that configuration through the existing party-owned deployment
@@ -78,10 +87,14 @@ preload. Freeze further schema changes until handoff finishes; incompatible
 changes require a coordinated cold deployment. The standalone migrator remains
 available through the existing deployment workflow.
 
-Before recording a request, B verifies all three current A processes expose the
+Before recording a new request, B verifies all three current A processes expose the
 compatible handoff protocol and are serving without a drain already requested.
-Each A then waits for all B preloads and the same six-process cohort before
-initiating its managed drain once. A request alone does not stop intake.
+For an existing matching request, B resumes from the database without contacting A.
+Each A verifies loaded candidates and publishes an in-memory `preflight_verified`
+flag for the handoff. The first seal requires all three flags and no reported
+errors. Flags reset on restart, changed intent or failed checks. Once an A has
+sealed the same handoff, the remaining A processes finish draining even if B is
+reloading. A request alone does not stop intake.
 Deployment must also stop ordinary alternate writers: a row cannot revoke an
 already-open legacy connection. Keep automatic handoff disabled until deployment
 and cold recovery are tested.
@@ -124,9 +137,19 @@ deployments stopped.
 
 ## Interrupted handoff
 
-Failed preload leaves A serving. After drain-start, mismatched/missing reports,
-process replacement or uncertain effects stop progress. No timeout resumes A.
-A fresh B cannot inherit its predecessor's reconciliation or activation.
+Failed preload leaves A serving before the first seal. A replacement B starts
+without readiness or reports, reads the existing request, loads canonical state
+and reconciles again. It can agree with already-reconciled B peers while writers
+remain paused, even after A exits. Reconciliation context is the handoff and C;
+each report identifies its own process and is checked against its live status.
+No original B process list is stored in the handoff record.
+
+Existing preload and agreement deadlines remain bounded. A reload exceeding
+another peer's remaining agreement budget can require restarting that failed
+candidate too. Fresh preload retains the normal loader's dense-ID requirement.
+Missing/mismatched reports, an A restart during drain or uncertain effects still
+stop progress. No timeout resumes A. A fresh B cannot inherit reconciliation or
+activation; recovery after partial activation remains POP-4378.
 
 After all three parties record activation, the same destination deployment can
 use existing coordinated cold startup: stop/fence all old processes, configure

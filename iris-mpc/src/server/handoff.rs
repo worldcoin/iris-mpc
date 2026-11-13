@@ -22,8 +22,8 @@ use tokio::{
 };
 use uuid::Uuid;
 
-// This version requires claimed-sequence batch hashes and durable-C drain reports.
-const PROTOCOL: u32 = 1;
+// Durable-C reports and handoff-scoped preflight acknowledgements.
+const PROTOCOL: u32 = 2;
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
@@ -33,14 +33,6 @@ struct Intent {
     id: Uuid,
     source: Uuid,
     destination: Uuid,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Completion {
-    source_process: Uuid,
-    candidate_processes: [Uuid; 3],
-    report: drain::Report,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -54,10 +46,9 @@ struct Status {
     common_config: [u8; 32],
     ready: bool,
     intent: Option<Intent>,
-    source_processes: Option<[Uuid; 3]>,
-    candidate_processes: Option<[Uuid; 3]>,
+    preflight_verified: bool,
     drain: Option<drain::Status>,
-    completion: Option<Completion>,
+    completion: Option<drain::Report>,
     reconciliation: Option<ReconciliationReport>,
     error: Option<String>,
 }
@@ -168,8 +159,7 @@ impl Coordinator {
                 ))?),
                 ready: false,
                 intent,
-                source_processes: None,
-                candidate_processes: None,
+                preflight_verified: false,
                 drain: None,
                 completion: None,
                 reconciliation: None,
@@ -280,8 +270,21 @@ impl Coordinator {
             .intent
             .as_ref()
             .ok_or_else(|| eyre!("missing candidate intent"))?;
+        if let Some(record) = handoffs.latest().await? {
+            if record.handoff_id == intent.id {
+                ensure!(
+                    record.source == intent.source && record.destination == intent.destination,
+                    "durable handoff intent changed"
+                );
+                ensure!(
+                    record.phase != HandoffPhase::Activated,
+                    "candidate handoff already activated"
+                );
+                return Ok(());
+            }
+        }
         let deadline = Instant::now() + PREFLIGHT_TIMEOUT;
-        let peers = loop {
+        loop {
             let peers = self
                 .wait_peers(&self.source_urls, StartupMode::Active, deadline)
                 .await?;
@@ -293,14 +296,12 @@ impl Coordinator {
                 "source is not participating and eligible for this handoff"
             );
             if peers.iter().all(|peer| peer.ready) {
-                break peers;
+                break;
             }
             timeout_at(deadline, sleep(POLL_INTERVAL))
                 .await
                 .wrap_err("source readiness deadline exceeded")?;
-        };
-        self.status.write().await.source_processes =
-            Some(std::array::from_fn(|i| peers[i].process));
+        }
         handoffs
             .request(intent.id, intent.source, intent.destination)
             .await
@@ -323,69 +324,63 @@ impl Coordinator {
             source: record.source,
             destination: record.destination,
         };
-        self.status.write().await.intent = Some(intent.clone());
+        {
+            let mut status = self.status.write().await;
+            if status.intent.as_ref() != Some(&intent) {
+                status.preflight_verified = false;
+            }
+            status.intent = Some(intent.clone());
+        }
         let sources = self.peers(&self.source_urls, StartupMode::Active).await?;
-        let candidates = self
-            .peers(&self.candidate_urls, StartupMode::Candidate)
-            .await?;
-        let source_processes = std::array::from_fn(|i| sources[i].process);
-        let candidate_processes = std::array::from_fn(|i| candidates[i].process);
         ensure!(
             sources.iter().all(|p| p.deployment == intent.source)
-                && source_processes[own.party_id] == own.process,
+                && sources[own.party_id].process == own.process,
             "source deployment or process changed"
         );
-        ensure!(
-            candidates.iter().all(|p| p.deployment == intent.destination
-                && p.intent.as_ref() == Some(&intent)
-                && p.source_processes == Some(source_processes)
-                && p.error.is_none()),
-            "candidate intent or source processes changed"
-        );
-        if !sources.iter().all(|p| p.ready) || !candidates.iter().all(|p| p.ready) {
-            return Ok(false);
-        }
-        ensure!(
-            source_processes
-                .iter()
-                .all(|id| !candidate_processes.contains(id)),
-            "source and candidate processes overlap"
-        );
+        let mut started = false;
         for source in &sources {
-            let status = source
+            let drain = source
                 .drain
                 .as_ref()
                 .ok_or_else(|| eyre!("missing source drain eligibility"))?;
             ensure!(
-                status.error.is_none() && status.blocked_reason.is_none(),
+                drain.error.is_none() && drain.blocked_reason.is_none(),
                 "source is not drain-eligible"
             );
-            if status.requested {
+            if drain.requested {
                 ensure!(
-                    source.intent.as_ref() == Some(&intent)
-                        && source.source_processes == Some(source_processes)
-                        && source.candidate_processes == Some(candidate_processes),
+                    source.intent.as_ref() == Some(&intent),
                     "source is draining another handoff"
                 );
+                started = true;
             }
         }
-        {
-            let mut status = self.status.write().await;
-            status.source_processes = Some(source_processes);
-            status.candidate_processes = Some(candidate_processes);
-        }
-        if !sources.iter().all(|p| {
-            p.intent.as_ref() == Some(&intent)
-                && p.source_processes == Some(source_processes)
-                && p.candidate_processes == Some(candidate_processes)
-                && p.error.is_none()
-        }) {
-            return Ok(false);
+        // Once a peer seals this handoff, finish draining even if B is reloading.
+        if !started {
+            let candidates = self
+                .peers(&self.candidate_urls, StartupMode::Candidate)
+                .await?;
+            ensure!(
+                candidates.iter().all(|p| p.deployment == intent.destination
+                    && p.intent.as_ref() == Some(&intent)
+                    && p.error.is_none()),
+                "candidate intent differs or candidate failed"
+            );
+            if !sources.iter().all(|p| p.ready) || !candidates.iter().all(|p| p.ready) {
+                self.status.write().await.preflight_verified = false;
+                return Ok(false);
+            }
+            self.status.write().await.preflight_verified = true;
+            if !sources.iter().all(|p| {
+                p.intent.as_ref() == Some(&intent) && p.preflight_verified && p.error.is_none()
+            }) {
+                return Ok(false);
+            }
         }
         self.drain
             .as_ref()
             .ok_or_else(|| eyre!("missing source drain"))?
-            .request_managed(intent.id, &candidate_processes)
+            .request_managed(intent.id)
             .await?;
         Ok(true)
     }
@@ -411,6 +406,7 @@ impl Coordinator {
                 Err(error) => {
                     let reason = format!("{error:#}");
                     let mut status = self.status.write().await;
+                    status.preflight_verified = false;
                     if status.error.as_ref() != Some(&reason) {
                         tracing::warn!(party_id = status.party_id, error = %reason, "CPU handoff coordination blocked");
                         status.error = Some(reason);
@@ -426,7 +422,7 @@ impl Coordinator {
         shutdown.wait_for_shutdown().await;
     }
 
-    async fn completion(&self, handoffs: &CpuCellHandoffs) -> Result<Option<Completion>> {
+    async fn completion(&self, handoffs: &CpuCellHandoffs) -> Result<Option<drain::Report>> {
         let own = self.status.read().await.clone();
         let intent = own
             .intent
@@ -440,57 +436,41 @@ impl Coordinator {
         if record.phase != HandoffPhase::Drained {
             return Ok(None);
         }
-        let source_processes = own
-            .source_processes
-            .ok_or_else(|| eyre!("source cohort was not verified"))?;
-        let candidates: [Uuid; 3] = record
-            .candidate_processes
-            .ok_or_else(|| eyre!("missing durable candidate cohort"))?
-            .try_into()
-            .map_err(|_| eyre!("invalid durable candidate cohort"))?;
-        ensure!(
-            record.source_process == Some(source_processes[own.party_id])
-                && candidates[own.party_id] == own.process,
-            "durable completion belongs to replaced processes"
-        );
-        Ok(Some(Completion {
-            source_process: source_processes[own.party_id],
-            candidate_processes: candidates,
-            report: serde_json::from_value(
-                record
-                    .drain_report
-                    .ok_or_else(|| eyre!("missing durable drain report"))?,
-            )?,
-        }))
+        Ok(Some(serde_json::from_value(
+            record
+                .drain_report
+                .ok_or_else(|| eyre!("missing durable drain report"))?,
+        )?))
     }
 
-    fn candidate_cohort(own: &Status, peers: &[Status; 3], completion: &Completion) -> Result<()> {
+    fn candidate_peers(own: &Status, peers: &[Status; 3]) -> Result<()> {
         ensure!(
-            peers.iter().enumerate().all(|(party, p)| p.process
-                == completion.candidate_processes[party]
+            peers.iter().all(|p| p.deployment == own.deployment
                 && p.intent == own.intent
-                && p.source_processes == own.source_processes
                 && p.error.is_none()),
-            "candidate processes or handoff changed"
+            "candidate handoff differs or candidate failed"
         );
+        for peer in peers {
+            if let Some(report) = &peer.reconciliation {
+                ensure!(
+                    report.process_id() == peer.process,
+                    "reconciliation belongs to another process"
+                );
+            }
+        }
         Ok(())
     }
 
-    fn completed_reports(own: &Status, peers: &[Status; 3], completion: &Completion) -> Result<()> {
-        Self::candidate_cohort(own, peers, completion)?;
-        let sources = own
-            .source_processes
-            .ok_or_else(|| eyre!("missing verified source cohort"))?;
+    fn completed_reports(
+        own: &Status,
+        peers: &[Status; 3],
+        completion: &drain::Report,
+    ) -> Result<()> {
+        Self::candidate_peers(own, peers)?;
         ensure!(
             peers
                 .iter()
-                .enumerate()
-                .all(|(party, p)| p
-                    .completion
-                    .as_ref()
-                    .is_some_and(|c| c.source_process == sources[party]
-                        && c.candidate_processes == completion.candidate_processes
-                        && c.report == completion.report)),
+                .all(|p| p.ready && p.completion.as_ref() == Some(completion)),
             "durable completed watermark or publication differs across parties"
         );
         Ok(())
@@ -507,12 +487,7 @@ impl Coordinator {
                     preflight_deadline,
                 )
                 .await?;
-            ensure!(
-                peers.iter().all(|p| p.intent == own.intent
-                    && (!p.ready || p.source_processes == own.source_processes)
-                    && p.error.is_none()),
-                "candidate preflight differs across parties"
-            );
+            Self::candidate_peers(&own, &peers)?;
             if peers.iter().all(|p| p.ready) {
                 break;
             }
@@ -542,27 +517,23 @@ impl Coordinator {
         };
         self.status.write().await.completion = Some(completion.clone());
         let own = self.status.read().await.clone();
-        let sources = own
-            .source_processes
-            .ok_or_else(|| eyre!("missing verified source cohort"))?;
+
         loop {
             let peers = self
                 .wait_peers(&self.candidate_urls, StartupMode::Candidate, deadline)
                 .await?;
-            if peers.iter().all(|p| p.completion.is_some()) {
+            if peers.iter().all(|p| p.ready && p.completion.is_some()) {
                 Self::completed_reports(&own, &peers, &completion)?;
                 break;
             }
-            Self::candidate_cohort(&own, &peers, &completion)?;
+            Self::candidate_peers(&own, &peers)?;
             timeout_at(deadline, sleep(POLL_INTERVAL)).await?;
         }
         let context = ReconciliationContext::new(
             own.intent
                 .ok_or_else(|| eyre!("missing handoff intent"))?
                 .id,
-            sources,
-            completion.candidate_processes,
-            completion.report.watermark.clone(),
+            completion.watermark.clone(),
         )?;
         let deadline = Instant::now() + budget;
         let report = candidate
@@ -574,7 +545,7 @@ impl Coordinator {
             let peers = self
                 .wait_peers(&self.candidate_urls, StartupMode::Candidate, deadline)
                 .await?;
-            Self::candidate_cohort(&*self.status.read().await, &peers, &completion)?;
+            Self::candidate_peers(&*self.status.read().await, &peers)?;
             if let [Some(a), Some(b), Some(c)] = peers.map(|p| p.reconciliation) {
                 ReconciliationReport::verify_agreement(&context, &[a, b, c])?;
                 return Ok(context);
@@ -610,12 +581,21 @@ pub(super) mod tests {
         for (source, handoff) in sources.iter().zip(handoffs) {
             assert!(!source.source_step(handoff).await?);
         }
+        sources[2].status.write().await.preflight_verified = false;
+        assert!(!sources[0].source_step(&handoffs[0]).await?);
+        assert!(!sources[0].drain.as_ref().unwrap().requested());
+        sources[2].status.write().await.preflight_verified = true;
         sources[2].status.write().await.error = Some("candidate peer unavailable".into());
         assert!(!sources[0].source_step(&handoffs[0]).await?);
         assert!(!sources[0].drain.as_ref().unwrap().requested());
         sources[2].status.write().await.error = None;
         assert!(sources[0].source_step(&handoffs[0]).await?);
         assert!(sources[0].drain.as_ref().unwrap().requested());
+        loading_candidate.status.write().await.ready = false;
+        for (source, handoff) in sources.iter().zip(handoffs).skip(1) {
+            assert!(source.source_step(handoff).await?);
+        }
+        loading_candidate.mark_ready(candidate_process).await;
         Ok(())
     }
 
@@ -631,8 +611,8 @@ pub(super) mod tests {
                 listeners[i].local_addr().unwrap()
             )
         });
-        let sources = std::array::from_fn(|_| Uuid::new_v4());
-        let candidates = std::array::from_fn(|_| Uuid::new_v4());
+        let source = Uuid::new_v4();
+        let candidates: [Uuid; 3] = std::array::from_fn(|_| Uuid::new_v4());
         let destination = Uuid::new_v4();
         let intent = Uuid::new_v4();
         let mut coordinators = Vec::new();
@@ -641,11 +621,10 @@ pub(super) mod tests {
             let config: Config = serde_json::from_value(serde_json::json!({
                 "party_id": party, "startup_mode": "candidate", "db_backed_ingest": true,
                 "cpu_cell": {"deployment_id": destination, "candidate_status_urls": serde_json::to_string(&addresses)?,
-                    "handoff": {"id": intent, "source_deployment_id": sources[0], "source_status_urls": serde_json::to_string(&addresses)?}}
+                    "handoff": {"id": intent, "source_deployment_id": source, "source_status_urls": serde_json::to_string(&addresses)?}}
             }))?;
             let coordinator = Coordinator::new(&config, candidates[party], None)?.unwrap();
             if party < 2 {
-                coordinator.status.write().await.source_processes = Some(sources);
                 coordinator.mark_ready(candidates[party]).await;
             }
             let router = coordinator.routes();
@@ -656,11 +635,10 @@ pub(super) mod tests {
         }
         let wait = coordinators[0].wait_candidates_loaded();
         tokio::pin!(wait);
-        // A peer still preparing has no source cohort yet; it must not fail fast B.
+        // A still-loading peer must not fail the other candidates.
         assert!(tokio::time::timeout(Duration::from_millis(50), &mut wait)
             .await
             .is_err());
-        coordinators[2].status.write().await.source_processes = Some(sources);
         coordinators[2].mark_ready(candidates[2]).await;
         tokio::time::timeout(Duration::from_secs(3), wait).await??;
         let mut peers: [Status; 3] = futures::future::join_all(
@@ -671,14 +649,10 @@ pub(super) mod tests {
         .await
         .try_into()
         .unwrap();
-        for (party, peer) in peers.iter_mut().enumerate() {
-            peer.completion = Some(Completion {
-                source_process: sources[party],
-                candidate_processes: candidates,
-                report: drain::Report {
-                    watermark: Some("42".into()),
-                    last_publication: None,
-                },
+        for peer in &mut peers {
+            peer.completion = Some(drain::Report {
+                watermark: Some("42".into()),
+                last_publication: None,
             });
         }
         let own = peers[0].clone();
@@ -688,11 +662,22 @@ pub(super) mod tests {
         peers[2].completion = None;
         assert!(Coordinator::completed_reports(&own, &peers, completion).is_err());
         peers[2] = original.clone();
-        peers[2].completion.as_mut().unwrap().report.watermark = Some("43".into());
+        peers[2].completion.as_mut().unwrap().watermark = Some("43".into());
         assert!(Coordinator::completed_reports(&own, &peers, completion).is_err());
         peers[2] = original;
         peers[2].process = Uuid::new_v4();
+        peers[2].ready = false;
+        peers[2].completion = None;
         assert!(Coordinator::completed_reports(&own, &peers, completion).is_err());
+        peers[2].ready = true;
+        peers[2].completion = Some(completion.clone());
+        Coordinator::completed_reports(&own, &peers, completion)?;
+        peers[2].reconciliation = Some(serde_json::from_value(serde_json::json!({
+            "context": {"attempt_id": intent, "watermark": null},
+            "party_id": 2, "process_id": candidates[2],
+            "registry_count": 0, "registry_digest": vec![0u8; 32],
+        }))?);
+        assert!(Coordinator::candidate_peers(&own, &peers).is_err());
         for task in tasks {
             task.abort();
         }

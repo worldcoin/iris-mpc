@@ -1502,11 +1502,8 @@ mod config_tests {
         let source = Uuid::parse_str(&config.cpu_cell.as_ref().unwrap().deployment_id)?;
         let destination = Uuid::new_v4();
         let process = Uuid::new_v4();
-        let candidates = std::array::from_fn(|_| Uuid::new_v4());
         handoffs.request(id, source, destination).await?;
-        handoffs
-            .record_drain_start(id, source, process, &candidates)
-            .await?;
+        handoffs.record_drain_start(id, source, process).await?;
         let tables_before: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relkind='r'").bind(&schema).fetch_one(&admin).await?;
         for mode in [StartupMode::Active, StartupMode::Candidate] {
             config.startup_mode = mode;
@@ -1520,9 +1517,7 @@ mod config_tests {
         handoffs
             .record_drain_completion(id, source, process, &report)
             .await?;
-        handoffs
-            .activate(id, destination, &candidates, &report)
-            .await?;
+        handoffs.activate(id, destination, &report).await?;
         config.startup_mode = StartupMode::Active;
         config.cpu_cell.as_mut().unwrap().deployment_id = destination.to_string();
         assert!(
