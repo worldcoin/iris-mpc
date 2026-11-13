@@ -22,7 +22,7 @@ use tokio::{
 };
 use uuid::Uuid;
 
-// Durable-C reports and handoff-scoped preflight acknowledgements.
+// Durable-C reports with deployment-scoped handoff progress.
 const PROTOCOL: u32 = 2;
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(60 * 60);
@@ -46,7 +46,6 @@ struct Status {
     common_config: [u8; 32],
     ready: bool,
     intent: Option<Intent>,
-    preflight_verified: bool,
     drain: Option<drain::Status>,
     completion: Option<drain::Report>,
     reconciliation: Option<ReconciliationReport>,
@@ -159,7 +158,6 @@ impl Coordinator {
                 ))?),
                 ready: false,
                 intent,
-                preflight_verified: false,
                 drain: None,
                 completion: None,
                 reconciliation: None,
@@ -324,13 +322,7 @@ impl Coordinator {
             source: record.source,
             destination: record.destination,
         };
-        {
-            let mut status = self.status.write().await;
-            if status.intent.as_ref() != Some(&intent) {
-                status.preflight_verified = false;
-            }
-            status.intent = Some(intent.clone());
-        }
+        self.status.write().await.intent = Some(intent.clone());
         let sources = self.peers(&self.source_urls, StartupMode::Active).await?;
         ensure!(
             sources.iter().all(|p| p.deployment == intent.source)
@@ -367,13 +359,6 @@ impl Coordinator {
                 "candidate intent differs or candidate failed"
             );
             if !sources.iter().all(|p| p.ready) || !candidates.iter().all(|p| p.ready) {
-                self.status.write().await.preflight_verified = false;
-                return Ok(false);
-            }
-            self.status.write().await.preflight_verified = true;
-            if !sources.iter().all(|p| {
-                p.intent.as_ref() == Some(&intent) && p.preflight_verified && p.error.is_none()
-            }) {
                 return Ok(false);
             }
         }
@@ -406,7 +391,6 @@ impl Coordinator {
                 Err(error) => {
                     let reason = format!("{error:#}");
                     let mut status = self.status.write().await;
-                    status.preflight_verified = false;
                     if status.error.as_ref() != Some(&reason) {
                         tracing::warn!(party_id = status.party_id, error = %reason, "CPU handoff coordination blocked");
                         status.error = Some(reason);
@@ -450,14 +434,6 @@ impl Coordinator {
                 && p.error.is_none()),
             "candidate handoff differs or candidate failed"
         );
-        for peer in peers {
-            if let Some(report) = &peer.reconciliation {
-                ensure!(
-                    report.process_id() == peer.process,
-                    "reconciliation belongs to another process"
-                );
-            }
-        }
         Ok(())
     }
 
@@ -566,7 +542,7 @@ pub(super) mod tests {
     use super::*;
 
     #[cfg(feature = "db_dependent")]
-    pub(in crate::server) async fn assert_sources_require_error_free_acknowledgements(
+    pub(in crate::server) async fn assert_sources_wait_for_preload_then_finish_drain(
         sources: &[Coordinator],
         handoffs: &[CpuCellHandoffs],
         loading_candidate: &Coordinator,
@@ -577,18 +553,6 @@ pub(super) mod tests {
             assert!(!source.drain.as_ref().unwrap().requested());
         }
         loading_candidate.mark_ready(candidate_process).await;
-        // Publish all three acknowledgements before testing the final initiation gate.
-        for (source, handoff) in sources.iter().zip(handoffs) {
-            assert!(!source.source_step(handoff).await?);
-        }
-        sources[2].status.write().await.preflight_verified = false;
-        assert!(!sources[0].source_step(&handoffs[0]).await?);
-        assert!(!sources[0].drain.as_ref().unwrap().requested());
-        sources[2].status.write().await.preflight_verified = true;
-        sources[2].status.write().await.error = Some("candidate peer unavailable".into());
-        assert!(!sources[0].source_step(&handoffs[0]).await?);
-        assert!(!sources[0].drain.as_ref().unwrap().requested());
-        sources[2].status.write().await.error = None;
         assert!(sources[0].source_step(&handoffs[0]).await?);
         assert!(sources[0].drain.as_ref().unwrap().requested());
         loading_candidate.status.write().await.ready = false;
@@ -672,12 +636,6 @@ pub(super) mod tests {
         peers[2].ready = true;
         peers[2].completion = Some(completion.clone());
         Coordinator::completed_reports(&own, &peers, completion)?;
-        peers[2].reconciliation = Some(serde_json::from_value(serde_json::json!({
-            "context": {"attempt_id": intent, "watermark": null},
-            "party_id": 2, "process_id": candidates[2],
-            "registry_count": 0, "registry_digest": vec![0u8; 32],
-        }))?);
-        assert!(Coordinator::candidate_peers(&own, &peers).is_err());
         for task in tasks {
             task.abort();
         }

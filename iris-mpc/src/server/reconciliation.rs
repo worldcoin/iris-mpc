@@ -52,25 +52,18 @@ impl ReconciliationContext {
 pub struct ReconciliationReport {
     context: ReconciliationContext,
     party_id: usize,
-    process_id: Uuid,
     registry_count: u64,
     registry_digest: [u8; 32],
 }
 
 impl ReconciliationReport {
-    pub(super) fn process_id(&self) -> Uuid {
-        self.process_id
-    }
-
-    /// The caller must match each report to its current trusted peer, indexed by party.
+    /// The caller must supply reports from trusted parties, indexed by party.
     /// Agreement is evidence for this frozen context, never permission to serve.
     pub fn verify_agreement(expected: &ReconciliationContext, reports: &[Self; 3]) -> Result<()> {
         expected.validate()?;
         for (party, report) in reports.iter().enumerate() {
             ensure!(
-                report.party_id == party
-                    && &report.context == expected
-                    && !report.process_id.is_nil(),
+                report.party_id == party && &report.context == expected,
                 "stale or incorrectly bound reconciliation report"
             );
             ensure!(
@@ -169,7 +162,6 @@ impl CandidateReconciliation {
         self.state = State::Complete(ReconciliationReport {
             context,
             party_id: self.party_id,
-            process_id: self.registry.process_id(),
             registry_count,
             registry_digest,
         });
@@ -309,18 +301,16 @@ mod tests {
             std::array::from_fn(|party_id| ReconciliationReport {
                 context: expected.clone(),
                 party_id,
-                process_id: Uuid::new_v4(),
                 registry_count: 3,
                 registry_digest: [7; 32],
             });
         ReconciliationReport::verify_agreement(&expected, &reports).unwrap();
-        for field in 0..5 {
+        for field in 0..4 {
             let mut bad = reports.clone();
             match field {
                 0 => bad[1].context.attempt_id = Uuid::new_v4(),
-                1 => bad[1].process_id = Uuid::nil(),
-                2 => bad[1].context.watermark = None,
-                3 => bad[1].registry_count += 1,
+                1 => bad[1].context.watermark = None,
+                2 => bad[1].registry_count += 1,
                 _ => bad[1].registry_digest[0] ^= 1,
             }
             assert!(ReconciliationReport::verify_agreement(&expected, &bad).is_err());
@@ -687,9 +677,6 @@ mod tests {
             .clone();
         assert_eq!(old.workers.registries[0].read().await.next_id, 128);
         assert_eq!(old_report.context, fresh_report.context);
-        assert_eq!(old_report.process_id(), old.registry.process_id());
-        assert_eq!(fresh_report.process_id(), fresh.registry.process_id());
-        assert_ne!(old_report.process_id(), fresh_report.process_id());
         assert_eq!(old_report.registry_digest, fresh_report.registry_digest);
         assert_eq!(old_report.registry_count, fresh_report.registry_count);
         drop((old, fresh));

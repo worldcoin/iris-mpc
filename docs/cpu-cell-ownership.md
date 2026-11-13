@@ -90,11 +90,11 @@ available through the existing deployment workflow.
 Before recording a new request, B verifies all three current A processes expose the
 compatible handoff protocol and are serving without a drain already requested.
 For an existing matching request, B resumes from the database without contacting A.
-Each A verifies loaded candidates and publishes an in-memory `preflight_verified`
-flag for the handoff. The first seal requires all three flags and no reported
-errors. Flags reset on restart, changed intent or failed checks. Once an A has
-sealed the same handoff, the remaining A processes finish draining even if B is
-reloading. A request alone does not stop intake.
+An A initiating the first seal checks the intended handoff, source readiness and
+drain eligibility, and loaded candidates. Once an A has sealed the same handoff,
+the remaining A processes finish draining even if B is reloading. Existing
+three-party drain agreement must complete before B can reconcile. A request
+alone does not stop intake.
 Deployment must also stop ordinary alternate writers: a row cannot revoke an
 already-open legacy connection. Keep automatic handoff disabled until deployment
 and cold recovery are tested.
@@ -119,8 +119,11 @@ startup history check, including after a previous handoff was activated.
 Preload/preflight can wait up to an hour. After all B processes finish preload,
 each B has one drain-timeout budget to observe and agree on completion, then a
 fresh budget of the same duration for reconciliation and metadata agreement.
-Preflight failures leave A serving;
-uncertain seal attempts and failures after drain-start never resume it.
+An A whose preflight fails keeps serving until it seals. There is no extra
+all-A preflight acknowledgement round: asymmetric connectivity can let one A
+seal while another cannot proceed. Such a partial pause fails drain agreement;
+it never authorizes B or automatically resumes A. Uncertain seal attempts also
+leave admission closed.
 
 The opt-in adds a read-only `/handoff-status` route on A's existing coordination
 listener and binds B's candidate status listener to all interfaces. Fixed URLs,
@@ -141,8 +144,9 @@ Failed preload leaves A serving before the first seal. A replacement B starts
 without readiness or reports, reads the existing request, loads canonical state
 and reconciles again. It can agree with already-reconciled B peers while writers
 remain paused, even after A exits. Reconciliation context is the handoff and C;
-each report identifies its own process and is checked against its live status.
-No original B process list is stored in the handoff record.
+each process publishes its report through its live status after reconciliation.
+A replacement starts with no readiness or report. No original B process list
+is stored in the handoff record.
 
 Existing preload and agreement deadlines remain bounded. A reload exceeding
 another peer's remaining agreement budget can require restarting that failed
