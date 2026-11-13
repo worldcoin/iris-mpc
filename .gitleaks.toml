@@ -1,0 +1,12 @@
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Public share-encryption keys embedded in the registries"
+condition = "AND"
+paths = ['''(^|/)keys(-staging)?\.json$''']
+regexTarget = "line"
+regexes = ['''^\s*"key_b64"\s*:\s*"[A-Za-z0-9+/]{43}="\s*,?\s*$''']

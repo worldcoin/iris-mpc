@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify checksums and Oxide-compatible public keys at every registry location."""
+"""Verify embedded public keys, their checksums, and every registry location."""
 
 import argparse
 import base64
@@ -46,6 +46,17 @@ def parse_registry(registry):
             raise ValueError(f"{label}.chk must use sha256 or sha512")
         if not re.fullmatch(rf"[0-9a-fA-F]{{{lengths[algorithm]}}}", digest):
             raise ValueError(f"{label}.chk must contain a {lengths[algorithm]}-digit hex digest")
+        key_b64 = party.get("key_b64")
+        if not isinstance(key_b64, str):
+            raise ValueError(f"{label}.key_b64 must be a string")
+        try:
+            key_data = key_b64.encode("ascii")
+            actual = hashlib.new(algorithm, key_data).hexdigest()
+            if actual != digest.lower():
+                raise ValueError(f"Checksum mismatch: expected {algorithm}:{digest}, got {algorithm}:{actual}")
+            validate_public_key(key_data)
+        except ValueError as error:
+            raise ValueError(f"{label}.key_b64: {error}") from error
         urls = party.get("pub")
         if isinstance(urls, str):
             urls = [urls]
@@ -63,7 +74,7 @@ def parse_registry(registry):
             _ = parsed.port
             if "#" in url:
                 raise ValueError(f"{label}.pub URLs must not contain fragments")
-            locations.append((slug, url, algorithm, digest.lower()))
+            locations.append((slug, url, algorithm, digest.lower(), key_data))
     return locations
 
 
@@ -113,7 +124,7 @@ def checkout_path(url, repository, repo_root):
 def verify_registry(registry, repository=None, repo_root="."):
     locations = parse_registry(registry)
     failures = 0
-    for slug, url, algorithm, expected in locations:
+    for slug, url, algorithm, expected, key_data in locations:
         try:
             local_path = checkout_path(url, repository, repo_root)
             source = f"checkout:{local_path}" if local_path is not None else url
@@ -129,7 +140,8 @@ def verify_registry(registry, repository=None, repo_root="."):
             actual = hashlib.new(algorithm, data).hexdigest()
             if actual != expected:
                 raise ValueError(f"Checksum mismatch: expected {algorithm}:{expected}, got {algorithm}:{actual}")
-            validate_public_key(data)
+            if data != key_data:
+                raise ValueError("Key differs from key_b64")
             print(f"OK: {slug} {url} (source: {source})")
         except (OSError, ValueError) as error:
             failures += 1

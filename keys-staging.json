@@ -6,21 +6,24 @@
         "pub": [
           "https://pki-smpcv2-stage.worldcoin.org/public-key-0"
         ],
-        "chk": "sha256:8fe3be4bd63e3328f8ba77d7261765086886c3fae6a3bfb3ad9ff273af27a316"
+        "chk": "sha256:8fe3be4bd63e3328f8ba77d7261765086886c3fae6a3bfb3ad9ff273af27a316",
+        "key_b64": "ivhUMBsbAhZMM3s3cuW2qBTf4jDvojQWCl9vk/+05ho="
       },
       {
         "slu": "berkeley-university",
         "pub": [
           "https://pki-smpcv2-stage.worldcoin.org/public-key-1"
         ],
-        "chk": "sha256:61e4d7a300e4a6dec49a81a484dbb374747639078754193fb68e44d270120e9c"
+        "chk": "sha256:61e4d7a300e4a6dec49a81a484dbb374747639078754193fb68e44d270120e9c",
+        "key_b64": "8vc+5yP1eYJ/tDZs9pDPdL9AUmYWB3A4aCWn3yKY2Qc="
       },
       {
         "slu": "kaist-university",
         "pub": [
           "https://pki-smpcv2-stage.worldcoin.org/public-key-2"
         ],
-        "chk": "sha256:715a9f5451918c04fd9b3a3f764f3367b94eee23c14500a93f1ba26d61cab380"
+        "chk": "sha256:715a9f5451918c04fd9b3a3f764f3367b94eee23c14500a93f1ba26d61cab380",
+        "key_b64": "vBBk7IEt1iAzjUyw71Bk/L3eXqfaPLuyimdyam8R9Dg="
       }
     ]
   }

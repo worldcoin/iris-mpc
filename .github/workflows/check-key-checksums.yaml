@@ -44,7 +44,7 @@ jobs:
             BASE_SHA=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
           fi
           if git diff --quiet --no-renames "$BASE_SHA" "$HEAD_SHA" -- \
-            keys.json certs/ scripts/check-key-checksums.py \
+            keys.json keys-staging.json certs/ scripts/check-key-checksums.py \
             scripts/tests/test_check_key_checksums.py .github/workflows/check-key-checksums.yaml; then
             echo "relevant=false" >> "$GITHUB_OUTPUT"
           else
@@ -63,6 +63,10 @@ jobs:
         if: steps.changes.outputs.relevant == 'true'
         # Own-repository main URLs use files in the checkout, including PR changes.
         run: python3 scripts/check-key-checksums.py keys.json --repository "$GITHUB_REPOSITORY" --repo-root "$GITHUB_WORKSPACE"
+
+      - name: Verify every staging public key location
+        if: steps.changes.outputs.relevant == 'true'
+        run: python3 scripts/check-key-checksums.py keys-staging.json --repository "$GITHUB_REPOSITORY" --repo-root "$GITHUB_WORKSPACE"
 
       - name: No registry changes
         if: steps.changes.outputs.relevant == 'false'
