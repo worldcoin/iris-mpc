@@ -64,11 +64,11 @@ process before starting its replacement: force-deleting its Pod does not prove
 it stopped. Supporting same-slot overlap would require a different contract.
 
 Any recorded handoff history requires deployment-aware startup. Missing
-configuration or an invalid phase blocks active startup. Active source startup
-is allowed only for the current requested handoff; after drain-start it is
-blocked after migrations and before claim recovery, replay or intake. Existing source
-connections can settle admitted work. Candidates remain passive; a database row
-cannot restore lost resident readiness after a process restart.
+configuration or an invalid phase blocks active startup. The current requested
+source and the latest activated destination may enter active startup. After
+drain-start, the source is blocked after migrations and before claim recovery,
+replay or intake. Existing source connections can settle admitted work.
+Candidates remain passive; a restarted process must rebuild resident state.
 
 Both active and candidate startup run the ordinary SQLx migrator before reading
 handoff history. Already-applied migrations are not reapplied. A newer release
@@ -103,8 +103,10 @@ SMPC__CPU_CELL__HANDOFF__SOURCE_STATUS_URLS='["http://a0:8080/handoff-status","h
 The destination is B's `SMPC__CPU_CELL__DEPLOYMENT_ID`. Configure DB-backed intake
 and a positive `SMPC__CPU_DRAIN_TIMEOUT_SECS`. B's first request precedes its
 startup history check, including after a previous handoff was activated.
-Preload/preflight can wait up to an hour; the drain/reconciliation budget starts
-after all B processes finish preload. Preflight failures leave A serving;
+Preload/preflight can wait up to an hour. After all B processes finish preload,
+each B has one drain-timeout budget to observe and agree on completion, then a
+fresh budget of the same duration for reconciliation and metadata agreement.
+Preflight failures leave A serving;
 uncertain seal attempts and failures after drain-start never resume it.
 
 The opt-in adds a read-only `/handoff-status` route on A's existing coordination
@@ -126,10 +128,16 @@ Failed preload leaves A serving. After drain-start, mismatched/missing reports,
 process replacement or uncertain effects stop progress. No timeout resumes A.
 A fresh B cannot inherit its predecessor's reconciliation or activation.
 
-The local foundation deliberately blocks active restarts after activation too;
-normal serving-crash handling is part of the cold-recovery integration. Before
-enabling handoff, test a party-owned cold-restart procedure that stops/fences old
-processes, settles outstanding effects and reloads canonical state. Do not clear
+After all three parties record activation, the same destination deployment can
+use existing coordinated cold startup: stop/fence all old processes, configure
+all three parties in active mode with the candidate handoff intent removed, and
+restart them together. Startup barriers precede recovery and a full canonical
+reload; recorded activation does not restore warm readiness. Single-party and
+rolling restarts remain unsupported. An incomplete handoff still blocks active
+startup and needs the coordinated recovery procedure in POP-4378.
+
+Before enabling handoff, test this party-owned cold-restart procedure, including
+settling outstanding effects and reloading canonical state. Do not clear
 handoff records or remove configuration while an old process may still act.
 Database restore and slot reuse need the same operating discipline. This table
 cannot cancel an SNS/SQS request already in flight or detect restored history.

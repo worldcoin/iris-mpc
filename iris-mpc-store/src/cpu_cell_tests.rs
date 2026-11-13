@@ -73,6 +73,7 @@ async fn handoff_transitions_preserve_exact_report_and_history() -> Result<()> {
         .await
         .is_err());
     f.drain().await?;
+    assert!(f.db.check_startup(f.destination, false).await.is_err());
     assert!(f
         .db
         .record_drain_start(f.id, f.source, Uuid::new_v4(), &f.candidates)
@@ -159,10 +160,13 @@ async fn startup_denies_restarted_source_but_keeps_existing_connections_usable()
     f.db.record_drain_completion(f.id, f.source, f.process, &report())
         .await?;
     f.db.check_startup(f.destination, true).await?;
+    assert!(f.db.check_startup(f.destination, false).await.is_err());
     f.db.activate(f.id, f.destination, &f.candidates, &report())
         .await?;
     assert!(f.db.check_startup(f.destination, true).await.is_err());
-    assert!(f.db.check_startup(f.destination, false).await.is_err());
+    f.db.check_startup(f.destination, false).await?;
+    assert!(f.db.check_startup(f.source, false).await.is_err());
+    assert!(f.db.check_startup(Uuid::new_v4(), false).await.is_err());
     f.cleanup().await
 }
 

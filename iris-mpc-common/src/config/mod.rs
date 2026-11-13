@@ -40,8 +40,8 @@ pub enum StartupMode {
 pub struct CpuCellConfig {
     pub deployment_id: String,
     /// Fixed /handoff-status URLs indexed by party. Omit to disable runtime handoff.
-    #[serde(default, deserialize_with = "deserialize_optional_peer_urls")]
-    pub candidate_status_urls: Option<[String; 3]>,
+    #[serde(default)]
+    pub candidate_status_urls: Option<JsonStrWrapper<[String; 3]>>,
     /// Supplied only to the destination candidate by its deployment configuration.
     #[serde(default)]
     pub handoff: Option<CpuCellHandoffConfig>,
@@ -52,31 +52,7 @@ pub struct CpuCellConfig {
 pub struct CpuCellHandoffConfig {
     pub id: String,
     pub source_deployment_id: String,
-    #[serde(deserialize_with = "deserialize_peer_urls")]
-    pub source_status_urls: [String; 3],
-}
-
-fn deserialize_peer_urls<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<[String; 3], D::Error> {
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum Urls {
-        Json(String),
-        Array([String; 3]),
-    }
-    match Urls::deserialize(deserializer)? {
-        Urls::Json(value) => serde_json::from_str(&value).map_err(serde::de::Error::custom),
-        Urls::Array(value) => Ok(value),
-    }
-}
-
-fn deserialize_optional_peer_urls<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<[String; 3]>, D::Error> {
-    #[derive(Deserialize)]
-    struct Urls(#[serde(deserialize_with = "deserialize_peer_urls")] [String; 3]);
-    Option::<Urls>::deserialize(deserializer).map(|value| value.map(|urls| urls.0))
+    pub source_status_urls: JsonStrWrapper<[String; 3]>,
 }
 
 fn default_cpu_drain_timeout_secs() -> u64 {

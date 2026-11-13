@@ -1500,14 +1500,12 @@ mod config_tests {
         let handoffs = CpuCellHandoffs::new(admin.clone(), &schema)?;
         let id = Uuid::new_v4();
         let source = Uuid::parse_str(&config.cpu_cell.as_ref().unwrap().deployment_id)?;
-        handoffs.request(id, source, Uuid::new_v4()).await?;
+        let destination = Uuid::new_v4();
+        let process = Uuid::new_v4();
+        let candidates = std::array::from_fn(|_| Uuid::new_v4());
+        handoffs.request(id, source, destination).await?;
         handoffs
-            .record_drain_start(
-                id,
-                source,
-                Uuid::new_v4(),
-                &std::array::from_fn(|_| Uuid::new_v4()),
-            )
+            .record_drain_start(id, source, process, &candidates)
             .await?;
         let tables_before: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relkind='r'").bind(&schema).fetch_one(&admin).await?;
         for mode in [StartupMode::Active, StartupMode::Candidate] {
@@ -1518,6 +1516,20 @@ mod config_tests {
                 "{error:?}"
             );
         }
+        let report = serde_json::json!({"watermark": null, "last_publication": null});
+        handoffs
+            .record_drain_completion(id, source, process, &report)
+            .await?;
+        handoffs
+            .activate(id, destination, &candidates, &report)
+            .await?;
+        config.startup_mode = StartupMode::Active;
+        config.cpu_cell.as_mut().unwrap().deployment_id = destination.to_string();
+        assert!(
+            initialize_handoff(&config, HawkSearchMode::LinearScan, &admin)
+                .await?
+                .is_some()
+        );
         config.cpu_cell = None;
         let error = linear_scan_server_main(config).await.unwrap_err();
         assert!(error

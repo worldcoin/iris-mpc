@@ -134,7 +134,7 @@ impl Coordinator {
                 !intent.id.is_nil() && !intent.source.is_nil() && intent.source != deployment,
                 "invalid handoff intent"
             );
-            (urls(&requested.source_status_urls)?, Some(intent))
+            (urls(&requested.source_status_urls.0)?, Some(intent))
         } else {
             ensure!(
                 cell.handoff.is_none(),
@@ -176,7 +176,7 @@ impl Coordinator {
                 error: None,
             })),
             source_urls,
-            candidate_urls: urls(candidate_urls)?,
+            candidate_urls: urls(&candidate_urls.0)?,
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(3))
                 .redirect(reqwest::redirect::Policy::none())
@@ -378,6 +378,7 @@ impl Coordinator {
             p.intent.as_ref() == Some(&intent)
                 && p.source_processes == Some(source_processes)
                 && p.candidate_processes == Some(candidate_processes)
+                && p.error.is_none()
         }) {
             return Ok(false);
         }
@@ -548,11 +549,11 @@ impl Coordinator {
             let peers = self
                 .wait_peers(&self.candidate_urls, StartupMode::Candidate, deadline)
                 .await?;
-            Self::candidate_cohort(&own, &peers, &completion)?;
             if peers.iter().all(|p| p.completion.is_some()) {
                 Self::completed_reports(&own, &peers, &completion)?;
                 break;
             }
+            Self::candidate_cohort(&own, &peers, &completion)?;
             timeout_at(deadline, sleep(POLL_INTERVAL)).await?;
         }
         let context = ReconciliationContext::new(
@@ -563,6 +564,7 @@ impl Coordinator {
             completion.candidate_processes,
             completion.report.watermark.clone(),
         )?;
+        let deadline = Instant::now() + budget;
         let report = candidate
             .reconcile(store, context.clone(), deadline)
             .await?
@@ -589,8 +591,33 @@ impl Coordinator {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
+
+    #[cfg(feature = "db_dependent")]
+    pub(in crate::server) async fn assert_sources_require_error_free_acknowledgements(
+        sources: &[Coordinator],
+        handoffs: &[CpuCellHandoffs],
+        loading_candidate: &Coordinator,
+        candidate_process: Uuid,
+    ) -> Result<()> {
+        for (source, handoff) in sources.iter().zip(handoffs) {
+            assert!(!source.source_step(handoff).await?);
+            assert!(!source.drain.as_ref().unwrap().requested());
+        }
+        loading_candidate.mark_ready(candidate_process).await;
+        // Publish all three acknowledgements before testing the final initiation gate.
+        for (source, handoff) in sources.iter().zip(handoffs) {
+            assert!(!source.source_step(handoff).await?);
+        }
+        sources[2].status.write().await.error = Some("candidate peer unavailable".into());
+        assert!(!sources[0].source_step(&handoffs[0]).await?);
+        assert!(!sources[0].drain.as_ref().unwrap().requested());
+        sources[2].status.write().await.error = None;
+        assert!(sources[0].source_step(&handoffs[0]).await?);
+        assert!(sources[0].drain.as_ref().unwrap().requested());
+        Ok(())
+    }
 
     #[tokio::test]
     async fn staggered_preload_waits_then_checks_current_durable_reports() -> Result<()> {
@@ -613,8 +640,8 @@ mod tests {
         for (party, listener) in listeners.into_iter().enumerate() {
             let config: Config = serde_json::from_value(serde_json::json!({
                 "party_id": party, "startup_mode": "candidate", "db_backed_ingest": true,
-                "cpu_cell": {"deployment_id": destination, "candidate_status_urls": addresses,
-                    "handoff": {"id": intent, "source_deployment_id": sources[0], "source_status_urls": addresses}}
+                "cpu_cell": {"deployment_id": destination, "candidate_status_urls": serde_json::to_string(&addresses)?,
+                    "handoff": {"id": intent, "source_deployment_id": sources[0], "source_status_urls": serde_json::to_string(&addresses)?}}
             }))?;
             let coordinator = Coordinator::new(&config, candidates[party], None)?.unwrap();
             if party < 2 {

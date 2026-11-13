@@ -60,8 +60,8 @@ impl CpuCellHandoffs {
         .map_err(Into::into)
     }
 
-    /// Check after migrations, before replay, queue access or operational writes. A recorded
-    /// activation cannot authorize a fresh process with none of B's resident state.
+    /// Check after migrations, before replay, queue access or operational writes. The latest
+    /// activated destination may enter coordinated cold startup; it must rebuild resident state.
     /// Locking the row waits for an old process's in-flight drain commit before
     /// deciding whether its replacement can start.
     pub async fn check_startup(&self, deployment: Uuid, candidate: bool) -> Result<()> {
@@ -84,7 +84,8 @@ impl CpuCellHandoffs {
                         HandoffPhase::Requested | HandoffPhase::Draining | HandoffPhase::Drained
                     )
             } else {
-                source == deployment && phase == HandoffPhase::Requested
+                (source == deployment && phase == HandoffPhase::Requested)
+                    || (destination == deployment && phase == HandoffPhase::Activated)
             }
         });
         ensure!(allowed, "CPU deployment cannot start in this handoff phase; coordinated cold recovery is required after an interrupted handoff");

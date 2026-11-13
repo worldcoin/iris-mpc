@@ -107,7 +107,9 @@ fn common_context(parties: &[Party]) -> Result<ReconciliationContext> {
     )
 }
 
-async fn drain_and_reload_handoff(parties: &mut [Party]) -> Result<ReconciliationContext> {
+async fn coordinate_drain_and_reconcile_candidates(
+    parties: &mut [Party],
+) -> Result<ReconciliationContext> {
     let (drains, tasks) = drain::tests::cohort(Duration::from_secs(30)).await;
     let (id, source, destination) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
     let candidates: [Uuid; 3] = std::array::from_fn(|i| parties[i].candidate.registry.process_id());
@@ -160,7 +162,7 @@ async fn drain_and_reload_handoff(parties: &mut [Party]) -> Result<Reconciliatio
             .collect();
         config.server_coordination = Some(peers);
         config.cpu_cell = Some(serde_json::from_value(
-            serde_json::json!({"deployment_id": source, "candidate_status_urls": candidate_urls}),
+            serde_json::json!({"deployment_id": source, "candidate_status_urls": serde_json::to_string(&candidate_urls)?}),
         )?);
         let source_coordinator = Coordinator::new(
             &config,
@@ -178,8 +180,8 @@ async fn drain_and_reload_handoff(parties: &mut [Party]) -> Result<Reconciliatio
         source_coordinators.push(source_coordinator);
         config.startup_mode = iris_mpc_common::config::StartupMode::Candidate;
         config.cpu_cell = Some(serde_json::from_value(
-            serde_json::json!({"deployment_id": destination, "candidate_status_urls": candidate_urls,
-            "handoff": {"id": id, "source_deployment_id": source, "source_status_urls": source_urls}}),
+            serde_json::json!({"deployment_id": destination, "candidate_status_urls": serde_json::to_string(&candidate_urls)?,
+            "handoff": {"id": id, "source_deployment_id": source, "source_status_urls": serde_json::to_string(&source_urls)?}}),
         )?);
         let candidate_coordinator = Coordinator::new(&config, candidates[i], None)?.unwrap();
         let router = candidate_coordinator.routes();
@@ -189,6 +191,7 @@ async fn drain_and_reload_handoff(parties: &mut [Party]) -> Result<Reconciliatio
         candidate_coordinators.push(candidate_coordinator);
     }
     let mut controls = Vec::new();
+    let mut source_handoffs = Vec::new();
     for (i, (party, drain)) in parties.iter().zip(&drains).enumerate() {
         let schema = party.config.get_gpu_db_schema();
         let control = PostgresClient::new(
@@ -232,12 +235,7 @@ async fn drain_and_reload_handoff(parties: &mut [Party]) -> Result<Reconciliatio
             handoffs: handoffs.clone(),
             deployment: source,
         }));
-        let coordinator = source_coordinators[i].clone();
-        source_tasks.push(tokio::spawn(async move {
-            coordinator
-                .run_source(handoffs, Arc::new(ShutdownHandler::new(0)))
-                .await;
-        }));
+        source_handoffs.push(handoffs);
         if i < 2 {
             candidate_coordinators[i].mark_ready(candidates[i]).await;
         }
@@ -250,12 +248,21 @@ async fn drain_and_reload_handoff(parties: &mut [Party]) -> Result<Reconciliatio
         }
         controls.push(control);
     }
-    tokio::time::sleep(Duration::from_millis(1100)).await;
-    assert!(
-        drains.iter().all(|drain| !drain.requested()),
-        "a still-loading candidate must leave A serving"
-    );
-    candidate_coordinators[2].mark_ready(candidates[2]).await;
+    super::super::handoff::tests::assert_sources_require_error_free_acknowledgements(
+        &source_coordinators,
+        &source_handoffs,
+        &candidate_coordinators[2],
+        candidates[2],
+    )
+    .await?;
+    // The acknowledgement regression has already initiated source 0's drain.
+    for (coordinator, handoffs) in source_coordinators.into_iter().zip(source_handoffs).skip(1) {
+        source_tasks.push(tokio::spawn(async move {
+            coordinator
+                .run_source(handoffs, Arc::new(ShutdownHandler::new(0)))
+                .await;
+        }));
+    }
     drain::tests::until(|| drains.iter().all(|drain| drain.ready_to_report())).await;
     for (i, (party, drain)) in parties.iter().zip(&drains).enumerate() {
         assert_eq!(drain.status().cut, Some(0));
@@ -312,13 +319,36 @@ async fn drain_and_reload_handoff(parties: &mut [Party]) -> Result<Reconciliatio
         reports.push(report);
         reopened.pool.close().await;
     }
-    for task in tasks.into_iter().chain(source_tasks) {
+    let source_tasks = tasks.into_iter().chain(source_tasks).collect::<Vec<_>>();
+    for task in &source_tasks {
         task.abort();
     }
+    for task in source_tasks {
+        assert!(task.await.unwrap_err().is_cancelled());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(1))
+        .build()?;
+    for url in source_urls {
+        assert!(client.get(url).send().await.is_err());
+    }
+    // Completion agreement consumes part of its budget; reconciliation gets a fresh one.
+    let mut lock = parties[0].writer.pool.begin().await?;
+    sqlx::query("LOCK TABLE irises IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *lock)
+        .await?;
+    let started = Instant::now();
+    let release_lock = async move {
+        tokio::time::sleep(Duration::from_secs(9)).await;
+        lock.commit().await
+    };
     // A no longer serves any endpoint. B finishes using only durable records and current B peers.
-    let contexts =
-        futures::future::try_join_all(parties.iter_mut().zip(&candidate_coordinators).map(
-            |(party, coordinator)| async move {
+    let reconcile = futures::future::try_join_all(
+        parties
+            .iter_mut()
+            .zip(&candidate_coordinators)
+            .enumerate()
+            .map(|(i, (party, coordinator))| async move {
                 let reader = PostgresClient::new(
                     &party.config.database.as_ref().unwrap().url,
                     &party.config.get_gpu_db_schema(),
@@ -328,12 +358,15 @@ async fn drain_and_reload_handoff(parties: &mut [Party]) -> Result<Reconciliatio
                 let handoffs =
                     CpuCellHandoffs::new(reader.pool.clone(), &party.config.get_gpu_db_schema())?;
                 let store = Store::new(&reader).await?;
+                if i == 2 {
+                    tokio::time::sleep(Duration::from_secs(4)).await;
+                }
                 let context = coordinator
                     .reconcile_candidate(
                         &handoffs,
                         &store,
                         &mut party.candidate,
-                        Duration::from_secs(30),
+                        Duration::from_secs(8),
                     )
                     .await?;
                 let pending: bool = sqlx::query_scalar(
@@ -345,9 +378,12 @@ async fn drain_and_reload_handoff(parties: &mut [Party]) -> Result<Reconciliatio
                 assert!(pending, "handoff must preserve pending-above-C work");
                 reader.pool.close().await;
                 Ok::<_, eyre::Report>(context)
-            },
-        ))
-        .await?;
+            }),
+    );
+    let (contexts, released) = tokio::join!(reconcile, release_lock);
+    released?;
+    let contexts = contexts?;
+    assert!(started.elapsed() >= Duration::from_secs(9));
     assert!(contexts.iter().all(|context| context == &contexts[0]));
     for task in candidate_tasks {
         task.abort();
@@ -453,7 +489,7 @@ async fn three_party_reconciliation_agrees_and_preserves_each_partys_payloads() 
         expected.push(inserted);
 
         // Queue intake/publication are outside this fixture; its simulated writers stop here.
-        let context = drain_and_reload_handoff(&mut parties).await?;
+        let context = coordinate_drain_and_reconcile_candidates(&mut parties).await?;
         let reports: [ReconciliationReport; 3] =
             std::array::from_fn(|i| parties[i].candidate.report_for(&context).unwrap().clone());
         ReconciliationReport::verify_agreement(&context, &reports)?;
