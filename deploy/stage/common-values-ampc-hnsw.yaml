@@ -1,7 +1,7 @@
-image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:v0.32.12@sha256:4d29fedde873bc94a52fc8275e91ceacd8c51fe9685e150e65cb4d9042d85334"
+image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:48f6a41182709fe68af96dac51ffa9f0e0f15f70@sha256:13be9a706475d13fca77ced3c363b735989fa0e0ec39b8421569f0c3f75c1d65"
 
 environment: stage
-replicaCount: 0
+replicaCount: 1
 
 # Common environment variables shared across all hnsw nodes.
 # Defined as a map (keyed by variable name) so Helm deep-merges these with the
@@ -29,16 +29,18 @@ env:
   SMPC__ANON_STATS_DATABASE__CREATE: "false"
   SMPC__ANON_STATS_DATABASE__LOAD_PARALLELISM: "8"
   SMPC__AWS__REGION: "eu-north-1"
+  SMPC__REQUESTS_QUEUE_REGION: "eu-central-1"
+  SMPC__RESULTS_TOPIC_REGION: "eu-central-1"
   SMPC__REQUESTS_QUEUE_URL:
     valueFrom:
       secretKeyRef:
         key: SQS_URL
-        name: application
+        name: iris-ampc-messaging
   SMPC__RESULTS_TOPIC_ARN:
     valueFrom:
       secretKeyRef:
         key: SNS_RESULTS_ARN
-        name: application
+        name: iris-ampc-messaging
   SMPC__PROCESSING_TIMEOUT_SECS: "120"
   SMPC__PATH: "/data/"
   SMPC__KMS_KEY_ARNS:

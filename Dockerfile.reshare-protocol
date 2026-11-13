@@ -26,7 +26,7 @@ RUN cargo install cargo-build-deps \
     && cargo install cargo-edit --version 0.13.6 --locked
 
 FROM --platform=linux/amd64 build-image as build-app
-WORKDIR /src/gpu-iris-mpc
+WORKDIR /src/iris-mpc
 COPY . .
 
 RUN cargo build -p iris-mpc-bins --release --target x86_64-unknown-linux-gnu --bin reshare-client --bin reshare-server
@@ -38,8 +38,8 @@ RUN apt-get update && apt-get install -y ca-certificates awscli
 COPY certs /usr/local/share/ca-certificates/
 RUN update-ca-certificates
 
-COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/reshare-client /bin/reshare-client
-COPY --from=build-app /src/gpu-iris-mpc/target/x86_64-unknown-linux-gnu/release/reshare-server /bin/reshare-server
+COPY --from=build-app /src/iris-mpc/target/x86_64-unknown-linux-gnu/release/reshare-client /bin/reshare-client
+COPY --from=build-app /src/iris-mpc/target/x86_64-unknown-linux-gnu/release/reshare-server /bin/reshare-server
 COPY scripts/reshare-client.sh /sbin/reshare-client.sh
 
 USER 65534

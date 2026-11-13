@@ -5,6 +5,7 @@ use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use iris_mpc_common::VectorId;
 use iris_mpc_cpu::hawkers::{aby3::aby3_store::VectorIdRegistryRef, shared_irises::SharedIrises};
 use iris_mpc_store::{normalize_sns_sequence_number, Store};
+use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
 use tokio::time::{timeout_at, Instant};
 use uuid::Uuid;
@@ -53,6 +54,43 @@ impl CandidateRegistry {
             process_id,
             registries,
         })
+    }
+
+    pub(super) async fn fingerprint(&self, deadline: Instant) -> Result<(u64, [u8; 32])> {
+        timeout_at(deadline, async {
+            let left = self.registries[0].read().await;
+            let right = self.registries[1].read().await;
+            let mut hash = Sha256::new();
+            hash.update(b"iris-mpc-registry-v1");
+            ensure!(
+                left.next_id == right.next_id,
+                "candidate allocation frontiers disagree"
+            );
+            hash.update(left.next_id.to_be_bytes());
+            let mut count = 0_u64;
+            for index in 0..left.get_points().len().max(right.get_points().len()) {
+                if index.is_multiple_of(1024) {
+                    tokio::task::yield_now().await;
+                }
+                ensure!(
+                    Instant::now() < deadline,
+                    "registry fingerprint deadline exceeded"
+                );
+                let a = left.get_points().get(index).copied().flatten();
+                let b = right.get_points().get(index).copied().flatten();
+                ensure!(a == b, "candidate eye registries disagree");
+                if let Some((version, ())) = a {
+                    let id = u32::try_from(index)?;
+                    ensure!(id > 0 && version >= 0, "invalid registry metadata");
+                    hash.update(id.to_be_bytes());
+                    hash.update(version.to_be_bytes());
+                    count += 1;
+                }
+            }
+            Ok((count, hash.finalize().into()))
+        })
+        .await
+        .wrap_err("registry fingerprint deadline exceeded")?
     }
 
     pub fn process_id(&self) -> Uuid {
@@ -402,6 +440,24 @@ mod tests {
         }
         ensure!(scan.completed(), "scan must have completed");
         Ok(result)
+    }
+
+    #[tokio::test]
+    async fn fingerprint_binds_the_ordered_metadata_and_allocation_frontier() -> Result<()> {
+        let baseline = candidate(&[(1, 0), (3, 1)]);
+        let first = baseline.fingerprint(deadline()).await?;
+        assert_eq!(first.0, 2);
+        for points in [vec![(2, 0), (3, 1)], vec![(1, 1), (3, 1)]] {
+            let other = candidate(&points).fingerprint(deadline()).await?;
+            assert_eq!(first.0, other.0);
+            assert_ne!(first.1, other.1);
+        }
+        let other = candidate(&[(1, 0), (3, 1)]);
+        for registry in &other.registries {
+            registry.write().await.next_id += 1;
+        }
+        assert_ne!(first.1, other.fingerprint(deadline()).await?.1);
+        Ok(())
     }
 
     #[tokio::test]

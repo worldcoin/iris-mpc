@@ -1,8 +1,10 @@
+pub mod cpu_cell;
+
 pub mod loader;
 mod s3_importer;
 
 use bytemuck::cast_slice;
-use eyre::{ensure, eyre, Result};
+use eyre::{ensure, eyre, Context, Result};
 use futures::{
     stream::{self},
     Stream, StreamExt, TryStreamExt,
@@ -26,7 +28,7 @@ pub use s3_importer::{
     fetch_and_parse_chunks, last_snapshot_timestamp, ObjectStore, S3Store, S3StoredIris,
 };
 use sha2::{Digest, Sha256};
-use sqlx::{PgConnection, PgPool, Postgres, Row, Transaction};
+use sqlx::{types::Json, PgConnection, PgPool, Postgres, Row, Transaction};
 use std::ops::DerefMut;
 
 /// Capability token for writing `version_id` verbatim: required by
@@ -56,6 +58,8 @@ impl<'t, 'c> ExplicitVersionToken<'t, 'c> {
 }
 
 pub const SNS_SEQUENCE_NUMBER_WIDTH: usize = 40;
+const INGEST_STATE_DOMAIN: &str = "db_ingest";
+const COMPLETED_SEQUENCE_NUMBER_KEY: &str = "completed_sequence_number";
 
 #[derive(sqlx::FromRow, Debug, Clone, PartialEq, Eq)]
 pub struct IngestedRequest {
@@ -69,6 +73,18 @@ pub fn normalize_sns_sequence_number(sequence_number: &str) -> Result<String> {
         "{parsed:0width$}",
         width = SNS_SEQUENCE_NUMBER_WIDTH
     ))
+}
+
+fn validate_completed_sequence_number(sequence_number: Option<String>) -> Result<Option<String>> {
+    if let Some(sequence_number) = &sequence_number {
+        ensure!(
+            normalize_sns_sequence_number(sequence_number)
+                .wrap_err("invalid ingested request completion watermark")?
+                == *sequence_number,
+            "ingested request completion watermark is not normalized"
+        );
+    }
+    Ok(sequence_number)
 }
 
 /// The unified type that can hold either DB or S3 variants.
@@ -201,6 +217,50 @@ pub struct Store {
     modification_input_storage: ModificationInputStorage,
 }
 
+/// A deadline-scoped payload lease. Failure closes it; dropping it never returns
+/// unfinished database work to the shared pool.
+pub struct IrisPayloadReader {
+    connection: Option<sqlx::pool::PoolConnection<sqlx::Postgres>>,
+    deadline: tokio::time::Instant,
+}
+
+impl IrisPayloadReader {
+    pub async fn read_side(&mut self, ids: &[i64], side: usize) -> Result<Vec<DbStoredIrisEye>> {
+        let query = Store::iris_side_query(side)?;
+        let connection = self
+            .connection
+            .as_mut()
+            .ok_or_else(|| eyre!("payload reader previously failed"))?;
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let result = tokio::time::timeout_at(self.deadline, async {
+            Store::set_statement_deadline(connection, self.deadline, false).await?;
+            let rows = sqlx::query_as::<_, DbStoredIrisEye>(query)
+                .bind(ids)
+                .fetch_all(&mut **connection)
+                .await?;
+            for row in &rows {
+                for (field, bytes) in [("code", &row.code), ("mask", &row.mask)] {
+                    if !bytes.is_empty() {
+                        bytemuck::try_cast_slice::<u8, u16>(bytes).map_err(|error| {
+                            eyre!("invalid reconciliation {field} buffer: {error}")
+                        })?;
+                    }
+                }
+            }
+            Ok::<_, eyre::Report>(rows)
+        })
+        .await
+        .map_err(|_| eyre!("reconciliation payload read deadline exceeded"))
+        .and_then(|result| result);
+        if result.is_err() {
+            self.connection.take();
+        }
+        result
+    }
+}
+
 impl Store {
     pub async fn new(postgres_client: &PostgresClient) -> Result<Self> {
         tracing::info!(
@@ -276,20 +336,7 @@ impl Store {
         deadline: tokio::time::Instant,
     ) -> impl Stream<Item = sqlx::Result<(i64, i16)>> + '_ {
         async_stream::try_stream! {
-            let mut connection = self.pool.acquire().await?;
-            connection.close_on_drop();
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            // PostgreSQL interprets zero as unlimited and accepts at most i32::MAX ms.
-            let timeout_ms = remaining.as_nanos().div_ceil(1_000_000)
-                .clamp(1, i32::MAX as u128) as i64;
-            sqlx::query(
-                "SELECT set_config('statement_timeout', \
-                 LEAST(NULLIF(setting::bigint, 0), $1)::text, false) \
-                 FROM pg_settings WHERE name = 'statement_timeout'",
-            )
-            .bind(timeout_ms)
-            .execute(&mut *connection)
-            .await?;
+            let mut connection = self.deadline_connection(deadline).await?;
             let mut rows = sqlx::query_as::<_, (i64, i16)>(
                 "SELECT id, version_id FROM irises ORDER BY id ASC",
             )
@@ -297,6 +344,79 @@ impl Store {
             while let Some(row) = rows.try_next().await? {
                 yield row;
             }
+        }
+    }
+
+    async fn deadline_connection(
+        &self,
+        deadline: tokio::time::Instant,
+    ) -> sqlx::Result<sqlx::pool::PoolConnection<sqlx::Postgres>> {
+        let mut connection = self.pool.acquire().await?;
+        connection.close_on_drop();
+        Self::set_statement_deadline(&mut connection, deadline, false).await?;
+        Ok(connection)
+    }
+
+    async fn set_statement_deadline(
+        connection: &mut sqlx::PgConnection,
+        deadline: tokio::time::Instant,
+        local: bool,
+    ) -> sqlx::Result<()> {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        // PostgreSQL interprets zero as unlimited and accepts at most i32::MAX ms.
+        let timeout_ms = remaining
+            .as_nanos()
+            .div_ceil(1_000_000)
+            .clamp(1, i32::MAX as u128) as i64;
+        sqlx::query(
+            "SELECT set_config('statement_timeout', \
+             LEAST(NULLIF(setting::bigint, 0), $1)::text, $2) \
+             FROM pg_settings WHERE name = 'statement_timeout'",
+        )
+        .bind(timeout_ms)
+        .bind(local)
+        .execute(connection)
+        .await?;
+        Ok(())
+    }
+
+    /// One owned lease reused across bounded reconciliation payload batches.
+    pub async fn iris_payload_reader(
+        &self,
+        deadline: tokio::time::Instant,
+    ) -> Result<IrisPayloadReader> {
+        let connection = tokio::time::timeout_at(deadline, self.deadline_connection(deadline))
+            .await
+            .map_err(|_| eyre!("reconciliation connection deadline exceeded"))??;
+        Ok(IrisPayloadReader {
+            connection: Some(connection),
+            deadline,
+        })
+    }
+
+    /// Sparse payload reads for a bounded passive reconciliation. Session settings
+    /// stay on a close-on-drop lease, including when the caller cancels the read.
+    pub async fn get_iris_data_by_ids_for_side_before(
+        &self,
+        ids: &[i64],
+        side: usize,
+        deadline: tokio::time::Instant,
+    ) -> Result<Vec<DbStoredIrisEye>> {
+        Self::iris_side_query(side)?;
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.iris_payload_reader(deadline)
+            .await?
+            .read_side(ids, side)
+            .await
+    }
+
+    fn iris_side_query(side: usize) -> Result<&'static str> {
+        match side {
+            0 => Ok("SELECT id, version_id, left_code AS code, left_mask AS mask FROM irises WHERE id = ANY($1) ORDER BY id ASC"),
+            1 => Ok("SELECT id, version_id, right_code AS code, right_mask AS mask FROM irises WHERE id = ANY($1) ORDER BY id ASC"),
+            _ => Err(eyre!("invalid iris side {side}; expected 0 or 1")),
         }
     }
 
@@ -348,35 +468,10 @@ impl Store {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
-        let rows = match side {
-            0 => {
-                sqlx::query_as::<_, DbStoredIrisEye>(
-                    r#"
-                    SELECT id, version_id, left_code AS code, left_mask AS mask
-                    FROM irises
-                    WHERE id = ANY($1)
-                    ORDER BY id ASC
-                    "#,
-                )
-                .bind(ids)
-                .fetch_all(&self.pool)
-                .await?
-            }
-            1 => {
-                sqlx::query_as::<_, DbStoredIrisEye>(
-                    r#"
-                    SELECT id, version_id, right_code AS code, right_mask AS mask
-                    FROM irises
-                    WHERE id = ANY($1)
-                    ORDER BY id ASC
-                    "#,
-                )
-                .bind(ids)
-                .fetch_all(&self.pool)
-                .await?
-            }
-            _ => return Err(eyre!("invalid iris side {side}; expected 0 or 1")),
-        };
+        let rows = sqlx::query_as::<_, DbStoredIrisEye>(Self::iris_side_query(side)?)
+            .bind(ids)
+            .fetch_all(&self.pool)
+            .await?;
         Ok(rows)
     }
 
@@ -706,8 +801,9 @@ WHERE id = $1;
     ///
     /// Returns `Ok(true)` if a new row was inserted, `Ok(false)` if a row with
     /// this sequence number already existed (duplicate delivery / re-receive —
-    /// safe to delete the SQS message either way), and `Err` on DB failure
-    /// (message must NOT be deleted from SQS; it will be re-received).
+    /// safe to delete the SQS message either way). An absent key at or below
+    /// durable completion is rejected. On any error the SQS message must remain
+    /// available for investigation or redelivery.
     pub async fn insert_ingested_request(
         &self,
         sequence_number: &str,
@@ -715,20 +811,58 @@ WHERE id = $1;
         is_valid: bool,
     ) -> Result<bool> {
         let normalized_sequence_number = normalize_sns_sequence_number(sequence_number)?;
-        let result = sqlx::query(
-            r#"
-            INSERT INTO ingested_requests (sequence_number, message_body, is_valid)
-            VALUES ($1, $2, $3)
-            ON CONFLICT (sequence_number) DO NOTHING
-            "#,
-        )
-        .bind(normalized_sequence_number)
-        .bind(message_body)
-        .bind(is_valid)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(result.rows_affected() == 1)
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+        tokio::time::timeout_at(deadline, async {
+            let mut tx = self.tx().await?;
+            Self::set_statement_deadline(tx.deref_mut(), deadline, true).await?;
+            let Json(completed): Json<Option<String>> = sqlx::query_scalar(
+                r#"
+                SELECT "value" FROM persistent_state
+                WHERE domain = $1 AND "key" = $2
+                FOR SHARE
+                "#,
+            )
+            .bind(INGEST_STATE_DOMAIN)
+            .bind(COMPLETED_SEQUENCE_NUMBER_KEY)
+            .fetch_one(tx.deref_mut())
+            .await
+            .wrap_err("failed to lock ingested request completion watermark for admission")?;
+            let completed = validate_completed_sequence_number(completed)?;
+            if let Some(completed) = completed
+                .as_deref()
+                .filter(|completed| normalized_sequence_number.as_str() <= *completed)
+            {
+                let retained: bool = sqlx::query_scalar(
+                    "SELECT EXISTS (SELECT 1 FROM ingested_requests WHERE sequence_number = $1)",
+                )
+                .bind(&normalized_sequence_number)
+                .fetch_one(tx.deref_mut())
+                .await?;
+                ensure!(
+                    retained,
+                    "cannot admit absent ingested request {normalized_sequence_number} at or below completed watermark {}; leave the SQS message unacknowledged and investigate replay or ordering",
+                    completed
+                );
+                tx.commit().await?;
+                return Ok(false);
+            }
+            let result = sqlx::query(
+                r#"
+                INSERT INTO ingested_requests (sequence_number, message_body, is_valid)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (sequence_number) DO NOTHING
+                "#,
+            )
+            .bind(normalized_sequence_number)
+            .bind(message_body)
+            .bind(is_valid)
+            .execute(tx.deref_mut())
+            .await?;
+            tx.commit().await?;
+            Ok(result.rows_affected() == 1)
+        })
+        .await
+        .wrap_err("ingested request admission deadline exceeded")?
     }
 
     // Pending = unclaimed AND unpersisted. The persisted_at guard narrows a
@@ -807,10 +941,10 @@ WHERE id = $1;
     }
 
     /// Marks the given claimed rows as persisted, on the caller's transaction,
-    /// so the mark is atomic with the batch's result commit. Keyed by sequence
-    /// number (the PK) rather than batch id: batch ids restart per boot and the
-    /// shared batch-id atomic advances under prefetch, so they cannot reliably
-    /// correlate a claim with its persist. Returns rows affected.
+    /// so the mark and completion watermark are atomic with the batch's result
+    /// commit. Keyed by sequence number (the PK) rather than batch id: batch ids
+    /// restart per boot and the shared batch-id atomic advances under prefetch,
+    /// so they cannot reliably correlate a claim with its persist. Returns rows affected.
     pub async fn mark_ingested_requests_persisted_tx(
         &self,
         tx: &mut Transaction<'_, Postgres>,
@@ -820,24 +954,137 @@ WHERE id = $1;
             return Ok(0);
         }
 
-        let result = sqlx::query(
+        for sequence_number in sequence_numbers {
+            ensure!(
+                normalize_sns_sequence_number(sequence_number)
+                    .wrap_err("invalid ingested request sequence number")?
+                    == *sequence_number,
+                "ingested request sequence number is not normalized"
+            );
+        }
+        let completed = Self::lock_completed_ingested_sequence_number_tx(tx).await?;
+
+        let persisted: Vec<String> = sqlx::query_scalar(
             r#"
             UPDATE ingested_requests
             SET persisted_at = now()
             WHERE sequence_number = ANY($1::text[])
               AND persisted_at IS NULL
+            RETURNING sequence_number
             "#,
         )
         .bind(sequence_numbers)
-        .execute(tx.deref_mut())
+        .fetch_all(tx.deref_mut())
         .await?;
 
-        Ok(result.rows_affected())
+        Self::advance_completed_ingested_sequence_number_tx(
+            tx,
+            completed.as_deref(),
+            persisted.iter().max().map(String::as_str),
+        )
+        .await?;
+
+        Ok(persisted.len() as u64)
     }
 
-    /// This party's persisted watermark: the highest sequence number with a
-    /// persist mark. Exchanged via SyncState for startup recovery. Drain also
-    /// checks the persisted request set with `prove_persisted_prefix`.
+    /// Highest durably completed sequence, independent of retained journal rows.
+    pub async fn completed_ingested_sequence_number(&self) -> Result<Option<String>> {
+        let Json(completed): Json<Option<String>> = sqlx::query_scalar(
+            r#"
+            SELECT "value" FROM persistent_state
+            WHERE domain = $1 AND "key" = $2
+            "#,
+        )
+        .bind(INGEST_STATE_DOMAIN)
+        .bind(COMPLETED_SEQUENCE_NUMBER_KEY)
+        .fetch_one(&self.pool)
+        .await
+        .wrap_err("failed to read ingested request completion watermark")?;
+        validate_completed_sequence_number(completed)
+    }
+
+    /// Read durable progress after drain has settled all writers, rejecting any
+    /// unresolved valid request at or below that completed sequence.
+    pub async fn drain_completed_ingested_sequence_number(&self) -> Result<Option<String>> {
+        let completed = self.completed_ingested_sequence_number().await?;
+        let unresolved: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM ingested_requests WHERE sequence_number <= $1 AND persisted_at IS NULL AND is_valid IS NOT FALSE)",
+        )
+        .bind(completed.as_deref())
+        .fetch_one(&self.pool)
+        .await
+        .wrap_err("failed to check unresolved ingested requests during drain")?;
+        ensure!(
+            !unresolved,
+            "unresolved valid ingested rows at or below completed watermark"
+        );
+        Ok(completed)
+    }
+
+    /// Reconcile writes from older processes before advertising startup progress.
+    pub async fn reconcile_completed_ingested_sequence_number(&self) -> Result<Option<String>> {
+        let mut tx = self.tx().await?;
+        let completed = Self::lock_completed_ingested_sequence_number_tx(&mut tx).await?;
+        let retained: (Option<String>,) = sqlx::query_as(
+            "SELECT MAX(sequence_number) FROM ingested_requests WHERE persisted_at IS NOT NULL",
+        )
+        .fetch_one(tx.deref_mut())
+        .await?;
+        let retained = validate_completed_sequence_number(retained.0)?;
+        let reconciled = completed.clone().max(retained);
+        Self::advance_completed_ingested_sequence_number_tx(
+            &mut tx,
+            completed.as_deref(),
+            reconciled.as_deref(),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(reconciled)
+    }
+
+    async fn lock_completed_ingested_sequence_number_tx(
+        tx: &mut Transaction<'_, Postgres>,
+    ) -> Result<Option<String>> {
+        let Json(completed): Json<Option<String>> = sqlx::query_scalar(
+            r#"
+            SELECT "value" FROM persistent_state
+            WHERE domain = $1 AND "key" = $2
+            FOR UPDATE
+            "#,
+        )
+        .bind(INGEST_STATE_DOMAIN)
+        .bind(COMPLETED_SEQUENCE_NUMBER_KEY)
+        .fetch_one(tx.deref_mut())
+        .await
+        .wrap_err("failed to lock ingested request completion watermark")?;
+        validate_completed_sequence_number(completed)
+    }
+
+    async fn advance_completed_ingested_sequence_number_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        completed: Option<&str>,
+        candidate: Option<&str>,
+    ) -> Result<()> {
+        if let Some(candidate) = candidate {
+            if completed.is_none_or(|completed| candidate > completed) {
+                sqlx::query(
+                    r#"
+                    UPDATE persistent_state SET "value" = $1
+                    WHERE domain = $2 AND "key" = $3
+                    "#,
+                )
+                .bind(Json(candidate))
+                .bind(INGEST_STATE_DOMAIN)
+                .bind(COMPLETED_SEQUENCE_NUMBER_KEY)
+                .execute(tx.deref_mut())
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Highest persisted sequence still retained in the journal. Durable progress
+    /// can be higher after journal rows have been removed.
     pub async fn max_persisted_sequence_number(&self) -> Result<Option<String>> {
         let row: (Option<String>,) = sqlx::query_as(
             r#"
@@ -893,6 +1140,22 @@ WHERE id = $1;
     /// via the modifications roll-forward, and re-forming it locally would
     /// diverge the batches (peers will never co-form it). Returns rows affected.
     pub async fn mark_ingested_requests_persisted_up_to(&self, frontier: &str) -> Result<u64> {
+        let mut tx = self.tx().await?;
+        let marked = self
+            .mark_ingested_requests_persisted_up_to_tx(&mut tx, frontier)
+            .await?;
+        tx.commit().await?;
+        Ok(marked)
+    }
+
+    /// Apply the recovered journal frontier atomically with its modification effects.
+    pub async fn mark_ingested_requests_persisted_up_to_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        frontier: &str,
+    ) -> Result<u64> {
+        validate_completed_sequence_number(Some(frontier.to_owned()))?;
+        let completed = Self::lock_completed_ingested_sequence_number_tx(tx).await?;
         let result = sqlx::query(
             r#"
             UPDATE ingested_requests
@@ -902,7 +1165,13 @@ WHERE id = $1;
             "#,
         )
         .bind(frontier)
-        .execute(&self.pool)
+        .execute(tx.deref_mut())
+        .await?;
+        Self::advance_completed_ingested_sequence_number_tx(
+            tx,
+            completed.as_deref(),
+            Some(frontier),
+        )
         .await?;
 
         Ok(result.rows_affected())
@@ -1202,6 +1471,195 @@ pub mod tests {
     const MAX_CONNECTIONS: u32 = 80;
 
     #[tokio::test]
+    async fn reconciliation_payload_reader_reuses_lease_and_releases_blocked_query() -> Result<()> {
+        use std::time::Duration;
+        use tokio::time::{timeout, Instant};
+        let url = test_db_url()?;
+        let schema = temporary_name();
+        let admin = PostgresClient::new(&url, &schema, AccessMode::ReadWrite).await?;
+        sqlx::query("CREATE TABLE irises (id bigint PRIMARY KEY, version_id smallint NOT NULL, left_code bytea NOT NULL, left_mask bytea NOT NULL)").execute(&admin.pool).await?;
+        sqlx::query("INSERT INTO irises VALUES (1, 7, $1, $1)")
+            .bind(vec![0_u8; 2])
+            .execute(&admin.pool)
+            .await?;
+        let search_path = format!("\"{schema}\"");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .after_connect(move |connection, _| {
+                let search_path = search_path.clone();
+                Box::pin(async move {
+                    sqlx::query("SELECT set_config('search_path', $1, false)")
+                        .bind(search_path)
+                        .execute(connection)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .connect(&url)
+            .await?;
+        let store = Store::new(&PostgresClient {
+            pool: pool.clone(),
+            schema_name: schema.clone(),
+        })
+        .await?;
+        let mut reader = store
+            .iris_payload_reader(Instant::now() + Duration::from_millis(500))
+            .await?;
+        let pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(&mut **reader.connection.as_mut().unwrap())
+            .await?;
+        for _ in 0..2 {
+            let rows = reader.read_side(&[1], 0).await?;
+            assert_eq!(rows[0].vector_id(), iris_mpc_common::VectorId::new(1, 7));
+            let current: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+                .fetch_one(&mut **reader.connection.as_mut().unwrap())
+                .await?;
+            assert_eq!(pid, current);
+        }
+        let mut blocker = admin.pool.begin().await?;
+        sqlx::query("LOCK TABLE irises IN ACCESS EXCLUSIVE MODE")
+            .execute(&mut *blocker)
+            .await?;
+        assert!(reader.read_side(&[1], 0).await.is_err());
+        assert!(reader.connection.is_none());
+        timeout(Duration::from_secs(2), async {
+            loop {
+                let present: bool = sqlx::query_scalar(
+                    "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = $1)",
+                )
+                .bind(pid)
+                .fetch_one(&admin.pool)
+                .await?;
+                if !present {
+                    break Ok::<_, sqlx::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await??;
+        let setting: String = timeout(
+            Duration::from_secs(2),
+            sqlx::query_scalar("SHOW statement_timeout").fetch_one(&pool),
+        )
+        .await??;
+        assert_eq!(setting, "0");
+        assert!(reader.read_side(&[1], 0).await.is_err());
+        blocker.rollback().await?;
+        pool.close().await;
+        cleanup(&admin, &schema).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drain_completed_watermark_is_independent_of_retained_history() -> Result<()> {
+        let schema_name = temporary_name();
+        let client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        run_migrations(&client.pool, false).await?;
+        let store = Store::new(&client).await?;
+        assert_eq!(
+            store.drain_completed_ingested_sequence_number().await?,
+            None
+        );
+        let sequences = [
+            normalize_sns_sequence_number("10")?,
+            normalize_sns_sequence_number("100")?,
+        ];
+        for sequence in &sequences {
+            store
+                .insert_ingested_request(sequence, "body", true)
+                .await?;
+        }
+        let mut tx = store.tx().await?;
+        store
+            .mark_ingested_requests_persisted_tx(&mut tx, &sequences)
+            .await?;
+        tx.commit().await?;
+        let completed = store.drain_completed_ingested_sequence_number().await?;
+        assert_eq!(completed, Some(sequences[1].clone()));
+
+        sqlx::query("DELETE FROM ingested_requests WHERE sequence_number = $1")
+            .bind(&sequences[1])
+            .execute(&client.pool)
+            .await?;
+        assert_eq!(
+            store.max_persisted_sequence_number().await?,
+            Some(sequences[0].clone())
+        );
+        assert_eq!(
+            store.drain_completed_ingested_sequence_number().await?,
+            completed
+        );
+        sqlx::query("DELETE FROM ingested_requests")
+            .execute(&client.pool)
+            .await?;
+        assert_eq!(store.max_persisted_sequence_number().await?, None);
+        assert_eq!(
+            store.drain_completed_ingested_sequence_number().await?,
+            completed
+        );
+        cleanup(&client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn drain_completed_watermark_rejects_only_unresolved_valid_rows_within_cut() -> Result<()>
+    {
+        let schema_name = temporary_name();
+        let client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        run_migrations(&client.pool, false).await?;
+        let store = Store::new(&client).await?;
+        store.insert_ingested_request("100", "body", true).await?;
+        let completed = normalize_sns_sequence_number("100")?;
+        let mut tx = store.tx().await?;
+        store
+            .mark_ingested_requests_persisted_tx(&mut tx, std::slice::from_ref(&completed))
+            .await?;
+        tx.commit().await?;
+        store.insert_ingested_request("200", "body", true).await?;
+        sqlx::query("INSERT INTO ingested_requests (sequence_number, message_body, is_valid) VALUES ($1, 'body', false)")
+            .bind(normalize_sns_sequence_number("50")?).execute(&client.pool).await?;
+        assert_eq!(
+            store.drain_completed_ingested_sequence_number().await?,
+            Some(completed.clone())
+        );
+
+        let unresolved = normalize_sns_sequence_number("50")?;
+        for is_valid in [Some(true), None] {
+            sqlx::query("UPDATE ingested_requests SET is_valid = $1 WHERE sequence_number = $2")
+                .bind(is_valid)
+                .bind(&unresolved)
+                .execute(&client.pool)
+                .await?;
+            assert!(store
+                .drain_completed_ingested_sequence_number()
+                .await
+                .is_err());
+        }
+        sqlx::query("UPDATE ingested_requests SET is_valid = false WHERE sequence_number = $1")
+            .bind(&unresolved)
+            .execute(&client.pool)
+            .await?;
+        assert_eq!(
+            store.drain_completed_ingested_sequence_number().await?,
+            Some(completed.clone())
+        );
+        sqlx::query("UPDATE ingested_requests SET persisted_at = NULL WHERE sequence_number = $1")
+            .bind(&completed)
+            .execute(&client.pool)
+            .await?;
+        assert!(store
+            .drain_completed_ingested_sequence_number()
+            .await
+            .is_err());
+        cleanup(&client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn persisted_prefix_detects_gaps_and_changes_beyond_the_maximum() -> Result<()> {
         let schema_name = temporary_name();
         let client =
@@ -1242,7 +1700,8 @@ pub mod tests {
         let proof = store.prove_persisted_prefix(watermark.as_deref()).await?;
         assert_eq!(proof.0, 2);
         assert_ne!(proof.1, empty.1);
-        store.insert_ingested_request("50", "body", true).await?;
+        sqlx::query("INSERT INTO ingested_requests (sequence_number, message_body, is_valid) VALUES ($1, 'body', true)")
+            .bind(normalize_sns_sequence_number("50")?).execute(&client.pool).await?;
         assert!(store
             .prove_persisted_prefix(watermark.as_deref())
             .await
@@ -1377,6 +1836,643 @@ pub mod tests {
         tx.commit().await?;
 
         cleanup(&postgres_client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ingested_completion_watermark_commit_and_rollback() -> Result<()> {
+        let schema_name = temporary_name();
+        let client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        run_migrations(&client.pool, false).await?;
+        let store = Store::new(&client).await?;
+        assert_eq!(store.completed_ingested_sequence_number().await?, None);
+        for sequence in ["10", "42", "43"] {
+            store
+                .insert_ingested_request(sequence, "body", true)
+                .await?;
+        }
+        let sequences = [
+            normalize_sns_sequence_number("42")?,
+            normalize_sns_sequence_number("43")?,
+        ];
+        let mut tx = store.tx().await?;
+        assert_eq!(
+            store
+                .mark_ingested_requests_persisted_tx(&mut tx, &sequences)
+                .await?,
+            2
+        );
+        assert_eq!(store.completed_ingested_sequence_number().await?, None);
+        tx.rollback().await?;
+        assert_eq!(store.max_persisted_sequence_number().await?, None);
+        assert_eq!(store.completed_ingested_sequence_number().await?, None);
+
+        let mut tx = store.tx().await?;
+        assert_eq!(
+            store
+                .mark_ingested_requests_persisted_tx(&mut tx, &sequences)
+                .await?,
+            2
+        );
+        tx.commit().await?;
+        assert_eq!(
+            store.completed_ingested_sequence_number().await?,
+            Some(sequences[1].clone())
+        );
+
+        let mut tx = store.tx().await?;
+        assert_eq!(
+            store
+                .mark_ingested_requests_persisted_tx(&mut tx, &[])
+                .await?,
+            0
+        );
+        assert_eq!(
+            store
+                .mark_ingested_requests_persisted_tx(&mut tx, &sequences)
+                .await?,
+            0
+        );
+        assert_eq!(
+            store
+                .mark_ingested_requests_persisted_tx(
+                    &mut tx,
+                    &[normalize_sns_sequence_number("999")?]
+                )
+                .await?,
+            0
+        );
+        assert_eq!(
+            store
+                .mark_ingested_requests_persisted_tx(
+                    &mut tx,
+                    &[normalize_sns_sequence_number("10")?]
+                )
+                .await?,
+            1
+        );
+        tx.commit().await?;
+        assert_eq!(
+            store.completed_ingested_sequence_number().await?,
+            Some(sequences[1].clone())
+        );
+
+        store.insert_ingested_request("50", "body", true).await?;
+        let fifty = normalize_sns_sequence_number("50")?;
+        let mut tx = store.tx().await?;
+        assert_eq!(
+            store
+                .mark_ingested_requests_persisted_tx(
+                    &mut tx,
+                    &[fifty.clone(), normalize_sns_sequence_number("999")?]
+                )
+                .await?,
+            1
+        );
+        tx.commit().await?;
+        assert_eq!(
+            store.completed_ingested_sequence_number().await?,
+            Some(fifty.clone())
+        );
+
+        sqlx::query("DELETE FROM ingested_requests WHERE persisted_at IS NOT NULL")
+            .execute(&client.pool)
+            .await?;
+        assert_eq!(store.max_persisted_sequence_number().await?, None);
+        assert_eq!(
+            store.completed_ingested_sequence_number().await?,
+            Some(fifty)
+        );
+        cleanup(&client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ingested_completion_watermark_bootstrap() -> Result<()> {
+        const BOOTSTRAP: &str = include_str!(
+            "../../migrations/20261111000000_ingested_requests_completion_watermark.up.sql"
+        );
+        let schema_name = temporary_name();
+        let client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        run_migrations(&client.pool, false).await?;
+        let store = Store::new(&client).await?;
+        let empty: String = sqlx::query_scalar("SELECT \"value\"::text FROM persistent_state WHERE domain = 'db_ingest' AND \"key\" = 'completed_sequence_number'")
+            .fetch_one(&client.pool).await?;
+        assert_eq!(empty, "null");
+        for sequence in ["42", "70", "90"] {
+            store
+                .insert_ingested_request(sequence, "body", true)
+                .await?;
+        }
+        sqlx::query(
+            "UPDATE ingested_requests SET persisted_at = now() WHERE sequence_number <= $1",
+        )
+        .bind(normalize_sns_sequence_number("70")?)
+        .execute(&client.pool)
+        .await?;
+        sqlx::query("DELETE FROM persistent_state WHERE domain = 'db_ingest' AND \"key\" = 'completed_sequence_number'")
+            .execute(&client.pool).await?;
+        sqlx::query(BOOTSTRAP).execute(&client.pool).await?;
+        assert_eq!(
+            store.completed_ingested_sequence_number().await?,
+            Some(normalize_sns_sequence_number("70")?)
+        );
+        sqlx::query("UPDATE ingested_requests SET persisted_at = now()")
+            .execute(&client.pool)
+            .await?;
+        sqlx::query(BOOTSTRAP).execute(&client.pool).await?;
+        assert_eq!(
+            store.completed_ingested_sequence_number().await?,
+            Some(normalize_sns_sequence_number("70")?)
+        );
+        cleanup(&client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ingested_completion_reconciles_legacy_progress() -> Result<()> {
+        let schema_name = temporary_name();
+        let client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        run_migrations(&client.pool, false).await?;
+        let store = Store::new(&client).await?;
+        assert_eq!(
+            store.reconcile_completed_ingested_sequence_number().await?,
+            None
+        );
+        for sequence in ["120", "150"] {
+            store
+                .insert_ingested_request(sequence, "body", true)
+                .await?;
+        }
+        let lower = normalize_sns_sequence_number("120")?;
+        let higher = normalize_sns_sequence_number("150")?;
+        let mut tx = store.tx().await?;
+        store
+            .mark_ingested_requests_persisted_tx(&mut tx, std::slice::from_ref(&lower))
+            .await?;
+        tx.commit().await?;
+        sqlx::query("UPDATE ingested_requests SET persisted_at = now() WHERE sequence_number = $1")
+            .bind(&higher)
+            .execute(&client.pool)
+            .await?;
+        assert_eq!(
+            store.completed_ingested_sequence_number().await?,
+            Some(lower)
+        );
+        assert_eq!(
+            store.reconcile_completed_ingested_sequence_number().await?,
+            Some(higher.clone())
+        );
+        sqlx::query("DELETE FROM ingested_requests WHERE sequence_number = $1")
+            .bind(&higher)
+            .execute(&client.pool)
+            .await?;
+        assert_eq!(
+            store.reconcile_completed_ingested_sequence_number().await?,
+            Some(higher.clone())
+        );
+        sqlx::query("DELETE FROM ingested_requests")
+            .execute(&client.pool)
+            .await?;
+        assert_eq!(
+            store.reconcile_completed_ingested_sequence_number().await?,
+            Some(higher.clone())
+        );
+        sqlx::query("INSERT INTO ingested_requests (sequence_number, message_body, persisted_at) VALUES ($1, 'body', now())")
+            .bind("x".repeat(SNS_SEQUENCE_NUMBER_WIDTH)).execute(&client.pool).await?;
+        assert!(store
+            .reconcile_completed_ingested_sequence_number()
+            .await
+            .is_err());
+        assert_eq!(
+            store.completed_ingested_sequence_number().await?,
+            Some(higher)
+        );
+        cleanup(&client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ingested_completion_recovery_is_atomic() -> Result<()> {
+        let schema_name = temporary_name();
+        let client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        run_migrations(&client.pool, false).await?;
+        let store = Store::new(&client).await?;
+        for sequence in ["120", "130", "140"] {
+            store
+                .insert_ingested_request(sequence, "body", true)
+                .await?;
+        }
+        let lower = normalize_sns_sequence_number("120")?;
+        let frontier = normalize_sns_sequence_number("150")?;
+        let mut tx = store.tx().await?;
+        store
+            .mark_ingested_requests_persisted_tx(&mut tx, std::slice::from_ref(&lower))
+            .await?;
+        tx.commit().await?;
+
+        for commit in [false, true] {
+            let mut tx = store.tx().await?;
+            sqlx::query("INSERT INTO modifications (id, serial_id, request_type, status, persisted) VALUES (1, 1, $1, 'COMPLETED', true)")
+                .bind(UNIQUENESS_MESSAGE_TYPE).execute(tx.deref_mut()).await?;
+            assert_eq!(
+                store
+                    .mark_ingested_requests_persisted_up_to_tx(&mut tx, &frontier)
+                    .await?,
+                2
+            );
+            assert_eq!(
+                store.completed_ingested_sequence_number().await?,
+                Some(lower.clone())
+            );
+            if commit {
+                tx.commit().await?;
+                assert_eq!(
+                    store.completed_ingested_sequence_number().await?,
+                    Some(frontier.clone())
+                );
+            } else {
+                tx.rollback().await?;
+                assert_eq!(
+                    store.completed_ingested_sequence_number().await?,
+                    Some(lower.clone())
+                );
+                assert_eq!(
+                    store.max_persisted_sequence_number().await?,
+                    Some(lower.clone())
+                );
+            }
+            let modifications: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM modifications")
+                .fetch_one(&client.pool)
+                .await?;
+            assert_eq!(modifications, i64::from(commit));
+        }
+
+        sqlx::query("DELETE FROM ingested_requests")
+            .execute(&client.pool)
+            .await?;
+        let next = normalize_sns_sequence_number("200")?;
+        assert_eq!(
+            store.mark_ingested_requests_persisted_up_to(&next).await?,
+            0
+        );
+        assert_eq!(
+            store.completed_ingested_sequence_number().await?,
+            Some(next.clone())
+        );
+        assert_eq!(
+            store.mark_ingested_requests_persisted_up_to(&lower).await?,
+            0
+        );
+        assert_eq!(
+            store.completed_ingested_sequence_number().await?,
+            Some(next)
+        );
+        assert!(store
+            .mark_ingested_requests_persisted_up_to("200")
+            .await
+            .is_err());
+        cleanup(&client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ingested_completion_watermark_rejects_invalid_state_and_keys() -> Result<()> {
+        let schema_name = temporary_name();
+        let client =
+            PostgresClient::new(test_db_url()?.as_str(), &schema_name, AccessMode::ReadWrite)
+                .await?;
+        run_migrations(&client.pool, false).await?;
+        let store = Store::new(&client).await?;
+        store.insert_ingested_request("42", "body", true).await?;
+        let sequence = normalize_sns_sequence_number("42")?;
+        for invalid in [
+            "42",
+            "{}",
+            "\"42\"",
+            "\"000000000000000000000000000000000000000x\"",
+        ] {
+            sqlx::query("UPDATE persistent_state SET \"value\" = $1::jsonb WHERE domain = 'db_ingest' AND \"key\" = 'completed_sequence_number'")
+                .bind(invalid).execute(&client.pool).await?;
+            assert!(store.completed_ingested_sequence_number().await.is_err());
+            assert!(store
+                .drain_completed_ingested_sequence_number()
+                .await
+                .is_err());
+            assert!(store
+                .insert_ingested_request("43", "body", true)
+                .await
+                .is_err());
+            assert!(store
+                .reconcile_completed_ingested_sequence_number()
+                .await
+                .is_err());
+            assert!(store
+                .mark_ingested_requests_persisted_up_to(&sequence)
+                .await
+                .is_err());
+            let mut tx = store.tx().await?;
+            assert!(store
+                .mark_ingested_requests_persisted_tx(&mut tx, std::slice::from_ref(&sequence))
+                .await
+                .is_err());
+            tx.rollback().await?;
+            assert_eq!(store.max_persisted_sequence_number().await?, None);
+        }
+        sqlx::query("UPDATE persistent_state SET \"value\" = 'null'::jsonb WHERE domain = 'db_ingest' AND \"key\" = 'completed_sequence_number'")
+            .execute(&client.pool).await?;
+        let mut tx = store.tx().await?;
+        assert!(store
+            .mark_ingested_requests_persisted_tx(&mut tx, &["42".to_owned()])
+            .await
+            .is_err());
+        tx.rollback().await?;
+        assert_eq!(store.max_persisted_sequence_number().await?, None);
+        sqlx::query("DELETE FROM persistent_state WHERE domain = 'db_ingest' AND \"key\" = 'completed_sequence_number'")
+            .execute(&client.pool).await?;
+        assert!(store.completed_ingested_sequence_number().await.is_err());
+        assert!(store
+            .drain_completed_ingested_sequence_number()
+            .await
+            .is_err());
+        assert!(store
+            .insert_ingested_request("43", "body", true)
+            .await
+            .is_err());
+        assert!(store
+            .reconcile_completed_ingested_sequence_number()
+            .await
+            .is_err());
+        assert!(store
+            .mark_ingested_requests_persisted_up_to(&sequence)
+            .await
+            .is_err());
+        let mut tx = store.tx().await?;
+        assert!(store
+            .mark_ingested_requests_persisted_tx(&mut tx, &[sequence])
+            .await
+            .is_err());
+        tx.rollback().await?;
+        cleanup(&client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ingested_admission_preserves_duplicates_and_rejects_deleted_replays() -> Result<()>
+    {
+        let schema_name = temporary_name();
+        let client =
+            PostgresClient::new(&test_db_url()?, &schema_name, AccessMode::ReadWrite).await?;
+        run_migrations(&client.pool, false).await?;
+        let store = Store::new(&client).await?;
+        for sequence in ["10", "20"] {
+            assert!(
+                store
+                    .insert_ingested_request(sequence, "body", true)
+                    .await?
+            );
+        }
+        store
+            .mark_ingested_requests_persisted_up_to(&normalize_sns_sequence_number("20")?)
+            .await?;
+        for sequence in ["10", "20"] {
+            assert!(
+                !store
+                    .insert_ingested_request(sequence, "duplicate", true)
+                    .await?
+            );
+        }
+        sqlx::query("DELETE FROM ingested_requests")
+            .execute(&client.pool)
+            .await?;
+        for sequence in ["10", "20"] {
+            let error = store
+                .insert_ingested_request(sequence, "replay", true)
+                .await
+                .unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("at or below completed watermark"));
+        }
+        assert_eq!(store.count_pending_ingested_requests().await?, 0);
+        assert!(store.insert_ingested_request("30", "body", true).await?);
+        assert!(
+            !store
+                .insert_ingested_request("30", "duplicate", true)
+                .await?
+        );
+        assert_eq!(store.count_pending_ingested_requests().await?, 1);
+        cleanup(&client, &schema_name).await?;
+        Ok(())
+    }
+
+    async fn wait_for_blocked_backend(pool: &PgPool, blocker: i32) -> Result<i32> {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let pid: Option<i32> = sqlx::query_scalar(
+                    "SELECT pid FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)) LIMIT 1",
+                ).bind(blocker).fetch_optional(pool).await?;
+                if let Some(pid) = pid {
+                    return Ok(pid);
+                }
+                tokio::task::yield_now().await;
+            }
+        }).await?
+    }
+
+    #[tokio::test]
+    async fn test_ingested_admission_deadline_bounds_a_blocked_completion_lock() -> Result<()> {
+        use std::time::Duration;
+        let schema_name = temporary_name();
+        let client =
+            PostgresClient::new(&test_db_url()?, &schema_name, AccessMode::ReadWrite).await?;
+        run_migrations(&client.pool, false).await?;
+        let store = Store::new(&client).await?;
+        let mut completion = store.tx().await?;
+        Store::lock_completed_ingested_sequence_number_tx(&mut completion).await?;
+        let completion_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+            .fetch_one(completion.deref_mut())
+            .await?;
+        let admission = tokio::spawn({
+            let store = store.clone();
+            async move { store.insert_ingested_request("10", "body", true).await }
+        });
+        wait_for_blocked_backend(&client.pool, completion_pid).await?;
+        tokio::time::pause();
+        tokio::time::advance(Duration::from_secs(31)).await;
+        let result = admission.await;
+        tokio::time::resume();
+        let error = result?.unwrap_err();
+        assert!(error.to_string().contains("admission deadline exceeded"));
+        completion.rollback().await?;
+        assert_eq!(
+            tokio::time::timeout(
+                Duration::from_secs(5),
+                store.count_pending_ingested_requests()
+            )
+            .await??,
+            0
+        );
+        cleanup(&client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ingested_admission_preserves_shorter_statement_timeout_and_pool_connection(
+    ) -> Result<()> {
+        use std::time::Duration;
+        let schema_name = temporary_name();
+        let url = test_db_url()?;
+        let client = PostgresClient::new(&url, &schema_name, AccessMode::ReadWrite).await?;
+        run_migrations(&client.pool, false).await?;
+        let mut store = Store::new(&client).await?;
+        let pool = client
+            .pool
+            .options()
+            .clone()
+            .max_connections(1)
+            .connect(&url)
+            .await?;
+        store.pool = pool.clone();
+        sqlx::query("SET statement_timeout = '250ms'")
+            .execute(&pool)
+            .await?;
+        let original: (i32, String) =
+            sqlx::query_as("SELECT pg_backend_pid(), current_setting('statement_timeout')")
+                .fetch_one(&pool)
+                .await?;
+        let mut completion = client.pool.begin().await?;
+        Store::lock_completed_ingested_sequence_number_tx(&mut completion).await?;
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            store.insert_ingested_request("10", "body", true),
+        )
+        .await?
+        .unwrap_err();
+        assert!(error.root_cause().to_string().contains("statement timeout"));
+        completion.rollback().await?;
+        let after_rollback: (i32, String) =
+            sqlx::query_as("SELECT pg_backend_pid(), current_setting('statement_timeout')")
+                .fetch_one(&pool)
+                .await?;
+        assert_eq!(after_rollback, original);
+        assert!(store.insert_ingested_request("10", "body", true).await?);
+        let after_commit: (i32, String) =
+            sqlx::query_as("SELECT pg_backend_pid(), current_setting('statement_timeout')")
+                .fetch_one(&pool)
+                .await?;
+        assert_eq!(after_commit, original);
+        pool.close().await;
+        cleanup(&client, &schema_name).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ingested_admission_serializes_before_completion_and_releases_on_cancel(
+    ) -> Result<()> {
+        use std::time::Duration;
+        for cancel in [false, true] {
+            let schema_name = temporary_name();
+            let client =
+                PostgresClient::new(&test_db_url()?, &schema_name, AccessMode::ReadWrite).await?;
+            run_migrations(&client.pool, false).await?;
+            let store = Store::new(&client).await?;
+            let mut journal_blocker = store.tx().await?;
+            let journal_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+                .fetch_one(journal_blocker.deref_mut())
+                .await?;
+            sqlx::query("LOCK TABLE ingested_requests IN SHARE MODE")
+                .execute(journal_blocker.deref_mut())
+                .await?;
+            let admission = tokio::spawn({
+                let store = store.clone();
+                async move { store.insert_ingested_request("10", "body", true).await }
+            });
+            let admission_pid = wait_for_blocked_backend(&client.pool, journal_pid).await?;
+            let completion = tokio::spawn({
+                let store = store.clone();
+                async move {
+                    store
+                        .mark_ingested_requests_persisted_up_to(&normalize_sns_sequence_number(
+                            "20",
+                        )?)
+                        .await
+                }
+            });
+            wait_for_blocked_backend(&client.pool, admission_pid).await?;
+            if cancel {
+                admission.abort();
+                assert!(admission.await.unwrap_err().is_cancelled());
+                journal_blocker.commit().await?;
+            } else {
+                journal_blocker.commit().await?;
+                assert!(tokio::time::timeout(Duration::from_secs(5), admission).await???);
+            }
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(5), completion).await???,
+                if cancel { 0 } else { 1 }
+            );
+            assert_eq!(
+                store.completed_ingested_sequence_number().await?,
+                Some(normalize_sns_sequence_number("20")?)
+            );
+            let retained: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM ingested_requests")
+                .fetch_one(&client.pool)
+                .await?;
+            assert_eq!(retained, if cancel { 0 } else { 1 });
+            cleanup(&client, &schema_name).await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ingested_admission_waits_for_completion_commit_or_rollback() -> Result<()> {
+        use std::time::Duration;
+        for commit in [false, true] {
+            let schema_name = temporary_name();
+            let client =
+                PostgresClient::new(&test_db_url()?, &schema_name, AccessMode::ReadWrite).await?;
+            run_migrations(&client.pool, false).await?;
+            let store = Store::new(&client).await?;
+            let mut completion = store.tx().await?;
+            let completion_pid: i32 = sqlx::query_scalar("SELECT pg_backend_pid()")
+                .fetch_one(completion.deref_mut())
+                .await?;
+            store
+                .mark_ingested_requests_persisted_up_to_tx(
+                    &mut completion,
+                    &normalize_sns_sequence_number("20")?,
+                )
+                .await?;
+            let admission = tokio::spawn({
+                let store = store.clone();
+                async move { store.insert_ingested_request("10", "body", true).await }
+            });
+            wait_for_blocked_backend(&client.pool, completion_pid).await?;
+            if commit {
+                completion.commit().await?;
+            } else {
+                completion.rollback().await?;
+            }
+            let admitted = tokio::time::timeout(Duration::from_secs(5), admission).await??;
+            if commit {
+                assert!(admitted.is_err());
+                assert_eq!(store.count_pending_ingested_requests().await?, 0);
+            } else {
+                assert!(admitted?);
+                assert_eq!(store.completed_ingested_sequence_number().await?, None);
+                assert_eq!(store.count_pending_ingested_requests().await?, 1);
+            }
+            cleanup(&client, &schema_name).await?;
+        }
         Ok(())
     }
 
