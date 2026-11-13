@@ -308,9 +308,8 @@ async fn ingest_sqs_message(
     let sns_message: SQSMessage = serde_json::from_str(&body).expect("checked above");
     let is_valid = is_request_payload_valid(&sns_message);
 
-    // DB errors are transient: propagate WITHOUT deleting so the message is
-    // redelivered (PK dedup makes the redelivery-after-successful-insert
-    // case harmless).
+    // Admission failures must leave the message unacknowledged. Retained PK
+    // duplicates are safe to acknowledge after the admission transaction commits.
     let inserted = iris_store
         .insert_ingested_request(&sns_message.sequence_number, &body, is_valid)
         .await?;
@@ -2257,6 +2256,109 @@ mod tests {
             iris_mpc_store::test_utils::cleanup(db, schema).await?;
         }
         result??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "db_dependent")]
+    async fn ingest_admission_deletes_only_after_committed_acceptance() -> eyre::Result<()> {
+        use super::*;
+        use axum::{routing::post, Json, Router};
+        use iris_mpc_common::postgres::{run_migrations, AccessMode, PostgresClient};
+        use std::sync::atomic::AtomicUsize;
+
+        for scenario in ["insert", "duplicate", "replay", "corrupt", "missing"] {
+            let schema = iris_mpc_store::test_utils::temporary_name();
+            let db = PostgresClient::new(
+                &iris_mpc_store::test_utils::test_db_url()?,
+                &schema,
+                AccessMode::ReadWrite,
+            )
+            .await?;
+            run_migrations(&db.pool, false).await?;
+            let store = Store::new(&db).await?;
+            if scenario == "duplicate" {
+                store
+                    .insert_ingested_request("10", "retained", true)
+                    .await?;
+            }
+            if matches!(scenario, "duplicate" | "replay") {
+                store
+                    .mark_ingested_requests_persisted_up_to(&normalize_sns_sequence_number("20")?)
+                    .await?;
+            }
+            if scenario == "corrupt" {
+                sqlx::query("UPDATE persistent_state SET \"value\" = '{}'::jsonb WHERE domain = 'db_ingest' AND \"key\" = 'completed_sequence_number'")
+                    .execute(&db.pool).await?;
+            } else if scenario == "missing" {
+                sqlx::query("DELETE FROM persistent_state WHERE domain = 'db_ingest' AND \"key\" = 'completed_sequence_number'")
+                    .execute(&db.pool).await?;
+            }
+            let deletes = Arc::new(AtomicUsize::new(0));
+            let routes = Router::new().route(
+                "/",
+                post({
+                    let pool = db.pool.clone();
+                    let deletes = deletes.clone();
+                    move || {
+                        let pool = pool.clone();
+                        let deletes = deletes.clone();
+                        async move {
+                            let retained: i64 =
+                                sqlx::query_scalar("SELECT COUNT(*) FROM ingested_requests")
+                                    .fetch_one(&pool)
+                                    .await
+                                    .unwrap();
+                            assert_eq!(retained, 1, "SQS delete must observe committed admission");
+                            deletes.fetch_add(1, Ordering::SeqCst);
+                            Json(serde_json::json!({}))
+                        }
+                    }
+                }),
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+            let endpoint = format!("http://{}", listener.local_addr()?);
+            let http = tokio::spawn(async move {
+                axum::serve(listener, routes).await.unwrap();
+            });
+            let client = Client::from_conf(
+                aws_sdk_sqs::config::Builder::new()
+                    .behavior_version_latest()
+                    .retry_config(aws_sdk_sqs::config::retry::RetryConfig::disabled())
+                    .region(aws_sdk_sqs::config::Region::new("us-east-1"))
+                    .credentials_provider(aws_sdk_sqs::config::Credentials::new(
+                        "test", "test", None, None, "test",
+                    ))
+                    .endpoint_url(&endpoint)
+                    .build(),
+            );
+            let mut config: Config = serde_json::from_value(serde_json::json!({}))?;
+            config.requests_queue_url = endpoint;
+            let message = aws_sdk_sqs::types::Message::builder()
+                .receipt_handle("receipt")
+                .body(serde_json::json!({
+                    "Type":"Notification", "MessageId":"test", "SequenceNumber":"10", "TopicArn":"test",
+                    "Message": serde_json::json!({"serial_id": 1}).to_string(), "Timestamp":"test", "UnsubscribeURL":"test",
+                    "MessageAttributes":{"message_type":{"Type":"String", "Value":IDENTITY_DELETION_MESSAGE_TYPE}}
+                }).to_string()).build();
+            let result = tokio::time::timeout(
+                Duration::from_secs(5),
+                ingest_sqs_message(&client, &config, &store, message),
+            )
+            .await?;
+            let accepted = matches!(scenario, "insert" | "duplicate");
+            assert_eq!(result.is_ok(), accepted, "{scenario}: {result:?}");
+            assert_eq!(
+                deletes.load(Ordering::SeqCst),
+                usize::from(accepted),
+                "{scenario}"
+            );
+            if !accepted {
+                assert_eq!(store.count_pending_ingested_requests().await?, 0);
+            }
+            http.abort();
+            iris_mpc_store::test_utils::cleanup(&db, &schema).await?;
+        }
         Ok(())
     }
 

@@ -17,7 +17,7 @@ reviews:
     - path: "**/*"
       instructions: "Report actionable correctness, security, data-integrity and reliability defects introduced by this change. Trace relevant callers and failure paths before asserting a bug; cite the code or contract and explain impact. Avoid speculative requirements, style-only churn and duplicate findings from existing CI. For cross-repository claims, identify the source and relevant dependency revision; default-branch context is not proof of deployed compatibility. If context is unavailable, state the uncertainty rather than inventing a contract."
     - path: iris-mpc*/**
-      instructions: "For protocol and matching changes compare CPU/HNSW and GPU behavior where applicable. Check party synchronization, share/serial ownership, persistence versus result publication, restart/replay and bounded batching. Check shared dependency revisions before assuming linked main matches the deployed caller."
+      instructions: "For protocol and matching changes check the CPU linear-scan and HNSW paths where applicable. Check party synchronization, share/serial ownership, persistence versus result publication, restart/replay and bounded batching. Check shared dependency revisions before assuming linked main matches the deployed caller."
     - path: migrations/**
       instructions: "Check schema changes against old and new binaries, migration history validation, rolling upgrades, rollback and retention required by recovery."
     - path: "{deploy/**,.github/workflows/**,**/Dockerfile*}"
