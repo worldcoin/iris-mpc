@@ -74,14 +74,15 @@ This security model forms the baseline of the implementation, and any attacks or
 
 Retain `pub` and `chk` for older clients.
 
-CI validates production only. Every mirror must pass; download failures also fail validation. Downloads have a 30-second timeout and 1 MiB limit. This repository's raw GitHub URLs targeting `main` use checkout files, which must not contain symlinks. Configure `Validate public key registry` as a required status check to enforce the gate.
+CI validates both production and staging registries. Every mirror must pass; download failures also fail validation. Downloads have a 30-second timeout and 1 MiB limit. This repository's raw GitHub URLs targeting `main` use checkout files, which must not contain symlinks. Configure `Validate public key registry` as a required status check to enforce the gate.
 
-For production rotation, coordinate publication of the same new key to every remote source in `pub` (including `pki-smpc.worldcoin.org`) with a PR updating `certs/party-N.pub`, `key_b64`, and `chk`. Calculate SHA-256 with `shasum -a 256 certs/party-N.pub` and prefix the digest with `sha256:`. Refresh staging snapshots as needed; CI does not check them.
+For production rotation, coordinate publication of the same new key to every remote source in `pub` (including `pki-smpc.worldcoin.org`) with a PR updating `certs/party-N.pub`, `key_b64`, and `chk`. Calculate SHA-256 with `shasum -a 256 certs/party-N.pub` and prefix the digest with `sha256:`. Update staging keys and their snapshots in `keys-staging.json` as needed; CI checks their embedded values and every listed location.
 
-Validate production against the checkout:
+Validate either registry against the checkout:
 
 ```sh
 python3 scripts/check-key-checksums.py keys.json --repository worldcoin/iris-mpc --repo-root .
+python3 scripts/check-key-checksums.py keys-staging.json --repository worldcoin/iris-mpc --repo-root .
 ```
 
 ## GPU Implementation
