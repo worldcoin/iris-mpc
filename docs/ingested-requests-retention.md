@@ -46,13 +46,14 @@ After keys have been deleted, rolling back to unguarded admission can reprocess
 old requests; disabling further cleanup does not restore those keys.
 This change does not enable retention jobs.
 
-## Prepared steady-state jobs
+## Prepared stage steady-state jobs
 
-`iris-ampc-ingested-requests-retention` has separate stage/prod common values
-and per-party values on the `ampc-hnsw` clusters. Both environments start
-suspended and with `RETENTION__DRY_RUN=true`; the existing reset jobs stay
-suspended. Registration belongs in the corresponding cluster-apps catalogs,
-using `common-cronjob` 1.11.0 in namespace `ampc-hnsw`.
+`iris-ampc-ingested-requests-retention` has stage common values and per-party
+values on the three `ampc-hnsw` stage clusters. The jobs start suspended and
+with `RETENTION__DRY_RUN=true`; the existing reset jobs stay suspended.
+Registration belongs in the stage cluster-apps catalogs, using
+`common-cronjob` 1.11.0 in namespace `ampc-hnsw`. Production configuration
+and deployment are deferred to separate work.
 
 The provisional grace is **30 days since `persisted_at`**, not receipt time.
 Only persisted rows with `is_valid IS TRUE`, a normalized 40-digit sequence,
