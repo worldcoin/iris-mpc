@@ -74,9 +74,9 @@ This security model forms the baseline of the implementation, and any attacks or
 
 Retain `pub` and `chk` for older clients.
 
-CI validates both production and staging registries. Every mirror must pass; download failures also fail validation. Downloads have a 30-second timeout and 1 MiB limit. This repository's raw GitHub URLs targeting `main` use checkout files, which must not contain symlinks. Configure `Validate public key registry` as a required status check to enforce the gate.
+CI validates production when `keys.json` or `certs/` changes, staging when `keys-staging.json` changes, and both when the validator, its tests, or the workflow changes. Every mirror of a selected registry must pass; download failures also fail validation. Downloads have a 30-second timeout and 1 MiB limit. This repository's raw GitHub URLs targeting `main` use checkout files, which must not contain symlinks. Configure `Validate public key registry` as a required status check to enforce the gate.
 
-For production rotation, coordinate publication of the same new key to every remote source in `pub` (including `pki-smpc.worldcoin.org`) with a PR updating `certs/party-N.pub`, `key_b64`, and `chk`. Calculate SHA-256 with `shasum -a 256 certs/party-N.pub` and prefix the digest with `sha256:`. Update staging keys and their snapshots in `keys-staging.json` as needed; CI checks their embedded values and every listed location.
+For production rotation, coordinate publication of the same new key to every remote source in `pub` (including `pki-smpc.worldcoin.org`) with a PR updating `certs/party-N.pub`, `key_b64`, and `chk`. The remote sources must serve the matching key before the PR's checksum check can pass. Coordinate the cutover with existing clients; keep the old decryption key usable until clients have refreshed cached keys and in-flight requests have drained. Calculate SHA-256 with `shasum -a 256 certs/party-N.pub` and prefix the digest with `sha256:`. Update staging keys and their snapshots in `keys-staging.json` as needed; CI checks their embedded values and every listed location.
 
 Validate either registry against the checkout:
 

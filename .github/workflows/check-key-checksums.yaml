@@ -37,37 +37,45 @@ jobs:
         run: |
           # A new branch or unavailable pre-force-push commit must run validation.
           if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "production=true" >> "$GITHUB_OUTPUT"
+            echo "staging=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [[ "$EVENT_NAME" == "pull_request" ]]; then
             BASE_SHA=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
           fi
-          if git diff --quiet --no-renames "$BASE_SHA" "$HEAD_SHA" -- \
-            keys.json keys-staging.json certs/ scripts/check-key-checksums.py \
-            scripts/tests/test_check_key_checksums.py .github/workflows/check-key-checksums.yaml; then
-            echo "relevant=false" >> "$GITHUB_OUTPUT"
-          else
-            status=$?
-            if [[ "$status" != 1 ]]; then
-              exit "$status"
+          for registry in production staging; do
+            if [[ "$registry" == production ]]; then
+              paths=(keys.json certs/)
+            else
+              paths=(keys-staging.json)
             fi
-            echo "relevant=true" >> "$GITHUB_OUTPUT"
-          fi
+            if git diff --quiet --no-renames "$BASE_SHA" "$HEAD_SHA" -- \
+              "${paths[@]}" scripts/check-key-checksums.py \
+              scripts/tests/test_check_key_checksums.py .github/workflows/check-key-checksums.yaml; then
+              echo "$registry=false" >> "$GITHUB_OUTPUT"
+            else
+              status=$?
+              if [[ "$status" != 1 ]]; then
+                exit "$status"
+              fi
+              echo "$registry=true" >> "$GITHUB_OUTPUT"
+            fi
+          done
 
       - name: Test checksum validator
-        if: steps.changes.outputs.relevant == 'true'
+        if: steps.changes.outputs.production == 'true' || steps.changes.outputs.staging == 'true'
         run: python3 -m unittest discover -s scripts/tests -p 'test_check_key_checksums.py'
 
       - name: Verify every public key location
-        if: steps.changes.outputs.relevant == 'true'
+        if: steps.changes.outputs.production == 'true'
         # Own-repository main URLs use files in the checkout, including PR changes.
         run: python3 scripts/check-key-checksums.py keys.json --repository "$GITHUB_REPOSITORY" --repo-root "$GITHUB_WORKSPACE"
 
       - name: Verify every staging public key location
-        if: steps.changes.outputs.relevant == 'true'
+        if: steps.changes.outputs.staging == 'true'
         run: python3 scripts/check-key-checksums.py keys-staging.json --repository "$GITHUB_REPOSITORY" --repo-root "$GITHUB_WORKSPACE"
 
       - name: No registry changes
-        if: steps.changes.outputs.relevant == 'false'
+        if: steps.changes.outputs.production == 'false' && steps.changes.outputs.staging == 'false'
         run: echo "No registry, certificate, validator, test, or workflow changes to validate."
