@@ -108,6 +108,14 @@ impl Coordinator {
             config.db_backed_ingest && config.cpu_drain_timeout_secs > 0,
             "runtime handoff requires DB-backed intake and a positive drain budget"
         );
+        let peers = config
+            .server_coordination
+            .as_ref()
+            .ok_or_else(|| eyre!("handoff requires server coordination"))?;
+        ensure!(
+            peers.node_hostnames.len() == 3 && peers.healthcheck_ports.len() == 3,
+            "handoff requires three serving addresses"
+        );
         let deployment = Uuid::parse_str(&cell.deployment_id)?;
         ensure!(!deployment.is_nil(), "CPU deployment must not be nil");
         let (source_urls, intent) = if config.startup_mode == StartupMode::Candidate {
@@ -129,14 +137,6 @@ impl Coordinator {
             ensure!(
                 cell.handoff.is_none(),
                 "handoff intent belongs to the destination candidate"
-            );
-            let peers = config
-                .server_coordination
-                .as_ref()
-                .ok_or_else(|| eyre!("source handoff requires server coordination"))?;
-            ensure!(
-                peers.node_hostnames.len() == 3 && peers.healthcheck_ports.len() == 3,
-                "handoff requires three source addresses"
             );
             let addresses = std::array::from_fn(|i| {
                 format!(
@@ -811,9 +811,25 @@ pub(super) mod tests {
         for (party, listener) in listeners.into_iter().enumerate() {
             let config: Config = serde_json::from_value(serde_json::json!({
                 "party_id": party, "startup_mode": "candidate", "db_backed_ingest": true,
+                "server_coordination": {},
                 "cpu_cell": {"deployment_id": destination, "candidate_status_urls": serde_json::to_string(&addresses)?,
                     "handoff": {"id": intent, "source_deployment_id": source, "source_status_urls": serde_json::to_string(&addresses)?}}
             }))?;
+            if party == 0 {
+                for (hosts, ports) in [(2, 3), (3, 2), (4, 3), (3, 4)] {
+                    let mut malformed = config.clone();
+                    let peers = malformed.server_coordination.as_mut().unwrap();
+                    peers.node_hostnames.resize(hosts, "localhost".into());
+                    peers.healthcheck_ports.resize(ports, "3000".into());
+                    assert_eq!(
+                        Coordinator::new(&malformed, candidates[party], None)
+                            .err()
+                            .unwrap()
+                            .to_string(),
+                        "handoff requires three serving addresses"
+                    );
+                }
+            }
             let coordinator = Coordinator::new(&config, candidates[party], None)?.unwrap();
             if party < 2 {
                 coordinator.mark_ready(candidates[party]).await;
