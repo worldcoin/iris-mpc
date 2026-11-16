@@ -116,6 +116,12 @@ impl Coordinator {
             peers.node_hostnames.len() == 3 && peers.healthcheck_ports.len() == 3,
             "handoff requires three serving addresses"
         );
+        let serving_urls = urls(&std::array::from_fn(|i| {
+            format!(
+                "http://{}:{}/handoff-status",
+                peers.node_hostnames[i], peers.healthcheck_ports[i]
+            )
+        }))?;
         let deployment = Uuid::parse_str(&cell.deployment_id)?;
         ensure!(!deployment.is_nil(), "CPU deployment must not be nil");
         let (source_urls, intent) = if config.startup_mode == StartupMode::Candidate {
@@ -138,13 +144,7 @@ impl Coordinator {
                 cell.handoff.is_none(),
                 "handoff intent belongs to the destination candidate"
             );
-            let addresses = std::array::from_fn(|i| {
-                format!(
-                    "http://{}:{}/handoff-status",
-                    peers.node_hostnames[i], peers.healthcheck_ports[i]
-                )
-            });
-            (urls(&addresses)?, None)
+            (serving_urls, None)
         };
         Ok(Some(Self {
             status: Arc::new(RwLock::new(Status {
@@ -811,7 +811,7 @@ pub(super) mod tests {
         for (party, listener) in listeners.into_iter().enumerate() {
             let config: Config = serde_json::from_value(serde_json::json!({
                 "party_id": party, "startup_mode": "candidate", "db_backed_ingest": true,
-                "server_coordination": {},
+                "server_coordination": {"healthcheck_ports": "[\"3000\",\"3001\",\"3002\"]"},
                 "cpu_cell": {"deployment_id": destination, "candidate_status_urls": serde_json::to_string(&addresses)?,
                     "handoff": {"id": intent, "source_deployment_id": source, "source_status_urls": serde_json::to_string(&addresses)?}}
             }))?;
@@ -828,6 +828,17 @@ pub(super) mod tests {
                             .to_string(),
                         "handoff requires three serving addresses"
                     );
+                }
+                for (host, port) in [
+                    ("localhost", "3000"),
+                    ("localhost", "invalid"),
+                    ("bad host", "3000"),
+                ] {
+                    let mut malformed = config.clone();
+                    let peers = malformed.server_coordination.as_mut().unwrap();
+                    peers.node_hostnames = vec![host.into(); 3];
+                    peers.healthcheck_ports = vec![port.into(); 3];
+                    assert!(Coordinator::new(&malformed, candidates[party], None).is_err());
                 }
             }
             let coordinator = Coordinator::new(&config, candidates[party], None)?.unwrap();
