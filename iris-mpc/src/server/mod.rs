@@ -1,5 +1,6 @@
 mod candidate;
 pub mod drain;
+mod handoff;
 pub mod reconciliation;
 pub mod registry_diff;
 
@@ -173,20 +174,28 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
             Duration::from_secs(config.cpu_drain_timeout_secs),
             config.db_backed_ingest,
         );
-        if let Some(handoff) = handoff {
-            drain.require_durable_seal(handoff);
+        if let Some(handoff) = &handoff {
+            drain.require_durable_seal(handoff.clone());
         }
         Some(drain)
     } else {
         None
     };
+    let handoff_coordinator = handoff::Coordinator::new(&config, Uuid::nil(), drain.clone())?;
+    let extra_routes = drain.as_ref().map(|drain| {
+        let routes = drain.routes();
+        match &handoff_coordinator {
+            Some(coordinator) => routes.merge(coordinator.routes()),
+            None => routes,
+        }
+    });
     let (is_ready_flag, verified_peers, my_uuid) = start_coordination_server_with_extra_routes(
         &server_coord_config,
         &mut background_tasks,
         &shutdown_handler,
         &my_state,
         Some(batch_sync_shared_state.clone()),
-        drain.as_ref().map(|drain| drain.routes()),
+        extra_routes,
     )
     .await;
     if let Some(drain) = &drain {
@@ -364,6 +373,16 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
         set_node_ready(is_ready_flag);
     }
     wait_for_others_ready(&server_coord_config, verified_peers).await?;
+    if let (Some(coordinator), Some(handoff)) = (handoff_coordinator, handoff) {
+        coordinator.mark_ready(Uuid::parse_str(&my_uuid)?).await;
+        let shutdown = shutdown_handler.clone();
+        background_tasks.spawn(async move {
+            coordinator
+                .run_source(handoff.handoffs.clone(), shutdown)
+                .await;
+            Ok(())
+        });
+    }
 
     background_tasks.check_tasks();
 
@@ -542,7 +561,8 @@ async fn initialize_handoff(
         HawkSearchMode::LinearScan => config.get_gpu_db_schema(),
     };
     let handoffs = CpuCellHandoffs::new(pool.clone(), &schema)?;
-    if !handoffs.is_managed().await? {
+    let managed = handoffs.is_managed().await?;
+    if !managed && config.cpu_cell.is_none() {
         return Ok(None);
     }
     let identity = config
@@ -560,9 +580,11 @@ async fn initialize_handoff(
     }
     let deployment =
         Uuid::parse_str(&identity.deployment_id).wrap_err("invalid CPU deployment UUID")?;
-    handoffs
-        .check_startup(deployment, config.startup_mode == StartupMode::Candidate)
-        .await?;
+    if managed {
+        handoffs
+            .check_startup(deployment, config.startup_mode == StartupMode::Candidate)
+            .await?;
+    }
     Ok(Some(Arc::new(ManagedHandoff {
         handoffs,
         deployment,
@@ -1464,7 +1486,7 @@ mod config_tests {
         assert!(
             initialize_handoff(&config, HawkSearchMode::LinearScan, &admin)
                 .await?
-                .is_none()
+                .is_some()
         );
         prepare_stores(&config, HawkSearchMode::LinearScan).await?;
         let identity = config.cpu_cell.take();
@@ -1478,15 +1500,10 @@ mod config_tests {
         let handoffs = CpuCellHandoffs::new(admin.clone(), &schema)?;
         let id = Uuid::new_v4();
         let source = Uuid::parse_str(&config.cpu_cell.as_ref().unwrap().deployment_id)?;
-        handoffs.request(id, source, Uuid::new_v4()).await?;
-        handoffs
-            .record_drain_start(
-                id,
-                source,
-                Uuid::new_v4(),
-                &std::array::from_fn(|_| Uuid::new_v4()),
-            )
-            .await?;
+        let destination = Uuid::new_v4();
+        let process = Uuid::new_v4();
+        handoffs.request(id, source, destination).await?;
+        handoffs.record_drain_start(id, source, process).await?;
         let tables_before: i64 = sqlx::query_scalar("SELECT count(*) FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relkind='r'").bind(&schema).fetch_one(&admin).await?;
         for mode in [StartupMode::Active, StartupMode::Candidate] {
             config.startup_mode = mode;
@@ -1496,6 +1513,18 @@ mod config_tests {
                 "{error:?}"
             );
         }
+        let report = serde_json::json!({"watermark": null, "last_publication": null});
+        handoffs
+            .record_drain_completion(id, source, process, &report)
+            .await?;
+        handoffs.activate(id, destination, &report).await?;
+        config.startup_mode = StartupMode::Active;
+        config.cpu_cell.as_mut().unwrap().deployment_id = destination.to_string();
+        assert!(
+            initialize_handoff(&config, HawkSearchMode::LinearScan, &admin)
+                .await?
+                .is_some()
+        );
         config.cpu_cell = None;
         let error = linear_scan_server_main(config).await.unwrap_err();
         assert!(error

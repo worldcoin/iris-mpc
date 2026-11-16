@@ -1,5 +1,6 @@
 use super::super::{
     drain::{self, Phase},
+    handoff::Coordinator,
     ManagedHandoff,
 };
 use super::*;
@@ -11,7 +12,7 @@ use iris_mpc_common::{
     postgres::{run_migrations, AccessMode, PostgresClient},
     VectorId,
 };
-use iris_mpc_store::cpu_cell::{CpuCellHandoffs, HandoffPhase};
+use iris_mpc_store::cpu_cell::CpuCellHandoffs;
 use rand::{rngs::StdRng, SeedableRng};
 use std::sync::Arc;
 
@@ -97,20 +98,99 @@ async fn preload_parties(rows: &[SharedRow], side: Eye) -> Result<Vec<Party>> {
     Ok(parties)
 }
 
-fn common_context(parties: &[Party]) -> Result<ReconciliationContext> {
-    ReconciliationContext::new(
-        Uuid::new_v4(),
-        std::array::from_fn(|_| Uuid::new_v4()),
-        std::array::from_fn(|party| parties[party].candidate.registry.process_id()),
-        Some(normalize_sns_sequence_number("42")?),
-    )
+fn common_context() -> Result<ReconciliationContext> {
+    ReconciliationContext::new(Uuid::new_v4(), Some(normalize_sns_sequence_number("42")?))
 }
 
-async fn drain_and_reload_handoff(parties: &[Party]) -> Result<ReconciliationContext> {
+async fn coordinate_drain_and_reconcile_candidates(
+    parties: &mut Vec<Party>,
+    restart_candidate: bool,
+) -> Result<ReconciliationContext> {
     let (drains, tasks) = drain::tests::cohort(Duration::from_secs(30)).await;
     let (id, source, destination) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
-    let candidates = std::array::from_fn(|i| parties[i].candidate.registry.process_id());
+    let candidates: [Uuid; 3] = std::array::from_fn(|i| parties[i].candidate.registry.process_id());
+    let mut source_listeners = Vec::new();
+    let mut candidate_listeners = Vec::new();
+    for _ in 0..3 {
+        source_listeners.push(tokio::net::TcpListener::bind("127.0.0.1:0").await?);
+        candidate_listeners.push(tokio::net::TcpListener::bind("127.0.0.1:0").await?);
+    }
+    let replacement_address = candidate_listeners[2].local_addr()?;
+    let source_urls: [String; 3] = std::array::from_fn(|i| {
+        format!(
+            "http://{}/handoff-status",
+            source_listeners[i].local_addr().unwrap()
+        )
+    });
+    let candidate_urls: [String; 3] = std::array::from_fn(|i| {
+        format!(
+            "http://{}/handoff-status",
+            candidate_listeners[i].local_addr().unwrap()
+        )
+    });
+    let mut source_coordinators = Vec::new();
+    let mut candidate_coordinators = Vec::new();
+    let mut candidate_configs = Vec::new();
+    let mut source_tasks = Vec::new();
+    let mut candidate_tasks = Vec::new();
+    for (i, ((party, source_listener), candidate_listener)) in parties
+        .iter()
+        .zip(source_listeners)
+        .zip(candidate_listeners)
+        .enumerate()
+    {
+        let mut config = party.config.clone();
+        // Isolated test schemas represent the same logical database in each party.
+        config.schema_name = "coordinator_fixture".into();
+        config.startup_mode = iris_mpc_common::config::StartupMode::Active;
+        config.db_backed_ingest = true;
+        let mut peers: ampc_server_utils::config::ServerCoordinationConfig =
+            serde_json::from_value(serde_json::json!({}))?;
+        peers.party_id = i;
+        peers.node_hostnames = vec!["127.0.0.1".into(); 3];
+        peers.healthcheck_ports = source_urls
+            .iter()
+            .map(|url| {
+                reqwest::Url::parse(url)
+                    .unwrap()
+                    .port()
+                    .unwrap()
+                    .to_string()
+            })
+            .collect();
+        config.server_coordination = Some(peers);
+        config.cpu_cell = Some(serde_json::from_value(
+            serde_json::json!({"deployment_id": source, "candidate_status_urls": serde_json::to_string(&candidate_urls)?}),
+        )?);
+        let source_coordinator = Coordinator::new(
+            &config,
+            Uuid::parse_str(&drains[i].status().process_uuid)?,
+            Some(drains[i].clone()),
+        )?
+        .unwrap();
+        source_coordinator
+            .mark_ready(Uuid::parse_str(&drains[i].status().process_uuid)?)
+            .await;
+        let router = source_coordinator.routes();
+        source_tasks.push(tokio::spawn(async move {
+            axum::serve(source_listener, router).await.unwrap();
+        }));
+        source_coordinators.push(source_coordinator);
+        config.startup_mode = iris_mpc_common::config::StartupMode::Candidate;
+        config.cpu_cell = Some(serde_json::from_value(
+            serde_json::json!({"deployment_id": destination, "candidate_status_urls": serde_json::to_string(&candidate_urls)?,
+            "handoff": {"id": id, "source_deployment_id": source, "source_status_urls": serde_json::to_string(&source_urls)?}}),
+        )?);
+        let candidate_coordinator = Coordinator::new(&config, candidates[i], None)?.unwrap();
+        let router = candidate_coordinator.routes();
+        candidate_tasks.push(tokio::spawn(async move {
+            axum::serve(candidate_listener, router).await.unwrap();
+        }));
+        candidate_coordinators.push(candidate_coordinator);
+        candidate_configs.push(config);
+    }
     let mut controls = Vec::new();
+    let mut source_handoffs = Vec::new();
     for (i, (party, drain)) in parties.iter().zip(&drains).enumerate() {
         let schema = party.config.get_gpu_db_schema();
         let control = PostgresClient::new(
@@ -136,14 +216,28 @@ async fn drain_and_reload_handoff(parties: &[Party]) -> Result<ReconciliationCon
             .mark_ingested_requests_persisted_tx(&mut tx, &sequences)
             .await?;
         tx.commit().await?;
-        handoffs.request(id, source, destination).await?;
-        handoffs.request(id, source, destination).await?;
+        // Completed journal retention differs; pending work above C survives the handoff.
+        sqlx::query("DELETE FROM ingested_requests WHERE persisted_at IS NOT NULL AND ($1 = 2 OR ($1 = 1 AND sequence_number = $2))")
+            .bind(i as i32).bind(&sequences[0]).execute(&party.writer.pool).await?;
+        store
+            .insert_ingested_request(
+                &normalize_sns_sequence_number("100")?,
+                "pending fixture request",
+                true,
+            )
+            .await?;
+        candidate_coordinators[i]
+            .prepare_candidate(&handoffs)
+            .await?;
+        handoffs.check_startup(destination, true).await?;
         drain.require_durable_seal(Arc::new(ManagedHandoff {
-            handoffs,
+            handoffs: handoffs.clone(),
             deployment: source,
         }));
-        drain.request_managed(id, &candidates).await?;
-        drain.request_managed(id, &candidates).await?;
+        source_handoffs.push(handoffs);
+        if i < 2 {
+            candidate_coordinators[i].mark_ready(candidates[i]).await;
+        }
         drain.ingest_stopped();
         drain.receiver_stopped();
         assert!(drain.settled());
@@ -153,6 +247,13 @@ async fn drain_and_reload_handoff(parties: &[Party]) -> Result<ReconciliationCon
         }
         controls.push(control);
     }
+    super::super::handoff::tests::assert_sources_wait_for_preload_then_finish_drain(
+        &source_coordinators,
+        &source_handoffs,
+        &candidate_coordinators[2],
+        candidates[2],
+    )
+    .await?;
     drain::tests::until(|| drains.iter().all(|drain| drain.ready_to_report())).await;
     for (i, (party, drain)) in parties.iter().zip(&drains).enumerate() {
         assert_eq!(drain.status().cut, Some(0));
@@ -174,60 +275,154 @@ async fn drain_and_reload_handoff(parties: &[Party]) -> Result<ReconciliationCon
             .all(|drain| drain.status().phase == Phase::Paused)
     })
     .await;
-    let mut records = Vec::new();
-    let mut reports = Vec::new();
-    for ((party, drain), control) in parties.iter().zip(&drains).zip(controls) {
+    for (drain, control) in drains.iter().zip(controls) {
         drain.persist_completion().await?;
-        let schema = party.config.get_gpu_db_schema();
-        let handoffs = CpuCellHandoffs::new(control.pool.clone(), &schema)?;
-        let completed = handoffs.get(id).await?;
-        drain.persist_completion().await?;
-        assert_eq!(handoffs.get(id).await?, completed);
         control.pool.close().await;
-        let reopened = PostgresClient::new(
-            &party.config.database.as_ref().unwrap().url,
-            &schema,
-            AccessMode::ExistingSchema,
-        )
-        .await?;
-        let reopened_handoffs = CpuCellHandoffs::new(reopened.pool.clone(), &schema)?;
-        let saved = reopened_handoffs.get(id).await?;
-        assert_eq!(saved, completed);
-        assert_eq!(saved.phase, HandoffPhase::Drained);
-        assert_eq!(
-            saved.source_process,
-            Some(Uuid::parse_str(&drain.status().process_uuid)?)
-        );
-        assert_eq!(saved.candidate_processes, Some(candidates.to_vec()));
-        assert!(reopened_handoffs
-            .check_startup(source, false)
-            .await
-            .is_err());
-        let report: drain::Report = serde_json::from_value(saved.drain_report.clone().unwrap())?;
-        assert_eq!(drain.status().report.as_ref(), Some(&report));
-        records.push(saved);
-        reports.push(report);
-        reopened.pool.close().await;
     }
-    for task in tasks {
+    let source_tasks = tasks.into_iter().chain(source_tasks).collect::<Vec<_>>();
+    for task in &source_tasks {
         task.abort();
     }
-    assert!(reports.iter().all(|report| report == &reports[0]));
-    assert_eq!(
-        reports[0].watermark,
-        Some(normalize_sns_sequence_number("42")?)
+    for task in source_tasks {
+        assert!(task.await.unwrap_err().is_cancelled());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(1))
+        .build()?;
+    for url in source_urls {
+        assert!(client.get(url).send().await.is_err());
+    }
+    // Completion agreement consumes part of its budget; reconciliation gets a fresh one.
+    let mut lock = parties[0].writer.pool.begin().await?;
+    sqlx::query("LOCK TABLE irises IN ACCESS EXCLUSIVE MODE")
+        .execute(&mut *lock)
+        .await?;
+    let started = Instant::now();
+    let release_lock = async move {
+        tokio::time::sleep(Duration::from_secs(9)).await;
+        lock.commit().await
+    };
+    // A no longer serves any endpoint. B finishes using only durable records and current B peers.
+    let reconcile = futures::future::try_join_all(
+        parties
+            .iter_mut()
+            .zip(&candidate_coordinators)
+            .enumerate()
+            .map(|(i, (party, coordinator))| async move {
+                let reader = PostgresClient::new(
+                    &party.config.database.as_ref().unwrap().url,
+                    &party.config.get_gpu_db_schema(),
+                    AccessMode::EnforcedReadOnly,
+                )
+                .await?;
+                let handoffs =
+                    CpuCellHandoffs::new(reader.pool.clone(), &party.config.get_gpu_db_schema())?;
+                let store = Store::new(&reader).await?;
+                if i == 2 {
+                    tokio::time::sleep(Duration::from_secs(4)).await;
+                }
+                let context = coordinator
+                    .reconcile_candidate(
+                        &handoffs,
+                        &store,
+                        &mut party.candidate,
+                        Duration::from_secs(8),
+                    )
+                    .await?;
+                let pending: bool = sqlx::query_scalar(
+                    "SELECT persisted_at IS NULL FROM ingested_requests WHERE sequence_number=$1",
+                )
+                .bind(normalize_sns_sequence_number("100")?)
+                .fetch_one(&reader.pool)
+                .await?;
+                assert!(pending, "handoff must preserve pending-above-C work");
+                reader.pool.close().await;
+                Ok::<_, eyre::Report>(context)
+            }),
     );
-    ReconciliationContext::new(
-        records[0].handoff_id,
-        std::array::from_fn(|i| records[i].source_process.unwrap()),
-        records[0]
-            .candidate_processes
-            .clone()
-            .unwrap()
-            .try_into()
-            .unwrap(),
-        reports[0].watermark.clone(),
-    )
+    let (contexts, released) = tokio::join!(reconcile, release_lock);
+    released?;
+    let contexts = contexts?;
+    assert!(started.elapsed() >= Duration::from_secs(9));
+    assert!(contexts.iter().all(|context| context == &contexts[0]));
+    if restart_candidate {
+        let task = candidate_tasks.pop().unwrap();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        drop(candidate_coordinators.pop().unwrap());
+        let Party {
+            config,
+            writer,
+            candidate,
+        } = parties.pop().unwrap();
+        let old_process = candidate.registry.process_id();
+        assert!(candidate.report_for(&contexts[2]).is_some());
+        drop(candidate);
+
+        let process = Uuid::new_v4();
+        let coordinator = Coordinator::new(&candidate_configs[2], process, None)?.unwrap();
+        let listener = tokio::net::TcpListener::bind(replacement_address).await?;
+        let router = coordinator.routes();
+        candidate_tasks.push(tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        }));
+        let status: serde_json::Value = client.get(&candidate_urls[2]).send().await?.json().await?;
+        assert_eq!(status["ready"], false);
+        assert!(status["completion"].is_null());
+        assert!(status["reconciliation"].is_null());
+
+        // Full startup reloads this party while A is gone and B0/B1 retain their reports.
+        let mut restart_config = candidate_configs[2].clone();
+        restart_config.schema_name = config.schema_name.clone();
+        let mut candidate = super::super::candidate::preload_with_coordinator(
+            &restart_config,
+            Arc::new(ShutdownHandler::new(0)),
+            process,
+            Some(&coordinator),
+        )
+        .await?;
+        assert_ne!(candidate.registry.process_id(), old_process);
+        assert!(candidate.report_for(&contexts[2]).is_none());
+        let reader = PostgresClient::new(
+            &config.database.as_ref().unwrap().url,
+            &config.get_gpu_db_schema(),
+            AccessMode::EnforcedReadOnly,
+        )
+        .await?;
+        let store = Store::new(&reader).await?;
+        let handoffs = CpuCellHandoffs::new(reader.pool.clone(), &config.get_gpu_db_schema())?;
+        coordinator.mark_ready(process).await;
+        let context = coordinator
+            .reconcile_candidate(&handoffs, &store, &mut candidate, Duration::from_secs(8))
+            .await?;
+        assert_eq!(context, contexts[2]);
+        assert!(candidate.report_for(&context).is_some());
+        let pending: bool = sqlx::query_scalar(
+            "SELECT persisted_at IS NULL FROM ingested_requests WHERE sequence_number=$1",
+        )
+        .bind(normalize_sns_sequence_number("100")?)
+        .fetch_one(&reader.pool)
+        .await?;
+        assert!(
+            pending,
+            "candidate restart must preserve pending-above-C work"
+        );
+        reader.pool.close().await;
+        parties.push(Party {
+            config,
+            writer,
+            candidate,
+        });
+    }
+    for task in &candidate_tasks {
+        task.abort();
+    }
+    for task in candidate_tasks {
+        assert!(task.await.unwrap_err().is_cancelled());
+    }
+    let expected = ReconciliationContext::new(id, Some(normalize_sns_sequence_number("42")?))?;
+    assert_eq!(contexts[0], expected);
+    Ok(expected)
 }
 
 async fn reconcile_parties(
@@ -268,7 +463,8 @@ async fn cleanup(parties: Vec<Party>) -> Result<()> {
 
 #[tokio::test]
 async fn three_party_reconciliation_agrees_and_preserves_each_partys_payloads() -> Result<()> {
-    for (side, resident) in [(Eye::Left, 0), (Eye::Right, 1)] {
+    // Sparse left-eye state covers removals; dense right-eye state permits a full restart.
+    for (side, resident, restart_candidate) in [(Eye::Left, 0, false), (Eye::Right, 1, true)] {
         let mut rng = StdRng::seed_from_u64(4374);
         let mut expected = (1..=6)
             .map(|id| SharedRow::generate(&mut rng, id, 1))
@@ -296,9 +492,11 @@ async fn three_party_reconciliation_agrees_and_preserves_each_partys_payloads() 
         }
         let inserted = SharedRow::generate(&mut rng, 7, 0);
         for (party_id, party) in parties.iter().enumerate() {
-            sqlx::query("DELETE FROM irises WHERE id IN (2, 6)")
-                .execute(&party.writer.pool)
-                .await?;
+            if !restart_candidate {
+                sqlx::query("DELETE FROM irises WHERE id IN (2, 6)")
+                    .execute(&party.writer.pool)
+                    .await?;
+            }
             inserted.write(&party.writer, party_id).await?;
             for registry in &party.candidate.workers.registries {
                 let registry = registry.read().await;
@@ -307,21 +505,28 @@ async fn three_party_reconciliation_agrees_and_preserves_each_partys_payloads() 
                 assert_eq!(registry.get_current_version(7), None);
             }
         }
-        expected.retain(|row| ![2, 6].contains(&row.id.serial_id()));
+        if !restart_candidate {
+            expected.retain(|row| ![2, 6].contains(&row.id.serial_id()));
+        }
         expected.push(inserted);
 
         // Queue intake/publication are outside this fixture; its simulated writers stop here.
-        let context = drain_and_reload_handoff(&parties).await?;
-        let reports = reconcile_parties(&mut parties, &context).await?;
+        let context =
+            coordinate_drain_and_reconcile_candidates(&mut parties, restart_candidate).await?;
+        let reports: [ReconciliationReport; 3] =
+            std::array::from_fn(|i| parties[i].candidate.report_for(&context).unwrap().clone());
         ReconciliationReport::verify_agreement(&context, &reports)?;
         for (party_id, party) in parties.iter().enumerate() {
             let candidate = &party.candidate;
             assert_eq!(candidate.report_for(&context), Some(&reports[party_id]));
             assert_eq!(reports[party_id].registry_count, expected.len() as u64);
-            assert!(Arc::ptr_eq(
-                &resident_pools[party_id],
-                &candidate.workers.pools[resident]
-            ));
+            assert_eq!(
+                Arc::ptr_eq(
+                    &resident_pools[party_id],
+                    &candidate.workers.pools[resident]
+                ),
+                !restart_candidate || party_id != 2,
+            );
             for registry in &candidate.workers.registries {
                 let registry = registry.read().await;
                 assert_eq!(registry.size, expected.len());
@@ -332,11 +537,13 @@ async fn three_party_reconciliation_agrees_and_preserves_each_partys_payloads() 
                         Some(row.id.version_id())
                     );
                 }
-                for removed in [2, 6] {
-                    assert_eq!(registry.get_current_version(removed), None);
+                if !restart_candidate {
+                    for removed in [2, 6] {
+                        assert_eq!(registry.get_current_version(removed), None);
+                    }
                 }
             }
-            // The cold LUC contains 5 and 7; older rows exercise sparse DB reads.
+            // Rows outside the cold LUC exercise database reads.
             for (eye, pool) in candidate.workers.pools.iter().enumerate() {
                 let fetched = pool
                     .fetch_irises(expected.iter().map(|row| row.id).collect())
@@ -346,26 +553,30 @@ async fn three_party_reconciliation_agrees_and_preserves_each_partys_payloads() 
                     assert_eq!(actual.as_ref(), &row.eyes[eye][party_id]);
                 }
             }
-            for stale in [
+            let mut stale_ids = vec![
                 VectorId::new(1, 1),
                 VectorId::new(4, 1),
                 VectorId::new(5, 1),
-                VectorId::new(2, 1),
-                VectorId::new(6, 1),
-            ] {
+            ];
+            if !restart_candidate {
+                stale_ids.extend([VectorId::new(2, 1), VectorId::new(6, 1)]);
+            }
+            for stale in stale_ids {
                 assert!(candidate.workers.pools[1 - resident]
                     .fetch_irises(vec![stale])
                     .await
                     .is_err());
             }
-            let empty = resident_pools[party_id]
-                .fetch_irises(vec![VectorId::new(8, 0)])
-                .await?;
-            for removed in [2, 6] {
-                let fetched = resident_pools[party_id]
-                    .fetch_irises(vec![VectorId::new(removed, 1)])
+            if !restart_candidate {
+                let empty = resident_pools[party_id]
+                    .fetch_irises(vec![VectorId::new(8, 0)])
                     .await?;
-                assert_eq!(fetched[0], empty[0]);
+                for removed in [2, 6] {
+                    let fetched = resident_pools[party_id]
+                        .fetch_irises(vec![VectorId::new(removed, 1)])
+                        .await?;
+                    assert_eq!(fetched[0], empty[0]);
+                }
             }
         }
         cleanup(parties).await?;
@@ -384,7 +595,7 @@ async fn three_party_reconciliation_rejects_real_divergent_metadata() -> Result<
     SharedRow::generate(&mut rng, 1, 2)
         .write(&parties[2].writer, 2)
         .await?;
-    let context = common_context(&parties)?;
+    let context = common_context()?;
     let reports = reconcile_parties(&mut parties, &context).await?;
     assert!(reports.iter().all(|report| report.registry_count == 3));
     assert_eq!(reports[0].registry_digest, reports[1].registry_digest);

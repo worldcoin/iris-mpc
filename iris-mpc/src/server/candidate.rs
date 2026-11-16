@@ -54,7 +54,7 @@ fn routes(status: Status) -> Router {
         .route(
             "/startup",
             get(|State(status): State<Status>| async move {
-                if status.read().await.state == "loaded" {
+                if matches!(status.read().await.state, "loaded" | "reconciled") {
                     StatusCode::OK
                 } else {
                     StatusCode::SERVICE_UNAVAILABLE
@@ -65,10 +65,16 @@ fn routes(status: Status) -> Router {
 }
 
 pub(super) async fn run(config: Config, shutdown: Arc<ShutdownHandler>) -> Result<()> {
-    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, config.candidate_status_port))
+    let process_id = Uuid::new_v4();
+    let coordinator = handoff::Coordinator::new(&config, process_id, None)?;
+    let address = if coordinator.is_some() {
+        std::net::Ipv4Addr::UNSPECIFIED
+    } else {
+        std::net::Ipv4Addr::LOCALHOST
+    };
+    let listener = TcpListener::bind((address, config.candidate_status_port))
         .await
         .wrap_err("bind candidate operator status")?;
-    let process_id = Uuid::new_v4();
     let status = Arc::new(RwLock::new(CandidateStatus {
         process_id,
         party_id: config.party_id,
@@ -78,10 +84,14 @@ pub(super) async fn run(config: Config, shutdown: Arc<ShutdownHandler>) -> Resul
     }));
     tracing::info!(party_id = config.party_id, process_id = %process_id,
         address = %listener.local_addr()?, state = "loading", "CPU candidate preload");
-    let status_server = axum::serve(listener, routes(status.clone()));
+    let router = match &coordinator {
+        Some(coordinator) => routes(status.clone()).merge(coordinator.routes()),
+        None => routes(status.clone()),
+    };
+    let status_server = axum::serve(listener, router);
     tokio::select! {
         result = status_server => result.wrap_err("candidate status server stopped"),
-        result = preload_and_wait(&config, shutdown, status) => result,
+        result = preload_and_wait(&config, shutdown, status, coordinator) => result,
     }
 }
 
@@ -89,19 +99,23 @@ async fn preload_and_wait(
     config: &Config,
     shutdown: Arc<ShutdownHandler>,
     status: Status,
+    coordinator: Option<handoff::Coordinator>,
 ) -> Result<()> {
     let started = Instant::now();
     let process_id = status.read().await.process_id;
     let loaded = tokio::select! {
         _ = shutdown.wait_for_shutdown() => return Ok(()),
-        result = timeout(PRELOAD_TIMEOUT, preload(config, shutdown.clone(), process_id)) => {
+        result = timeout(PRELOAD_TIMEOUT, preload_with_coordinator(config, shutdown.clone(), process_id, coordinator.as_ref())) => {
             result.wrap_err("candidate preload exceeded one hour").and_then(|loaded| loaded)
         }
     };
-    let workers = match loaded {
+    let mut workers = match loaded {
         Ok(workers) => workers,
         Err(error) => {
             status.write().await.state = "failed";
+            if let Some(coordinator) = &coordinator {
+                coordinator.fail(&error).await;
+            }
             tracing::error!(state = "failed", error = ?error, "CPU candidate preload failed");
             return Err(error);
         }
@@ -119,6 +133,36 @@ async fn preload_and_wait(
         duration_seconds = started.elapsed().as_secs_f64(),
         "CPU candidate remains passive and unreconciled"
     );
+    if let Some(coordinator) = &coordinator {
+        let db = config
+            .database
+            .as_ref()
+            .ok_or_else(|| eyre!("candidate requires database"))?;
+        let postgres = PostgresClient::new(
+            &db.url,
+            &config.get_gpu_db_schema(),
+            AccessMode::EnforcedReadOnly,
+        )
+        .await?;
+        let store = Store::new(&postgres).await?;
+        let handoffs = CpuCellHandoffs::new(postgres.pool.clone(), &config.get_gpu_db_schema())?;
+        coordinator.mark_ready(process_id).await;
+        let outcome = tokio::select! {
+            _ = shutdown.wait_for_shutdown() => return Ok(()),
+            result = coordinator.reconcile_candidate(&handoffs, &store, &mut workers,
+                Duration::from_secs(config.cpu_drain_timeout_secs)) => result,
+        };
+        if let Err(error) = outcome {
+            coordinator.fail(&error).await;
+            status.write().await.state = "failed";
+            return Err(error);
+        }
+        status.write().await.state = "reconciled";
+        tracing::info!(
+            state = "reconciled",
+            "CPU candidate agreement completed; remains passive"
+        );
+    }
     shutdown.wait_for_shutdown().await;
     // Keep the pools (and their resident shares and observed versions) alive
     // until shutdown. A later handoff must reconcile before building an actor.
@@ -126,10 +170,20 @@ async fn preload_and_wait(
     Ok(())
 }
 
+#[cfg(test)]
 pub(super) async fn preload(
     config: &Config,
     shutdown: Arc<ShutdownHandler>,
     process_id: Uuid,
+) -> Result<CandidatePreload> {
+    preload_with_coordinator(config, shutdown, process_id, None).await
+}
+
+pub(super) async fn preload_with_coordinator(
+    config: &Config,
+    shutdown: Arc<ShutdownHandler>,
+    process_id: Uuid,
+    coordinator: Option<&handoff::Coordinator>,
 ) -> Result<CandidatePreload> {
     let db = config
         .database
@@ -138,6 +192,10 @@ pub(super) async fn preload(
     let migration =
         PostgresClient::new(&db.url, &config.get_gpu_db_schema(), AccessMode::ReadWrite).await?;
     run_migrations(&migration.pool, db.ignore_missing_migrations).await?;
+    if let Some(coordinator) = coordinator {
+        let handoffs = CpuCellHandoffs::new(migration.pool.clone(), &config.get_gpu_db_schema())?;
+        coordinator.prepare_candidate(&handoffs).await?;
+    }
     initialize_handoff(config, HawkSearchMode::LinearScan, &migration.pool).await?;
     migration.pool.close().await;
     let postgres = PostgresClient::new(

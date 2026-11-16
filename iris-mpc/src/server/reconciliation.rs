@@ -1,5 +1,5 @@
-//! Passive reconciliation evidence. Ownership and authenticated peer exchange are
-//! enforced by the handoff coordinator, not by this local primitive.
+//! Passive reconciliation evidence. The handoff coordinator binds current
+//! processes under the existing peer-network access controls.
 
 use super::registry_diff::{CandidateRegistry, RegistryChange};
 use eyre::{ensure, Result, WrapErr};
@@ -20,22 +20,13 @@ mod three_party_tests;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReconciliationContext {
     attempt_id: Uuid,
-    source_processes: [Uuid; 3],
-    candidate_processes: [Uuid; 3],
     watermark: Option<String>,
 }
 
 impl ReconciliationContext {
-    pub fn new(
-        attempt_id: Uuid,
-        source_processes: [Uuid; 3],
-        candidate_processes: [Uuid; 3],
-        watermark: Option<String>,
-    ) -> Result<Self> {
+    pub fn new(attempt_id: Uuid, watermark: Option<String>) -> Result<Self> {
         let context = Self {
             attempt_id,
-            source_processes,
-            candidate_processes,
             watermark,
         };
         context.validate()?;
@@ -47,17 +38,6 @@ impl ReconciliationContext {
             !self.attempt_id.is_nil(),
             "reconciliation attempt must not be nil"
         );
-        let processes = self
-            .source_processes
-            .iter()
-            .chain(&self.candidate_processes)
-            .collect::<Vec<_>>();
-        for (index, id) in processes.iter().enumerate() {
-            ensure!(
-                !id.is_nil() && !processes[..index].contains(id),
-                "reconciliation requires distinct non-nil process identities"
-            );
-        }
         if let Some(watermark) = &self.watermark {
             ensure!(
                 normalize_sns_sequence_number(watermark)? == *watermark,
@@ -77,7 +57,7 @@ pub struct ReconciliationReport {
 }
 
 impl ReconciliationReport {
-    /// Reports must come from authenticated parties and be indexed by party.
+    /// The caller must supply reports from trusted parties, indexed by party.
     /// Agreement is evidence for this frozen context, never permission to serve.
     pub fn verify_agreement(expected: &ReconciliationContext, reports: &[Self; 3]) -> Result<()> {
         expected.validate()?;
@@ -156,10 +136,6 @@ impl CandidateReconciliation {
             "candidate requires a fresh preload after reconciliation or invalidation"
         );
         context.validate()?;
-        ensure!(
-            context.candidate_processes[self.party_id] == self.registry.process_id(),
-            "reconciliation is bound to another candidate process"
-        );
         ensure!(
             Instant::now() < deadline,
             "reconciliation deadline exceeded"
@@ -310,11 +286,9 @@ impl CandidateReconciliation {
 mod tests {
     use super::*;
 
-    fn context(process: Uuid) -> ReconciliationContext {
+    fn context() -> ReconciliationContext {
         ReconciliationContext::new(
             Uuid::new_v4(),
-            std::array::from_fn(|_| Uuid::new_v4()),
-            [process, Uuid::new_v4(), Uuid::new_v4()],
             Some(normalize_sns_sequence_number("42").unwrap()),
         )
         .unwrap()
@@ -322,7 +296,7 @@ mod tests {
 
     #[test]
     fn agreement_requires_exact_current_context_and_matching_metadata() {
-        let expected = context(Uuid::new_v4());
+        let expected = context();
         let reports: [ReconciliationReport; 3] =
             std::array::from_fn(|party_id| ReconciliationReport {
                 context: expected.clone(),
@@ -331,14 +305,12 @@ mod tests {
                 registry_digest: [7; 32],
             });
         ReconciliationReport::verify_agreement(&expected, &reports).unwrap();
-        for field in 0..6 {
+        for field in 0..4 {
             let mut bad = reports.clone();
             match field {
                 0 => bad[1].context.attempt_id = Uuid::new_v4(),
-                1 => bad[1].context.candidate_processes[1] = Uuid::new_v4(),
-                2 => bad[1].context.source_processes[0] = Uuid::new_v4(),
-                3 => bad[1].context.watermark = None,
-                4 => bad[1].registry_count += 1,
+                1 => bad[1].context.watermark = None,
+                2 => bad[1].registry_count += 1,
                 _ => bad[1].registry_digest[0] ^= 1,
             }
             assert!(ReconciliationReport::verify_agreement(&expected, &bad).is_err());
@@ -347,7 +319,7 @@ mod tests {
         swapped.swap(0, 1);
         assert!(ReconciliationReport::verify_agreement(&expected, &swapped).is_err());
         let mut invalid = expected.clone();
-        invalid.candidate_processes[1] = invalid.candidate_processes[0];
+        invalid.attempt_id = Uuid::nil();
         assert!(invalid.validate().is_err());
     }
 
@@ -359,7 +331,7 @@ mod tests {
         let registry = candidate.workers.registries[0].clone();
         let guard = registry.write().await;
         let store = Store::new(&db).await?;
-        let expected = context(candidate.registry.process_id());
+        let expected = context();
         {
             let run = candidate.reconcile(
                 &store,
@@ -435,10 +407,12 @@ mod tests {
             let mut candidate = preload(&config).await?;
             assert_eq!(candidate.workers.passive_resident_side()?, resident);
             let store = Store::new(&db).await?;
-            let expected = context(candidate.registry.process_id());
+            let expected = context();
             let mut invalid = expected.clone();
             invalid.attempt_id = Uuid::nil();
-            for rejected in [invalid, context(Uuid::new_v4())] {
+            let mut invalid_watermark = expected.clone();
+            invalid_watermark.watermark = Some("not-a-sequence".into());
+            for rejected in [invalid, invalid_watermark] {
                 assert!(candidate
                     .reconcile(&store, rejected, Instant::now() + Duration::from_secs(20))
                     .await
@@ -523,7 +497,7 @@ mod tests {
             .execute(&db.pool)
             .await?;
         let store = Store::new(&db).await?;
-        let expected = context(candidate.registry.process_id());
+        let expected = context();
         let report = candidate
             .reconcile(
                 &store,
@@ -592,7 +566,7 @@ mod tests {
                 .bind(vec![0_u8; 1])
                 .execute(&db.pool)
                 .await?;
-            let expected = context(candidate.registry.process_id());
+            let expected = context();
             let error = candidate
                 .reconcile(
                     &store,
@@ -640,7 +614,7 @@ mod tests {
             .bind(vec![0_u8; 2])
             .execute(&db.pool)
             .await?;
-        let failed_context = context(failed.registry.process_id());
+        let failed_context = context();
         assert!(failed
             .reconcile(
                 &store,
@@ -682,8 +656,9 @@ mod tests {
             .execute(&db.pool)
             .await?;
         let mut fresh = preload(&config).await?;
-        let old_context = context(old.registry.process_id());
-        let fresh_context = context(fresh.registry.process_id());
+        let old_context = context();
+        let fresh_context = old_context.clone();
+        assert!(fresh.report_for(&fresh_context).is_none());
         let old_report = old
             .reconcile(
                 &store,
@@ -701,6 +676,7 @@ mod tests {
             .await?
             .clone();
         assert_eq!(old.workers.registries[0].read().await.next_id, 128);
+        assert_eq!(old_report.context, fresh_report.context);
         assert_eq!(old_report.registry_digest, fresh_report.registry_digest);
         assert_eq!(old_report.registry_count, fresh_report.registry_count);
         drop((old, fresh));
