@@ -80,10 +80,7 @@ impl CpuCellHandoffs {
                 destination == deployment
                     && matches!(
                         phase,
-                        HandoffPhase::Requested
-                            | HandoffPhase::Draining
-                            | HandoffPhase::Drained
-                            | HandoffPhase::Activated
+                        HandoffPhase::Requested | HandoffPhase::Draining | HandoffPhase::Drained
                     )
             } else {
                 (source == deployment && phase == HandoffPhase::Requested)

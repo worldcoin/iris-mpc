@@ -513,22 +513,17 @@ async fn prepare_server(
         set_node_ready(is_ready_flag);
     }
     wait_for_others_ready(&server_coord_config, verified_peers.clone()).await?;
-    if let (Some(promotion), Some(coordinator)) = (&promotion, &handoff_coordinator) {
-        let expected = activation_cohort
-            .as_ref()
-            .ok_or_else(|| eyre!("missing serving cohort"))?;
+    if let Some(expected) = &activation_cohort {
         eyre::ensure!(
             serving_processes(&server_coord_config, &my_uuid, &verified_peers).await? == *expected,
             "serving health cohort changed before intake"
         );
-        coordinator
-            .serving_barrier(expected, &promotion.context, promotion.deadline)
-            .await?;
-        coordinator.mark_ready(Uuid::parse_str(&my_uuid)?).await;
-        promotion.mark_serving().await;
     }
     if let (Some(coordinator), Some(handoff)) = (handoff_coordinator, handoff) {
         coordinator.mark_ready(Uuid::parse_str(&my_uuid)?).await;
+        if let Some(promotion) = &promotion {
+            promotion.mark_serving().await;
+        }
         let shutdown = shutdown_handler.clone();
         background_tasks.spawn(async move {
             coordinator

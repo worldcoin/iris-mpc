@@ -237,7 +237,6 @@ impl Coordinator {
         let peers = self
             .peers(&self.candidate_urls, StartupMode::Candidate)
             .await?;
-        Self::candidate_peers(&own, &peers)?;
         let intent = own
             .intent
             .as_ref()
@@ -251,27 +250,10 @@ impl Coordinator {
             .as_ref()
             .ok_or_else(|| eyre!("missing activation reconciliation"))?;
         Self::completed_reports(&own, &peers, completion)?;
-        let reports: Vec<_> = peers
-            .iter()
-            .map(|peer| {
-                peer.reconciliation
-                    .clone()
-                    .ok_or_else(|| eyre!("missing peer activation reconciliation"))
-            })
-            .collect::<Result<_>>()?;
-        ReconciliationReport::verify_agreement(
-            &report.context,
-            &reports
-                .try_into()
-                .map_err(|_| eyre!("missing activation party"))?,
-        )?;
-        let record = handoffs.get(intent.id).await?;
-        ensure!(
-            record.source == intent.source
-                && record.destination == own.deployment
-                && record.drain_report.as_ref() == Some(&serde_json::to_value(completion)?),
-            "activation no longer matches durable completion"
-        );
+        let [Some(a), Some(b), Some(c)] = peers.map(|peer| peer.reconciliation) else {
+            return Err(eyre!("missing peer activation reconciliation"));
+        };
+        ReconciliationReport::verify_agreement(&report.context, &[a, b, c])?;
         handoffs
             .activate(
                 intent.id,
@@ -280,10 +262,8 @@ impl Coordinator {
             )
             .await?;
         let mut status = self.status.write().await;
-        if status.mode == StartupMode::Candidate {
-            status.mode = StartupMode::Active;
-            status.ready = false;
-        }
+        status.mode = StartupMode::Active;
+        status.ready = false;
         Ok(())
     }
 
@@ -294,29 +274,25 @@ impl Coordinator {
         deadline: Instant,
     ) -> Result<()> {
         let own = self.status.read().await.clone();
-        loop {
-            let peers = self
-                .wait_peers(&self.candidate_urls, StartupMode::Active, deadline)
-                .await?;
-            Self::candidate_peers(&own, &peers)?;
-            ensure!(
-                peers
-                    .iter()
-                    .zip(expected)
-                    .all(|(peer, process)| peer.process == *process),
-                "serving cohort process changed"
-            );
-            ensure!(
-                peers.iter().all(|peer| peer.completion == own.completion),
-                "serving completion or final publication differs"
-            );
-            let reports = peers.map(|peer| peer.reconciliation);
-            if let [Some(a), Some(b), Some(c)] = reports {
-                ReconciliationReport::verify_agreement(context, &[a, b, c])?;
-                return Ok(());
-            }
-            timeout_at(deadline, sleep(POLL_INTERVAL)).await?;
-        }
+        let peers = self
+            .wait_peers(&self.candidate_urls, StartupMode::Active, deadline)
+            .await?;
+        Self::candidate_peers(&own, &peers)?;
+        ensure!(
+            peers
+                .iter()
+                .zip(expected)
+                .all(|(peer, process)| peer.process == *process),
+            "serving cohort process changed"
+        );
+        ensure!(
+            peers.iter().all(|peer| peer.completion == own.completion),
+            "serving completion or final publication differs"
+        );
+        let [Some(a), Some(b), Some(c)] = peers.map(|peer| peer.reconciliation) else {
+            return Err(eyre!("missing serving reconciliation"));
+        };
+        ReconciliationReport::verify_agreement(context, &[a, b, c])
     }
 
     async fn peers(&self, addresses: &[reqwest::Url; 3], mode: StartupMode) -> Result<[Status; 3]> {
@@ -403,18 +379,6 @@ impl Coordinator {
                     record.source == intent.source && record.destination == intent.destination,
                     "durable handoff intent changed"
                 );
-                if record.phase == HandoffPhase::Activated {
-                    let peers = self
-                        .peers(&self.candidate_urls, StartupMode::Candidate)
-                        .await?;
-                    Self::candidate_peers(&own, &peers)?;
-                    ensure!(
-                        peers
-                            .iter()
-                            .all(|peer| peer.mode != StartupMode::Active || !peer.ready),
-                        "destination already serving; coordinated recovery required"
-                    );
-                }
                 return Ok(());
             }
         }
@@ -553,10 +517,7 @@ impl Coordinator {
             record.source == intent.source && record.destination == intent.destination,
             "durable handoff intent changed"
         );
-        if !matches!(
-            record.phase,
-            HandoffPhase::Drained | HandoffPhase::Activated
-        ) {
+        if record.phase != HandoffPhase::Drained {
             return Ok(None);
         }
         Ok(Some(serde_json::from_value(
@@ -780,14 +741,15 @@ pub(super) mod tests {
         let mut changed = original.clone();
         changed.reconciliation = None;
         *coordinators[2].status.write().await = changed;
-        assert!(coordinators[0]
+        let error = coordinators[0]
             .serving_barrier(
                 &expected,
                 context,
-                Instant::now() + Duration::from_millis(100)
+                Instant::now() + Duration::from_millis(100),
             )
             .await
-            .is_err());
+            .unwrap_err();
+        assert_eq!(error.to_string(), "missing serving reconciliation");
         let mut changed = original.clone();
         changed.completion.as_mut().unwrap().last_publication = Some(drain::Publication {
             batch_id: 1,

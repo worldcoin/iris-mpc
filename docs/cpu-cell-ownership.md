@@ -156,9 +156,9 @@ another peer's remaining agreement budget can require restarting that failed
 candidate too. Fresh preload retains the normal loader's dense-ID requirement.
 Missing/mismatched reports, an A restart during drain or uncertain effects still
 stop progress. No timeout resumes A. A fresh B cannot inherit reconciliation or
-in-memory activation readiness. It may reconcile during partial activation only
-while all B peers remain gated from serving. Once any B opens processing, a
-replacement must use the coordinated recovery procedure in POP-4378.
+in-memory activation readiness. Once serving startup establishes the peer cohort
+and MPC sessions, replacing a B requires coordinated recovery in POP-4378,
+including when activation is only partially recorded and intake remains closed.
 
 After all three parties record activation, the same destination deployment can
 use existing coordinated cold startup: stop/fence all old processes, configure

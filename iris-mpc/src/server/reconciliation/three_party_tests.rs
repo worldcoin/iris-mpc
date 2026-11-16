@@ -656,16 +656,14 @@ async fn promote_and_process(
                         serving_processes(coord_config, &process, &verified).await?,
                         expected
                     );
-                    coordinator
-                        .serving_barrier(&expected, context, deadline)
-                        .await?;
                     coordinator.mark_ready(process_id).await;
-                    // Observing repeated activation must not reconstruct the actor or reset readiness.
-                    coordinator.activate_candidate(&handoff).await?;
                     assert!(ready.load(Ordering::SeqCst));
                     assert!(
-                        coordinator.prepare_candidate(&handoff).await.is_err(),
-                        "a fresh candidate must not hot-rejoin a serving destination"
+                        handoff
+                            .check_startup(handoff.latest().await?.unwrap().destination, true)
+                            .await
+                            .is_err(),
+                        "an activated destination requires coordinated recovery"
                     );
                     let response: serde_json::Value = reqwest::Client::new()
                         .get(
