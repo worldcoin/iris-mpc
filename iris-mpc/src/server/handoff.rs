@@ -58,7 +58,7 @@ pub(super) struct Coordinator {
     source_urls: [reqwest::Url; 3],
     candidate_urls: [reqwest::Url; 3],
     client: reqwest::Client,
-    drain: Option<Arc<drain::Drain>>,
+    drain: Arc<std::sync::RwLock<Option<Arc<drain::Drain>>>>,
 }
 
 fn urls(values: &[String; 3]) -> Result<[reqwest::Url; 3]> {
@@ -169,7 +169,7 @@ impl Coordinator {
                 .timeout(Duration::from_secs(3))
                 .redirect(reqwest::redirect::Policy::none())
                 .build()?,
-            drain,
+            drain: Arc::new(std::sync::RwLock::new(drain)),
         }))
     }
 
@@ -181,7 +181,7 @@ impl Coordinator {
                 let coordinator = coordinator.clone();
                 async move {
                     let mut status = coordinator.status.read().await.clone();
-                    status.drain = coordinator.drain.as_ref().map(|drain| drain.status());
+                    status.drain = coordinator.drain().map(|drain| drain.status());
                     Json(status)
                 }
             }),
@@ -192,6 +192,131 @@ impl Coordinator {
         let mut status = self.status.write().await;
         status.process = process;
         status.ready = true;
+    }
+
+    fn drain(&self) -> Option<Arc<drain::Drain>> {
+        self.drain.read().unwrap().clone()
+    }
+
+    pub(super) async fn agreed_completion(&self) -> Result<drain::Report> {
+        self.status
+            .read()
+            .await
+            .completion
+            .clone()
+            .ok_or_else(|| eyre!("missing agreed durable completion"))
+    }
+
+    /// Keep both status listeners bound to the same state while adopting the
+    /// ordinary serving listener's fresh UUID and drain handle.
+    pub(super) async fn bind_serving(
+        &self,
+        config: &Config,
+        process: Uuid,
+        drain: Arc<drain::Drain>,
+    ) -> Result<Self> {
+        let peers = config
+            .server_coordination
+            .as_ref()
+            .ok_or_else(|| eyre!("missing serving coordination"))?;
+        let addresses = std::array::from_fn(|party| {
+            format!(
+                "http://{}:{}/handoff-status",
+                peers.node_hostnames[party], peers.healthcheck_ports[party]
+            )
+        });
+        let mut serving = self.clone();
+        serving.source_urls = urls(&addresses)?;
+        *self.drain.write().unwrap() = Some(drain);
+        self.status.write().await.process = process;
+        Ok(serving)
+    }
+
+    pub(super) async fn activate_candidate(&self, handoffs: &CpuCellHandoffs) -> Result<()> {
+        let own = self.status.read().await.clone();
+        let peers = self
+            .peers(&self.candidate_urls, StartupMode::Candidate)
+            .await?;
+        Self::candidate_peers(&own, &peers)?;
+        let intent = own
+            .intent
+            .as_ref()
+            .ok_or_else(|| eyre!("missing activation intent"))?;
+        let completion = own
+            .completion
+            .as_ref()
+            .ok_or_else(|| eyre!("missing activation completion"))?;
+        let report = own
+            .reconciliation
+            .as_ref()
+            .ok_or_else(|| eyre!("missing activation reconciliation"))?;
+        Self::completed_reports(&own, &peers, completion)?;
+        let reports: Vec<_> = peers
+            .iter()
+            .map(|peer| {
+                peer.reconciliation
+                    .clone()
+                    .ok_or_else(|| eyre!("missing peer activation reconciliation"))
+            })
+            .collect::<Result<_>>()?;
+        ReconciliationReport::verify_agreement(
+            &report.context,
+            &reports
+                .try_into()
+                .map_err(|_| eyre!("missing activation party"))?,
+        )?;
+        let record = handoffs.get(intent.id).await?;
+        ensure!(
+            record.source == intent.source
+                && record.destination == own.deployment
+                && record.drain_report.as_ref() == Some(&serde_json::to_value(completion)?),
+            "activation no longer matches durable completion"
+        );
+        handoffs
+            .activate(
+                intent.id,
+                own.deployment,
+                &serde_json::to_value(completion)?,
+            )
+            .await?;
+        let mut status = self.status.write().await;
+        if status.mode == StartupMode::Candidate {
+            status.mode = StartupMode::Active;
+            status.ready = false;
+        }
+        Ok(())
+    }
+
+    pub(super) async fn serving_barrier(
+        &self,
+        expected: &[Uuid; 3],
+        context: &ReconciliationContext,
+        deadline: Instant,
+    ) -> Result<()> {
+        let own = self.status.read().await.clone();
+        loop {
+            let peers = self
+                .wait_peers(&self.candidate_urls, StartupMode::Active, deadline)
+                .await?;
+            Self::candidate_peers(&own, &peers)?;
+            ensure!(
+                peers
+                    .iter()
+                    .zip(expected)
+                    .all(|(peer, process)| peer.process == *process),
+                "serving cohort process changed"
+            );
+            ensure!(
+                peers.iter().all(|peer| peer.completion == own.completion),
+                "serving completion or final publication differs"
+            );
+            let reports = peers.map(|peer| peer.reconciliation);
+            if let [Some(a), Some(b), Some(c)] = reports {
+                ReconciliationReport::verify_agreement(context, &[a, b, c])?;
+                return Ok(());
+            }
+            timeout_at(deadline, sleep(POLL_INTERVAL)).await?;
+        }
     }
 
     async fn peers(&self, addresses: &[reqwest::Url; 3], mode: StartupMode) -> Result<[Status; 3]> {
@@ -215,7 +340,11 @@ impl Coordinator {
             ensure!(
                 status.protocol == PROTOCOL
                     && status.party_id == party
-                    && status.mode == mode
+                    && (status.mode == mode
+                        || (mode == StartupMode::Candidate
+                            && status.mode == StartupMode::Active
+                            && status.completion.is_some()
+                            && status.reconciliation.is_some()))
                     && !status.process.is_nil(),
                 "incompatible handoff participant at party {party}"
             );
@@ -274,10 +403,18 @@ impl Coordinator {
                     record.source == intent.source && record.destination == intent.destination,
                     "durable handoff intent changed"
                 );
-                ensure!(
-                    record.phase != HandoffPhase::Activated,
-                    "candidate handoff already activated"
-                );
+                if record.phase == HandoffPhase::Activated {
+                    let peers = self
+                        .peers(&self.candidate_urls, StartupMode::Candidate)
+                        .await?;
+                    Self::candidate_peers(&own, &peers)?;
+                    ensure!(
+                        peers
+                            .iter()
+                            .all(|peer| peer.mode != StartupMode::Active || !peer.ready),
+                        "destination already serving; coordinated recovery required"
+                    );
+                }
                 return Ok(());
             }
         }
@@ -362,8 +499,7 @@ impl Coordinator {
                 return Ok(false);
             }
         }
-        self.drain
-            .as_ref()
+        self.drain()
             .ok_or_else(|| eyre!("missing source drain"))?
             .request_managed(intent.id)
             .await?;
@@ -395,7 +531,7 @@ impl Coordinator {
                         tracing::warn!(party_id = status.party_id, error = %reason, "CPU handoff coordination blocked");
                         status.error = Some(reason);
                     }
-                    if self.drain.as_ref().is_some_and(|drain| drain.requested()) {
+                    if self.drain().is_some_and(|drain| drain.requested()) {
                         break;
                     }
                 }
@@ -417,7 +553,10 @@ impl Coordinator {
             record.source == intent.source && record.destination == intent.destination,
             "durable handoff intent changed"
         );
-        if record.phase != HandoffPhase::Drained {
+        if !matches!(
+            record.phase,
+            HandoffPhase::Drained | HandoffPhase::Activated
+        ) {
             return Ok(None);
         }
         Ok(Some(serde_json::from_value(
@@ -434,6 +573,13 @@ impl Coordinator {
                 && p.error.is_none()),
             "candidate handoff differs or candidate failed"
         );
+        ensure!(
+            own.mode != StartupMode::Candidate
+                || peers
+                    .iter()
+                    .all(|peer| peer.mode != StartupMode::Active || !peer.ready),
+            "destination already serving; fresh reconciliation requires coordinated recovery"
+        );
         Ok(())
     }
 
@@ -446,7 +592,8 @@ impl Coordinator {
         ensure!(
             peers
                 .iter()
-                .all(|p| p.ready && p.completion.as_ref() == Some(completion)),
+                .all(|p| (p.ready || p.mode == StartupMode::Active)
+                    && p.completion.as_ref() == Some(completion)),
             "durable completed watermark or publication differs across parties"
         );
         Ok(())
@@ -464,7 +611,10 @@ impl Coordinator {
                 )
                 .await?;
             Self::candidate_peers(&own, &peers)?;
-            if peers.iter().all(|p| p.ready) {
+            if peers
+                .iter()
+                .all(|p| p.ready || p.mode == StartupMode::Active)
+            {
                 break;
             }
             timeout_at(preflight_deadline, sleep(POLL_INTERVAL))
@@ -498,7 +648,10 @@ impl Coordinator {
             let peers = self
                 .wait_peers(&self.candidate_urls, StartupMode::Candidate, deadline)
                 .await?;
-            if peers.iter().all(|p| p.ready && p.completion.is_some()) {
+            if peers
+                .iter()
+                .all(|p| (p.ready || p.mode == StartupMode::Active) && p.completion.is_some())
+            {
                 Self::completed_reports(&own, &peers, &completion)?;
                 break;
             }
@@ -542,6 +695,118 @@ pub(super) mod tests {
     use super::*;
 
     #[cfg(feature = "db_dependent")]
+    pub(in crate::server) async fn reject_changed_activation_evidence(
+        coordinators: &[Coordinator],
+        handoffs: &[CpuCellHandoffs],
+    ) -> Result<()> {
+        let original = coordinators[2].status.read().await.clone();
+        for missing_completion in [true, false] {
+            let mut peer = original.clone();
+            if missing_completion {
+                peer.completion = None;
+            } else {
+                peer.reconciliation = None;
+            }
+            *coordinators[2].status.write().await = peer;
+            assert!(coordinators[0]
+                .activate_candidate(&handoffs[0])
+                .await
+                .is_err());
+        }
+        let mut changed = original.clone();
+        changed.completion.as_mut().unwrap().watermark =
+            Some(iris_mpc_store::normalize_sns_sequence_number("43")?);
+        *coordinators[2].status.write().await = changed;
+        assert!(coordinators[0]
+            .activate_candidate(&handoffs[0])
+            .await
+            .is_err());
+        let mut changed = original.clone();
+        changed.reconciliation.as_mut().unwrap().context =
+            ReconciliationContext::new(Uuid::new_v4(), None)?;
+        *coordinators[2].status.write().await = changed;
+        assert!(coordinators[0]
+            .activate_candidate(&handoffs[0])
+            .await
+            .is_err());
+        let mut replacement = original.clone();
+        replacement.process = Uuid::new_v4();
+        replacement.ready = false;
+        replacement.completion = None;
+        replacement.reconciliation = None;
+        *coordinators[2].status.write().await = replacement;
+        assert!(coordinators[0]
+            .activate_candidate(&handoffs[0])
+            .await
+            .is_err());
+        let mut serving = original.clone();
+        serving.mode = StartupMode::Active;
+        serving.ready = true;
+        *coordinators[2].status.write().await = serving;
+        assert!(coordinators[0]
+            .activate_candidate(&handoffs[0])
+            .await
+            .is_err());
+        *coordinators[2].status.write().await = original;
+        for handoff in handoffs {
+            let record = handoff.latest().await?.unwrap();
+            assert_eq!(record.phase, HandoffPhase::Drained);
+            assert!(handoff.check_startup(record.source, false).await.is_err());
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "db_dependent")]
+    pub(in crate::server) async fn reject_changed_serving_evidence(
+        coordinators: &[Coordinator],
+        context: &ReconciliationContext,
+    ) -> Result<()> {
+        let mut expected = [Uuid::nil(); 3];
+        for (party, coordinator) in coordinators.iter().enumerate() {
+            expected[party] = coordinator.status.read().await.process;
+        }
+        let original = coordinators[2].status.read().await.clone();
+        let mut changed = original.clone();
+        changed.process = Uuid::new_v4();
+        *coordinators[2].status.write().await = changed;
+        assert!(coordinators[0]
+            .serving_barrier(
+                &expected,
+                context,
+                Instant::now() + Duration::from_millis(100)
+            )
+            .await
+            .is_err());
+        let mut changed = original.clone();
+        changed.reconciliation = None;
+        *coordinators[2].status.write().await = changed;
+        assert!(coordinators[0]
+            .serving_barrier(
+                &expected,
+                context,
+                Instant::now() + Duration::from_millis(100)
+            )
+            .await
+            .is_err());
+        let mut changed = original.clone();
+        changed.completion.as_mut().unwrap().last_publication = Some(drain::Publication {
+            batch_id: 1,
+            batch_sha256: "ab".repeat(32),
+        });
+        *coordinators[2].status.write().await = changed;
+        assert!(coordinators[0]
+            .serving_barrier(
+                &expected,
+                context,
+                Instant::now() + Duration::from_millis(100)
+            )
+            .await
+            .is_err());
+        *coordinators[2].status.write().await = original;
+        Ok(())
+    }
+
+    #[cfg(feature = "db_dependent")]
     pub(in crate::server) async fn assert_sources_wait_for_preload_then_finish_drain(
         sources: &[Coordinator],
         handoffs: &[CpuCellHandoffs],
@@ -550,11 +815,11 @@ pub(super) mod tests {
     ) -> Result<()> {
         for (source, handoff) in sources.iter().zip(handoffs) {
             assert!(!source.source_step(handoff).await?);
-            assert!(!source.drain.as_ref().unwrap().requested());
+            assert!(!source.drain().unwrap().requested());
         }
         loading_candidate.mark_ready(candidate_process).await;
         assert!(sources[0].source_step(&handoffs[0]).await?);
-        assert!(sources[0].drain.as_ref().unwrap().requested());
+        assert!(sources[0].drain().unwrap().requested());
         loading_candidate.status.write().await.ready = false;
         for (source, handoff) in sources.iter().zip(handoffs).skip(1) {
             assert!(source.source_step(handoff).await?);

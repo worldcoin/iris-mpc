@@ -152,7 +152,9 @@ async fn startup_denies_restarted_source_but_keeps_existing_connections_usable()
     f.db.check_startup(f.destination, true).await?;
     assert!(f.db.check_startup(f.destination, false).await.is_err());
     f.db.activate(f.id, f.destination, &report()).await?;
-    assert!(f.db.check_startup(f.destination, true).await.is_err());
+    // A replacement may reload during partial activation; live serving is
+    // rejected separately by the current peer barrier before reconciliation.
+    f.db.check_startup(f.destination, true).await?;
     f.db.check_startup(f.destination, false).await?;
     assert!(f.db.check_startup(f.source, false).await.is_err());
     assert!(f.db.check_startup(Uuid::new_v4(), false).await.is_err());

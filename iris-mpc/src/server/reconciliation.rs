@@ -50,7 +50,7 @@ impl ReconciliationContext {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReconciliationReport {
-    context: ReconciliationContext,
+    pub(super) context: ReconciliationContext,
     party_id: usize,
     registry_count: u64,
     registry_digest: [u8; 32],
@@ -118,6 +118,17 @@ impl CandidateReconciliation {
             State::Complete(report) if &report.context == current => Some(report),
             _ => None,
         }
+    }
+
+    pub(super) fn into_workers(
+        self,
+        current: &ReconciliationContext,
+    ) -> Result<InitializedWorkers> {
+        ensure!(
+            self.report_for(current).is_some(),
+            "candidate lacks current completed reconciliation"
+        );
+        Ok(self.workers)
     }
 
     /// All canonical writers must remain frozen and A sealed until activation.

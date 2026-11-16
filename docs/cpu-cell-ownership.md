@@ -5,8 +5,8 @@ existing peer coordination establishes agreement across the three parties.
 This is a planned handoff between cooperating binaries using existing database
 and network access controls.
 
-The runtime coordinates drain and candidate reconciliation automatically when
-configured. Serving activation remains [POP-4376](https://linear.app/worldcoin/issue/POP-4376); deployment wiring and
+The runtime coordinates drain, candidate reconciliation and serving activation
+when configured. Deployment wiring and
 cold recovery are [POP-4377](https://linear.app/worldcoin/issue/POP-4377) and
 [POP-4378](https://linear.app/worldcoin/issue/POP-4378).
 
@@ -37,8 +37,9 @@ The database report remains readable after A exits. The drain compares durable
 completed watermarks and final publications, independent of retained request
 history. Each B reads its local record, exchanges it with the current B peers,
 and reconciles its retained workers at the agreed watermark. A need not remain
-alive for this exchange. Matching canonical iris metadata reports leave B
-reconciled and passive.
+alive for this exchange. Matching canonical iris metadata reports allow B to
+prepare its serving actor from the reconciled resident workers. The current B
+processes must still agree on activation before processing requests.
 
 ## Migrations and startup
 
@@ -77,7 +78,8 @@ configuration or an invalid phase blocks active startup. The current requested
 source and the latest activated destination may enter active startup. After
 drain-start, the source is blocked after migrations and before claim recovery,
 replay or intake. Existing source connections can settle admitted work.
-Candidates remain passive; a restarted process must rebuild resident state.
+Candidates remain passive until promotion completes; a restarted process must
+rebuild resident state.
 
 Both active and candidate startup run the ordinary SQLx migrator before reading
 handoff history. Already-applied migrations are not reapplied. A newer release
@@ -132,7 +134,8 @@ must restrict these listeners to the intended party processes using its existing
 network/access controls; do not publish them as serving endpoints. Common
 configuration must match within each cell. A and B may have different serving
 settings, but their protocol and forward-only schema changes must be compatible
-and reviewed together. This configuration enables no serving activation.
+and reviewed together. Configuring automatic handoff also enables B promotion
+after agreement; use the passive stage configuration when testing preload alone.
 
 The deployment migrator applies migrations forward; this migration has no down
 operation. Retain handoff history because startup uses it to keep retired
@@ -153,7 +156,9 @@ another peer's remaining agreement budget can require restarting that failed
 candidate too. Fresh preload retains the normal loader's dense-ID requirement.
 Missing/mismatched reports, an A restart during drain or uncertain effects still
 stop progress. No timeout resumes A. A fresh B cannot inherit reconciliation or
-activation; recovery after partial activation remains POP-4378.
+in-memory activation readiness. It may reconcile during partial activation only
+while all B peers remain gated from serving. Once any B opens processing, a
+replacement must use the coordinated recovery procedure in POP-4378.
 
 After all three parties record activation, the same destination deployment can
 use existing coordinated cold startup: stop/fence all old processes, configure
@@ -168,3 +173,25 @@ settling outstanding effects and reloading canonical state. Do not clear
 handoff records or remove configuration while an old process may still act.
 Database restore and slot reuse need the same operating discipline. This table
 cannot cancel an SNS/SQS request already in flight or detect restored history.
+
+## Resident promotion
+
+Normal promotion consumes B's reconciled workers once, initializes deferred
+serving networking and actor state, records local activation, and passes the
+existing coordination barriers before opening intake. It does not repeat
+cold-start migrations, modification replay or the database preload. A local
+`activated` row alone does not permit serving.
+
+Serving coordination can allocate a fresh process UUID. The handoff status
+must publish that serving identity consistently, and activation must check the
+exact current three-party cohort against matching handoff, completion and
+reconciliation reports. Replacing B requires fresh preload and reconciliation;
+recorded progress cannot supply the replacement's in-memory readiness.
+
+Promotion and peer waits have a bounded budget. A failure leaves B closed and
+A stopped; it does not roll back the durable seal. Include deferred serving
+initialization and the first completed B request when measuring handoff pause.
+The `candidate_handoff_to_first_publication` log measures from B's post-preload
+completion wait through reconciliation, promotion and its first nonempty result
+publication. Correlate the A admission seal separately for end-to-end pause.
+Deployment wiring for the next destination remains POP-4377.
