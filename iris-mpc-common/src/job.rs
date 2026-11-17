@@ -8,6 +8,7 @@ use crate::{
 use ampc_server_utils::batch_sync::get_own_batch_sync_entries;
 use ampc_server_utils::{get_batch_sync_entries, BatchSyncEntriesResult};
 use eyre::{eyre, Result};
+use sha2::{Digest, Sha256};
 use std::{collections::HashMap, future::Future};
 
 #[derive(Default, Debug, Clone, PartialEq, Eq, Hash)]
@@ -111,6 +112,20 @@ pub struct BatchQuery {
 }
 
 impl BatchQuery {
+    /// Hash both ordered input lists with explicit list and byte-length boundaries.
+    pub fn agreement_hash(&self) -> [u8; 32] {
+        let mut digest = Sha256::new();
+        digest.update(b"iris-mpc/batch-agreement/v1");
+        for entries in [&self.sns_message_ids, &self.sqs_sequence_numbers] {
+            digest.update((entries.len() as u64).to_be_bytes());
+            for entry in entries {
+                digest.update((entry.len() as u64).to_be_bytes());
+                digest.update(entry.as_bytes());
+            }
+        }
+        digest.finalize().into()
+    }
+
     /// Add a Uniqueness, Reauth, or Reset Check request to the batch.
     /// Must be followed by a call to `push_matching_request_shares` to set the shares.
     pub fn push_matching_request(
@@ -452,6 +467,87 @@ mod tests {
     use crate::{
         helpers::smpc_request::UNIQUENESS_MESSAGE_TYPE, IRIS_CODE_LENGTH, MASK_CODE_LENGTH,
     };
+
+    #[test]
+    fn agreement_hash_covers_all_claimed_sequences() {
+        for sns_message_ids in [vec![], vec!["accepted".to_owned()]] {
+            let first = BatchQuery {
+                sns_message_ids,
+                sqs_sequence_numbers: vec!["10".to_owned(), "20".to_owned()],
+                ..Default::default()
+            };
+            let mut second = first.clone();
+            second.sqs_sequence_numbers[1] = "30".to_owned();
+            assert_ne!(first.agreement_hash(), second.agreement_hash());
+        }
+    }
+
+    #[test]
+    fn agreement_hash_frames_lists_and_elements() {
+        let first = BatchQuery {
+            sns_message_ids: vec!["ab".to_owned(), "c".to_owned()],
+            ..Default::default()
+        };
+        let second = BatchQuery {
+            sns_message_ids: vec!["a".to_owned(), "bc".to_owned()],
+            ..Default::default()
+        };
+        assert_ne!(first.agreement_hash(), second.agreement_hash());
+
+        let first = BatchQuery {
+            sns_message_ids: vec!["a".to_owned()],
+            sqs_sequence_numbers: vec!["b".to_owned()],
+            ..Default::default()
+        };
+        let second = BatchQuery {
+            sns_message_ids: vec!["a".to_owned(), "b".to_owned()],
+            ..Default::default()
+        };
+        assert_ne!(first.agreement_hash(), second.agreement_hash());
+        let one_empty = BatchQuery {
+            sns_message_ids: vec![String::new()],
+            ..Default::default()
+        };
+        assert_ne!(
+            one_empty.agreement_hash(),
+            BatchQuery::default().agreement_hash()
+        );
+    }
+
+    #[test]
+    fn agreement_hash_preserves_both_input_orders() {
+        let first = BatchQuery {
+            sns_message_ids: vec!["a".to_owned(), "b".to_owned()],
+            sqs_sequence_numbers: vec!["10".to_owned(), "20".to_owned()],
+            ..Default::default()
+        };
+        let mut second = first.clone();
+        second.sns_message_ids.reverse();
+        assert_ne!(first.agreement_hash(), second.agreement_hash());
+        second = first.clone();
+        second.sqs_sequence_numbers.reverse();
+        assert_ne!(first.agreement_hash(), second.agreement_hash());
+    }
+
+    #[test]
+    fn agreement_hash_uses_new_format_for_empty_and_explicit_batches() {
+        for batch in [
+            BatchQuery::default(),
+            BatchQuery {
+                sns_message_ids: vec!["single".to_owned()],
+                ..Default::default()
+            },
+            BatchQuery {
+                sns_message_ids: vec!["envelope:0".to_owned(), "envelope:1".to_owned()],
+                sqs_sequence_numbers: vec!["10".to_owned()],
+                ..Default::default()
+            },
+        ] {
+            let legacy = crate::helpers::sha256::sha256_bytes(batch.sns_message_ids.join(""));
+            assert_ne!(batch.agreement_hash(), legacy);
+            assert_eq!(batch.agreement_hash(), batch.clone().agreement_hash());
+        }
+    }
 
     #[test]
     fn test_batch_valid_entries() {

@@ -129,6 +129,15 @@ impl<I: Clone> SharedIrises<I> {
         vector_id
     }
 
+    /// Remove a current entry without reusing its serial ID or creating a dummy.
+    pub fn remove(&mut self, serial_id: SerialId) -> Option<I> {
+        let entry = self.points.get_mut(serial_id as usize)?.take()?;
+        self.set_hash.remove(VectorId::new(serial_id, entry.0));
+        self.size -= 1;
+        self.live_ids = OnceLock::new();
+        Some(entry.1)
+    }
+
     /// Insert the given iris at the next unused serial ID, with version
     /// initialized to 0.
     pub fn append(&mut self, iris: I) -> VectorId {
@@ -449,6 +458,24 @@ impl<I: Clone> SharedIrisesRef<I> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn physical_removal_invalidates_metadata_without_reusing_ids() {
+        let mut store = SharedIrises::<u8>::default();
+        let first = store.append(7);
+        let second = store.append(8);
+        let _ = store.live_vector_ids();
+        assert_eq!(store.remove(second.serial_id()), Some(8));
+        assert_eq!(store.size, 1);
+        assert_eq!(&*store.live_vector_ids(), &[first]);
+        assert!(store.get_vector(&second).is_none());
+        let mut expected = SharedIrises::<u8>::default();
+        expected.append(7);
+        assert_eq!(store.set_hash, expected.set_hash);
+        assert_eq!(store.append(9).serial_id(), 3);
+        assert!(store.remove(second.serial_id()).is_none());
+        assert_eq!(store.size, 2);
+    }
 
     #[test]
     fn live_vector_ids_track_mutations() {

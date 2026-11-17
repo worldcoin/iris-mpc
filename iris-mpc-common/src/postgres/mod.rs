@@ -22,9 +22,11 @@ pub enum AccessMode {
 }
 
 fn sanitize_identifier(input: &str) -> Result<()> {
-    if input
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+    if !input.is_empty()
+        && input.len() <= 63
+        && input
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
     {
         Ok(())
     } else {

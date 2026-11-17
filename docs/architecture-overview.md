@@ -14,7 +14,7 @@ iris-mpc-store/      Postgres persistence layer
 ## Crate Responsibilities
 
 ### iris-mpc-cpu
-The core MPC computation engine. Runs the ABY3 protocol over HNSW graphs.
+The core MPC computation engine. Runs the ABY3 protocol for CPU linear scan and HNSW graphs.
 
 | Module | Path | Role |
 |--------|------|------|
@@ -67,7 +67,7 @@ Binaries and operational scripts.
 
 | Item | Path | Role |
 |------|------|------|
-| GPU server binary (`iris-mpc-gpu`) | `bin/iris-mpc/server.rs` | GPU MPC server entry point |
+| Linear-scan server binary (`iris-mpc-linear-scan`) | `bin/iris-mpc/server/iris_mpc_linear_scan.rs` | CPU linear-scan MPC server entry point |
 | Hawk server binary (`iris-mpc-hawk`) | `bin/iris-mpc/server/iris_mpc_hawk.rs` | CPU (HNSW) MPC server entry point |
 | Service client | `bin/service-client/` | CLI binary wrapping iris-mpc-utils |
 | Run script | `scripts/run-service-client.sh` | Shell wrapper with file resolution and AWS profile setup |

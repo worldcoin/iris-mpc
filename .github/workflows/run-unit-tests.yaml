@@ -87,6 +87,16 @@ jobs:
       - name: Run Tests with DB
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
         run: cargo test --release --features db_dependent -- --test-threads=1
+        env:
+          CPU_CELL_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+
+      - name: Run CPU handoff startup guards
+        if: steps.changed-files-yaml.outputs.src_any_changed == 'true'
+        run: |
+          cargo test --release -p iris-mpc server::config_tests::startup_handoff_denial_precedes_operational_effects -- --include-ignored --test-threads=1
+          cargo test --release -p iris-mpc server::candidate::tests::candidate_preloads_read_only_and_never_enters_live_startup -- --include-ignored --test-threads=1
+        env:
+          CPU_CELL_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
 
       - name: Run CPU E2E tests
         if: steps.changed-files-yaml.outputs.src_any_changed == 'true'

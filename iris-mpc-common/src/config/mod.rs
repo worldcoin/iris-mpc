@@ -34,6 +34,27 @@ pub enum StartupMode {
     Candidate,
 }
 
+/// Immutable deployment identity; A/B slot names are reused across releases.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CpuCellConfig {
+    pub deployment_id: String,
+    /// Fixed /handoff-status URLs indexed by party. Omit to disable runtime handoff.
+    #[serde(default)]
+    pub candidate_status_urls: Option<JsonStrWrapper<[String; 3]>>,
+    /// Supplied only to the destination candidate by its deployment configuration.
+    #[serde(default)]
+    pub handoff: Option<CpuCellHandoffConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CpuCellHandoffConfig {
+    pub id: String,
+    pub source_deployment_id: String,
+    pub source_status_urls: JsonStrWrapper<[String; 3]>,
+}
+
 fn default_cpu_drain_timeout_secs() -> u64 {
     300
 }
@@ -46,11 +67,14 @@ fn default_candidate_status_port() -> u16 {
 // to all lower case. ex: SMPC__SCHEMA_NAME -> schema_name.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
+    #[serde(default)]
+    pub cpu_cell: Option<CpuCellConfig>,
+
     /// Passive preloading is supported only by the CPU linear-scan service.
     #[serde(default)]
     pub startup_mode: StartupMode,
 
-    /// Operator status, bound to loopback only in candidate mode.
+    /// Candidate status port; loopback unless runtime handoff is explicitly configured.
     #[serde(default = "default_candidate_status_port")]
     pub candidate_status_port: u16,
 
@@ -853,6 +877,7 @@ impl From<Config> for CommonConfig {
         // This is destructured here intentionally to cause a compile error if
         // any of the fields are added to the struct without being considered if they should be in the common config hash or not.
         let Config {
+            cpu_cell: _,     // deployment identity is checked against local handoff history
             startup_mode: _, // candidate processes never join active coordination
             candidate_status_port: _,
             cpu_drain_timeout_secs: _, // local drain deadline does not change MPC computation
@@ -1020,6 +1045,40 @@ impl From<Config> for CommonConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cpu_cell_peer_urls_load_from_gitops_environment() {
+        let prefix = "CPU_CELL_CONFIG_TEST";
+        let urls = r#"["http://a:3090/handoff-status","http://b:3090/handoff-status","http://c:3090/handoff-status"]"#;
+        let values = [
+            (
+                "CPU_CELL__DEPLOYMENT_ID",
+                "00000000-0000-0000-0000-000000000001",
+            ),
+            ("CPU_CELL__CANDIDATE_STATUS_URLS", urls),
+            (
+                "CPU_CELL__HANDOFF__ID",
+                "00000000-0000-0000-0000-000000000002",
+            ),
+            (
+                "CPU_CELL__HANDOFF__SOURCE_DEPLOYMENT_ID",
+                "00000000-0000-0000-0000-000000000003",
+            ),
+            ("CPU_CELL__HANDOFF__SOURCE_STATUS_URLS", urls),
+        ];
+        for (key, value) in values {
+            std::env::set_var(format!("{prefix}__{key}"), value);
+        }
+        let config = Config::load_config(prefix);
+        for (key, _) in values {
+            std::env::remove_var(format!("{prefix}__{key}"));
+        }
+        let cell = config.unwrap().cpu_cell.unwrap();
+        assert_eq!(
+            cell.candidate_status_urls.unwrap(),
+            cell.handoff.unwrap().source_status_urls
+        );
+    }
 
     #[test]
     fn messaging_regions_are_optional_local_transport_settings() {

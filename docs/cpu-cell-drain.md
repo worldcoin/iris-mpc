@@ -48,28 +48,33 @@ Drain proceeds in three steps:
    settle can unused database claims be released for later processing.
    Existing malformed-envelope/invalid-sequence discard policy is unchanged.
 
-3. **Verify that all parties completed the same requests.** Each party reads
-   a fresh persisted request watermark, W: the highest request sequence number
-   whose results are committed to Postgres. It rejects unresolved valid requests
-   at or below W. The cut is a batch number; W is a request sequence number.
-   Matching W alone is insufficient: sets `{10, 20, 30}` and `{10, 30}` both
-   end at 30. Each party therefore streams its ordered persisted sequence IDs
-   into a SHA-256 hash and counts them; all three reports must agree. Sequence
-   numbers need not be consecutive. For a nonzero cut, the final publication
-   must be for that batch, with the same full batch digest on every party.
+3. **Verify completion and publication agreement.** Each party reads a fresh
+   durable completion watermark, C, written with committed batch results. It
+   rejects unresolved valid requests at or below C. The cut is a batch number;
+   C is a request sequence number and can be null when no request has completed.
+   All three reports must agree on C. This relies on the existing FIFO-prefix
+   contract, exact claimed-request agreement before each batch, and startup
+   recovery; drain does not audit historical membership. Deleting completed
+   journal rows does not change C or drain agreement. For a nonzero cut, the
+   final publication must be for that batch, with the same full batch digest
+   on every party. C records processing completion, not publication success.
    Cut zero requires no new publication.
+
+The report schema rejects legacy count/SHA fields and requires an explicit
+nullable C field. Old and new report formats reject each other, so upgrade all
+three parties before attempting a drain.
 
 `SMPC__CPU_DRAIN_TIMEOUT_SECS` bounds the whole operation (default 300 seconds).
 Tune it for the expected in-flight workload before starting the process. A
 missing drain request, peer identity change, timeout, DB or publication
-failure, asymmetric persisted prefix, or failed startup SNS replay blocks
+failure, unequal C, unresolved valid requests through C, or failed startup SNS replay blocks
 success. An exhausted ingest error makes this process ineligible for a successful
 drain even if an unrelated later receive succeeds: this version does not track
 recovery of individual ambiguous receipt operations. Normal serving retries
 continue until drain is requested.
 
 The drain timeout does not cancel admitted batch processing, DB commits or SNS
-publications. Claim cleanup and the prefix proof run only after that work
+publications. Claim cleanup and completion checks run only after that work
 settles, within the remaining drain budget. A timeout leaves the process
 failed/paused and must not authorize handoff.
 

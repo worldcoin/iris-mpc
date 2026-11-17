@@ -17,15 +17,15 @@ pub struct SyncState {
     #[serde(default)]
     pub graph_mutation_bytes: Vec<Option<Vec<u8>>>,
 
-    /// db_backed_ingest only: this party's highest persisted (fully committed)
-    /// `ingested_requests.sequence_number`. Because formation always consumes
-    /// the lowest pending rows in FIFO ingest order, the persisted set is a
-    /// contiguous prefix of the sequence order, so this single value is a
+    /// db_backed_ingest only: this party's durable completion watermark C,
+    /// reconciled with retained persisted journal rows at startup. Formation
+    /// consumes the lowest pending rows in FIFO ingest order, so C tracks a
+    /// contiguous prefix of that order and serves as a
     /// complete progress marker — the DB analog of the SQS queue-head number.
     /// Zero-padded fixed width: lexicographic comparison == numeric.
     ///
-    /// serde(default) keeps rolling-deploy peers parseable (missing key =
-    /// unknown = None, which conservatively disables the skip-ahead).
+    /// serde(default) keeps rolling-deploy peers parseable. A missing field is
+    /// unknown (None) and contributes nothing to the fleet maximum.
     #[serde(default)]
     pub max_persisted_sequence_number: Option<String>,
 
