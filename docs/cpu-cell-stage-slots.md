@@ -1,8 +1,5 @@
 # Passive CPU cells in stage
 
-For coordinated migration baseline, runtime handoff configuration and the
-A→B→A acceptance sequence, see [stage rollout preparation](cpu-cell-stage-rollout.md).
-
 The existing `ampc-hnsw` deployment keeps serving. `ampc-hnsw-a` and
 `ampc-hnsw-b` are separate, initially disabled candidate deployments in the same
 namespace. They share the party's existing database, queues, `application`
@@ -85,3 +82,25 @@ uncertain CREATE response: inspect and retire the slot before retrying.
 Rollback for this passive stage test is disabling the candidate and retiring
 its records; the existing serving deployment remains in place. These files do
 not implement promotion or production rollout.
+
+## Coordinated handoff prerequisites
+
+Before enabling handoff, verify healthy CPU capacity for both cells, peer
+DNS/TLS/network access, database headroom, and `route53:GetChange` on each
+stage workload role. Route53 INSYNC does not prove peer DNS resolution or TLS.
+
+Establish protocol 2 with a coordinated cold upgrade and no handoff in flight.
+Candidate startup migrates before compatibility checks; `MIGRATE=false` does
+not protect an incompatible serving release. Stop/fence legacy writers first.
+
+During that baseline, configure Active A with its deployment UUID and B's
+candidate-status URLs. Restore A's serving HTTP probes on port 3000 instead of
+the passive exec probes on 3090. The later warm release changes B only: pin its
+image digest, assign fresh deployment/handoff UUIDs, and supply A's serving URLs
+and the current B operator URLs. Keep B's candidate probes through promotion.
+
+POP-4560 supplies next-candidate routing before B→A can work without restarting
+serving B. Retire old processes and exact DNS records before slot reuse. Validate
+both directions through signup-service and exercise cold recovery under
+POP-4378/4379/4380. After sealing, failures must not automatically resume A.
+Keep journal cleanup and production rollout separate.
