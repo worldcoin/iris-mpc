@@ -93,10 +93,11 @@ Establish protocol 2 with a coordinated cold upgrade and no handoff in flight.
 Candidate startup migrates before compatibility checks; `MIGRATE=false` does
 not protect an incompatible serving release. Stop/fence legacy writers first.
 
-During that baseline, configure Active A with its deployment UUID and B's
+During that baseline, configure Active A with one shared deployment UUID and B's
 candidate-status URLs. Restore A's serving HTTP probes on port 3000 instead of
 the passive exec probes on 3090. The later warm release changes B only: pin its
-image digest, assign fresh deployment/handoff UUIDs, and supply A's status URLs
+image digest, use one fresh B deployment UUID and one fresh handoff UUID shared
+across all three parties, and supply A's status URLs
 (`http://<host>:<healthcheck-port>/handoff-status`) and the current B operator URLs.
 Keep B's candidate probes through promotion.
 
