@@ -94,12 +94,56 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
         return candidate::run(config, shutdown).await;
     }
 
+    let shutdown_handler = init_shutdown_handler(&config).await;
+    Box::pin(run_server(config, search_mode, shutdown_handler, None)).await
+}
+
+struct PreparedServer {
+    config: Config,
+    search_mode: HawkSearchMode,
+    iris_store: Store,
+    aws_clients: AwsClients,
+    shares_encryption_key_pair: Arc<SharesEncryptionKeyPairs>,
+    background_tasks: TaskMonitor,
+    shutdown_handler: Arc<ShutdownHandler>,
+    hawk_handle: HawkHandle,
+    tx_results: Sender<(BatchTimings, ServerJobResult)>,
+    current_batch_id_atomic: Arc<AtomicU64>,
+    batch_sync_shared_state: Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
+    drain: Option<Arc<drain::Drain>>,
+}
+
+async fn run_server(
+    config: Config,
+    search_mode: HawkSearchMode,
+    shutdown_handler: Arc<ShutdownHandler>,
+    promotion: Option<candidate::Promotion>,
+) -> Result<()> {
+    let deadline = promotion.as_ref().map(|promotion| promotion.deadline);
+    let startup = prepare_server(config, search_mode, shutdown_handler, promotion);
+    let prepared = match deadline {
+        Some(deadline) => tokio::time::timeout_at(deadline, startup)
+            .await
+            .wrap_err("candidate activation deadline exceeded")??,
+        None => startup.await?,
+    };
+    match prepared {
+        Some(prepared) => prepared.run().await,
+        None => Ok(()),
+    }
+}
+
+async fn prepare_server(
+    config: Config,
+    search_mode: HawkSearchMode,
+    shutdown_handler: Arc<ShutdownHandler>,
+    mut promotion: Option<candidate::Promotion>,
+) -> Result<Option<PreparedServer>> {
     tracing::info!(
         ?search_mode,
         "Starting AMPC CPU server with configuration: {:?}",
         config
     );
-    let shutdown_handler = init_shutdown_handler(&config).await;
 
     process_config(&config, search_mode)?;
 
@@ -126,24 +170,69 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
         );
     }
 
-    let (iris_store, graph_store) = prepare_stores(&config, search_mode).await?;
-    let handoff = initialize_handoff(&config, search_mode, &iris_store.pool).await?;
+    let (iris_store, graph_store, handoff) = if promotion.is_some() {
+        let db = config
+            .database
+            .as_ref()
+            .ok_or_else(|| eyre!("missing candidate database"))?;
+        let postgres = PostgresClient::new(
+            &db.url,
+            &config.get_gpu_db_schema(),
+            AccessMode::ExistingSchema,
+        )
+        .await?;
+        let store = Store::new(&postgres).await?;
+        let graph = GraphStore::new(&postgres).await?;
+        let deployment = Uuid::parse_str(
+            &config
+                .cpu_cell
+                .as_ref()
+                .ok_or_else(|| eyre!("missing candidate cell"))?
+                .deployment_id,
+        )?;
+        let handoff = Arc::new(ManagedHandoff {
+            handoffs: CpuCellHandoffs::new(postgres.pool.clone(), &config.get_gpu_db_schema())?,
+            deployment,
+        });
+        (store, graph, Some(handoff))
+    } else {
+        let (store, graph) = prepare_stores(&config, search_mode).await?;
+        let handoff = initialize_handoff(&config, search_mode, &store.pool).await?;
+        (store, graph, handoff)
+    };
 
     let aws_clients = init_aws_services(&config).await?;
     let shares_encryption_key_pair =
         Arc::new(get_shares_encryption_key_pair(&config, &aws_clients).await?);
     let sns_attributes_maps = init_sns_attributes_maps()?;
 
-    maybe_seed_random_shares(&config, &iris_store).await?;
-    check_store_consistency(&config, &iris_store).await?;
-    let my_state = build_sync_state(
-        &config,
-        &aws_clients,
-        &iris_store,
-        &graph_store,
-        search_mode,
-    )
-    .await?;
+    let my_state = if let Some(promotion) = &promotion {
+        let completion = promotion.coordinator.agreed_completion().await?;
+        let workers = promotion
+            .workers
+            .as_ref()
+            .ok_or_else(|| eyre!("candidate workers already consumed"))?;
+        SyncState {
+            db_len: workers.registries[0].read().await.size as u64,
+            modifications: vec![],
+            next_sns_sequence_num: None,
+            common_config: CommonConfig::from(config.clone()),
+            graph_mutation_bytes: vec![],
+            max_persisted_sequence_number: completion.watermark,
+            dh_nonce: None,
+        }
+    } else {
+        maybe_seed_random_shares(&config, &iris_store).await?;
+        check_store_consistency(&config, &iris_store).await?;
+        build_sync_state(
+            &config,
+            &aws_clients,
+            &iris_store,
+            &graph_store,
+            search_mode,
+        )
+        .await?
+    };
 
     let mut background_tasks = TaskMonitor::new();
 
@@ -181,7 +270,10 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
     } else {
         None
     };
-    let handoff_coordinator = handoff::Coordinator::new(&config, Uuid::nil(), drain.clone())?;
+    let mut handoff_coordinator = match &promotion {
+        Some(promotion) => Some(promotion.coordinator.clone()),
+        None => handoff::Coordinator::new(&config, Uuid::nil(), drain.clone())?,
+    };
     let extra_routes = drain.as_ref().map(|drain| {
         let routes = drain.routes();
         match &handoff_coordinator {
@@ -201,6 +293,22 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
     if let Some(drain) = &drain {
         drain.initialize(my_uuid.clone(), is_ready_flag.clone());
     }
+    if let Some(promotion) = &promotion {
+        let process = Uuid::parse_str(&my_uuid)?;
+        handoff_coordinator = Some(
+            promotion
+                .coordinator
+                .bind_serving(
+                    &config,
+                    process,
+                    drain
+                        .clone()
+                        .ok_or_else(|| eyre!("missing promoted drain"))?,
+                )
+                .await?,
+        );
+        promotion.bind_status(process, is_ready_flag.clone()).await;
+    }
     tracing::info!("Coordination server started");
 
     // Startup barriers: un-ready sync + full mutual peer visibility
@@ -209,118 +317,135 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
     let sync_result = get_sync_result(&config, &my_state).await?;
     sync_result.check_common_config()?;
 
-    // Full-fleet restarts rebuild every SyncState snapshot after its party's
-    // last commit. Solo restarts would require live DB frontier reads instead.
-    let fleet_frontier = if config.db_backed_ingest {
-        sync_result.max_persisted_sequence_number()
-    } else {
-        None
-    };
-
-    // Handle modifications sync
-    if config.enable_modifications_sync {
-        let mut tx = sync_modifications(
-            &config,
-            &iris_store,
-            &aws_clients,
-            &shares_encryption_key_pair,
-            sync_result.clone(),
-        )
-        .await?;
-        // Insert the WAL entries so that init_hawk_actor rolls the graph forward to
-        // the correct height. Share the modifications-sync transaction so a crash
-        // cannot leave the iris store ahead of the WAL. Linear scan has no graph WAL.
-        if search_mode == HawkSearchMode::Hnsw {
-            sync_graph_mutations(&sync_result, &graph_store, &mut tx).await?;
-        }
-        let marked = if let Some(frontier) = &fleet_frontier {
-            iris_store
-                .mark_ingested_requests_persisted_up_to_tx(&mut tx, frontier)
-                .await
-                .wrap_err("failed to skip-ahead ingested rows to fleet frontier")?
+    if promotion.is_none() {
+        // Full-fleet restarts rebuild every SyncState snapshot after its party's
+        // last commit. Solo restarts would require live DB frontier reads instead.
+        let fleet_frontier = if config.db_backed_ingest {
+            sync_result.max_persisted_sequence_number()
         } else {
-            0
+            None
         };
-        tx.commit().await?;
-        if marked > 0 {
-            tracing::warn!(
-                frontier = ?fleet_frontier,
-                "Skip-ahead: marked {} ingested row(s) persisted with recovered modification effects",
-                marked
-            );
-            metrics::counter!("db_ingest_frontier_skip_ahead").increment(marked);
-        }
-    }
 
-    if config.enable_modifications_replay {
-        // replay last `max_modification_lookback` modifications to SNS
-        if let Err(e) = send_last_modifications_to_sns(
-            &iris_store,
-            &aws_clients.sns_client,
-            &config,
-            config.max_modifications_lookback,
-        )
-        .await
-        {
-            tracing::error!("Failed to replay last modifications: {:?}", e);
-            if let Some(drain) = &drain {
-                drain.block("startup SNS replay failed earlier in this process");
+        // Handle modifications sync
+        if config.enable_modifications_sync {
+            let mut tx = sync_modifications(
+                &config,
+                &iris_store,
+                &aws_clients,
+                &shares_encryption_key_pair,
+                sync_result.clone(),
+            )
+            .await?;
+            // Insert the WAL entries so that init_hawk_actor rolls the graph forward to
+            // the correct height. Share the modifications-sync transaction so a crash
+            // cannot leave the iris store ahead of the WAL. Linear scan has no graph WAL.
+            if search_mode == HawkSearchMode::Hnsw {
+                sync_graph_mutations(&sync_result, &graph_store, &mut tx).await?;
+            }
+            let marked = if let Some(frontier) = &fleet_frontier {
+                iris_store
+                    .mark_ingested_requests_persisted_up_to_tx(&mut tx, frontier)
+                    .await
+                    .wrap_err("failed to skip-ahead ingested rows to fleet frontier")?
+            } else {
+                0
+            };
+            tx.commit().await?;
+            if marked > 0 {
+                tracing::warn!(
+                    frontier = ?fleet_frontier,
+                    "Skip-ahead: marked {} ingested row(s) persisted with recovered modification effects",
+                    marked
+                );
+                metrics::counter!("db_ingest_frontier_skip_ahead").increment(marked);
             }
         }
-    }
 
-    if config.db_backed_ingest {
-        // Recovery committed the fleet frontier and its effects together.
-        // Release remaining unpersisted claims (all above the fleet
-        // frontier = no party persisted them = the symmetric-crash case).
-        // Deterministic re-formation picks them up identically everywhere.
-        let released = iris_store
-            .reset_unpersisted_ingested_claims()
+        if config.enable_modifications_replay {
+            // replay last `max_modification_lookback` modifications to SNS
+            if let Err(e) = send_last_modifications_to_sns(
+                &iris_store,
+                &aws_clients.sns_client,
+                &config,
+                config.max_modifications_lookback,
+            )
             .await
-            .wrap_err("failed to reset unpersisted ingested claims on startup")?;
-        if released > 0 {
-            tracing::warn!(
+            {
+                tracing::error!("Failed to replay last modifications: {:?}", e);
+                if let Some(drain) = &drain {
+                    drain.block("startup SNS replay failed earlier in this process");
+                }
+            }
+        }
+
+        if config.db_backed_ingest {
+            // Recovery committed the fleet frontier and its effects together.
+            // Release remaining unpersisted claims (all above the fleet
+            // frontier = no party persisted them = the symmetric-crash case).
+            // Deterministic re-formation picks them up identically everywhere.
+            let released = iris_store
+                .reset_unpersisted_ingested_claims()
+                .await
+                .wrap_err("failed to reset unpersisted ingested claims on startup")?;
+            if released > 0 {
+                tracing::warn!(
                 "Released {} unpersisted ingested request claim(s) from a crashed/restarted batch; they will be re-formed",
                 released
             );
-            metrics::counter!("db_ingest_claims_released").increment(released);
+                metrics::counter!("db_ingest_claims_released").increment(released);
+            } else {
+                tracing::info!("No unpersisted ingested request claims to release on startup");
+            }
+
+            // Skip the startup queue trim: with DB-backed ingest, queues are
+            // transient buffers with party-dependent ingest offsets, so cross-party
+            // queue-position comparison is meaningless (an already-drained queue
+            // reports None and max_sns_sequence_num panics on mixed states) and the
+            // trim could delete messages a lagging party has not yet ingested.
+            // Dedup of redeliveries is handled by the ingest's PK ON CONFLICT;
+            // already-processed rows are excluded by persisted_at.
+            tracing::info!("db-backed ingest enabled; skipping startup SQS queue sync/trim");
         } else {
-            tracing::info!("No unpersisted ingested request claims to release on startup");
+            sync_sqs_queues(&config, &sync_result, &aws_clients).await?;
         }
 
-        // Skip the startup queue trim: with DB-backed ingest, queues are
-        // transient buffers with party-dependent ingest offsets, so cross-party
-        // queue-position comparison is meaningless (an already-drained queue
-        // reports None and max_sns_sequence_num panics on mixed states) and the
-        // trim could delete messages a lagging party has not yet ingested.
-        // Dedup of redeliveries is handled by the ingest's PK ON CONFLICT;
-        // already-processed rows are excluded by persisted_at.
-        tracing::info!("db-backed ingest enabled; skipping startup SQS queue sync/trim");
+        if shutdown_handler.is_shutting_down() {
+            tracing::warn!("Shutting down has been triggered");
+            return Ok(None);
+        }
+    }
+    let mut hawk_actor = if let Some(promotion) = promotion.as_mut() {
+        let workers = promotion
+            .workers
+            .take()
+            .ok_or_else(|| eyre!("candidate workers already consumed"))?;
+        promote_actor(&config, workers, &shutdown_handler).await?
     } else {
-        sync_sqs_queues(&config, &sync_result, &aws_clients).await?;
-    }
-
-    if shutdown_handler.is_shutting_down() {
-        tracing::warn!("Shutting down has been triggered");
-        return Ok(());
-    }
-
-    let mut hawk_actor = init_hawk_actor(
-        &config,
-        &aws_clients.checkpoint_s3_client,
-        &config.graph_checkpoint_bucket_name,
-        &iris_store,
-        &graph_store,
-        &shutdown_handler,
-        search_mode,
-    )
-    .await?;
+        init_hawk_actor(
+            &config,
+            &aws_clients.checkpoint_s3_client,
+            &config.graph_checkpoint_bucket_name,
+            &iris_store,
+            &graph_store,
+            &shutdown_handler,
+            search_mode,
+        )
+        .await?
+    };
 
     if let Some(url) = config.get_anon_stats_db_url() {
         let schema = config.get_anon_stats_db_schema();
-        let anon_client =
-            AnonStatsPgClient::new(&url, &schema, AnonStatsAccessMode::ReadWrite).await?;
-        let anon_store = AnonStatsStore::new(&anon_client, false).await?;
+        let anon_store = if promotion.is_some() {
+            let client = PostgresClient::new(&url, &schema, AccessMode::ExistingSchema).await?;
+            AnonStatsStore {
+                pool: client.pool,
+                schema_name: client.schema_name,
+            }
+        } else {
+            let client =
+                AnonStatsPgClient::new(&url, &schema, AnonStatsAccessMode::ReadWrite).await?;
+            AnonStatsStore::new(&client, false).await?
+        };
         hawk_actor.set_anon_stats_store(Some(anon_store));
     } else {
         tracing::warn!(
@@ -334,6 +459,7 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
         iris_store: iris_store.clone(),
         graph_store,
         search_mode,
+        candidate_started: promotion.as_ref().map(|promotion| promotion.started),
         worker_pools: [
             hawk_actor.worker_pool(StoreId::Left),
             hawk_actor.worker_pool(StoreId::Right),
@@ -367,14 +493,37 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
         let config = server_coord_config.clone();
         background_tasks.spawn(async move { drain.coordinate(config, cohort).await });
     }
+    // Session/network initialization must finish before activation or readiness.
+    let hawk_handle = HawkHandle::new(hawk_actor).await?;
+    let activation_cohort = if let (Some(promotion), Some(handoff), Some(coordinator)) =
+        (&promotion, &handoff, &handoff_coordinator)
+    {
+        coordinator.activate_candidate(&handoff.handoffs).await?;
+        let expected = serving_processes(&server_coord_config, &my_uuid, &verified_peers).await?;
+        coordinator
+            .serving_barrier(&expected, &promotion.context, promotion.deadline)
+            .await?;
+        Some(expected)
+    } else {
+        None
+    };
     if let Some(drain) = &drain {
         drain.mark_ready();
     } else {
         set_node_ready(is_ready_flag);
     }
-    wait_for_others_ready(&server_coord_config, verified_peers).await?;
+    wait_for_others_ready(&server_coord_config, verified_peers.clone()).await?;
+    if let Some(expected) = &activation_cohort {
+        eyre::ensure!(
+            serving_processes(&server_coord_config, &my_uuid, &verified_peers).await? == *expected,
+            "serving health cohort changed before intake"
+        );
+    }
     if let (Some(coordinator), Some(handoff)) = (handoff_coordinator, handoff) {
         coordinator.mark_ready(Uuid::parse_str(&my_uuid)?).await;
+        if let Some(promotion) = &promotion {
+            promotion.mark_serving().await;
+        }
         let shutdown = shutdown_handler.clone();
         background_tasks.spawn(async move {
             coordinator
@@ -386,94 +535,127 @@ async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMod
 
     background_tasks.check_tasks();
 
-    // ensure sidecar doesn't outlive main
-    let sidecar_ct = CancellationToken::new();
-    let main_finished = sidecar_ct.clone();
-    let config = Arc::new(RwLock::new(config));
-    let config2 = config.clone();
+    Ok(Some(PreparedServer {
+        config,
+        search_mode,
+        iris_store,
+        aws_clients,
+        shares_encryption_key_pair,
+        background_tasks,
+        shutdown_handler,
+        hawk_handle,
+        tx_results,
+        current_batch_id_atomic,
+        batch_sync_shared_state,
+        drain,
+    }))
+}
 
-    let main_future = async move {
-        let config = config2.read().await;
-        let r = run_main_server_loop(
-            &config,
-            &iris_store,
-            &aws_clients,
+impl PreparedServer {
+    async fn run(self) -> Result<()> {
+        let PreparedServer {
+            config,
+            search_mode,
+            iris_store,
+            aws_clients,
             shares_encryption_key_pair,
             background_tasks,
-            &shutdown_handler,
-            hawk_actor,
+            shutdown_handler,
+            hawk_handle,
             tx_results,
-            current_batch_id_atomic.clone(),
+            current_batch_id_atomic,
             batch_sync_shared_state,
             drain,
-        )
-        .await;
-        main_finished.cancel();
-        r
-    };
+        } = self;
+        // ensure sidecar doesn't outlive main
+        let sidecar_ct = CancellationToken::new();
+        let main_finished = sidecar_ct.clone();
+        let config = Arc::new(RwLock::new(config));
+        let config2 = config.clone();
 
-    let sidecar_future = async move {
-        if search_mode == HawkSearchMode::LinearScan {
-            return Ok(());
-        }
-        let config = config.read().await;
-        // ensure the sidecar specific setup code only runs if sidecar is enabled in the config
-        // if sidecar returns an error, log it and return Ok so that it doesn't interfere with server_main()
-        let sidecar_config = match SidecarConfigWrapper::load_config("SIDECAR") {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!("failed to parse sidecar config: {e}");
+        let main_future = async move {
+            let config = config2.read().await;
+            let r = run_main_server_loop(
+                &config,
+                &iris_store,
+                &aws_clients,
+                shares_encryption_key_pair,
+                background_tasks,
+                &shutdown_handler,
+                hawk_handle,
+                tx_results,
+                current_batch_id_atomic.clone(),
+                batch_sync_shared_state,
+                drain,
+            )
+            .await;
+            main_finished.cancel();
+            r
+        };
+
+        let sidecar_future = async move {
+            if search_mode == HawkSearchMode::LinearScan {
                 return Ok(());
             }
-        };
-        let Some(mut sc_config) = sidecar_config.config else {
-            return Ok(());
-        };
-
-        // Keep S3 prefix / metric labels aligned with the network identity.
-        sc_config.party_id = config.party_id;
-
-        let result: Result<()> = async {
-            let aws_clients = AwsClients::new(&config)
-                .await
-                .wrap_err("failed to create AWS clients")?;
-            // the sidecar needs its own graph store and this function transforms config to the
-            // appropriate schema name when creating the pg client
-            let (_iris_store, graph_store) = prepare_stores(&config, HawkSearchMode::Hnsw)
-                .await
-                .wrap_err("failed to prepare stores")?;
-            let network_args = NetworkHandleArgs {
-                party_index: config.party_id,
-                addresses: sidecar_config.addresses.clone(),
-                outbound_addresses: sidecar_config.addresses,
-                connection_parallelism: sidecar_config.connection_parallelism,
-                request_parallelism: sidecar_config.request_parallelism,
-                sessions_per_request: 1, // these aren't used by the sidecar
-                tls: config.tls.clone(),
+            let config = config.read().await;
+            // ensure the sidecar specific setup code only runs if sidecar is enabled in the config
+            // if sidecar returns an error, log it and return Ok so that it doesn't interfere with server_main()
+            let sidecar_config = match SidecarConfigWrapper::load_config("SIDECAR") {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!("failed to parse sidecar config: {e}");
+                    return Ok(());
+                }
             };
-            let mut network_handle = build_network_handle(network_args, sidecar_ct.clone())
-                .await
-                .wrap_err("failed to build network handle")?;
-            sidecar_main(
-                sc_config,
-                &graph_store,
-                &aws_clients.checkpoint_s3_client,
-                &mut network_handle,
-                sidecar_ct,
-            )
-            .await
-            .wrap_err("sidecar_main exited with error")?;
-            Ok(())
-        }
-        .await;
-        if let Err(e) = result {
-            tracing::error!("sidecar: {e:#}");
-        }
-        Ok(())
-    };
+            let Some(mut sc_config) = sidecar_config.config else {
+                return Ok(());
+            };
 
-    tokio::try_join!(main_future, sidecar_future)?;
-    Ok(())
+            // Keep S3 prefix / metric labels aligned with the network identity.
+            sc_config.party_id = config.party_id;
+
+            let result: Result<()> = async {
+                let aws_clients = AwsClients::new(&config)
+                    .await
+                    .wrap_err("failed to create AWS clients")?;
+                // the sidecar needs its own graph store and this function transforms config to the
+                // appropriate schema name when creating the pg client
+                let (_iris_store, graph_store) = prepare_stores(&config, HawkSearchMode::Hnsw)
+                    .await
+                    .wrap_err("failed to prepare stores")?;
+                let network_args = NetworkHandleArgs {
+                    party_index: config.party_id,
+                    addresses: sidecar_config.addresses.clone(),
+                    outbound_addresses: sidecar_config.addresses,
+                    connection_parallelism: sidecar_config.connection_parallelism,
+                    request_parallelism: sidecar_config.request_parallelism,
+                    sessions_per_request: 1, // these aren't used by the sidecar
+                    tls: config.tls.clone(),
+                };
+                let mut network_handle = build_network_handle(network_args, sidecar_ct.clone())
+                    .await
+                    .wrap_err("failed to build network handle")?;
+                sidecar_main(
+                    sc_config,
+                    &graph_store,
+                    &aws_clients.checkpoint_s3_client,
+                    &mut network_handle,
+                    sidecar_ct,
+                )
+                .await
+                .wrap_err("sidecar_main exited with error")?;
+                Ok(())
+            }
+            .await;
+            if let Err(e) = result {
+                tracing::error!("sidecar: {e:#}");
+            }
+            Ok(())
+        };
+
+        tokio::try_join!(main_future, sidecar_future)?;
+        Ok(())
+    }
 }
 
 /// Initializes shutdown handler, which waits for shutdown signals or function
@@ -886,6 +1068,58 @@ fn build_hawk_args(config: &Config) -> Result<(HawkArgs, Vec<String>, Vec<String
     Ok((hawk_args, node_inbound_addresses, node_outbound_addresses))
 }
 
+async fn promote_actor(
+    config: &Config,
+    workers: iris_mpc_cpu::execution::hawk_main::worker_pool_initializer::InitializedWorkers,
+    shutdown: &Arc<ShutdownHandler>,
+) -> Result<HawkActor> {
+    let (args, _, _) = build_hawk_args(config)?;
+    let network =
+        build_hawk_network_handle(&args, shutdown.get_network_cancellation_token()).await?;
+    Ok(HawkActor::new_linear_scan(
+        args,
+        network,
+        workers,
+        [GraphMem::new(), GraphMem::new()],
+    ))
+}
+
+async fn serving_processes(
+    config: &ampc_server_utils::config::ServerCoordinationConfig,
+    own: &str,
+    verified: &std::collections::HashSet<String>,
+) -> Result<[Uuid; 3]> {
+    let responses =
+        ampc_server_utils::server_coordination::try_get_endpoint_other_nodes(config, "health")
+            .await?;
+    eyre::ensure!(
+        responses.len() == 2 && verified.len() == 2,
+        "incomplete serving health cohort"
+    );
+    let mut processes = [Uuid::nil(); 3];
+    processes[config.party_id] = Uuid::parse_str(own)?;
+    for (party, (status, body)) in (0..3)
+        .filter(|party| *party != config.party_id)
+        .zip(responses)
+    {
+        eyre::ensure!(status.is_success(), "serving health probe failed");
+        let probe: ampc_server_utils::server_coordination::ReadyProbeResponse =
+            serde_json::from_slice(&body)?;
+        eyre::ensure!(
+            !probe.shutting_down && verified.contains(&probe.uuid),
+            "serving process changed after startup verification"
+        );
+        processes[party] = Uuid::parse_str(&probe.uuid)?;
+    }
+    eyre::ensure!(
+        processes[0] != processes[1]
+            && processes[0] != processes[2]
+            && processes[1] != processes[2],
+        "serving identities are not distinct"
+    );
+    Ok(processes)
+}
+
 /// Build the iris-loading initializer per config, run the iris and
 /// graph loads in parallel (graph from S3 checkpoint when present,
 /// else from PG), then assemble a fully-loaded `HawkActor`.
@@ -1041,6 +1275,7 @@ struct ResultsPersistence {
     graph_store: GraphPg<Aby3Store<HawkOps>>,
     search_mode: HawkSearchMode,
     worker_pools: BothEyes<Arc<dyn IrisWorkerPool>>,
+    candidate_started: Option<Instant>,
 }
 
 async fn start_results_thread(
@@ -1060,11 +1295,15 @@ async fn start_results_thread(
         graph_store,
         search_mode,
         worker_pools,
+        mut candidate_started,
     } = persistence;
     let shutdown_handler_bg = Arc::clone(shutdown_handler);
     let party_id = config.party_id;
     let _result_sender_abort = task_monitor.spawn(async move {
         while let Some((batch_timings, job_result)) = rx.recv().await {
+            let has_requests = !job_result.request_ids.is_empty()
+                || !job_result.deleted_ids.is_empty()
+                || !job_result.identity_update_request_ids.is_empty();
             let publication = drain::Publication {
                 batch_id: batch_timings.batch_id,
                 batch_sha256: batch_timings.batch_hash.clone(),
@@ -1100,6 +1339,13 @@ async fn start_results_thread(
                 }
                 exit(1);
             }
+            if let Some(started) = candidate_started.take_if(|_| has_requests) {
+                tracing::info!(
+                    party_id,
+                    elapsed_ms = started.elapsed().as_secs_f64() * 1000.0,
+                    "candidate_handoff_to_first_publication"
+                );
+            }
             if let Some(drain) = &drain {
                 drain.result_sent(publication);
             }
@@ -1125,7 +1371,7 @@ async fn run_main_server_loop(
     shares_encryption_key_pair: Arc<SharesEncryptionKeyPairs>,
     mut task_monitor: TaskMonitor,
     shutdown_handler: &Arc<ShutdownHandler>,
-    hawk_actor: HawkActor,
+    mut hawk_handle: HawkHandle,
     tx_results: Sender<(BatchTimings, ServerJobResult)>,
     current_batch_id_atomic: Arc<AtomicU64>,
     batch_sync_shared_state: Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
@@ -1135,8 +1381,6 @@ async fn run_main_server_loop(
     // ANCHOR: Start the main loop
     // --------------------------------------------------------------------------
     tracing::info!("⚓️ ANCHOR: Start the main loop");
-
-    let mut hawk_handle = HawkHandle::new(hawk_actor).await?;
 
     let party_id = config.party_id;
 
@@ -1338,7 +1582,8 @@ async fn run_main_server_loop(
                     .unwrap_or_else(|| Utc::now().format("run-%Y%m%dT%H%M%SZ").to_string());
                 let hash_prefix = hex::encode(&batch_hash[0..4]);
 
-                match guard.report().build() {
+                let report_result = guard.report().build();
+                match report_result {
                     Ok(report) => {
                         if !config.pprof_profile_only {
                             let mut svg = Vec::new();

@@ -64,6 +64,14 @@ struct Party {
     candidate: CandidateReconciliation,
 }
 
+struct Coordinated {
+    context: ReconciliationContext,
+    coordinators: Vec<Coordinator>,
+    tasks: Vec<tokio::task::JoinHandle<()>>,
+    shutdowns: Vec<tokio_util::sync::CancellationToken>,
+    configs: Vec<Config>,
+}
+
 async fn preload_parties(rows: &[SharedRow], side: Eye) -> Result<Vec<Party>> {
     let url = std::env::var("CPU_CELL_TEST_DATABASE_URL")?;
     let mut parties = Vec::new();
@@ -105,7 +113,7 @@ fn common_context() -> Result<ReconciliationContext> {
 async fn coordinate_drain_and_reconcile_candidates(
     parties: &mut Vec<Party>,
     restart_candidate: bool,
-) -> Result<ReconciliationContext> {
+) -> Result<Coordinated> {
     let (drains, tasks) = drain::tests::cohort(Duration::from_secs(30)).await;
     let (id, source, destination) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
     let candidates: [Uuid; 3] = std::array::from_fn(|i| parties[i].candidate.registry.process_id());
@@ -133,6 +141,7 @@ async fn coordinate_drain_and_reconcile_candidates(
     let mut candidate_configs = Vec::new();
     let mut source_tasks = Vec::new();
     let mut candidate_tasks = Vec::new();
+    let mut candidate_shutdowns = Vec::new();
     for (i, ((party, source_listener), candidate_listener)) in parties
         .iter()
         .zip(source_listeners)
@@ -183,8 +192,13 @@ async fn coordinate_drain_and_reconcile_candidates(
         )?);
         let candidate_coordinator = Coordinator::new(&config, candidates[i], None)?.unwrap();
         let router = candidate_coordinator.routes();
+        let stop = tokio_util::sync::CancellationToken::new();
+        candidate_shutdowns.push(stop.clone());
         candidate_tasks.push(tokio::spawn(async move {
-            axum::serve(candidate_listener, router).await.unwrap();
+            axum::serve(candidate_listener, router)
+                .with_graceful_shutdown(stop.cancelled_owned())
+                .await
+                .unwrap();
         }));
         candidate_coordinators.push(candidate_coordinator);
         candidate_configs.push(config);
@@ -347,8 +361,8 @@ async fn coordinate_drain_and_reconcile_candidates(
     assert!(contexts.iter().all(|context| context == &contexts[0]));
     if restart_candidate {
         let task = candidate_tasks.pop().unwrap();
-        task.abort();
-        assert!(task.await.unwrap_err().is_cancelled());
+        candidate_shutdowns.pop().unwrap().cancel();
+        tokio::time::timeout(Duration::from_secs(3), task).await??;
         drop(candidate_coordinators.pop().unwrap());
         let Party {
             config,
@@ -363,8 +377,13 @@ async fn coordinate_drain_and_reconcile_candidates(
         let coordinator = Coordinator::new(&candidate_configs[2], process, None)?.unwrap();
         let listener = tokio::net::TcpListener::bind(replacement_address).await?;
         let router = coordinator.routes();
+        let stop = tokio_util::sync::CancellationToken::new();
+        candidate_shutdowns.push(stop.clone());
         candidate_tasks.push(tokio::spawn(async move {
-            axum::serve(listener, router).await.unwrap();
+            axum::serve(listener, router)
+                .with_graceful_shutdown(stop.cancelled_owned())
+                .await
+                .unwrap();
         }));
         let status: serde_json::Value = client.get(&candidate_urls[2]).send().await?.json().await?;
         assert_eq!(status["ready"], false);
@@ -413,16 +432,17 @@ async fn coordinate_drain_and_reconcile_candidates(
             writer,
             candidate,
         });
-    }
-    for task in &candidate_tasks {
-        task.abort();
-    }
-    for task in candidate_tasks {
-        assert!(task.await.unwrap_err().is_cancelled());
+        candidate_coordinators.push(coordinator);
     }
     let expected = ReconciliationContext::new(id, Some(normalize_sns_sequence_number("42")?))?;
     assert_eq!(contexts[0], expected);
-    Ok(expected)
+    Ok(Coordinated {
+        context: expected,
+        coordinators: candidate_coordinators,
+        tasks: candidate_tasks,
+        shutdowns: candidate_shutdowns,
+        configs: candidate_configs,
+    })
 }
 
 async fn reconcile_parties(
@@ -457,6 +477,250 @@ async fn cleanup(parties: Vec<Party>) -> Result<()> {
         iris_mpc_store::test_utils::cleanup(&party.writer, &party.config.get_gpu_db_schema())
             .await?;
         party.writer.pool.close().await;
+    }
+    Ok(())
+}
+
+async fn promote_and_process(
+    parties: Vec<Party>,
+    coordinated: Coordinated,
+    resident: usize,
+) -> Result<()> {
+    use super::super::{promote_actor, serving_processes};
+    use ampc_server_utils::{
+        start_coordination_server_with_extra_routes, wait_for_others_ready,
+        wait_for_startup_barriers, TaskMonitor,
+    };
+    use iris_mpc_common::{
+        helpers::sync::SyncState,
+        job::{BatchMetadata, BatchQuery, JobSubmissionHandle},
+    };
+    use iris_mpc_cpu::execution::{
+        hawk_main::{HawkHandle, StoreId},
+        local::get_free_local_addresses,
+    };
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    let health = get_free_local_addresses(3).await?;
+    let mpc = get_free_local_addresses(3).await?;
+    let handoffs = parties
+        .iter()
+        .map(|party| {
+            CpuCellHandoffs::new(party.writer.pool.clone(), &party.config.get_gpu_db_schema())
+        })
+        .collect::<Result<Vec<_>>>()?;
+    super::super::handoff::tests::reject_changed_activation_evidence(
+        &coordinated.coordinators,
+        &handoffs,
+    )
+    .await?;
+    let activated = Arc::new(AtomicUsize::new(0));
+    let changed = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let processing = Arc::new(AtomicBool::new(false));
+    let controls = parties
+        .iter()
+        .map(|party| party.writer.pool.clone())
+        .collect::<Vec<_>>();
+    let release_last = {
+        let activated = activated.clone();
+        let changed = changed.clone();
+        let release = release.clone();
+        let processing = processing.clone();
+        async move {
+            while activated.load(Ordering::SeqCst) != 2 {
+                changed.notified().await;
+            }
+            assert!(
+                !processing.load(Ordering::SeqCst),
+                "partial activation must not process work"
+            );
+            for (party, pool) in controls.iter().enumerate() {
+                let phase: String = sqlx::query_scalar(
+                    "SELECT phase FROM cpu_cell_handoffs ORDER BY sequence DESC LIMIT 1",
+                )
+                .fetch_one(pool)
+                .await?;
+                assert_eq!(phase, if party < 2 { "activated" } else { "drained" });
+                let pending: (Option<i64>, bool) = sqlx::query_as(
+                    "SELECT consumed_batch_id, persisted_at IS NULL FROM ingested_requests WHERE sequence_number=$1",
+                )
+                .bind(normalize_sns_sequence_number("100")?)
+                .fetch_one(pool)
+                .await?;
+                assert_eq!(pending, (None, true));
+            }
+            release.notify_one();
+            Ok::<_, eyre::Report>(())
+        }
+    };
+    let context = &coordinated.context;
+    let promote = futures::future::try_join_all(
+        parties
+            .into_iter()
+            .zip(coordinated.configs)
+            .zip(&coordinated.coordinators)
+            .enumerate()
+            .map(|(party, ((loaded, mut config), coordinator))| {
+                let activated = activated.clone();
+                let changed = changed.clone();
+                let release = release.clone();
+                let processing = processing.clone();
+                let health = health.clone();
+                let mpc = mpc.clone();
+                async move {
+                    let Party {
+                        config: physical_config,
+                        writer,
+                        candidate,
+                    } = loaded;
+                    let preload_process = candidate.registry.process_id();
+                    let resident_pool = candidate.workers.pools[resident].clone();
+                    let workers = candidate.into_workers(context)?;
+                    let coord = config.server_coordination.as_mut().unwrap();
+                    coord.node_hostnames = vec!["127.0.0.1".into(); 3];
+                    coord.healthcheck_ports = health
+                        .iter()
+                        .map(|address| address.rsplit(':').next().unwrap().to_owned())
+                        .collect();
+                    config.service_ports = mpc
+                        .iter()
+                        .map(|address| address.rsplit(':').next().unwrap().parse())
+                        .collect::<std::result::Result<_, _>>()?;
+                    config.service_outbound_ports = config.service_ports.clone();
+                    config.hawk_request_parallelism = 1;
+                    config.hawk_connection_parallelism = 1;
+                    config.startup_mode = iris_mpc_common::config::StartupMode::Active;
+                    let coord_config = config.server_coordination.as_ref().unwrap();
+                    let state = SyncState {
+                        db_len: workers.registries[0].read().await.size as u64,
+                        modifications: vec![],
+                        next_sns_sequence_num: None,
+                        common_config: iris_mpc_common::config::CommonConfig::from(config.clone()),
+                        graph_mutation_bytes: vec![],
+                        max_persisted_sequence_number: coordinator
+                            .agreed_completion()
+                            .await?
+                            .watermark,
+                        dh_nonce: None,
+                    };
+                    let shutdown = Arc::new(ShutdownHandler::new(0));
+                    let mut monitor = TaskMonitor::new();
+                    let drain = drain::Drain::new(party, Duration::from_secs(30), true);
+                    let (ready, verified, process) = start_coordination_server_with_extra_routes(
+                        coord_config,
+                        &mut monitor,
+                        &shutdown,
+                        &state,
+                        None,
+                        Some(coordinator.routes()),
+                    )
+                    .await;
+                    let process_id = Uuid::parse_str(&process)?;
+                    assert_ne!(preload_process, process_id);
+                    drain.initialize(process.clone(), ready.clone());
+                    let coordinator = coordinator
+                        .bind_serving(&config, process_id, drain.clone())
+                        .await?;
+                    wait_for_startup_barriers(coord_config, &verified, &process).await?;
+                    let actor = promote_actor(&config, workers, &shutdown).await?;
+                    assert!(Arc::ptr_eq(
+                        &resident_pool,
+                        &actor.worker_pool(if resident == 0 {
+                            StoreId::Left
+                        } else {
+                            StoreId::Right
+                        })
+                    ));
+                    let mut handle = HawkHandle::new(actor).await?;
+                    let handoff = CpuCellHandoffs::new(
+                        writer.pool.clone(),
+                        &physical_config.get_gpu_db_schema(),
+                    )?;
+                    if party == 2 {
+                        release.notified().await;
+                    }
+                    coordinator.activate_candidate(&handoff).await?;
+                    if party < 2 {
+                        activated.fetch_add(1, Ordering::SeqCst);
+                        changed.notify_one();
+                    }
+                    let verified = verified.lock().await.clone();
+                    let expected = serving_processes(coord_config, &process, &verified).await?;
+                    let deadline = Instant::now() + Duration::from_secs(20);
+                    coordinator
+                        .serving_barrier(&expected, context, deadline)
+                        .await?;
+                    drain.mark_ready();
+                    wait_for_others_ready(coord_config, verified.clone()).await?;
+                    assert_eq!(
+                        serving_processes(coord_config, &process, &verified).await?,
+                        expected
+                    );
+                    coordinator.mark_ready(process_id).await;
+                    assert!(ready.load(Ordering::SeqCst));
+                    assert!(
+                        handoff
+                            .check_startup(handoff.latest().await?.unwrap().destination, true)
+                            .await
+                            .is_err(),
+                        "an activated destination requires coordinated recovery"
+                    );
+                    let response: serde_json::Value = reqwest::Client::new()
+                        .get(
+                            &config
+                                .cpu_cell
+                                .as_ref()
+                                .unwrap()
+                                .candidate_status_urls
+                                .as_ref()
+                                .unwrap()
+                                .0[party],
+                        )
+                        .send()
+                        .await?
+                        .json()
+                        .await?;
+                    assert_eq!(response["process"], process_id.to_string());
+                    assert_eq!(response["mode"], "active");
+                    assert_eq!(response["drain"]["process_uuid"], process);
+                    processing.store(true, Ordering::SeqCst);
+                    let mut batch = BatchQuery::default();
+                    batch.push_deletion_request(
+                        "first-after-handoff".into(),
+                        0,
+                        BatchMetadata::default(),
+                    );
+                    let result = handle.submit_batch_query(batch).await.await?;
+                    assert_eq!(result.deleted_ids, vec![0]);
+                    assert!(handoff
+                        .check_startup(handoff.latest().await?.unwrap().source, false)
+                        .await
+                        .is_err());
+                    Ok::<_, eyre::Report>((writer, physical_config, handle, shutdown, monitor))
+                }
+            }),
+    );
+    let (promoted, released) = tokio::time::timeout(Duration::from_secs(40), async {
+        tokio::join!(promote, release_last)
+    })
+    .await?;
+    released?;
+    let promoted = promoted?;
+    super::super::handoff::tests::reject_changed_serving_evidence(
+        &coordinated.coordinators,
+        context,
+    )
+    .await?;
+    for (task, stop) in coordinated.tasks.into_iter().zip(coordinated.shutdowns) {
+        stop.cancel();
+        tokio::time::timeout(Duration::from_secs(3), task).await??;
+    }
+    for (writer, config, handle, shutdown, monitor) in promoted {
+        drop(handle);
+        shutdown.get_network_cancellation_token().cancel();
+        drop(monitor);
+        iris_mpc_store::test_utils::cleanup(&writer, &config.get_gpu_db_schema()).await?;
+        writer.pool.close().await;
     }
     Ok(())
 }
@@ -511,8 +775,9 @@ async fn three_party_reconciliation_agrees_and_preserves_each_partys_payloads() 
         expected.push(inserted);
 
         // Queue intake/publication are outside this fixture; its simulated writers stop here.
-        let context =
+        let coordinated =
             coordinate_drain_and_reconcile_candidates(&mut parties, restart_candidate).await?;
+        let context = coordinated.context.clone();
         let reports: [ReconciliationReport; 3] =
             std::array::from_fn(|i| parties[i].candidate.report_for(&context).unwrap().clone());
         ReconciliationReport::verify_agreement(&context, &reports)?;
@@ -579,7 +844,7 @@ async fn three_party_reconciliation_agrees_and_preserves_each_partys_payloads() 
                 }
             }
         }
-        cleanup(parties).await?;
+        promote_and_process(parties, coordinated, resident).await?;
     }
     Ok(())
 }

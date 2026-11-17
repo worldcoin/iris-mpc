@@ -1,4 +1,4 @@
-//! Passive exact-scan preload. This path never enters active coordination.
+//! Passive exact-scan preload, followed by promotion of the reconciled workers.
 
 use super::reconciliation::CandidateReconciliation;
 use super::*;
@@ -16,12 +16,37 @@ struct CandidateStatus {
     state: &'static str,
     loaded_rows: usize,
     serving: bool,
+    #[serde(skip)]
+    readiness: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 type Status = Arc<RwLock<CandidateStatus>>;
 
 // The cold-eye pool is deliberately uninitialized; this is not a serving actor.
 type CandidatePreload = CandidateReconciliation;
+
+pub(super) struct Promotion {
+    pub workers:
+        Option<iris_mpc_cpu::execution::hawk_main::worker_pool_initializer::InitializedWorkers>,
+    pub coordinator: handoff::Coordinator,
+    pub context: reconciliation::ReconciliationContext,
+    pub started: Instant,
+    pub deadline: tokio::time::Instant,
+    status: Status,
+}
+
+impl Promotion {
+    pub async fn bind_status(&self, process: Uuid, readiness: Arc<std::sync::atomic::AtomicBool>) {
+        let mut status = self.status.write().await;
+        status.process_id = process;
+        status.state = "activating";
+        status.readiness = Some(readiness);
+    }
+
+    pub async fn mark_serving(&self) {
+        self.status.write().await.state = "serving";
+    }
+}
 
 pub(super) fn validate_config(config: &Config, mode: HawkSearchMode) -> Result<()> {
     if mode != HawkSearchMode::LinearScan {
@@ -47,14 +72,40 @@ fn routes(status: Status) -> Router {
     Router::new()
         .route(
             "/candidate-status",
-            get(|State(status): State<Status>| async move { Json(status.read().await.clone()) }),
+            get(|State(status): State<Status>| async move {
+                let mut status = status.read().await.clone();
+                status.serving = status.state == "serving"
+                    && status
+                        .readiness
+                        .as_ref()
+                        .is_some_and(|ready| ready.load(Ordering::SeqCst));
+                Json(status)
+            }),
         )
         .route("/health", get(|| async { StatusCode::OK }))
-        .route("/ready", get(|| async { StatusCode::SERVICE_UNAVAILABLE }))
+        .route(
+            "/ready",
+            get(|State(status): State<Status>| async move {
+                let status = status.read().await;
+                if status.state == "serving"
+                    && status
+                        .readiness
+                        .as_ref()
+                        .is_some_and(|ready| ready.load(Ordering::SeqCst))
+                {
+                    StatusCode::OK
+                } else {
+                    StatusCode::SERVICE_UNAVAILABLE
+                }
+            }),
+        )
         .route(
             "/startup",
             get(|State(status): State<Status>| async move {
-                if matches!(status.read().await.state, "loaded" | "reconciled") {
+                if matches!(
+                    status.read().await.state,
+                    "loaded" | "reconciled" | "activating" | "serving"
+                ) {
                     StatusCode::OK
                 } else {
                     StatusCode::SERVICE_UNAVAILABLE
@@ -81,6 +132,7 @@ pub(super) async fn run(config: Config, shutdown: Arc<ShutdownHandler>) -> Resul
         state: "loading",
         loaded_rows: 0,
         serving: false,
+        readiness: None,
     }));
     tracing::info!(party_id = config.party_id, process_id = %process_id,
         address = %listener.local_addr()?, state = "loading", "CPU candidate preload");
@@ -147,21 +199,54 @@ async fn preload_and_wait(
         let store = Store::new(&postgres).await?;
         let handoffs = CpuCellHandoffs::new(postgres.pool.clone(), &config.get_gpu_db_schema())?;
         coordinator.mark_ready(process_id).await;
+        let handoff_started = Instant::now();
         let outcome = tokio::select! {
             _ = shutdown.wait_for_shutdown() => return Ok(()),
             result = coordinator.reconcile_candidate(&handoffs, &store, &mut workers,
                 Duration::from_secs(config.cpu_drain_timeout_secs)) => result,
         };
-        if let Err(error) = outcome {
-            coordinator.fail(&error).await;
-            status.write().await.state = "failed";
-            return Err(error);
+        let context = match outcome {
+            Ok(context) => context,
+            Err(error) => {
+                coordinator.fail(&error).await;
+                status.write().await.state = "failed";
+                return Err(error);
+            }
+        };
+        let reconciled_rows = workers.workers.registries[0].read().await.size;
+        {
+            let mut status = status.write().await;
+            status.state = "reconciled";
+            status.loaded_rows = reconciled_rows;
         }
-        status.write().await.state = "reconciled";
-        tracing::info!(
-            state = "reconciled",
-            "CPU candidate agreement completed; remains passive"
-        );
+        let promotion = Promotion {
+            workers: Some(workers.into_workers(&context)?),
+            coordinator: coordinator.clone(),
+            context,
+            started: handoff_started,
+            deadline: tokio::time::Instant::now()
+                + Duration::from_secs(config.cpu_drain_timeout_secs),
+            status: status.clone(),
+        };
+        let mut serving_config = config.clone();
+        serving_config.startup_mode = StartupMode::Active;
+        let result = Box::pin(super::run_server(
+            serving_config,
+            HawkSearchMode::LinearScan,
+            shutdown.clone(),
+            Some(promotion),
+        ))
+        .await;
+        if let Err(error) = &result {
+            coordinator.fail(error).await;
+            let mut status = status.write().await;
+            status.state = "failed";
+            if let Some(ready) = &status.readiness {
+                ready.store(false, Ordering::SeqCst);
+            }
+            shutdown.get_network_cancellation_token().cancel();
+        }
+        return result;
     }
     shutdown.wait_for_shutdown().await;
     // Keep the pools (and their resident shares and observed versions) alive
@@ -516,4 +601,70 @@ mod tests {
         writer.pool.close().await;
         Ok(())
     }
+}
+#[tokio::test]
+async fn candidate_probe_opens_only_after_the_serving_barrier_and_tracks_drain() -> Result<()> {
+    let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let process = Uuid::new_v4();
+    let status = Arc::new(RwLock::new(CandidateStatus {
+        process_id: process,
+        party_id: 0,
+        state: "activating",
+        loaded_rows: 1,
+        serving: false,
+        readiness: Some(ready.clone()),
+    }));
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let endpoint = format!("http://{}", listener.local_addr()?);
+    let router = routes(status.clone());
+    let task = tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()?;
+    ready.store(true, Ordering::SeqCst);
+    assert_eq!(
+        client
+            .get(format!("{endpoint}/ready"))
+            .send()
+            .await?
+            .status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    status.write().await.state = "serving";
+    assert_eq!(
+        client
+            .get(format!("{endpoint}/ready"))
+            .send()
+            .await?
+            .status(),
+        StatusCode::OK
+    );
+    let serving: serde_json::Value = client
+        .get(format!("{endpoint}/candidate-status"))
+        .send()
+        .await?
+        .json()
+        .await?;
+    assert_eq!(serving["serving"], true);
+    assert_eq!(serving["process_id"], process.to_string());
+    ready.store(false, Ordering::SeqCst);
+    assert_eq!(
+        client
+            .get(format!("{endpoint}/ready"))
+            .send()
+            .await?
+            .status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    let paused: serde_json::Value = client
+        .get(format!("{endpoint}/candidate-status"))
+        .send()
+        .await?
+        .json()
+        .await?;
+    assert_eq!(paused["serving"], false);
+    task.abort();
+    Ok(())
 }
