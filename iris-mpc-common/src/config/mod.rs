@@ -42,6 +42,9 @@ pub struct CpuCellConfig {
     /// Fixed /handoff-status URLs indexed by party. Omit to disable runtime handoff.
     #[serde(default)]
     pub candidate_status_urls: Option<JsonStrWrapper<[String; 3]>>,
+    /// Next destination after this candidate becomes the serving source.
+    #[serde(default)]
+    pub next_candidate_status_urls: Option<JsonStrWrapper<[String; 3]>>,
     /// Supplied only to the destination candidate by its deployment configuration.
     #[serde(default)]
     pub handoff: Option<CpuCellHandoffConfig>,
@@ -1056,6 +1059,7 @@ mod tests {
                 "00000000-0000-0000-0000-000000000001",
             ),
             ("CPU_CELL__CANDIDATE_STATUS_URLS", urls),
+            ("CPU_CELL__NEXT_CANDIDATE_STATUS_URLS", urls),
             (
                 "CPU_CELL__HANDOFF__ID",
                 "00000000-0000-0000-0000-000000000002",
@@ -1074,10 +1078,17 @@ mod tests {
             std::env::remove_var(format!("{prefix}__{key}"));
         }
         let cell = config.unwrap().cpu_cell.unwrap();
+        assert_eq!(cell.next_candidate_status_urls, cell.candidate_status_urls);
         assert_eq!(
             cell.candidate_status_urls.unwrap(),
             cell.handoff.unwrap().source_status_urls
         );
+        for count in [0, 2, 4] {
+            assert!(serde_json::from_value::<CpuCellConfig>(serde_json::json!({
+                "deployment_id": "00000000-0000-0000-0000-000000000001",
+                "next_candidate_status_urls": serde_json::to_string(&vec!["http://peer:3090/handoff-status"; count]).unwrap()
+            })).is_err());
+        }
     }
 
     #[test]

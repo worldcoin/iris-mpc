@@ -57,6 +57,7 @@ pub(super) struct Coordinator {
     status: Arc<RwLock<Status>>,
     source_urls: [reqwest::Url; 3],
     candidate_urls: [reqwest::Url; 3],
+    destination_urls: [reqwest::Url; 3],
     client: reqwest::Client,
     drain: Arc<std::sync::RwLock<Option<Arc<drain::Drain>>>>,
 }
@@ -102,6 +103,19 @@ impl Coordinator {
                 "automatic handoff requires candidate_status_urls"
             );
             return Ok(None);
+        };
+        let destination_urls = if config.startup_mode == StartupMode::Candidate {
+            urls(
+                &cell
+                    .next_candidate_status_urls
+                    .as_ref()
+                    .ok_or_else(|| {
+                        eyre!("automatic candidate handoff requires next_candidate_status_urls")
+                    })?
+                    .0,
+            )?
+        } else {
+            urls(&candidate_urls.0)?
         };
         ensure!(config.party_id < 3, "invalid handoff party");
         ensure!(
@@ -165,6 +179,7 @@ impl Coordinator {
             })),
             source_urls,
             candidate_urls: urls(&candidate_urls.0)?,
+            destination_urls,
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(3))
                 .redirect(reqwest::redirect::Policy::none())
@@ -451,7 +466,7 @@ impl Coordinator {
         // Once a peer seals this handoff, finish draining even if B is reloading.
         if !started {
             let candidates = self
-                .peers(&self.candidate_urls, StartupMode::Candidate)
+                .peers(&self.destination_urls, StartupMode::Candidate)
                 .await?;
             ensure!(
                 candidates.iter().all(|p| p.deployment == intent.destination
@@ -769,6 +784,43 @@ pub(super) mod tests {
     }
 
     #[cfg(feature = "db_dependent")]
+    pub(in crate::server) async fn reject_incompatible_next_candidate(
+        sources: &[Coordinator],
+        handoffs: &[CpuCellHandoffs],
+        candidate: &Coordinator,
+    ) -> Result<()> {
+        let original = candidate.status.read().await.clone();
+        for wrong_deployment in [true, false] {
+            let mut incompatible = original.clone();
+            if wrong_deployment {
+                incompatible.deployment = Uuid::new_v4();
+            } else {
+                incompatible.intent.as_mut().unwrap().id = Uuid::new_v4();
+            }
+            *candidate.status.write().await = incompatible;
+            for (source, handoff) in sources.iter().zip(handoffs) {
+                assert!(source.source_step(handoff).await.is_err());
+                assert!(!source.drain().unwrap().requested());
+                assert_eq!(
+                    handoff.latest().await?.unwrap().phase,
+                    HandoffPhase::Requested
+                );
+            }
+        }
+        *candidate.status.write().await = original;
+        for (source, handoff) in sources.iter().zip(handoffs) {
+            assert!(!source.source_step(handoff).await?);
+            assert!(!source.drain().unwrap().requested());
+            assert!(source.status.read().await.ready);
+            assert_eq!(
+                handoff.latest().await?.unwrap().phase,
+                HandoffPhase::Requested
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "db_dependent")]
     pub(in crate::server) async fn assert_sources_wait_for_preload_then_finish_drain(
         sources: &[Coordinator],
         handoffs: &[CpuCellHandoffs],
@@ -813,9 +865,33 @@ pub(super) mod tests {
                 "party_id": party, "startup_mode": "candidate", "db_backed_ingest": true,
                 "server_coordination": {"healthcheck_ports": "[\"3000\",\"3001\",\"3002\"]"},
                 "cpu_cell": {"deployment_id": destination, "candidate_status_urls": serde_json::to_string(&addresses)?,
+                    "next_candidate_status_urls": serde_json::to_string(&addresses)?,
                     "handoff": {"id": intent, "source_deployment_id": source, "source_status_urls": serde_json::to_string(&addresses)?}}
             }))?;
             if party == 0 {
+                let mut missing = config.clone();
+                missing
+                    .cpu_cell
+                    .as_mut()
+                    .unwrap()
+                    .next_candidate_status_urls = None;
+                assert!(Coordinator::new(&missing, candidates[party], None)
+                    .err()
+                    .unwrap()
+                    .to_string()
+                    .contains("next_candidate_status_urls"));
+                for invalid in ["not a URL", &addresses[1]] {
+                    let mut malformed = config.clone();
+                    malformed
+                        .cpu_cell
+                        .as_mut()
+                        .unwrap()
+                        .next_candidate_status_urls
+                        .as_mut()
+                        .unwrap()
+                        .0[0] = invalid.into();
+                    assert!(Coordinator::new(&malformed, candidates[party], None).is_err());
+                }
                 for (hosts, ports) in [(2, 3), (3, 2), (4, 3), (3, 4)] {
                     let mut malformed = config.clone();
                     let peers = malformed.server_coordination.as_mut().unwrap();

@@ -113,7 +113,21 @@ On B additionally set:
 SMPC__CPU_CELL__HANDOFF__ID=<fresh-handoff-uuid>
 SMPC__CPU_CELL__HANDOFF__SOURCE_DEPLOYMENT_ID=<current-A-deployment-uuid>
 SMPC__CPU_CELL__HANDOFF__SOURCE_STATUS_URLS='["http://a0:8080/handoff-status","http://a1:8080/handoff-status","http://a2:8080/handoff-status"]'
+SMPC__CPU_CELL__NEXT_CANDIDATE_STATUS_URLS='["http://a0:3090/handoff-status","http://a1:3090/handoff-status","http://a2:3090/handoff-status"]'
 ```
+
+Supply the next candidate URLs in B's original candidate configuration. They
+identify the next A slot's three status listeners, indexed by party; missing or
+invalid URLs reject automatic candidate startup before preload. After promotion,
+the same B processes use these URLs when considering the next handoff. B's
+`CANDIDATE_STATUS_URLS` remain the current B cohort for reconciliation, activation
+and serving agreement. An initially active process uses `CANDIDATE_STATUS_URLS`
+for its destination and ignores `NEXT_CANDIDATE_STATUS_URLS`.
+
+Deploy the next A with fresh deployment and handoff UUIDs, B's deployment as its
+source, and the next B slot URLs as its own `NEXT_CANDIDATE_STATUS_URLS`. Retire
+the old A processes before reusing the slot. B keeps serving until the intended
+next A cohort is loaded and compatible; URLs alone do not authorize a seal.
 
 The destination is B's `SMPC__CPU_CELL__DEPLOYMENT_ID`. Configure DB-backed intake
 and a positive `SMPC__CPU_DRAIN_TIMEOUT_SECS`. B's first request precedes its
