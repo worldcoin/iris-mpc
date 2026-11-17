@@ -1,5 +1,8 @@
 # Passive CPU cells in stage
 
+For coordinated migration baseline, runtime handoff configuration and the
+A→B→A acceptance sequence, see [stage rollout preparation](cpu-cell-stage-rollout.md).
+
 The existing `ampc-hnsw` deployment keeps serving. `ampc-hnsw-a` and
 `ampc-hnsw-b` are separate, initially disabled candidate deployments in the same
 namespace. They share the party's existing database, queues, `application`
