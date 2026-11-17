@@ -96,8 +96,9 @@ not protect an incompatible serving release. Stop/fence legacy writers first.
 During that baseline, configure Active A with its deployment UUID and B's
 candidate-status URLs. Restore A's serving HTTP probes on port 3000 instead of
 the passive exec probes on 3090. The later warm release changes B only: pin its
-image digest, assign fresh deployment/handoff UUIDs, and supply A's serving URLs
-and the current B operator URLs. Keep B's candidate probes through promotion.
+image digest, assign fresh deployment/handoff UUIDs, and supply A's status URLs
+(`http://<host>:<healthcheck-port>/handoff-status`) and the current B operator URLs.
+Keep B's candidate probes through promotion.
 
 POP-4560 supplies next-candidate routing before B→A can work without restarting
 serving B. Retire old processes and exact DNS records before slot reuse. Validate
