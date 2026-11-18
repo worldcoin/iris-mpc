@@ -102,6 +102,20 @@ resources:
 imagePullSecrets:
   - name: github-secret
 
+podAnnotations:
+  karpenter.sh/do-not-disrupt: "true"
+
+nodeSelector:
+  application: anon-stats-server
+  kubernetes.io/arch: amd64
+  karpenter.sh/capacity-type: on-demand
+
+tolerations:
+  - key: application
+    operator: Equal
+    value: anon-stats-server
+    effect: NoSchedule
+
 podSecurityContext:
   runAsUser: 65534
   runAsGroup: 65534
