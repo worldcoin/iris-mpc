@@ -7,7 +7,7 @@ use super::*;
 use ampc_anon_stats::types::Eye;
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use iris_mpc_common::{
-    config::Config,
+    config::{Config, CpuCellSlot},
     iris_db::iris::IrisCode,
     postgres::{run_migrations, AccessMode, PostgresClient},
     VectorId,
@@ -190,7 +190,8 @@ async fn coordinate_drain_and_reconcile_candidates(
             .collect();
         config.server_coordination = Some(peers);
         config.cpu_cell = Some(serde_json::from_value(
-            serde_json::json!({"deployment_id": source, "candidate_status_urls": serde_json::to_string(&candidate_urls)?}),
+            serde_json::json!({"deployment_id": source,
+                "peers": {"slot": "a", "a": serde_json::to_string(&next_urls)?, "b": serde_json::to_string(&candidate_urls)?}}),
         )?);
         let source_coordinator = Coordinator::new(
             &config,
@@ -208,8 +209,8 @@ async fn coordinate_drain_and_reconcile_candidates(
         source_coordinators.push(source_coordinator);
         config.startup_mode = iris_mpc_common::config::StartupMode::Candidate;
         config.cpu_cell = Some(serde_json::from_value(
-            serde_json::json!({"deployment_id": destination, "candidate_status_urls": serde_json::to_string(&candidate_urls)?,
-            "next_candidate_status_urls": serde_json::to_string(&next_urls)?,
+            serde_json::json!({"deployment_id": destination,
+            "peers": {"slot": "b", "a": serde_json::to_string(&next_urls)?, "b": serde_json::to_string(&candidate_urls)?},
             "handoff": {"id": id, "source_deployment_id": source, "source_status_urls": serde_json::to_string(&source_urls)?}}),
         )?);
         let candidate_coordinator = Coordinator::new(&config, candidates[i], None)?.unwrap();
@@ -698,17 +699,13 @@ async fn promote_and_process(
                             .is_err(),
                         "an activated destination requires coordinated recovery"
                     );
+                    let peers = config.cpu_cell.as_ref().unwrap().peers.as_ref().unwrap();
+                    let own_urls = match peers.slot {
+                        CpuCellSlot::A => &peers.a,
+                        CpuCellSlot::B => &peers.b,
+                    };
                     let response: serde_json::Value = reqwest::Client::new()
-                        .get(
-                            &config
-                                .cpu_cell
-                                .as_ref()
-                                .unwrap()
-                                .candidate_status_urls
-                                .as_ref()
-                                .unwrap()
-                                .0[party],
-                        )
+                        .get(&own_urls.0[party])
                         .send()
                         .await?
                         .json()
@@ -777,22 +774,16 @@ async fn handoff_to_next_slot(
             peers.node_hostnames[i], peers.healthcheck_ports[i]
         )
     });
-    let future_urls = serving[0]
+    let mut cell_peers = serving[0]
         .config
         .cpu_cell
         .as_ref()
         .unwrap()
-        .candidate_status_urls
+        .peers
         .clone()
         .unwrap();
-    let next_urls = serving[0]
-        .config
-        .cpu_cell
-        .as_ref()
-        .unwrap()
-        .next_candidate_status_urls
-        .clone()
-        .unwrap();
+    assert_eq!(cell_peers.slot, CpuCellSlot::B);
+    cell_peers.slot = CpuCellSlot::A;
     let mut coordinated = Coordinated {
         context: ReconciliationContext::new(id, Some(normalize_sns_sequence_number("42")?))?,
         coordinators: Vec::new(),
@@ -816,8 +807,7 @@ async fn handoff_to_next_slot(
         config.startup_mode = iris_mpc_common::config::StartupMode::Candidate;
         config.cpu_cell = Some(serde_json::from_value(serde_json::json!({
             "deployment_id": destination,
-            "candidate_status_urls": serde_json::to_string(&next_urls.0)?,
-            "next_candidate_status_urls": serde_json::to_string(&future_urls.0)?,
+            "peers": cell_peers,
             "handoff": {"id": id, "source_deployment_id": source,
                 "source_status_urls": serde_json::to_string(&source_urls)?}
         }))?);
