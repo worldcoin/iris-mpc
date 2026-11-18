@@ -71,6 +71,7 @@ service:
 
 nginxSidecar:
   enabled: true
+  image: nginx:1.30.7
   port: 6443
   secrets:
     enabled: true
