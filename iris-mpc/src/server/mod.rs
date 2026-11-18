@@ -117,10 +117,13 @@ async fn run_server(
     config: Config,
     search_mode: HawkSearchMode,
     shutdown_handler: Arc<ShutdownHandler>,
-    promotion: Option<candidate::Promotion>,
+    slot: Option<&mut candidate::ServingSlot>,
 ) -> Result<()> {
-    let deadline = promotion.as_ref().map(|promotion| promotion.deadline);
-    let startup = prepare_server(config, search_mode, shutdown_handler, promotion);
+    let deadline = slot
+        .as_ref()
+        .and_then(|slot| slot.promotion.as_ref())
+        .map(|promotion| promotion.deadline);
+    let startup = prepare_server(config, search_mode, shutdown_handler, slot);
     let prepared = match deadline {
         Some(deadline) => tokio::time::timeout_at(deadline, startup)
             .await
@@ -137,8 +140,10 @@ async fn prepare_server(
     config: Config,
     search_mode: HawkSearchMode,
     shutdown_handler: Arc<ShutdownHandler>,
-    mut promotion: Option<candidate::Promotion>,
+    mut slot: Option<&mut candidate::ServingSlot>,
 ) -> Result<Option<PreparedServer>> {
+    let mut promotion = slot.as_mut().and_then(|slot| slot.promotion.take());
+    let slot = slot.as_deref();
     tracing::info!(
         ?search_mode,
         "Starting AMPC CPU server with configuration: {:?}",
@@ -206,8 +211,8 @@ async fn prepare_server(
         Arc::new(get_shares_encryption_key_pair(&config, &aws_clients).await?);
     let sns_attributes_maps = init_sns_attributes_maps()?;
 
-    let my_state = if let Some(promotion) = &promotion {
-        let completion = promotion.coordinator.agreed_completion().await?;
+    let my_state = if let (Some(slot), Some(promotion)) = (slot, &promotion) {
+        let completion = slot.coordinator.agreed_completion().await?;
         let workers = promotion
             .workers
             .as_ref()
@@ -270,8 +275,8 @@ async fn prepare_server(
     } else {
         None
     };
-    let mut handoff_coordinator = match &promotion {
-        Some(promotion) => Some(promotion.coordinator.clone()),
+    let mut handoff_coordinator = match slot {
+        Some(slot) => Some(slot.coordinator.clone()),
         None => handoff::Coordinator::new(&config, Uuid::nil(), drain.clone())?,
     };
     let extra_routes = drain.as_ref().map(|drain| {
@@ -293,11 +298,10 @@ async fn prepare_server(
     if let Some(drain) = &drain {
         drain.initialize(my_uuid.clone(), is_ready_flag.clone());
     }
-    if let Some(promotion) = &promotion {
+    if let Some(slot) = slot {
         let process = Uuid::parse_str(&my_uuid)?;
         handoff_coordinator = Some(
-            promotion
-                .coordinator
+            slot.coordinator
                 .bind_serving(
                     &config,
                     process,
@@ -307,7 +311,7 @@ async fn prepare_server(
                 )
                 .await?,
         );
-        promotion.bind_status(process, is_ready_flag.clone()).await;
+        slot.bind_status(process, is_ready_flag.clone()).await;
     }
     tracing::info!("Coordination server started");
 
@@ -433,6 +437,9 @@ async fn prepare_server(
         .await?
     };
 
+    if let Some(slot) = slot {
+        slot.loaded(hawk_actor.db_size().await).await;
+    }
     if let Some(url) = config.get_anon_stats_db_url() {
         let schema = config.get_anon_stats_db_schema();
         let anon_store = if promotion.is_some() {
@@ -512,7 +519,11 @@ async fn prepare_server(
     } else {
         set_node_ready(is_ready_flag);
     }
-    wait_for_others_ready(&server_coord_config, verified_peers.clone()).await?;
+    tokio::select! {
+        biased;
+        _ = shutdown_handler.wait_for_shutdown() => return Ok(None),
+        result = wait_for_others_ready(&server_coord_config, verified_peers.clone()) => result?,
+    }
     if let Some(expected) = &activation_cohort {
         eyre::ensure!(
             serving_processes(&server_coord_config, &my_uuid, &verified_peers).await? == *expected,
@@ -521,8 +532,8 @@ async fn prepare_server(
     }
     if let (Some(coordinator), Some(handoff)) = (handoff_coordinator, handoff) {
         coordinator.mark_ready(Uuid::parse_str(&my_uuid)?).await;
-        if let Some(promotion) = &promotion {
-            promotion.mark_serving().await;
+        if let Some(slot) = slot {
+            slot.mark_serving().await;
         }
         let shutdown = shutdown_handler.clone();
         background_tasks.spawn(async move {
