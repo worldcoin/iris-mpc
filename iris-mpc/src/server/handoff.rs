@@ -433,13 +433,12 @@ impl Coordinator {
             let peers = self
                 .wait_peers(&self.own_urls, StartupMode::Active, deadline)
                 .await?;
-            Self::candidate_peers(&own, &peers)?;
-            // Just-promoted peers still have warm evidence; already-serving peers are ready.
+            // Old serving peers can already advertise the next handoff.
             if peers
                 .iter()
                 .all(|p| !p.ready && p.completion.is_none() && p.reconciliation.is_none())
             {
-                return Ok(());
+                return Self::candidate_peers(&own, &peers);
             }
             timeout_at(deadline, sleep(POLL_INTERVAL))
                 .await
