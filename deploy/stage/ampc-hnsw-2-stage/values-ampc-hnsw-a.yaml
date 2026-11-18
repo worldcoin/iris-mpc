@@ -1,5 +1,5 @@
 replicaCount: 1
-image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:c7c336f34f9120f3f10ac9bac8334a203f761de2@sha256:595a6428e157fffe542ffc84eb7ae026505f9e7ec8a02b6ffbd0350581f556a1"
+image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:afba70d6130c85c83c800e9dd500e47d84d29688@sha256:4b59f49f9026c52804432454457c39bdb47ca45be7b3b1637747d22b59e76a69"
 
 env:
   SMPC__CPU_CELL__DEPLOYMENT_ID: "0d2421b8-4f49-4b70-b67e-a6d9311b34c4"
