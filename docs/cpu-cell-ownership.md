@@ -180,13 +180,16 @@ in-memory activation readiness. Once serving startup establishes the peer cohort
 and MPC sessions, replacing a B requires coordinated recovery in POP-4378,
 including when activation is only partially recorded and intake remains closed.
 
-After all three parties record activation, the same destination deployment can
-use existing coordinated cold startup: stop/fence all old processes, configure
-all three parties in active mode with the candidate handoff intent removed, and
-restart them together. Startup barriers precede recovery and a full canonical
-reload; recorded activation does not restore warm readiness. Single-party and
-rolling restarts remain unsupported. An incomplete handoff still blocks active
-startup and needs the coordinated recovery procedure in POP-4378.
+After promotion, losing one serving process shuts down its serving peers through
+the existing heartbeat. Restart all three with the deployed slot configuration.
+Each replacement reads its latest handoff row. An exact match for its activated
+handoff and destination selects coordinated cold startup. The three fresh
+processes must agree before rebuilding from canonical state and passing the
+normal startup barriers. Readiness stays closed until serving resumes.
+If the latest row is a successor’s `requested` handoff and names this deployment
+as its source, the replacement uses the handoff ID in its manifest to look up
+its original `activated` row. Once the successor starts sealing, the source
+cannot restart this way. Partial activation still requires POP-4378 recovery.
 
 Before enabling handoff, test this party-owned cold-restart procedure, including
 settling outstanding effects and reloading canonical state. Do not clear

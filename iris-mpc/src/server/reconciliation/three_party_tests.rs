@@ -416,13 +416,14 @@ async fn coordinate_drain_and_reconcile_candidates(
         // Full startup reloads this party while A is gone and B0/B1 retain their reports.
         let mut restart_config = candidate_configs[2].clone();
         restart_config.schema_name = config.schema_name.clone();
-        let mut candidate = super::super::candidate::preload_with_coordinator(
+        let mut candidate = super::super::candidate::load_or_recover(
             &restart_config,
             Arc::new(ShutdownHandler::new(0)),
             process,
             Some(&coordinator),
         )
-        .await?;
+        .await?
+        .expect("unactivated candidate preloads");
         assert_ne!(candidate.registry.process_id(), old_process);
         assert!(candidate.report_for(&contexts[2]).is_none());
         let reader = PostgresClient::new(
@@ -545,6 +546,7 @@ async fn promote_and_process(
         .iter()
         .map(|party| party.writer.pool.clone())
         .collect::<Vec<_>>();
+    let candidate_configs = coordinated.configs.clone();
     let release_last = {
         let activated = activated.clone();
         let changed = changed.clone();
@@ -565,6 +567,22 @@ async fn promote_and_process(
                 .fetch_one(pool)
                 .await?;
                 assert_eq!(phase, if party < 2 { "activated" } else { "drained" });
+                let replacement =
+                    Coordinator::new(&candidate_configs[party], Uuid::new_v4(), None)?.unwrap();
+                let mode = replacement.prepare_candidate(&handoffs[party]).await?;
+                use iris_mpc_common::config::StartupMode;
+                if party < 2 {
+                    assert_eq!(mode, StartupMode::Active);
+                    assert!(
+                        replacement
+                            .wait_cold_cohort(Instant::now() + Duration::from_millis(150))
+                            .await
+                            .is_err(),
+                        "a replacement cannot join a warm activation in flight"
+                    );
+                } else {
+                    assert_eq!(mode, StartupMode::Candidate);
+                }
                 let pending: (Option<i64>, bool) = sqlx::query_as(
                     "SELECT consumed_batch_id, persisted_at IS NULL FROM ingested_requests WHERE sequence_number=$1",
                 )
@@ -758,6 +776,62 @@ async fn promote_and_process(
     Ok(promoted)
 }
 
+// Restart the promoted cohort with its original candidate manifest and durable databases.
+async fn restart_activated_slot(serving: Vec<Serving>) -> Result<()> {
+    let mut listeners = tokio::task::JoinSet::new();
+    let mut restarts = Vec::new();
+    for party in serving {
+        drop(party.handle);
+        party.shutdown.get_network_cancellation_token().cancel();
+        drop(party.monitor);
+        let mut config = party.config;
+        config.startup_mode = iris_mpc_common::config::StartupMode::Candidate;
+        let peers = config.cpu_cell.as_ref().unwrap().peers.as_ref().unwrap();
+        let urls = match peers.slot {
+            CpuCellSlot::A => &peers.a,
+            CpuCellSlot::B => &peers.b,
+        };
+        let url = reqwest::Url::parse(&urls.0[config.party_id])?;
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", url.port().unwrap())).await?;
+        let process = Uuid::new_v4();
+        let coordinator = Coordinator::new(&config, process, None)?.unwrap();
+        let routes = coordinator.routes();
+        listeners.spawn(async move { axum::serve(listener, routes).await });
+        config.schema_name = party.physical_config.schema_name.clone();
+        // The successor has requested a handoff on one party, but nobody has sealed.
+        if config.party_id == 0 {
+            let handoffs =
+                CpuCellHandoffs::new(party.writer.pool.clone(), &config.get_gpu_db_schema())?;
+            let owner = handoffs.latest().await?.unwrap().destination;
+            handoffs
+                .request(Uuid::new_v4(), owner, Uuid::new_v4())
+                .await?;
+        }
+        restarts.push(async move {
+            let outcome = super::super::candidate::load_or_recover(
+                &config,
+                Arc::new(ShutdownHandler::new(0)),
+                process,
+                Some(&coordinator),
+            )
+            .await?;
+            assert!(
+                outcome.is_none(),
+                "an activated owner must use a full cold start"
+            );
+            iris_mpc_store::test_utils::cleanup(&party.writer, &config.get_gpu_db_schema()).await?;
+            party.writer.pool.close().await;
+            Ok::<_, eyre::Report>(())
+        });
+    }
+    tokio::time::timeout(
+        Duration::from_secs(15),
+        futures::future::try_join_all(restarts),
+    )
+    .await??;
+    Ok(())
+}
+
 async fn handoff_to_next_slot(
     mut serving: Vec<Serving>,
     listeners: Vec<tokio::net::TcpListener>,
@@ -935,6 +1009,14 @@ async fn handoff_to_next_slot(
             record.phase,
             iris_mpc_store::cpu_cell::HandoffPhase::Drained
         );
+        let mut original_manifest = party.config.clone();
+        original_manifest.startup_mode = iris_mpc_common::config::StartupMode::Candidate;
+        let old_owner = Coordinator::new(&original_manifest, Uuid::new_v4(), None)?.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(3), old_owner.prepare_candidate(handoff))
+                .await?
+                .is_err()
+        );
         drop(party.handle);
         party.shutdown.get_network_cancellation_token().cancel();
         drop(party.monitor);
@@ -1087,6 +1169,8 @@ async fn three_party_reconciliation_agrees_and_preserves_each_partys_payloads() 
         if restart_candidate {
             let (parties, coordinated) = handoff_to_next_slot(serving, next_listeners).await?;
             serving = promote_and_process(parties, coordinated, resident).await?;
+            restart_activated_slot(serving).await?;
+            continue;
         }
         for party in serving {
             drop(party.handle);
