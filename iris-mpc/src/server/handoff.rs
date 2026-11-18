@@ -370,7 +370,10 @@ impl Coordinator {
     }
 
     // Called after migrations and before the candidate's ordinary startup guard.
-    pub(super) async fn prepare_candidate(&self, handoffs: &CpuCellHandoffs) -> Result<()> {
+    pub(super) async fn prepare_candidate(
+        &self,
+        handoffs: &CpuCellHandoffs,
+    ) -> Result<StartupMode> {
         let own = self.status.read().await.clone();
         let intent = own
             .intent
@@ -382,7 +385,11 @@ impl Coordinator {
                     record.source == intent.source && record.destination == intent.destination,
                     "durable handoff intent changed"
                 );
-                return Ok(());
+                if record.phase == HandoffPhase::Activated {
+                    self.status.write().await.mode = StartupMode::Active;
+                    return Ok(StartupMode::Active);
+                }
+                return Ok(StartupMode::Candidate);
             }
         }
         let deadline = Instant::now() + PREFLIGHT_TIMEOUT;
@@ -406,7 +413,28 @@ impl Coordinator {
         }
         handoffs
             .request(intent.id, intent.source, intent.destination)
-            .await
+            .await?;
+        Ok(StartupMode::Candidate)
+    }
+
+    pub(super) async fn wait_cold_cohort(&self, deadline: Instant) -> Result<()> {
+        let own = self.status.read().await.clone();
+        loop {
+            let peers = self
+                .wait_peers(&self.own_urls, StartupMode::Active, deadline)
+                .await?;
+            Self::candidate_peers(&own, &peers)?;
+            // Just-promoted peers still have warm evidence; already-serving peers are ready.
+            if peers
+                .iter()
+                .all(|p| !p.ready && p.completion.is_none() && p.reconciliation.is_none())
+            {
+                return Ok(());
+            }
+            timeout_at(deadline, sleep(POLL_INTERVAL))
+                .await
+                .wrap_err("waiting for all three activated parties to cold start")?;
+        }
     }
 
     async fn source_step(&self, handoffs: &CpuCellHandoffs) -> Result<bool> {

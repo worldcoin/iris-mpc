@@ -28,19 +28,31 @@ type CandidatePreload = CandidateReconciliation;
 pub(super) struct Promotion {
     pub workers:
         Option<iris_mpc_cpu::execution::hawk_main::worker_pool_initializer::InitializedWorkers>,
-    pub coordinator: handoff::Coordinator,
     pub context: reconciliation::ReconciliationContext,
     pub started: Instant,
     pub deadline: tokio::time::Instant,
+}
+
+pub(super) struct ServingSlot {
+    pub promotion: Option<Promotion>,
+    pub coordinator: handoff::Coordinator,
     status: Status,
 }
 
-impl Promotion {
+impl ServingSlot {
     pub async fn bind_status(&self, process: Uuid, readiness: Arc<std::sync::atomic::AtomicBool>) {
         let mut status = self.status.write().await;
         status.process_id = process;
-        status.state = "activating";
+        if status.state == "reconciled" {
+            status.state = "activating";
+        }
         status.readiness = Some(readiness);
+    }
+
+    pub async fn loaded(&self, rows: usize) {
+        let mut status = self.status.write().await;
+        status.loaded_rows = rows;
+        status.state = "activating";
     }
 
     pub async fn mark_serving(&self) {
@@ -157,12 +169,27 @@ async fn preload_and_wait(
     let process_id = status.read().await.process_id;
     let loaded = tokio::select! {
         _ = shutdown.wait_for_shutdown() => return Ok(()),
-        result = timeout(PRELOAD_TIMEOUT, preload_with_coordinator(config, shutdown.clone(), process_id, coordinator.as_ref())) => {
+        result = timeout(PRELOAD_TIMEOUT, load_or_recover(config, shutdown.clone(), process_id, coordinator.as_ref())) => {
             result.wrap_err("candidate preload exceeded one hour").and_then(|loaded| loaded)
         }
     };
     let mut workers = match loaded {
-        Ok(workers) => workers,
+        Ok(Some(workers)) => workers,
+        Ok(None) => {
+            let coordinator =
+                coordinator.ok_or_else(|| eyre!("owner recovery requires a coordinator"))?;
+            tracing::info!("Rebuilding activated CPU cell through coordinated cold startup");
+            return serve_slot(
+                config,
+                shutdown,
+                ServingSlot {
+                    coordinator,
+                    status,
+                    promotion: None,
+                },
+            )
+            .await;
+        }
         Err(error) => {
             status.write().await.state = "failed";
             if let Some(coordinator) = &coordinator {
@@ -221,32 +248,21 @@ async fn preload_and_wait(
         }
         let promotion = Promotion {
             workers: Some(workers.into_workers(&context)?),
-            coordinator: coordinator.clone(),
             context,
             started: handoff_started,
             deadline: tokio::time::Instant::now()
                 + Duration::from_secs(config.cpu_drain_timeout_secs),
-            status: status.clone(),
         };
-        let mut serving_config = config.clone();
-        serving_config.startup_mode = StartupMode::Active;
-        let result = Box::pin(super::run_server(
-            serving_config,
-            HawkSearchMode::LinearScan,
-            shutdown.clone(),
-            Some(promotion),
-        ))
+        return serve_slot(
+            config,
+            shutdown,
+            ServingSlot {
+                coordinator: coordinator.clone(),
+                status,
+                promotion: Some(promotion),
+            },
+        )
         .await;
-        if let Err(error) = &result {
-            coordinator.fail(error).await;
-            let mut status = status.write().await;
-            status.state = "failed";
-            if let Some(ready) = &status.readiness {
-                ready.store(false, Ordering::SeqCst);
-            }
-            shutdown.get_network_cancellation_token().cancel();
-        }
-        return result;
     }
     shutdown.wait_for_shutdown().await;
     // Keep the pools (and their resident shares and observed versions) alive
@@ -255,21 +271,49 @@ async fn preload_and_wait(
     Ok(())
 }
 
+async fn serve_slot(
+    config: &Config,
+    shutdown: Arc<ShutdownHandler>,
+    mut slot: ServingSlot,
+) -> Result<()> {
+    let mut config = config.clone();
+    config.startup_mode = StartupMode::Active;
+    let result = Box::pin(super::run_server(
+        config,
+        HawkSearchMode::LinearScan,
+        shutdown.clone(),
+        Some(&mut slot),
+    ))
+    .await;
+    if let Err(error) = &result {
+        slot.coordinator.fail(error).await;
+        let mut status = slot.status.write().await;
+        status.state = "failed";
+        if let Some(ready) = &status.readiness {
+            ready.store(false, Ordering::SeqCst);
+        }
+        shutdown.get_network_cancellation_token().cancel();
+    }
+    result
+}
+
 #[cfg(test)]
 pub(super) async fn preload(
     config: &Config,
     shutdown: Arc<ShutdownHandler>,
     process_id: Uuid,
 ) -> Result<CandidatePreload> {
-    preload_with_coordinator(config, shutdown, process_id, None).await
+    load_or_recover(config, shutdown, process_id, None)
+        .await?
+        .ok_or_else(|| eyre!("expected a preload"))
 }
 
-pub(super) async fn preload_with_coordinator(
+pub(super) async fn load_or_recover(
     config: &Config,
     shutdown: Arc<ShutdownHandler>,
     process_id: Uuid,
     coordinator: Option<&handoff::Coordinator>,
-) -> Result<CandidatePreload> {
+) -> Result<Option<CandidatePreload>> {
     let db = config
         .database
         .as_ref()
@@ -279,7 +323,13 @@ pub(super) async fn preload_with_coordinator(
     run_migrations(&migration.pool, db.ignore_missing_migrations).await?;
     if let Some(coordinator) = coordinator {
         let handoffs = CpuCellHandoffs::new(migration.pool.clone(), &config.get_gpu_db_schema())?;
-        coordinator.prepare_candidate(&handoffs).await?;
+        if coordinator.prepare_candidate(&handoffs).await? == StartupMode::Active {
+            migration.pool.close().await;
+            coordinator
+                .wait_cold_cohort(tokio::time::Instant::now() + PRELOAD_TIMEOUT)
+                .await?;
+            return Ok(None);
+        }
     }
     initialize_handoff(config, HawkSearchMode::LinearScan, &migration.pool).await?;
     migration.pool.close().await;
@@ -324,7 +374,7 @@ pub(super) async fn preload_with_coordinator(
     )
     .initialize()
     .await?;
-    CandidateReconciliation::new(config.party_id, process_id, workers)
+    CandidateReconciliation::new(config.party_id, process_id, workers).map(Some)
 }
 
 #[cfg(test)]
