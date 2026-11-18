@@ -546,7 +546,7 @@ async fn promote_and_process(
         .iter()
         .map(|party| party.writer.pool.clone())
         .collect::<Vec<_>>();
-    let candidate_configs = coordinated.configs.clone();
+    let candidate_configs = &coordinated.configs;
     let release_last = {
         let activated = activated.clone();
         let changed = changed.clone();
@@ -573,13 +573,6 @@ async fn promote_and_process(
                 use iris_mpc_common::config::StartupMode;
                 if party < 2 {
                     assert_eq!(mode, StartupMode::Active);
-                    assert!(
-                        replacement
-                            .wait_cold_cohort(Instant::now() + Duration::from_millis(150))
-                            .await
-                            .is_err(),
-                        "a replacement cannot join a warm activation in flight"
-                    );
                 } else {
                     assert_eq!(mode, StartupMode::Candidate);
                 }
@@ -599,7 +592,7 @@ async fn promote_and_process(
     let promote = futures::future::try_join_all(
         parties
             .into_iter()
-            .zip(coordinated.configs)
+            .zip(candidate_configs.iter().cloned())
             .zip(&coordinated.coordinators)
             .enumerate()
             .map(|(party, ((loaded, mut config), coordinator))| {
@@ -691,6 +684,20 @@ async fn promote_and_process(
                     if party < 2 {
                         activated.fetch_add(1, Ordering::SeqCst);
                         changed.notify_one();
+                    } else {
+                        // All three peers have activated, but none can become ready before party 2.
+                        let replacement =
+                            Coordinator::new(&candidate_configs[party], Uuid::new_v4(), None)?
+                                .unwrap();
+                        replacement.prepare_candidate(&handoff).await?;
+                        let error = replacement
+                            .wait_cold_cohort(Instant::now() + Duration::from_millis(500))
+                            .await
+                            .unwrap_err();
+                        assert_eq!(
+                            error.to_string(),
+                            "waiting for all three activated parties to cold start"
+                        );
                     }
                     let verified = verified.lock().await.clone();
                     let expected = serving_processes(coord_config, &process, &verified).await?;
