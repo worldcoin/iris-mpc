@@ -186,9 +186,10 @@ Each replacement reads its latest handoff row. An exact match for its activated
 handoff and destination selects coordinated cold startup. The three fresh
 processes must agree before rebuilding from canonical state and passing the
 normal startup barriers. Readiness stays closed until serving resumes.
-A pending successor request still allows recovery of the current owner until
-sealing begins. A sealed source or partially activated cohort still requires
-the recovery procedure in POP-4378.
+If the latest row is a successor’s `requested` handoff and names this deployment
+as its source, the replacement uses the handoff ID in its manifest to look up
+its original `activated` row. Once the successor starts sealing, the source
+cannot restart this way. Partial activation still requires POP-4378 recovery.
 
 Before enabling handoff, test this party-owned cold-restart procedure, including
 settling outstanding effects and reloading canonical state. Do not clear
