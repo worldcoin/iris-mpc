@@ -519,7 +519,11 @@ async fn prepare_server(
     } else {
         set_node_ready(is_ready_flag);
     }
-    wait_for_others_ready(&server_coord_config, verified_peers.clone()).await?;
+    tokio::select! {
+        biased;
+        _ = shutdown_handler.wait_for_shutdown() => return Ok(None),
+        result = wait_for_others_ready(&server_coord_config, verified_peers.clone()) => result?,
+    }
     if let Some(expected) = &activation_cohort {
         eyre::ensure!(
             serving_processes(&server_coord_config, &my_uuid, &verified_peers).await? == *expected,

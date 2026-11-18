@@ -798,6 +798,15 @@ async fn restart_activated_slot(serving: Vec<Serving>) -> Result<()> {
         let routes = coordinator.routes();
         listeners.spawn(async move { axum::serve(listener, routes).await });
         config.schema_name = party.physical_config.schema_name.clone();
+        // The successor has requested a handoff on one party, but nobody has sealed.
+        if config.party_id == 0 {
+            let handoffs =
+                CpuCellHandoffs::new(party.writer.pool.clone(), &config.get_gpu_db_schema())?;
+            let owner = handoffs.latest().await?.unwrap().destination;
+            handoffs
+                .request(Uuid::new_v4(), owner, Uuid::new_v4())
+                .await?;
+        }
         restarts.push(async move {
             let outcome = super::super::candidate::load_or_recover(
                 &config,
@@ -999,6 +1008,14 @@ async fn handoff_to_next_slot(
         assert_eq!(
             record.phase,
             iris_mpc_store::cpu_cell::HandoffPhase::Drained
+        );
+        let mut original_manifest = party.config.clone();
+        original_manifest.startup_mode = iris_mpc_common::config::StartupMode::Candidate;
+        let old_owner = Coordinator::new(&original_manifest, Uuid::new_v4(), None)?.unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(3), old_owner.prepare_candidate(handoff))
+                .await?
+                .is_err()
         );
         drop(party.handle);
         party.shutdown.get_network_cancellation_token().cancel();

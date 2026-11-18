@@ -379,7 +379,17 @@ impl Coordinator {
             .intent
             .as_ref()
             .ok_or_else(|| eyre!("missing candidate intent"))?;
-        if let Some(record) = handoffs.latest().await? {
+        if let Some(latest) = handoffs.latest().await? {
+            // A successor request leaves its source in charge until sealing begins.
+            let record = if latest.source == own.deployment {
+                ensure!(
+                    latest.phase == HandoffPhase::Requested,
+                    "source has already started draining; coordinated recovery is required"
+                );
+                handoffs.get(intent.id).await?
+            } else {
+                latest
+            };
             if record.handoff_id == intent.id {
                 ensure!(
                     record.source == intent.source && record.destination == intent.destination,
