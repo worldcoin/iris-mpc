@@ -93,16 +93,19 @@ Establish protocol 2 with a coordinated cold upgrade and no handoff in flight.
 Candidate startup migrates before compatibility checks; `MIGRATE=false` does
 not protect an incompatible serving release. Stop/fence legacy writers first.
 
-During that baseline, configure Active A with one shared deployment UUID and B's
-candidate-status URLs. Restore A's serving HTTP probes on port 3000 instead of
-the passive exec probes on 3090. The later warm release changes B only: pin its
+During that baseline, configure Active A with one shared deployment UUID, fixed
+`CPU_CELL__PEERS__A` and `CPU_CELL__PEERS__B` candidate-status URL lists, and
+`CPU_CELL__PEERS__SLOT=a` (all prefixed with `SMPC__`). Restore A's serving HTTP
+probes on port 3000 instead of the passive exec probes on 3090. The later warm
+release changes B only: pin its
 image digest, use one fresh B deployment UUID and one fresh handoff UUID shared
 across all three parties, and supply A's status URLs
-(`http://<host>:<healthcheck-port>/handoff-status`) and the current B operator URLs.
+(`http://<host>:<healthcheck-port>/handoff-status`). Keep the same A/B URL lists
+and set `CPU_CELL__PEERS__SLOT=b`.
 Keep B's candidate probes through promotion.
 
-POP-4560 supplies next-candidate routing before B→A can work without restarting
-serving B. Retire old processes and exact DNS records before slot reuse. Validate
+The fixed peer lists also route B→A without restarting serving B. Retire old
+processes and exact DNS records before slot reuse. Validate
 both directions through signup-service and exercise cold recovery under
 POP-4378/4379/4380. After sealing, failures must not automatically resume A.
 Keep journal cleanup and production rollout separate.

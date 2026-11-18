@@ -7,7 +7,7 @@ use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use axum::{routing::get, Json, Router};
 use eyre::{ensure, eyre, Result, WrapErr};
 use iris_mpc_common::{
-    config::{CommonConfig, Config, StartupMode},
+    config::{CommonConfig, Config, CpuCellSlot, StartupMode},
     helpers::sha256::sha256_bytes,
 };
 use iris_mpc_store::{
@@ -56,7 +56,8 @@ struct Status {
 pub(super) struct Coordinator {
     status: Arc<RwLock<Status>>,
     source_urls: [reqwest::Url; 3],
-    candidate_urls: [reqwest::Url; 3],
+    own_urls: [reqwest::Url; 3],
+    other_urls: [reqwest::Url; 3],
     client: reqwest::Client,
     drain: Arc<std::sync::RwLock<Option<Arc<drain::Drain>>>>,
 }
@@ -96,13 +97,16 @@ impl Coordinator {
         let Some(cell) = &config.cpu_cell else {
             return Ok(None);
         };
-        let Some(candidate_urls) = &cell.candidate_status_urls else {
-            ensure!(
-                cell.handoff.is_none(),
-                "automatic handoff requires candidate_status_urls"
-            );
+        let Some(peers) = &cell.peers else {
+            ensure!(cell.handoff.is_none(), "automatic handoff requires peers");
             return Ok(None);
         };
+        let (own, other) = match peers.slot {
+            CpuCellSlot::A => (&peers.a, &peers.b),
+            CpuCellSlot::B => (&peers.b, &peers.a),
+        };
+        let own_urls = urls(&own.0)?;
+        let other_urls = urls(&other.0)?;
         ensure!(config.party_id < 3, "invalid handoff party");
         ensure!(
             config.db_backed_ingest && config.cpu_drain_timeout_secs > 0,
@@ -164,7 +168,8 @@ impl Coordinator {
                 error: None,
             })),
             source_urls,
-            candidate_urls: urls(&candidate_urls.0)?,
+            own_urls,
+            other_urls,
             client: reqwest::Client::builder()
                 .timeout(Duration::from_secs(3))
                 .redirect(reqwest::redirect::Policy::none())
@@ -234,9 +239,7 @@ impl Coordinator {
 
     pub(super) async fn activate_candidate(&self, handoffs: &CpuCellHandoffs) -> Result<()> {
         let own = self.status.read().await.clone();
-        let peers = self
-            .peers(&self.candidate_urls, StartupMode::Candidate)
-            .await?;
+        let peers = self.peers(&self.own_urls, StartupMode::Candidate).await?;
         let intent = own
             .intent
             .as_ref()
@@ -275,7 +278,7 @@ impl Coordinator {
     ) -> Result<()> {
         let own = self.status.read().await.clone();
         let peers = self
-            .wait_peers(&self.candidate_urls, StartupMode::Active, deadline)
+            .wait_peers(&self.own_urls, StartupMode::Active, deadline)
             .await?;
         Self::candidate_peers(&own, &peers)?;
         ensure!(
@@ -450,9 +453,7 @@ impl Coordinator {
         }
         // Once a peer seals this handoff, finish draining even if B is reloading.
         if !started {
-            let candidates = self
-                .peers(&self.candidate_urls, StartupMode::Candidate)
-                .await?;
+            let candidates = self.peers(&self.other_urls, StartupMode::Candidate).await?;
             ensure!(
                 candidates.iter().all(|p| p.deployment == intent.destination
                     && p.intent.as_ref() == Some(&intent)
@@ -565,11 +566,7 @@ impl Coordinator {
         let preflight_deadline = Instant::now() + PREFLIGHT_TIMEOUT;
         loop {
             let peers = self
-                .wait_peers(
-                    &self.candidate_urls,
-                    StartupMode::Candidate,
-                    preflight_deadline,
-                )
+                .wait_peers(&self.own_urls, StartupMode::Candidate, preflight_deadline)
                 .await?;
             Self::candidate_peers(&own, &peers)?;
             if peers
@@ -607,7 +604,7 @@ impl Coordinator {
 
         loop {
             let peers = self
-                .wait_peers(&self.candidate_urls, StartupMode::Candidate, deadline)
+                .wait_peers(&self.own_urls, StartupMode::Candidate, deadline)
                 .await?;
             if peers
                 .iter()
@@ -633,7 +630,7 @@ impl Coordinator {
         self.status.write().await.reconciliation = Some(report);
         loop {
             let peers = self
-                .wait_peers(&self.candidate_urls, StartupMode::Candidate, deadline)
+                .wait_peers(&self.own_urls, StartupMode::Candidate, deadline)
                 .await?;
             Self::candidate_peers(&*self.status.read().await, &peers)?;
             if let [Some(a), Some(b), Some(c)] = peers.map(|p| p.reconciliation) {
@@ -769,6 +766,43 @@ pub(super) mod tests {
     }
 
     #[cfg(feature = "db_dependent")]
+    pub(in crate::server) async fn reject_incompatible_next_candidate(
+        sources: &[Coordinator],
+        handoffs: &[CpuCellHandoffs],
+        candidate: &Coordinator,
+    ) -> Result<()> {
+        let original = candidate.status.read().await.clone();
+        for wrong_deployment in [true, false] {
+            let mut incompatible = original.clone();
+            if wrong_deployment {
+                incompatible.deployment = Uuid::new_v4();
+            } else {
+                incompatible.intent.as_mut().unwrap().id = Uuid::new_v4();
+            }
+            *candidate.status.write().await = incompatible;
+            for (source, handoff) in sources.iter().zip(handoffs) {
+                assert!(source.source_step(handoff).await.is_err());
+                assert!(!source.drain().unwrap().requested());
+                assert_eq!(
+                    handoff.latest().await?.unwrap().phase,
+                    HandoffPhase::Requested
+                );
+            }
+        }
+        *candidate.status.write().await = original;
+        for (source, handoff) in sources.iter().zip(handoffs) {
+            assert!(!source.source_step(handoff).await?);
+            assert!(!source.drain().unwrap().requested());
+            assert!(source.status.read().await.ready);
+            assert_eq!(
+                handoff.latest().await?.unwrap().phase,
+                HandoffPhase::Requested
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "db_dependent")]
     pub(in crate::server) async fn assert_sources_wait_for_preload_then_finish_drain(
         sources: &[Coordinator],
         handoffs: &[CpuCellHandoffs],
@@ -812,10 +846,31 @@ pub(super) mod tests {
             let config: Config = serde_json::from_value(serde_json::json!({
                 "party_id": party, "startup_mode": "candidate", "db_backed_ingest": true,
                 "server_coordination": {"healthcheck_ports": "[\"3000\",\"3001\",\"3002\"]"},
-                "cpu_cell": {"deployment_id": destination, "candidate_status_urls": serde_json::to_string(&addresses)?,
+                "cpu_cell": {"deployment_id": destination,
+                    "peers": {"slot": "b", "a": serde_json::to_string(&addresses)?, "b": serde_json::to_string(&addresses)?},
                     "handoff": {"id": intent, "source_deployment_id": source, "source_status_urls": serde_json::to_string(&addresses)?}}
             }))?;
             if party == 0 {
+                let mut missing = config.clone();
+                missing.cpu_cell.as_mut().unwrap().peers = None;
+                assert!(Coordinator::new(&missing, candidates[party], None)
+                    .err()
+                    .unwrap()
+                    .to_string()
+                    .contains("automatic handoff requires peers"));
+                for invalid in ["not a URL", &addresses[1]] {
+                    let mut malformed = config.clone();
+                    malformed
+                        .cpu_cell
+                        .as_mut()
+                        .unwrap()
+                        .peers
+                        .as_mut()
+                        .unwrap()
+                        .a
+                        .0[0] = invalid.into();
+                    assert!(Coordinator::new(&malformed, candidates[party], None).is_err());
+                }
                 for (hosts, ports) in [(2, 3), (3, 2), (4, 3), (3, 4)] {
                     let mut malformed = config.clone();
                     let peers = malformed.server_coordination.as_mut().unwrap();

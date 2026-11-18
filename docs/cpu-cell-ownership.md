@@ -103,17 +103,37 @@ and cold recovery are tested.
 
 ## Runtime configuration
 
-Omitting `SMPC__CPU_CELL__CANDIDATE_STATUS_URLS` keeps automatic handoff disabled.
-On all participating A and B processes set that variable to a JSON array of
-three fixed B `/handoff-status` URLs, indexed by party. A uses its existing
-`server_coordination` hostnames and healthcheck ports for A status exchange.
-On B additionally set:
+Omitting all `SMPC__CPU_CELL__PEERS__*` settings keeps automatic handoff disabled. All
+participating processes use the same fixed A/B candidate-status URL lists,
+indexed by party. Set `SLOT` to the process's own slot (`a` or `b`):
+
+```sh
+SMPC__CPU_CELL__PEERS__SLOT=b
+SMPC__CPU_CELL__PEERS__A='["http://a0:3090/handoff-status","http://a1:3090/handoff-status","http://a2:3090/handoff-status"]'
+SMPC__CPU_CELL__PEERS__B='["http://b0:3090/handoff-status","http://b1:3090/handoff-status","http://b2:3090/handoff-status"]'
+```
+
+The slot selects its own cohort for reconciliation/activation and the other
+cohort for its later source role. These settings stay fixed through promotion
+and across releases in the same slot. Both lists must contain three distinct,
+valid URLs; incomplete peer configuration rejects startup before preload.
+
+On candidate B additionally set:
 
 ```sh
 SMPC__CPU_CELL__HANDOFF__ID=<fresh-handoff-uuid>
 SMPC__CPU_CELL__HANDOFF__SOURCE_DEPLOYMENT_ID=<current-A-deployment-uuid>
-SMPC__CPU_CELL__HANDOFF__SOURCE_STATUS_URLS='["http://a0:8080/handoff-status","http://a1:8080/handoff-status","http://a2:8080/handoff-status"]'
+SMPC__CPU_CELL__HANDOFF__SOURCE_STATUS_URLS='["http://a0:3000/handoff-status","http://a1:3000/handoff-status","http://a2:3000/handoff-status"]'
 ```
+
+Source URLs address the current serving cohort's healthcheck listeners; the
+A/B lists address candidate listeners. Those ports can differ. Active source
+coordination uses its existing `server_coordination` hostnames and ports.
+
+Deploy the next A with the same A/B lists, `SLOT=a`, fresh deployment and
+handoff UUIDs, and B as its source. Retire the old A processes before reusing
+the slot. B keeps serving until the intended next A cohort is loaded and
+compatible; URLs alone do not authorize a seal.
 
 The destination is B's `SMPC__CPU_CELL__DEPLOYMENT_ID`. Configure DB-backed intake
 and a positive `SMPC__CPU_DRAIN_TIMEOUT_SECS`. B's first request precedes its

@@ -7,7 +7,7 @@ use super::*;
 use ampc_anon_stats::types::Eye;
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use iris_mpc_common::{
-    config::Config,
+    config::{Config, CpuCellSlot},
     iris_db::iris::IrisCode,
     postgres::{run_migrations, AccessMode, PostgresClient},
     VectorId,
@@ -70,6 +70,19 @@ struct Coordinated {
     tasks: Vec<tokio::task::JoinHandle<()>>,
     shutdowns: Vec<tokio_util::sync::CancellationToken>,
     configs: Vec<Config>,
+    next_listeners: Vec<tokio::net::TcpListener>,
+}
+
+struct Serving {
+    writer: PostgresClient,
+    physical_config: Config,
+    config: Config,
+    handle: iris_mpc_cpu::execution::hawk_main::HawkHandle,
+    shutdown: Arc<ShutdownHandler>,
+    monitor: ampc_server_utils::TaskMonitor,
+    coordinator: Coordinator,
+    drain: Arc<drain::Drain>,
+    ready: Arc<std::sync::atomic::AtomicBool>,
 }
 
 async fn preload_parties(rows: &[SharedRow], side: Eye) -> Result<Vec<Party>> {
@@ -119,9 +132,11 @@ async fn coordinate_drain_and_reconcile_candidates(
     let candidates: [Uuid; 3] = std::array::from_fn(|i| parties[i].candidate.registry.process_id());
     let mut source_listeners = Vec::new();
     let mut candidate_listeners = Vec::new();
+    let mut next_listeners = Vec::new();
     for _ in 0..3 {
         source_listeners.push(tokio::net::TcpListener::bind("127.0.0.1:0").await?);
         candidate_listeners.push(tokio::net::TcpListener::bind("127.0.0.1:0").await?);
+        next_listeners.push(tokio::net::TcpListener::bind("127.0.0.1:0").await?);
     }
     let replacement_address = candidate_listeners[2].local_addr()?;
     let source_urls: [String; 3] = std::array::from_fn(|i| {
@@ -137,6 +152,12 @@ async fn coordinate_drain_and_reconcile_candidates(
         )
     });
     let mut source_coordinators = Vec::new();
+    let next_urls: [String; 3] = std::array::from_fn(|i| {
+        format!(
+            "http://{}/handoff-status",
+            next_listeners[i].local_addr().unwrap()
+        )
+    });
     let mut candidate_coordinators = Vec::new();
     let mut candidate_configs = Vec::new();
     let mut source_tasks = Vec::new();
@@ -169,7 +190,8 @@ async fn coordinate_drain_and_reconcile_candidates(
             .collect();
         config.server_coordination = Some(peers);
         config.cpu_cell = Some(serde_json::from_value(
-            serde_json::json!({"deployment_id": source, "candidate_status_urls": serde_json::to_string(&candidate_urls)?}),
+            serde_json::json!({"deployment_id": source,
+                "peers": {"slot": "a", "a": serde_json::to_string(&next_urls)?, "b": serde_json::to_string(&candidate_urls)?}}),
         )?);
         let source_coordinator = Coordinator::new(
             &config,
@@ -187,7 +209,8 @@ async fn coordinate_drain_and_reconcile_candidates(
         source_coordinators.push(source_coordinator);
         config.startup_mode = iris_mpc_common::config::StartupMode::Candidate;
         config.cpu_cell = Some(serde_json::from_value(
-            serde_json::json!({"deployment_id": destination, "candidate_status_urls": serde_json::to_string(&candidate_urls)?,
+            serde_json::json!({"deployment_id": destination,
+            "peers": {"slot": "b", "a": serde_json::to_string(&next_urls)?, "b": serde_json::to_string(&candidate_urls)?},
             "handoff": {"id": id, "source_deployment_id": source, "source_status_urls": serde_json::to_string(&source_urls)?}}),
         )?);
         let candidate_coordinator = Coordinator::new(&config, candidates[i], None)?.unwrap();
@@ -442,6 +465,7 @@ async fn coordinate_drain_and_reconcile_candidates(
         tasks: candidate_tasks,
         shutdowns: candidate_shutdowns,
         configs: candidate_configs,
+        next_listeners,
     })
 }
 
@@ -485,7 +509,7 @@ async fn promote_and_process(
     parties: Vec<Party>,
     coordinated: Coordinated,
     resident: usize,
-) -> Result<()> {
+) -> Result<Vec<Serving>> {
     use super::super::{promote_actor, serving_processes};
     use ampc_server_utils::{
         start_coordination_server_with_extra_routes, wait_for_others_ready,
@@ -612,7 +636,7 @@ async fn promote_and_process(
                         &shutdown,
                         &state,
                         None,
-                        Some(coordinator.routes()),
+                        Some(coordinator.routes().merge(drain.routes())),
                     )
                     .await;
                     let process_id = Uuid::parse_str(&process)?;
@@ -636,6 +660,12 @@ async fn promote_and_process(
                         writer.pool.clone(),
                         &physical_config.get_gpu_db_schema(),
                     )?;
+                    drain.require_durable_seal(Arc::new(ManagedHandoff {
+                        handoffs: handoff.clone(),
+                        deployment: Uuid::parse_str(
+                            &config.cpu_cell.as_ref().unwrap().deployment_id,
+                        )?,
+                    }));
                     if party == 2 {
                         release.notified().await;
                     }
@@ -657,6 +687,10 @@ async fn promote_and_process(
                         expected
                     );
                     coordinator.mark_ready(process_id).await;
+                    let drain_task = drain.clone();
+                    let drain_config = coord_config.clone();
+                    let cohort = expected.iter().map(ToString::to_string).collect();
+                    monitor.spawn(async move { drain_task.coordinate(drain_config, cohort).await });
                     assert!(ready.load(Ordering::SeqCst));
                     assert!(
                         handoff
@@ -665,17 +699,13 @@ async fn promote_and_process(
                             .is_err(),
                         "an activated destination requires coordinated recovery"
                     );
+                    let peers = config.cpu_cell.as_ref().unwrap().peers.as_ref().unwrap();
+                    let own_urls = match peers.slot {
+                        CpuCellSlot::A => &peers.a,
+                        CpuCellSlot::B => &peers.b,
+                    };
                     let response: serde_json::Value = reqwest::Client::new()
-                        .get(
-                            &config
-                                .cpu_cell
-                                .as_ref()
-                                .unwrap()
-                                .candidate_status_urls
-                                .as_ref()
-                                .unwrap()
-                                .0[party],
-                        )
+                        .get(&own_urls.0[party])
                         .send()
                         .await?
                         .json()
@@ -696,7 +726,17 @@ async fn promote_and_process(
                         .check_startup(handoff.latest().await?.unwrap().source, false)
                         .await
                         .is_err());
-                    Ok::<_, eyre::Report>((writer, physical_config, handle, shutdown, monitor))
+                    Ok::<_, eyre::Report>(Serving {
+                        writer,
+                        physical_config,
+                        config,
+                        handle,
+                        shutdown,
+                        monitor,
+                        coordinator,
+                        drain,
+                        ready,
+                    })
                 }
             }),
     );
@@ -715,14 +755,212 @@ async fn promote_and_process(
         stop.cancel();
         tokio::time::timeout(Duration::from_secs(3), task).await??;
     }
-    for (writer, config, handle, shutdown, monitor) in promoted {
-        drop(handle);
-        shutdown.get_network_cancellation_token().cancel();
-        drop(monitor);
-        iris_mpc_store::test_utils::cleanup(&writer, &config.get_gpu_db_schema()).await?;
-        writer.pool.close().await;
+    Ok(promoted)
+}
+
+async fn handoff_to_next_slot(
+    mut serving: Vec<Serving>,
+    listeners: Vec<tokio::net::TcpListener>,
+) -> Result<(Vec<Party>, Coordinated)> {
+    use iris_mpc_common::job::{BatchMetadata, BatchQuery, JobSubmissionHandle};
+    use std::sync::atomic::Ordering;
+
+    let source = Uuid::parse_str(&serving[0].config.cpu_cell.as_ref().unwrap().deployment_id)?;
+    let (id, destination) = (Uuid::new_v4(), Uuid::new_v4());
+    let peers = serving[0].config.server_coordination.as_ref().unwrap();
+    let source_urls: [String; 3] = std::array::from_fn(|i| {
+        format!(
+            "http://{}:{}/handoff-status",
+            peers.node_hostnames[i], peers.healthcheck_ports[i]
+        )
+    });
+    let mut cell_peers = serving[0]
+        .config
+        .cpu_cell
+        .as_ref()
+        .unwrap()
+        .peers
+        .clone()
+        .unwrap();
+    assert_eq!(cell_peers.slot, CpuCellSlot::B);
+    cell_peers.slot = CpuCellSlot::A;
+    let mut coordinated = Coordinated {
+        context: ReconciliationContext::new(id, Some(normalize_sns_sequence_number("42")?))?,
+        coordinators: Vec::new(),
+        tasks: Vec::new(),
+        shutdowns: Vec::new(),
+        configs: Vec::new(),
+        next_listeners: Vec::new(),
+    };
+    let mut handoffs = Vec::new();
+    let mut parties = Vec::new();
+    let sources = serving
+        .iter()
+        .map(|party| party.coordinator.clone())
+        .collect::<Vec<_>>();
+    let processes = serving
+        .iter()
+        .map(|party| party.drain.status().process_uuid)
+        .collect::<Vec<_>>();
+    for (i, (party, listener)) in serving.iter().zip(listeners).enumerate() {
+        let mut config = party.config.clone();
+        config.startup_mode = iris_mpc_common::config::StartupMode::Candidate;
+        config.cpu_cell = Some(serde_json::from_value(serde_json::json!({
+            "deployment_id": destination,
+            "peers": cell_peers,
+            "handoff": {"id": id, "source_deployment_id": source,
+                "source_status_urls": serde_json::to_string(&source_urls)?}
+        }))?);
+        let coordinator = Coordinator::new(&config, Uuid::new_v4(), None)?.unwrap();
+        let router = coordinator.routes();
+        let stop = tokio_util::sync::CancellationToken::new();
+        coordinated.shutdowns.push(stop.clone());
+        coordinated.tasks.push(tokio::spawn(async move {
+            axum::serve(listener, router)
+                .with_graceful_shutdown(stop.cancelled_owned())
+                .await
+                .unwrap();
+        }));
+        let handoff = CpuCellHandoffs::new(
+            party.writer.pool.clone(),
+            &party.physical_config.get_gpu_db_schema(),
+        )?;
+        coordinator.prepare_candidate(&handoff).await?;
+        handoff.check_startup(destination, true).await?;
+        if i < 2 {
+            let mut physical_config = config.clone();
+            physical_config.schema_name = party.physical_config.schema_name.clone();
+            let candidate = super::super::candidate::preload(
+                &physical_config,
+                Arc::new(ShutdownHandler::new(0)),
+                Uuid::new_v4(),
+            )
+            .await?;
+            coordinator
+                .mark_ready(candidate.registry.process_id())
+                .await;
+            parties.push(Party {
+                config: physical_config,
+                writer: party.writer.clone(),
+                candidate,
+            });
+        }
+        coordinated.coordinators.push(coordinator);
+        coordinated.configs.push(config);
+        handoffs.push(handoff);
     }
-    Ok(())
+    super::super::handoff::tests::reject_incompatible_next_candidate(
+        &sources,
+        &handoffs,
+        &coordinated.coordinators[2],
+    )
+    .await?;
+    // B still processes a real MPC request while the last next-A process has not preloaded.
+    futures::future::try_join_all(serving.iter_mut().enumerate().map(|(i, party)| {
+        let process = &processes[i];
+        async move {
+            assert!(party.ready.load(Ordering::SeqCst));
+            assert_eq!(&party.drain.status().process_uuid, process);
+            let mut batch = BatchQuery::default();
+            batch.push_deletion_request(
+                "while-next-candidate-loads".into(),
+                0,
+                BatchMetadata::default(),
+            );
+            assert_eq!(
+                party
+                    .handle
+                    .submit_batch_query(batch)
+                    .await
+                    .await?
+                    .deleted_ids,
+                vec![0]
+            );
+            Ok::<_, eyre::Report>(())
+        }
+    }))
+    .await?;
+    let last = &serving[2];
+    let mut physical_config = coordinated.configs[2].clone();
+    physical_config.schema_name = last.physical_config.schema_name.clone();
+    let candidate = super::super::candidate::preload(
+        &physical_config,
+        Arc::new(ShutdownHandler::new(0)),
+        Uuid::new_v4(),
+    )
+    .await?;
+    let last_process = candidate.registry.process_id();
+    parties.push(Party {
+        config: physical_config,
+        writer: last.writer.clone(),
+        candidate,
+    });
+    super::super::handoff::tests::assert_sources_wait_for_preload_then_finish_drain(
+        &sources,
+        &handoffs,
+        &coordinated.coordinators[2],
+        last_process,
+    )
+    .await?;
+    for (party, process) in serving.iter().zip(&processes) {
+        assert_eq!(&party.drain.status().process_uuid, process);
+        assert!(!party.ready.load(Ordering::SeqCst));
+        party.drain.ingest_stopped();
+        party.drain.receiver_stopped();
+        assert!(party.drain.settled());
+    }
+    drain::tests::until(|| serving.iter().all(|party| party.drain.ready_to_report())).await;
+    for party in &serving {
+        party.drain.publish_report(drain::Report {
+            watermark: Store::new(&party.writer)
+                .await?
+                .drain_completed_ingested_sequence_number()
+                .await?,
+            last_publication: None,
+        });
+    }
+    drain::tests::until(|| {
+        serving
+            .iter()
+            .all(|party| party.drain.status().phase == Phase::Paused)
+    })
+    .await;
+    for (party, handoff) in serving.into_iter().zip(&handoffs) {
+        party.drain.persist_completion().await?;
+        let record = handoff.latest().await?.unwrap();
+        assert_eq!(record.handoff_id, id);
+        assert_eq!(record.source, source);
+        assert_eq!(record.destination, destination);
+        assert_eq!(
+            record.phase,
+            iris_mpc_store::cpu_cell::HandoffPhase::Drained
+        );
+        drop(party.handle);
+        party.shutdown.get_network_cancellation_token().cancel();
+        drop(party.monitor);
+    }
+    let contexts = futures::future::try_join_all(
+        parties
+            .iter_mut()
+            .zip(&coordinated.coordinators)
+            .zip(&handoffs)
+            .map(|((party, coordinator), handoff)| async move {
+                let store = Store::new(&party.writer).await?;
+                coordinator
+                    .reconcile_candidate(
+                        handoff,
+                        &store,
+                        &mut party.candidate,
+                        Duration::from_secs(10),
+                    )
+                    .await
+            }),
+    )
+    .await?;
+    assert!(contexts
+        .iter()
+        .all(|context| context == &coordinated.context));
+    Ok((parties, coordinated))
 }
 
 #[tokio::test]
@@ -775,7 +1013,7 @@ async fn three_party_reconciliation_agrees_and_preserves_each_partys_payloads() 
         expected.push(inserted);
 
         // Queue intake/publication are outside this fixture; its simulated writers stop here.
-        let coordinated =
+        let mut coordinated =
             coordinate_drain_and_reconcile_candidates(&mut parties, restart_candidate).await?;
         let context = coordinated.context.clone();
         let reports: [ReconciliationReport; 3] =
@@ -844,7 +1082,23 @@ async fn three_party_reconciliation_agrees_and_preserves_each_partys_payloads() 
                 }
             }
         }
-        promote_and_process(parties, coordinated, resident).await?;
+        let next_listeners = std::mem::take(&mut coordinated.next_listeners);
+        let mut serving = promote_and_process(parties, coordinated, resident).await?;
+        if restart_candidate {
+            let (parties, coordinated) = handoff_to_next_slot(serving, next_listeners).await?;
+            serving = promote_and_process(parties, coordinated, resident).await?;
+        }
+        for party in serving {
+            drop(party.handle);
+            party.shutdown.get_network_cancellation_token().cancel();
+            drop(party.monitor);
+            iris_mpc_store::test_utils::cleanup(
+                &party.writer,
+                &party.physical_config.get_gpu_db_schema(),
+            )
+            .await?;
+            party.writer.pool.close().await;
+        }
     }
     Ok(())
 }

@@ -34,14 +34,29 @@ pub enum StartupMode {
     Candidate,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CpuCellSlot {
+    A,
+    B,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CpuCellPeers {
+    pub slot: CpuCellSlot,
+    pub a: JsonStrWrapper<[String; 3]>,
+    pub b: JsonStrWrapper<[String; 3]>,
+}
+
 /// Immutable deployment identity; A/B slot names are reused across releases.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CpuCellConfig {
     pub deployment_id: String,
-    /// Fixed /handoff-status URLs indexed by party. Omit to disable runtime handoff.
+    /// Fixed A/B candidate status URLs indexed by party. Omit to disable runtime handoff.
     #[serde(default)]
-    pub candidate_status_urls: Option<JsonStrWrapper<[String; 3]>>,
+    pub peers: Option<CpuCellPeers>,
     /// Supplied only to the destination candidate by its deployment configuration.
     #[serde(default)]
     pub handoff: Option<CpuCellHandoffConfig>,
@@ -1055,7 +1070,9 @@ mod tests {
                 "CPU_CELL__DEPLOYMENT_ID",
                 "00000000-0000-0000-0000-000000000001",
             ),
-            ("CPU_CELL__CANDIDATE_STATUS_URLS", urls),
+            ("CPU_CELL__PEERS__SLOT", "b"),
+            ("CPU_CELL__PEERS__A", urls),
+            ("CPU_CELL__PEERS__B", urls),
             (
                 "CPU_CELL__HANDOFF__ID",
                 "00000000-0000-0000-0000-000000000002",
@@ -1074,10 +1091,36 @@ mod tests {
             std::env::remove_var(format!("{prefix}__{key}"));
         }
         let cell = config.unwrap().cpu_cell.unwrap();
-        assert_eq!(
-            cell.candidate_status_urls.unwrap(),
-            cell.handoff.unwrap().source_status_urls
-        );
+        let peers = cell.peers.unwrap();
+        assert_eq!(peers.slot, CpuCellSlot::B);
+        assert_eq!(peers.a, peers.b);
+        assert_eq!(peers.a, cell.handoff.unwrap().source_status_urls);
+        let valid = serde_json::json!({"slot": "a", "a": urls, "b": urls});
+        for field in ["slot", "a", "b"] {
+            let mut missing = valid.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(serde_json::from_value::<CpuCellPeers>(missing).is_err());
+        }
+        let mut invalid_slot = valid.clone();
+        invalid_slot["slot"] = "c".into();
+        assert!(serde_json::from_value::<CpuCellPeers>(invalid_slot).is_err());
+        for field in ["candidate_status_urls", "next_candidate_status_urls"] {
+            let mut legacy = serde_json::json!({
+                "deployment_id": "00000000-0000-0000-0000-000000000001"
+            });
+            legacy[field] = urls.into();
+            assert!(serde_json::from_value::<CpuCellConfig>(legacy).is_err());
+        }
+        for field in ["a", "b"] {
+            for count in [0, 2, 4] {
+                let mut invalid = valid.clone();
+                invalid[field] =
+                    serde_json::to_string(&vec!["http://peer:3090/handoff-status"; count])
+                        .unwrap()
+                        .into();
+                assert!(serde_json::from_value::<CpuCellPeers>(invalid).is_err());
+            }
+        }
     }
 
     #[test]
