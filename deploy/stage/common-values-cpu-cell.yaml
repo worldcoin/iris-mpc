@@ -48,7 +48,6 @@ initContainer:
     init.sh: |
       #!/usr/bin/env bash
       set -euo pipefail
-      # An uncertain CREATE requires inspection, not an automatic retry.
       export AWS_MAX_ATTEMPTS=1
       case "$PARTY_ID" in 0|1|2) ;; *) echo "Invalid party" >&2; exit 1;; esac
       case "$CELL_SLOT" in a|b) ;; *) echo "Invalid cell slot" >&2; exit 1;; esac
@@ -66,12 +65,47 @@ initContainer:
         echo "No exact hosted zone for $ZONE_NAME" >&2
         exit 1
       fi
-      # CREATE never overwrites a different owner, including a concurrent init.
-      CHANGE_ID=$(aws route53 change-resource-record-sets \
-        --hosted-zone-id "$ZONE_ID" \
-        --change-batch "{\"Changes\":[{\"Action\":\"CREATE\",\"ResourceRecordSet\":{\"Name\":\"$RECORD_NAME\",\"Type\":\"A\",\"TTL\":5,\"ResourceRecords\":[{\"Value\":\"$POD_IP\"}]}}]}" \
-        --query ChangeInfo.Id --output text \
-        --cli-connect-timeout 10 --cli-read-timeout 30)
+      # Names and values are restricted to the validated slot, party, IPv4 and UUID alphabets.
+      rr() {
+        printf '{"Name":"%s","Type":"%s","TTL":5,"ResourceRecords":[{"Value":"%s"}]}' "$RECORD_NAME" "$1" "$2"
+      }
+      change() { printf '{"Action":"%s","ResourceRecordSet":%s}' "$1" "$2"; }
+      submit() {
+        local IFS=,
+        aws route53 change-resource-record-sets --hosted-zone-id "$ZONE_ID" \
+          --change-batch "{\"Changes\":[$*]}" --query ChangeInfo.Id --output text \
+          --cli-connect-timeout 10 --cli-read-timeout 30
+      }
+      valid_id() {
+        [[ $1 =~ ^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$ && $1 != 00000000-0000-0000-0000-000000000000 ]]
+      }
+      address=$(rr A "$POD_IP")
+      if [[ -z ${DNS_DEPLOYMENT_ID+x} && -z ${DNS_PREVIOUS_DEPLOYMENT_ID+x} ]]; then
+        CHANGE_ID=$(submit "$(change CREATE "$address")")
+      else
+        valid_id "${DNS_DEPLOYMENT_ID:-}" || { echo "Invalid DNS_DEPLOYMENT_ID for $RECORD_NAME" >&2; exit 1; }
+        owner=$(rr TXT "\\\"$DNS_DEPLOYMENT_ID\\\"")
+        if [[ -n ${DNS_PREVIOUS_DEPLOYMENT_ID+x} ]]; then
+          if ! valid_id "$DNS_PREVIOUS_DEPLOYMENT_ID" || [[ $DNS_DEPLOYMENT_ID == "$DNS_PREVIOUS_DEPLOYMENT_ID" ]]; then
+            echo "Invalid DNS_PREVIOUS_DEPLOYMENT_ID for $RECORD_NAME" >&2; exit 1
+          fi
+          previous=$(rr TXT "\\\"$DNS_PREVIOUS_DEPLOYMENT_ID\\\"")
+          claim=("$(change DELETE "$previous")" "$(change CREATE "$owner")" "$(change UPSERT "$address")")
+        else
+          claim=("$(change CREATE "$address")" "$(change CREATE "$owner")")
+        fi
+        # After an exact-match conflict, a retry can succeed only if both records already match.
+        if ! CHANGE_ID=$(submit "${claim[@]}" 2>&1); then
+          case "$CHANGE_ID" in
+            *"An error occurred (InvalidChangeBatch) when calling the ChangeResourceRecordSets operation:"*) ;;
+            *) echo "DNS claim failed for $RECORD_NAME: $CHANGE_ID" >&2; exit 1;;
+          esac
+          CHANGE_ID=$(submit "$(change DELETE "$owner")" "$(change CREATE "$owner")" \
+                             "$(change DELETE "$address")" "$(change CREATE "$address")") || {
+            echo "Could not verify the current owner and IP for $RECORD_NAME" >&2; exit 1
+          }
+        fi
+      fi
       if [[ -z "$CHANGE_ID" || "$CHANGE_ID" == "None" ]]; then
         echo "Missing Route53 change ID for $RECORD_NAME; inspect before retrying" >&2
         exit 1
