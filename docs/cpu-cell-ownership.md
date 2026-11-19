@@ -130,9 +130,10 @@ A/B lists address candidate listeners. Those ports can differ. Active source
 coordination uses its existing `server_coordination` hostnames and ports.
 
 For a new rollout, generate one fresh destination deployment UUID and commit
-it across all three parties. With `SMPC__CPU_CELL__HANDOFF__ID` omitted, the
-candidate uses its destination UUID as the handoff ID. An explicit ID still
-takes precedence. A retry or restart must keep the original source, destination
+it across all three parties. Candidates that support the destination-UUID default
+use it when `SMPC__CPU_CELL__HANDOFF__ID` is omitted. For an older warm-handoff
+image, set that field explicitly to the same fresh destination UUID. An explicit
+ID takes precedence. A retry or restart must keep the original source, destination
 and effective handoff ID, including an older deployment’s distinct explicit ID.
 
 Deploy the next A with the same A/B lists, `SLOT=a`, a new deployment UUID,
