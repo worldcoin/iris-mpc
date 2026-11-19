@@ -105,13 +105,14 @@ To also validate repository-hosted keys against your local checkout, run `python
 
 CPU linear scan is the maintained matching service. See [GPU retirement](docs/gpu-retirement.md) for the removal scope and retained compatibility contracts.
 
-### Messaging regions
+### AWS client regions
 
 `SMPC__REQUESTS_QUEUE_REGION` overrides the matching service's input SQS region.
 `SMPC__RESULTS_TOPIC_REGION` overrides the result SNS region for both the matching
-service and `iris-mpc-anon-stats-server`. Both are optional and fall back to the
-shared AWS region (`SMPC__AWS__REGION`). Other clients, including S3 result
-payload offloading, keep their existing region configuration.
+service and `iris-mpc-anon-stats-server`.
+`SMPC__SHARES_BUCKET_REGION` overrides the region used by the matching service to
+read objects from `SMPC__SHARES_BUCKET_NAME` during request processing and
+startup replay. These settings are optional and fall back to `SMPC__AWS__REGION`.
 
 ### Requirements
 
