@@ -1,0 +1,25 @@
+name: Check CPU cell release preparation
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/prepare-cpu-cell-stage-release.sh'
+      - 'scripts/tests/test-prepare-cpu-cell-stage-release.sh'
+      - 'scripts/tests/test-cpu-cell-stage-dns.sh'
+      - 'deploy/stage/**/values-ampc-hnsw*.yaml'
+      - 'deploy/stage/common-values-ampc-hnsw.yaml'
+      - 'deploy/stage/common-values-cpu-cell.yaml'
+      - '.github/workflows/check-cpu-cell-release.yaml'
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8
+        with:
+          persist-credentials: false
+      - run: scripts/tests/test-prepare-cpu-cell-stage-release.sh
+      - run: scripts/tests/test-cpu-cell-stage-dns.sh

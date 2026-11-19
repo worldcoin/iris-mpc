@@ -31,8 +31,9 @@ passive startup; the older serving release does not.
 Each slot has distinct selectors and `pod-a.{party}.stage.hnsw.worldcoin.dev`
 or `pod-b.{party}.stage.hnsw.worldcoin.dev` peer names. The existing party
 certificates must cover those names. The DNS init container completes Route53
-registration before preload and uses CREATE rather than UPSERT to reject
-collisions. Resolver propagation is verified separately before activation;
+registration before preload. Initially it creates the address only if the name
+is free. Prepared releases also register the deployment UUID as described below.
+Resolver propagation is verified separately before activation;
 the passive loader does not use the peer network.
 
 ## Observe preload
@@ -66,22 +67,37 @@ claiming the networking is ready for activation.
 
 ## Retire or reuse a slot
 
+Once both slots have used candidate manifests and the previous slot has been
+retired as described below, prepare the next stage release from the repository
+root with Git, Bash, jq, yq v4 and uuidgen:
+
+```sh
+scripts/prepare-cpu-cell-stage-release.sh "$PINNED_STAGE_IMAGE"
+git diff -- deploy/stage
+```
+
+Pass the published `ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:<commit>@sha256:<digest>`
+reference. The script reads the six slot manifests, uses the last handoff's
+source to identify the slot to reuse, and writes one shared deployment ID and
+handoff ID into its three manifests. Repeating the command for an already
+prepared rollout preserves both IDs. Review the diff in the deployment PR.
+The script reads the values in the Git working tree. Before enabling a slot
+whose desired replica count is zero, verify that it has actually retired.
+
 1. Commit zero replicas to the source Argo reconciles and wait for that exact
    revision to sync. Do not rely on `kubectl scale`: self-healing can recreate it.
 2. Confirm the Deployment has observed zero replicas and no slot Pods remain,
    including terminating Pods and DNS init containers. Unreachable nodes or
    uncertain termination block DNS removal/reuse.
-3. Read the exact slot A record and delete that record with its observed IP/TTL.
-   Never delete another slot's name or the serving `node.{party}` records.
-4. Before enabling the slot again, confirm its name is absent and keep the old
-   revision disabled. An old init container cannot UPSERT over a new owner.
-
-A pod or init restart can leave a record behind. CREATE fails closed until the
-retirement checks and exact-record deletion are complete. This also covers an
-uncertain CREATE response: inspect and retire the slot before retrying.
-Rollback for this passive stage test is disabling the candidate and retiring
-its records; the existing serving deployment remains in place. These files do
-not implement promotion or production rollout.
+3. For a slot last deployed without `DNS_DEPLOYMENT_ID`, remove its legacy
+   A record using the observed IP and TTL, and confirm the name is free. The
+   first prepared release creates the A record and a TXT record containing its
+   deployment UUID together. An existing unmarked address blocks registration.
+4. For subsequent releases, leave both records in place. The init container
+   replaces the address and owner in one Route53 transaction that requires the
+   previous deployment's exact TXT record. A retry succeeds if both the address
+   and the new owner already match. A missing or unexpected owner, or a restart
+   of the same deployment at a different IP, requires investigation.
 
 ## Coordinated handoff prerequisites
 
@@ -105,7 +121,7 @@ and set `CPU_CELL__PEERS__SLOT=b`.
 Keep B's candidate probes through promotion.
 
 The fixed peer lists also route B→A without restarting serving B. Retire old
-processes and exact DNS records before slot reuse. Validate
+processes and follow the DNS ownership procedure above before slot reuse. Validate
 both directions through signup-service and exercise cold recovery under
 POP-4378/4379/4380. After sealing, failures must not automatically resume A.
 Keep journal cleanup and production rollout separate.
