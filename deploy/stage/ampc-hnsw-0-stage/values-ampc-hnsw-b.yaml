@@ -2,6 +2,7 @@ replicaCount: 1
 image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:afba70d6130c85c83c800e9dd500e47d84d29688@sha256:4b59f49f9026c52804432454457c39bdb47ca45be7b3b1637747d22b59e76a69"
 
 env:
+  SMPC__MAX_DB_SIZE: "125000"
   SMPC__CPU_CELL__DEPLOYMENT_ID: "835b81b9-6e3e-438a-9124-db04a00128cd"
   SMPC__CPU_CELL__PEERS__SLOT: "b"
   SMPC__CPU_CELL__PEERS__A: '["http://pod-a.0.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-a.1.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-a.2.stage.hnsw.worldcoin.dev:3090/handoff-status"]'
