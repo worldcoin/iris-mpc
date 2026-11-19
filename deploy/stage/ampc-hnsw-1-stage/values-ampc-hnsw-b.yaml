@@ -6,7 +6,6 @@ strategy:
     maxUnavailable: 0
 image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:5d3e5f4843ed601d72e6d0f2bcb235abc1c7e6c4@sha256:1c8f2859335a277668f5ee9434782bd9ba77c97e8eadf78e3ffcc20f2e1036dd"
 
-
 env:
   SMPC__MAX_DB_SIZE: "125000"
   SMPC__CPU_CELL__DEPLOYMENT_ID: "553c16a6-be15-4711-8224-c6458b0f082d"
@@ -19,10 +18,8 @@ env:
   SMPC__SERVICE__METRICS__PREFIX: "cpu-cell-a-1"
   SMPC__SERVER_COORDINATION__NODE_HOSTNAMES: '["pod-a.0.stage.hnsw.worldcoin.dev","0.0.0.0","pod-a.2.stage.hnsw.worldcoin.dev"]'
 
-
 startupProbe:
   failureThreshold: 420
-
 
 initContainer:
   env:
