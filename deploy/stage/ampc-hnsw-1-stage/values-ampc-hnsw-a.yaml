@@ -1,32 +1,20 @@
-replicaCount: 0
-image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:ec5fe8f3875b869bb394465d86f4099f844eed3d@sha256:f86091285d1c182d37bbf91b903b05a468db0dcda3ea49b1f1634c2191e947d8"
-
-livenessProbe:
-  exec: null
-  httpGet: {path: /health, port: health}
-
-readinessProbe:
-  exec: null
-  httpGet: {path: /ready, port: health}
-
-startupProbe:
-  exec: null
-  httpGet: {path: /ready, port: health}
-  initialDelaySeconds: 60
-  periodSeconds: 30
-  failureThreshold: 120
+replicaCount: 1
+image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:afba70d6130c85c83c800e9dd500e47d84d29688@sha256:4b59f49f9026c52804432454457c39bdb47ca45be7b3b1637747d22b59e76a69"
 
 env:
-  SMPC__STARTUP_MODE: "active"
-  SMPC__DATABASE__MIGRATE: "true"
-  SMPC__ENABLE_S3_IMPORTER: "true"
-  SMPC__CPU_CELL__DEPLOYMENT_ID: "96cda578-2269-4d9c-b10e-1bb49c10cc37"
+  SMPC__CPU_CELL__DEPLOYMENT_ID: "0d2421b8-4f49-4b70-b67e-a6d9311b34c4"
   SMPC__CPU_CELL__PEERS__SLOT: "a"
   SMPC__CPU_CELL__PEERS__A: '["http://pod-a.0.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-a.1.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-a.2.stage.hnsw.worldcoin.dev:3090/handoff-status"]'
   SMPC__CPU_CELL__PEERS__B: '["http://pod-b.0.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-b.1.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-b.2.stage.hnsw.worldcoin.dev:3090/handoff-status"]'
+  SMPC__CPU_CELL__HANDOFF__ID: "c6884078-bf2c-407d-9e6d-d337b1cf22dc"
+  SMPC__CPU_CELL__HANDOFF__SOURCE_DEPLOYMENT_ID: "8ee2a99d-e845-4aeb-b0ae-3b9007093666"
+  SMPC__CPU_CELL__HANDOFF__SOURCE_STATUS_URLS: '["http://pod-b.0.stage.hnsw.worldcoin.dev:3000/handoff-status","http://pod-b.1.stage.hnsw.worldcoin.dev:3000/handoff-status","http://pod-b.2.stage.hnsw.worldcoin.dev:3000/handoff-status"]'
   SMPC__SERVICE__SERVICE_NAME: "cpu-cell-a-1"
   SMPC__SERVICE__METRICS__PREFIX: "cpu-cell-a-1"
   SMPC__SERVER_COORDINATION__NODE_HOSTNAMES: '["pod-a.0.stage.hnsw.worldcoin.dev","0.0.0.0","pod-a.2.stage.hnsw.worldcoin.dev"]'
+
+startupProbe:
+  failureThreshold: 420
 
 initContainer:
   env:
