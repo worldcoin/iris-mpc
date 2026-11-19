@@ -31,9 +31,8 @@ passive startup; the older serving release does not.
 Each slot has distinct selectors and `pod-a.{party}.stage.hnsw.worldcoin.dev`
 or `pod-b.{party}.stage.hnsw.worldcoin.dev` peer names. The existing party
 certificates must cover those names. The DNS init container completes Route53
-registration before preload and uses CREATE rather than UPSERT to reject
-collisions. Resolver propagation is verified separately before activation;
-the passive loader does not use the peer network.
+registration before preload by upserting its slot name to its pod IP. Verify
+resolver propagation separately before activation.
 
 ## Observe preload
 
@@ -70,18 +69,10 @@ claiming the networking is ready for activation.
    revision to sync. Do not rely on `kubectl scale`: self-healing can recreate it.
 2. Confirm the Deployment has observed zero replicas and no slot Pods remain,
    including terminating Pods and DNS init containers. Unreachable nodes or
-   uncertain termination block DNS removal/reuse.
-3. Read the exact slot A record and delete that record with its observed IP/TTL.
-   Never delete another slot's name or the serving `node.{party}` records.
-4. Before enabling the slot again, confirm its name is absent and keep the old
-   revision disabled. An old init container cannot UPSERT over a new owner.
+   uncertain termination block slot reuse. Leave the slot DNS record in place.
+3. Start the next deployment in the retired slot. During the rehearsal, verify
+   that peers resolve each party's slot name to the new pod IP.
 
-A pod or init restart can leave a record behind. CREATE fails closed until the
-retirement checks and exact-record deletion are complete. This also covers an
-uncertain CREATE response: inspect and retire the slot before retrying.
-Rollback for this passive stage test is disabling the candidate and retiring
-its records; the existing serving deployment remains in place. These files do
-not implement promotion or production rollout.
 
 ## Coordinated handoff prerequisites
 
@@ -104,8 +95,8 @@ across all three parties, and supply A's status URLs
 and set `CPU_CELL__PEERS__SLOT=b`.
 Keep B's candidate probes through promotion.
 
-The fixed peer lists also route B→A without restarting serving B. Retire old
-processes and exact DNS records before slot reuse. Validate
+The fixed peer lists also route B→A without restarting serving B. Retire the old
+processes before slot reuse. Validate
 both directions through signup-service and exercise cold recovery under
 POP-4378/4379/4380. After sealing, failures must not automatically resume A.
 Keep journal cleanup and production rollout separate.
