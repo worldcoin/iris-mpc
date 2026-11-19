@@ -48,7 +48,6 @@ initContainer:
     init.sh: |
       #!/usr/bin/env bash
       set -euo pipefail
-      # An uncertain CREATE requires inspection, not an automatic retry.
       export AWS_MAX_ATTEMPTS=1
       case "$PARTY_ID" in 0|1|2) ;; *) echo "Invalid party" >&2; exit 1;; esac
       case "$CELL_SLOT" in a|b) ;; *) echo "Invalid cell slot" >&2; exit 1;; esac
@@ -66,10 +65,9 @@ initContainer:
         echo "No exact hosted zone for $ZONE_NAME" >&2
         exit 1
       fi
-      # CREATE never overwrites a different owner, including a concurrent init.
       CHANGE_ID=$(aws route53 change-resource-record-sets \
         --hosted-zone-id "$ZONE_ID" \
-        --change-batch "{\"Changes\":[{\"Action\":\"CREATE\",\"ResourceRecordSet\":{\"Name\":\"$RECORD_NAME\",\"Type\":\"A\",\"TTL\":5,\"ResourceRecords\":[{\"Value\":\"$POD_IP\"}]}}]}" \
+        --change-batch "{\"Changes\":[{\"Action\":\"UPSERT\",\"ResourceRecordSet\":{\"Name\":\"$RECORD_NAME\",\"Type\":\"A\",\"TTL\":5,\"ResourceRecords\":[{\"Value\":\"$POD_IP\"}]}}]}" \
         --query ChangeInfo.Id --output text \
         --cli-connect-timeout 10 --cli-read-timeout 30)
       if [[ -z "$CHANGE_ID" || "$CHANGE_ID" == "None" ]]; then
