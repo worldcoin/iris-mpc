@@ -1,18 +1,23 @@
 replicaCount: 1
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
 image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:afba70d6130c85c83c800e9dd500e47d84d29688@sha256:4b59f49f9026c52804432454457c39bdb47ca45be7b3b1637747d22b59e76a69"
 
 env:
   SMPC__MAX_DB_SIZE: "125000"
-  SMPC__CPU_CELL__DEPLOYMENT_ID: "835b81b9-6e3e-438a-9124-db04a00128cd"
-  SMPC__CPU_CELL__PEERS__SLOT: "b"
+  SMPC__CPU_CELL__DEPLOYMENT_ID: "41abbd40-6443-4f3f-9f6c-042f0daef43c"
+  SMPC__CPU_CELL__PEERS__SLOT: "a"
   SMPC__CPU_CELL__PEERS__A: '["http://pod-a.0.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-a.1.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-a.2.stage.hnsw.worldcoin.dev:3090/handoff-status"]'
   SMPC__CPU_CELL__PEERS__B: '["http://pod-b.0.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-b.1.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-b.2.stage.hnsw.worldcoin.dev:3090/handoff-status"]'
-  SMPC__CPU_CELL__HANDOFF__ID: "506c4091-a994-47ff-b3ce-2fe2d2f47c4b"
-  SMPC__CPU_CELL__HANDOFF__SOURCE_DEPLOYMENT_ID: "0d2421b8-4f49-4b70-b67e-a6d9311b34c4"
-  SMPC__CPU_CELL__HANDOFF__SOURCE_STATUS_URLS: '["http://pod-a.0.stage.hnsw.worldcoin.dev:3000/handoff-status","http://pod-a.1.stage.hnsw.worldcoin.dev:3000/handoff-status","http://pod-a.2.stage.hnsw.worldcoin.dev:3000/handoff-status"]'
-  SMPC__SERVICE__SERVICE_NAME: "cpu-cell-b-2"
-  SMPC__SERVICE__METRICS__PREFIX: "cpu-cell-b-2"
-  SMPC__SERVER_COORDINATION__NODE_HOSTNAMES: '["pod-b.0.stage.hnsw.worldcoin.dev","pod-b.1.stage.hnsw.worldcoin.dev","0.0.0.0"]'
+  SMPC__CPU_CELL__HANDOFF__ID: "5061f8a3-a70c-4573-a53d-27e62199d389"
+  SMPC__CPU_CELL__HANDOFF__SOURCE_DEPLOYMENT_ID: "835b81b9-6e3e-438a-9124-db04a00128cd"
+  SMPC__CPU_CELL__HANDOFF__SOURCE_STATUS_URLS: '["http://pod-b.0.stage.hnsw.worldcoin.dev:3000/handoff-status","http://pod-b.1.stage.hnsw.worldcoin.dev:3000/handoff-status","http://pod-b.2.stage.hnsw.worldcoin.dev:3000/handoff-status"]'
+  SMPC__SERVICE__SERVICE_NAME: "cpu-cell-a-2"
+  SMPC__SERVICE__METRICS__PREFIX: "cpu-cell-a-2"
+  SMPC__SERVER_COORDINATION__NODE_HOSTNAMES: '["pod-a.0.stage.hnsw.worldcoin.dev","pod-a.1.stage.hnsw.worldcoin.dev","0.0.0.0"]'
 
 startupProbe:
   failureThreshold: 420
@@ -22,7 +27,7 @@ initContainer:
     - name: PARTY_ID
       value: "2"
     - name: CELL_SLOT
-      value: "b"
+      value: "a"
     - name: POD_IP
       valueFrom:
         fieldRef:
