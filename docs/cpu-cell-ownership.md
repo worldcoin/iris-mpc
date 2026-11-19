@@ -121,7 +121,6 @@ valid URLs; incomplete peer configuration rejects startup before preload.
 On candidate B additionally set:
 
 ```sh
-SMPC__CPU_CELL__HANDOFF__ID=<fresh-handoff-uuid>
 SMPC__CPU_CELL__HANDOFF__SOURCE_DEPLOYMENT_ID=<current-A-deployment-uuid>
 SMPC__CPU_CELL__HANDOFF__SOURCE_STATUS_URLS='["http://a0:3000/handoff-status","http://a1:3000/handoff-status","http://a2:3000/handoff-status"]'
 ```
@@ -130,8 +129,14 @@ Source URLs address the current serving cohort's healthcheck listeners; the
 A/B lists address candidate listeners. Those ports can differ. Active source
 coordination uses its existing `server_coordination` hostnames and ports.
 
-Deploy the next A with the same A/B lists, `SLOT=a`, fresh deployment and
-handoff UUIDs, and B as its source. Retire the old A processes before reusing
+For a new rollout, generate one fresh destination deployment UUID and commit
+it across all three parties. With `SMPC__CPU_CELL__HANDOFF__ID` omitted, the
+candidate uses its destination UUID as the handoff ID. An explicit ID still
+takes precedence. A retry or restart must keep the original source, destination
+and effective handoff ID, including an older deployment’s distinct explicit ID.
+
+Deploy the next A with the same A/B lists, `SLOT=a`, a new deployment UUID,
+and B as its source. Retire the old A processes before reusing
 the slot. B keeps serving until the intended next A cohort is loaded and
 compatible; URLs alone do not authorize a seal.
 

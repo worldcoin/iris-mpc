@@ -847,7 +847,7 @@ async fn handoff_to_next_slot(
     use std::sync::atomic::Ordering;
 
     let source = Uuid::parse_str(&serving[0].config.cpu_cell.as_ref().unwrap().deployment_id)?;
-    let (id, destination) = (Uuid::new_v4(), Uuid::new_v4());
+    let destination = Uuid::new_v4();
     let peers = serving[0].config.server_coordination.as_ref().unwrap();
     let source_urls: [String; 3] = std::array::from_fn(|i| {
         format!(
@@ -866,7 +866,10 @@ async fn handoff_to_next_slot(
     assert_eq!(cell_peers.slot, CpuCellSlot::B);
     cell_peers.slot = CpuCellSlot::A;
     let mut coordinated = Coordinated {
-        context: ReconciliationContext::new(id, Some(normalize_sns_sequence_number("42")?))?,
+        context: ReconciliationContext::new(
+            destination,
+            Some(normalize_sns_sequence_number("42")?),
+        )?,
         coordinators: Vec::new(),
         tasks: Vec::new(),
         shutdowns: Vec::new(),
@@ -889,7 +892,7 @@ async fn handoff_to_next_slot(
         config.cpu_cell = Some(serde_json::from_value(serde_json::json!({
             "deployment_id": destination,
             "peers": cell_peers,
-            "handoff": {"id": id, "source_deployment_id": source,
+            "handoff": {"source_deployment_id": source,
                 "source_status_urls": serde_json::to_string(&source_urls)?}
         }))?);
         let coordinator = Coordinator::new(&config, Uuid::new_v4(), None)?.unwrap();
@@ -1009,7 +1012,7 @@ async fn handoff_to_next_slot(
     for (party, handoff) in serving.into_iter().zip(&handoffs) {
         party.drain.persist_completion().await?;
         let record = handoff.latest().await?.unwrap();
-        assert_eq!(record.handoff_id, id);
+        assert_eq!(record.handoff_id, destination);
         assert_eq!(record.source, source);
         assert_eq!(record.destination, destination);
         assert_eq!(
