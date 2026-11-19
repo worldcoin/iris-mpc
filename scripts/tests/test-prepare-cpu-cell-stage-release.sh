@@ -26,6 +26,7 @@ for party in 0 1 2; do
             count=0 id=$b parent=$former
         fi
         count=$count id=$id parent=$parent yq -i '
+            .initContainer.env |= map(select(.name!="DNS_DEPLOYMENT_ID" and .name!="DNS_PREVIOUS_DEPLOYMENT_ID")) |
             .env.SMPC__STARTUP_MODE="candidate" | .replicaCount=env(count) |
             .env.SMPC__CPU_CELL__DEPLOYMENT_ID=strenv(id) |
             .env.SMPC__CPU_CELL__HANDOFF__SOURCE_DEPLOYMENT_ID=strenv(parent) |
