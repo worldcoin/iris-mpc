@@ -8,16 +8,16 @@ image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:afba70d6130c85c83c800e9dd50
 
 env:
   SMPC__MAX_DB_SIZE: "125000"
-  SMPC__CPU_CELL__DEPLOYMENT_ID: "41abbd40-6443-4f3f-9f6c-042f0daef43c"
-  SMPC__CPU_CELL__PEERS__SLOT: "a"
+  SMPC__CPU_CELL__DEPLOYMENT_ID: "29c0fab7-7110-4cdc-8e73-be2c5d09d1ab"
+  SMPC__CPU_CELL__PEERS__SLOT: "b"
   SMPC__CPU_CELL__PEERS__A: '["http://pod-a.0.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-a.1.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-a.2.stage.hnsw.worldcoin.dev:3090/handoff-status"]'
   SMPC__CPU_CELL__PEERS__B: '["http://pod-b.0.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-b.1.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-b.2.stage.hnsw.worldcoin.dev:3090/handoff-status"]'
-  SMPC__CPU_CELL__HANDOFF__ID: "5061f8a3-a70c-4573-a53d-27e62199d389"
-  SMPC__CPU_CELL__HANDOFF__SOURCE_DEPLOYMENT_ID: "835b81b9-6e3e-438a-9124-db04a00128cd"
-  SMPC__CPU_CELL__HANDOFF__SOURCE_STATUS_URLS: '["http://pod-b.0.stage.hnsw.worldcoin.dev:3000/handoff-status","http://pod-b.1.stage.hnsw.worldcoin.dev:3000/handoff-status","http://pod-b.2.stage.hnsw.worldcoin.dev:3000/handoff-status"]'
-  SMPC__SERVICE__SERVICE_NAME: "cpu-cell-a-1"
-  SMPC__SERVICE__METRICS__PREFIX: "cpu-cell-a-1"
-  SMPC__SERVER_COORDINATION__NODE_HOSTNAMES: '["pod-a.0.stage.hnsw.worldcoin.dev","0.0.0.0","pod-a.2.stage.hnsw.worldcoin.dev"]'
+  SMPC__CPU_CELL__HANDOFF__ID: "39975519-1264-44e5-8b7e-903663db43ea"
+  SMPC__CPU_CELL__HANDOFF__SOURCE_DEPLOYMENT_ID: "41abbd40-6443-4f3f-9f6c-042f0daef43c"
+  SMPC__CPU_CELL__HANDOFF__SOURCE_STATUS_URLS: '["http://pod-a.0.stage.hnsw.worldcoin.dev:3000/handoff-status","http://pod-a.1.stage.hnsw.worldcoin.dev:3000/handoff-status","http://pod-a.2.stage.hnsw.worldcoin.dev:3000/handoff-status"]'
+  SMPC__SERVICE__SERVICE_NAME: "cpu-cell-b-1"
+  SMPC__SERVICE__METRICS__PREFIX: "cpu-cell-b-1"
+  SMPC__SERVER_COORDINATION__NODE_HOSTNAMES: '["pod-b.0.stage.hnsw.worldcoin.dev","0.0.0.0","pod-b.2.stage.hnsw.worldcoin.dev"]'
 
 startupProbe:
   failureThreshold: 420
@@ -27,7 +27,7 @@ initContainer:
     - name: PARTY_ID
       value: "1"
     - name: CELL_SLOT
-      value: "a"
+      value: "b"
     - name: POD_IP
       valueFrom:
         fieldRef:
