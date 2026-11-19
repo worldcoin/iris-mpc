@@ -14,8 +14,11 @@ legacy `ampc-hnsw` and separate `ampc-hnsw-a` Deployments stay at zero.
    image, flip `PEERS__SLOT` and the DNS init container's `CELL_SLOT`, and use
    that slot for coordination hostnames and metrics names. Keep the fixed A/B
    peer lists. Set the source status URLs (port 3000) and source deployment UUID
-   to the current serving release. Use one fresh destination UUID and one fresh
-   handoff UUID across the three parties.
+   to the current serving release. Generate one fresh destination UUID for the
+   new rollout and use it in all three parties, even when reusing an image.
+   Omit `SMPC__CPU_CELL__HANDOFF__ID` for candidates supporting the default.
+   For an older warm-handoff image, explicitly set the handoff ID to that same
+   fresh UUID. Keep the original IDs for any retry of an existing release.
 3. Review the rendered pod templates, including inherited values, as a single
    rollout. Any warm pod-template change needs the opposite slot: a same-slot
    candidate would point the serving DNS name at its own pod during startup. Serialize releases through old-pod termination.

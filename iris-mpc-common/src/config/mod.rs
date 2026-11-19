@@ -65,7 +65,9 @@ pub struct CpuCellConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CpuCellHandoffConfig {
-    pub id: String,
+    /// Defaults to the destination deployment UUID when omitted.
+    #[serde(default)]
+    pub id: Option<String>,
     pub source_deployment_id: String,
     pub source_status_urls: JsonStrWrapper<[String; 3]>,
 }
@@ -1074,10 +1076,6 @@ mod tests {
             ("CPU_CELL__PEERS__A", urls),
             ("CPU_CELL__PEERS__B", urls),
             (
-                "CPU_CELL__HANDOFF__ID",
-                "00000000-0000-0000-0000-000000000002",
-            ),
-            (
                 "CPU_CELL__HANDOFF__SOURCE_DEPLOYMENT_ID",
                 "00000000-0000-0000-0000-000000000003",
             ),
@@ -1094,7 +1092,9 @@ mod tests {
         let peers = cell.peers.unwrap();
         assert_eq!(peers.slot, CpuCellSlot::B);
         assert_eq!(peers.a, peers.b);
-        assert_eq!(peers.a, cell.handoff.unwrap().source_status_urls);
+        let handoff = cell.handoff.unwrap();
+        assert!(handoff.id.is_none());
+        assert_eq!(peers.a, handoff.source_status_urls);
         let valid = serde_json::json!({"slot": "a", "a": urls, "b": urls});
         for field in ["slot", "a", "b"] {
             let mut missing = valid.clone();
