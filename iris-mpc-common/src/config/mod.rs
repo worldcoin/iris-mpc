@@ -34,11 +34,42 @@ pub enum StartupMode {
     Candidate,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CpuCellSlot {
+    A,
+    B,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CpuCellPeers {
+    pub slot: CpuCellSlot,
+    pub a: JsonStrWrapper<[String; 3]>,
+    pub b: JsonStrWrapper<[String; 3]>,
+}
+
 /// Immutable deployment identity; A/B slot names are reused across releases.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CpuCellConfig {
     pub deployment_id: String,
+    /// Fixed A/B candidate status URLs indexed by party. Omit to disable runtime handoff.
+    #[serde(default)]
+    pub peers: Option<CpuCellPeers>,
+    /// Supplied only to the destination candidate by its deployment configuration.
+    #[serde(default)]
+    pub handoff: Option<CpuCellHandoffConfig>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CpuCellHandoffConfig {
+    /// Defaults to the destination deployment UUID when omitted.
+    #[serde(default)]
+    pub id: Option<String>,
+    pub source_deployment_id: String,
+    pub source_status_urls: JsonStrWrapper<[String; 3]>,
 }
 
 fn default_cpu_drain_timeout_secs() -> u64 {
@@ -60,7 +91,7 @@ pub struct Config {
     #[serde(default)]
     pub startup_mode: StartupMode,
 
-    /// Operator status, bound to loopback only in candidate mode.
+    /// Candidate status port; loopback unless runtime handoff is explicitly configured.
     #[serde(default = "default_candidate_status_port")]
     pub candidate_status_port: u16,
 
@@ -1031,6 +1062,66 @@ impl From<Config> for CommonConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cpu_cell_peer_urls_load_from_gitops_environment() {
+        let prefix = "CPU_CELL_CONFIG_TEST";
+        let urls = r#"["http://a:3090/handoff-status","http://b:3090/handoff-status","http://c:3090/handoff-status"]"#;
+        let values = [
+            (
+                "CPU_CELL__DEPLOYMENT_ID",
+                "00000000-0000-0000-0000-000000000001",
+            ),
+            ("CPU_CELL__PEERS__SLOT", "b"),
+            ("CPU_CELL__PEERS__A", urls),
+            ("CPU_CELL__PEERS__B", urls),
+            (
+                "CPU_CELL__HANDOFF__SOURCE_DEPLOYMENT_ID",
+                "00000000-0000-0000-0000-000000000003",
+            ),
+            ("CPU_CELL__HANDOFF__SOURCE_STATUS_URLS", urls),
+        ];
+        for (key, value) in values {
+            std::env::set_var(format!("{prefix}__{key}"), value);
+        }
+        let config = Config::load_config(prefix);
+        for (key, _) in values {
+            std::env::remove_var(format!("{prefix}__{key}"));
+        }
+        let cell = config.unwrap().cpu_cell.unwrap();
+        let peers = cell.peers.unwrap();
+        assert_eq!(peers.slot, CpuCellSlot::B);
+        assert_eq!(peers.a, peers.b);
+        let handoff = cell.handoff.unwrap();
+        assert!(handoff.id.is_none());
+        assert_eq!(peers.a, handoff.source_status_urls);
+        let valid = serde_json::json!({"slot": "a", "a": urls, "b": urls});
+        for field in ["slot", "a", "b"] {
+            let mut missing = valid.clone();
+            missing.as_object_mut().unwrap().remove(field);
+            assert!(serde_json::from_value::<CpuCellPeers>(missing).is_err());
+        }
+        let mut invalid_slot = valid.clone();
+        invalid_slot["slot"] = "c".into();
+        assert!(serde_json::from_value::<CpuCellPeers>(invalid_slot).is_err());
+        for field in ["candidate_status_urls", "next_candidate_status_urls"] {
+            let mut legacy = serde_json::json!({
+                "deployment_id": "00000000-0000-0000-0000-000000000001"
+            });
+            legacy[field] = urls.into();
+            assert!(serde_json::from_value::<CpuCellConfig>(legacy).is_err());
+        }
+        for field in ["a", "b"] {
+            for count in [0, 2, 4] {
+                let mut invalid = valid.clone();
+                invalid[field] =
+                    serde_json::to_string(&vec!["http://peer:3090/handoff-status"; count])
+                        .unwrap()
+                        .into();
+                assert!(serde_json::from_value::<CpuCellPeers>(invalid).is_err());
+            }
+        }
+    }
 
     #[test]
     fn messaging_regions_are_optional_local_transport_settings() {

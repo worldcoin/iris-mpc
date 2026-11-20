@@ -1,7 +1,21 @@
+replicaCount: 0
+image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:afba70d6130c85c83c800e9dd500e47d84d29688@sha256:4b59f49f9026c52804432454457c39bdb47ca45be7b3b1637747d22b59e76a69"
+
 env:
+  SMPC__MAX_DB_SIZE: "125000"
+  SMPC__CPU_CELL__DEPLOYMENT_ID: "0d2421b8-4f49-4b70-b67e-a6d9311b34c4"
+  SMPC__CPU_CELL__PEERS__SLOT: "a"
+  SMPC__CPU_CELL__PEERS__A: '["http://pod-a.0.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-a.1.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-a.2.stage.hnsw.worldcoin.dev:3090/handoff-status"]'
+  SMPC__CPU_CELL__PEERS__B: '["http://pod-b.0.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-b.1.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-b.2.stage.hnsw.worldcoin.dev:3090/handoff-status"]'
+  SMPC__CPU_CELL__HANDOFF__ID: "c6884078-bf2c-407d-9e6d-d337b1cf22dc"
+  SMPC__CPU_CELL__HANDOFF__SOURCE_DEPLOYMENT_ID: "8ee2a99d-e845-4aeb-b0ae-3b9007093666"
+  SMPC__CPU_CELL__HANDOFF__SOURCE_STATUS_URLS: '["http://pod-b.0.stage.hnsw.worldcoin.dev:3000/handoff-status","http://pod-b.1.stage.hnsw.worldcoin.dev:3000/handoff-status","http://pod-b.2.stage.hnsw.worldcoin.dev:3000/handoff-status"]'
   SMPC__SERVICE__SERVICE_NAME: "cpu-cell-a-0"
   SMPC__SERVICE__METRICS__PREFIX: "cpu-cell-a-0"
   SMPC__SERVER_COORDINATION__NODE_HOSTNAMES: '["0.0.0.0","pod-a.1.stage.hnsw.worldcoin.dev","pod-a.2.stage.hnsw.worldcoin.dev"]'
+
+startupProbe:
+  failureThreshold: 420
 
 initContainer:
   env:

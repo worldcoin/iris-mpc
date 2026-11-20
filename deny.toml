@@ -15,6 +15,8 @@ reason = "metrics crate uses a global recorder - multiple versions may break met
 [advisories]
 version = 2
 ignore = [
+    # Unmaintained-only advisory: all chrono versions are affected and no patched release exists.
+    { id = "RUSTSEC-2026-0543", reason = "chrono is required directly and through ampc-common/SQLx; remove this temporary exception after coordinating migration of these dependencies to time or jiff." },
     { id = "RUSTSEC-2026-0441", reason = "pin-utils is an unmaintained transitive AWS SDK dependency; remove this exception when the AWS dependency chain no longer requires it." },
     { id = "RUSTSEC-2024-0436", reason = "deep subdependency from several aws and sqlx crates" },
     # rustls-pemfile is required by reqwest and tonic, we will switch once they do

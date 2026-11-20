@@ -181,12 +181,8 @@ impl Drain {
         *self.handoff.lock().unwrap() = Some(handoff);
     }
 
-    /// Persist the exact approved attempt before publishing any drain evidence.
-    pub async fn request_managed(
-        &self,
-        handoff_id: uuid::Uuid,
-        candidates: &[uuid::Uuid; 3],
-    ) -> Result<()> {
+    /// Persist the source process before publishing any drain evidence.
+    pub async fn request_managed(&self, handoff_id: uuid::Uuid) -> Result<()> {
         let status = self.status();
         eyre::ensure!(
             status.error.is_none() && status.blocked_reason.is_none(),
@@ -205,7 +201,7 @@ impl Drain {
         let process = uuid::Uuid::parse_str(&status.process_uuid)?;
         if let Err(error) = handoff
             .handoffs
-            .record_drain_start(handoff_id, handoff.deployment, process, candidates)
+            .record_drain_start(handoff_id, handoff.deployment, process)
             .await
         {
             self.fail("durable source seal failed");
@@ -681,8 +677,7 @@ pub(super) mod tests {
             Arc::new(AtomicBool::new(true)),
         );
         drain.require_durable_seal(managed(pool.clone()));
-        let candidates = std::array::from_fn(|_| uuid::Uuid::new_v4());
-        let mut request = Box::pin(drain.request_managed(uuid::Uuid::new_v4(), &candidates));
+        let mut request = Box::pin(drain.request_managed(uuid::Uuid::new_v4()));
         assert!(futures::poll!(&mut request).is_pending());
         drop(request);
         assert!(drain.requested());
