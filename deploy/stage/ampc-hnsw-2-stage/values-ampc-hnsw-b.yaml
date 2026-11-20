@@ -7,31 +7,27 @@ strategy:
 image: ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:7c6de563d9f645563001c80e74554cd642e9f535@sha256:639f0cdb081f32a70ec8c6e801c1942488890514895fa14be3c0aed843488af6
 env:
   SMPC__MAX_DB_SIZE: "18000000"
-  SMPC__CPU_CELL__DEPLOYMENT_ID: 60173f3c-2019-4089-b26c-4052b3532841
-  SMPC__CPU_CELL__PEERS__SLOT: a
+  SMPC__CPU_CELL__DEPLOYMENT_ID: 09b6a436-e1ab-47a1-9b3a-383df080c3c2
+  SMPC__CPU_CELL__PEERS__SLOT: b
   SMPC__CPU_CELL__PEERS__A: "[\"http://pod-a.0.stage.hnsw.worldcoin.dev:3090/handoff-status\",\"http://pod-a.1.stage.hnsw.worldcoin.dev:3090/handoff-status\",\"http://pod-a.2.stage.hnsw.worldcoin.dev:3090/handoff-status\"]"
   SMPC__CPU_CELL__PEERS__B: "[\"http://pod-b.0.stage.hnsw.worldcoin.dev:3090/handoff-status\",\"http://pod-b.1.stage.hnsw.worldcoin.dev:3090/handoff-status\",\"http://pod-b.2.stage.hnsw.worldcoin.dev:3090/handoff-status\"]"
-  SMPC__SERVICE__SERVICE_NAME: cpu-cell-a-2
-  SMPC__SERVICE__METRICS__PREFIX: cpu-cell-a-2
-  SMPC__SERVER_COORDINATION__NODE_HOSTNAMES: "[\"pod-a.0.stage.hnsw.worldcoin.dev\",\"pod-a.1.stage.hnsw.worldcoin.dev\",\"0.0.0.0\"]"
+  SMPC__CPU_CELL__HANDOFF__SOURCE_DEPLOYMENT_ID: 60173f3c-2019-4089-b26c-4052b3532841
+  SMPC__CPU_CELL__HANDOFF__SOURCE_STATUS_URLS: "[\"http://pod-a.0.stage.hnsw.worldcoin.dev:3000/handoff-status\",\"http://pod-a.1.stage.hnsw.worldcoin.dev:3000/handoff-status\",\"http://pod-a.2.stage.hnsw.worldcoin.dev:3000/handoff-status\"]"
+  SMPC__SERVICE__SERVICE_NAME: cpu-cell-b-2
+  SMPC__SERVICE__METRICS__PREFIX: cpu-cell-b-2
+  SMPC__SERVER_COORDINATION__NODE_HOSTNAMES: "[\"pod-b.0.stage.hnsw.worldcoin.dev\",\"pod-b.1.stage.hnsw.worldcoin.dev\",\"0.0.0.0\"]"
   SMPC__SCHEMA_NAME: POP4401_17M_a20261006
   SMPC__ENABLE_S3_IMPORTER: "true"
   SMPC__DB_CHUNKS_FOLDER_NAME: pop4381/17m/export-v1
-  SMPC__STARTUP_MODE: active
+  SMPC__STARTUP_MODE: candidate
 startupProbe:
-  exec: null
-  httpGet:
-    path: /ready
-    port: health
-  initialDelaySeconds: 60
-  periodSeconds: 30
-  failureThreshold: 120
+  failureThreshold: 420
 initContainer:
   env:
     - name: PARTY_ID
       value: "2"
     - name: CELL_SLOT
-      value: a
+      value: b
     - name: POD_IP
       valueFrom:
         fieldRef:
@@ -45,13 +41,3 @@ resources:
     memory: 698Gi
 nodeSelector:
   node.kubernetes.io/instance-type: r8i.24xlarge
-livenessProbe:
-  exec: null
-  httpGet:
-    path: /health
-    port: health
-readinessProbe:
-  exec: null
-  httpGet:
-    path: /ready
-    port: health
