@@ -1432,7 +1432,7 @@ async fn run_main_server_loop(
             party_id,
             aws_clients.sqs_client.clone(),
             aws_clients.sns_client.clone(),
-            aws_clients.s3_client.clone(),
+            aws_clients.shares_s3_client.clone(),
             config.clone(),
             shares_encryption_key_pair.clone(),
             shutdown_handler.clone(),

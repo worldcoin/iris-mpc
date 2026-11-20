@@ -4,7 +4,7 @@ on:
   push:
     branches:
       - main
-      - test-alkali-change
+      - wojteksromek/pop-4523-stage-move-the-shares-bucket-from-eu
   release:
     types:
       - published
