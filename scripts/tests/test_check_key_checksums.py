@@ -28,6 +28,7 @@ class CheckKeyChecksumsTests(unittest.TestCase):
             "slu": slug,
             "pub": urls,
             "chk": f"{algorithm}:{hashlib.new(algorithm, data).hexdigest()}",
+            "key_b64": data.decode("ascii", errors="replace"),
         } for slug in PARTY_SLUGS]}}
 
     def verify(self, registry, responses, **kwargs):
@@ -101,7 +102,7 @@ class CheckKeyChecksumsTests(unittest.TestCase):
                         validator.verify_registry(registry)
                     download.assert_not_called()
 
-    def test_malformed_keys_fail_even_with_matching_checksums(self):
+    def test_malformed_embedded_keys_are_rejected_before_download(self):
         malformed = (
             b"not base64", b"\xff" * 44,
             KEY + b"\n", KEY + b"\r\n", b" " + KEY,
@@ -114,9 +115,10 @@ class CheckKeyChecksumsTests(unittest.TestCase):
         for data in malformed:
             for algorithm in ("sha256", "sha512"):
                 with self.subTest(data=data, algorithm=algorithm):
-                    result, download = self.verify(self.registry(algorithm, data=data), [data])
-                    self.assertEqual(result, 1)
-                    self.assertEqual(download.call_count, 3)
+                    with patch.object(validator, "urlopen") as download:
+                        with self.assertRaisesRegex(ValueError, "key_b64"):
+                            validator.verify_registry(self.registry(algorithm, data=data))
+                        download.assert_not_called()
 
     def test_wrong_decoded_lengths_fail_with_matching_checksums(self):
         for length in (0, 1, 31, 33, 64):
@@ -124,14 +126,44 @@ class CheckKeyChecksumsTests(unittest.TestCase):
                 data = base64.b64encode(bytes(length))
                 with self.assertRaisesRegex(ValueError, "exactly 32 bytes"):
                     validator.validate_public_key(data)
-                result, _ = self.verify(self.registry(data=data), [data])
-                self.assertEqual(result, 1)
+                with patch.object(validator, "urlopen") as download:
+                    with self.assertRaisesRegex(ValueError, "key_b64.*exactly 32 bytes"):
+                        validator.verify_registry(self.registry(data=data))
+                    download.assert_not_called()
 
-    def test_checksum_is_verified_before_decoding(self):
+    def test_embedded_checksum_is_verified_before_decoding(self):
+        registry = self.registry()
+        registry["iris"]["parties"][0]["chk"] = "sha256:" + "0" * 64
         with patch.object(validator, "validate_public_key") as decode:
-            result, _ = self.verify(self.registry(), [b"wrong checksum and malformed key"])
-            self.assertEqual(result, 1)
+            with patch.object(validator, "urlopen") as download:
+                with self.assertRaisesRegex(ValueError, "key_b64.*Checksum mismatch"):
+                    validator.verify_registry(registry)
+                download.assert_not_called()
             decode.assert_not_called()
+
+    def test_embedded_checksum_covers_base64_text_not_decoded_bytes(self):
+        for algorithm in ("sha256", "sha512"):
+            with self.subTest(algorithm=algorithm):
+                registry = self.registry(algorithm)
+                registry["iris"]["parties"][0]["chk"] = (
+                    f"{algorithm}:{hashlib.new(algorithm, base64.b64decode(KEY)).hexdigest()}"
+                )
+                with patch.object(validator, "urlopen") as download:
+                    with self.assertRaisesRegex(ValueError, "key_b64.*Checksum mismatch"):
+                        validator.verify_registry(registry)
+                    download.assert_not_called()
+
+    def test_missing_or_non_string_embedded_keys_are_rejected(self):
+        for value in (None, 123, [], {}, KEY):
+            with self.subTest(value=value):
+                registry = self.registry()
+                registry["iris"]["parties"][0]["key_b64"] = value
+                with self.assertRaisesRegex(ValueError, "key_b64 must be a string"):
+                    validator.parse_registry(registry)
+        registry = self.registry()
+        del registry["iris"]["parties"][0]["key_b64"]
+        with self.assertRaisesRegex(ValueError, "key_b64 must be a string"):
+            validator.parse_registry(registry)
 
     def test_standard_base64_alphabet_is_accepted(self):
         data = base64.b64encode(b"\xfb\xff" * 16)
@@ -140,14 +172,12 @@ class CheckKeyChecksumsTests(unittest.TestCase):
         result, _ = self.verify(self.registry(data=data), [data])
         self.assertEqual(result, 0)
 
-    def test_every_mirror_is_decoded(self):
-        data = KEY + b"\n"
-        registry = self.registry(urls=["https://example.org/a", "https://example.org/b"], data=data)
-        with patch.object(validator, "validate_public_key", wraps=validator.validate_public_key) as decode:
-            result, download = self.verify(registry, [data, data])
+    def test_every_mirror_must_match_embedded_key(self):
+        registry = self.registry(urls=["https://example.org/a", "https://example.org/b"])
+        other_key = base64.b64encode(bytes(reversed(range(32))))
+        result, download = self.verify(registry, [KEY, other_key])
         self.assertEqual(result, 1)
         self.assertEqual(download.call_count, 6)
-        self.assertEqual(decode.call_count, 6)
 
     def test_download_failures(self):
         for error in (URLError("unreachable"), TimeoutError("timed out"), HTTPError("https://example.org", 404, "not found", {}, None)):
@@ -269,7 +299,7 @@ class CheckKeyChecksumsTests(unittest.TestCase):
             self.assertEqual(result, 1)
             download.assert_not_called()
 
-    def test_malformed_checkout_keys_fail_with_matching_checksums(self):
+    def test_malformed_checkout_keys_are_rejected(self):
         with TemporaryDirectory() as directory:
             path = Path(directory) / "unpublished.pub"
             url = "https://raw.githubusercontent.com/worldcoin/iris-mpc/main/unpublished.pub"
@@ -278,7 +308,7 @@ class CheckKeyChecksumsTests(unittest.TestCase):
                     with self.subTest(data=data, algorithm=algorithm):
                         path.write_bytes(data)
                         result, download = self.verify(
-                            self.registry(algorithm, urls=url, data=data), [],
+                            self.registry(algorithm, urls=url), [],
                             repository="worldcoin/iris-mpc", repo_root=directory,
                         )
                         self.assertEqual(result, 1)
