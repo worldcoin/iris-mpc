@@ -4,8 +4,10 @@ strategy:
   rollingUpdate:
     maxSurge: 1
     maxUnavailable: 0
-image: ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:7c6de563d9f645563001c80e74554cd642e9f535@sha256:639f0cdb081f32a70ec8c6e801c1942488890514895fa14be3c0aed843488af6
+image: ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:b5db8b96e90e513d4abd3d9264cf6077a5a3970e@sha256:d6e400bffcfd6aa607248b6fcb50c1f96652d85f869d4184d76a258a15cc21ff
 env:
+  SMPC__SHARES_BUCKET_NAME: "wf-ampc-stage-sns-requests"
+  SMPC__SHARES_BUCKET_REGION: "eu-central-1"
   SMPC__MAX_DB_SIZE: "18000000"
   SMPC__CPU_CELL__DEPLOYMENT_ID: 60173f3c-2019-4089-b26c-4052b3532841
   SMPC__CPU_CELL__PEERS__SLOT: a
