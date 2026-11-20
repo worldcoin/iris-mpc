@@ -134,7 +134,10 @@ impl Coordinator {
                 .as_ref()
                 .ok_or_else(|| eyre!("candidate coordination requires handoff intent"))?;
             let intent = Intent {
-                id: Uuid::parse_str(&requested.id)?,
+                id: match &requested.id {
+                    Some(id) => Uuid::parse_str(id)?,
+                    None => deployment,
+                },
                 source: Uuid::parse_str(&requested.source_deployment_id)?,
                 destination: deployment,
             };
