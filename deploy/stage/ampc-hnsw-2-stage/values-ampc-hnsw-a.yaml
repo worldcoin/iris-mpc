@@ -1,29 +1,22 @@
-replicaCount: 0
-image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:afba70d6130c85c83c800e9dd500e47d84d29688@sha256:4b59f49f9026c52804432454457c39bdb47ca45be7b3b1637747d22b59e76a69"
+# Passive 17M preload on the unused physical slot. No handoff coordinator or DNS registration.
+replicaCount: 1
+image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:7c6de563d9f645563001c80e74554cd642e9f535@sha256:639f0cdb081f32a70ec8c6e801c1942488890514895fa14be3c0aed843488af6"
 
 env:
-  SMPC__MAX_DB_SIZE: "125000"
-  SMPC__CPU_CELL__DEPLOYMENT_ID: "0d2421b8-4f49-4b70-b67e-a6d9311b34c4"
-  SMPC__CPU_CELL__PEERS__SLOT: "a"
-  SMPC__CPU_CELL__PEERS__A: '["http://pod-a.0.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-a.1.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-a.2.stage.hnsw.worldcoin.dev:3090/handoff-status"]'
-  SMPC__CPU_CELL__PEERS__B: '["http://pod-b.0.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-b.1.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-b.2.stage.hnsw.worldcoin.dev:3090/handoff-status"]'
-  SMPC__CPU_CELL__HANDOFF__ID: "c6884078-bf2c-407d-9e6d-d337b1cf22dc"
-  SMPC__CPU_CELL__HANDOFF__SOURCE_DEPLOYMENT_ID: "8ee2a99d-e845-4aeb-b0ae-3b9007093666"
-  SMPC__CPU_CELL__HANDOFF__SOURCE_STATUS_URLS: '["http://pod-b.0.stage.hnsw.worldcoin.dev:3000/handoff-status","http://pod-b.1.stage.hnsw.worldcoin.dev:3000/handoff-status","http://pod-b.2.stage.hnsw.worldcoin.dev:3000/handoff-status"]'
-  SMPC__SERVICE__SERVICE_NAME: "cpu-cell-a-2"
-  SMPC__SERVICE__METRICS__PREFIX: "cpu-cell-a-2"
-  SMPC__SERVER_COORDINATION__NODE_HOSTNAMES: '["pod-a.0.stage.hnsw.worldcoin.dev","pod-a.1.stage.hnsw.worldcoin.dev","0.0.0.0"]'
+  SMPC__STARTUP_MODE: "candidate"
+  SMPC__SCHEMA_NAME: "POP4401_17M_a20261006"
+  SMPC__MAX_DB_SIZE: "18000000"
+  SMPC__ENABLE_S3_IMPORTER: "true"
+  SMPC__DB_CHUNKS_FOLDER_NAME: "pop4381/17m/export-v1"
+  SMPC__SERVICE__SERVICE_NAME: "cpu-cell-preload-2"
+  SMPC__SERVICE__METRICS__PREFIX: "cpu-cell-preload-2"
 
-startupProbe:
-  failureThreshold: 420
+resources:
+  requests: {cpu: "92", memory: 698Gi}
+  limits: {cpu: "92", memory: 698Gi}
+
+nodeSelector:
+  node.kubernetes.io/instance-type: r8i.24xlarge
 
 initContainer:
-  env:
-    - name: PARTY_ID
-      value: "2"
-    - name: CELL_SLOT
-      value: "a"
-    - name: POD_IP
-      valueFrom:
-        fieldRef:
-          fieldPath: status.podIP
+  enabled: false
