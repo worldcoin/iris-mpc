@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - test-alkali-change
+      - carlomazzaferro/pop4381-s3-stage
   release:
     types:
       - published
@@ -21,6 +22,7 @@ env:
 
 jobs:
   docker:
+    if: github.ref != 'refs/heads/carlomazzaferro/pop4381-s3-stage'
     name: Build and push arm64 image
     timeout-minutes: 40
     runs-on:
@@ -111,7 +113,9 @@ jobs:
           {
             echo "tags<<EOF"
             echo "${REGISTRY}/${IMAGE_NAME_AMD64}:${GITHUB_SHA}"
-            echo "${REGISTRY}/${IMAGE_NAME_AMD64}:latest"
+            if [ "${GITHUB_REF}" != "refs/heads/carlomazzaferro/pop4381-s3-stage" ]; then
+              echo "${REGISTRY}/${IMAGE_NAME_AMD64}:latest"
+            fi
             if [ -n "${RELEASE_TAG_NAME}" ]; then
               echo "${REGISTRY}/${IMAGE_NAME_AMD64}:${RELEASE_TAG_NAME}"
             fi
