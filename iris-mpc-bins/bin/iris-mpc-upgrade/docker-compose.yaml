@@ -64,7 +64,7 @@ services:
     ports:
       - "7000:7000"
   nginx:
-    image: nginx:1.27.1
+    image: nginx:1.30.7
     depends_on:
       - reshare-server-2
     ports:
