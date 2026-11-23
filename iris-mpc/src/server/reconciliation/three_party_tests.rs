@@ -123,10 +123,10 @@ fn common_context() -> Result<ReconciliationContext> {
     ReconciliationContext::new(Uuid::new_v4(), Some(normalize_sns_sequence_number("42")?))
 }
 
-async fn coordinate_drain_and_reconcile_candidates(
-    parties: &mut Vec<Party>,
-    restart_candidate: bool,
-) -> Result<Coordinated> {
+async fn drain_sources(
+    parties: &[Party],
+    client: &reqwest::Client,
+) -> Result<(Coordinated, [String; 3])> {
     let (drains, tasks) = drain::tests::cohort(Duration::from_secs(30)).await;
     let (id, source, destination) = (Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4());
     let candidates: [Uuid; 3] = std::array::from_fn(|i| parties[i].candidate.registry.process_id());
@@ -138,7 +138,6 @@ async fn coordinate_drain_and_reconcile_candidates(
         candidate_listeners.push(tokio::net::TcpListener::bind("127.0.0.1:0").await?);
         next_listeners.push(tokio::net::TcpListener::bind("127.0.0.1:0").await?);
     }
-    let replacement_address = candidate_listeners[2].local_addr()?;
     let source_urls: [String; 3] = std::array::from_fn(|i| {
         format!(
             "http://{}/handoff-status",
@@ -323,12 +322,28 @@ async fn coordinate_drain_and_reconcile_candidates(
     for task in source_tasks {
         assert!(task.await.unwrap_err().is_cancelled());
     }
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(1))
-        .build()?;
     for url in source_urls {
         assert!(client.get(url).send().await.is_err());
     }
+    let cell = Coordinated {
+        context: ReconciliationContext::new(id, Some(normalize_sns_sequence_number("42")?))?,
+        coordinators: candidate_coordinators,
+        tasks: candidate_tasks,
+        shutdowns: candidate_shutdowns,
+        configs: candidate_configs,
+        next_listeners,
+    };
+    Ok((cell, candidate_urls))
+}
+
+async fn coordinate_drain_and_reconcile_candidates(
+    parties: &mut Vec<Party>,
+    restart_candidate: bool,
+) -> Result<Coordinated> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(1))
+        .build()?;
+    let (mut cell, candidate_urls) = drain_sources(parties, &client).await?;
     // Completion agreement consumes part of its budget; reconciliation gets a fresh one.
     let mut lock = parties[0].writer.pool.begin().await?;
     sqlx::query("LOCK TABLE irises IN ACCESS EXCLUSIVE MODE")
@@ -340,12 +355,9 @@ async fn coordinate_drain_and_reconcile_candidates(
         lock.commit().await
     };
     // A no longer serves any endpoint. B finishes using only durable records and current B peers.
-    let reconcile = futures::future::try_join_all(
-        parties
-            .iter_mut()
-            .zip(&candidate_coordinators)
-            .enumerate()
-            .map(|(i, (party, coordinator))| async move {
+    let reconcile =
+        futures::future::try_join_all(parties.iter_mut().zip(&cell.coordinators).enumerate().map(
+            |(i, (party, coordinator))| async move {
                 let reader = PostgresClient::new(
                     &party.config.database.as_ref().unwrap().url,
                     &party.config.get_gpu_db_schema(),
@@ -375,18 +387,18 @@ async fn coordinate_drain_and_reconcile_candidates(
                 assert!(pending, "handoff must preserve pending-above-C work");
                 reader.pool.close().await;
                 Ok::<_, eyre::Report>(context)
-            }),
-    );
+            },
+        ));
     let (contexts, released) = tokio::join!(reconcile, release_lock);
     released?;
     let contexts = contexts?;
     assert!(started.elapsed() >= Duration::from_secs(9));
     assert!(contexts.iter().all(|context| context == &contexts[0]));
     if restart_candidate {
-        let task = candidate_tasks.pop().unwrap();
-        candidate_shutdowns.pop().unwrap().cancel();
+        let task = cell.tasks.pop().unwrap();
+        cell.shutdowns.pop().unwrap().cancel();
         tokio::time::timeout(Duration::from_secs(3), task).await??;
-        drop(candidate_coordinators.pop().unwrap());
+        drop(cell.coordinators.pop().unwrap());
         let Party {
             config,
             writer,
@@ -397,12 +409,13 @@ async fn coordinate_drain_and_reconcile_candidates(
         drop(candidate);
 
         let process = Uuid::new_v4();
-        let coordinator = Coordinator::new(&candidate_configs[2], process, None)?.unwrap();
-        let listener = tokio::net::TcpListener::bind(replacement_address).await?;
+        let coordinator = Coordinator::new(&cell.configs[2], process, None)?.unwrap();
+        let port = reqwest::Url::parse(&candidate_urls[2])?.port().unwrap();
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", port)).await?;
         let router = coordinator.routes();
         let stop = tokio_util::sync::CancellationToken::new();
-        candidate_shutdowns.push(stop.clone());
-        candidate_tasks.push(tokio::spawn(async move {
+        cell.shutdowns.push(stop.clone());
+        cell.tasks.push(tokio::spawn(async move {
             axum::serve(listener, router)
                 .with_graceful_shutdown(stop.cancelled_owned())
                 .await
@@ -414,7 +427,7 @@ async fn coordinate_drain_and_reconcile_candidates(
         assert!(status["reconciliation"].is_null());
 
         // Full startup reloads this party while A is gone and B0/B1 retain their reports.
-        let mut restart_config = candidate_configs[2].clone();
+        let mut restart_config = cell.configs[2].clone();
         restart_config.schema_name = config.schema_name.clone();
         let mut candidate = super::super::candidate::load_or_recover(
             &restart_config,
@@ -456,18 +469,10 @@ async fn coordinate_drain_and_reconcile_candidates(
             writer,
             candidate,
         });
-        candidate_coordinators.push(coordinator);
+        cell.coordinators.push(coordinator);
     }
-    let expected = ReconciliationContext::new(id, Some(normalize_sns_sequence_number("42")?))?;
-    assert_eq!(contexts[0], expected);
-    Ok(Coordinated {
-        context: expected,
-        coordinators: candidate_coordinators,
-        tasks: candidate_tasks,
-        shutdowns: candidate_shutdowns,
-        configs: candidate_configs,
-        next_listeners,
-    })
+    assert_eq!(contexts[0], cell.context);
+    Ok(cell)
 }
 
 async fn reconcile_parties(
@@ -1053,6 +1058,67 @@ async fn handoff_to_next_slot(
         .iter()
         .all(|context| context == &coordinated.context));
     Ok((parties, coordinated))
+}
+
+#[tokio::test]
+async fn completion_agreement_timeout_keeps_both_cells_from_serving() -> Result<()> {
+    use iris_mpc_store::cpu_cell::HandoffPhase;
+
+    let mut parties = preload_parties(&[], Eye::Left).await?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(1))
+        .build()?;
+    let (cell, candidate_urls) = drain_sources(&parties, &client).await?;
+
+    // All three candidates are loaded, but party 2 never publishes its completion.
+    let agree =
+        futures::future::try_join_all(parties.iter_mut().take(2).enumerate().map(|(i, party)| {
+            let coordinator = &cell.coordinators[i];
+            async move {
+                let handoffs = CpuCellHandoffs::new(
+                    party.writer.pool.clone(),
+                    &party.config.get_gpu_db_schema(),
+                )?;
+                let store = Store::new(&party.writer).await?;
+                let budget = Duration::from_secs(2);
+                let started = Instant::now();
+                let error = coordinator
+                    .reconcile_candidate(&handoffs, &store, &mut party.candidate, budget)
+                    .await
+                    .unwrap_err();
+                assert!(error.is::<tokio::time::error::Elapsed>(), "{error:#}");
+                assert!(started.elapsed() >= budget);
+                Ok::<_, eyre::Report>(())
+            }
+        }));
+    tokio::time::timeout(Duration::from_secs(10), agree).await??;
+
+    for (i, party) in parties.iter().enumerate() {
+        let status: serde_json::Value = client
+            .get(&candidate_urls[i])
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        assert_eq!(status["ready"], true);
+        assert_eq!(status["completion"].is_object(), i < 2);
+        assert!(status["reconciliation"].is_null());
+        let handoffs =
+            CpuCellHandoffs::new(party.writer.pool.clone(), &party.config.get_gpu_db_schema())?;
+        assert!(cell.coordinators[i]
+            .activate_candidate(&handoffs)
+            .await
+            .is_err());
+        let record = handoffs.latest().await?.unwrap();
+        assert_eq!(record.phase, HandoffPhase::Drained);
+        assert!(handoffs.check_startup(record.source, false).await.is_err());
+    }
+    for (task, stop) in cell.tasks.into_iter().zip(cell.shutdowns) {
+        stop.cancel();
+        tokio::time::timeout(Duration::from_secs(3), task).await??;
+    }
+    cleanup(parties).await
 }
 
 #[tokio::test]
