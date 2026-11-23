@@ -74,9 +74,6 @@ pub(super) fn validate_config(config: &Config, mode: HawkSearchMode) -> Result<(
     if config.fake_db_size > 0 || config.init_db_size > 0 || config.clear_db_before_init {
         bail!("candidate cannot seed, clear, or generate database contents");
     }
-    if config.enable_s3_importer {
-        bail!("candidate preload currently requires enable_s3_importer=false");
-    }
     process_config(config, mode)
 }
 
@@ -405,7 +402,7 @@ mod tests {
         validate_config(&config, HawkSearchMode::LinearScan).unwrap();
         assert!(validate_config(&config, HawkSearchMode::Hnsw).is_err());
         config.enable_s3_importer = true;
-        assert!(validate_config(&config, HawkSearchMode::LinearScan).is_err());
+        validate_config(&config, HawkSearchMode::LinearScan).unwrap();
         config.enable_s3_importer = false;
         config.clear_db_before_init = true;
         assert!(validate_config(&config, HawkSearchMode::LinearScan).is_err());
