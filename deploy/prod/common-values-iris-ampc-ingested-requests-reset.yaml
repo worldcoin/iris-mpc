@@ -1,4 +1,4 @@
-image: "ghcr.io/worldcoin/retention-reaper:v0.32.12@sha256:4e6434646504c7ef09ae6db4f3d60dd163b712e2f9741514b28a103296cb1029"
+image: "ghcr.io/worldcoin/retention-reaper:v0.32.14@sha256:437673d29cc89fb2a31771a0dccfb2018a1d044e6998b792daae21cedd4a52c8"
 
 environment: prod
 replicaCount: 1
