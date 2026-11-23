@@ -1,5 +1,5 @@
 # Cleanup remains disabled pending stage validation and production activation approval.
-image: "ghcr.io/worldcoin/retention-reaper:530e70eb253b1787dc4bfeddbf70d427018298e4@sha256:3bddbd9e9e3e9ceb501a62d8031ced9ead2a48c2ffae05826e11b9e94e080909"
+image: "ghcr.io/worldcoin/retention-reaper:v0.32.14@sha256:437673d29cc89fb2a31771a0dccfb2018a1d044e6998b792daae21cedd4a52c8"
 
 environment: prod
 replicaCount: 1
