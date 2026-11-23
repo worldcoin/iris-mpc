@@ -5,23 +5,20 @@ strategy:
     maxSurge: 1
     maxUnavailable: 0
 image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:b5db8b96e90e513d4abd3d9264cf6077a5a3970e@sha256:d6e400bffcfd6aa607248b6fcb50c1f96652d85f869d4184d76a258a15cc21ff"
-
 env:
   SMPC__SHARES_BUCKET_NAME: "wf-ampc-stage-sns-requests"
   SMPC__SHARES_BUCKET_REGION: "eu-central-1"
-  SMPC__CPU_CELL__DEPLOYMENT_ID: "fd230fee-3fd6-406e-b84d-23f5f0230464"
+  SMPC__CPU_CELL__DEPLOYMENT_ID: "a1075608-ecd6-4805-b2a1-e7e12a966c0d"
   SMPC__CPU_CELL__PEERS__SLOT: "b"
   SMPC__CPU_CELL__PEERS__A: '["http://pod-a.0.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-a.1.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-a.2.stage.hnsw.worldcoin.dev:3090/handoff-status"]'
   SMPC__CPU_CELL__PEERS__B: '["http://pod-b.0.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-b.1.stage.hnsw.worldcoin.dev:3090/handoff-status","http://pod-b.2.stage.hnsw.worldcoin.dev:3090/handoff-status"]'
-  SMPC__CPU_CELL__HANDOFF__SOURCE_DEPLOYMENT_ID: "553c16a6-be15-4711-8224-c6458b0f082d"
+  SMPC__CPU_CELL__HANDOFF__SOURCE_DEPLOYMENT_ID: "0e013e98-6481-4ed4-853b-f005f2cc4058"
   SMPC__CPU_CELL__HANDOFF__SOURCE_STATUS_URLS: '["http://pod-a.0.stage.hnsw.worldcoin.dev:3000/handoff-status","http://pod-a.1.stage.hnsw.worldcoin.dev:3000/handoff-status","http://pod-a.2.stage.hnsw.worldcoin.dev:3000/handoff-status"]'
   SMPC__SERVICE__SERVICE_NAME: "cpu-cell-b-0"
   SMPC__SERVICE__METRICS__PREFIX: "cpu-cell-b-0"
   SMPC__SERVER_COORDINATION__NODE_HOSTNAMES: '["0.0.0.0","pod-b.1.stage.hnsw.worldcoin.dev","pod-b.2.stage.hnsw.worldcoin.dev"]'
-
 startupProbe:
   failureThreshold: 420
-
 initContainer:
   env:
     - name: PARTY_ID
