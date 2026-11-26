@@ -1,7 +1,7 @@
 image: "ghcr.io/worldcoin/anon-stats-server:v0.32.14@sha256:2db1938a79902803a51d58c7a729ec759ebc8bf79b82dcd075a8822d90f17b9c"
 
 environment: prod
-replicaCount: 0
+replicaCount: 1
 
 # Common environment variables shared across all anon-stats-server hnsw nodes.
 # Defined as a map so Helm deep-merges with per-node env maps.
