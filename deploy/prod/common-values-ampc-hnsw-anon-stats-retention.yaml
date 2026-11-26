@@ -9,7 +9,7 @@ image: "ghcr.io/worldcoin/retention-reaper:v0.32.14@sha256:437673d29cc89fb2a3177
 # First run drains the never-reaped backlog validated in dry-run (counts stepped at 07-31
 # exactly when the 07-16 created_at backfill crossed the 14d horizon) — expect the
 # POP-4136 runaway-deletion monitor (>1M rows/day) to fire once on that drain.
-suspend: false
+suspend: true
 
 env:
   RETENTION__ENABLED: "true"

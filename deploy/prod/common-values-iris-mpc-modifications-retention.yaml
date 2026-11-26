@@ -12,7 +12,7 @@ image: "ghcr.io/worldcoin/retention-reaper:v0.32.14@sha256:437673d29cc89fb2a3177
 # DELETE on rows past the retention window, bounded by the newest-10k floor. Deleted rows
 # are unrecoverable. Kill switch: RETENTION__DRY_RUN back to "true" reverts to read-only
 # previews; suspend: true stops runs entirely.
-suspend: false
+suspend: true
 
 env:
   RETENTION__ENABLED: "true"
