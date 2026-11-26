@@ -1668,6 +1668,9 @@ async fn run_main_server_loop(
     }
     .await;
 
+    if res.is_err() {
+        rollout.set_phase(rollout::Phase::Failed);
+    }
     if let Some(drain) = &drain {
         if let Err(error) = &res {
             if drain.requested() {

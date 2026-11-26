@@ -182,7 +182,6 @@ async fn preload_and_wait(
             let coordinator =
                 coordinator.ok_or_else(|| eyre!("owner recovery requires a coordinator"))?;
             tracing::info!("Rebuilding activated CPU cell through coordinated cold startup");
-            rollout.set_phase(rollout::Phase::Starting);
             return serve_slot(
                 config,
                 shutdown,

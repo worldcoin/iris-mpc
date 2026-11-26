@@ -439,6 +439,7 @@ impl Coordinator {
     }
 
     pub(super) async fn wait_cold_cohort(&self, deadline: Instant) -> Result<()> {
+        self.rollout.set_phase(rollout::Phase::Starting);
         let own = self.status.read().await.clone();
         loop {
             let peers = self

@@ -97,7 +97,11 @@ impl Rollout {
     }
 
     pub(super) fn set_phase(&self, phase: Phase) {
-        self.update(|state| state.phase = phase);
+        self.update(|state| {
+            if state.phase != Phase::Failed {
+                state.phase = phase;
+            }
+        });
     }
 
     pub(super) fn start_serving(&self, drain: Option<Arc<Drain>>) {
@@ -116,8 +120,10 @@ impl Rollout {
         let mut state = state.lock().unwrap();
         change(&mut state);
         let phase = if state.phase == Phase::Serving {
-            let drain_phase = state.drain.as_ref().map(|drain| drain.status().phase);
-            let phase = serving_phase(drain_phase, state.blocked);
+            let drain = state.drain.as_ref().map(|drain| drain.status());
+            let blocked =
+                state.blocked || drain.as_ref().is_some_and(|s| s.blocked_reason.is_some());
+            let phase = serving_phase(drain.map(|s| s.phase), blocked);
             if matches!(phase, Phase::Serving | Phase::BlockedServing)
                 && state.shutdown.is_shutting_down()
             {
@@ -161,6 +167,26 @@ fn serving_phase(drain: Option<drain::Phase>, blocked: bool) -> Phase {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn heartbeat_reflects_local_blockers_and_preserves_processing_failure_on_exit() {
+        let urls = r#"["http://one","http://two","http://three"]"#;
+        let config = serde_json::from_value(serde_json::json!({
+            "cpu_cell": {"deployment_id": "test", "peers": {"slot": "a", "a": urls, "b": urls}}
+        }))
+        .unwrap();
+        let rollout = Rollout::new(&config, Arc::new(ShutdownHandler::new(0)));
+        let phase = || rollout.0.as_ref().unwrap().lock().unwrap().last_phase;
+        let drain = Drain::new(0, Duration::from_secs(5), true);
+        rollout.start_serving(Some(drain.clone()));
+        assert_eq!(phase(), Phase::Serving);
+        drain.block("SNS replay failed");
+        rollout.update(|_| {});
+        assert_eq!(phase(), Phase::BlockedServing);
+        rollout.set_phase(Phase::Failed);
+        rollout.set_phase(Phase::Stopping);
+        assert_eq!(phase(), Phase::Failed);
+    }
 
     #[test]
     fn a_blocked_preflight_can_still_admit_but_a_closed_drain_takes_precedence() {
