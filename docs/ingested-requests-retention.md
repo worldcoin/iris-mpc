@@ -44,19 +44,22 @@ even if the message later moves to the DLQ; see [CPU drain recovery](cpu-cell-dr
 Deploy guarded admission to every writer before enabling journal deletion.
 After keys have been deleted, rolling back to unguarded admission can reprocess
 old requests; disabling further cleanup does not restore those keys.
+Rollback after deletion requires a binary that preserves durable C and the
+at-or-below-C admission guard.
 This change does not enable retention jobs.
 
-## Prepared stage retention
+## Prepared retention jobs
 
 The existing `iris-ampc-ingested-requests-reset` applications on the three
-`ampc-hnsw` stage clusters are reused for guarded steady-state retention,
-keeping their legacy reset name. They remain suspended and now use
-`RETENTION__DRY_RUN=true`. Their image, schedule, and per-party database,
+`ampc-hnsw` clusters in each of stage and production are reused for guarded
+steady-state retention, keeping their legacy reset name. Both environments
+remain suspended and use `RETENTION__DRY_RUN=true`. Their per-party database,
 security-group and metrics wiring are preserved. No additional application
-or catalog registration is needed. Production configuration and deployment
-are deferred to separate work.
+or catalog registration is needed.
 
 The provisional grace is **30 days since `persisted_at`**, not receipt time.
+It limits physical row deletion only; durable C does not expire after 30 days
+and cleanup must not lower or reset it.
 Only persisted rows with `is_valid IS TRUE`, a normalized 40-digit sequence,
 and sequence ≤ the local durable C qualify. Invalid or NULL validity and
 malformed/NULL sequences are retained for investigation. C must be a JSON
@@ -65,16 +68,36 @@ or malformed C retains every row. Comparisons use fixed-width text with C
 collation and no numeric casts. The only target is `ingested_requests`;
 `cpu_cell_handoffs` is preserved.
 
-The existing daily 10:58 UTC schedule forbids overlap, uses 2,000-row batches
-with 250 ms pauses, and caps SQL statements at 30 seconds. The chart has no Job deadline
-field: verified image-provided GNU `timeout` sends TERM after 1,800 seconds and
+Stage keeps its daily 10:58 UTC schedule; production keeps its historical
+`0 0 31 2 *` schedule, which has no matching date. Both forbid overlap, use
+2,000-row batches with 250 ms pauses, and cap SQL statements at 30 seconds.
+The chart has no Job deadline field: verified image-provided GNU `timeout`
+sends TERM after 1,800 seconds and
 KILL after another 30 seconds. `restartPolicy: Never` and `backoffLimit: 0`
 prevent retries. Scheduling/image-pull delays are not covered by this process
 bound; a Pending job can block the next run under `Forbid` and needs operator
 attention. CronJob changes do not update or cancel existing Jobs: ensure no
 old zero-retention Jobs are active before deployment or activation.
 
-This is configuration preparation, not approval to activate. POP-4496 must
-approve grace and invalid-row policy; POP-4534 must validate guarded admission,
-queue ordering/replay constraints, all-party dry-run eligibility, resource
-impact, and monitoring before any unsuspend or destructive-mode change.
+### First production run
+
+The guarded writers rolled out in [#2525](https://github.com/worldcoin/iris-mpc/pull/2525)
+and handed off to v0.32.15 in [#2532](https://github.com/worldcoin/iris-mpc/pull/2532).
+The journal reaper uses the matching v0.32.15 release. The policy and stage
+validation are tracked in [POP-4496](https://linear.app/worldcoin/issue/POP-4496)
+and [POP-4534](https://linear.app/worldcoin/issue/POP-4534).
+
+1. After Argo syncs this change, verify the live CronJob on **each party** has
+   the expected image digest, the 30-day guard and `RETENTION__DRY_RUN=true`.
+   Check for active Jobs left over from the old reset template.
+2. For an approved count-only run, have each party's operator create one Job
+   from its synced CronJob, leaving the schedule suspended. In Datadog, check
+   for `retention job ok (dry run)` and record `rows_would_delete` and the run
+   duration per party. A timeout is a failed count. A zero count can also mean
+   the guard found no usable local C.
+3. Before approving deletion in [POP-4535](https://linear.app/worldcoin/issue/POP-4535),
+   verify each writer's guarded admission and durable C, review the stage
+   deletion/replay and recovery evidence, and agree the first production
+   deletion budget from the counts and database load. Enable recurring cleanup
+   in a separate reviewed change with a real schedule. Suspending the CronJob
+   stops future runs; an active Job must be stopped separately.
