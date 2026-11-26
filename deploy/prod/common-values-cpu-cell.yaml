@@ -7,6 +7,7 @@ strategy:
   rollingUpdate:
     maxSurge: 1
     maxUnavailable: 0
+progressDeadlineSeconds: 5400
 
 serviceAccount:
   create: false
