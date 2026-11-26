@@ -1,0 +1,85 @@
+replicaCount: 1
+image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:v0.32.15@sha256:a1d7fd842986e2cf716eecdd3bb054b8453762bc7a14fa8dc0a673cca9828b70"
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+progressDeadlineSeconds: 5400
+
+serviceAccount:
+  create: false
+  name: ampc-hnsw
+
+service:
+  enabled: false
+
+env:
+  SMPC__STARTUP_MODE: "candidate"
+  SMPC__CPU_CELL__DEPLOYMENT_ID: "1741902f-3754-44aa-8c32-178ca12852a6"
+  SMPC__CPU_CELL__HANDOFF__SOURCE_DEPLOYMENT_ID: "de95c87e-5c44-4f0d-8e59-91f546c4985f"
+  SMPC__CPU_CELL__HANDOFF__SOURCE_STATUS_URLS: '["http://pod-a.0.prod.hnsw.worldcoin.org:3000/handoff-status","http://pod-a.1.prod.hnsw.worldcoin.org:3000/handoff-status","http://pod-a.2.prod.hnsw.worldcoin.org:3000/handoff-status"]'
+  SMPC__DATABASE__MIGRATE: "false"
+  SMPC__DATABASE__CREATE: "false"
+  SMPC__CANDIDATE_STATUS_PORT: "3090"
+  SMPC__CPU_CELL__PEERS__A: '["http://pod-a.0.prod.hnsw.worldcoin.org:3090/handoff-status","http://pod-a.1.prod.hnsw.worldcoin.org:3090/handoff-status","http://pod-a.2.prod.hnsw.worldcoin.org:3090/handoff-status"]'
+  SMPC__CPU_CELL__PEERS__B: '["http://pod-b.0.prod.hnsw.worldcoin.org:3090/handoff-status","http://pod-b.1.prod.hnsw.worldcoin.org:3090/handoff-status","http://pod-b.2.prod.hnsw.worldcoin.org:3090/handoff-status"]'
+
+livenessProbe:
+  httpGet: null
+  exec:
+    command: ["curl", "--fail", "--silent", "--max-time", "2", "http://127.0.0.1:3090/health"]
+  timeoutSeconds: 3
+
+readinessProbe:
+  httpGet: null
+  exec:
+    command: ["curl", "--fail", "--silent", "--max-time", "2", "http://127.0.0.1:3090/ready"]
+  timeoutSeconds: 3
+
+startupProbe:
+  httpGet: null
+  exec:
+    command: ["curl", "--fail", "--silent", "--max-time", "2", "http://127.0.0.1:3090/startup"]
+  timeoutSeconds: 3
+  initialDelaySeconds: 0
+  periodSeconds: 10
+  failureThreshold: 420
+
+initContainer:
+  name: cpu-cell-dns
+  image: "amazon/aws-cli:2.17.62@sha256:183d4bb76169d35c12ba99e3384b605fee9a72fcb7ff1eeaa857fc27aa8fc713"
+  configMap:
+    init.sh: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+      export AWS_MAX_ATTEMPTS=1
+      case "$PARTY_ID" in 0|1|2) ;; *) echo "Invalid party" >&2; exit 1;; esac
+      case "$CELL_SLOT" in a|b) ;; *) echo "Invalid cell slot" >&2; exit 1;; esac
+      if [[ ! "$POD_IP" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+        echo "Expected an IPv4 pod address" >&2
+        exit 1
+      fi
+      ZONE_NAME="$PARTY_ID.prod.hnsw.worldcoin.org"
+      RECORD_NAME="pod-$CELL_SLOT.$ZONE_NAME"
+      ZONE_ID=$(aws route53 list-hosted-zones-by-name \
+        --dns-name "$ZONE_NAME" \
+        --query "HostedZones[?Name == '$ZONE_NAME.'] | [0].Id" \
+        --output text --cli-connect-timeout 10 --cli-read-timeout 30)
+      if [[ -z "$ZONE_ID" || "$ZONE_ID" == "None" ]]; then
+        echo "No exact hosted zone for $ZONE_NAME" >&2
+        exit 1
+      fi
+      CHANGE_ID=$(aws route53 change-resource-record-sets \
+        --hosted-zone-id "$ZONE_ID" \
+        --change-batch "{\"Changes\":[{\"Action\":\"UPSERT\",\"ResourceRecordSet\":{\"Name\":\"$RECORD_NAME\",\"Type\":\"A\",\"TTL\":5,\"ResourceRecords\":[{\"Value\":\"$POD_IP\"}]}}]}" \
+        --query ChangeInfo.Id --output text \
+        --cli-connect-timeout 10 --cli-read-timeout 30)
+      if [[ -z "$CHANGE_ID" || "$CHANGE_ID" == "None" ]]; then
+        echo "Missing Route53 change ID for $RECORD_NAME; inspect before retrying" >&2
+        exit 1
+      fi
+      timeout --signal=TERM --kill-after=10s 180s \
+        aws route53 wait resource-record-sets-changed --id "$CHANGE_ID" \
+        --cli-connect-timeout 10 --cli-read-timeout 30

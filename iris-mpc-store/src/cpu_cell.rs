@@ -23,7 +23,6 @@ pub struct Handoff {
     pub destination: Uuid,
     pub phase: HandoffPhase,
     pub source_process: Option<Uuid>,
-    pub candidate_processes: Option<Vec<Uuid>>,
     pub drain_report: Option<serde_json::Value>,
 }
 
@@ -60,8 +59,8 @@ impl CpuCellHandoffs {
         .map_err(Into::into)
     }
 
-    /// Check after migrations, before replay, queue access or operational writes. A recorded
-    /// activation cannot authorize a fresh process with none of B's resident state.
+    /// Check after migrations, before replay, queue access or operational writes. The latest
+    /// activated destination may enter coordinated cold startup; it must rebuild resident state.
     /// Locking the row waits for an old process's in-flight drain commit before
     /// deciding whether its replacement can start.
     pub async fn check_startup(&self, deployment: Uuid, candidate: bool) -> Result<()> {
@@ -84,7 +83,8 @@ impl CpuCellHandoffs {
                         HandoffPhase::Requested | HandoffPhase::Draining | HandoffPhase::Drained
                     )
             } else {
-                source == deployment && phase == HandoffPhase::Requested
+                (source == deployment && phase == HandoffPhase::Requested)
+                    || (destination == deployment && phase == HandoffPhase::Activated)
             }
         });
         ensure!(allowed, "CPU deployment cannot start in this handoff phase; coordinated cold recovery is required after an interrupted handoff");
@@ -93,10 +93,27 @@ impl CpuCellHandoffs {
 
     async fn transaction(&self) -> Result<Transaction<'_, Postgres>> {
         let mut tx = self.pool.begin().await?;
-        sqlx::raw_sql("SET LOCAL lock_timeout = '2s'; SET LOCAL statement_timeout = '5s'")
+        sqlx::query("SET LOCAL lock_timeout = '2s'")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("SET LOCAL statement_timeout = '5s'")
             .execute(&mut *tx)
             .await?;
         Ok(tx)
+    }
+
+    pub async fn latest(&self) -> Result<Option<Handoff>> {
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            sqlx::query_as(&format!(
+                "SELECT * FROM {} ORDER BY sequence DESC LIMIT 1",
+                self.table
+            ))
+            .fetch_optional(&self.pool),
+        )
+        .await
+        .wrap_err("reading latest handoff timed out")?
+        .map_err(Into::into)
     }
 
     pub async fn get(&self, id: Uuid) -> Result<Handoff> {
@@ -175,35 +192,34 @@ impl CpuCellHandoffs {
         .wrap_err("CPU handoff request timed out; inspect durable state before retry")?
     }
 
-    pub async fn record_drain_start(
-        &self,
-        id: Uuid,
-        source: Uuid,
-        process: Uuid,
-        candidates: &[Uuid; 3],
-    ) -> Result<()> {
+    pub async fn record_drain_start(&self, id: Uuid, source: Uuid, process: Uuid) -> Result<()> {
         tokio::time::timeout(Duration::from_secs(10), async {
-        ensure!(
-            !process.is_nil()
-                && candidates.iter().all(|id| !id.is_nil() && *id != process)
-                && candidates[0] != candidates[1]
-                && candidates[0] != candidates[2]
-                && candidates[1] != candidates[2],
-            "drain requires distinct current process identities"
-        );
-        let mut tx = self.transaction().await?;
-        let result = sqlx::query(&format!("UPDATE {}
-                 SET phase='draining', source_process=$3, candidate_processes=$4
+            ensure!(
+                !process.is_nil(),
+                "drain requires a current source process identity"
+            );
+            let mut tx = self.transaction().await?;
+            let result = sqlx::query(&format!(
+                "UPDATE {}
+                 SET phase='draining', source_process=$3
                  WHERE handoff_id=$1 AND source=$2
-                   AND (phase='requested' OR (phase='draining' AND source_process=$3 AND candidate_processes=$4))", self.table))
-            .bind(id).bind(source).bind(process).bind(candidates.as_slice()).execute(&mut *tx).await?;
-        ensure!(
-            result.rows_affected() == 1,
-            "handoff is not awaiting this source's drain"
-        );
-        tx.commit().await?;
-        Ok(())
-        }).await.wrap_err("CPU handoff record_drain_start timed out; inspect durable state before retry")?
+                   AND (phase='requested' OR (phase='draining' AND source_process=$3))",
+                self.table
+            ))
+            .bind(id)
+            .bind(source)
+            .bind(process)
+            .execute(&mut *tx)
+            .await?;
+            ensure!(
+                result.rows_affected() == 1,
+                "handoff is not awaiting this source's drain"
+            );
+            tx.commit().await?;
+            Ok(())
+        })
+        .await
+        .wrap_err("CPU handoff record_drain_start timed out; inspect durable state before retry")?
     }
 
     /// The caller supplies the existing agreed drain report only after all
@@ -238,36 +254,44 @@ impl CpuCellHandoffs {
         &self,
         id: Uuid,
         destination: Uuid,
-        candidates: &[Uuid; 3],
         report: &serde_json::Value,
     ) -> Result<()> {
         tokio::time::timeout(Duration::from_secs(10), async {
-        let mut tx = self.transaction().await?;
-        sqlx::query(&format!(
-            "LOCK TABLE {} IN SHARE ROW EXCLUSIVE MODE",
-            self.table
-        ))
-        .execute(&mut *tx)
-        .await?;
-        let latest: Option<Uuid> = sqlx::query_scalar(&format!(
-            "SELECT handoff_id FROM {} ORDER BY sequence DESC LIMIT 1",
-            self.table
-        ))
-        .fetch_optional(&mut *tx)
-        .await?;
-        ensure!(latest == Some(id), "cannot activate a superseded handoff");
-        let result = sqlx::query(&format!("UPDATE {}
+            let mut tx = self.transaction().await?;
+            sqlx::query(&format!(
+                "LOCK TABLE {} IN SHARE ROW EXCLUSIVE MODE",
+                self.table
+            ))
+            .execute(&mut *tx)
+            .await?;
+            let latest: Option<Uuid> = sqlx::query_scalar(&format!(
+                "SELECT handoff_id FROM {} ORDER BY sequence DESC LIMIT 1",
+                self.table
+            ))
+            .fetch_optional(&mut *tx)
+            .await?;
+            ensure!(latest == Some(id), "cannot activate a superseded handoff");
+            let result = sqlx::query(&format!(
+                "UPDATE {}
                  SET phase='activated'
                  WHERE handoff_id=$1 AND destination=$2
-                   AND phase IN ('drained','activated') AND drain_report=$3 AND candidate_processes=$4", self.table))
-            .bind(id).bind(destination).bind(report).bind(candidates.as_slice()).execute(&mut *tx).await?;
-        ensure!(
-            result.rows_affected() == 1,
-            "handoff lacks the matching completed drain"
-        );
-        tx.commit().await?;
-        Ok(())
-        }).await.wrap_err("CPU handoff activate timed out; inspect durable state before retry")?
+                   AND phase IN ('drained','activated') AND drain_report=$3",
+                self.table
+            ))
+            .bind(id)
+            .bind(destination)
+            .bind(report)
+            .execute(&mut *tx)
+            .await?;
+            ensure!(
+                result.rows_affected() == 1,
+                "handoff lacks the matching completed drain"
+            );
+            tx.commit().await?;
+            Ok(())
+        })
+        .await
+        .wrap_err("CPU handoff activate timed out; inspect durable state before retry")?
     }
 }
 

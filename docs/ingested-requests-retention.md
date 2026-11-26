@@ -79,17 +79,25 @@ bound; a Pending job can block the next run under `Forbid` and needs operator
 attention. CronJob changes do not update or cancel existing Jobs: ensure no
 old zero-retention Jobs are active before deployment or activation.
 
-This prepares the policy defined under POP-4496 without activating cleanup.
-POP-4534 must validate guarded admission, queue ordering/replay constraints,
-all-party dry-run eligibility, resource impact, and monitoring before any
-unsuspend or destructive-mode change.
+### First production run
 
-Production requires the stage-tested `48f6a411` CPU image.
-Roll out the guarded writers with a coordinated three-party restart, then
-verify durable C and guarded admission on every party before cleanup.
-Mixed-version compatibility is not established; old and new drain-report
-formats are incompatible, so do not attempt drain across mixed versions.
-POP-4534 has no completed deletion-validation cases yet. Production
-activation under POP-4535, including schedule changes, unsuspension or
-destructive mode, requires separate approval after those checks; this prepared
-configuration is not activation authorization.
+The guarded writers rolled out in [#2525](https://github.com/worldcoin/iris-mpc/pull/2525)
+and handed off to v0.32.15 in [#2532](https://github.com/worldcoin/iris-mpc/pull/2532).
+The journal reaper uses the matching v0.32.15 release. The policy and stage
+validation are tracked in [POP-4496](https://linear.app/worldcoin/issue/POP-4496)
+and [POP-4534](https://linear.app/worldcoin/issue/POP-4534).
+
+1. After Argo syncs this change, verify the live CronJob on **each party** has
+   the expected image digest, the 30-day guard and `RETENTION__DRY_RUN=true`.
+   Check for active Jobs left over from the old reset template.
+2. For an approved count-only run, have each party's operator create one Job
+   from its synced CronJob, leaving the schedule suspended. In Datadog, check
+   for `retention job ok (dry run)` and record `rows_would_delete` and the run
+   duration per party. A timeout is a failed count. A zero count can also mean
+   the guard found no usable local C.
+3. Before approving deletion in [POP-4535](https://linear.app/worldcoin/issue/POP-4535),
+   verify each writer's guarded admission and durable C, review the stage
+   deletion/replay and recovery evidence, and agree the first production
+   deletion budget from the counts and database load. Enable recurring cleanup
+   in a separate reviewed change with a real schedule. Suspending the CronJob
+   stops future runs; an active Job must be stopped separately.
