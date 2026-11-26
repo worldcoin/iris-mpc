@@ -3,13 +3,13 @@
 # modifications copy — the hawk server writes a row per signup-modification into its own
 # DB and nothing deletes it in steady state. The GPU MPCV2 DB's copy gets its own reaper
 # instance in a follow-up (same binary, values + cluster-apps entry only).
-image: "ghcr.io/worldcoin/retention-reaper:v0.32.12@sha256:4e6434646504c7ef09ae6db4f3d60dd163b712e2f9741514b28a103296cb1029"
+image: "ghcr.io/worldcoin/retention-reaper:v0.32.14@sha256:437673d29cc89fb2a31771a0dccfb2018a1d044e6998b792daae21cedd4a52c8"
 
 # LIVE DELETION (POP-4134): ENABLED + DRY_RUN=false — the daily run executes the guarded
 # DELETE on rows past the retention window, bounded by the newest-10k floor. Deleted rows
 # are unrecoverable. Kill switch: RETENTION__DRY_RUN back to "true" reverts to read-only
 # previews; suspend: true stops runs entirely.
-suspend: true
+suspend: false
 
 env:
   RETENTION__ENABLED: "true"
