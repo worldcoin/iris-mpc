@@ -3,6 +3,7 @@ pub mod drain;
 mod handoff;
 pub mod reconciliation;
 pub mod registry_diff;
+mod rollout;
 
 use crate::services::aws::clients::AwsClients;
 use crate::services::processors::batch::{receive_batch_stream, spawn_db_backed_ingest_task};
@@ -90,12 +91,30 @@ pub async fn linear_scan_server_main(config: Config) -> Result<()> {
 async fn server_main_with_search_mode(config: Config, search_mode: HawkSearchMode) -> Result<()> {
     if config.startup_mode == StartupMode::Candidate {
         candidate::validate_config(&config, search_mode)?;
-        let shutdown = init_shutdown_handler(&config).await;
-        return candidate::run(config, shutdown).await;
     }
-
-    let shutdown_handler = init_shutdown_handler(&config).await;
-    Box::pin(run_server(config, search_mode, shutdown_handler, None)).await
+    let shutdown = init_shutdown_handler(&config).await;
+    let rollout = if search_mode == HawkSearchMode::LinearScan {
+        rollout::Rollout::new(&config, shutdown.clone())
+    } else {
+        rollout::Rollout::default()
+    };
+    let run = async {
+        if config.startup_mode == StartupMode::Candidate {
+            candidate::run(config, shutdown, rollout.clone()).await
+        } else {
+            Box::pin(run_server(config, search_mode, shutdown, None, &rollout)).await
+        }
+    };
+    let result = tokio::select! {
+        result = run => result,
+        never = rollout.refresh() => match never {},
+    };
+    rollout.set_phase(if result.is_ok() {
+        rollout::Phase::Stopping
+    } else {
+        rollout::Phase::Failed
+    });
+    result
 }
 
 struct PreparedServer {
@@ -118,12 +137,13 @@ async fn run_server(
     search_mode: HawkSearchMode,
     shutdown_handler: Arc<ShutdownHandler>,
     slot: Option<&mut candidate::ServingSlot>,
+    rollout: &rollout::Rollout,
 ) -> Result<()> {
     let deadline = slot
         .as_ref()
         .and_then(|slot| slot.promotion.as_ref())
         .map(|promotion| promotion.deadline);
-    let startup = prepare_server(config, search_mode, shutdown_handler, slot);
+    let startup = prepare_server(config, search_mode, shutdown_handler, slot, rollout);
     let prepared = match deadline {
         Some(deadline) => tokio::time::timeout_at(deadline, startup)
             .await
@@ -131,7 +151,7 @@ async fn run_server(
         None => startup.await?,
     };
     match prepared {
-        Some(prepared) => prepared.run().await,
+        Some(prepared) => prepared.run(rollout).await,
         None => Ok(()),
     }
 }
@@ -141,6 +161,7 @@ async fn prepare_server(
     search_mode: HawkSearchMode,
     shutdown_handler: Arc<ShutdownHandler>,
     mut slot: Option<&mut candidate::ServingSlot>,
+    rollout: &rollout::Rollout,
 ) -> Result<Option<PreparedServer>> {
     let mut promotion = slot.as_mut().and_then(|slot| slot.promotion.take());
     let slot = slot.as_deref();
@@ -277,7 +298,8 @@ async fn prepare_server(
     };
     let mut handoff_coordinator = match slot {
         Some(slot) => Some(slot.coordinator.clone()),
-        None => handoff::Coordinator::new(&config, Uuid::nil(), drain.clone())?,
+        None => handoff::Coordinator::new(&config, Uuid::nil(), drain.clone())?
+            .map(|coordinator| coordinator.with_rollout(rollout.clone())),
     };
     let extra_routes = drain.as_ref().map(|drain| {
         let routes = drain.routes();
@@ -505,6 +527,7 @@ async fn prepare_server(
     let activation_cohort = if let (Some(promotion), Some(handoff), Some(coordinator)) =
         (&promotion, &handoff, &handoff_coordinator)
     {
+        rollout.set_phase(rollout::Phase::WaitingForAgreement);
         coordinator.activate_candidate(&handoff.handoffs).await?;
         let expected = serving_processes(&server_coord_config, &my_uuid, &verified_peers).await?;
         coordinator
@@ -563,7 +586,7 @@ async fn prepare_server(
 }
 
 impl PreparedServer {
-    async fn run(self) -> Result<()> {
+    async fn run(self, rollout: &rollout::Rollout) -> Result<()> {
         let PreparedServer {
             config,
             search_mode,
@@ -598,6 +621,7 @@ impl PreparedServer {
                 current_batch_id_atomic.clone(),
                 batch_sync_shared_state,
                 drain,
+                rollout,
             )
             .await;
             main_finished.cancel();
@@ -1387,6 +1411,7 @@ async fn run_main_server_loop(
     current_batch_id_atomic: Arc<AtomicU64>,
     batch_sync_shared_state: Arc<tokio::sync::Mutex<BatchSyncSharedState>>,
     drain: Option<Arc<drain::Drain>>,
+    rollout: &rollout::Rollout,
 ) -> Result<()> {
     // --------------------------------------------------------------------------
     // ANCHOR: Start the main loop
@@ -1448,6 +1473,7 @@ async fn run_main_server_loop(
             batch_sync_shared_state.clone(),
             drain.clone(),
         );
+        rollout.start_serving(drain.clone());
 
         loop {
             let now = Instant::now();
@@ -1642,6 +1668,9 @@ async fn run_main_server_loop(
     }
     .await;
 
+    if res.is_err() {
+        rollout.set_phase(rollout::Phase::Failed);
+    }
     if let Some(drain) = &drain {
         if let Err(error) = &res {
             if drain.requested() {
