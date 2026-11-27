@@ -1,111 +1,61 @@
-# Passive CPU cells in stage
+# Warm CPU cell releases in stage
 
-The existing `ampc-hnsw` deployment keeps serving. `ampc-hnsw-a` and
-`ampc-hnsw-b` are separate, initially disabled candidate deployments in the same
-namespace. They share the party's existing database, queues, `application`
-secret, pod security group and `ampc-hnsw` service account. Neither slot serves
-requests until the later drain/reconciliation/activation work is implemented.
-Do not start another active process alongside the legacy serving deployment.
+Each party uses its existing `ampc-hnsw-b` Kubernetes Deployment for warm
+releases. Its name and selector stay fixed. A and B identify **logical slots**:
+successive pod revisions alternate between the two fixed peer DNS names. The
+legacy `ampc-hnsw` and separate `ampc-hnsw-a` Deployments stay at zero.
 
-## Render a slot
+## Prepare one release PR
 
-Use common-app **2.7.4 or later**, which supports reusing a named service account.
-The cluster-apps bootstrap defines the same ordered values list:
+1. Confirm the previous rollout finished on all three parties and its old pods
+   have terminated. Check the current logical slot and deployment UUID in the
+   live pod template. The next slot must be free.
+2. Update the three stage `values-ampc-hnsw-b.yaml` files together. Pin the
+   image, flip `PEERS__SLOT` and the DNS init container's `CELL_SLOT`, and use
+   that slot for coordination hostnames and metrics names. Keep the fixed A/B
+   peer lists. Set the source status URLs (port 3000) and source deployment UUID
+   to the current serving release. Generate one fresh destination UUID for the
+   new rollout and use it in all three parties, even when reusing an image.
+   Omit `SMPC__CPU_CELL__HANDOFF__ID` for candidates supporting the default.
+   For an older warm-handoff image, explicitly set the handoff ID to that same
+   fresh UUID. Keep the original IDs for any retry of an existing release.
+3. Review the rendered pod templates, including inherited values, as a single
+   rollout. Any warm pod-template change needs the opposite slot: a same-slot
+   candidate would point the serving DNS name at its own pod during startup. Serialize releases through old-pod termination.
+
+To render party 0 with the same values order as Argo:
 
 ```sh
 party=0
-slot=b
-helm template "ampc-hnsw-$slot" "$COMMON_APP_CHART" --namespace ampc-hnsw \
-  -f deploy/stage/common-values-ampc-hnsw.yaml \
-  -f "deploy/stage/ampc-hnsw-$party-stage/values-ampc-hnsw.yaml" \
-  -f deploy/stage/common-values-cpu-cell.yaml \
-  -f "deploy/stage/ampc-hnsw-$party-stage/values-ampc-hnsw-$slot.yaml"
+base=deploy/stage
+p="$base/ampc-hnsw-$party-stage"
+helm template ampc-hnsw-b "$COMMON_APP_CHART" --namespace ampc-hnsw \
+  -f "$base/common-values-ampc-hnsw.yaml" -f "$p/values-ampc-hnsw.yaml" \
+  -f "$base/common-values-cpu-cell.yaml" -f "$p/values-ampc-hnsw-b.yaml"
 ```
 
-Slots default to zero replicas. Enable only the candidate being measured, in
-the configuration Argo reconciles, after confirming spare capacity. Each
-candidate inherits the serving workload's CPU/memory requests and placement;
-the stage pool must accommodate both. The pinned candidate image includes
-passive startup; the older serving release does not.
+## What happens after merge
 
-Each slot has distinct selectors and `pod-a.{party}.stage.hnsw.worldcoin.dev`
-or `pod-b.{party}.stage.hnsw.worldcoin.dev` peer names. The existing party
-certificates must cover those names. The DNS init container completes Route53
-registration before preload and uses CREATE rather than UPSERT to reject
-collisions. Resolver propagation is verified separately before activation;
-the passive loader does not use the peer network.
+Argo updates one Deployment per party. With one desired replica, one surge and
+zero unavailable, Kubernetes creates the next pod alongside its predecessor.
+The DNS init container upserts the candidate's own slot record. Capacity must
+support both pods during preload. While any candidate waits for capacity or
+preload, the source cohort can keep serving.
 
-## Observe preload
+The existing three-party protocol drains the source, reconciles the candidates
+and activates them. The candidate's `/startup` can succeed after preload.
+Its `/ready` on port 3090 succeeds only after serving agreement. Each party's
+Deployment controller then scales down its old ReplicaSet. The old DNS record
+stays in place until that slot's next init container replaces it.
 
-Candidate status binds only to loopback. Exec probes use the image's curl:
-`/health` is liveness, `/startup` confirms preload, and `/ready` always fails.
-No Service is created. A candidate therefore remains Kubernetes NotReady even
-after successful preload; do not use Deployment Available or Argo Healthy as
-the acceptance signal. Inspect the exact candidate pod/container:
+For stage verification, observe both ReplicaSets by pod-template hash. Check
+the destination slot and `serving=true` on all three new pods, the disappearance
+of old pods, peer DNS resolution and fresh and duplicate signup outcomes.
+A pause after sealing requires forward recovery. Do not undo the Deployment
+to the previous pod template. If termination is uncertain, fence the old
+process before reusing its slot. See [CPU cell ownership and recovery](cpu-cell-ownership.md).
 
-```sh
-kubectl --context "$CONTEXT" -n ampc-hnsw exec "$CANDIDATE_POD" \
-  -c "ampc-hnsw-$slot" -- curl --fail --silent --max-time 5 \
-  http://127.0.0.1:3090/candidate-status
-```
-
-Require `state=loaded`, `serving=false`, the expected party and nonzero loaded
-rows for all three parties. Record each process UUID, image, row count and
-preload duration. Check that none of the legacy serving pods restarted.
-
-Measure the same offered signup-service request rate before and during B
-preload. Record terminal outcomes and latency, serving-cell latency/error
-metrics, Postgres CPU/connections/read I/O, and B preload duration. Keep baseline
-and preload windows separate; a successful preload alone is not evidence of
-acceptable serving or database impact. No fixture reset or queue replacement
-is needed.
-
-The passive process does not bind peer sockets. Validate the certificate SANs
-and mutual TLS on the slot DNS/peer ports with an isolated test listener before
-claiming the networking is ready for activation.
-
-## Retire or reuse a slot
-
-1. Commit zero replicas to the source Argo reconciles and wait for that exact
-   revision to sync. Do not rely on `kubectl scale`: self-healing can recreate it.
-2. Confirm the Deployment has observed zero replicas and no slot Pods remain,
-   including terminating Pods and DNS init containers. Unreachable nodes or
-   uncertain termination block DNS removal/reuse.
-3. Read the exact slot A record and delete that record with its observed IP/TTL.
-   Never delete another slot's name or the serving `node.{party}` records.
-4. Before enabling the slot again, confirm its name is absent and keep the old
-   revision disabled. An old init container cannot UPSERT over a new owner.
-
-A pod or init restart can leave a record behind. CREATE fails closed until the
-retirement checks and exact-record deletion are complete. This also covers an
-uncertain CREATE response: inspect and retire the slot before retrying.
-Rollback for this passive stage test is disabling the candidate and retiring
-its records; the existing serving deployment remains in place. These files do
-not implement promotion or production rollout.
-
-## Coordinated handoff prerequisites
-
-Before enabling handoff, verify healthy CPU capacity for both cells, peer
-DNS/TLS/network access, database headroom, and `route53:GetChange` on each
-stage workload role. Route53 INSYNC does not prove peer DNS resolution or TLS.
-
-Establish protocol 2 with a coordinated cold upgrade and no handoff in flight.
-Candidate startup migrates before compatibility checks; `MIGRATE=false` does
-not protect an incompatible serving release. Stop/fence legacy writers first.
-
-During that baseline, configure Active A with one shared deployment UUID, fixed
-`CPU_CELL__PEERS__A` and `CPU_CELL__PEERS__B` candidate-status URL lists, and
-`CPU_CELL__PEERS__SLOT=a` (all prefixed with `SMPC__`). Restore A's serving HTTP
-probes on port 3000 instead of the passive exec probes on 3090. The later warm
-release changes B only: pin its
-image digest, use one fresh B deployment UUID and one fresh handoff UUID shared
-across all three parties, and supply A's status URLs
-(`http://<host>:<healthcheck-port>/handoff-status`). Keep the same A/B URL lists
-and set `CPU_CELL__PEERS__SLOT=b`.
-Keep B's candidate probes through promotion.
-
-The fixed peer lists also route B→A without restarting serving B. Retire old
-processes and exact DNS records before slot reuse. Validate
-both directions through signup-service and exercise cold recovery under
-POP-4378/4379/4380. After sealing, failures must not automatically resume A.
-Keep journal cleanup and production rollout separate.
+Common-app 2.7.4 sets the Deployment progress deadline to ten minutes. A slow
+preload can therefore show `ProgressDeadlineExceeded` before the startup probe
+budget expires. The controller continues the rollout when the pod becomes
+available. Inspect scheduling, DNS init and candidate status to locate a stall.

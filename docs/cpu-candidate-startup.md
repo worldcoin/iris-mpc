@@ -4,14 +4,15 @@ Use the `iris-mpc-linear-scan` binary with the active cell's database/schema and
 
 ```sh
 SMPC__STARTUP_MODE=candidate
-SMPC__ENABLE_S3_IMPORTER=false
 SMPC__CLEAR_DB_BEFORE_INIT=false
 SMPC__CANDIDATE_STATUS_PORT=3090
 ```
 
 `startup_mode` defaults to `active`, preserving coordinated startup. The HNSW entrypoint rejects candidate mode. Candidate mode rejects seeding/clearing, fake data, invalid party/loading settings, and unsupported CPU scan settings.
 
-The candidate runs the ordinary SQLx migrator, checks handoff history, then opens Postgres with read-only transactions on every preload connection. Already-applied migrations are not reapplied; pending migrations must be compatible with A serving. It preloads the configured resident eye using the exact-scan worker layout and retains row IDs and observed versions. With [runtime handoff configuration](cpu-cell-ownership.md#runtime-configuration), it verifies A participation and records the intended handoff before the history check, then coordinates durable completion and reconciliation after preload. It runs no MPC network, queue reads, claim resets, modification/result replay, or live execution. S3 loading is outside this implementation.
+The candidate runs the ordinary SQLx migrator, checks handoff history, then opens Postgres with read-only transactions on every preload connection. Already-applied migrations are not reapplied; pending migrations must be compatible with A serving. It preloads the configured resident eye using the exact-scan worker layout and retains row IDs and observed versions. With [runtime handoff configuration](cpu-cell-ownership.md#runtime-configuration), it verifies A participation and records the intended handoff before the history check, then coordinates durable completion and reconciliation after preload. It runs no MPC network, queue reads, claim resets, modification/result replay, or live execution.
+
+With `SMPC__ENABLE_S3_IMPORTER=true`, the candidate uses the same loader as the active cell. It reads the latest snapshot from the configured S3 bucket and picks up recent changes from Postgres. With the importer disabled, it reads all rows from Postgres.
 
 ## Operator status
 

@@ -74,9 +74,6 @@ pub(super) fn validate_config(config: &Config, mode: HawkSearchMode) -> Result<(
     if config.fake_db_size > 0 || config.init_db_size > 0 || config.clear_db_before_init {
         bail!("candidate cannot seed, clear, or generate database contents");
     }
-    if config.enable_s3_importer {
-        bail!("candidate preload currently requires enable_s3_importer=false");
-    }
     process_config(config, mode)
 }
 
@@ -127,9 +124,14 @@ fn routes(status: Status) -> Router {
         .with_state(status)
 }
 
-pub(super) async fn run(config: Config, shutdown: Arc<ShutdownHandler>) -> Result<()> {
+pub(super) async fn run(
+    config: Config,
+    shutdown: Arc<ShutdownHandler>,
+    rollout: rollout::Rollout,
+) -> Result<()> {
     let process_id = Uuid::new_v4();
-    let coordinator = handoff::Coordinator::new(&config, process_id, None)?;
+    let coordinator = handoff::Coordinator::new(&config, process_id, None)?
+        .map(|coordinator| coordinator.with_rollout(rollout.clone()));
     let address = if coordinator.is_some() {
         std::net::Ipv4Addr::UNSPECIFIED
     } else {
@@ -155,7 +157,7 @@ pub(super) async fn run(config: Config, shutdown: Arc<ShutdownHandler>) -> Resul
     let status_server = axum::serve(listener, router);
     tokio::select! {
         result = status_server => result.wrap_err("candidate status server stopped"),
-        result = preload_and_wait(&config, shutdown, status, coordinator) => result,
+        result = preload_and_wait(&config, shutdown, status, coordinator, &rollout) => result,
     }
 }
 
@@ -164,6 +166,7 @@ async fn preload_and_wait(
     shutdown: Arc<ShutdownHandler>,
     status: Status,
     coordinator: Option<handoff::Coordinator>,
+    rollout: &rollout::Rollout,
 ) -> Result<()> {
     let started = Instant::now();
     let process_id = status.read().await.process_id;
@@ -187,6 +190,7 @@ async fn preload_and_wait(
                     status,
                     promotion: None,
                 },
+                rollout,
             )
             .await;
         }
@@ -212,6 +216,7 @@ async fn preload_and_wait(
         duration_seconds = started.elapsed().as_secs_f64(),
         "CPU candidate remains passive and unreconciled"
     );
+    rollout.set_phase(rollout::Phase::Loaded);
     if let Some(coordinator) = &coordinator {
         let db = config
             .database
@@ -261,6 +266,7 @@ async fn preload_and_wait(
                 status,
                 promotion: Some(promotion),
             },
+            rollout,
         )
         .await;
     }
@@ -275,6 +281,7 @@ async fn serve_slot(
     config: &Config,
     shutdown: Arc<ShutdownHandler>,
     mut slot: ServingSlot,
+    rollout: &rollout::Rollout,
 ) -> Result<()> {
     let mut config = config.clone();
     config.startup_mode = StartupMode::Active;
@@ -283,6 +290,7 @@ async fn serve_slot(
         HawkSearchMode::LinearScan,
         shutdown.clone(),
         Some(&mut slot),
+        rollout,
     ))
     .await;
     if let Err(error) = &result {
@@ -405,7 +413,7 @@ mod tests {
         validate_config(&config, HawkSearchMode::LinearScan).unwrap();
         assert!(validate_config(&config, HawkSearchMode::Hnsw).is_err());
         config.enable_s3_importer = true;
-        assert!(validate_config(&config, HawkSearchMode::LinearScan).is_err());
+        validate_config(&config, HawkSearchMode::LinearScan).unwrap();
         config.enable_s3_importer = false;
         config.clear_db_before_init = true;
         assert!(validate_config(&config, HawkSearchMode::LinearScan).is_err());
@@ -626,7 +634,7 @@ mod tests {
 
         let shutdown = Arc::new(ShutdownHandler::new(0));
         let test_shutdown = shutdown.clone();
-        let run_task = tokio::spawn(run(config.clone(), shutdown));
+        let run_task = tokio::spawn(run(config.clone(), shutdown, rollout::Rollout::default()));
         test_shutdown.trigger_manual_shutdown();
         timeout(Duration::from_secs(5), run_task).await???;
         sqlx::query("UPDATE irises SET id = 2")
@@ -640,9 +648,13 @@ mod tests {
         // A missing table produces a returned startup failure, not a silent
         // live fallback or a process that appears loaded.
         writer.pool.execute("DROP TABLE irises").await?;
-        assert!(run(config, Arc::new(ShutdownHandler::new(0)))
-            .await
-            .is_err());
+        assert!(run(
+            config,
+            Arc::new(ShutdownHandler::new(0)),
+            rollout::Rollout::default()
+        )
+        .await
+        .is_err());
         writer
             .pool
             .execute(format!("DROP SCHEMA \"{schema}\" CASCADE").as_str())

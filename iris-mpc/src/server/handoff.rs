@@ -2,6 +2,7 @@
 use super::{
     drain,
     reconciliation::{CandidateReconciliation, ReconciliationContext, ReconciliationReport},
+    rollout,
 };
 use ampc_server_utils::shutdown_handler::ShutdownHandler;
 use axum::{routing::get, Json, Router};
@@ -60,6 +61,7 @@ pub(super) struct Coordinator {
     other_urls: [reqwest::Url; 3],
     client: reqwest::Client,
     drain: Arc<std::sync::RwLock<Option<Arc<drain::Drain>>>>,
+    rollout: rollout::Rollout,
 }
 
 fn urls(values: &[String; 3]) -> Result<[reqwest::Url; 3]> {
@@ -134,7 +136,10 @@ impl Coordinator {
                 .as_ref()
                 .ok_or_else(|| eyre!("candidate coordination requires handoff intent"))?;
             let intent = Intent {
-                id: Uuid::parse_str(&requested.id)?,
+                id: match &requested.id {
+                    Some(id) => Uuid::parse_str(id)?,
+                    None => deployment,
+                },
                 source: Uuid::parse_str(&requested.source_deployment_id)?,
                 destination: deployment,
             };
@@ -175,7 +180,13 @@ impl Coordinator {
                 .redirect(reqwest::redirect::Policy::none())
                 .build()?,
             drain: Arc::new(std::sync::RwLock::new(drain)),
+            rollout: rollout::Rollout::default(),
         }))
+    }
+
+    pub(super) fn with_rollout(mut self, rollout: rollout::Rollout) -> Self {
+        self.rollout = rollout;
+        self
     }
 
     pub(super) fn routes(&self) -> Router {
@@ -428,18 +439,18 @@ impl Coordinator {
     }
 
     pub(super) async fn wait_cold_cohort(&self, deadline: Instant) -> Result<()> {
+        self.rollout.set_phase(rollout::Phase::Starting);
         let own = self.status.read().await.clone();
         loop {
             let peers = self
                 .wait_peers(&self.own_urls, StartupMode::Active, deadline)
                 .await?;
-            Self::candidate_peers(&own, &peers)?;
-            // Just-promoted peers still have warm evidence; already-serving peers are ready.
+            // Old serving peers can already advertise the next handoff.
             if peers
                 .iter()
                 .all(|p| !p.ready && p.completion.is_none() && p.reconciliation.is_none())
             {
-                return Ok(());
+                return Self::candidate_peers(&own, &peers);
             }
             timeout_at(deadline, sleep(POLL_INTERVAL))
                 .await
@@ -522,10 +533,13 @@ impl Coordinator {
             match result {
                 Ok(true) => {
                     self.status.write().await.error = None;
+                    self.rollout.set_blocked(false);
                     break;
                 }
                 Ok(false) => {
-                    self.status.write().await.error = None;
+                    if self.status.write().await.error.take().is_some() {
+                        self.rollout.set_blocked(false);
+                    }
                 }
                 Err(error) => {
                     let reason = format!("{error:#}");
@@ -533,6 +547,7 @@ impl Coordinator {
                     if status.error.as_ref() != Some(&reason) {
                         tracing::warn!(party_id = status.party_id, error = %reason, "CPU handoff coordination blocked");
                         status.error = Some(reason);
+                        self.rollout.set_blocked(true);
                     }
                     if self.drain().is_some_and(|drain| drain.requested()) {
                         break;
@@ -661,11 +676,13 @@ impl Coordinator {
             completion.watermark.clone(),
         )?;
         let deadline = Instant::now() + budget;
+        self.rollout.set_phase(rollout::Phase::Reconciling);
         let report = candidate
             .reconcile(store, context.clone(), deadline)
             .await?
             .clone();
         self.status.write().await.reconciliation = Some(report);
+        self.rollout.set_phase(rollout::Phase::Reconciled);
         loop {
             let peers = self
                 .wait_peers(&self.own_urls, StartupMode::Candidate, deadline)

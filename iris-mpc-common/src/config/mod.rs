@@ -65,7 +65,9 @@ pub struct CpuCellConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CpuCellHandoffConfig {
-    pub id: String,
+    /// Defaults to the destination deployment UUID when omitted.
+    #[serde(default)]
+    pub id: Option<String>,
     pub source_deployment_id: String,
     pub source_status_urls: JsonStrWrapper<[String; 3]>,
 }
@@ -155,6 +157,10 @@ pub struct Config {
 
     #[serde(default = "default_shares_bucket_name")]
     pub shares_bucket_name: String,
+
+    /// Region of the request shares bucket. Defaults to the shared AWS region.
+    #[serde(default)]
+    pub shares_bucket_region: Option<String>,
 
     #[serde(default)]
     pub clear_db_before_init: bool,
@@ -914,6 +920,7 @@ impl From<Config> for CommonConfig {
             processing_timeout_secs,
             public_key_base_url,
             shares_bucket_name,
+            shares_bucket_region: _, // shares transport settings are local to each server
             clear_db_before_init,
             init_db_size,
             max_db_size,
@@ -1074,10 +1081,6 @@ mod tests {
             ("CPU_CELL__PEERS__A", urls),
             ("CPU_CELL__PEERS__B", urls),
             (
-                "CPU_CELL__HANDOFF__ID",
-                "00000000-0000-0000-0000-000000000002",
-            ),
-            (
                 "CPU_CELL__HANDOFF__SOURCE_DEPLOYMENT_ID",
                 "00000000-0000-0000-0000-000000000003",
             ),
@@ -1094,7 +1097,9 @@ mod tests {
         let peers = cell.peers.unwrap();
         assert_eq!(peers.slot, CpuCellSlot::B);
         assert_eq!(peers.a, peers.b);
-        assert_eq!(peers.a, cell.handoff.unwrap().source_status_urls);
+        let handoff = cell.handoff.unwrap();
+        assert!(handoff.id.is_none());
+        assert_eq!(peers.a, handoff.source_status_urls);
         let valid = serde_json::json!({"slot": "a", "a": urls, "b": urls});
         for field in ["slot", "a", "b"] {
             let mut missing = valid.clone();
@@ -1124,13 +1129,15 @@ mod tests {
     }
 
     #[test]
-    fn messaging_regions_are_optional_local_transport_settings() {
+    fn aws_regions_are_optional_local_transport_settings() {
         let mut config: Config = serde_json::from_str("{}").unwrap();
         assert!(config.requests_queue_region.is_none());
         assert!(config.results_topic_region.is_none());
+        assert!(config.shares_bucket_region.is_none());
         let common = CommonConfig::from(config.clone());
         config.requests_queue_region = Some("eu-central-1".to_owned());
         config.results_topic_region = Some("eu-central-1".to_owned());
+        config.shares_bucket_region = Some("eu-central-1".to_owned());
         assert_eq!(CommonConfig::from(config), common);
     }
 

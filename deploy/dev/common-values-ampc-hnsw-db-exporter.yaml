@@ -5,6 +5,7 @@ replicaCount: 1
 environment: dev
 
 schedule: "0 10 * * *"
+suspend: true
 
 # this is needed to prevent the job from restarting if it fails
 backoffLimit: 0

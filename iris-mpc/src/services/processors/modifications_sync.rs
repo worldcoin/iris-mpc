@@ -128,7 +128,7 @@ pub async fn sync_modifications<'a>(
                     config.party_id,
                     shares_encryption_key_pair.clone(),
                     Arc::clone(&semaphore),
-                    aws_clients.s3_client.clone(),
+                    aws_clients.shares_s3_client.clone(),
                     config.shares_bucket_name.clone(),
                     s3_url,
                 )?

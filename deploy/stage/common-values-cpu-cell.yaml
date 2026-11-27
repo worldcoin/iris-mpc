@@ -1,6 +1,7 @@
 # Applied after the existing common and per-party ampc-hnsw values.
 # Slots stay disabled and passive until a compatible release and handoff are reviewed.
 replicaCount: 0
+progressDeadlineSeconds: 5400
 image: "ghcr.io/worldcoin/iris-mpc-linear-scan-amd64:530e70eb253b1787dc4bfeddbf70d427018298e4@sha256:e300189e96867a9938ff4637d5e1bd4b46b3df9e3f666b1eb6393c4b0b811c57"
 
 serviceAccount:
@@ -16,6 +17,7 @@ env:
   SMPC__DATABASE__MIGRATE: "false"
   SMPC__DATABASE__CREATE: "false"
   SMPC__CLEAR_DB_BEFORE_INIT: "false"
+  SMPC__MAX_DB_SIZE: "200000"
   SMPC__INIT_DB_SIZE: "0"
   SMPC__FAKE_DB_SIZE: "0"
   SMPC__CANDIDATE_STATUS_PORT: "3090"
@@ -48,7 +50,6 @@ initContainer:
     init.sh: |
       #!/usr/bin/env bash
       set -euo pipefail
-      # An uncertain CREATE requires inspection, not an automatic retry.
       export AWS_MAX_ATTEMPTS=1
       case "$PARTY_ID" in 0|1|2) ;; *) echo "Invalid party" >&2; exit 1;; esac
       case "$CELL_SLOT" in a|b) ;; *) echo "Invalid cell slot" >&2; exit 1;; esac
@@ -66,10 +67,9 @@ initContainer:
         echo "No exact hosted zone for $ZONE_NAME" >&2
         exit 1
       fi
-      # CREATE never overwrites a different owner, including a concurrent init.
       CHANGE_ID=$(aws route53 change-resource-record-sets \
         --hosted-zone-id "$ZONE_ID" \
-        --change-batch "{\"Changes\":[{\"Action\":\"CREATE\",\"ResourceRecordSet\":{\"Name\":\"$RECORD_NAME\",\"Type\":\"A\",\"TTL\":5,\"ResourceRecords\":[{\"Value\":\"$POD_IP\"}]}}]}" \
+        --change-batch "{\"Changes\":[{\"Action\":\"UPSERT\",\"ResourceRecordSet\":{\"Name\":\"$RECORD_NAME\",\"Type\":\"A\",\"TTL\":5,\"ResourceRecords\":[{\"Value\":\"$POD_IP\"}]}}]}" \
         --query ChangeInfo.Id --output text \
         --cli-connect-timeout 10 --cli-read-timeout 30)
       if [[ -z "$CHANGE_ID" || "$CHANGE_ID" == "None" ]]; then
